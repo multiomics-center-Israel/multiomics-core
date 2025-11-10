@@ -1,0 +1,12 @@
+paths:
+  raw: "data-raw"
+  out: "outputs"
+
+modes:
+  rna:
+    filter_tpm: 3
+  proteomics:
+    min_peptides: 2
+
+params:
+  seed: 1
