@@ -12,6 +12,7 @@ _targets/
 renv/library/
 renv/staging/
 renv/python/
+renv/sandbox/
 
 # OS / temporary files
 .DS_Store
