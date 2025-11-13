@@ -1,4 +1,38 @@
+# RStudio files
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
+
+# targets pipeline cache (never commit)
+_targets/
+.tar*
+
+# renv: only lockfile should be kept
+renv/library/
+renv/staging/
+renv/python/
+
+# OS / temporary files
+.DS_Store
+Thumbs.db
+
+# Output files
+outputs/
+reports/
+
+# Logs
+*.log
+
+# HTML / temp knitted files
+*.utf8.md
+*.knit.md
+*.nb.html
+
+# R package checking
+.Rcheck/
+
+# Packed files
+*.tar.gz
+*.zip
+

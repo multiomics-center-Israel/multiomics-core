@@ -1,7 +1,7 @@
 # _targets.R
 library(targets)
 
-tar_option_set(packages = c("readr","dplyr","tidyr","ggplot2"))
+tar_option_set(packages = c("readr","dplyr","tidyr","ggplot2", "edgeR", "DESeq2"))
 
 # ---- Pipeline ----
 list(
