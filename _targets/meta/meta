@@ -4,9 +4,13 @@ cfg_meta_path|stem|8ecdd187933c5ba7|500683821b5d4943|2c530c1562a7fbd1|-164086928
 counts_raw|stem|b7b3aa69cfe54ccc|41dbf0deb66f56a1|c7dc17277c54d139|671062403||t20405.4783767412s|s358b|358|rds|local|vector|||0.11||
 meta|stem|1a61f5dbbae39fdb|f80fe37433177e62|1cf4c5e078abd97a|2070790274||t20405.4783768968s|s304b|304|rds|local|vector|||0||
 counts_mat|stem|3aeef8d443324040|a5d4e2cf01df4a66|86babba19dc4274d|-1046015380||t20405.4783769494s|s165b|165|rds|local|vector|||0||
-counts_norm|stem|c84b8507584fd137|9eb5a664395e99f3|7fadfcc2f55a4a2e|-527825700||t20405.5060977595s|s266b|266|rds|local|vector|||0.03||
 counts_pca_png|stem|a0105e5161a91c55|f424b5572664265b|d07856852802b931|832950331|outputs/counts_pca.png|t20405.5061034224s|s28808b|28808|file|local|vector|||0.46||
-counts_norm_density_png|stem|cede692bc55fb662|c996cf056b2f034e|d07856852802b931|825660589|outputs/counts_norm_density.png|t20405.5061056325s|s39328b|39328|file|local|vector|||0.17||
 counts_norm_csv|stem|8962533a281ae618|2f8595651f0c77d8|d07856852802b931|-1039504434|outputs/counts_norm_TMMlogCPM.csv|t20405.5061066493s|s323b|323|file|local|vector|||0.08||
 counts_pca_plot_png|stem|66d9d0ae187f2de4|fad8700365b4559e|e53d9abea349901f|-355962993|outputs/pca_scatter.png|t20405.5061087168s|s40085b|40085|file|local|vector|||0.18||
 counts_pca_outliers_csv|stem|56d543cb1c17d83e|4bf8329a904c56cb|d07856852802b931|-1855826066|outputs/pca_outliers.csv|t20405.5061089247s|s88b|88|file|local|vector|||0||
+read_config|function|6682f631275988c5
+save_table|function|caeb6ac9ce40794f
+normalize_counts|function|d6c14ac9383dfe55
+counts_norm|stem|c84b8507584fd137|06564b390faae258|70b5fee16efdedd5|-527825700||t20405.5983032271s|s266b|266|rds|local|vector|||0.13||
+counts_density_plot_png|stem|f5657c0a1c196496|d545ae48e37619e3|d07856852802b931|1956052885|outputs/counts_density.png|t20405.5983068161s|s51306b|51306|file|local|vector|||0.3||
+counts_norm_density_png|stem|cede692bc55fb662|63132facedb73d45|d07856852802b931|825660589|outputs/counts_norm_density.png|t20405.5983086046s|s39328b|39328|file|local|vector|||0.13||
