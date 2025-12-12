@@ -1,0 +1,55 @@
+#' Perseus-style imputation (downshifted & narrowed normal distribution)
+#'
+#' For each sample (column), missing values are imputed from a normal
+#' distribution with:
+#'   mean = mean(sample, na.rm = TRUE) - downshift * sd(sample, na.rm = TRUE)
+#'   sd   = width * sd(sample, na.rm = TRUE)
+#'
+#' @param expr_mat  Numeric matrix/data.frame (features x samples), usually log2.
+#' @param width  Fraction of the sample sd used as sd of the imputation dist.
+#' @param downshift How many sd to subtract from the mean for the imputation mean.
+#'
+#' @return A list with:
+#'   - imputed: numeric matrix with imputed values
+#'   - imputed_flag: logical matrix, TRUE where a value was imputed
+perseus_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
+  # Coerce to matrix for safety
+  expr_mat <- as.matrix(expr_mat)
+  sample_cols <- colnames(expr_mat)
+  
+  # Logical matrix of missing values (these will be imputed)
+  imputed_flag <- is.na(expr_mat)
+  
+  # Copy for imputation
+  imputed <- expr_mat
+  
+  for (j in seq_len(ncol(imputed))) {
+    x <- imputed[, j]
+    
+    # Skip if all values are NA
+    if (all(is.na(x))) next
+    
+    # Compute sd and mean of observed values
+    s <- stats::sd(x, na.rm = TRUE)
+    m <- mean(x, na.rm = TRUE)
+    
+    imp_sd   <- width * s
+    imp_mean <- m - downshift * s
+    
+    n_missing <- sum(is.na(x))
+    if (n_missing > 0) {
+      x[is.na(x)] <- stats::rnorm(n_missing, mean = imp_mean, sd = imp_sd)
+    }
+    
+    imputed[, j] <- x
+  }
+  
+  colnames(imputed)      <- sample_cols
+  rownames(imputed_flag) <- rownames(imputed)
+  colnames(imputed_flag) <- sample_cols
+  
+  list(
+    imputed      = imputed,
+    imputed_flag = imputed_flag
+  )
+}
