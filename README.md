@@ -8,11 +8,18 @@ This repository provides: - standardized data loading and validation - modular p
 ------------------------------------------------------------------------
 
 ## Repository structure
+```
+R/
+├── core/ # Small reusable helpers (PCA utils, metadata alignment, etc.)
+├── plots/ # plot_* functions (pure plotting, no saving, no config)
+├── qc/ # qc_* wrappers (QC logic + saving)
+├── preprocess_* # Omics-specific preprocessing
+├── pipeline_* # High-level pipeline entry points
+config/
+├── config.yml # Central configuration file
+outputs/ # Analysis outputs (ignored by git)
 
-R/ ├── core/ \# Small reusable helpers (PCA utils, metadata alignment, etc.) ├── plots/ \# plot\_\* functions (pure plotting, no saving, no config) ├── qc/ \# qc\_\* wrappers (QC logic + saving) ├── preprocess\_\* \# Omics-specific preprocessing ├── pipeline\_\* \# High-level pipeline entry points config/ ├── config.yml \# Central configuration file outputs/ \# Analysis outputs (ignored by git)
-
-yaml Copy code
-
+```
 ------------------------------------------------------------------------
 
 ## Requirements
@@ -42,13 +49,13 @@ config/config.yml
 
 This file controls:
 
-file paths
+-  file paths
 
-omics-specific parameters
+-  omics-specific parameters
 
-filtering / normalization / imputation settings
+-  filtering / normalization / imputation settings
 
-QC aesthetics (color, shape, sample ID columns)
+-  QC aesthetics (color, shape, sample ID columns)
 
 # Running proteomics QC (example)
 
@@ -74,18 +81,18 @@ qc_pca_scatter(
 
 # Reproducibility
 
-All package versions are locked in renv.lock
+-  All package versions are locked in renv.lock
 
-Outputs, caches, and intermediate files are excluded from git
+-  Outputs, caches, and intermediate files are excluded from git
 
-Future versions will use {targets} for fully declarative pipelines
+-  Future versions will use {targets} for fully declarative pipelines
 
 # Status
 
-Version: v0.1.0 This release focuses on:
+-  Version: v0.1.0 This release focuses on:
 
-proteomics preprocessing
+-  proteomics preprocessing
 
-QC refactoring and PCA unification
+-  QC refactoring and PCA unification
 
-RNA and multi-omics integration will be added in later versions.
+-  RNA and multi-omics integration will be added in later versions.
