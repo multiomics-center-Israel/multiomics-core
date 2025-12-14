@@ -48,7 +48,14 @@ modes:
         # T: 3
         # SH: 2  
     min_peptides: 2
-    
+  
+    limma:
+      no_repetitions: 10        # Number of multiple imputations
+      min_no_passed: 8          # Stability threshold (>= 8/10)
+      use_adj_for_pass1: true   # Use adj.P.Val for pass1 (otherwise P.Value)
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+
     normalization:
       method: "none"    # or "median" 
 
@@ -61,7 +68,7 @@ modes:
    
     effects:
       color: "Condition"
-      shape: NULL
+      shape: null
       samples: "SampleID"
 
   metabolomics:

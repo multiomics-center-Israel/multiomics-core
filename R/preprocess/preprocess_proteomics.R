@@ -217,6 +217,87 @@ impute_proteomics_perseus <- function(expr_mat, cfg, return_flags = FALSE) {
   if (return_flags) res else res$imputed
 }
 
+#' Preprocess proteomics data starting from loaded inputs
+#'
+#' This function performs all proteomics preprocessing steps required
+#' prior to differential expression analysis, starting from already
+#' loaded and validated inputs.
+#'
+#' The preprocessing workflow includes:
+#'   1) Validation of proteomics inputs
+#'   2) Construction of a sample-by-feature expression matrix from DIA-NN outputs
+#'   3) Extraction of protein-level annotation (row data)
+#'   4) Feature filtering based on minimum detection count across samples
+#'   5) Missing value imputation (currently Perseus-style)
+#'
+#' The function performs no file I/O and is designed to be used in
+#' reproducible pipelines (e.g., targets), where inputs are loaded
+#' upstream and passed explicitly.
+#'
+#' @param inputs List of proteomics inputs as returned by
+#'        load_proteomics_inputs(), including protein data, sample mapping,
+#'        metadata, and contrasts.
+#' @param config Full pipeline configuration list.
+#'
+#' @return A named list containing:
+#'   \item{expr_raw}{Raw expression matrix (samples × proteins).}
+#'   \item{expr_filt}{Filtered expression matrix after minimum-count filtering.}
+#'   \item{expr_imp}{Imputed expression matrix used for downstream DE analysis.}
+#'   \item{row_data}{Protein-level annotation corresponding to the rows of expr_* matrices.}
+#'   \item{meta}{Sample metadata aligned to the expression matrices.}
+#'
+#' @seealso load_proteomics_inputs
+#' @seealso filter_proteomics_by_min_count
+#' @seealso impute_proteomics_perseus
+#'
+preprocess_proteomics <- function(inputs, config) {
+  cfg <- config$modes$proteomics
+  
+  # validate inputs
+  validate_proteomics_inputs(inputs, cfg)
+  
+  # Build standardized proteomics object (engine-aware)
+  prot_obj <- get_proteomics_expression_matrix(inputs, config)
+  
+  # Downstream contract: work on log2 assay
+  expr_mat  <- prot_obj$assay_log2
+  row_data  <- prot_obj$row_data
+  col_data  <- prot_obj$col_data
+  
+  
+  # protein annotation
+  row_data <- inputs$protein[
+    ,
+    c(cfg$id_columns$protein_id,
+      unlist(cfg$id_columns$protein_annot)),
+    drop = FALSE
+  ]
+  
+  # filtering
+  filt <- filter_proteomics_by_min_count(
+    expr_mat = expr_mat,
+    row_data = row_data,
+    meta     = col_data,
+    cfg      = cfg
+  )
+  
+  expr_filt  <- filt$expr_mat
+  row_data_f <- filt$row_data
+  
+  # imputation (currently: Perseus)
+  expr_imp <- impute_proteomics_perseus(
+    expr_mat = expr_filt,
+    cfg      = cfg
+  )
+  
+  list(
+    expr_raw  = expr_mat,
+    expr_filt = expr_filt,
+    expr_imp  = expr_imp,
+    row_data  = row_data_f,
+    meta      = col_data
+  )
+}
 
 
 

@@ -37,3 +37,9 @@ reports/
 *.tar.gz
 *.zip
 
+# Local data (do not commit)
+data/
+
+# Local scratch scripts
+scripts/test_*.R
+
