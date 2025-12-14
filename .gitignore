@@ -43,3 +43,4 @@ data/
 # Local scratch scripts
 scripts/test_*.R
 
+doc/
