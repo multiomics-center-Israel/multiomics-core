@@ -44,3 +44,5 @@ data/
 scripts/test_*.R
 
 doc/
+
+Rplots.pdf

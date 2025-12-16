@@ -4,6 +4,7 @@ library(targets)
 r_files <- list.files("R", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE)
 invisible(lapply(r_files, source))
 
+
 tar_option_set(
   packages = c("limma", "dplyr")
 )
@@ -40,13 +41,30 @@ list(
       config   = config
     )
   ),
+  tar_target(
+    prot_run_dir,
+    get_run_out_dir(config)
+  ),
+  
+  tar_target(
+    prot_qc_files,
+    mod_proteomics_qc(
+      pre     = prot_pre,
+      config  = config,
+      run_dir = prot_run_dir
+    ),
+    format = "file"
+  ),
+  
   
   tar_target(
     prot_de_files,
     write_proteomics_multimpute_outputs(
-      de_res     = prot_de,
-      out_dir    = file.path(config$paths$out, "proteomics"),
-      prefix     = "proteomics",
+      pre       = prot_pre,
+      de_res    = prot_de,
+      inputs    = prot_inputs,
+      config    = config,
+      run_dir   = get_run_out_dir(config),
       write_runs = FALSE
     ),
     format = "file"

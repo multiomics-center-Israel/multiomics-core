@@ -2,6 +2,10 @@ paths:
   raw: "data-raw"
   out: "outputs"
 
+project:
+  name: "E_Pick"
+  analysis_round: "Analysis_02"
+
 modes:
   rna:
     files:
