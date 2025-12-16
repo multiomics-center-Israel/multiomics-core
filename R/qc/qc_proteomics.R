@@ -111,26 +111,6 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-
-# helper 
-build_imputation_long_df <- function(imputed, imputed_flag) {
-  imputed      <- as.matrix(imputed)
-  imputed_flag <- as.matrix(imputed_flag)
-  
-  sample_ids <- colnames(imputed)
-  
-  df <- data.frame(
-    sample = rep(sample_ids, each = nrow(imputed)),
-    value  = as.vector(imputed),
-    flag   = as.vector(imputed_flag),
-    stringsAsFactors = FALSE
-  )
-  df$type <- ifelse(df$flag, "Imputed", "Observed")
-  df <- df[is.finite(df$value), , drop = FALSE]
-  df
-}
-
-
 #' Imputed data histograms per sample (facet by sample)
 #'
 #' @param imputed      numeric matrix (features x samples), after imputation.
@@ -139,71 +119,42 @@ build_imputation_long_df <- function(imputed, imputed_flag) {
 #' @param out_file     optional path to save plot.
 #'
 #' @return invisibly returns the ggplot object.
-imputed_histograms_summary <- function(imputed,
-                                       imputed_flag,
-                                       cfg = NULL,
-                                       out_file = NULL) {
- 
-  
-  imputed      <- as.matrix(imputed)
-  imputed_flag <- as.matrix(imputed_flag)
-  
-  sample_ids <- colnames(imputed)
-  df <- build_imputation_long_df(imputed, imputed_flag)
-  
-
-  
-  title_txt <- "Imputed data histograms summary"
-  if (!is.null(cfg) && !is.null(cfg$imputation)) {
-    w  <- cfg$imputation$width     %||% NA
-    ds <- cfg$imputation$downshift %||% NA
-    if (!is.na(w) && !is.na(ds)) {
-      title_txt <- sprintf(
-        "Imputed data histograms summary (WIDTH=%.2f, DOWNSHIFT=%.2f)",
-        w, ds
-      )
-    }
-  }
-  
-  p <- ggplot2::ggplot(df, ggplot2::aes(x = value, fill = type)) +
-    ggplot2::geom_histogram(alpha = 0.7, bins = 60, position = "identity") +
-    ggplot2::facet_wrap(~ sample, nrow = 1) +
-    ggplot2::labs(
-      title = title_txt,
-      x     = "log2 intensity",
-      y     = "Frequency",
-      fill  = "Value"
-    ) +
-    ggplot2::theme_minimal()
+imputed_histograms_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
+  p <- build_imputed_histograms_summary(imputed, imputed_flag, cfg = cfg)
   
   if (!is.null(out_file)) {
-    ggplot2::ggsave(out_file,
-                    plot  = p,
-                    width = max(7, length(sample_ids) * 1.5),
-                    height = 4)
+    ggplot2::ggsave(out_file, plot = p, width = 12, height = 5, dpi = 150)
   }
   
   invisible(p)
 }
-
 
 #' Expression heatmap with sample annotations
 #'
 #' @param expr_mat numeric matrix (features x samples), usually normalized/imputed.
 #' @param meta     metadata table (one row per sample).
 #' @param cfg      config$modes$proteomics (effects$samples + effects$color).
+#' @param out_file optional path to save plot (PNG).
 #' @param title    plot title.
-#' @param out_file optional path to save plot (PDF/PNG).
-#' @param cluster_rows logical, cluster proteins.
-#' @param cluster_cols logical, cluster samples.
 #' @param max_rows optional: if not NULL, sample this many rows for speed.
-qc_expr_heatmap <- function(expr_mat, meta, cfg, out_file = NULL, title = NULL, max_rows = 2000) {
+#' @param cluster_cols logical: cluster samples (TRUE = legacy default).
+#'
+qc_expr_heatmap <- function(expr_mat,
+                            meta,
+                            cfg,
+                            out_file = NULL,
+                            title = NULL,
+                            max_rows = 2000,
+                            cluster_cols = TRUE) {
   
   eff <- cfg$effects
   sample_col <- eff$samples
   color_col  <- eff$color
   
+  expr_mat <- as.matrix(expr_mat)
   sample_ids <- colnames(expr_mat)
+  
+  meta <- as.data.frame(meta)
   meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
   
   annot <- data.frame(
@@ -211,51 +162,25 @@ qc_expr_heatmap <- function(expr_mat, meta, cfg, out_file = NULL, title = NULL, 
     row.names = sample_ids
   )
   
-  # 1) Save to file (no screen)
-  if (!is.null(out_file)) {
-    with_png(out_file, {
-      plot_expr_heatmap(expr_mat, annotation_col = annot, max_rows = max_rows, main = title)
-    })
+  plot_fun <- function() {
+    plot_expr_heatmap(
+      expr_mat        = expr_mat,
+      annotation_col  = annot,
+      max_rows        = max_rows,
+      main            = title,
+      # NEW: allow disabling column clustering for the "wo_col" version
+      cluster_cols    = cluster_cols
+    )
   }
   
-  # 2) Always draw to screen and return object
-  ph <- plot_expr_heatmap(expr_mat, annotation_col = annot, max_rows = max_rows, main = title)
-  invisible(ph)
-}
-
-
-
-qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, dist_method = "euclidean", out_file = NULL) {
-  
-  eff <- cfg$effects
-  sample_col <- eff$samples
-  color_col  <- eff$color
-  
-  sample_ids <- colnames(expr_mat)
-  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  
-  annot <- data.frame(
-    Condition = meta_sub[[color_col]],
-    row.names = sample_ids
-  )
-  
   if (!is.null(out_file)) {
-    with_png(out_file, {
-      plot_sample_distance_heatmap(expr_mat, dist_method = dist_method, annotation_col = annot)
-    })
+    ph <- plot_fun()
+    save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
   }
   
-  ph <- plot_sample_distance_heatmap(expr_mat, dist_method = dist_method, annotation_col = annot)
-  invisible(ph)
+  invisible(plot_fun())
+  
 }
-
-
-
-
-
-
-
-                      
 
 #' Density overlay of normalized expression for all samples
 #'
@@ -298,7 +223,112 @@ qc_proteomics_density <- function(expr_mat,
   invisible(p)
 }
 
+#' Sample–sample correlation heatmap (proteomics QC)
+#'
+#' Computes a sample correlation matrix (Pearson) and plots it as a heatmap.
+#' This is complementary to the sample distance heatmap.
+#'
+#' @param expr_mat numeric matrix (features x samples), typically log2 and imputed.
+#' @param meta     metadata table (one row per sample). Used only for annotation (optional).
+#' @param cfg      config$modes$proteomics (effects$samples + effects$color).
+#' @param out_file optional path to save PNG.
+#' @param method   correlation method ("pearson", "spearman").
+#' @return invisibly returns the pheatmap object.
+qc_sample_correlation_heatmap <- function(expr_mat,
+                                          meta,
+                                          cfg,
+                                          out_file,
+                                          method = "pearson",
+                                          fontsize = 12) {
+  eff <- cfg$effects
+  sample_col <- eff$samples
+  color_col  <- eff$color
+  
+  expr_mat <- as.matrix(expr_mat)
+  meta <- as.data.frame(meta)
+  sample_ids <- colnames(expr_mat)
+  
+  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
+  
+  annot <- data.frame(
+    Condition = meta_sub[[color_col]],
+    row.names = sample_ids
+  )
+  
+  ph <- plot_sample_correlation_heatmap(
+    expr_mat = expr_mat,
+    method = method,
+    annotation_col = annot,
+    fontsize = fontsize
+  )
+  
+  save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
+  invisible(ph)
+}
 
+
+#' Sample–sample distance heatmap (QC)
+#'
+#' Generates a sample–sample distance heatmap from a proteomics expression matrix
+#' and saves it to file.
+#'
+#' Distances are computed between samples based on their expression profiles
+#' (features x samples matrix). This plot is primarily a **technical QC tool**,
+#' useful for detecting outlier samples, batch effects, or unexpected clustering.
+#'
+#' Two modes are supported:
+#' - with_na = FALSE (default): rows (proteins) containing any NA values are removed
+#'   prior to distance computation.
+#' - with_na = TRUE: NA values are kept; distances are computed on available values.
+#'
+#' @param expr_mat Numeric matrix (features x samples), typically log2 normalized
+#'        and optionally imputed expression values.
+#' @param meta Data frame with one row per sample (sample metadata).
+#' @param cfg Proteomics mode configuration (`config$modes$proteomics`),
+#'        used to extract sample ID and color annotations.
+#' @param out_file Path to output PNG file.
+#' @param with_na Logical; whether to keep rows with missing values (default: FALSE).
+#' @param fontsize Numeric font size for row/column labels.
+#'
+#' @return Invisibly returns the pheatmap object.
+#'
+#' @seealso plot_sample_distance_heatmap
+#'
+qc_sample_distance_heatmap <- function(expr_mat,
+                                       meta,
+                                       cfg,
+                                       out_file,
+                                       with_na = FALSE,
+                                       fontsize = 12) {
+  
+  eff <- cfg$effects
+  sample_col <- eff$samples
+  color_col  <- eff$color
+  
+  expr_mat <- as.matrix(expr_mat)
+  meta <- as.data.frame(meta)
+  sample_ids <- colnames(expr_mat)
+  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
+  
+  annot <- data.frame(
+    Condition = meta_sub[[color_col]],
+    row.names = sample_ids
+  )
+  
+  if (!with_na) {
+    keep <- stats::complete.cases(expr_mat)
+    expr_mat <- expr_mat[keep, , drop = FALSE]
+  }
+  
+  ph <- plot_sample_distance_heatmap(
+    expr_mat = expr_mat,
+    annotation_col = annot,
+    fontsize = fontsize
+  )
+  
+  save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
+  invisible(ph)
+}
 
 
 

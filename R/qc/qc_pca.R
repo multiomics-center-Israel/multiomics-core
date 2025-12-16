@@ -88,18 +88,11 @@ qc_pca_3d <- function(expr_mat,
   
   # Align metadata order with matrix column order
   # (Important: This ensures consistency with the PCA results later)
-  match_idx <- match(sample_ids, meta[[sample_col]])
-  
-  if (any(is.na(match_idx))) {
-    missing_samples <- sample_ids[is.na(match_idx)]
-    stop("Some samples in expr_mat are missing from metadata: ", paste(head(missing_samples), collapse=", "))
-  }
-  
-  meta_sub <- meta[match_idx, , drop = FALSE]
-  rownames(meta_sub) <- sample_ids
+  meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
   
   # PCA Calculation
-  pca <- stats::prcomp(t(expr_mat), scale. = TRUE)
+  pca <- stats::prcomp(t(expr_mat), center = TRUE, scale. = FALSE)
+  
   
   var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
   pc_labels <- sprintf(
@@ -157,8 +150,11 @@ qc_pca_3d <- function(expr_mat,
       ),
       title = "3D PCA: PC1 vs PC2 vs PC3"
     )
-  saveWidget(widget = plt, 
-             file = out_file, 
-             selfcontained = TRUE)
+  htmlwidgets::saveWidget(
+    widget = plt,
+    file = out_file,
+    selfcontained = TRUE
+  )
+  
   return(plt)
 }

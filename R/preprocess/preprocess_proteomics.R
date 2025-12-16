@@ -284,19 +284,39 @@ preprocess_proteomics <- function(inputs, config) {
   expr_filt  <- filt$expr_mat
   row_data_f <- filt$row_data
   
+  
   # imputation (currently: Perseus)
-  expr_imp <- impute_proteomics_perseus(
-    expr_mat = expr_filt,
-    cfg      = cfg
+  imp_res <- impute_proteomics_perseus(
+    expr_mat     = expr_filt,
+    cfg          = cfg,
+    return_flags = TRUE
   )
   
+  expr_imp <- imp_res$imputed
+  
+  imputation_qc <- NULL
+  
+  if (!is.null(imp_res$imputed_flag)) {
+    imputation_qc <- list(
+      imputed_flag     = imp_res$imputed_flag,
+      hist_plot = build_imputed_histograms_summary(
+        expr_mat = expr_filt,
+        imputed_flag = imp_res$imputed_flag,
+        cfg      = cfg
+      )
+    )
+  }
+  
+  
   list(
-    expr_raw  = expr_mat,
-    expr_filt = expr_filt,
-    expr_imp  = expr_imp,
-    row_data  = row_data_f,
-    meta      = col_data
+    expr_raw   = expr_mat,
+    expr_filt  = expr_filt,
+    expr_imp   = expr_imp,
+    row_data   = row_data_f,
+    meta       = inputs$metadata,
+    imputation = imputation_qc
   )
+  
 }
 
 
