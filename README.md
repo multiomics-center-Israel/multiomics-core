@@ -21,6 +21,21 @@ A modular and reproducible R framework for single-omics and multi-omics analyses
 
 ------------------------------------------------------------------------
 
+## Getting started (new users)
+
+If you are new to **multiomics-core**, start here:
+
+-   📘 **Onboarding guide:** `docs/onboarding.md`
+
+The onboarding guide explains:
+
+-   How to open the project in RStudio.
+-   How to restore the R environment with `renv`.
+-   How to run analyses interactively or via `{targets}`.
+-   How to reproduce previous runs.
+
+------------------------------------------------------------------------
+
 ## Repository structure
 
 ```         
@@ -33,7 +48,7 @@ R/
 ├── qc/ # QC wrappers (logic + saving)
 ├── utils.R
 config/
-├── config.yml # Central configuration file
+├── config.yaml # Central configuration file
 docs/ # Design notes and architecture decisions
 outputs/ # Analysis outputs (git-ignored)
 _targets.R # {targets} pipeline definition
@@ -62,7 +77,7 @@ renv::restore()
 
 #### Edit the central configuration file:
 
-`config/config.yml`
+`config/config.yaml`
 
 ***The configuration controls***:
 
@@ -115,7 +130,7 @@ invisible(lapply(r_files, source))
 
 # Load config
 
-config <- load_config("config/config.yml")
+config <- load_config("config/config.yaml")
 
 # Load inputs
 
@@ -131,6 +146,35 @@ qc_pca_scatter( expr_mat = res$expr_imp,
   meta     = res$meta, cfg = config$modes$proteomics, out_file = "outputs/proteomics/qc/pca_pc1_pc2.png" )
 ```
 
+## Starting a new analysis run
+
+To start a new analysis with different parameters:
+
+1.  Copy a config template from `config/templates/`
+
+    ``` bash
+    cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml
+    ```
+
+2.  Update project identifiers, input paths, and analysis parameters
+
+3.  Place your data under data/<mode>/
+
+4.  Restore the environment if needed:
+
+``` r
+renv::restore()
+```
+
+5.  Run the pipeline:
+
+``` r
+library(targets)
+tar_make()
+```
+
+Each run produces a separate output folder, allowing multiple analyses to coexist without overwriting results.
+
 ## Proteomics DE details
 
 Proteomics differential expression is implemented using:
@@ -145,7 +189,7 @@ Proteomics differential expression is implemented using:
 
 -   stability filtering (features must pass DE cutoffs in ≥ K/N runs)
 
-All thresholds are controlled via `config.yml`.
+All thresholds are controlled via `config.yaml`.
 
 ## Reproducibility
 
@@ -154,6 +198,16 @@ All thresholds are controlled via `config.yml`.
 -   Outputs and caches are excluded from git
 
 -   `{targets}` provides deterministic, restartable pipelines
+
+## Outputs
+
+All analysis outputs are written to the `outputs/` directory.
+
+-   This directory is intentionally excluded from git
+-   Results should be shared by zipping the relevant output folder
+-   Each run is isolated by its configuration parameters
+
+This design keeps the repository clean while allowing full reproducibility.
 
 # Status
 

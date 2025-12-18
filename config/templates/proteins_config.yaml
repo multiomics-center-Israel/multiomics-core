@@ -1,0 +1,108 @@
+# ============================================================
+# multiomics-core — Proteomics configuration template
+# Copy this file and adjust ONLY the fields marked as REQUIRED.
+# Do NOT edit R code to start a new project.
+# ============================================================
+
+paths:
+  raw: "data-raw"          # optional: raw inputs (not always used)
+  out: "outputs"  # REQUIRED: base output directory (run subfolders created automatically)
+
+
+project:
+  name: "<PROJECT_NAME>"   # REQUIRED: short project identifier
+  analysis_round: "A01"    # REQUIRED: analysis iteration / round
+  active_mode: "proteomics"  # recommended: enables mode switching
+
+# ============================================================
+# Proteomics mode configuration
+# ============================================================
+modes:
+  proteomics:
+
+    # --------------------------------------------------------
+    # Data origin / engine (informational, not used internally)
+    # --------------------------------------------------------
+    engine: "DIANN"          # e.g. DIANN / MaxQuant / FragPipe
+
+    # --------------------------------------------------------
+    # Input files (REQUIRED)
+    # --------------------------------------------------------
+    files:
+      protein:    "data/proteomics/protein_matrix.csv"   # expression matrix
+      sample_map: "data/proteomics/sample_map.csv"       # raw → unified sample IDs
+      metadata:   "data/proteomics/meta_prot.csv"        # sample-level metadata
+      contrasts:  "data/proteomics/contrasts_prot.csv"   # limma contrasts
+
+    # --------------------------------------------------------
+    # Column naming conventions (REQUIRED)
+    # --------------------------------------------------------
+    id_columns:
+      protein_id: "Protein.Group"    # unique protein identifier
+      sample_col: "SampleID"         # final unified sample ID
+
+      # Optional protein annotations to keep in output tables
+      protein_annot:
+        - "Protein.Names"
+        - "Genes"
+        - "First.Protein.Description"
+        # - "N.Peptides"   # optional: only if present in your protein matrix
+
+      # Mapping from matrix column names → SampleID
+      map_from: "sample_orig_name"   # column names in protein matrix
+      map_to:   "SampleID"            # column in sample_map containing unified IDs
+
+    # --------------------------------------------------------
+    # Filtering
+    # --------------------------------------------------------
+    filtering:
+      min_count:
+        default: 3        # minimum non-NA values per condition
+        # Optional per-condition override:
+        # Control: 3
+        # Treatment: 2
+
+    # --------------------------------------------------------
+    # Normalization
+    # --------------------------------------------------------
+    normalization:
+      method: "none"      # "none" or "median"
+
+    # --------------------------------------------------------
+    # Multiple imputation
+    # --------------------------------------------------------
+    imputation:
+      method: "perseus"   # "none" | "perseus" | "dep2"
+
+      no_repetitions: 10   # number of imputations
+      min_no_passed: 8     # stability threshold across imputations
+
+      # Perseus-style parameters (used only if method == "perseus")
+      width: 0.2
+      downshift: 1.6
+
+      # DEP2 parameters (used only if method == "dep2")
+      dep2_method: "MinDet"
+      dep2_random_seed: 1
+
+    # --------------------------------------------------------
+    # Differential expression (limma)
+    # --------------------------------------------------------
+    limma:
+      use_adj_for_pass1: true   # use adj.P.Val for stability pass
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+
+    # --------------------------------------------------------
+    # Plotting / QC aesthetics
+    # --------------------------------------------------------
+    effects:
+      color: "Condition"    # column in metadata
+      shape: null
+      samples: "SampleID"
+
+# ============================================================
+# Global parameters
+# ============================================================
+params:
+  seed: 1    # REQUIRED: controls reproducibility
