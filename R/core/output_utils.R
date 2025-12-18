@@ -37,16 +37,12 @@ create_legacy_output_dirs <- function(run_dir) {
 #' Improved outputs use clearer filenames and the .tsv extension.
 #'
 #' @param x data.frame or matrix to write
-#' @param legacy_path Full path to legacy file (typically *.txt)
-#' @param improved_path Full path to improved file (typically *.tsv)
+#' @param path Full path to improved file (typically *.tsv)
 #' @return Character vector of written file paths (legacy, improved)
-write_dual_tsv <- function(x, legacy_path, improved_path) {
-  dir.create(dirname(legacy_path), showWarnings = FALSE, recursive = TRUE)
-  dir.create(dirname(improved_path), showWarnings = FALSE, recursive = TRUE)
+write_tsv <- function(x, path) {
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  write.table(x, path, sep = "\t", quote = FALSE, col.names = NA)
   
-  write.table(x, legacy_path, sep = "\t", quote = FALSE, col.names = NA)
-  write.table(x, improved_path, sep = "\t", quote = FALSE, col.names = NA)
-  
-  c(legacy_path, improved_path)
+  path
 }
 
