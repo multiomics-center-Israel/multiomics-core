@@ -1,4 +1,4 @@
-run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl) {
+run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
   stopifnot(is.matrix(expr_imp))
   stopifnot(all(c("SampleID","Condition") %in% colnames(meta)))
   stopifnot(all(c("Contrast_name","Factor","Numerator","Denominator") %in% colnames(contrasts_df)))
@@ -26,9 +26,15 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl) {
   fit2 <- limma::eBayes(fit2)
   
   # 5) Build per-contrast annotated topTables (match old: sort.by="none", number=Inf)
-  idx <- as.integer(rownames(expr_imp))
-  stopifnot(all(!is.na(idx)))
-  stopifnot(all(idx >= 1 & idx <= nrow(prot_tbl)))
+  protein_id_col <- cfg$modes$proteomics$id_columns$protein_id
+  stopifnot(protein_id_col %in% colnames(prot_tbl))
+  idx <- match(rownames(expr_imp), prot_tbl[[protein_id_col]])
+  
+  if (anyNA(idx)) {
+    stop(sprintf("prot_tbl missing %d proteins (e.g. %s)",
+                 sum(is.na(idx)), paste(head(rownames(expr_imp)[is.na(idx)], 3), collapse = ", ")))
+  }
+  
   
   ann <- prot_tbl[idx, c("Protein.Group","Protein.Names","Genes","First.Protein.Description"), drop = FALSE]
   
@@ -48,7 +54,6 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl) {
     de_out
   })
   names(de_tables) <- colnames(contrast.matrix)
-  
 
   # return only objects (no files yet)
   list(

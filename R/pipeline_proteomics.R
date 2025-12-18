@@ -37,7 +37,7 @@ run_proteomics_preprocessing <- function(config) {
 #'        containing legacy-compatible columns (sum.pass.*, pass.imputs.*, linearFC.imputs.*, etc.).}
 #'
 #' @seealso run_limma_mult_imputation_proteomics
-#' @seealso summarize_mult_imputation
+#' @seealso summarize_limma_mult_imputation
 #'
 run_proteomics_de_mult_impute <- function(expr_mat, inputs, config) {
   
@@ -59,13 +59,13 @@ run_proteomics_de_mult_impute <- function(expr_mat, inputs, config) {
     seed_base    = config$params$seed
   )
   
-  # Keep only DE tables per run (format expected by summarize_mult_imputation)
+  # Keep only DE tables per run (format expected by summarize_limma_mult_imputation)
   runs_de_tables <- lapply(runs, `[[`, "de_tables")
   
   # Legacy stability summary ("passed in >= min_no_passed imputations")
-  summary_df <- summarize_mult_imputation(
+  summary_df <- summarize_limma_mult_imputation(
     runs_de_tables = runs_de_tables,
-    cfg            = limma_cfg
+    config         = config
   )
   
   list(

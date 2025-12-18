@@ -1,9 +1,5 @@
-#' Write legacy-style proteomics datasets (with improved copies)
-#'
-#' Writes intermediate proteomics matrices in both:
-#' 1) Legacy filenames (*.txt, TSV) for backward compatibility
-#' 2) Improved filenames (*.tsv) with clearer naming
-#'
+#' Writes intermediate proteomics matrices
+#'  
 #' @param pre Output of preprocess_proteomics()
 #' @param runs Optional list of limma/imputation runs
 #' @param config Full config list
@@ -19,10 +15,9 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
   ## 1) Unimputed (log2) expression matrix
   files_written <- c(
     files_written,
-    write_dual_tsv(
+    write_tsv(
       x = pre$expr_filt,
-      legacy_path   = file.path(dirs$datasets, "LFQ_data_unimputed.txt"),
-      improved_path = file.path(dirs$datasets, "protein_log2_filtered_unimputed.tsv")
+      path = file.path(dirs$datasets, "protein_log2_filtered_unimputed.tsv")
       
     )
   )
@@ -33,13 +28,9 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
   
   files_written <- c(
     files_written,
-    write_dual_tsv(
+    write_tsv(
       x = pre$expr_imp,
-      legacy_path = file.path(
-        dirs$datasets,
-        sprintf("Filtered_imputed_data_once_WIDTH_%s_SHIFT_%s.txt", width, downshift)
-      ),
-      improved_path = file.path(
+      path = file.path(
         dirs$datasets,
         sprintf(
           "protein_log2_filtered_imputed_once_width_%s_shift_%s.tsv",
@@ -64,10 +55,9 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
       
       files_written <- c(
         files_written,
-        write_dual_tsv(
+        write_tsv(
           x = expr_i,
-          legacy_path   = file.path(rep_dir_legacy,   sprintf("Imputed.%d.txt", i)),
-          improved_path = file.path(
+          path = file.path(
             rep_dir_improved,
             sprintf("protein_log2_filtered_imputed_%02d.tsv", i)
           )
@@ -85,7 +75,7 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
 #'   - Limma_summary_mult_imputs_P_<p>.txt  (legacy)
 #' and also a clearer TSV filename (improved).
 #'
-#' @param summary_df data.frame produced by summarize_mult_imputation()
+#' @param summary_df data.frame produced by summarize_limma_mult_imputation()
 #' @param config Full config list
 #' @param run_dir Run output root directory
 #' @return Character vector of written file paths
@@ -95,10 +85,9 @@ write_limma_multimp_summary_legacy <- function(summary_df, config, run_dir) {
   p_cut <- config$modes$proteomics$limma$p_cutoff
   p_tag <- format(p_cut, trim = TRUE, scientific = FALSE)
   
-  legacy_path <- file.path(dirs$datasets, sprintf("Limma_summary_mult_imputs_P_%s.txt", p_tag))
-  improved_path <- file.path(dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag))
+  path <- file.path(dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag))
   
-  write_dual_tsv(summary_df, legacy_path, improved_path)
+  write_tsv(summary_df, path)
 }
 #' Build legacy-style wide limma table across imputations
 #'
@@ -145,10 +134,9 @@ build_limma_results_multimp_wide <- function(
   
   out
 }
-#' Write legacy-style limma results across multiple imputations (with improved copy)
+#' Write legacy-style limma results across multiple imputations 
 #'
 #' Produces:
-#' - Datasets/Limma_results_mult_imput_P_<p>.txt (legacy)
 #' - Datasets/limma_results_multimp_p<p>.tsv (improved)
 #'
 #' @param de_res Output of run_proteomics_de_mult_impute()
@@ -168,10 +156,9 @@ write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, ru
     stats_cols     = c("logFC", "P.Value", "adj.P.Val")
   )
   
-  legacy_path   <- file.path(dirs$datasets, sprintf("Limma_results_mult_imput_P_%s.txt", p_tag))
-  improved_path <- file.path(dirs$datasets, sprintf("limma_results_multimp_p%s.tsv", p_tag))
+  path <- file.path(dirs$datasets, sprintf("limma_results_multimp_p%s.tsv", p_tag))
   
-  write_dual_tsv(wide_df, legacy_path, improved_path)
+  write_tsv(wide_df, path)
 }
 #' Build legacy-style Final_results table (all proteins)
 #'
@@ -262,9 +249,8 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
 #' @param run_dir Run output root directory
 #' @return Character vector of written file paths
 write_final_results_table_legacy <- function(final_results, run_dir) {
-  legacy_path   <- file.path(run_dir, "Final_results.txt")
-  improved_path <- file.path(run_dir, "final_results.tsv")
-  write_dual_tsv(final_results, legacy_path, improved_path)
+  path <- file.path(run_dir, "final_results.tsv")
+  write_tsv(final_results, path)
 }
 #' Write legacy Excel outputs for proteomics final results
 #'
@@ -439,10 +425,8 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, run
     row_data     = pre$row_data
   )
   
-  files_final <- write_final_results_table_legacy(
-    final_results = final_results,
-    run_dir       = run_dir
-  )
+  
+  files_final <- write_tsv(final_results, file.path(run_dir, "final_results.tsv"))
   
   # 5) Excel outputs (all + DE) + Cutoffs tab
   files_xlsx <- write_final_results_excels_legacy(

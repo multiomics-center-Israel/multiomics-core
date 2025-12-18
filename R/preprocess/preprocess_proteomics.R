@@ -1,4 +1,4 @@
-#' Extract log2-transformed DIA-NN measurements per sample
+#' Extract log2-transformed DIA-NN measurements per sample (features × samples)
 #'
 #' This function:
 #' - selects sample columns from the wide protein matrix (excluding annotation columns)
@@ -6,28 +6,38 @@
 #' - applies log2 transformation
 #' - renames columns from raw sample names to unified SampleID (using sample_map)
 #' - reorders columns to match metadata sample order (effects$samples)
+#' - sets rownames to the configured protein ID column (id_columns$protein_id)
 #'
-#' @param protein    Protein table (wide DIA-NN output)
-#' @param sample_map Sample mapping table (e.g. from config$modes$proteomics$files$sample_map)
-#' @param meta       Metadata table (e.g. meta_prot.csv)
-#' @param cfg        config$modes$proteomics
+#' @param protein    Protein table (wide DIA-NN output).
+#' @param sample_map Sample mapping table.
+#' @param meta       Metadata table.
+#' @param cfg        config$modes$proteomics.
 #'
-#' @return A numeric matrix/data.frame of log2-intensities,
-#'         columns ordered to match meta[[effects$samples]]
+#' @return A numeric matrix of log2 intensities (features × samples), with:
+#'   - rownames = protein IDs (e.g. Protein.Group)\n
+#'   - colnames = unified sample IDs (e.g. SampleID), ordered to match metadata.
 get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
   id_cols  <- cfg$id_columns
   eff_cols <- cfg$effects
   
-  # 1) Identify non-sample columns in the protein table 
+  # 0) Protein ID for rownames
+  protein_id_col <- id_cols$protein_id
+  check_has_cols(protein, protein_id_col, df_name = "protein")
+  feat_ids <- as.character(protein[[protein_id_col]])
   
-  annot_cols <- id_cols$protein_annot
-  if (is.null(annot_cols)) {
-    annot_cols <- character(0)
-  } else {
-    annot_cols <- unlist(annot_cols)
+  if (anyNA(feat_ids) || any(feat_ids == "")) {
+    stop(sprintf("Protein ID column '%s' contains NA/empty values.", protein_id_col))
+  }
+  if (anyDuplicated(feat_ids) > 0) {
+    dups <- unique(feat_ids[duplicated(feat_ids)])
+    stop(sprintf("Protein ID column '%s' contains duplicated IDs (e.g. %s).",
+                 protein_id_col, paste(head(dups, 3), collapse = ", ")))
   }
   
-  non_sample_cols <- unique(c(id_cols$protein_id, annot_cols))
+  # 1) Identify non-sample columns in the protein table
+  annot_cols <- id_cols$protein_annot
+  annot_cols <- if (is.null(annot_cols)) character(0) else unlist(annot_cols)
+  non_sample_cols <- unique(c(protein_id_col, annot_cols))
   
   # Sample columns = everything else
   sample_cols <- setdiff(colnames(protein), non_sample_cols)
@@ -37,37 +47,27 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
   
   df_m <- protein[, sample_cols, drop = FALSE]
   
-  # 2) Coerce to numeric (DIA-NN often has blanks) 
-  
+  # 2) Coerce to numeric (DIA-NN often has blanks)
   df_m <- as.data.frame(
-    suppressWarnings(
-      sapply(df_m, function(x) as.numeric(as.character(x)))
-    ),
-    row.names   = row.names(df_m),
+    suppressWarnings(sapply(df_m, function(x) as.numeric(as.character(x)))),
     check.names = FALSE
   )
   
-  # 3) Log2 transformation 
-  
+  # 3) Log2 transformation
   df_m <- as.data.frame(
     log2(df_m),
-    row.names   = row.names(df_m),
     check.names = FALSE
   )
   
-  # 4) Rename columns: raw sample names -> SampleID using sample_map 
-  
+  # 4) Rename columns: raw sample names -> SampleID using sample_map
   raw_names <- colnames(df_m)
-  
   map_from <- id_cols$map_from
   map_to   <- id_cols$map_to
   
-  # Sanity check: mapping columns exist
   check_has_cols(sample_map, c(map_from, map_to), df_name = "sample_map")
   
-  new_names <- sample_map[[map_to]][ match(raw_names, sample_map[[map_from]]) ]
+  new_names <- sample_map[[map_to]][match(raw_names, sample_map[[map_from]])]
   
-  # If some didn't match, keep originals but warn
   unmatched <- is.na(new_names)
   if (any(unmatched)) {
     warning(
@@ -79,25 +79,31 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
   colnames(df_m) <- ifelse(unmatched, raw_names, new_names)
   
   # 5) Reorder columns to match metadata sample order
-  
   meta_sample_col <- eff_cols$samples
   check_has_cols(meta, meta_sample_col, df_name = "metadata")
-  
   meta_sample_ids <- meta[[meta_sample_col]]
   
   missing_in_df <- setdiff(meta_sample_ids, colnames(df_m))
   if (length(missing_in_df) > 0) {
     warning(
       "These samples from metadata were not found in DIA-NN columns after renaming: ",
-      paste(missing_in_df, collapse = ", ")
+      paste(head(missing_in_df, 10), collapse = ", "),
+      if (length(missing_in_df) > 10) sprintf(" ... (+%d more)", length(missing_in_df) - 10) else ""
     )
   }
   
   ordered_cols <- intersect(meta_sample_ids, colnames(df_m))
   df_m_ordered <- df_m[, ordered_cols, drop = FALSE]
   
-  df_m_ordered
+  # 6) Return as numeric matrix with proper rownames
+  m <- coerce_df_to_numeric_matrix(df_m_ordered, rownames_vec = feat_ids, name = "diann_measurements")
+  
+  # Optional: enforce strict contract
+  assert_numeric_matrix(m, "diann_measurements")
+  
+  m
 }
+
 
 #' Convenience wrapper: extract DIA-NN measurements from inputs list
 #'
@@ -259,65 +265,94 @@ preprocess_proteomics <- function(inputs, config) {
   # Build standardized proteomics object (engine-aware)
   prot_obj <- get_proteomics_expression_matrix(inputs, config)
   
-  # Downstream contract: work on log2 assay
-  expr_mat  <- prot_obj$assay_log2
-  row_data  <- prot_obj$row_data
-  col_data  <- prot_obj$col_data
+  # Downstream contract: work on log2 assay (features x samples)
+  expr_raw <- prot_obj$assay_log2
+  row_data <- prot_obj$row_data
+  col_data <- prot_obj$col_data
   
+  # ---- enforce matrix + IDs contract early ----
+  # Ensure expr_raw is a numeric matrix with proper row/col names.
+  # Prefer protein_id column as rownames if needed.
+  protein_id_col <- cfg$id_columns$protein_id
   
-  # protein annotation
-  row_data <- inputs$protein[
-    ,
-    c(cfg$id_columns$protein_id,
-      unlist(cfg$id_columns$protein_annot)),
-    drop = FALSE
-  ]
+  # If expr_raw is a data.frame, coerce to matrix
+  if (is.data.frame(expr_raw)) {
+    rn <- NULL
+    if (!is.null(row_data) && protein_id_col %in% colnames(row_data)) {
+      rn <- row_data[[protein_id_col]]
+    }
+    expr_raw <- coerce_df_to_numeric_matrix(expr_raw, rownames_vec = rn, name = "expr_raw")
+  }
   
-  # filtering
+  # If rownames are missing/meaningless, set from row_data protein_id
+  if (!is.null(row_data) && protein_id_col %in% colnames(row_data)) {
+    rn <- as.character(row_data[[protein_id_col]])
+    # replace if empty or looks like 1..N
+    if (is.null(rownames(expr_raw)) || all(grepl("^\\d+$", rownames(expr_raw)))) {
+      rownames(expr_raw) <- rn
+    }
+  }
+  
+  assert_numeric_matrix(expr_raw, "expr_raw")
+  
+  # Ensure col_data is aligned to expr_raw columns (same sample IDs)
+  sample_id_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
+  check_has_cols(col_data, sample_id_col, df_name = "col_data")
+  
+  # Reorder col_data to match expr_raw colnames (fail if missing)
+  idx <- match(colnames(expr_raw), col_data[[sample_id_col]])
+  if (anyNA(idx)) {
+    missing <- colnames(expr_raw)[is.na(idx)]
+    stop(sprintf("col_data is missing %d samples present in expr_raw, e.g. %s",
+                 length(missing), paste(head(missing, 3), collapse = ", ")))
+  }
+  col_data <- col_data[idx, , drop = FALSE]
+  
+  # ---- filtering ----
   filt <- filter_proteomics_by_min_count(
-    expr_mat = expr_mat,
+    expr_mat = expr_raw,
     row_data = row_data,
     meta     = col_data,
     cfg      = cfg
   )
   
-  expr_filt  <- filt$expr_mat
+  expr_filt <- filt$expr_mat
   row_data_f <- filt$row_data
   
+  assert_numeric_matrix(expr_filt, "expr_filt")
   
-  # imputation (currently: Perseus)
+  # ---- optional: single-imputation + QC only (kept for plots) ----
   imp_res <- impute_proteomics_perseus(
     expr_mat     = expr_filt,
     cfg          = cfg,
     return_flags = TRUE
   )
-  
-  expr_imp <- imp_res$imputed
+  expr_imp_single <- imp_res$imputed
+  assert_numeric_matrix(expr_imp_single, "expr_imp_single")
   
   imputation_qc <- NULL
-  
   if (!is.null(imp_res$imputed_flag)) {
     imputation_qc <- list(
-      imputed_flag     = imp_res$imputed_flag,
-      hist_plot = build_imputed_histograms_summary(
-        expr_mat = expr_filt,
-        imputed_flag = imp_res$imputed_flag,
-        cfg      = cfg
+      imputed_flag = imp_res$imputed_flag,
+      hist_plot    = build_imputed_histograms_summary(
+        expr_mat      = expr_filt,
+        imputed_flag  = imp_res$imputed_flag,
+        cfg           = cfg
       )
     )
   }
   
-  
+  # Return: matrices only, consistently named
   list(
-    expr_raw   = expr_mat,
-    expr_filt  = expr_filt,
-    expr_imp   = expr_imp,
-    row_data   = row_data_f,
-    meta       = inputs$metadata,
-    imputation = imputation_qc
+    expr_raw_mat     = expr_raw,
+    expr_filt_mat    = expr_filt,
+    expr_imp_single  = expr_imp_single,
+    row_data         = row_data_f,
+    meta             = col_data,
+    imputation_qc    = imputation_qc
   )
-  
 }
+
 
 
 
