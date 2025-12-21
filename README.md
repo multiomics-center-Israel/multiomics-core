@@ -26,6 +26,7 @@ A modular and reproducible R framework for single-omics and multi-omics analyses
 If you are new to **multiomics-core**, start here:
 
 -   📘 **Onboarding guide:** `docs/onboarding.md`
+-   📘 **Developer guide:** `docs/developer_guide.md`
 
 The onboarding guide explains:
 
@@ -208,6 +209,12 @@ All analysis outputs are written to the `outputs/` directory.
 -   Each run is isolated by its configuration parameters
 
 This design keeps the repository clean while allowing full reproducibility.
+
+## Developer
+
+If you want to ant to extend, modify, or maintain the **multiomics-core** framework, please follow this guide:
+
+-   📘 **Developer guide:** `docs/developer_guide.md`
 
 # Status
 
