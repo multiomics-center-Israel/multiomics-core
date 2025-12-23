@@ -1,13 +1,7 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
 
 # Example — Adding a New QC Module (Worked Example)
 
-**Goal:** Add a **sample-level clustering QC** step for proteomics
-without breaking the pipeline.
+**Goal:** Add a **sample-level clustering QC** step for proteomics without breaking the pipeline.
 
 We will:
 
@@ -28,8 +22,7 @@ We want:
 -   reproducible
 -   saved as a PNG
 
-**Key decision:** This is *QC*, not preprocessing → lives under `R/qc/`
-and `R/plots/`.
+**Key decision:** This is *QC*, not preprocessing → lives under `R/qc/` and `R/plots/`.
 
 ------------------------------------------------------------------------
 

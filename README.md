@@ -60,8 +60,24 @@ _targets.R # {targets} pipeline definition
 # Requirements
 
 -   R (≥ 4.3 recommended)
--   `renv`
--   System libraries required by Bioconductor (for RNA / proteomics workflows)
+
+-   RStudio (recommended)
+
+-   `renv` (for reproducible environments)
+
+## Platform-specific requirements
+
+### Windows users:
+
+-   **Rtools** (matching your R version, e.g. Rtools45 for R 4.5)
+
+-   R equired to compile some CRAN / Bioconductor packages when binaries are not available.
+
+On Windows, missing **Rtools** may cause `renv::restore()` to fail when packages need to be built from source (e.g. Bioconductor packages such as `SparseArray`).
+
+### Linux / macOS users:
+
+-   System libraries required by Bioconductor (compiler toolchain, libxml2, curl, etc.)
 
 ------------------------------------------------------------------------
 
