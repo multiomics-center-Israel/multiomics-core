@@ -4,7 +4,7 @@ paths:
 
 project:
   name: "E_Pick"
-  analysis_round: "Analysis_03"
+  analysis_round: "Analysis_05"
 
 modes:
   rna:

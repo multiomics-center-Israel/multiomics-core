@@ -168,7 +168,6 @@ prot_pre    <- preprocess_proteomics(prot_inputs, config)
 prot_imps <- make_imputations_proteomics(
   expr_mat  = prot_pre$expr_filt,
   cfg       = config,
-  seed_base = 1234,
   verbose   = TRUE
 )
 

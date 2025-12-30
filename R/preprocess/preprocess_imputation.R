@@ -59,13 +59,15 @@ perseus_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
   )
 }
 
-make_imputations_proteomics <- function(expr_mat,
-                                        cfg,
-                                        seed_base = NULL,
-                                        verbose = FALSE) {
+make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
   
   imp_cfg <- cfg$modes$proteomics$imputation
   n_imputations <- as.integer(imp_cfg$no_repetitions)
+  
+  seed_base <- cfg$params$seed
+  if (is.null(seed_base) || is.na(seed_base)) {
+    stop("Missing cfg$params$seed. Set it in the YAML to ensure reproducibility.")
+  }
   
   stopifnot(is.matrix(expr_mat))
   stopifnot(!is.na(n_imputations), n_imputations >= 1)
@@ -77,9 +79,7 @@ make_imputations_proteomics <- function(expr_mat,
       message(sprintf("Imputation: %d / %d", i, n_imputations))
     }
     
-    if (!is.null(seed_base)) {
-      set.seed(as.integer(seed_base) + i)
-    }
+    set.seed(as.integer(seed_base) + i)
     
     expr_imp_i <- impute_proteomics_perseus(
       expr_mat,
@@ -97,4 +97,5 @@ make_imputations_proteomics <- function(expr_mat,
   
   imps
 }
+
 

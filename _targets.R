@@ -1,6 +1,5 @@
 library(targets)
 
-# Load all project R functions
 r_files <- list.files("R", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE)
 invisible(lapply(r_files, source))
 
@@ -23,10 +22,19 @@ list(
   
   tar_target(
     cfg_validated,
-    {
-      validate_config(config)
-      TRUE
-    }
+    { validate_config(config); TRUE }
+  ),
+  
+  # ✅ compute run dir early (used by writers)
+  tar_target(
+    prot_run_dir,
+    get_run_out_dir(config)
+  ),
+  
+  tar_target(
+    execution_info_files,
+    write_execution_info(config = config, run_dir = prot_run_dir),
+    format = "file"
   ),
   
   tar_target(
@@ -39,24 +47,20 @@ list(
     preprocess_proteomics(prot_inputs, config)
   ),
   
-  
   tar_target(
     prot_pre_legacy,
     as_legacy_pre(prot_pre)
   ),
   
-  # Compute multiple imputations ONCE (cached)
   tar_target(
     prot_imputations,
     make_imputations_proteomics(
-      expr_mat   = prot_pre$expr_filt_mat,
-      cfg        = config,
-      seed_base  = 1234,
-      verbose    = TRUE
+      expr_mat = prot_pre$expr_filt_mat,
+      cfg      = config,
+      verbose  = TRUE
     )
   ),
   
-  # Run limma on each imputed dataset
   tar_target(
     prot_limma_runs,
     run_limma_multimp(
@@ -69,41 +73,24 @@ list(
     )
   ),
   
-  # Summarize DE across imputations (legacy-compatible)
   tar_target(
     prot_de_res,
     {
       runs_de_tables <- lapply(prot_limma_runs, function(x) x$de_tables)
-      
-      summary_df <- summarize_limma_mult_imputation(
-        runs_de_tables = runs_de_tables,
-        config         = config
-      )
+      summary_df <- summarize_limma_mult_imputation(runs_de_tables = runs_de_tables, config = config)
       
       list(
-        runs_de_tables = runs_de_tables,   #
-        runs           = prot_limma_runs,  # nice to keep
+        runs_de_tables = runs_de_tables,
+        runs           = prot_limma_runs,
         summary_df     = summary_df
       )
     }
   ),
   
+  # (optional) “panic button” RData
   tar_target(
     project_rdata_file,
-    write_project_rdata(
-      run_dir     = prot_run_dir
-    ),
-    format = "file"
-  ), 
-  
-  tar_target(
-    prot_run_dir,
-    get_run_out_dir(config)
-  ),
-  
-  tar_target(
-    execution_info_files,
-    write_execution_info(config = config, run_dir = prot_run_dir),
+    write_project_rdata(run_dir = prot_run_dir),
     format = "file"
   ),
   

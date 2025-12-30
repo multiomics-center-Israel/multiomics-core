@@ -2,15 +2,15 @@
 
 A modular and reproducible R framework for single-omics and multi-omics analyses (RNA-seq, proteomics, metabolomics, lipidomics).
 
-### The project emphasizes:
+### The project emphasizes
 
 -   clear separation of concerns (I/O, preprocessing, DE, QC, plotting)
--   configuration-driven workflows - reproducibility via `renv`
+-   configuration-driven workflows with reproducibility via `renv`
 -   scalable orchestration via `{targets}`
 
 ------------------------------------------------------------------------
 
-### What this repository provides
+## What this repository provides
 
 -   Standardized data loading and validation
 -   Omics-specific preprocessing (filtering, normalization, imputation)
@@ -30,10 +30,10 @@ If you are new to **multiomics-core**, start here:
 
 The onboarding guide explains:
 
--   How to open the project in RStudio.
--   How to restore the R environment with `renv`.
--   How to run analyses interactively or via `{targets}`.
--   How to reproduce previous runs.
+-   How to open the project in RStudio
+-   How to restore the R environment with `renv`
+-   How to run analyses interactively or via `{targets}`
+-   How to reproduce previous runs
 
 ------------------------------------------------------------------------
 
@@ -41,73 +41,115 @@ The onboarding guide explains:
 
 ```         
 R/
-├── core/ # Core utilities (contracts, validation, matrix/meta helpers)
-├── de/ # Differential expression logic (limma, multi-imputation)
-├── preprocess_* # Omics-specific preprocessing pipelines
-├── pipeline_* # High-level pipeline entry points
-├── plots/ # Pure plotting functions (no I/O)
-├── qc/ # QC wrappers (logic + saving)
-├── utils.R
+├── core/        # Core utilities (contracts, validation, matrix/meta helpers)
+├── de/          # Differential expression logic (limma, multi-imputation)
+├── preprocess/  # Omics-specific preprocessing pipelines
+├── plots/       # Pure plotting functions (no I/O)
+├── qc/          # QC wrappers (logic + saving)
+├── io/          # Data loading and config handling
 config/
-├── config.yaml # Central configuration file
-docs/ # Design notes and architecture decisions
-outputs/ # Analysis outputs (git-ignored)
-_targets.R # {targets} pipeline definition
+├── config.yaml              # Central configuration file
+├── templates/               # Analysis config templates
+docs/                         # Onboarding and developer documentation
+outputs/                      # Analysis outputs (git-ignored)
+_targets.R                    # {targets} pipeline definition
 ```
 
 ------------------------------------------------------------------------
 
-# Requirements
+## Requirements
 
--   R (≥ 4.3 recommended)
+-   **R ≥ 4.3** (tested with R 4.5.x)
+-   **RStudio** (recommended)
+-   **`renv`** (for reproducible environments)
 
--   RStudio (recommended)
+### Windows users (IMPORTANT)
 
--   Rtools https://cran.r-project.org/bin/windows/Rtools/
+On Windows, some CRAN / Bioconductor packages may need to be **compiled from source** (e.g. `SparseArray`, `IRanges`, `Biobase`). Therefore, **Rtools is required**.
 
--   `renv` (for reproducible environments)
+**Install Rtools (matching your R version):** 👉 <https://cran.r-project.org/bin/windows/Rtools/>
 
-## Platform-specific requirements
+After installation, **restart R / RStudio**, then verify:
 
-### Windows users:
+``` r
+Sys.which("gcc")
+Sys.which("make")
+```
 
--   **Rtools** (matching your R version, e.g. Rtools45 for R 4.5)
+Both commands should return a valid path. If they return `""`, Rtools is not correctly installed or not on `PATH`.
 
--   R equired to compile some CRAN / Bioconductor packages when binaries are not available.
+Missing Rtools may cause `renv::restore()` to fail.
 
-On Windows, missing **Rtools** may cause `renv::restore()` to fail when packages need to be built from source (e.g. Bioconductor packages such as `SparseArray`).
+### Linux / macOS users
 
-### Linux / macOS users:
-
--   System libraries required by Bioconductor (compiler toolchain, libxml2, curl, etc.)
+-   A standard compiler toolchain is required
+-   System libraries commonly needed by Bioconductor (e.g. `libxml2`, `curl`, `openssl`)
 
 ------------------------------------------------------------------------
 
-# Setup
+## Package repositories (CRAN + Bioconductor)
+
+This project relies on **CRAN** and **Bioconductor** packages.
+
+We recommend using **Posit Package Manager (PPM)** for CRAN together with standard Bioconductor repositories.
+
+Recommended setup:
+
+``` r
+options(repos = c(
+  CRAN = "https://packagemanager.posit.co/cran/latest"
+))
+
+BiocManager::repositories()
+```
+
+The Bioconductor version must match the one recorded in `renv.lock` (e.g. `Bioconductor 3.22`).
+
+To check:
+
+``` r
+BiocManager::version()
+```
+
+If needed:
+
+``` r
+BiocManager::install(version = "3.22")
+```
+
+------------------------------------------------------------------------
+
+## Setup
 
 Clone the repository and restore the R environment:
 
 ``` r
-install.packages("renv") 
-renv::restore() 
+install.packages("renv")
+renv::restore()
 ```
+
+------------------------------------------------------------------------
 
 ## Configuration
 
-#### Edit the central configuration file:
+Edit the central configuration file:
 
-`config/config.yaml`
+```         
+config/config.yaml
+```
 
-***The configuration controls***:
+Or start from a template:
+
+``` bash
+cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml
+```
+
+The configuration controls:
 
 -   input and output file paths
-
 -   omics-specific parameters
-
 -   filtering, normalization, and imputation settings
-
 -   differential expression thresholds
-
 -   QC aesthetics (color, shape, sample ID columns)
 
 ------------------------------------------------------------------------
@@ -123,100 +165,55 @@ library(targets)
 tar_make()
 ```
 
-**This will run, in order**:
+This will run, in order:
 
 1.  configuration validation
-
 2.  proteomics input loading
-
 3.  proteomics preprocessing
-
 4.  differential expression using limma with multiple imputations
+5.  writing result tables to `outputs/`
 
-5.  writing result tables to outputs/
+`{targets}` ensures that only steps affected by changes are recomputed.
 
-Targets ensures that only steps affected by changes are recomputed.
+------------------------------------------------------------------------
 
 ## Running preprocessing interactively (example)
 
-For exploratory work or debugging, preprocessing can also be run interactively:
+For exploratory work or debugging:
 
 ``` r
 # Load all functions
-
-r_files <- list.files("R", pattern = "\\.[Rr]\$", full.names = TRUE, recursive = TRUE)
+r_files <- list.files("R", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE)
 invisible(lapply(r_files, source))
 
 # Load config
-
 config <- load_config("config/config.yaml")
 
 # Load inputs
-
 inputs <- load_proteomics_inputs(config)
 
 # Run preprocessing
-
 res <- preprocess_proteomics(inputs, config)
 
 # Example QC: PCA
-
-qc_pca_scatter( expr_mat = res$expr_imp,
-  meta     = res$meta, cfg = config$modes$proteomics, out_file = "outputs/proteomics/qc/pca_pc1_pc2.png" )
+qc_pca_scatter(
+  expr_mat = res$expr_imp,
+  meta     = res$meta,
+  cfg      = config$modes$proteomics,
+  out_file = "outputs/proteomics/qc/pca_pc1_pc2.png"
+)
 ```
 
-## Starting a new analysis run
-
-To start a new analysis with different parameters:
-
-1.  Copy a config template from `config/templates/`
-
-    ``` bash
-    cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml
-    ```
-
-2.  Update project identifiers, input paths, and analysis parameters
-
-3.  Place your data under data/<mode>/
-
-4.  Restore the environment if needed:
-
-``` r
-renv::restore()
-```
-
-5.  Run the pipeline:
-
-``` r
-library(targets)
-tar_make()
-```
-
-Each run produces a separate output folder, allowing multiple analyses to coexist without overwriting results.
-
-## Proteomics DE details
-
-Proteomics differential expression is implemented using:
-
--   log2-scale expression matrices
-
--   Perseus-style missing value imputation
-
--   multiple imputation runs (N repetitions)
-
--   limma run on each imputed dataset
-
--   stability filtering (features must pass DE cutoffs in ≥ K/N runs)
-
-All thresholds are controlled via `config.yaml`.
+------------------------------------------------------------------------
 
 ## Reproducibility
 
 -   All package versions are locked in `renv.lock`
-
 -   Outputs and caches are excluded from git
-
 -   `{targets}` provides deterministic, restartable pipelines
+-   Each run records execution metadata (config snapshot, git commit, session info)
+
+------------------------------------------------------------------------
 
 ## Outputs
 
@@ -226,32 +223,30 @@ All analysis outputs are written to the `outputs/` directory.
 -   Results should be shared by zipping the relevant output folder
 -   Each run is isolated by its configuration parameters
 
-This design keeps the repository clean while allowing full reproducibility.
+------------------------------------------------------------------------
 
-## Developer
+## Developer notes
 
-If you want to ant to extend, modify, or maintain the **multiomics-core** framework, please follow this guide:
+If you want to extend, modify, or maintain **multiomics-core**, see:
 
 -   📘 **Developer guide:** `docs/developer_guide.md`
 
-# Status
+------------------------------------------------------------------------
 
-**Current version**: v0.2.0
+## Status
 
-Implemented:
+**Current version:** v0.2.0
+
+### Implemented
 
 -   Proteomics preprocessing
-
 -   Proteomics DE (limma + multi-imputation)
-
 -   Unified config validation
-
 -   `{targets}` pipeline integration
 
-# Planned:
+### Planned
 
 -   RNA-seq DE integration
-
 -   Metabolomics / lipidomics DE
-
+-   Clustering module
 -   Extended QC and reporting

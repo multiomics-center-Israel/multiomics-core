@@ -16,8 +16,6 @@
 #' @param cfg Full config list. Must contain proteomics settings under:
 #'        - `cfg$modes$proteomics$imputation` (including `no_repetitions` and Perseus parameters)
 #'        - any other proteomics fields required by `impute_proteomics_perseus()`
-#' @param seed_base Optional integer base seed for reproducibility.
-#'        If provided, each imputation uses `set.seed(seed_base + i)`.
 #' @param verbose Logical; if TRUE, prints progress messages.
 #'
 #' @return A list of length N (= `cfg$modes$proteomics$imputation$no_repetions`).
@@ -32,7 +30,6 @@
 #'   contrasts_df = contrasts_df,
 #'   prot_tbl     = prot_tbl,
 #'   cfg          = config,
-#'   seed_base    = 1234,
 #'   verbose      = TRUE
 #' )
 #' }
@@ -41,13 +38,11 @@ run_limma_mult_imputation_proteomics <- function(expr_mat,
                                                  contrasts_df,
                                                  prot_tbl,
                                                  cfg,
-                                                 seed_base = NULL,
                                                  verbose = FALSE) {
   
   imputations <- make_imputations_proteomics(
     expr_mat   = expr_mat,
     cfg        = cfg,
-    seed_base  = seed_base,
     verbose    = verbose
   )
   
@@ -82,7 +77,7 @@ run_limma_mult_imputation_proteomics <- function(expr_mat,
 #'
 #' @examples
 #' \dontrun{
-#' imputations <- make_imputations_proteomics(expr_mat, cfg = config, seed_base = 1234)
+#' imputations <- make_imputations_proteomics(expr_mat, cfg = config)
 #' limma_runs  <- run_limma_multimp(
 #'   imputations  = imputations,
 #'   meta         = meta,
