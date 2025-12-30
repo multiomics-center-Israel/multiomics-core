@@ -8,11 +8,15 @@ load_config <- function(path = "config/config.yml") {
   if (!requireNamespace("yaml", quietly = TRUE)) {
     stop("Package 'yaml' is required. Install it with install.packages('yaml').")
   }
-  if (!file.exists(path)) {
-    stop("Config file not found at: ", path)
-  }
-  yaml::read_yaml(path)
+  
+  cfg <- yaml::read_yaml(path)
+  
+  cfg$.config_path  <- normalizePath(path, mustWork = FALSE)
+  cfg$.config_mtime <- file.info(path)$mtime
+  
+  return(cfg)
 }
+
 
 # Get effects (color / shape / samples) for a given modality (e.g. "rna", "proteomics")
 # R/config.R

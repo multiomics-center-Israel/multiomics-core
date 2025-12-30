@@ -26,12 +26,17 @@ perseus_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
   for (j in seq_len(ncol(imputed))) {
     x <- imputed[, j]
     
-    # Skip if all values are NA
-    if (all(is.na(x))) next
+    # stop if all values are NA
+    if (all(is.na(x))) {
+      stop("Imputation failed: sample '", colnames(imputed)[j], "' is all-NA after filtering.")
+    }
+
     
     # Compute sd and mean of observed values
-    s <- stats::sd(x, na.rm = TRUE)
-    m <- mean(x, na.rm = TRUE)
+    obs <- x[!is.na(x)]
+    s <- stats::sd(obs)
+    if (!is.finite(s) || s == 0) s <- 1e-8
+    m <- mean(obs)
     
     imp_sd   <- width * s
     imp_mean <- m - downshift * s

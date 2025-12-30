@@ -18,14 +18,18 @@
 #' @param allow_na logical; if TRUE, allow NA values in matrices (useful pre-imputation / NA-QC)
 #'
 #' @return invisibly TRUE; otherwise stops with informative error
+
 validate_proteomics_imputations <- function(imputations,
                                             meta,
                                             cfg,
                                             warn_extra_meta = TRUE,
-                                            allow_na = FALSE) {
+                                            allow_na = FALSE,
+                                            sample_col = NULL) {
   # ---- basic checks ----
-  if (!is.list(imputations) || length(imputations) < 1) {
-    stop("`imputations` must be a non-empty list of matrices.")
+  if (is.null(sample_col) || !nzchar(sample_col)) {
+    sample_col <- cfg$modes$proteomics$effects$samples %||%
+      cfg$modes$proteomics$id_columns$sample_col %||%
+      "SampleID"
   }
   
   ref <- imputations[[1]]

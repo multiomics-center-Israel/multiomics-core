@@ -63,6 +63,8 @@ _targets.R # {targets} pipeline definition
 
 -   RStudio (recommended)
 
+-   Rtools https://cran.r-project.org/bin/windows/Rtools/
+
 -   `renv` (for reproducible environments)
 
 ## Platform-specific requirements

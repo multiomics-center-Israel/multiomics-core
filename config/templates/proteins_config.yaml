@@ -12,7 +12,6 @@ paths:
 project:
   name: "<PROJECT_NAME>"   # REQUIRED: short project identifier
   analysis_round: "A01"    # REQUIRED: analysis iteration / round
-  active_mode: "proteomics"  # recommended: enables mode switching
 
 # ============================================================
 # Proteomics mode configuration
@@ -56,7 +55,7 @@ modes:
     # Filtering
     # --------------------------------------------------------
     filtering:
-      min_count:
+      min_count: 
         default: 3        # minimum non-NA values per condition
         # Optional per-condition override:
         # Control: 3

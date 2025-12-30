@@ -9,9 +9,16 @@ tar_option_set(
 )
 
 list(
+  
+  tar_target(
+    config_file,
+    "config/config.yaml",
+    format = "file"
+  ),
+  
   tar_target(
     config,
-    load_config("config/config.yaml")
+    load_config(config_file)
   ),
   
   tar_target(
@@ -30,6 +37,12 @@ list(
   tar_target(
     prot_pre,
     preprocess_proteomics(prot_inputs, config)
+  ),
+  
+  
+  tar_target(
+    prot_pre_legacy,
+    as_legacy_pre(prot_pre)
   ),
   
   # Compute multiple imputations ONCE (cached)
@@ -68,13 +81,20 @@ list(
       )
       
       list(
-        runs_de_tables = runs_de_tables,   # <-- זה מה שחסר ל-writers
+        runs_de_tables = runs_de_tables,   #
         runs           = prot_limma_runs,  # nice to keep
         summary_df     = summary_df
       )
     }
   ),
   
+  tar_target(
+    project_rdata_file,
+    write_project_rdata(
+      run_dir     = prot_run_dir
+    ),
+    format = "file"
+  ), 
   
   tar_target(
     prot_run_dir,
@@ -82,11 +102,8 @@ list(
   ),
   
   tar_target(
-    execution_info_dir,
-    write_execution_info(
-      config  = config,
-      run_dir = prot_run_dir
-    ),
+    execution_info_files,
+    write_execution_info(config = config, run_dir = prot_run_dir),
     format = "file"
   ),
   

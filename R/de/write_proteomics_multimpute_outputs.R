@@ -281,11 +281,10 @@ write_final_results_excels_legacy <- function(final_results, config, run_dir) {
   
   # DE only
   de_df <- final_results[!is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1, , drop = FALSE]
+  de_df <- de_df[, -which(startsWith(names(de_df), "manual_cutoffs"))]
   wb2 <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb2, "Results")
   openxlsx::writeData(wb2, "Results", de_df)
-  add_cutoffs_sheet_legacy(wb2, config)
-  fill_manual_cutoffs_formulas_legacy(wb2, "Results", de_df, config)
   openxlsx::saveWorkbook(wb2, f_de, overwrite = TRUE)
   
   c(f_all, f_de)

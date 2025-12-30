@@ -147,9 +147,17 @@ tar_destroy()       # clear cache (use with care)
 For exploratory work or debugging, steps can be run interactively.
 
 ``` r
-config <- load_config("config/E_Pick_A02.yaml")
-validate_config(config)
+# Load all functions
+r_files <- list.files("R", pattern = "\\.[Rr]\$", full.names = TRUE, recursive = TRUE)
+invisible(lapply(r_files, source))
+```
 
+``` r
+config <- load_config("config/proj1_02.yaml")
+validate_config(config)
+```
+
+``` r
 prot_inputs <- load_proteomics_inputs(config)
 prot_pre    <- preprocess_proteomics(prot_inputs, config)
 ```

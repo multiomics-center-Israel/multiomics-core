@@ -4,7 +4,7 @@ paths:
 
 project:
   name: "E_Pick"
-  analysis_round: "Analysis_02"
+  analysis_round: "Analysis_03"
 
 modes:
   rna:
@@ -63,10 +63,10 @@ modes:
 
     imputation:
       no_repetitions: 10        # Number of multiple imputations
-      min_no_passed: 8          # Stability threshold (>= 8/10)
+      min_no_passed: 7          # Stability threshold (>= 8/10)
       method: "perseus"     # "none", "perseus", or "dep2"
       width: 0.2            # Perseus-style width
-      downshift: 1.6        # Perseus-style downshift
+      downshift: 1.8        # Perseus-style downshift
       dep2_method: "MinDet"       # used only if method: "dep2"
       dep2_random_seed: 1         # for reproducibility
    
