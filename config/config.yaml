@@ -4,7 +4,7 @@ paths:
 
 project:
   name: "E_Pick"
-  analysis_round: "Analysis_05"
+  analysis_round: "Analysis_03"
 
 modes:
   rna:
@@ -14,62 +14,114 @@ modes:
       metadata:   "data/rna/meta_rna.csv"
       contrasts:  "data/rna/contrasts_rna.csv"
     id_columns:
-      gene_id:   "gene_id"
+      gene_id:    "gene_id"
       sample_col: "SampleID"
-      map_from:  "sample_original_name"
-      map_to:    "SampleID"
+      map_from:   "sample_original_name"
+      map_to:     "SampleID"
     normalization:
       method: "TMMlogCPM"   # or "VST"
       prior.count: 1
     filter_tpm: 3
     effects:
-      color: "label"     
-      shape: "line"       
-      samples: "SampleID"   
+      color:   "label"
+      shape:   "line"
+      samples: "SampleID"
 
   proteomics:
-    engine: "DIANN"         
-    files: 
+    engine: "DIANN"
+    files:
       protein:    "data/proteomics/protein_matrix.csv"
       sample_map: "data/proteomics/sample_map.csv"
       metadata:   "data/proteomics/meta_prot.csv"
       contrasts:  "data/proteomics/contrasts_prot.csv"
+
     id_columns:
       protein_id: "Protein.Group"
       sample_col: "SampleID"
       protein_annot:
-          - "Protein.Names"
-          - "Genes"
-          - "First.Protein.Description"
-          - "N.Sequences"
-          - "N.Proteotypic.Sequences"
+        - "Protein.Names"
+        - "Genes"
+        - "First.Protein.Description"
+        - "N.Sequences"
+        - "N.Proteotypic.Sequences"
       map_from: "sample_orig_name"   # names in the protein matrix columns
-      map_to:   "SampleID"               # final unified sample ID
+      map_to:   "SampleID"           # final unified sample ID
+
     filtering:
       min_count:
         default: 3
         # or, if different per condition:
         # C: 3
         # T: 3
-        # SH: 2  
+        # SH: 2
 
     limma:
       use_adj_for_pass1: true   # Use adj.P.Val for pass1 (otherwise P.Value)
-      p_cutoff: 0.05
+      p_cutoff: 0.1
       linear_fc_cutoff: 1.5
 
     normalization:
-      method: "none"    # or "median" 
+      method: "none"    # or "median"
 
     imputation:
       no_repetitions: 10        # Number of multiple imputations
       min_no_passed: 7          # Stability threshold (>= 8/10)
-      method: "perseus"     # "none", "perseus", or "dep2"
-      width: 0.2            # Perseus-style width
-      downshift: 1.8        # Perseus-style downshift
-      dep2_method: "MinDet"       # used only if method: "dep2"
-      dep2_random_seed: 1         # for reproducibility
-   
+      method: "perseus"         # "none", "perseus", or "dep2"
+      width: 0.2                # Perseus-style width
+      downshift: 1.8            # Perseus-style downshift
+      dep2_method: "MinDet"     # used only if method: "dep2"
+      dep2_random_seed: 1       # for reproducibility
+
+    # How to interpret DE summary tables (used by get_de_features)
+    de:
+      id_col: "FeatureID"
+      pass_any_col: "pass_any_contrast"
+
+    # NEW: clustering is a pipeline of steps, not a single method
+    clustering:
+      enabled: true
+
+      # Which DE features to cluster.
+      # "any_contrast" = pass_any_col == 1
+      de_source: "any_contrast"
+
+      # Run steps that require multiple conditions only if enough groups exist
+      # Groups are derived from pre$meta[[effects.color]]
+      min_groups: 2
+
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"   # "euclidean" / "manhattan" / etc.
+          linkage: "complete"     # "complete" / "average" / "ward.D2"
+          k: null                 # optional; cut tree into k clusters if provided
+
+        partition:
+          enabled: true
+          method: "hclust"          # "kmeans" or "pam" or "hclust" (legacy) 
+          distance: "euclidean"  # pam only (euclidean is fine)
+          k: null                # if null -> auto choose k using k_max + silhouette
+          k_max: 20
+          nstart: 25             # kmeans only
+
+          outputs:
+            write_profiles_pdf: true
+            write_heatmap_png: true
+          
+          use_group_averages: true
+
+        binary_patterns:
+          enabled: true
+          group: "Condition"      # typically same as effects$color
+          corr_cutoff: 0.8
+          counts_cutoff: 0
+          skip_trivial_patterns: true   # skip all-0/all-1 patterns
+
+      # Shared heatmap settings for clustering outputs
+      heatmap:
+        max_rows: null            # subsample if too many DE features (null = no subsample)
+        cluster_cols: true        # cluster samples (columns) on heatmap
+
     effects:
       color: "Condition"
       shape: null
@@ -78,7 +130,7 @@ modes:
   metabolomics:
     effects:
       color: "label"
-      shape: null         
+      shape: null
       samples: "SampleID"
 
   lipidomics:
@@ -87,8 +139,5 @@ modes:
       shape: null
       samples: "SampleID"
 
-
-
 params:
   seed: 1
-

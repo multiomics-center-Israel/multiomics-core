@@ -7,8 +7,7 @@
 #'   - 1  : pass
 #'   - NA : fail
 #'
-#' @param de_table A data.frame from limma::topTable() containing at least
-#'        'logFC', 'P.Value', and 'adj.P.Val'.
+#' @param de_table A data.frame from limma::topTable()
 #' @param p_cutoff Numeric cutoff for p-value or adjusted p-value.
 #' @param lfc_cutoff Numeric cutoff for |logFC| (log2 scale).
 #' @param use_adj Logical; TRUE uses 'adj.P.Val', FALSE uses 'P.Value'.
@@ -24,22 +23,52 @@ mark_pass1 <- function(de_table, p_cutoff, lfc_cutoff, use_adj = TRUE) {
   ifelse(pass, 1, NA)
 }
 
+#' Helper to add pass_any_contrast column
+#' 
+#' Scans for columns starting with 'pass.imputs.' and creates a summary flag.
+#'
+#' @param summary_df Data frame containing pass columns.
+#' @param pass_prefix Regex prefix for pass columns.
+#' @param out_col Name of the output binary column.
+#' @param out_n_col Name of the output count column.
+#' 
+#' @return The data frame with added columns.
+add_pass_any_contrast <- function(summary_df,
+                                  pass_prefix = "^pass\\.imputs\\.",
+                                  out_col = "pass_any_contrast",
+                                  out_n_col = "n_pass_contrasts") {
+  
+  pass_cols <- grep(pass_prefix, names(summary_df), value = TRUE)
+  
+  if (length(pass_cols) == 0) {
+    # If no pass columns found, initialize with 0/NA to avoid downstream errors
+    summary_df[[out_n_col]] <- 0L
+    summary_df[[out_col]]   <- NA
+    return(summary_df)
+  }
+  
+  pass_mat <- as.matrix(summary_df[, pass_cols, drop = FALSE])
+  
+  # Count how many contrasts passed (ignoring NAs)
+  n_pass <- rowSums(!is.na(pass_mat) & pass_mat == 1, na.rm = TRUE)
+  
+  summary_df[[out_n_col]] <- as.integer(n_pass)
+  summary_df[[out_col]]   <- ifelse(n_pass > 0, 1, NA)
+  
+  summary_df
+}
 
 #' Summarize differential expression across multiple imputations (legacy-compatible)
 #'
 #' Reproduces the old script logic:
 #'   - "stable" if passed in >= min_no_passed imputations
 #'   - average linear ratio across imputations and convert to signed linearFC
-#'   - summarize p-value and padj using quantile at (min_no_passed / no_repetitions)
+#'   - summarize p-value and padj using quantile
 #'
 #' @param runs_de_tables List of length cfg$no_repetitions.
-#'        Each element corresponds to one imputation run and contains a named list
-#'        of DE tables (one per contrast), as returned by run_limma_proteomics()$de_tables.
-#' @param config 
+#' @param config Full config list.
 #'
-#' @return A data.frame with one row per feature, including annotations and per-contrast
-#'         summary columns (sum.pass.*, pass.imputs.*, linearRatio.imputs.*, linearFC.imputs.*,
-#'         pvalue.imputs.*, padj.imputs.*).
+#' @return A data.frame with one row per feature.
 summarize_limma_mult_imputation <- function(runs_de_tables, config) {
   limma_cfg <- config$modes$proteomics$limma
   imp_cfg   <- config$modes$proteomics$imputation
@@ -68,6 +97,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
   out <- ref_df[, id_cols, drop = FALSE]
   ref_ids <- ref_df$FeatureID
   
+  # Validate alignment
   for (n in seq_len(NO_REPETITIONS)) {
     for (cn in contrasts) {
       cur <- runs_de_tables[[n]][[cn]]
@@ -76,6 +106,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     }
   }
   
+  # Loop over contrasts to calculate stability
   for (cn in contrasts) {
     contrast_print <- gsub(" ", "", cn)
     
@@ -112,6 +143,8 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     out[[paste0("padj.imputs.", contrast_print)]]        <- padj_imputs
   }
   
-  out
+  # Use the helper to add the global pass flags (DRY principle)
+  out <- add_pass_any_contrast(out)
+  
+  return(out)
 }
-

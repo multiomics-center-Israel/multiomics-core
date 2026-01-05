@@ -104,8 +104,12 @@ validate_proteomics_imputations <- function(imputations,
     }
   }
   
-  # ---- meta <-> sample IDs check using config ----
-  sample_col <- cfg$modes$proteomics$id_columns$sample_col
+  # keep the resolved sample_col from the top (or override only if still missing)
+  if (is.null(sample_col) || !nzchar(sample_col)) {
+    sample_col <- cfg$modes$proteomics$id_columns$sample_col %||%
+      cfg$modes$proteomics$id_columns$map_to %||%
+      stop("Could not determine sample ID column. Please set cfg$modes$proteomics$id_columns$sample_col.")
+  }
   
   # backward-compatible fallback (optional but safe)
   if (is.null(sample_col) || !nzchar(sample_col)) {

@@ -44,3 +44,4 @@ data/
 scripts/test_*.R
 
 Rplots.pdf
+.lintr
