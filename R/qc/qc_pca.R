@@ -5,39 +5,57 @@
 #' @param cfg      config$modes$proteomics (effects$samples/color/shape).
 #' @param pcs      length-2 vector of PCs to plot, e.g. c(1, 2) or c(1, 3).
 #' @param out_file optional path to save plot.
-qc_pca_scatter <- function(expr_mat, meta, cfg, pcs=c(1, 2), out_file = NULL) {
-  # NOTE:
-  # Input should be a processed expression matrix with no missing values
-  # (e.g., imputed proteomics or normalized/transformed RNA).
-  # PCA uses centering only (scale = FALSE) for consistency with legacy analyses.
+qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) {
   
   expr_mat <- as.matrix(expr_mat)
   
-  eff         <- cfg$effects
-  sample_col  <- eff$samples
-  color_col   <- eff$color
-  shape_col   <- eff$shape %||% NULL
+  # Basic input validation
+  if (is.null(colnames(expr_mat)) || length(colnames(expr_mat)) == 0) {
+    stop("qc_pca_scatter(): expr_mat must have sample column names.")
+  }
+  pcs <- as.integer(pcs)
+  if (length(pcs) != 2 || anyNA(pcs) || any(pcs < 1)) {
+    stop("qc_pca_scatter(): pcs must be a length-2 vector of positive integers, e.g. c(1,2).")
+  }
+  
+  eff        <- cfg$effects
+  sample_col <- eff$samples
+  color_col  <- eff$color
+  shape_col  <- eff$shape
+  if (is.null(shape_col)) shape_col <- NULL  # avoid dependency on %||%
   
   sample_ids <- colnames(expr_mat)
-  meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
-
-  # PCA: samples as rows
-  res <- compute_pca_scores(expr_mat, pcs = pcs, center = TRUE, scale = FALSE)
+  meta_sub   <- align_meta_to_matrix(sample_ids, meta, sample_col)
   
-  scores <- res$scores
+  # Ensure color_col exists (fail-fast with clear error)
+  if (is.null(color_col) || !color_col %in% colnames(meta_sub)) {
+    stop("qc_pca_scatter(): color column '", color_col, "' not found in aligned metadata.")
+  }
+  
+  # PCA via shared helper
+  res      <- compute_pca_scores(expr_mat, pcs = pcs, center = TRUE, scale = FALSE)
+  scores   <- res$scores
   var_expl <- res$var_expl
+  
+  # Ensure expected PC columns exist (should always be true now)
+  needed_pc_cols <- paste0("PC", pcs)
+  if (!all(needed_pc_cols %in% colnames(scores))) {
+    stop("qc_pca_scatter(): PCA scores missing expected columns: ",
+         paste(setdiff(needed_pc_cols, colnames(scores)), collapse = ", "))
+  }
   
   pc_labels <- sprintf("PC%d: %.2f%% of variance", seq_along(var_expl), 100 * var_expl)
   
   pc_x <- pcs[1]
   pc_y <- pcs[2]
   
+  # Attach metadata
   scores[[color_col]] <- meta_sub[[color_col]]
-  
   if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
-    scores[[shape_col]] <- meta_sub[[shape_col]]}
+    scores[[shape_col]] <- meta_sub[[shape_col]]
+  }
   
-  p <- build_pca_scatter_plot(
+  p <- plot_pca_scatter(
     scores    = scores,
     color_col = color_col,
     shape_col = shape_col,
@@ -54,82 +72,55 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs=c(1, 2), out_file = NULL) {
 }
 
 
+
 #' 3D PCA plot (PC1 vs PC2 vs PC3)
 #'
 #' @param expr_mat numeric matrix (features x samples), normalized/imputed.
 #' @param meta     metadata table.
 #' @param cfg      config$modes$proteomics (effects$samples/color/shape).
+#' @param out_file optional HTML path to save widget (if NULL, does not save).
 #'
 #' @return plotly object (interactive 3D PCA).
-#' 3D PCA plot (PC1 vs PC2 vs PC3)
-qc_pca_3d <- function(expr_mat,
-                      meta,
-                      cfg,
-                      out_file = NULL) {
+qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   
-  # 2. Basic conversions to prevent Tibble/Matrix errors
   expr_mat <- as.matrix(expr_mat)
+  meta     <- as.data.frame(meta)
   
-  # Convert to standard data.frame to avoid warnings about setting row names on a tibble
-  meta <- as.data.frame(meta) 
+  eff        <- cfg$effects
+  sample_col <- eff$samples
+  color_col  <- eff$color
+  shape_col  <- eff$shape
+  if (is.null(shape_col)) shape_col <- NULL
   
-  eff         <- cfg$effects
-  sample_col  <- eff$samples
-  color_col   <- eff$color
-  shape_col   <- eff$shape %||% NULL # Assumes %||% is defined, otherwise use standard if-null logic
-  if(is.null(eff$shape)) shape_col <- NULL 
-  
-  # Ensure the sample column exists in metadata
   if (!sample_col %in% colnames(meta)) {
     stop("Sample column '", sample_col, "' not found in metadata.")
   }
   
   sample_ids <- colnames(expr_mat)
+  meta_sub   <- align_meta_to_matrix(sample_ids, meta, sample_col)
   
-  # Align metadata order with matrix column order
-  # (Important: This ensures consistency with the PCA results later)
-  meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
+  # PCA via shared helper
+  res      <- compute_pca_scores(expr_mat, pcs = 1:3, center = TRUE, scale = FALSE)
+  scores   <- res$scores
+  var_expl <- res$var_expl
   
-  # PCA Calculation
-  pca <- stats::prcomp(t(expr_mat), center = TRUE, scale. = FALSE)
+  pc_labels <- sprintf("PC%d (%.1f%%)", seq_along(var_expl), 100 * var_expl)
   
-  
-  var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
-  pc_labels <- sprintf(
-    "PC%d (%.1f%%)",
-    seq_along(var_expl),
-    100 * var_expl
-  )
-  
-  # Prepare results table (scores)
-  scores <- as.data.frame(pca$x[, 1:3, drop = FALSE])
-  colnames(scores) <- c("PC1", "PC2", "PC3")
-  scores$sample <- rownames(scores)
-  
-  # Add metadata to Scores table
-  # Since meta_sub is sorted by sample_ids, and PCA was run on sample_ids, the order is identical.
+  # Attach metadata (order is aligned)
   scores[[color_col]] <- meta_sub[[color_col]]
-  
   if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
     scores[[shape_col]] <- meta_sub[[shape_col]]
   }
   
-  # Build Hover Text
+  # Hover text
   hover_text <- scores$sample
   if (!is.null(color_col)) {
-    hover_text <- paste0(
-      hover_text,
-      "<br>", color_col, ": ", scores[[color_col]]
-    )
+    hover_text <- paste0(hover_text, "<br>", color_col, ": ", scores[[color_col]])
   }
   if (!is.null(shape_col) && shape_col %in% colnames(scores)) {
-    hover_text <- paste0(
-      hover_text,
-      "<br>", shape_col, ": ", scores[[shape_col]]
-    )
+    hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
   
-  # Create plot (using Native Pipe |> instead of %>%)
   plt <- plotly::plot_ly(
     data = scores,
     x    = ~PC1,
@@ -137,11 +128,11 @@ qc_pca_3d <- function(expr_mat,
     z    = ~PC3,
     type = "scatter3d",
     mode = "markers",
-    color = if (!is.null(color_col)) scores[[color_col]] else NULL,
+    color  = if (!is.null(color_col)) scores[[color_col]] else NULL,
     symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
-    text  = hover_text,
+    text = hover_text,
     hoverinfo = "text"
-  ) |> 
+  ) |>
     plotly::layout(
       scene = list(
         xaxis = list(title = pc_labels[1]),
@@ -150,11 +141,10 @@ qc_pca_3d <- function(expr_mat,
       ),
       title = "3D PCA: PC1 vs PC2 vs PC3"
     )
-  htmlwidgets::saveWidget(
-    widget = plt,
-    file = out_file,
-    selfcontained = TRUE
-  )
   
-  return(plt)
+  if (!is.null(out_file)) {
+    htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = TRUE)
+  }
+  
+  plt
 }

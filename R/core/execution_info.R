@@ -94,18 +94,16 @@ write_execution_info <- function(config,
   written_files
 }
 
-
-
 # Optional helper if you want an explicit function name to create project.Rdata
 # (still uses save.image(), but keeps callsite clearer).
-write_project_rdata <- function(run_dir,
-                                filename = "project.Rdata") {
+write_project_rdata <- function(run_dir, ..., filename = "project.Rdata") {
   exec_dir <- file.path(run_dir, "execution_info")
   dir.create(exec_dir, recursive = TRUE, showWarnings = FALSE)
-  
   out <- file.path(exec_dir, filename)
-  save.image(file = out)
   
-  if (!file.exists(out)) stop("save.image() did not create project.Rdata.")
+  objects_list <- list(...)
+  save(list = names(objects_list), envir = list2env(objects_list), file = out)
+  
+  if (!file.exists(out)) stop("save() did not create project.Rdata.")
   out
 }

@@ -334,10 +334,9 @@ preprocess_proteomics <- function(inputs, config) {
   if (!is.null(imp_res$imputed_flag)) {
     imputation_qc <- list(
       imputed_flag = imp_res$imputed_flag,
-      hist_plot    = build_imputed_histograms_summary(
+      hist_plot    = plot_imputation_summary(
         expr_mat      = expr_filt,
-        imputed_flag  = imp_res$imputed_flag,
-        cfg           = cfg
+        imputed_flag  = imp_res$imputed_flag
       )
     )
   }

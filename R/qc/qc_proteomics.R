@@ -1,47 +1,147 @@
-#' Boxplots of normalized expression per sample
+#------- HELPERS ------- 
+
+#' Prepare data for QC plotting
 #'
-#' @param expr_norm numeric matrix/data.frame (features x samples), normalized (log2).
-#' @param meta      metadata table with one row per sample.
-#' @param cfg       config$modes$proteomics (used to get color/label columns).
-#' @param out_file  optional path to save plot (PDF/PNG). If NULL, only prints.
+#' Handles common tasks: matrix conversion, metadata matching, and annotation creation.
+#' Includes strict validation to fail fast on data inconsistencies.
 #'
-#' @return invisibly returns the ggplot object.
-norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
+#' @param expr Numeric matrix or data.frame.
+#' @param meta Metadata data.frame.
+#' @param cfg Config object containing effects$samples and effects$color.
+#' @return A list containing aligned expr, meta, annot, and column names.
+#' Prepare data for QC plotting
+#'
+#' Handles common tasks: matrix conversion, metadata matching, and annotation creation.
+#' Includes strict validation to fail fast on data inconsistencies (duplicates, missing samples).
+#'
+#' @param expr Numeric matrix or data.frame.
+#' @param meta Metadata data.frame.
+#' @param cfg Config object containing effects$samples and effects$color.
+#' @return A list containing aligned expr, meta, annot, and column names.
+prepare_qc_data <- function(expr, meta, cfg) {
   
-  expr_norm <- as.matrix(expr_norm)
+  # 1. Ensure Expression is a Matrix with Names
+  expr <- as.matrix(expr)
+  sample_ids <- colnames(expr)
   
-  eff        <- cfg$effects
-  sample_col <- eff$samples   # e.g. "SampleID"
-  color_col  <- eff$color   # e.g. "Condition"
-  
-  stopifnot(sample_col %in% colnames(meta))
-  sample_ids <- colnames(expr_norm)
-  
-  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  if (any(is.na(meta_sub[[sample_col]]))) {
-    stop("Some column names in expr_norm were not found in metadata[[", sample_col, "].")
+  # FIX: Handle empty matrix or NULL colnames
+  if (is.null(sample_ids) || length(sample_ids) == 0) {
+    stop("Expression matrix must have non-empty column names (sample IDs).")
   }
   
-  df_long <- data.frame(
-    sample = rep(sample_ids, each = nrow(expr_norm)),
-    value  = as.vector(expr_norm),
+  if (anyDuplicated(sample_ids)) {
+    stop("Expression matrix contains duplicate column names/sample IDs.")
+  }
+  
+  # 2. Extract Config & Validate Keys
+  eff <- cfg$effects
+  if (is.null(eff$samples) || is.null(eff$color)) {
+    stop("Config must contain cfg$effects$samples and cfg$effects$color")
+  }
+  sample_col <- eff$samples
+  color_col  <- eff$color
+  
+  # 3. Ensure Metadata is a base data.frame (safe against tibbles)
+  meta <- as.data.frame(meta)
+  
+  # 4. Validate Columns Existence in Metadata
+  if (!sample_col %in% colnames(meta)) {
+    stop(sprintf("Sample column '%s' not found in metadata.", sample_col))
+  }
+  if (!color_col %in% colnames(meta)) {
+    stop(sprintf("Color/Condition column '%s' not found in metadata.", color_col))
+  }
+  
+  # FIX: Critical check for duplicates in metadata ID column
+  # match() returns the first hit, so duplicates would be silently ignored without this.
+  if (anyDuplicated(meta[[sample_col]])) {
+    stop(sprintf("Metadata column '%s' contains duplicate sample IDs.", sample_col))
+  }
+  
+  # 5. Match Metadata to Expression Columns
+  # This guarantees that meta_sub rows are 1:1 with expr columns
+  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
+  
+  # 6. Verify Integrity (Missing samples)
+  # FIX: Detailed error message with count + examples
+  if (any(is.na(meta_sub[[sample_col]]))) {
+    missing_mask <- is.na(meta_sub[[sample_col]])
+    missing_samples <- sample_ids[missing_mask]
+    
+    stop(sprintf(
+      "Found %d samples in expression matrix missing from metadata column '%s'. Examples: %s", 
+      length(missing_samples), 
+      sample_col, 
+      paste(head(missing_samples, 3), collapse = ", ")
+    ))
+  }
+  
+  # FIX: Extra sanity check for 1:1 alignment
+  if (nrow(meta_sub) != ncol(expr)) {
+    stop("Internal error: metadata alignment failed (meta_sub rows != expr columns).")
+  }
+  
+  # 7. Create Generic Annotation (for pheatmap)
+  annot <- data.frame(
+    Condition = meta_sub[[color_col]],
+    row.names = sample_ids,
     stringsAsFactors = FALSE
   )
-  # drop NA / NaN / Inf / -Inf
-  df_long <- df_long[is.finite(df_long$value), , drop = FALSE]
   
-  df_long[[color_col]] <- meta_sub[[color_col]][match(df_long$sample, meta_sub[[sample_col]])]
+  list(
+    expr = expr,
+    meta = meta_sub, # Perfectly aligned with expr columns
+    annot = annot,
+    sample_col = sample_col,
+    color_col = color_col,
+    sample_ids = sample_ids
+  )
+}
+#' Convert Expression Matrix to Long Format
+#' 
+#' Used for ggplot2. Optimized to use 'rep' since data is already aligned.
+to_long_format <- function(prep_data) {
+  
+  n_features <- nrow(prep_data$expr)
+  
+  # Vectorized creation of long vectors
+  df_long <- data.frame(
+    sample = rep(prep_data$sample_ids, each = n_features),
+    value  = as.vector(prep_data$expr),
+    stringsAsFactors = FALSE
+  )
+  
+  # OPTIMIZATION: Use rep() instead of match()
+  # Since prep_data$meta is guaranteed to be sorted by sample_ids (from prepare_qc_data),
+  # we can simply repeat each condition n_features times.
+  cond_values <- prep_data$meta[[prep_data$color_col]]
+  df_long[[prep_data$color_col]] <- rep(cond_values, each = n_features)
+  
+  # Filter non-finite values (NA/NaN/Inf) to keep plots clean
+  df_long[is.finite(df_long$value), , drop = FALSE]
+}
+
+
+
+#------- MAIN PLOTTING FUNCTIONS ------- 
+
+
+#' Boxplots of normalized expression per sample
+norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
+  
+  d <- prepare_qc_data(expr_norm, meta, cfg)
+  df_long <- to_long_format(d)
   
   p <- ggplot2::ggplot(
     df_long,
-    ggplot2::aes(x = sample, y = value, colour = .data[[color_col]])
+    ggplot2::aes(x = sample, y = value, colour = .data[[d$color_col]])
   ) +
     ggplot2::geom_boxplot(outlier.size = 0.4) +
     ggplot2::labs(
       title  = "Normalized expression boxplots",
       x      = "Sample",
       y      = "log2(normalized intensity)",
-      colour = color_col
+      colour = d$color_col
     ) +
     ggplot2::theme_bw() +
     ggplot2::theme(
@@ -57,50 +157,22 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
 
 
 #' Histogram summary of normalized expression by condition
-#'
-#' @param expr_norm numeric matrix/data.frame (features x samples), normalized (log2).
-#' @param meta      metadata table with one row per sample.
-#' @param cfg       config$modes$proteomics (uses effects$samples for SampleID and effects$color for condition).
-#' @param out_file  optional path to save plot (PDF/PNG).
-#'
-#' @return invisibly returns the ggplot object.
 norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   
-  expr_norm <- as.matrix(expr_norm)
-  
-  eff        <- cfg$effects
-  sample_col <- eff$samples   # e.g. "SampleID"
-  cond_col   <- eff$color   # e.g. "Condition"
-  
-  stopifnot(all(c(sample_col, cond_col) %in% colnames(meta)))
-  
-  sample_ids <- colnames(expr_norm)
-  meta_sub   <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  
-  if (any(is.na(meta_sub[[sample_col]]))) {
-    stop("Some expr_norm column names not found in metadata[[", sample_col, "].")
-  }
-  
-  df_long <- data.frame(
-    sample = rep(sample_ids, each = nrow(expr_norm)),
-    value  = as.vector(expr_norm),
-    stringsAsFactors = FALSE
-  )
-  df_long[[cond_col]] <- meta_sub[[cond_col]][match(df_long$sample, meta_sub[[sample_col]])]
-  
-  df_long <- df_long[is.finite(df_long$value), , drop = FALSE]
+  d <- prepare_qc_data(expr_norm, meta, cfg)
+  df_long <- to_long_format(d)
   
   p <- ggplot2::ggplot(
     df_long,
-    ggplot2::aes(x = value, fill = .data[[cond_col]])
+    ggplot2::aes(x = value, fill = .data[[d$color_col]])
   ) +
     ggplot2::geom_histogram(alpha = 0.6, bins = 60, position = "identity") +
-    ggplot2::facet_wrap(as.formula(paste("~", cond_col)), nrow = 1, scales = "free_y") +
+    ggplot2::facet_wrap(as.formula(paste("~", d$color_col)), nrow = 1, scales = "free_y") +
     ggplot2::labs(
       title = "Normalized expression histograms by condition",
       x     = "log2(normalized intensity)",
       y     = "Frequency",
-      fill  = cond_col
+      fill  = d$color_col
     ) +
     ggplot2::theme_minimal()
   
@@ -111,100 +183,86 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-#' Imputed data histograms per sample (facet by sample)
-#'
-#' @param imputed      numeric matrix (features x samples), after imputation.
-#' @param imputed_flag logical matrix, TRUE where value was imputed.
-#' @param cfg          config$modes$proteomics (for title: width/downshift if desired).
-#' @param out_file     optional path to save plot.
-#'
-#' @return invisibly returns the ggplot object.
-imputed_histograms_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
-  p <- build_imputed_histograms_summary(imputed, imputed_flag, cfg = cfg)
+wrap_qc_heatmap <- function(expr_mat, meta, cfg, out_file = NULL) {
   
-  if (!is.null(out_file)) {
-    ggplot2::ggsave(out_file, plot = p, width = 12, height = 5, dpi = 150)
-  }
-  
-  invisible(p)
-}
-
-#' Expression heatmap with sample annotations
-#'
-#' @param expr_mat numeric matrix (features x samples), usually normalized/imputed.
-#' @param meta     metadata table (one row per sample).
-#' @param cfg      config$modes$proteomics (effects$samples + effects$color).
-#' @param out_file optional path to save plot (PNG).
-#' @param title    plot title.
-#' @param max_rows optional: if not NULL, sample this many rows for speed.
-#' @param cluster_cols logical: cluster samples (TRUE = legacy default).
-#'
-qc_expr_heatmap <- function(expr_mat,
-                            meta,
-                            cfg,
-                            out_file = NULL,
-                            title = NULL,
-                            max_rows = 2000,
-                            cluster_cols = TRUE) {
-  
-  eff <- cfg$effects
-  sample_col <- eff$samples
-  color_col  <- eff$color
-  
-  expr_mat <- as.matrix(expr_mat)
-  sample_ids <- colnames(expr_mat)
-  
-  meta <- as.data.frame(meta)
-  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  
+  # 1. Prepare Data
+  # (Assuming prepare_qc_data logic is simple annotation creation)
   annot <- data.frame(
-    Condition = meta_sub[[color_col]],
-    row.names = sample_ids
+    Condition = meta[[cfg$effects$color]],
+    row.names = meta[[cfg$effects$samples]]
   )
   
-  plot_fun <- function() {
-    plot_expr_heatmap(
-      expr_mat        = expr_mat,
-      annotation_col  = annot,
-      max_rows        = max_rows,
-      main            = title,
-      # NEW: allow disabling column clustering for the "wo_col" version
-      cluster_cols    = cluster_cols
-    )
-  }
+  # 2. Plot
+  ph <- plot_heatmap_core(
+    expr_mat = expr_mat,
+    annotation_col = annot,
+    title = "QC: Sample Protein Expression",
+    max_rows = 2000,       # QC usually needs subsampling
+    cluster_rows = TRUE,
+    cluster_cols = TRUE
+  )
   
-  if (!is.null(out_file)) {
-    ph <- plot_fun()
-    save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
-  }
-  
-  invisible(plot_fun())
-  
+  # 3. Save & Return
+  if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
+  return(ph)
 }
 
-#' Density overlay of normalized expression for all samples
-#'
-#' One density curve per sample, all on the same plot.
-#'
-#' @param expr_mat numeric matrix/data.frame (features x samples).
-#' @param meta      metadata table (one row per sample).
-#' @param cfg       config$modes$proteomics (effects$samples + effects$color).
-#' @param out_file  optional path to save plot (PDF/PNG). If NULL, only prints.
-#'
-#' @return invisibly returns the ggplot object.
-qc_proteomics_density <- function(expr_mat,
-                                  meta,
-                                  cfg,
-                                  out_file   = NULL,
-                                  alpha      = 0.3,
-                                  show_legend = TRUE,
-                                  title      = "Density plot of normalized intensities") {
-
+#' Sample–sample correlation heatmap (proteomics QC)
+qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file, 
+                                          method = "pearson", fontsize = 12) {
+  d <- prepare_qc_data(expr_mat, meta, cfg)
   
-  sample_ids <- colnames(expr_mat)
+  ph <- plot_sample_correlation_heatmap(
+    expr_mat = d$expr,
+    method = method,
+    annotation_col = d$annot,
+    fontsize = fontsize
+  )
+  
+  save_heatmap_to_file(ph, out_file, width = 1600, height = 1200, res = 150)
+  invisible(ph)
+}
+
+
+#' Sample–sample distance heatmap (QC)
+qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file, 
+                                       with_na = FALSE, fontsize = 12) {
+  
+  # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
+  # This prevents data.frame type coercion issues
+  expr_mat <- as.matrix(expr_mat)
+  
+  if (!with_na) {
+    keep <- stats::complete.cases(expr_mat)
+    expr_mat <- expr_mat[keep, , drop = FALSE]
+  }
+  
+  # Validate & Prepare (after filtering NAs)
+  d <- prepare_qc_data(expr_mat, meta, cfg)
+  
+  ph <- plot_sample_distance_heatmap(
+    expr_mat = d$expr,
+    annotation_col = d$annot,
+    fontsize = fontsize
+  )
+  
+  save_heatmap_to_file(ph, out_file, width = 1600, height = 1200, res = 150)
+  invisible(ph)
+}
+
+
+#' Density overlay of normalized expression
+qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
+                                  alpha = 0.3, show_legend = TRUE,
+                                  title = "Density plot of normalized intensities") {
+  
+  # Keeping prepare_qc_data here intentionally.
+  # Even though density doesn't strictly need metadata to run, 
+  # we want to ensure the input data is consistent with the pipeline standards.
+  d <- prepare_qc_data(expr_mat, meta, cfg)
   
   p <- plot_density_overlay(
-    expr_mat = expr_mat,
+    expr_mat = d$expr,
     title    = title,
     alpha    = alpha
   )
@@ -223,113 +281,35 @@ qc_proteomics_density <- function(expr_mat,
   invisible(p)
 }
 
-#' Sample–sample correlation heatmap (proteomics QC)
-#'
-#' Computes a sample correlation matrix (Pearson) and plots it as a heatmap.
-#' This is complementary to the sample distance heatmap.
-#'
-#' @param expr_mat numeric matrix (features x samples), typically log2 and imputed.
-#' @param meta     metadata table (one row per sample). Used only for annotation (optional).
-#' @param cfg      config$modes$proteomics (effects$samples + effects$color).
-#' @param out_file optional path to save PNG.
-#' @param method   correlation method ("pearson", "spearman").
-#' @return invisibly returns the pheatmap object.
-qc_sample_correlation_heatmap <- function(expr_mat,
-                                          meta,
-                                          cfg,
-                                          out_file,
-                                          method = "pearson",
-                                          fontsize = 12) {
-  eff <- cfg$effects
-  sample_col <- eff$samples
-  color_col  <- eff$color
-  
-  expr_mat <- as.matrix(expr_mat)
-  meta <- as.data.frame(meta)
-  sample_ids <- colnames(expr_mat)
-  
-  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  
-  annot <- data.frame(
-    Condition = meta_sub[[color_col]],
-    row.names = sample_ids
-  )
-  
-  ph <- plot_sample_correlation_heatmap(
-    expr_mat = expr_mat,
-    method = method,
-    annotation_col = annot,
-    fontsize = fontsize
-  )
-  
-  save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
-  invisible(ph)
+# (Existing function, kept for completeness)
+imputed_histograms_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
+  p <- plot_imputation_summary(imputed, imputed_flag)
+  if (!is.null(out_file)) {
+    ggplot2::ggsave(out_file, plot = p, width = 12, height = 5, dpi = 150)
+  }
+  invisible(p)
 }
 
-
-#' Sample–sample distance heatmap (QC)
-#'
-#' Generates a sample–sample distance heatmap from a proteomics expression matrix
-#' and saves it to file.
-#'
-#' Distances are computed between samples based on their expression profiles
-#' (features x samples matrix). This plot is primarily a **technical QC tool**,
-#' useful for detecting outlier samples, batch effects, or unexpected clustering.
-#'
-#' Two modes are supported:
-#' - with_na = FALSE (default): rows (proteins) containing any NA values are removed
-#'   prior to distance computation.
-#' - with_na = TRUE: NA values are kept; distances are computed on available values.
-#'
-#' @param expr_mat Numeric matrix (features x samples), typically log2 normalized
-#'        and optionally imputed expression values.
-#' @param meta Data frame with one row per sample (sample metadata).
-#' @param cfg Proteomics mode configuration (`config$modes$proteomics`),
-#'        used to extract sample ID and color annotations.
-#' @param out_file Path to output PNG file.
-#' @param with_na Logical; whether to keep rows with missing values (default: FALSE).
-#' @param fontsize Numeric font size for row/column labels.
-#'
-#' @return Invisibly returns the pheatmap object.
-#'
-#' @seealso plot_sample_distance_heatmap
-#'
-qc_sample_distance_heatmap <- function(expr_mat,
-                                       meta,
-                                       cfg,
-                                       out_file,
-                                       with_na = FALSE,
-                                       fontsize = 12) {
-  
-  eff <- cfg$effects
-  sample_col <- eff$samples
-  color_col  <- eff$color
-  
-  expr_mat <- as.matrix(expr_mat)
-  meta <- as.data.frame(meta)
+#' Write per-sample imputation histograms (Batch writer)
+#' Refactored: Uses ggsave and returns objects
+write_imputation_histograms_per_sample <- function(expr_mat, imputed_flag, out_dir) {
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
   sample_ids <- colnames(expr_mat)
-  meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-  
-  annot <- data.frame(
-    Condition = meta_sub[[color_col]],
-    row.names = sample_ids
-  )
-  
-  if (!with_na) {
-    keep <- stats::complete.cases(expr_mat)
-    expr_mat <- expr_mat[keep, , drop = FALSE]
+  files <- character(0)
+  plots <- list() 
+  for (s in sample_ids) {
+    p <- plot_imputation_histogram_one_sample(expr_mat, imputed_flag, s)
+    f <- file.path(out_dir, paste0("X", s, ".png"))
+    ggplot2::ggsave(filename = f, plot = p, width = 3.33, height = 6, dpi = 150)
+    files <- c(files, f)
+    plots[[paste0("sample_", s)]] <- p
   }
   
-  ph <- plot_sample_distance_heatmap(
-    expr_mat = expr_mat,
-    annotation_col = annot,
-    fontsize = fontsize
-  )
+  return(list(files = files, plots = plots))
   
-  save_pheatmap_png(ph, out_file, width = 1600, height = 1200, res = 150)
-  invisible(ph)
+  # res_hist <- write_imputation_histograms_per_sample(    
+  #                    pre$expr_imp, pre$imputation$imputed_flag, out_dir = out_qc)
+  # files <- c(files, res_hist$files)
+  # plots <- c(plots, res_hist$plots)
 }
-
-
-
 

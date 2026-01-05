@@ -1,539 +1,220 @@
 #' Writes intermediate proteomics matrices
-#'  
-#' @param pre Output of preprocess_proteomics()
-#' @param runs Optional list of limma/imputation runs
-#' @param config Full config list
-#' @param run_dir Run output root directory
-#' @return Character vector of written file paths
 write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) {
-  
-  cfg  <- config$modes$proteomics
   dirs <- create_legacy_output_dirs(run_dir)
+  cfg  <- config$modes$proteomics
+  files <- character(0)
   
-  files_written <- c()
+  files <- c(files, write_tsv(as.data.frame(pre$expr_filt, check.names = FALSE),
+                              dirs$datasets, "protein_log2_filtered_unimputed.tsv"))
   
-  ## 1) Unimputed (log2) expression matrix
-  files_written <- c(
-    files_written,
-    write_tsv(
-      x = pre$expr_filt,
-      path = file.path(dirs$datasets, "protein_log2_filtered_unimputed.tsv")
-      
-    )
+  fname_imp <- sprintf(
+    "protein_log2_filtered_imputed_once_width_%s_shift_%s.tsv",
+    cfg$imputation$width, cfg$imputation$downshift
   )
   
-  ## 2) Single imputed matrix
-  width     <- cfg$imputation$width
-  downshift <- cfg$imputation$downshift
+  files <- c(files, write_tsv(as.data.frame(pre$expr_imp,  check.names = FALSE),
+                              dirs$datasets, fname_imp))
+ 
   
-  files_written <- c(
-    files_written,
-    write_tsv(
-      x = pre$expr_imp,
-      path = file.path(
-        dirs$datasets,
-        sprintf(
-          "protein_log2_filtered_imputed_once_width_%s_shift_%s.tsv",
-          width, downshift
-        )
-      )
-      
-    )
-  )
-  
-  ## 3) Multiple imputations (if provided)
-  if (!is.null(runs)) {
-    rep_dir_legacy   <- file.path(dirs$datasets, "Imputed_repetitions")
-    rep_dir_improved <- file.path(dirs$datasets, "imputed_repetitions")
-    
-    dir.create(rep_dir_legacy,   showWarnings = FALSE, recursive = TRUE)
-    dir.create(rep_dir_improved, showWarnings = FALSE, recursive = TRUE)
+  if (!is.null(runs) && length(runs) > 0) {
+    rep_dir <- file.path(dirs$datasets, "imputed_repetitions")
+    ensure_dir(rep_dir)
     
     for (i in seq_along(runs)) {
-      expr_i <- runs[[i]]$expr_imp %||% runs[[i]]$expr_imputed %||% NULL
+      expr_i <- runs[[i]]$expr_imp
+      if (is.null(expr_i)) expr_i <- runs[[i]]$expr_imputed
       if (is.null(expr_i)) next
       
-      files_written <- c(
-        files_written,
-        write_tsv(
-          x = expr_i,
-          path = file.path(
-            rep_dir_improved,
-            sprintf("protein_log2_filtered_imputed_%02d.tsv", i)
-          )
-          
-        )
-      )
+      # repetitions
+      files <- c(files, write_tsv(as.data.frame(expr_i, check.names = FALSE),
+                                  rep_dir, sprintf("protein_log2_filtered_imputed_%02d.tsv", i)))
+      
     }
   }
   
-  files_written
+  unique(files)
 }
-#' Write legacy-style Limma multi-imputation summary (with improved copy)
-#'
-#' Creates the old-pipeline summary table file under Datasets/:
-#'   - Limma_summary_mult_imputs_P_<p>.txt  (legacy)
-#' and also a clearer TSV filename (improved).
-#'
-#' @param summary_df data.frame produced by summarize_limma_mult_imputation()
-#' @param config Full config list
-#' @param run_dir Run output root directory
-#' @return Character vector of written file paths
+
+#' Write legacy-style Limma multi-imputation summary
 write_limma_multimp_summary_legacy <- function(summary_df, config, run_dir) {
   dirs <- create_legacy_output_dirs(run_dir)
-  
-  p_cut <- config$modes$proteomics$limma$p_cutoff
-  p_tag <- format(p_cut, trim = TRUE, scientific = FALSE)
-  
-  path <- file.path(dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag))
-  
-  write_tsv(summary_df, path)
+  write_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag(config)))
 }
+
 #' Build legacy-style wide limma table across imputations
-#'
-#' The old pipeline concatenated per-imputation stats columns (with ".n" suffix).
-#' This function reproduces that structure from runs_de_tables.
-#'
-#' @param runs_de_tables List (length N imputations) of per-contrast DE tables.
-#'        Each element is a named list of contrasts -> data.frame.
-#' @param contrast_name Which contrast to export (e.g., "AHA_vs_OXY").
-#' @param stats_cols Which columns to export per imputation.
-#' @return data.frame wide legacy-style results (row-aligned by FeatureID)
-build_limma_results_multimp_wide <- function(
-    runs_de_tables,
-    contrast_name,
-    stats_cols = c("logFC", "P.Value", "adj.P.Val")
-) {
+build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, 
+                                             stats_cols = c("logFC", "P.Value", "adj.P.Val")) {
   stopifnot(length(runs_de_tables) >= 1)
   
-  # Take base table from first run to anchor FeatureID + annotations
+  # Anchor with first run
   base <- runs_de_tables[[1]][[contrast_name]]
-  stopifnot(!is.null(base))
+  
+  # FIX: Fail-fast if first run is broken
+  if (is.null(base)) stop(sprintf("Contrast '%s' missing in imputation run 1", contrast_name))
   stopifnot("FeatureID" %in% colnames(base))
   
-  # Keep an "ID block" (what you want on the left side)
-  id_cols <- intersect(
-    c("FeatureID", "Protein.Names", "Genes", "First.Protein.Description", "Contrast"),
-    colnames(base)
-  )
+  id_cols <- intersect(c("FeatureID", "Protein.Names", "Genes", "First.Protein.Description", "Contrast"), colnames(base))
   out <- base[, id_cols, drop = FALSE]
   
-  # Append stats per imputation with suffix .n
+  # Append stats per imputation
   for (i in seq_along(runs_de_tables)) {
     tab <- runs_de_tables[[i]][[contrast_name]]
-    stopifnot(!is.null(tab))
     
-    # Ensure same row order via FeatureID
-    tab <- tab[match(out$FeatureID, tab$FeatureID), , drop = FALSE]
+    # FIX: Strict check - missing imputation data is critical
+    if (is.null(tab)) {
+      stop(sprintf("Critical: Contrast '%s' is missing in imputation run %d (but existed in run 1)", contrast_name, i))
+    }
+    
+    # Ensure alignment
+    tab <- align_de_table_by_feature_id(
+      tab = tab,
+      ref_ids = out$FeatureID,
+      run_i = i,
+      contrast_name = contrast_name,
+      id_col = "FeatureID"
+    )
+    
     
     stat_block <- tab[, intersect(stats_cols, colnames(tab)), drop = FALSE]
     colnames(stat_block) <- paste0(colnames(stat_block), ".", i)
-    
     out <- cbind(out, stat_block)
   }
   
   out
 }
-#' Write legacy-style limma results across multiple imputations 
-#'
-#' Produces:
-#' - Datasets/limma_results_multimp_p<p>.tsv (improved)
-#'
-#' @param de_res Output of run_proteomics_de_mult_impute()
-#' @param contrast_name Contrast to export
-#' @param config Full config list
-#' @param run_dir Run output root directory
-#' @return Character vector of written file paths
+
+#' Write legacy-style limma results across multiple imputations
 write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, run_dir) {
   dirs <- create_legacy_output_dirs(run_dir)
   
-  p_cut <- config$modes$proteomics$limma$p_cutoff
-  p_tag <- format(p_cut, trim = TRUE, scientific = FALSE)
-  
   wide_df <- build_limma_results_multimp_wide(
     runs_de_tables = de_res$runs_de_tables,
-    contrast_name  = contrast_name,
-    stats_cols     = c("logFC", "P.Value", "adj.P.Val")
+    contrast_name  = contrast_name
   )
   
-  path <- file.path(dirs$datasets, sprintf("limma_results_multimp_p%s.tsv", p_tag))
-  
-  write_tsv(wide_df, path)
+  fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag(config))
+  write_tsv(wide_df, dirs$datasets, fname)
 }
-#' Build legacy-style Final_results table (all proteins)
-#'
-#' Mirrors the old Neat proteomics "final_results" table:
-#' - Protein ID + annotation
-#' - expression matrix (log2, filtered, unimputed)
-#' - per-contrast summary stats (linearFC/pvalue/padj) + up/down label
-#' - pass_any_contrast flag
-#' - manual_cutoffs.<contrast> placeholder (legacy column)
-#'
-#' @param pre Output of preprocess_proteomics() (needs expr_filt and meta)
-#' @param summary_df Multi-imputation summary table (prot_de$summary_df)
-#' @param contrasts_df Contrasts table (inputs$contrasts)
-#' @return data.frame final_results (legacy-compatible columns)
+
+
+#' Build legacy-style Final_results table
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL) {
   
   expr_df <- as.data.frame(pre$expr_filt, check.names = FALSE)
-  
-  # Use row_data to map numeric rownames -> Protein.Group IDs
   if (is.null(row_data)) row_data <- pre$row_data
-  stopifnot(!is.null(row_data))
-  stopifnot(nrow(row_data) == nrow(expr_df))
-  stopifnot("Protein.Group" %in% colnames(row_data))
   
-  protein_ids <- row_data[["Protein.Group"]]
+  stopifnot(!is.null(row_data), "Protein.Group" %in% colnames(row_data))
   
+  # Initialize Base
   base <- data.frame(
-    Protein = protein_ids,
-    stringsAsFactors = FALSE,
-    check.names = FALSE
+    Protein = row_data[["Protein.Group"]],
+    stringsAsFactors = FALSE, check.names = FALSE
   )
   
-  # Add annotation (prefer summary_df columns if present; fallback to row_data)
+  # Match to Summary
   m <- match(base$Protein, summary_df$FeatureID)
   
-  # Preferred annot from summary_df (already aligned to FeatureID)
-  base$Protein.Names <- summary_df$Protein.Names[m]
-  base$Genes <- summary_df$Genes[m]
-  base$First.Protein.Description <- summary_df$First.Protein.Description[m]
-  
-  # If any annotation is missing, fill from row_data when available
+  # Add Annotations
   for (col in c("Protein.Names", "Genes", "First.Protein.Description")) {
-    if (any(is.na(base[[col]])) && (col %in% colnames(row_data))) {
-      base[[col]][is.na(base[[col]])] <- row_data[[col]][is.na(base[[col]])]
+    val <- if (col %in% colnames(summary_df)) summary_df[[col]][m] else NA
+    if (col %in% colnames(row_data)) {
+      fallback <- row_data[[col]]
+      val <- ifelse(is.na(val), fallback, val)
+    }
+    base[[col]] <- val
+  }
+  
+  # Add Expression
+  base <- cbind(base, expr_df)
+  
+  # Add Contrast Stats
+  contrast_names <- contrasts_df$Contrast_name
+  
+  # FIX: Pre-validate that all required columns exist in summary_df
+  # This prevents partial failure inside the loop
+  for (cn in contrast_names) {
+    cols <- get_contrast_cols(cn)
+    needed <- c(cols$fc, cols$p, cols$padj) # pass is optional-ish but usually needed
+    missing_cols <- setdiff(needed, colnames(summary_df))
+    if (length(missing_cols) > 0) {
+      stop(sprintf("Summary DF missing columns for contrast '%s': %s", cn, paste(missing_cols, collapse=", ")))
     }
   }
   
-  # Add expression columns (log2, filtered, unimputed)
-  base <- cbind(base, expr_df)
-  
-  # Add per-contrast stats + up/down + manual_cutoffs placeholder
-  contrast_names <- contrasts_df$Contrast_name
-  
   for (cn in contrast_names) {
-    fc_col   <- paste0("linearFC.imputs.", cn)
-    p_col    <- paste0("pvalue.imputs.",  cn)
-    padj_col <- paste0("padj.imputs.",    cn)
-    pass_col <- paste0("pass.imputs.",    cn)
+    cols <- get_contrast_cols(cn) 
     
-    updown_col <- paste0("upDown.imputs.", cn)
-    manual_col <- paste0("manual_cutoffs.", cn)
+    fc_vals   <- summary_df[[cols$fc]][m]
+    # FIX: Robust check for 'pass' column existence
+    pass_vals <- if (cols$pass %in% colnames(summary_df)) summary_df[[cols$pass]][m] else rep(NA, length(m))
     
-    fc_vals   <- summary_df[[fc_col]][m]
-    pass_vals <- summary_df[[pass_col]][m]
+    base[[cols$fc]]   <- fc_vals
+    base[[cols$p]]    <- summary_df[[cols$p]][m]
+    base[[cols$padj]] <- summary_df[[cols$padj]][m]
     
-    base[[fc_col]]     <- fc_vals
-    base[[p_col]]      <- summary_df[[p_col]][m]
-    base[[padj_col]]   <- summary_df[[padj_col]][m]
-    base[[updown_col]] <- ifelse(!is.na(pass_vals),
-                                 ifelse(as.numeric(fc_vals) >= 0, "up", "down"),
-                                 "")
-    base[[manual_col]] <- NA
+    # Calculate Up/Down logic
+    base[[cols$updown]] <- ifelse(!is.na(pass_vals),
+                                  ifelse(as.numeric(fc_vals) >= 0, "up", "down"), "")
+    base[[cols$manual]] <- NA 
   }
   
-  # pass_any_contrast
-  pass_mat <- sapply(contrast_names, function(cn) summary_df[[paste0("pass.imputs.", cn)]][m])
-  base$pass_any_contrast <- ifelse(rowSums(!is.na(pass_mat)) > 0, 1, NA)
+  # FIX: Robust pass_any_contrast logic
+  pass_cols <- paste0("pass.imputs.", contrast_names)
+  existing_pass_cols <- intersect(pass_cols, colnames(summary_df))
+  
+  if (length(existing_pass_cols) == 0) {
+    warning("No 'pass.imputs' columns found in summary_df. pass_any_contrast will be NA.")
+    base$pass_any_contrast <- NA
+  } else {
+    # Create matrix, handle potential NAs in 'm' automatically (returns NA row)
+    pass_mat <- summary_df[m, existing_pass_cols, drop = FALSE]
+    # rowSums ignoring NAs, check if > 0
+    # Note: !is.na(NA) is FALSE, so NA entries don't contribute to the sum
+    base$pass_any_contrast <- ifelse(rowSums(!is.na(pass_mat)) > 0, 1, NA)
+  }
   
   base
 }
 
-#' Write legacy Final_results.txt (with improved copy)
+#' Orchestrator: write all proteomics multi-imputation outputs (legacy-compatible)
 #'
-#' Exports the full "final_results" table (annotation + expression + per-contrast stats)
-#' to the run root, matching the old pipeline filename.
+#' @param pre Preprocessed object
+#' @param de_res List with $runs_de_tables, $runs, $summary_df
+#' @param inputs proteomics inputs (expects $contrasts at least)
+#' @param config global config
+#' @param run_dir run directory
+#' @param write_runs logical; if TRUE writes per-imputation matrices (if available in de_res$runs)
 #'
-#' @param final_results data.frame from build_final_results_proteomics()
-#' @param run_dir Run output root directory
-#' @return Character vector of written file paths
-write_final_results_table_legacy <- function(final_results, run_dir) {
-  path <- file.path(run_dir, "final_results.tsv")
-  write_tsv(final_results, path)
-}
-#' Write legacy Excel outputs for proteomics final results
-#'
-#' Produces two Excel files at the run root:
-#'  - Final_results_P_<p>.xlsx    (all proteins)
-#'  - Final_results_DE_P_<p>.xlsx (DE proteins only; pass_any_contrast == 1)
-#'
-#' @param final_results data.frame from build_final_results_proteomics()
-#' @param config Full config list
-#' @param run_dir Run output root directory
-#' @return Character vector of written file paths
-write_final_results_excels_legacy <- function(final_results, config, run_dir) {
-  stopifnot(requireNamespace("openxlsx", quietly = TRUE))
-  
-  p_cut <- config$modes$proteomics$limma$p_cutoff
-  p_tag <- format(p_cut, trim = TRUE, scientific = FALSE)
-  
-  f_all <- file.path(run_dir, sprintf("Final_results_P_%s.xlsx", p_tag))
-  f_de  <- file.path(run_dir, sprintf("Final_results_DE_P_%s.xlsx", p_tag))
-  
-  # ALL
-  wb1 <- openxlsx::createWorkbook()
-  openxlsx::addWorksheet(wb1, "Results")
-  openxlsx::writeData(wb1, "Results", final_results)
-  add_cutoffs_sheet_legacy(wb1, config)
-  fill_manual_cutoffs_formulas_legacy(wb1, "Results", final_results, config)
-  openxlsx::saveWorkbook(wb1, f_all, overwrite = TRUE)
-  
-  # DE only
-  de_df <- final_results[!is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1, , drop = FALSE]
-  de_df <- de_df[, -which(startsWith(names(de_df), "manual_cutoffs"))]
-  wb2 <- openxlsx::createWorkbook()
-  openxlsx::addWorksheet(wb2, "Results")
-  openxlsx::writeData(wb2, "Results", de_df)
-  openxlsx::saveWorkbook(wb2, f_de, overwrite = TRUE)
-  
-  c(f_all, f_de)
-}
-
-#' Add legacy-style "Cutoffs" sheet to an openxlsx workbook
-#'
-#' Reproduces the old Neat proteomics Cutoffs tab (layout + styles),
-#' but reads values from config$modes$proteomics$limma.
-#'
-#' NOTE:
-#' In the legacy script, FDR_ADJ controlled which cutoff cell
-#' (p-value vs adjusted p-value) was considered "active".
-#' Here we map that behavior to limma$use_adj_for_pass1
-#' for backward compatibility.
-#'
-#' @param wb openxlsx workbook object
-#' @param config Full config list
-add_cutoffs_sheet_legacy <- function(wb, config) {
-  stopifnot(requireNamespace("openxlsx", quietly = TRUE))
-  
-  limma_cfg <- config$modes$proteomics$limma
-  
-  # Legacy mapping
-  FDR_ADJ <- isTRUE(limma_cfg$use_adj_for_pass1)
-  
-  P_CUTOFF <- as.numeric(limma_cfg$p_cutoff)
-  LINEAR_FC_CUTOFF <- as.numeric(limma_cfg$linear_fc_cutoff)
-  
-  if (is.na(P_CUTOFF))
-    stop("Cutoffs sheet: limma$p_cutoff is NA or not numeric.")
-  if (is.na(LINEAR_FC_CUTOFF))
-    stop("Cutoffs sheet: limma$linear_fc_cutoff is NA or not numeric.")
-  
-  openxlsx::addWorksheet(wb, sheetName = "Cutoffs", gridLines = TRUE)
-  
-  openxlsx::writeData(
-    wb, "Cutoffs",
-    x = c("p-value", "Adjusted pvalue (FDR)", "linear Fold Change (linearFC)"),
-    startCol = 2,
-    startRow = 4
-  )
-  
-  openxlsx::writeData(
-    wb, "Cutoffs",
-    x = c(
-      ifelse(FDR_ADJ, "", P_CUTOFF),
-      ifelse(FDR_ADJ, P_CUTOFF, ""),
-      LINEAR_FC_CUTOFF
-    ),
-    startCol = 3,
-    startRow = 4
-  )
-  
-  openxlsx::createNamedRegion(wb, "Cutoffs", cols = 3, rows = 4, name = "PVAL_CO")
-  openxlsx::createNamedRegion(wb, "Cutoffs", cols = 3, rows = 5, name = "FDR_CO")
-  openxlsx::createNamedRegion(wb, "Cutoffs", cols = 3, rows = 6, name = "LFC_CO")
-  
-  style_used <- openxlsx::createStyle(
-    border = "TopBottomLeftRight",
-    borderStyle = "thick",
-    fgFill = "green",
-    halign = "center"
-  )
-  style_not <- openxlsx::createStyle(
-    border = "TopBottomLeftRight",
-    borderStyle = "thick",
-    fgFill = "red",
-    halign = "center"
-  )
-  
-  used_rows    <- if (FDR_ADJ) 5:6 else c(4, 6)
-  notused_rows <- if (FDR_ADJ) 4    else 5
-  
-  openxlsx::addStyle(
-    wb, "Cutoffs", style_not,
-    rows = notused_rows, cols = 3,
-    gridExpand = FALSE, stack = FALSE
-  )
-  openxlsx::addStyle(
-    wb, "Cutoffs", style_used,
-    rows = used_rows, cols = 3,
-    gridExpand = FALSE, stack = FALSE
-  )
-  
-  openxlsx::setColWidths(wb, "Cutoffs", cols = 2, widths = "auto")
-}
-#' Write legacy-style proteomics multi-imputation outputs (orchestrator)
-#'
-#' This is a convenience wrapper used by {targets}. It writes the legacy-compatible
-#' output set (datasets + summary + wide limma + final results + excel files)
-#' and returns a character vector of file paths.
-#'
-#' @param pre Preprocess output from preprocess_proteomics()
-#' @param de_res Output of run_proteomics_de_mult_impute()
-#' @param inputs Proteomics inputs list (for contrasts)
-#' @param config Full config list
-#' @param run_dir Run output root directory (e.g., outputs/Results_<project>_<round>)
-#' @param write_runs Logical; if TRUE, also write per-imputation run outputs (optional; not implemented here)
-#' @return Character vector of file paths written
+#' @return character vector of written file paths
 write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, run_dir, write_runs = FALSE) {
   
-  # Ensure legacy directory structure exists
-  create_legacy_output_dirs(run_dir)
+  files <- character(0)
   
-  # 1) Datasets (unimputed + imputed once)
-  files_ds <- write_proteomics_datasets_legacy(
-    pre     = pre,
-    runs    = NULL,
-    config  = config,
-    run_dir = run_dir
-  )
+  runs_for_datasets <- if (isTRUE(write_runs)) de_res$runs else NULL
+  files <- c(files, write_proteomics_datasets_legacy(pre, runs_for_datasets, config, run_dir))
   
-  # 2) Limma multi-imputation stability summary
-  files_sum <- write_limma_multimp_summary_legacy(
-    summary_df = de_res$summary_df,
-    config     = config,
-    run_dir    = run_dir
-  )
+  if (!is.null(de_res$summary_df)) {
+    files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, run_dir))
+  }
   
-  # 3) Wide legacy limma results across imputations (per contrast)
-  contrast_names <- as.data.frame(inputs$contrasts)$Contrast_name
-  files_lr <- unlist(lapply(contrast_names, function(cn) {
-    write_limma_results_multimp_legacy(
-      de_res        = de_res,
-      contrast_name = cn,
-      config        = config,
-      run_dir       = run_dir
-    )
-  }), use.names = FALSE)
-  
-  # 4) Final results table (all proteins)
-  final_results <- build_final_results_proteomics(
-    pre          = pre,
-    summary_df   = de_res$summary_df,
-    contrasts_df = as.data.frame(inputs$contrasts),
-    row_data     = pre$row_data
-  )
-  
-  
-  files_final <- write_tsv(final_results, file.path(run_dir, "final_results.tsv"))
-  
-  # 5) Excel outputs (all + DE) + Cutoffs tab
-  files_xlsx <- write_final_results_excels_legacy(
-    final_results = final_results,
-    config        = config,
-    run_dir       = run_dir
-  )
-  
-  # (Optional) write_runs reserved for future (kept for API compatibility)
-  invisible(write_runs)
-  
-  c(files_ds, files_sum, files_lr, files_final, files_xlsx)
-}
-
-#' Fill manual_cutoffs.* columns in an Excel sheet with legacy-style formulas
-#'
-#' Writes Excel formulas that use named ranges (PVAL_CO, FDR_CO, LFC_CO) from the Cutoffs sheet.
-#' The formula is written per-row and per-contrast into the manual_cutoffs column.
-#'
-#' @param wb openxlsx workbook
-#' @param sheet Sheet name where results table was written (e.g. "Results")
-#' @param final_results data.frame that was written to the sheet
-#' @param config Full config list
-fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config) {
-  stopifnot(requireNamespace("openxlsx", quietly = TRUE))
-  
-  limma_cfg <- config$modes$proteomics$limma
-  use_fdr   <- isTRUE(limma_cfg$use_adj_for_pass1)  # legacy mapping
-  
-  # Find all contrasts by manual_cutoffs.imputs.<contrast>
-  manual_cols <- grep("^manual_cutoffs\\.", names(final_results), value = TRUE)
-  if (length(manual_cols) == 0) return(invisible(NULL))
-  
-  # Header row is 1, data starts at row 2 (because writeData writes colnames)
-  start_row <- 2
-  n <- nrow(final_results)
-  
-  # Helper to turn numeric column index into Excel column letters
-  num_to_excel_col <- function(num) {
-    letters <- c(LETTERS)
-    out <- ""
-    while (num > 0) {
-      r <- (num - 1) %% 26
-      out <- paste0(letters[r + 1], out)
-      num <- (num - 1) %/% 26
+  # Optional: wide per-contrast tables
+  if (!is.null(de_res$runs_de_tables) && length(de_res$runs_de_tables) > 0) {
+    contrast_names <- names(de_res$runs_de_tables[[1]])
+    for (cn in contrast_names) {
+      files <- c(files, write_limma_results_multimp_legacy(de_res, cn, config, run_dir))
     }
-    out
   }
   
-  # For each contrast, write a formula in manual_cutoffs column
-  for (mcol in manual_cols) {
-    contrast <- sub("^manual_cutoffs\\.", "", mcol)
-    
-    fc_col   <- paste0("linearFC.imputs.", contrast)
-    p_col    <- paste0("pvalue.imputs.",  contrast)
-    padj_col <- paste0("padj.imputs.",    contrast)
-    
-    # Sanity: required cols exist
-    needed <- c(fc_col, p_col, padj_col)
-    if (!all(needed %in% names(final_results))) next
-    
-    # Column indices within the written sheet (1-based)
-    fc_i   <- match(fc_col,   names(final_results))
-    p_i    <- match(p_col,    names(final_results))
-    padj_i <- match(padj_col, names(final_results))
-    m_i    <- match(mcol,     names(final_results))
-    
-    fc_L   <- num_to_excel_col(fc_i)
-    p_L    <- num_to_excel_col(p_i)
-    padj_L <- num_to_excel_col(padj_i)
-    m_L    <- num_to_excel_col(m_i)
-    
-    rows <- start_row:(start_row + n - 1)
-    
-    # Build formulas per row
-    formulas <- vapply(rows, function(r) {
-      fc_ref   <- paste0(fc_L, r)
-      p_ref    <- paste0(p_L, r)
-      padj_ref <- paste0(padj_L, r)
-      
-      if (use_fdr) {
-        # Use adjusted p-value cutoff (FDR_CO) + LFC_CO
-        paste0(
-          'IF(AND(ISNUMBER(', padj_ref, '),',
-          padj_ref, '<=FDR_CO,',
-          'ABS(', fc_ref, ')>=LFC_CO),',
-          'IF(', fc_ref, '>0,"up","down"),"")'
-        )
-      } else {
-        # Use raw p-value cutoff (PVAL_CO) + LFC_CO
-        paste0(
-          'IF(AND(ISNUMBER(', p_ref, '),',
-          p_ref, '<=PVAL_CO,',
-          'ABS(', fc_ref, ')>=LFC_CO),',
-          'IF(', fc_ref, '>0,"up","down"),"")'
-        )
-      }
-    }, character(1))
-    
-    # Write formulas into the manual_cutoffs column
-    openxlsx::writeFormula(
-      wb, sheet = sheet,
-      x = formulas,
-      startCol = m_i,
-      startRow = start_row
+  # Final results + excels (if you keep them)
+  if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
+    final_results <- build_final_results_proteomics(
+      pre          = pre,
+      summary_df   = de_res$summary_df,
+      contrasts_df = inputs$contrasts,
+      row_data     = pre$row_data
     )
+    files <- c(files, write_final_results_excels_legacy(final_results, pre, config, run_dir))
   }
   
-  invisible(NULL)
+  unique(files)
 }
-
