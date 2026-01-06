@@ -9,11 +9,11 @@
 add_cutoffs_sheet_legacy <- function(wb, config, sheet = "Cutoffs") {
   stopifnot(requireNamespace("openxlsx", quietly = TRUE))
   
-  limma_cfg <- config$modes$proteomics$limma
-  FDR_ADJ   <- isTRUE(limma_cfg$use_adj_for_pass1)
+  de_cfg <- config$modes$proteomics$de
+  FDR_ADJ   <- isTRUE(de_cfg$use_adj_for_pass1)
   
-  P_CUTOFF         <- limma_cfg$p_cutoff %||% 0.05
-  LINEAR_FC_CUTOFF <- limma_cfg$linear_fc_cutoff %||% 1.5
+  P_CUTOFF         <- de_cfg$p_cutoff %||% 0.05
+  LINEAR_FC_CUTOFF <- de_cfg$linear_fc_cutoff %||% 1.5
   
   # recreate sheet to avoid stale named regions
   if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)

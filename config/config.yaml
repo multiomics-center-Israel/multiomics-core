@@ -4,7 +4,7 @@ paths:
 
 project:
   name: "E_Pick"
-  analysis_round: "Analysis_03"
+  analysis_round: "Analysis_06"
 
 modes:
   rna:
@@ -55,7 +55,8 @@ modes:
         # T: 3
         # SH: 2
 
-    limma:
+    de:
+      method: "limma"
       use_adj_for_pass1: true   # Use adj.P.Val for pass1 (otherwise P.Value)
       p_cutoff: 0.1
       linear_fc_cutoff: 1.5
@@ -73,7 +74,7 @@ modes:
       dep2_random_seed: 1       # for reproducibility
 
     # How to interpret DE summary tables (used by get_de_features)
-    de:
+    de_table:
       id_col: "FeatureID"
       pass_any_col: "pass_any_contrast"
 

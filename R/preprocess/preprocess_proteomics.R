@@ -46,6 +46,7 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
   }
   
   df_m <- protein[, sample_cols, drop = FALSE]
+  if (any(df_m <= 0, na.rm=TRUE)) warning("Non-positive values found before log2; will produce -Inf/NaN")
   
   # 2) Coerce to numeric (DIA-NN often has blanks)
   df_m <- as.data.frame(
@@ -104,21 +105,6 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
   m
 }
 
-
-#' Convenience wrapper: extract DIA-NN measurements from inputs list
-#'
-#' @param inputs List returned by load_proteomics_inputs()
-#' @param cfg    config$modes$proteomics
-#'
-#' @return Log2-intensity matrix/data.frame with samples in columns
-get_measurements_per_sample_diann_from_inputs <- function(inputs, cfg) {
-  get_measurements_per_sample_diann(
-    protein    = inputs$protein,
-    sample_map = inputs$sample_map,
-    meta       = inputs$metadata,
-    cfg        = cfg
-  )
-}
 
 #' Filter proteomics data using min_count per condition
 #'
@@ -343,12 +329,12 @@ preprocess_proteomics <- function(inputs, config) {
   
   # Return: matrices only, consistently named
   list(
-    expr_raw_mat     = expr_raw,
-    expr_filt_mat    = expr_filt,
+    expr_raw     = expr_raw,
+    expr_filt    = expr_filt,
     expr_imp_single  = expr_imp_single,
     row_data         = row_data_f,
     meta             = col_data,
-    imputation_qc    = imputation_qc
+    imputation    = imputation_qc
   )
 }
 

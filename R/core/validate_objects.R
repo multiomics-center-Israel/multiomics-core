@@ -166,7 +166,7 @@ validate_proteomics_imputations <- function(imputations,
 #'
 #' @examples
 #' \dontrun{
-#' assert_numeric_matrix(expr_mat, "expr_filt_mat")
+#' assert_numeric_matrix(expr_mat, "expr_filt")
 #' }
 assert_numeric_matrix <- function(x, name = "x") {
   if (!is.matrix(x)) stop(sprintf("`%s` must be a matrix.", name))
@@ -215,4 +215,34 @@ coerce_df_to_numeric_matrix <- function(df, rownames_vec = NULL, name = "df") {
     rownames(m) <- as.character(rownames_vec)
   }
   m
+}
+
+assert_pre_contract <- function(pre, stage = "proteomics") {
+  stopifnot(is.list(pre))
+  
+  required <- c("expr_raw", "expr_filt", "expr_imp_single", "meta", "row_data")
+  missing <- setdiff(required, names(pre))
+  if (length(missing) > 0) {
+    stop(sprintf(
+      "Preprocess contract failed for %s. Missing fields: %s",
+      stage, paste(missing, collapse = ", ")
+    ))
+  }
+  
+  invisible(TRUE)
+}
+
+assert_de_contract <- function(de_res, stage = "proteomics") {
+  stopifnot(is.list(de_res))
+  
+  required <- c("summary_df")
+  missing <- setdiff(required, names(de_res))
+  if (length(missing) > 0) {
+    stop(sprintf(
+      "DE contract failed for %s. Missing fields: %s",
+      stage, paste(missing, collapse = ", ")
+    ))
+  }
+  
+  invisible(TRUE)
 }

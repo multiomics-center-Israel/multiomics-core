@@ -134,7 +134,7 @@ align_annotations_to_expr <- function(expr_mat, prot_tbl, protein_id_col, annot_
   
   prot_tbl[idx, annot_cols, drop = FALSE]
 }
-#' Align limma differential expression results to an expression matrix
+#' Align differential expression results to an expression matrix
 #'
 #' Fail-fast helper that reorders a `topTable()` result to match the feature
 #' order of the input expression matrix. This prevents silent mis-annotation

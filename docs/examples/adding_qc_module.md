@@ -126,7 +126,7 @@ In `_targets.R`:
 tar_target(
   prot_qc_clustering,
   qc_cluster_samples_proteomics(
-    expr_mat = prot_pre$expr_filt_mat,
+    expr_mat = prot_pre$expr_filt,
     meta     = prot_pre$meta,
     cfg      = config$modes$proteomics
   )
@@ -139,6 +139,7 @@ tar_target(
     meta    = prot_pre$meta,
     run_dir = prot_run_dir
   ),
+  
   format = "file"
 )
 ```

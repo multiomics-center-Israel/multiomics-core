@@ -88,13 +88,13 @@ run_binary_patterns <- function(expr_mat,
   written <- character(0)
   plots <- list()
   
-  # Write summary tables (assuming do_write returns the file path)
-  written <- c(written, do_write(best, out_dir, "corr_results_best_pattern.tsv"))
+  # Write summary tables (assuming save_tsv returns the file path)
+  written <- c(written, save_tsv(best, out_dir, "corr_results_best_pattern.tsv"))
   
   # Stats per pattern
   stats <- as.data.frame(table(best$best_pattern), stringsAsFactors = FALSE)
   colnames(stats) <- c("pattern", "n_features")
-  written <- c(written, do_write(stats, out_dir, "corr_stats_patterns.tsv"))
+  written <- c(written, save_tsv(stats, out_dir, "corr_stats_patterns.tsv"))
   
   # 5) Heatmaps per pattern
   for (pat in patterns) {
@@ -127,7 +127,7 @@ run_binary_patterns <- function(expr_mat,
     
     # Gene list per pattern
     gl <- data.frame(feature_id = feats_pat, stringsAsFactors = FALSE)
-    written <- c(written, do_write(gl, out_dir, sprintf("genes_%s.tsv", pat)))
+    written <- c(written, save_tsv(gl, out_dir, sprintf("genes_%s.tsv", pat)))
   }
   
   # --- Final Return: List containing both files and plots ---

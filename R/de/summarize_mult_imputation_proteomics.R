@@ -1,4 +1,4 @@
-#' Mark differential expression pass for a single limma result table
+#' Mark differential expression pass for a single result table
 #'
 #' Applies the legacy "pass1" rule: a feature passes if it meets BOTH
 #' the p-value cutoff (raw or adjusted) and the absolute log2FC cutoff.
@@ -7,7 +7,7 @@
 #'   - 1  : pass
 #'   - NA : fail
 #'
-#' @param de_table A data.frame from limma::topTable()
+#' @param de_table A data.frame from topTable()
 #' @param p_cutoff Numeric cutoff for p-value or adjusted p-value.
 #' @param lfc_cutoff Numeric cutoff for |logFC| (log2 scale).
 #' @param use_adj Logical; TRUE uses 'adj.P.Val', FALSE uses 'P.Value'.
@@ -70,16 +70,16 @@ add_pass_any_contrast <- function(summary_df,
 #'
 #' @return A data.frame with one row per feature.
 summarize_limma_mult_imputation <- function(runs_de_tables, config) {
-  limma_cfg <- config$modes$proteomics$limma
+  de_cfg <- config$modes$proteomics$de
   imp_cfg   <- config$modes$proteomics$imputation
   
   NO_REPETITIONS <- as.integer(imp_cfg$no_repetitions)
   MIN_NO_PASSED  <- as.integer(imp_cfg$min_no_passed)
   
-  use_adj_for_pass1 <- isTRUE(limma_cfg$use_adj_for_pass1)
-  p_cutoff <- as.numeric(limma_cfg$p_cutoff)
+  use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
+  p_cutoff <- as.numeric(de_cfg$p_cutoff)
   
-  linear_fc_cutoff <- as.numeric(limma_cfg$linear_fc_cutoff)
+  linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff)
   lfc_cutoff <- log2(linear_fc_cutoff)
   
   stopifnot(length(runs_de_tables) == NO_REPETITIONS)

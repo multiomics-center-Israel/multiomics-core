@@ -113,7 +113,7 @@ cp config/templates/proteomics.yaml config/E_Pick_A02.yaml
 -   filtering parameters (`filtering.min_count`)
 -   normalization method
 -   imputation parameters (method, repetitions, thresholds)
--   limma thresholds
+-   de thresholds
 -   QC aesthetics (`effects`)
 
 > Starting a new project should **never require modifying R code**.
