@@ -5,15 +5,17 @@
 #' only when the data has enough groups (>= min_groups), where groups are
 #' defined by cfg$effects$color.
 #'
-#' @param pre     preprocessed proteomics object (expects $expr_imp and $meta)
+#' @param pre preprocessed proteomics object (expects $expr_imp_single and $meta)
 #' @param de_res  DE results list (expects $summary_df at least)
 #' @param config  full YAML config list
 #' @param run_dir output run directory (project folder)
 #'
 #' @return list(plots, files)
 mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
-  stopifnot(is.list(pre), is.list(de_res), is.list(config))
   stopifnot(is.character(run_dir), length(run_dir) == 1)
+  
+  assert_pre_contract(pre, stage = "proteomics")
+  assert_de_contract(de_res, stage = "proteomics")
   
   cfg <- config$modes$proteomics
   cl  <- cfg$clustering
@@ -45,10 +47,10 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
   }
   
   # Get DE features
-  de_features <- get_de_features(de_res, config)
+  de_features <- get_de_features(de_res, cfg)
   
   # Expression matrix (Imputed)
-  expr_mat <- as.matrix(pre$expr_imp)
+  expr_mat <- as.matrix(pre$expr_imp_single)
   
   written <- character(0)
   plots <- list()
@@ -78,7 +80,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
     
     # Run wrapper
     p_cluster <- wrap_clustering_heatmap(
-      expr_mat    = pre$expr_imp,
+      expr_mat    = pre$expr_imp_single,
       meta        = pre$meta,
       cfg         = cfg,
       feature_ids = de_features,       
@@ -96,8 +98,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
         cluster    = as.integer(hc_res$clusters),
         stringsAsFactors = FALSE
       )
-      # Assuming write_tsv is a helper or from readr
-      readr::write_tsv(cl_tbl, f_tbl) 
+      save_tsv_path(cl_tbl, f_tbl) 
       written <- c(written, f_tbl)
       plots$cl_tbl <- cl_tbl
     }
@@ -113,14 +114,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
     
     # Fit clusters on group means (using the effects function)
     part_res <- perform_partition_clustering_effects(
-      expr_mat = pre$expr_imp,
+      expr_mat = pre$expr_imp_single,
       meta = pre$meta,
       cfg = cfg,
       de_features = de_features
     )
     
     # Final output dir includes number of clusters (legacy style)
-    part_dir <- file.path(clustering_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
+    part_dir <- file.path(part_base_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
     ensure_dir(part_dir)
     
     # (1) write clusters table
@@ -130,14 +131,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
       stringsAsFactors = FALSE
     )
     f_tbl <- file.path(part_dir, "partition_clusters.tsv")
-    readr::write_tsv(clusters_tbl, f_tbl)
+    save_tsv_path(clusters_tbl, f_tbl)
     written <- c(written, f_tbl)
     plots$pt_tbl <- clusters_tbl
     
     # (2) heatmap
     if (isTRUE(cfg$clustering$steps$partition$outputs$write_heatmap_png %||% TRUE)) {
       feats <- names(part_res$clusters)
-      mat <- as.matrix(pre$expr_imp)[feats, , drop = FALSE]
+      mat <- as.matrix(pre$expr_imp_single)[feats, , drop = FALSE]
       
       # Order rows: cluster then name
       ord <- order(part_res$clusters, names(part_res$clusters))
@@ -201,8 +202,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
     
     # --- FIX: Export Legacy Data (Moved INSIDE the IF block) ---
     # This must be here because part_res and part_dir are only defined here.
-    legacy_files <- write_legacy_cluster_data(
-      expr_mat = pre$expr_imp,    # Source of Truth (Absolute values)
+    legacy_files <- write_clustering_legacy_profiles(
+      expr_mat = pre$expr_imp_single,    # Source of Truth (Absolute values)
       meta     = pre$meta,        # Metadata
       clusters = part_res$clusters, 
       cfg      = cfg,

@@ -7,30 +7,22 @@
 #' @param config Global config
 #'
 #' @return character vector of feature IDs
-get_de_features <- function(de_res, config) {
+get_de_features <- function(de_res, cfg) {
   stopifnot(is.list(de_res), !is.null(de_res$summary_df))
   df <- de_res$summary_df
   stopifnot(is.data.frame(df))
   
   # Accept legacy + new column names
-  id_candidates <- c("feature_id", "FeatureID", "Protein", "protein_id")
-  id_col <- id_candidates[id_candidates %in% colnames(df)][1]
-  
+  id_col <- cfg$de_table$id_col
+  pass_any_col <- cfg$de_table$pass_any_col
   if (is.na(id_col) || is.null(id_col)) {
-    stop("DE summary missing id column. Expected one of: ",
-         paste(id_candidates, collapse = ", "))
+    stop("DE summary missing id column. Expected : ", id_col)
   }
   
   # Standardize internally
   df$feature_id <- df[[id_col]]
   
-  # ---- your existing logic below, but use df$feature_id ----
-  # Example: any_contrast = pass_any == 1
-  if (!"pass_any_contrast" %in% colnames(df)) {
-    stop("DE summary missing 'pass_any_contrast'. (expected from summarize_limma_mult_imputation)")
-  }
-  
-  feats <- df$feature_id[!is.na(df$pass_any_contrast) & df$pass_any_contrast == 1]
+  feats <- df$feature_id[!is.na(df[[pass_any_col]]) & df[[pass_any_col]] == 1]
   unique(as.character(feats))
 }
 

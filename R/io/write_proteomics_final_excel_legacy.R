@@ -69,10 +69,10 @@ write_final_results_excels_legacy <- function(final_results, pre, config, run_di
 #' @param wb openxlsx workbook
 #' @param sheet sheet name (usually "Results")
 #' @param final_results data.frame written to the sheet
-#' @param config full config (uses modes$proteomics$limma$use_adj_for_pass1)
+#' @param config full config (uses modes$proteomics$de$use_adj_for_pass1)
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config) {
-  limma_cfg <- config$modes$proteomics$limma
-  use_fdr   <- isTRUE(limma_cfg$use_adj_for_pass1)
+  de_cfg <- config$modes$proteomics$de
+  use_fdr   <- isTRUE(de_cfg$use_adj_for_pass1)
   
   manual_cols <- grep("^manual_cutoffs\\.", names(final_results), value = TRUE)
   if (length(manual_cols) == 0) return(invisible(NULL))

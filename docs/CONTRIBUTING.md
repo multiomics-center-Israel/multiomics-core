@@ -162,7 +162,7 @@ Add a new target **after** its dependencies:
 tar_target(
   prot_clusters,
   run_clustering_proteomics(
-    expr_mat = prot_pre$expr_filt_mat,
+    expr_mat = prot_pre$expr_filt,
     meta     = prot_pre$meta,
     cfg      = config$modes$proteomics,
     verbose  = TRUE

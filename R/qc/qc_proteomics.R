@@ -308,7 +308,7 @@ write_imputation_histograms_per_sample <- function(expr_mat, imputed_flag, out_d
   return(list(files = files, plots = plots))
   
   # res_hist <- write_imputation_histograms_per_sample(    
-  #                    pre$expr_imp, pre$imputation$imputed_flag, out_dir = out_qc)
+  #                    pre$expr_imp_single, pre$imputation$imputed_flag, out_dir = out_qc)
   # files <- c(files, res_hist$files)
   # plots <- c(plots, res_hist$plots)
 }

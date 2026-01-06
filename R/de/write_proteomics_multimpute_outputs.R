@@ -4,7 +4,7 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
   cfg  <- config$modes$proteomics
   files <- character(0)
   
-  files <- c(files, write_tsv(as.data.frame(pre$expr_filt, check.names = FALSE),
+  files <- c(files, save_tsv(as.data.frame(pre$expr_filt, check.names = FALSE),
                               dirs$datasets, "protein_log2_filtered_unimputed.tsv"))
   
   fname_imp <- sprintf(
@@ -12,7 +12,7 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
     cfg$imputation$width, cfg$imputation$downshift
   )
   
-  files <- c(files, write_tsv(as.data.frame(pre$expr_imp,  check.names = FALSE),
+  files <- c(files, save_tsv(as.data.frame(pre$expr_imp_single,  check.names = FALSE),
                               dirs$datasets, fname_imp))
  
   
@@ -22,11 +22,10 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
     
     for (i in seq_along(runs)) {
       expr_i <- runs[[i]]$expr_imp
-      if (is.null(expr_i)) expr_i <- runs[[i]]$expr_imputed
       if (is.null(expr_i)) next
       
       # repetitions
-      files <- c(files, write_tsv(as.data.frame(expr_i, check.names = FALSE),
+      files <- c(files, save_tsv(as.data.frame(expr_i, check.names = FALSE),
                                   rep_dir, sprintf("protein_log2_filtered_imputed_%02d.tsv", i)))
       
     }
@@ -35,10 +34,10 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, run_dir) 
   unique(files)
 }
 
-#' Write legacy-style Limma multi-imputation summary
+#' Write legacy-style  multi-imputation summary
 write_limma_multimp_summary_legacy <- function(summary_df, config, run_dir) {
   dirs <- create_legacy_output_dirs(run_dir)
-  write_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag(config)))
+  save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag(config)))
 }
 
 #' Build legacy-style wide limma table across imputations
@@ -93,7 +92,7 @@ write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, ru
   )
   
   fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag(config))
-  write_tsv(wide_df, dirs$datasets, fname)
+  save_tsv(wide_df, dirs$datasets, fname)
 }
 
 
@@ -186,26 +185,30 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
 #' @param write_runs logical; if TRUE writes per-imputation matrices (if available in de_res$runs)
 #'
 #' @return character vector of written file paths
-write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, run_dir, write_runs = FALSE) {
+write_proteomics_multimpute_outputs <- function(pre, de_res,
+                                                inputs, config, run_dir, write_runs = FALSE) {
   
   files <- character(0)
+  dirs  <- create_legacy_output_dirs(run_dir)
   
+  # 1) datasets
   runs_for_datasets <- if (isTRUE(write_runs)) de_res$runs else NULL
   files <- c(files, write_proteomics_datasets_legacy(pre, runs_for_datasets, config, run_dir))
   
+  # 2) summary
   if (!is.null(de_res$summary_df)) {
     files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, run_dir))
   }
   
-  # Optional: wide per-contrast tables
+  # 3) wide limma per contrast (optional)
   if (!is.null(de_res$runs_de_tables) && length(de_res$runs_de_tables) > 0) {
     contrast_names <- names(de_res$runs_de_tables[[1]])
     for (cn in contrast_names) {
-      files <- c(files, write_limma_results_multimp_legacy(de_res, cn, config, run_dir))
+      files <- c(files, write_limma_results_multimp_legacy(de_res = de_res, contrast_name = cn, config = config, run_dir = run_dir))
     }
   }
   
-  # Final results + excels (if you keep them)
+  # 4) final results TSV (optional but useful)
   if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
     final_results <- build_final_results_proteomics(
       pre          = pre,
@@ -213,6 +216,9 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, run
       contrasts_df = inputs$contrasts,
       row_data     = pre$row_data
     )
+    files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
+    
+    # 5) Excel outputs (delegated to dedicated file)
     files <- c(files, write_final_results_excels_legacy(final_results, pre, config, run_dir))
   }
   

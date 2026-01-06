@@ -211,11 +211,11 @@ validate_proteomics_config <- function(cfg) {
     }
   }
   
-  # 4. Limma Settings
-  if (!is.null(cfg$limma)) {
-    assert_scalar_num(cfg$limma$p_cutoff, "limma$p_cutoff",
+  # 4. de Settings
+  if (!is.null(cfg$de)) {
+    assert_scalar_num(cfg$de$p_cutoff, "de$p_cutoff",
                       allow_null = TRUE, min_val = .Machine$double.eps, max_val = 1)
-    assert_scalar_num(cfg$limma$linear_fc_cutoff, "limma$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
+    assert_scalar_num(cfg$de$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
   }
   
   invisible(TRUE)

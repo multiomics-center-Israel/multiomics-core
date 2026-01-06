@@ -30,19 +30,4 @@ create_legacy_output_dirs <- function(run_dir) {
   for (d in dirs) dir.create(d, showWarnings = FALSE, recursive = TRUE)
   dirs
 }
-#' Write a table twice: legacy .txt (TSV) + improved .tsv
-#'
-#' Legacy outputs keep the original filenames used by the old pipeline (usually *.txt),
-#' but are written as tab-separated text for robustness.
-#' Improved outputs use clearer filenames and the .tsv extension.
-#'
-#' @param x data.frame or matrix to write
-#' @param path Full path to improved file (typically *.tsv)
-#' @return Character vector of written file paths (legacy, improved)
-write_tsv <- function(x, path) {
-  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
-  write.table(x, path, sep = "\t", quote = FALSE, col.names = NA)
-  
-  path
-}
 

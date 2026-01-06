@@ -46,18 +46,15 @@ run_limma_mult_imputation_proteomics <- function(expr_mat,
     verbose    = verbose
   )
   
-  run_limma_multimp(
-    imputations  = imputations,
-    meta         = meta,
-    contrasts_df = contrasts_df,
-    prot_tbl     = prot_tbl,
-    cfg          = cfg,
-    verbose      = verbose
-  )
-}
-
-
-
+#   run_limma_multimp(
+#     imputations  = imputations,
+#     meta         = meta,
+#     contrasts_df = contrasts_df,
+#     prot_tbl     = prot_tbl,
+#     cfg          = cfg,
+#     verbose      = verbose
+#   )
+ }
 
 #' Run limma proteomics DE on a precomputed list of imputed datasets
 #'
@@ -85,14 +82,11 @@ run_limma_mult_imputation_proteomics <- function(expr_mat,
 #'   prot_tbl     = prot_tbl
 #' )
 #' }
-run_limma_multimp <- function(imputations,
-                                                meta,
-                                                contrasts_df,
-                                                prot_tbl,
-                                                cfg,
-                                                verbose = FALSE) {
+run_limma_multimp <- function(imputations, meta, contrasts_df, prot_tbl, cfg,
+                              verbose = FALSE) {
   
-  validate_proteomics_imputations(imputations = imputations, meta = meta, cfg = cfg)
+  validate_proteomics_imputations(imputations = imputations,
+                                  meta = meta, cfg = cfg)
   
   runs <- vector("list", length(imputations))
   

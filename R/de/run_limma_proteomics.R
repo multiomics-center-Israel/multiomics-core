@@ -66,6 +66,7 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
   names(de_tables) <- colnames(contrast_matrix)
  
   list(
+    expr_imp = expr_imp,
     meta_aligned = meta_aligned,
     design = design,
     contrast_formulas = contrast_formulas,

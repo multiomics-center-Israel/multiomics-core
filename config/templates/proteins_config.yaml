@@ -87,7 +87,8 @@ modes:
     # --------------------------------------------------------
     # Differential expression (limma)
     # --------------------------------------------------------
-    limma:
+    de:
+      method: "limma"
       use_adj_for_pass1: true   # use adj.P.Val for stability pass
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
