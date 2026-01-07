@@ -1,8 +1,8 @@
-## Developer Guide — multiomics-core
+# Developer Guide — multiomics-core
 
 This guide is intended for developers who want to **extend**, **modify**, or **maintain** the **multiomics-core** framework.
 
-The project is **configuration-driven**, **modular**, and **reproducible**, with orchestration handled by `{targets}`. The goal of this guide is to protect the infrastructure from drifting into legacy code as the team grows.
+The project is **configuration-driven**, **modular**, and **fully reproducible**, with orchestration handled by `{targets}`. The goal of this guide is to protect the infrastructure from degrading into legacy code as the team grows.
 
 ------------------------------------------------------------------------
 
@@ -13,13 +13,13 @@ The project is **configuration-driven**, **modular**, and **reproducible**, with
 2.  **Clear separation of concerns**
 
     -   **I/O**: loading, saving, paths, legacy-compatible outputs
-    -   **Logic**: preprocessing, QC computation, DE, clustering
+    -   **Logic**: preprocessing, QC, DE, clustering
     -   **Plotting**: pure plotting functions (no file writing)
     -   **Orchestration**: `_targets.R` only
 
 3.  **Pure functions by default** Logic functions should not read/write files, rely on global state, or mutate external objects.
 
-4.  **Fail-fast validation** Validate critical objects immediately to prevent silent downstream errors.
+4.  **Fail-fast validation** Critical objects must be validated immediately to prevent silent downstream errors.
 
 5.  **Backward compatibility matters**
 
@@ -33,37 +33,38 @@ The project is **configuration-driven**, **modular**, and **reproducible**, with
 
 ### Main directories
 
--   `R/core/` — contracts, validations, matrix/meta helpers, execution snapshots
--   `R/io/` — config loading + input loaders
--   `R/preprocess/` — omics preprocessing logic
--   `R/de/` — differential expression logic (e.g. limma, multi-imputation)
--   `R/qc/` — QC wrappers (may include file writing)
--   `R/plots/` — pure plotting functions (no I/O)
+-   `R/core/` — contracts, validations, matrix/meta helpers, utilities
+-   `R/io/`— config parsing, loaders, I/O helpers, Excel legacy writers
+-   `R/preprocess/` — omics preprocessing (filtering, normalization, imputation)
+-   `R/de/` — DE engines + summarization + builders (method-based)
+-   `R/qc/` — QC computations (PCA, density, correlation)
+-   `R/plots/` — pure plotting (no I/O)
+-   `R/clustering/` — clustering algorithms + legacy exporters
+-   `R/pipeline/` — pipeline modules + {targets} factories
 -   `_targets.R` — orchestration only
--   `docs/` — architecture and contribution guides
 
 ### Typical pipeline flow (proteomics example)
 
 ```         
-load_inputs → preprocess → make_imputations → run_DE → summarize → write_outputs + QC
+load_inputs → preprocess → DE (impute+run+summarize) → QC/clustering → write_outputs
 ```
 
 ------------------------------------------------------------------------
 
 ## Contracts: What Each Stage Must Accept and Return
 
-To keep modules composable and stable, each stage must return a predictable structure.
+To keep modules composable and stable, each **main stage returns a predictable structure**.
 
-### Example: `preprocess_proteomics()`
+#### Example: `preprocess_proteomics()`
 
 Recommended return structure:
 
--   `expr_*_mat` — numeric matrix (features × samples), colnames = unified `SampleID`
--   `meta` — data.frame with one row per sample, aligned to matrix columns
--   `row_data` / `feature_tbl` — annotations for features, aligned to matrix rows
--   `qc` (optional) — computed QC metrics (no files)
+-   `expr_raw`, `expr_filt`, `expr_imp_single` — numeric matrices (features × samples)
+-   `meta` — data.frame (samples × covariates)
+-   `row_data` — feature annotations aligned to rows of expr matrices
+-   `qc` / `*_qc` (optional)
 
-**Golden rule:** If a downstream step consumes `expr_mat + meta`, it should not care how they were loaded or named originally.
+**Golden rule:** If a downstream step consumes `expr_mat + meta`, it should not care *how* they were loaded or named originally.
 
 ------------------------------------------------------------------------
 
@@ -71,22 +72,21 @@ Recommended return structure:
 
 ### When to add validation
 
--   After `load_*` (files exist, required columns, uniqueness)
+-   After `load_*` (files, columns, uniqueness)
 -   After sample ID mapping (`sample_map`)
--   After matrix construction (numeric type, alignment, duplicates)
--   After filtering (dimensions + alignment preserved)
--   After imputation generation (number of runs, dims, same sample order)
--   After DE results (required columns, feature alignment, duplicates)
+-   After matrix construction (alignment, numeric type, NA policy)
+-   After imputation generation (number of runs, dimensions, alignment)
+-   After DE results (required columns, duplicated features)
 
 ### Minimum checks
 
 -   `is.matrix(expr)` and numeric storage mode
 -   `nrow(expr) > 0`, `ncol(expr) > 1`
--   `identical(colnames(expr), meta[[SampleID_col]])`
--   no duplicated critical IDs
--   no silent recycling or partial matching
+-   Column/sample alignment with metadata
+-   No duplicated critical IDs
+-   No silent dimension recycling
 
-If something is wrong — fail early with a clear error: **what was expected**, **what was found**, and **how to fix it**.
+> If something is wrong — fail early with a clear error: *what was expected*, *what was found*, and *how to fix it*.
 
 ------------------------------------------------------------------------
 
@@ -94,72 +94,72 @@ If something is wrong — fail early with a clear error: **what was expected**, 
 
 ### Add a **function** when:
 
--   it represents reusable logic
--   it should be unit-testable / contract-validated
--   it is (mostly) pure
--   it will be used both interactively and in `{targets}`
+-   It represents reusable logic
+-   It should be unit-testable or contract-validated
+-   It is (mostly) pure
+-   It will be used both interactively and in `{targets}`
 
 ### Add a **target** when:
 
--   you want caching and dependency tracking
--   it is expensive computation
--   multiple downstream steps depend on it
--   it produces files / artifacts
+-   You want caching and dependency tracking
+-   It is an expensive computation
+-   Multiple downstream steps depend on it
+-   It produces files/artifacts
 
-**Rule of thumb:** Function = *what is computed* Target = *when it runs + what it depends on*
+**Rule of thumb:** Function = *what is computed* Target = *when and with which dependencies*
 
 ------------------------------------------------------------------------
 
-## How to Add a New Pipeline Step (e.g. clustering module)
+## How to Add a New Pipeline Step
 
-### 1) Decide where it belongs
+### 1. Design decision: where does it belong?
 
 Choose the category:
 
--   `preprocess/` — transformations before modeling
--   `qc/` — QC metrics and visualization wrappers
--   `de/` — statistical modeling / differential analysis
--   `clustering/` (new) — clustering, embeddings, feature selection
+-   `preprocess` — transformations before modeling
+-   `qc` — quality metrics or visualizations
+-   `de` — statistical models / differential analysis
+-   `clustering` — clustering algorithms and summaries (writing handled by modules/writers)
 
-Create a new directory only for a **family of functionality**, not one-off helpers.
+Create a new directory only for **families of functionality**, not single functions.
 
 ------------------------------------------------------------------------
 
-### 2) Define a clear API
+### 2. Define a clear API
 
 Prefer consistent signatures:
 
--   pass `cfg` instead of many parameters
--   use `config$modes$<mode>` (mode-scoped config)
+-   Pass `cfg` instead of many parameters
+-   Use `config$modes$<mode>` when possible
 
 Example:
 
 ``` r
 run_clustering_proteomics <- function(expr_mat, meta, cfg, verbose = FALSE) {
   # validations
-  # compute clusters + embeddings
-  # return results object (no I/O)
+  # algorithm
+  # return list(assignments = ..., embeddings = ..., metrics = ...)
 }
 ```
 
 ------------------------------------------------------------------------
 
-### 3) Define the output contract
+### 3. Define the output contract
 
-Return an object that downstream steps can rely on:
+Clearly document what the function returns:
 
--   `assignments` — cluster labels per sample / feature
+-   `assignments` — cluster labels
 -   `embeddings` — PCA/UMAP coordinates
--   `metrics` — silhouette / withinSS / etc.
--   `params` — parameters snapshot (derived from cfg)
+-   `params` — parameter snapshot
+-   **No file writing**
 
-**No file writing here.** Writers handle disk.
+File writing belongs to wrappers/writers.
 
 ------------------------------------------------------------------------
 
-### 4) Integrate with `{targets}`
+### 4. Integrate with `{targets}`
 
-Add a new target after its dependencies:
+Add a new target **after** its dependencies:
 
 ``` r
 tar_target(
@@ -175,8 +175,8 @@ tar_target(
 
 For file outputs:
 
--   wrap in `write_*`
--   use `format = "file"`
+-   Wrap with `write_*`
+-   Use `format = "file"`
 
 ------------------------------------------------------------------------
 
@@ -185,9 +185,9 @@ For file outputs:
 ### Hard rule
 
 -   `R/plots/` → plotting only, no saving
--   writers (`write_*`) or `R/qc/` wrappers → responsible for disk output
+-   `R/qc/` and `write_*` → responsible for disk output
 
-Recommended writer template:
+### Recommended writer template
 
 ``` r
 write_proteomics_cluster_outputs <- function(clust_res, run_dir, cfg, ...) {
@@ -198,7 +198,7 @@ write_proteomics_cluster_outputs <- function(clust_res, run_dir, cfg, ...) {
 }
 ```
 
-Target:
+Target definition:
 
 ``` r
 tar_target(..., format = "file")
@@ -208,21 +208,18 @@ tar_target(..., format = "file")
 
 ## Naming Conventions
 
-### Targets (mode-prefixed)
+### Targets
 
-Use:
+-   Prefix by mode: `prot_*`, `rna_*`, `met_*`, `lip_*`
 
--   `prot_*`, `rna_*`, `met_*`, `lip_*`
+-   Common patterns:
 
-Common patterns:
-
--   `*_inputs`
--   `*_pre`
--   `*_imputations`
--   `*_de_res`
--   `*_qc_files`
--   `*_de_files`
--   `*_clusters` / `*_cluster_files`
+    -   `*_inputs`
+    -   `*_pre`
+    -   `*_imputations`
+    -   `*_de_res`
+    -   `*_qc_files`
+    -   `*_de_files`
 
 ### Functions
 
@@ -236,66 +233,67 @@ Common patterns:
 
 ### Internal objects
 
--   matrices: `expr_*_mat`
--   metadata: always `meta`
--   config: `cfg` (`config$modes$<mode>`)
+-   Matrices: `expr_*_mat`
+-   Metadata: always `meta`
+-   Config: `cfg` (usually `config$modes$<mode>`)
 
 ------------------------------------------------------------------------
 
 ## How Not to Break Backward Compatibility
 
-1.  **Do not rename existing return fields**
+1.  **Avoid renaming return fields once they are part of the public contract. If a rename is necessary, do it in a single refactor PR + update docs + bump version.**
 
-    -   add new fields instead
-    -   deprecate old ones gradually with warnings
+    -   Add new fields instead
+    -   Deprecate old ones gradually with warnings
 
 2.  **Preserve legacy output formats**
 
-    -   if external tools depend on them, changes must be opt-in via config
+    -   If external tools depend on them, changes must be opt-in via config
 
 3.  **Config schema**
 
-    -   new fields must have defaults
-    -   semantic changes require docs + version bump
+    -   New fields must have defaults
+    -   Semantic changes require documentation + version bump
 
 4.  **Versioning**
 
-    -   bump version on meaningful API or behavior change
-    -   document changes under `docs/`
+    -   Bump version on meaningful API or behavior changes
+    -   Document changes in `docs/`
 
 ------------------------------------------------------------------------
 
 ## Working Correctly with `{targets}`
 
-### Core rules
+### Principles
 
--   targets must be deterministic given inputs + config
--   expensive steps should run once and be reused
--   no hidden I/O outside tracked file targets
+-   Targets must be deterministic given inputs + config
+-   Expensive computations should run once and be reused
+-   No hidden file I/O outside tracked targets
 
-### Seeds & reproducibility
+### Seeds and reproducibility
 
--   use `params.seed` as the global anchor
--   derive all random seeds systematically from it
--   avoid ad-hoc `set.seed()` not tied to config
+-   Use `params.seed` as the global seed anchor
+-   Derive imputation seeds systematically
+-   Avoid ad-hoc `set.seed()` calls unrelated to config
+-   All stochastic steps (e.g., imputations) must derive seeds from params.seed and record them in outputs/metadata.
 
 ### Debugging
 
--   the same functions must work interactively and in `{targets}`
--   do not maintain parallel “debug-only” code paths
+-   Use the same functions interactively as in `{targets}`
+-   Do not maintain parallel “debug-only” logic
 
 ------------------------------------------------------------------------
 
 ## Pre-PR / Pre-Merge Checklist
 
--   [ ] validations added where needed (fail-fast)
--   [ ] single responsibility per function
--   [ ] no hidden I/O in logic
--   [ ] new target added for expensive/reusable steps
--   [ ] naming conventions followed
--   [ ] no breaking changes to existing contracts
--   [ ] new config fields have defaults + docs
--   [ ] pipeline runs end-to-end (`tar_make()`), caching behaves as expected
+-   [ ] Validations added where needed (fail-fast)
+-   [ ] Function follows single-responsibility principle
+-   [ ] No hidden I/O in logic
+-   [ ] New target added for expensive or reusable steps
+-   [ ] Naming conventions followed
+-   [ ] No breaking changes to existing contracts
+-   [ ] New config fields have defaults + documentation
+-   [ ] Full pipeline runs (`tar_make()`) with sensible caching
 
 ------------------------------------------------------------------------
 
@@ -303,7 +301,7 @@ Common patterns:
 
 ### “Thin orchestration, thick modules”
 
-`_targets.R` stays short; all logic lives in `R/`.
+`_targets.R` should remain short and readable. All logic lives in `R/`.
 
 ### “Data in, data out”
 
@@ -313,6 +311,8 @@ Modules consume objects and return objects; only writers touch disk.
 
 When adding functionality, consider:
 
--   what is shared across omics?
--   what is mode-specific?
--   can this scale to RNA-seq / metabolomics / lipidomics?
+-   What is shared across omics?
+-   What is mode-specific?
+-   Can this scale to RNA-seq, metabolomics, lipidomics?
+
+------------------------------------------------------------------------

@@ -8,13 +8,17 @@ A modular and reproducible R framework for single-omics and multi-omics analyses
 -   configuration-driven workflows with reproducibility via `renv`
 -   scalable orchestration via `{targets}`
 
+#### This project relies heavily on {targets} for reproducible pipeline orchestration.
+
+For in-depth documentation and tutorials, see the official targets book: <https://books.ropensci.org/targets/>
+
 ------------------------------------------------------------------------
 
 ## What this repository provides
 
 -   Standardized data loading and validation
 -   Omics-specific preprocessing (filtering, normalization, imputation)
--   Proteomics differential expression using **limma** with legacy-style **multiple imputations + stability filtering**
+-   Proteomics differential expression via a method-based interface (currently **limma**) with legacy-style multiple imputations and stability filtering
 -   Unified QC utilities (PCA, heatmaps, sample distance)
 -   A central YAML configuration file controlling all parameters
 -   A `{targets}` pipeline for reproducible, dependency-aware execution
@@ -42,11 +46,13 @@ The onboarding guide explains:
 ```         
 R/
 ├── core/        # Core utilities (contracts, validation, matrix/meta helpers)
-├── de/          # Differential expression logic (limma, multi-imputation)
-├── preprocess/  # Omics-specific preprocessing pipelines
+├── io/          # Data loading, config parsing, and I/O helpers
+├── preprocess/  # Omics-specific preprocessing (filtering, normalization, imputation)
+├── de/          # Differential expression logic (engines, summarization, builders)
+├── qc/          # QC computations (PCA, density, correlation)
 ├── plots/       # Pure plotting functions (no I/O)
-├── qc/          # QC wrappers (logic + saving)
-├── io/          # Data loading and config handling
+├── clustering/  # Clustering algorithms and legacy exporters
+├── pipeline/    # Pipeline modules and {targets} factories
 config/
 ├── config.yaml              # Central configuration file
 ├── templates/               # Analysis config templates
@@ -170,10 +176,18 @@ This will run, in order:
 1.  configuration validation
 2.  proteomics input loading
 3.  proteomics preprocessing
-4.  differential expression using limma with multiple imputations
-5.  writing result tables to `outputs/`
+4.  differential expression (multi-imputation, method-based)
+5.  QC analysis and diagnostic plots (if enabled)
+6.  clustering analysis (if enabled)
+7.  writing result tables to `outputs/`
 
 `{targets}` ensures that only steps affected by changes are recomputed.
+
+### Learning more about `{targets}`
+
+This project uses `{targets}` for reproducible, dependency-aware pipeline orchestration.
+
+For a detailed introduction, tutorials, and best practices, see the official **targets** book: <https://books.ropensci.org/targets/>
 
 ------------------------------------------------------------------------
 
@@ -197,7 +211,7 @@ res <- preprocess_proteomics(inputs, config)
 
 # Example QC: PCA
 qc_pca_scatter(
-  expr_mat = res$expr_imp,
+  expr_mat = res$expr_imp_single,
   meta     = res$meta,
   cfg      = config$modes$proteomics,
   out_file = "outputs/proteomics/qc/pca_pc1_pc2.png"
@@ -240,13 +254,15 @@ If you want to extend, modify, or maintain **multiomics-core**, see:
 ### Implemented
 
 -   Proteomics preprocessing
--   Proteomics DE (limma + multi-imputation)
+-   Proteomics DE (multi-imputation, method-based; currently limma)
+-   QC module
+-   Clustering module (hierarchical, partition, binary patterns)
 -   Unified config validation
 -   `{targets}` pipeline integration
 
 ### Planned
 
+-   MA / Volcano plots
 -   RNA-seq DE integration
 -   Metabolomics / lipidomics DE
--   Clustering module
--   Extended QC and reporting
+-   Multi-omics integration and reporting

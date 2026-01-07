@@ -81,18 +81,24 @@ data/
 
 ### 3.1 Create a new config file from a template
 
-**Do not edit `config/config.yaml` directly.**
+**Do not edit `config/config.yaml` manually unless you know what you are doing.**
 
-Always start from a template:
+Instead, start from a template:
 
 ``` bash
-cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml
+cp config/templates/proteomics.yaml config/<PROJECT>_<ROUND>.yaml
+```
+
+Then point the pipeline to your new config by updating the config_file target in `_targets.R`:
+
+``` r
+tar_target(config_file, "config/<PROJECT>_<ROUND>.yaml", format = "file")
 ```
 
 Example:
 
-``` bash
-cp config/templates/proteomics.yaml config/E_Pick_A02.yaml
+``` r
+tar_target(config_file, "config/E_Pick_A02.yaml", format = "file")
 ```
 
 ------------------------------------------------------------------------
@@ -140,6 +146,12 @@ tar_read(prot_de_res)  # read DE summary results
 tar_destroy()       # clear cache (use with care)
 ```
 
+### Learning more about `{targets}`
+
+This project uses `{targets}` for reproducible, dependency-aware pipeline orchestration.
+
+For a detailed introduction, tutorials, and best practices, see the official **targets** book: <https://books.ropensci.org/targets/>
+
 ------------------------------------------------------------------------
 
 ## 5. Interactive execution (for debugging & exploration)
@@ -178,24 +190,70 @@ validate_proteomics_imputations(
 )
 ```
 
-### 5.2 Differential expression (limma)
+------------------------------------------------------------------------
+
+### 5.2 Differential expression (method-based)
+
+Differential expression is executed via a **method-agnostic builder**, controlled entirely by the configuration file (`cfg$de$method`).
+
+At this stage, the proteomics pipeline supports:
+
+-   `method: "limma"` — limma with multiple imputations + stability filtering
+
+Additional DE methods may be added in the future without changing the pipeline interface.
+
+### Run DE interactively
 
 ``` r
-limma_runs <- run_limma_on_imputations_proteomics(
-  imputations  = prot_imps,
-  meta         = prot_pre$meta,
-  contrasts_df = prot_inputs$contrasts,
-  prot_tbl     = prot_inputs$protein,
-  cfg          = config
-)
-
-runs_de_tables <- lapply(limma_runs, function(x) x$de_tables)
-
-summary_df <- summarize_limma_mult_imputation(
-  runs_de_tables = runs_de_tables,
-  config         = config
+prot_de_res <- build_proteomics_de_results(
+  pre          = prot_pre,
+  inputs       = prot_inputs,
+  config       = config,
+  verbose      = TRUE
 )
 ```
+
+This function performs, internally:
+
+1.  generation of multiple imputed datasets (if configured)
+2.  execution of the selected DE method
+3.  summarization across imputations
+4.  validation of the resulting DE tables
+
+### Returned object
+
+`prot_de_res` is a list with the following fields:
+
+-   `runs` — per-imputation DE results (method-specific)
+-   `runs_de_tables` — extracted DE tables per contrast
+-   `summary_df` — unified DE summary table used downstream
+-   `method` — DE method used (e.g. `"limma"`)
+
+Downstream steps (clustering, QC, writing outputs) **must not assume a specific DE method**, and should rely only on the standardized fields above.
+
+------------------------------------------------------------------------
+
+### Configuration example
+
+``` yaml
+modes:
+  proteomics:
+    de:
+      method: "limma"
+      use_adj_for_pass1: true
+      p_cutoff: 0.1
+      linear_fc_cutoff: 1.5
+```
+
+Changing the DE method requires **only updating the config**, not modifying R code.
+
+------------------------------------------------------------------------
+
+### Design note (for developers)
+
+-   `build_proteomics_de_results()` is the **single entry point** for DE
+-   Method-specific logic lives under `R/de/`
+-   No downstream code should call `run_limma_*()` directly
 
 ------------------------------------------------------------------------
 
