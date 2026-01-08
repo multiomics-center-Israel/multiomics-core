@@ -46,4 +46,11 @@ get_contrast_cols <- function(contrast) {
   )
 }
 
+signed_fc_to_log2 <- function(x) {
+  x <- as.numeric(x)
+  out <- rep(NA_real_, length(x))
+  ok <- !is.na(x) & x != 0
+  out[ok] <- sign(x[ok]) * log2(abs(x[ok]))
+  out
+}
 

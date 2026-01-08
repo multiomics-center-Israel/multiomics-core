@@ -5,31 +5,36 @@ pipe_proteomics <- function() {
     tar_target(prot_pre, preprocess_proteomics(prot_inputs, config)),
 
     tar_target(
-      prot_imputations,
-      make_imputations_proteomics(
-        expr_mat = prot_pre$expr_filt,
-        cfg      = config,
-        verbose  = TRUE
+      prot_qc_pre_obj,
+      mod_proteomics_qc_pre(
+        pre     = prot_pre,
+        config  = config,
+        run_dir = prot_run_dir
       )
     ),
     
-    tar_target(
-      prot_de_runs,
-      run_limma_multimp(
-        imputations  = prot_imputations,
-        meta         = prot_pre$meta,
-        contrasts_df = prot_inputs$contrasts,
-        prot_tbl     = prot_inputs$protein,
-        cfg          = config,
-        verbose      = TRUE
-      )
-    ),
     
     tar_target(
       prot_de_res,
-      build_proteomics_de_results(prot_de_runs, config)
+      mod_proteomics_de(
+        pre     = prot_pre,
+        inputs  = prot_inputs,
+        config  = config,
+        verbose = TRUE
+      )
     ),
     
+    tar_target(
+      prot_qc_post_obj,
+      mod_proteomics_qc_post(
+        pre          = prot_pre,
+        de_res       = prot_de_res,
+        config       = config,
+        run_dir      = prot_run_dir,
+        de_source    = "table1"
+      )
+    ),
+
     tar_target(
       prot_clustering_obj,
       mod_proteomics_clustering(
@@ -39,16 +44,7 @@ pipe_proteomics <- function() {
         run_dir = prot_run_dir
       )
     ),
-    
-    tar_target(
-      prot_qc_obj,
-      mod_proteomics_qc(
-        pre     = prot_pre,
-        config  = config,
-        run_dir = prot_run_dir
-      )
-    ),
-    
+
     tar_target(
       prot_de_files,
       write_proteomics_multimpute_outputs(
@@ -57,11 +53,11 @@ pipe_proteomics <- function() {
         inputs     = prot_inputs,
         config     = config,
         run_dir    = prot_run_dir,
-        write_runs = TRUE
+        write_runs = FALSE
       ),
       format = "file"
     ),
-    
+
     tar_target(
       project_rdata_file,
       write_project_rdata(
@@ -69,10 +65,9 @@ pipe_proteomics <- function() {
         config       = config,
         inputs       = prot_inputs,
         pre_process  = prot_pre,
-        imputations  = prot_imputations,
+        imputations  = prot_de_res$imputations,  #  
         de_results   = prot_de_res,
-        qc_results   = prot_qc_obj,
-        clustering_results = prot_clustering_obj
+        qc_results   = prot_qc_pre_obj
       ),
       format = "file"
     )

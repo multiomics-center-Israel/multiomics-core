@@ -33,10 +33,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
   }
   
   # ---- read all CSVs in a generic way ----
-  inputs <- lapply(
-    files,
-    function(path) readr::read_csv(path, show_col_types = FALSE)
-  )
+  inputs <- lapply(files, read_table_auto)
   names(inputs) <- names(files)
   
   # ---- attach engine if present ----
@@ -46,6 +43,16 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
   
   inputs
 }
+
+read_table_auto <- function(path) {
+  ext <- tolower(tools::file_ext(path))
+  if (ext %in% c("tsv", "txt")) {
+    readr::read_tsv(path, show_col_types = FALSE)
+  } else {
+    readr::read_csv(path, show_col_types = FALSE)
+  }
+}
+
 
 #' Load proteomics inputs 
 #'
