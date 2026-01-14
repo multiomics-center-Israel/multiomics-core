@@ -41,14 +41,33 @@ mod_proteomics_qc_post <- function(pre, de_res, config, run_dir, de_source = c("
     de_tbl <- tables[[cn]]
     if (is.null(de_tbl)) next
     
-    p <- plot_volcano(de_tbl, cfg = cfg, title = paste0("Volcano: ", cn), use_adj = TRUE)
+    # Volcano
+    p_volcano <- plot_volcano(de_tbl, cfg = cfg, 
+                              title = paste0("Volcano: ", cn, " (", de_source, ")"),
+                              use_adj = TRUE)
+    f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, de_source))
+    ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
     
-    f_png <- file.path(out_qc_post, sprintf("volcano_%s.png", cn))
-    ggplot2::ggsave(f_png, plot = p, width = 8, height = 6, dpi = 150)
+    plots[[paste0("volcano_", cn)]] <- p_volcano
+    files <- c(files, f_volcano)
     
-    plots[[paste0("volcano_", cn)]] <- p
-    files <- c(files, f_png)
+    # MA
+    id_col <- cfg$de_table$id_col %||% "FeatureID"
+    de_tbl_ma <- de_tbl
+    if (!("AveExpr" %in% colnames(de_tbl_ma))) {
+      de_tbl_ma <- add_A_from_expr(de_tbl_ma, pre$expr_imp_single, id_col = id_col)
+    }
+    
+    p_ma <- plot_ma(de_tbl_ma, cfg = cfg, 
+                    title = paste0("MA: ", cn, " (", de_source, ")"),
+                    use_adj = TRUE)
+    f_ma <- file.path(out_qc_post, sprintf("ma_%s_%s.png", cn, de_source))
+    ggplot2::ggsave(f_ma, plot = p_ma, width = 8, height = 6, dpi = 150)
+    
+    plots[[paste0("ma_", cn)]] <- p_ma
+    files <- c(files, f_ma)
   }
+  
   
   list(plots = plots, files = unique(files))
 }
@@ -68,7 +87,17 @@ get_de_tables_qc_post <- function(de_res, cfg, de_source = c("summary", "table1"
   if (is.null(de_res$runs_de_tables) || length(de_res$runs_de_tables) < 1) {
     stop("QC_post: de_source='table1' requested but de_res$runs_de_tables is missing.")
   }
-  de_res$runs_de_tables[[1]]
+  
+  tabs <- de_res$runs_de_tables[[1]]
+  for (cn in names(tabs)) {
+    if (!("FeatureID" %in% colnames(tabs[[cn]]))) {
+      if (is.null(rownames(tabs[[cn]]))) stop("QC_post(table1): missing FeatureID and rownames are NULL for contrast ", cn)
+      tabs[[cn]]$FeatureID <- rownames(tabs[[cn]])
+      
+    }
+  }
+  return(tabs)
+  
 }
 
 
@@ -78,7 +107,7 @@ qc_post_tables_from_summary <- function(summary_df, cfg, use_adj = TRUE) {
   id_col <- cfg$de_table$id_col %||% "FeatureID"
   if (!(id_col %in% colnames(summary_df))) stop("summary_df missing id col: ", id_col)
   
-  contrasts <- sub("^padj\\.imputs\\.", "", grep("^padj\\.imputs\\.", colnames(prot_de_res$summary_df), value = TRUE))
+  contrasts <- sub("^padj\\.imputs\\.", "", grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE))
   if (length(contrasts) == 0) stop("No contrasts found in summary_df (expected columns like padj.imputs.<contrast>).")
   
   out <- setNames(vector("list", length(contrasts)), contrasts)

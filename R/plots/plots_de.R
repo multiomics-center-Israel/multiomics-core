@@ -32,8 +32,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   df <- de_tbl
   df$.p <- as.numeric(df[[p_col]])
   df$.logFC <- as.numeric(df[["logFC"]])
-  # df$.neglog10p <- -log10(df$.p)
-  
+
   # pass flag (robust to NAs)
   df$.pass <- !is.na(df$.p) & !is.na(df$.logFC) &
     (df$.p <= p_cut) & (abs(df$.logFC) >= log2fc_cut)
@@ -53,3 +52,75 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
     ) +
     ggplot2::theme_minimal()
 }
+
+#' MA plot for a single DE table (one contrast)
+#'
+#' Expects columns:
+#'   - logFC
+#'   - AveExpr (preferred) OR .A provided externally
+#'   - P.Value and/or adj.P.Val
+#'
+#' @param de_tbl data.frame with DE results for one contrast
+#' @param cfg mode config (e.g., config$modes$proteomics)
+#' @param title optional plot title
+#' @param use_adj logical; if TRUE uses adj.P.Val, else P.Value
+#'
+#' @return ggplot object
+plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
+  stopifnot(is.data.frame(de_tbl))
+  if (!("logFC" %in% colnames(de_tbl))) stop("plot_ma: de_tbl missing 'logFC' column.")
+  
+  # p column
+  p_col <- if (isTRUE(use_adj) && "adj.P.Val" %in% colnames(de_tbl)) "adj.P.Val" else "P.Value"
+  if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' or 'adj.P.Val'.")
+  
+  # A column
+  if ("AveExpr" %in% colnames(de_tbl)) {
+    A <- as.numeric(de_tbl$AveExpr)
+  } else if (".A" %in% colnames(de_tbl)) {
+    A <- as.numeric(de_tbl$.A)
+  } else {
+    stop("plot_ma: missing 'AveExpr' (or computed '.A').")
+  }
+  
+  # thresholds
+  p_cut <- cfg$de$p_cutoff %||% 0.1
+  lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
+  log2fc_cut <- log2(lin_fc_cut)
+  
+  df <- de_tbl
+  df$.A <- A
+  df$.logFC <- as.numeric(df$logFC)
+  df$.p <- as.numeric(df[[p_col]])
+  
+  df$.pass <- !is.na(df$.p) & !is.na(df$.logFC) &
+    (df$.p <= p_cut) & (abs(df$.logFC) >= log2fc_cut)
+  
+  ggplot2::ggplot(df, ggplot2::aes(x = .A, y = .logFC)) +
+    ggplot2::geom_point(ggplot2::aes(color = .pass), alpha = 0.7, size = 1.2, na.rm = TRUE) +
+    ggplot2::geom_hline(yintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed") +
+    ggplot2::labs(
+      title = title %||% "MA plot",
+      x = "A (mean expression)",
+      y = "M (log2 Fold Change)"
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::scale_color_manual(values = c(`FALSE` = "grey60", `TRUE` = "red"), guide = "none")
+}
+
+# ---- Helper ----
+
+add_A_from_expr <- function(de_tbl, expr_mat, id_col = "FeatureID") {
+  stopifnot(is.data.frame(de_tbl), is.matrix(expr_mat))
+  if (!(id_col %in% colnames(de_tbl))) stop("add_A_from_expr: missing id_col: ", id_col)
+  
+  ids <- as.character(de_tbl[[id_col]])
+  m <- match(ids, rownames(expr_mat))
+  A <- rep(NA_real_, length(ids))
+  ok <- !is.na(m)
+  A[ok] <- rowMeans(expr_mat[m[ok], , drop = FALSE], na.rm = TRUE)
+  
+  de_tbl$.A <- A
+  de_tbl
+}
+

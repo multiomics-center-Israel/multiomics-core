@@ -111,27 +111,39 @@ align_de_to_expr <- function(de, expr_mat, contrast_name = NULL) {
   de[m, , drop = FALSE]
 }
 
-align_feature_tbl_to_mat <- function(mat, feature_tbl, feature_id_col, annot_cols)
-{
-  if (!is.matrix(expr_mat)) stop("expr_mat must be a matrix.")
-  if (!is.data.frame(prot_tbl)) stop("prot_tbl must be a data.frame.")
-  if (!(protein_id_col %in% colnames(prot_tbl))) stop("prot_tbl missing protein_id_col: ", protein_id_col)
+align_feature_tbl_to_mat <- function(mat, feature_tbl, feature_id_col, annot_cols) {
   
-  missing_cols <- setdiff(annot_cols, colnames(prot_tbl))
-  if (length(missing_cols) > 0) {
-    stop("prot_tbl is missing annotation columns: ", paste(missing_cols, collapse = ", "))
+  # 1. Guards
+  if (!is.matrix(mat)) stop("'mat' must be a matrix.")
+  if (!is.data.frame(feature_tbl)) stop("'feature_tbl' must be a data.frame.")
+  
+  if (!(feature_id_col %in% colnames(feature_tbl))) {
+    stop("feature_tbl is missing id column: '", feature_id_col, "'")
   }
   
-  idx <- match(rownames(expr_mat), prot_tbl[[protein_id_col]])
+  missing_cols <- setdiff(annot_cols, colnames(feature_tbl))
+  if (length(missing_cols) > 0) {
+    stop("feature_tbl is missing annotation columns: ", paste(missing_cols, collapse = ", "))
+  }
+  
+  # 2. Alignment Logic
+  # Align feature_tbl rows to match rownames(mat)
+  idx <- match(rownames(mat), feature_tbl[[feature_id_col]])
+  
   if (anyNA(idx)) {
-    missing_ids <- rownames(expr_mat)[is.na(idx)]
+    missing_ids <- rownames(mat)[is.na(idx)]
     stop(
-      "prot_tbl missing ", sum(is.na(idx)), " proteins (protein_id_col='", protein_id_col, "'). ",
-      "Example: ", paste(head(missing_ids, 5), collapse = ", ")
+      "feature_tbl is missing metadata for ", sum(is.na(idx)), " features found in the matrix.\n",
+      "ID Column: '", feature_id_col, "'\n",
+      "First 5 missing IDs: ", paste(head(missing_ids, 5), collapse = ", ")
     )
   }
   
-  prot_tbl[idx, annot_cols, drop = FALSE]
+  # 3. Output
+  aligned_df <- feature_tbl[idx, annot_cols, drop = FALSE]
+  rownames(aligned_df) <- rownames(mat)
+  
+  return(aligned_df)
 }
 
 # Create a standard omics object (generic container)
