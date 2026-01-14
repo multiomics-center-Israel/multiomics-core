@@ -29,7 +29,7 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
   annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
   
   assert_numeric_matrix(expr_imp, "expr_imp")
-  meta_aligned <- align_meta_to_expr(expr_imp, meta, sample_col)
+  meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
   
   meta_aligned[[group_col]] <- factor(meta_aligned[[group_col]])
   design <- model.matrix(stats::as.formula(paste0("~ 0 + ", group_col)), data = meta_aligned)
