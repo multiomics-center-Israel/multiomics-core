@@ -4,28 +4,41 @@ paths:
 
 project:
   name: "E_Pick"
-  analysis_round: "Analysis_a"
+  analysis_round: "Analysis_x"
 
 modes:
   rna:
     files:
       counts:     "data/rna/raw_counts.csv"
-      sample_map: "data/rna/sample_map.csv"
-      metadata:   "data/rna/meta_rna.csv"
-      contrasts:  "data/rna/contrasts_rna.csv"
+      sample_map:  null
+      metadata:   "data/rna/metadata.txt"
+      contrasts:  "data/rna/Contrasts_salt_sens.txt"
+      gene_length: null 
     id_columns:
-      gene_id:    "gene_id"
+      gene_id:    "Name"
       sample_col: "SampleID"
-      map_from:   "sample_original_name"
-      map_to:     "SampleID"
+      map_from:   null
+      map_to:     null
+    filtering:
+      group_col: "line"
+      threshold: 3
     normalization:
       method: "TMMlogCPM"   # or "VST"
       prior.count: 1
     filter_tpm: 3
+    sample_filter:
+      enabled: true
+      rules:
+        time_point: [3]
     effects:
-      color:   "label"
+      color:   "salt_sensitivity"
       shape:   "line"
       samples: "SampleID"
+    de:
+      method: "DESeq2"
+      use_adj_for_pass1: true   # Use adj.P.Val for pass1 (otherwise P.Value)
+      p_cutoff: 0.1
+      linear_fc_cutoff: 1.5
 
   proteomics:
     engine: "DIANN"
@@ -46,7 +59,11 @@ modes:
         - "N.Proteotypic.Sequences"
       map_from: "sample_orig_name"   # names in the protein matrix columns
       map_to:   "SampleID"           # final unified sample ID
-
+    
+    sample_filter:
+      enabled: false
+      rules: {}
+    
     filtering:
       min_count:
         default: 3

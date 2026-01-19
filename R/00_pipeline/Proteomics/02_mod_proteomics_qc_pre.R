@@ -3,13 +3,13 @@
 #' QC plots that depend only on preprocessing outputs (no DE needed).
 #' @param pre List returned by preprocess_proteomics()
 #' @param config Full config list
-#' @param run_dir Output root directory
+#' @param out_dir Output root directory
 #' @return list(plots, files)
-mod_proteomics_qc_pre <- function(pre, config, run_dir) {
-  stopifnot(is.character(run_dir), length(run_dir) == 1)
+mod_proteomics_qc_pre <- function(pre, config, out_dir) {
+  stopifnot(is.character(out_dir), length(out_dir) == 1)
   assert_pre_contract(pre, stage = "proteomics")
   
-  dirs   <- create_legacy_output_dirs(run_dir)
+  dirs   <- create_legacy_output_dirs(out_dir)
   out_qc <- dirs$diagnostic_plots
   cfg    <- config$modes$proteomics
   

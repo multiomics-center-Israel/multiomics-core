@@ -1,4 +1,4 @@
-#' Proteomics clustering module (legacy-like outputs under run_dir/Clustering)
+#' Proteomics clustering module (legacy-like outputs under out_dir/Clustering)
 #'
 #' Runs hierarchical clustering on DE features (always, if enabled),
 #' and additionally runs partition clustering + binary patterns
@@ -8,17 +8,19 @@
 #' @param pre preprocessed proteomics object (expects $expr_imp_single and $meta)
 #' @param de_res  DE results list (expects $summary_df at least)
 #' @param config  full YAML config list
-#' @param run_dir output run directory (project folder)
+#' @param out_dir output run directory (project folder)
 #'
 #' @return list(plots, files)
-mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
-  stopifnot(is.character(run_dir), length(run_dir) == 1)
+mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
+  stopifnot(is.character(out_dir), length(out_dir) == 1)
   
   assert_pre_contract(pre, stage = "proteomics")
   assert_de_contract(de_res, stage = "proteomics")
   
   cfg <- config$modes$proteomics
   cl  <- cfg$clustering
+  
+  excel_order <- NULL
   
   # If clustering is missing/disabled -> no-op
   if (is.null(cl) || isFALSE(cl$enabled)) {
@@ -27,7 +29,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
   }
   
   # ---- output root (UNDER PROJECT RUN DIR) ----
-  clustering_dir <- file.path(run_dir, "Clustering")
+  clustering_dir <- file.path(out_dir, "Clustering")
   ensure_dir(clustering_dir)
   
   # ---- decide which steps to run ----
@@ -59,8 +61,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
   if (isTRUE(flags$hierarchical)) {
     hcfg <- cl$steps$hierarchical %||% list()
     
-    out_dir <- file.path(clustering_dir, "Hierarchical")
-    ensure_dir(out_dir)
+    clust_out_dir <- file.path(clustering_dir, "Hierarchical")
+    ensure_dir(clust_out_dir)
     
     # Run clustering
     hc_res <- run_clustering(
@@ -75,8 +77,17 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
       )
     )
     
+    mat_de <- as.matrix(pre$expr_imp_single)[de_features, , drop = FALSE]
+    z_de <- zscore_rows(mat_de)
+    colnames(z_de) <- paste0(colnames(z_de), ".zscore")
+    
+    excel_order <- list(
+      ordered_ids = hc_res$ordering,
+      zscore_mat  = z_de
+    )
+    
     # Heatmap setup
-    f_hm <- file.path(out_dir, "Hierarchical_DE_heatmap.png")
+    f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
     
     # Run wrapper
     p_cluster <- wrap_clustering_heatmap(
@@ -92,7 +103,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
     
     # Save cluster assignments
     if (!is.null(hc_res$clusters)) {
-      f_tbl <- file.path(out_dir, "Hierarchical_clusters.tsv")
+      f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
       cl_tbl <- data.frame(
         feature_id = names(hc_res$clusters),
         cluster    = as.integer(hc_res$clusters),
@@ -217,8 +228,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
   if (isTRUE(flags$binary_patterns)) {
     bcfg <- cl$steps$binary_patterns %||% list()
     
-    out_dir <- file.path(clustering_dir, "Binary_patterns")
-    ensure_dir(out_dir)
+    clust_out_dir <- file.path(clustering_dir, "Binary_patterns")
+    ensure_dir(clust_out_dir)
     
     # Run function and capture result
     bp_res <- run_binary_patterns(
@@ -226,7 +237,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
       meta          = pre$meta,
       cfg           = cfg,
       de_features   = de_features,
-      out_dir       = out_dir,
+      out_dir       = clust_out_dir,
       corr_cutoff   = bcfg$corr_cutoff %||% 0.8,
       counts_cutoff = bcfg$counts_cutoff %||% 0
     )
@@ -237,7 +248,9 @@ mod_proteomics_clustering <- function(pre, de_res, config, run_dir) {
   }
   
   return(list(
-    plots = plots,  
-    files = unique(written)  
+    plots = plots,
+    files = unique(written),
+    excel_order = excel_order
   ))
+  
 }

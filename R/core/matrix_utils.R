@@ -59,7 +59,7 @@ zscore_rows <- function(mat) {
   scaled
 }
 
-# compute hierarchical order for rows (כמו pheatmap עם correlation + complete)
+# compute hierarchical order for rows 
 get_hclust_row_order <- function(mat, row_distance = "correlation", hclust_method = "complete") {
   mat <- as.matrix(mat)
   mat <- mat[stats::complete.cases(mat), , drop = FALSE]

@@ -46,16 +46,28 @@ run_hierarchical_clustering <- function(z_expr, config) {
   dist_mat <- stats::dist(z_expr, method = dist_method)
   hc <- stats::hclust(dist_mat, method = linkage)
   
+  ordering <- hc$labels[hc$order]
+  
   clusters <- NULL
   if (!is.null(k)) {
     clusters <- stats::cutree(hc, k = k)
     clusters <- clusters[hc$labels]
   }
   
+  # ---- NEW: excel_order payload ----
+  z_for_excel <- z_expr
+  colnames(z_for_excel) <- paste0(colnames(z_for_excel), ".zscore")
+  
+  
+  
   list(
     method = "hierarchical",
     clusters = clusters,
-    ordering = hc$labels[hc$order],
+    ordering = ordering,
+    excel_order = list(
+      ordered_ids = ordering,
+      zscore_mat  = z_for_excel
+    ),
     details = hc,
     data = list(z_scores = z_expr, samples = colnames(z_expr))
   )
@@ -350,8 +362,12 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
   use_ids <- intersect(feature_ids, rownames(expr_mat))
   
   if (!is.null(ordering)) {
-    # If we have a specific clustering order (e.g. from hierarchical cluster object)
     use_ids <- intersect(ordering, use_ids)
+    mat2plot <- expr_mat[use_ids, , drop = FALSE]
+    cluster_rows_flag <- FALSE
+  } else {
+    mat2plot <- expr_mat[use_ids, , drop = FALSE]
+    cluster_rows_flag <- TRUE
   }
   
   mat2plot <- expr_mat[use_ids, , drop = FALSE]
@@ -368,10 +384,20 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
     annotation_col = annot,
     title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
     scale_rows = TRUE,
-    cluster_rows = TRUE,  # Let pheatmap cluster the subset
+    cluster_rows = cluster_rows_flag,
     cluster_cols = TRUE,
-    max_rows = NULL       # Don't subsample DE results! We want to see them all
+    max_rows = NULL
   )
+  
+  
+  if (!is.null(ordering)) {
+    use_ids <- intersect(ordering, use_ids)
+    mat2plot <- expr_mat[use_ids, , drop = FALSE]
+    cluster_rows_flag <- FALSE
+  } else {
+    mat2plot <- expr_mat[use_ids, , drop = FALSE]
+    cluster_rows_flag <- TRUE
+  }
   
   # 4. Save & Return
   if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)

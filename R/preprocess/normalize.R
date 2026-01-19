@@ -78,3 +78,33 @@ normalize_counts <- function(counts,
   if (is.null(attr(mat, "method"))) attr(mat, "method") <- "VST"
   return(mat)
 }
+
+# compute CPM 
+compute_cpm <- function(counts) {
+  counts <- as.matrix(counts)
+  lib <- colSums(counts, na.rm = TRUE)
+  if (any(lib == 0 | !is.finite(lib))) stop("Zero/invalid library size for CPM.")
+  sweep(counts, 2, lib, "/") * 1e6
+}
+
+# compute TPM if gene_length exist 
+compute_tpm <- function(counts, gene_lengths_bp) {
+  stopifnot(!is.null(rownames(counts)))
+  stopifnot(all(c("gene", "length") %in% colnames(gene_lengths_bp)))
+  
+  common <- intersect(rownames(counts), gene_lengths_bp$gene)
+  if (length(common) == 0) stop("No overlapping genes for TPM.")
+  
+  counts <- as.matrix(counts[common, , drop = FALSE])
+  gl_kb <- gene_lengths_bp$length[match(common, gene_lengths_bp$gene)] / 1000
+  if (any(!is.finite(gl_kb) | gl_kb <= 0)) stop("Invalid gene lengths.")
+  
+  rpk <- counts / gl_kb
+  sf  <- colSums(rpk, na.rm = TRUE)
+  if (any(sf == 0 | !is.finite(sf))) stop("Zero/invalid TPM scaling factor.")
+  
+  tpm <- sweep(rpk, 2, sf, "/") * 1e6
+  rownames(tpm) <- common
+  tpm
+}
+
