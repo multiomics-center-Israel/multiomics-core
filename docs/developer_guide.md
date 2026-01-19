@@ -190,7 +190,7 @@ For file outputs:
 ### Recommended writer template
 
 ``` r
-write_proteomics_cluster_outputs <- function(clust_res, run_dir, cfg, ...) {
+write_proteomics_cluster_outputs <- function(clust_res, out_dir, cfg, ...) {
   # create directories
   # write tables
   # save plots

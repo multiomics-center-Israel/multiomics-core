@@ -1,4 +1,3 @@
-# ============================================================
 # multiomics-core — run execution info utilities
 #
 # Goal:
@@ -12,7 +11,6 @@
 # - safe both interactively and via {targets}
 # - writes under <run_dir>/execution_info/
 # - returns a character vector of file paths (targets-friendly)
-# ============================================================
 
 write_execution_info <- function(config,
                                  run_dir,

@@ -14,27 +14,41 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
   # ---- get mode config ----
   cfg <- config$modes[[mode]]
   if (is.null(cfg)) {
-    stop("No configuration found for mode '", mode, "' in config$modes$", mode)
+    stop("No configuration found for mode '", mode, "' in config$modes$")
   }
   if (is.null(cfg$files) || !length(cfg$files)) {
     stop("config$modes$", mode, "$files is missing or empty.")
   }
   
-  # ---- check files exist ----
-  files <- cfg$files  # named list: protein / sample_map / metadata / contrasts / ...
+  files <- cfg$files
+  
+  inputs <- list()
+  
   for (nm in names(files)) {
     f <- files[[nm]]
-    if (is.null(f) || !nzchar(f)) {
-      stop("In mode '", mode, "': path for '", nm, "' is missing/empty in cfg$files.")
+    
+    # ---- OPTIONAL file (NULL / NA / empty) ----
+    if (is.null(f) || is.na(f) || !nzchar(f)) {
+      inputs[[nm]] <- NULL
+      message(
+        sprintf(
+          "[%s] Optional input '%s' not provided (NULL) – skipping.",
+          mode, nm
+        )
+      )
+      next
     }
+    
+    # ---- path provided but file missing ----
     if (!file.exists(f)) {
-      stop("In mode '", mode, "': file not found for '", nm, "': ", f)
+      stop(
+        "In mode '", mode, "': file not found for '", nm, "': ", f
+      )
     }
+    
+    # ---- read file ----
+    inputs[[nm]] <- read_table_auto(f)
   }
-  
-  # ---- read all CSVs in a generic way ----
-  inputs <- lapply(files, read_table_auto)
-  names(inputs) <- names(files)
   
   # ---- attach engine if present ----
   if (!is.null(cfg$engine)) {

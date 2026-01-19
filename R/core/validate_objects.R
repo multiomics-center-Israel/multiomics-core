@@ -184,21 +184,6 @@ coerce_df_to_numeric_matrix <- function(df, rownames_vec = NULL, name = "df") {
   m
 }
 
-assert_pre_contract <- function(pre, stage = "proteomics") {
-  stopifnot(is.list(pre))
-  
-  required <- c("expr_raw", "expr_filt", "expr_imp_single", "meta", "row_data")
-  missing <- setdiff(required, names(pre))
-  if (length(missing) > 0) {
-    stop(sprintf(
-      "Preprocess contract failed for %s. Missing fields: %s",
-      stage, paste(missing, collapse = ", ")
-    ))
-  }
-  
-  invisible(TRUE)
-}
-
 assert_de_contract <- function(de_res, stage = "proteomics") {
   stopifnot(is.list(de_res))
   

@@ -1,6 +1,54 @@
-# R/core/omics_contract.R
+# TODO [multiomics]:
+# - Generalize build_final_results_* functions into a single generic helper:
+#     * input: pre, summary_df, contrasts_df, id_col, expr_matrix
+#     * output: final_results table with identical column structure across omics
+# - Remove remaining proteomics-specific assumptions (e.g. Protein vs Gene)
+# - Allow per-mode annotation adapters (e.g. protein annotations, gene annotations)
+# - Keep Excel writers unchanged (they already support generic inputs)
+# - Goal: fully unified Final_results API for RNA / proteomics / metabolomics
 
+# TODO:
+# - allow RNASeq clustering to export excel_order
+# - optionally write order + zscore also to final_results.tsv (configurable)
+
+# R/core/omics_contract.R
 # Minimal contracts for a standard omics object.
+assert_pre_contract <- function(pre, stage = c("proteomics", "rna", "metabolomics")) {
+  stage <- match.arg(stage)
+  
+  stopifnot(is.list(pre))
+  
+  base_fields <- c(
+    "expr_raw",
+    "expr_filt",
+    "expr_work",
+    "meta",
+    "row_data"
+  )
+  
+  stage_fields <- switch(
+    stage,
+    proteomics = c("expr_imp_single"),
+    rna        = character(0),
+    metabolomics = character(0)
+  )
+  
+  required <- c(base_fields, stage_fields)
+  missing <- setdiff(required, names(pre))
+  
+  if (length(missing) > 0) {
+    stop(
+      sprintf(
+        "Preprocess contract failed for %s. Missing fields: %s",
+        stage,
+        paste(missing, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  
+  invisible(TRUE)
+}
 
 assert_meta_contract <- function(meta, sample_col) {
   if (!is.data.frame(meta)) stop("meta must be a data.frame.")

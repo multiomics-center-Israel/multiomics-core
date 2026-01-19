@@ -10,15 +10,15 @@
 #' @param pre        preprocessed proteomics object
 #' @param de_res     DE results list
 #' @param config     full YAML config list
-#' @param run_dir    output run directory
+#' @param out_dir    output run directory
 #' @param de_source  "summary" or "table1"
 #' @return list(plots, files)
-mod_proteomics_qc_post <- function(pre, de_res, config, run_dir, de_source = c("summary", "table1")) {
+mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("summary", "table1")) {
   de_source <- match.arg(de_source)
   
   cfg <- config$modes$proteomics
   
-  dirs <- create_legacy_output_dirs(run_dir)
+  dirs <- create_legacy_output_dirs(out_dir)
   out_qc_post <- file.path(dirs$diagnostic_plots, "QC_post")
   ensure_dir(out_qc_post)
   
@@ -55,7 +55,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, run_dir, de_source = c("
     id_col <- cfg$de_table$id_col %||% "FeatureID"
     de_tbl_ma <- de_tbl
     if (!("AveExpr" %in% colnames(de_tbl_ma))) {
-      de_tbl_ma <- add_A_from_expr(de_tbl_ma, pre$expr_imp_single, id_col = id_col)
+      de_tbl_ma <- add_A_from_expr(de_tbl_ma, pre$expr_imp_single, id_col = "FeatureID")
     }
     
     p_ma <- plot_ma(de_tbl_ma, cfg = cfg, 
@@ -103,10 +103,14 @@ get_de_tables_qc_post <- function(de_res, cfg, de_source = c("summary", "table1"
 
 # returns named list: contrast -> de_tbl (with logFC + P.Value/adj.P.Val)
 qc_post_tables_from_summary <- function(summary_df, cfg, use_adj = TRUE) {
-  stopifnot(is.data.frame(summary_df))
-  id_col <- cfg$de_table$id_col %||% "FeatureID"
-  if (!(id_col %in% colnames(summary_df))) stop("summary_df missing id col: ", id_col)
   
+  stopifnot(is.data.frame(summary_df))
+  
+  src_id_col <- cfg$de_table$id_col %||% "FeatureID"
+  if (!(src_id_col %in% colnames(summary_df))) {
+    stop("summary_df missing id col: ", src_id_col)
+  }
+ 
   contrasts <- sub("^padj\\.imputs\\.", "", grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE))
   if (length(contrasts) == 0) stop("No contrasts found in summary_df (expected columns like padj.imputs.<contrast>).")
   
@@ -119,8 +123,8 @@ qc_post_tables_from_summary <- function(summary_df, cfg, use_adj = TRUE) {
     if (!(fc_col %in% colnames(summary_df))) stop("summary_df missing: ", fc_col)
     
     de_tbl <- data.frame(
-      FeatureID = summary_df[[id_col]],
-      logFC = signed_fc_to_log2(summary_df[[fc_col]]),
+      FeatureID = summary_df[[src_id_col]],
+      logFC     = signed_fc_to_log2(summary_df[[fc_col]]),
       P.Value   = as.numeric(summary_df[[paste0("pvalue.imputs.", cn)]]),
       adj.P.Val = as.numeric(summary_df[[paste0("padj.imputs.", cn)]]),
       stringsAsFactors = FALSE

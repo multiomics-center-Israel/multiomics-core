@@ -294,6 +294,27 @@ preprocess_proteomics <- function(inputs, config) {
   }
   col_data <- col_data[idx, , drop = FALSE]
   
+  # ---- optional: sample_filter (generic across modes) ----
+  rules <- get_sample_filter_rules(config, mode = "proteomics")
+  if (!is.null(rules)) {
+    # require rownames(meta) == colnames(expr)
+    if (is.null(rownames(col_data))) rownames(col_data) <- col_data[[sample_id_col]]
+    # enforce identical order
+    col_data <- col_data[match(colnames(expr_raw), rownames(col_data)), , drop = FALSE]
+    
+    filtered <- apply_sample_filter(
+      meta  = col_data,
+      expr  = expr_raw,
+      rules = rules,
+      mode  = "proteomics",
+      strict_cols = FALSE
+    )
+    
+    col_data <- filtered$meta
+    expr_raw <- filtered$expr
+  }
+  
+  
   # ---- filtering ----
   filt <- filter_proteomics_by_min_count(
     expr_mat = expr_raw,
@@ -326,11 +347,13 @@ preprocess_proteomics <- function(inputs, config) {
       )
     )
   }
+  expr_work <- expr_imp_single
   
   # Return: matrices only, consistently named
   list(
     expr_raw     = expr_raw,
     expr_filt    = expr_filt,
+    expr_work       = expr_work,
     expr_imp_single  = expr_imp_single,
     row_data         = row_data_f,
     meta             = col_data,
