@@ -1,7 +1,12 @@
 library(targets)
 
-r_files <- sort(list.files("R", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE))
-invisible(lapply(r_files, source))
+# 1) modules
+mod_files <- sort(list.files("R", pattern = "^\\d{2}_.*\\.R$", full.names = TRUE))
+invisible(lapply(mod_files, tar_source))
+
+# 2) pipelines (load ALL pipeline scripts)
+pipe_files <- sort(list.files("R/00_pipeline", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE))
+invisible(lapply(pipe_files, tar_source))
 
 tar_option_set(
   packages = c(
@@ -21,5 +26,4 @@ list(
   
   pipe_proteomics()
   # pipe_rnaseq()
-  
 )
