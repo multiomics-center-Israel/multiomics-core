@@ -24,7 +24,8 @@ pipe_rnaseq <- function() {
         inputs = rna_inputs,
         config = config,
         out_dir = rna_out_dir),
-        format = "file"
+        
+      format = "file"
       ),
     
    

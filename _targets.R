@@ -12,7 +12,7 @@ tar_option_set(
 )
 
 list(
-  tar_target(config_file, "config/config.yaml", format = "file"),
+  tar_target(config_file, "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/02_Ella_Pick/config.yaml", format = "file"),
   tar_target(config, load_config(config_file)),
   tar_target(cfg_validated, { validate_config(config); TRUE }),
   

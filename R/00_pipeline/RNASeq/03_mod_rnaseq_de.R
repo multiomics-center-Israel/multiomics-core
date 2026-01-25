@@ -31,7 +31,7 @@
 
 # mod_rnaseq_de
 mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
-  assert_pre_contract_rna(pre)
+  assert_pre_contract(pre, stage = "rna")
   
   cfg <- config$modes$rna
   contrasts_df <- inputs$contrasts

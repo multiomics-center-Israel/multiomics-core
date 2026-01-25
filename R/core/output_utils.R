@@ -6,10 +6,9 @@
 #' @param config Full config list.
 #' @return Character path to the run output directory.
 get_run_out_dir <- function(config) {
-  out_base <- config$paths$out %||% "outputs"
-  proj <- config$project$name %||% "Project"
+  proj  <- config$project$name %||% "Project"
   round <- config$project$analysis_round %||% "Analysis"
-  file.path(out_base, sprintf("Results_%s_%s", proj, round))
+  resolve_out_path(config, sprintf("Results_%s_%s", proj, round))
 }
 
 #' Get output directory for a specific omics mode
@@ -21,10 +20,7 @@ get_run_out_dir <- function(config) {
 get_mode_out_dir <- function(out_dir, mode) {
   stopifnot(is.character(out_dir), length(out_dir) == 1)
   stopifnot(is.character(mode), length(mode) == 1)
-  
-  mode_dir <- file.path(out_dir, mode)
-  if (!dir.exists(mode_dir)) dir.create(mode_dir, recursive = TRUE, showWarnings = FALSE)
-  mode_dir
+  file.path(out_dir, mode)
 }
 
 
@@ -47,9 +43,7 @@ create_legacy_output_dirs <- function(out_dir, create = TRUE) {
   )
   
   if (isTRUE(create)) {
-    for (d in unique(unname(dirs))) {
-      dir.create(d, recursive = TRUE, showWarnings = FALSE)
-    }
+    for (d in unique(unname(dirs))) ensure_dir(d)
   }
   
   dirs

@@ -67,8 +67,7 @@ assert_expr_meta_alignment <- function(expr_mat, meta, cfg, strict = TRUE) {
   
   expr_ids <- colnames(expr_mat)
   meta_ids <- as.character(meta[[sample_col]])
-  
-  # meta -> expr (חסר ב-matrix)
+
   missing_in_expr <- setdiff(meta_ids, expr_ids)
   if (length(missing_in_expr) > 0) {
     stop(
