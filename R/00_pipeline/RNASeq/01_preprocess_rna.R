@@ -66,6 +66,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   rules <- get_sample_filter_rules(config, mode = "rna")
   if (!is.null(rules)) {
     filtered <- apply_sample_filter(
+      sample_col = sample_col,
       meta  = meta2,
       expr  = counts,
       rules = rules,

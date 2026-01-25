@@ -20,7 +20,7 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir) {
     files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
     
     # 4) Excel outputs (optional; reuse legacy writer with small adapter)
-    files <- c(files, write_final_results_excels_legacy_rna(final_results, pre, config, out_dir))
+    files <- c(files, write_final_results_excels_legacy_rna(final_results,pre, config, out_dir))
   }
   
   unique(files)

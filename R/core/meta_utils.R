@@ -16,13 +16,9 @@ align_meta_to_matrix <- function(sample_ids, meta, sample_col) {
 }
 #' Apply sample filtering rules to (meta, expr)
 #'
-#' @param meta data.frame; rownames(meta) must be SampleIDs that match colnames(expr)
-#' @param expr matrix; features x samples
-#' @param rules named list; each name is a column in meta, each value is vector of allowed values
-#' @param mode string for messages ("rna"/"proteomics"/...)
-#' @param strict_cols if TRUE, missing rule columns cause error; else warning+skip
 #' @return list(meta = meta_filtered, expr = expr_filtered, info = list(n_before, n_after))
-apply_sample_filter <- function(meta,
+apply_sample_filter <- function(sample_col,
+                                meta,
                                 expr,
                                 rules,
                                 mode = "omics",
@@ -70,7 +66,7 @@ apply_sample_filter <- function(meta,
     stop("[", mode, "] sample_filter removed all samples. Check your rules.")
   }
   
-  expr2 <- expr[, rownames(meta2), drop = FALSE]
+  expr2 <- expr[, meta2[[sample_col]], drop = FALSE]
   
   message(sprintf("[%s] sample_filter kept %d/%d samples.", mode, nrow(meta2), n_before))
   

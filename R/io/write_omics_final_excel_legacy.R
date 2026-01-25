@@ -187,7 +187,7 @@ write_final_results_excels_proteomics <- function(final_results, pre, config, ou
 
 # ---- RNASeq final_file ----
 
-write_final_results_excels_legacy_rna <- function(final_results, config, out_dir) {
+write_final_results_excels_legacy_rna <- function(final_results, pre, config, out_dir) {
   write_final_results_excels_legacy_generic(
     final_results = final_results,
     config       = config,

@@ -21,34 +21,25 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
   }
   
   files <- cfg$files
-  
   inputs <- list()
-  
+
+  # resolve relative -> absolute under project.dir + paths.raw
   for (nm in names(files)) {
-    f <- files[[nm]]
-    
-    # ---- OPTIONAL file (NULL / NA / empty) ----
-    if (is.null(f) || is.na(f) || !nzchar(f)) {
-      inputs[[nm]] <- NULL
-      message(
-        sprintf(
-          "[%s] Optional input '%s' not provided (NULL) – skipping.",
-          mode, nm
-        )
-      )
-      next
+    rel <- files[[nm]]
+    if (is.null(rel) || !nzchar(rel)) {
+      stop("In mode '", mode, "': path for '", nm, "' is missing/empty in cfg$files.")
     }
-    
-    # ---- path provided but file missing ----
-    if (!file.exists(f)) {
-      stop(
-        "In mode '", mode, "': file not found for '", nm, "': ", f
-      )
+
+    abs <- resolve_raw_path(config, rel)
+    files[[nm]] <- abs
+
+    if (!file.exists(abs)) {
+      stop("In mode '", mode, "': file not found for '", nm, "': ", abs)
     }
-    
-    # ---- read file ----
-    inputs[[nm]] <- read_table_auto(f)
   }
+
+  inputs <- lapply(files, function(path) readr::read_csv(path, show_col_types = FALSE))
+  names(inputs) <- names(files)
   
   # ---- attach engine if present ----
   if (!is.null(cfg$engine)) {
@@ -57,6 +48,35 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
   
   inputs
 }
+  
+  # 
+  # for (nm in names(files)) {
+  #   f <- files[[nm]]
+  #   
+  #   # ---- OPTIONAL file (NULL / NA / empty) ----
+  #   if (is.null(f) || is.na(f) || !nzchar(f)) {
+  #     inputs[[nm]] <- NULL
+  #     message(
+  #       sprintf(
+  #         "[%s] Optional input '%s' not provided (NULL) – skipping.",
+  #         mode, nm
+  #       )
+  #     )
+  #     next
+  #   }
+  #   
+  #   # ---- path provided but file missing ----
+  #   if (!file.exists(f)) {
+  #     stop(
+  #       "In mode '", mode, "': file not found for '", nm, "': ", f
+  #     )
+  #   }
+  #   
+  #   # ---- read file ----
+  #   inputs[[nm]] <- read_table_auto(f)
+  # }
+  
+ 
 
 read_table_auto <- function(path) {
   ext <- tolower(tools::file_ext(path))
@@ -83,4 +103,3 @@ load_proteomics_inputs <- function(config) {
 load_rna_inputs <- function(config) {
   load_omics_inputs(config, mode = "rna")
 }
-

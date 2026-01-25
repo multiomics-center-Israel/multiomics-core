@@ -1,10 +1,11 @@
-paths:
-  raw: "data-raw"
-  out: "outputs"
-
 project:
+  dir: "/projects/02_Ella_Pick"
   name: "E_Pick"
-  analysis_round: "Analysis_x"
+  analysis_round: "Analysis_06"
+
+paths:
+  raw: "data"
+  out: "outputs"
 
 modes:
   rna:
@@ -31,8 +32,8 @@ modes:
       rules:
         time_point: [3]
     effects:
-      color:   "salt_sensitivity"
-      shape:   "line"
+      color:   "line"
+      shape:   "salt_sensitivity"
       samples: "SampleID"
     de:
       method: "DESeq2"
