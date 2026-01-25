@@ -1,3 +1,227 @@
+#' Run binary-pattern clustering
+#'
+#' Logic:
+#' 1) Aggregate expression by group -> feature x group means.
+#' 2) Enumerate binary patterns.
+#' 3) Compute correlation (vectorized).
+#' 4) Filter and write results.
+#'
+#' @return character vector of written file paths
+run_binary_patterns <- function(expr_mat, 
+                                meta, 
+                                cfg, 
+                                de_features, 
+                                out_dir, 
+                                corr_cutoff = 0.8, 
+                                counts_cutoff = 0) {
+  
+  stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
+  expr_mat <- as.matrix(expr_mat)
+  stopifnot(is.data.frame(meta))
+  stopifnot(is.character(de_features))
+  
+  # Ensure directory exists
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  group_col  <- cfg$effects$color
+  sample_col <- cfg$effects$samples
+  
+  # --- Validations ---
+  if (is.null(group_col) || !(group_col %in% colnames(meta))) {
+    stop(sprintf("Binary patterns: effects$color column '%s' not found in meta", group_col))
+  }
+  if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
+    stop(sprintf("Binary patterns: effects$samples column '%s' not found in meta", sample_col))
+  }
+  
+  # Align meta order to expression columns
+  samples <- colnames(expr_mat)
+  m_idx <- match(samples, as.character(meta[[sample_col]]))
+  if (any(is.na(m_idx))) {
+    stop("Binary patterns: meta is missing some samples present in expr_mat colnames")
+  }
+  meta2 <- meta[m_idx, , drop = FALSE]
+  
+  groups <- droplevels(as.factor(meta2[[group_col]]))
+  group_levels <- levels(groups)
+  n_groups <- length(group_levels)
+  
+  # --- Early Return Fix 1: Return empty structure on failure ---
+  if (n_groups < 3) {
+    warning("Binary patterns: <3 groups detected; skipping.")
+    return(list(files = character(0), plots = list()))
+  }
+  
+  # Restrict to DE features present
+  feats <- intersect(de_features, rownames(expr_mat))
+  
+  # --- Early Return Fix 2: Return empty structure on failure ---
+  if (length(feats) < 1) {
+    warning("Binary patterns: no DE features found in expression matrix rownames")
+    return(list(files = character(0), plots = list()))
+  }
+  
+  x <- expr_mat[feats, , drop = FALSE]
+  
+  # 1) Feature x Group means
+  group_means <- sapply(group_levels, function(g) {
+    cols <- which(groups == g)
+    rowMeans(x[, cols, drop = FALSE], na.rm = TRUE)
+  })
+  group_means <- as.matrix(group_means) # features x groups
+  
+  # 2) Patterns (exclude all-0 / all-1)
+  patterns <- .get_all_binary_patterns(n_groups)
+  patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
+  patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]
+  
+  # 3) Counts gate
+  pass_counts <- .calc_counts_gate(x, groups, group_levels, patterns, counts_cutoff)
+  
+  # 4) Correlation to patterns (Vectorized!)
+  cor_mat <- .calc_cor_to_patterns(group_means, patterns)
+  
+  # Best pattern selection (Robust Logic)
+  best <- .best_pattern_per_feature(cor_mat, patterns, pass_counts, corr_cutoff)
+  
+  # --- Writing Outputs ---
+  written <- character(0)
+  plots <- list()
+  
+  # Write summary tables (assuming save_tsv returns the file path)
+  written <- c(written, save_tsv(best, out_dir, "corr_results_best_pattern.tsv"))
+  
+  # Stats per pattern
+  stats <- as.data.frame(table(best$best_pattern), stringsAsFactors = FALSE)
+  colnames(stats) <- c("pattern", "n_features")
+  written <- c(written, save_tsv(stats, out_dir, "corr_stats_patterns.tsv"))
+  
+  # 5) Heatmaps per pattern
+  for (pat in patterns) {
+    # Filter features belonging to this pattern
+    feats_pat <- best$feature_id[which(best$best_pattern == pat)]
+    if (length(feats_pat) < 2) next
+    
+    mat2plot <- x[feats_pat, , drop = FALSE]
+    f_hm <- file.path(out_dir, sprintf("Heatmap_%s.png", pat))
+    
+    annot_df <- data.frame(Condition = groups, row.names = samples)
+    
+    # Create Object
+    p <- plot_heatmap_core(
+      expr_mat       = mat2plot,
+      annotation_col = annot_df,
+      max_rows       = NULL,        
+      main           = sprintf("Pattern %s (%d features)", pat, length(feats_pat)),
+      scale_rows     = TRUE,
+      cluster_rows   = TRUE,
+      cluster_cols   = TRUE
+    )
+    
+    # Save File
+    save_heatmap_to_file(p, f_hm)
+    
+    # Store Object and Path
+    plots[[paste0("pattern_", pat)]] <- p 
+    written <- c(written, f_hm)
+    
+    # Gene list per pattern
+    gl <- data.frame(feature_id = feats_pat, stringsAsFactors = FALSE)
+    written <- c(written, save_tsv(gl, out_dir, sprintf("genes_%s.tsv", pat)))
+  }
+  
+  # --- Final Return: List containing both files and plots ---
+  return(list(
+    files = unique(written),
+    plots = plots
+  ))
+}
+
+# ---- Internal Helpers ----
+
+.get_all_binary_patterns <- function(n) {
+  grid <- expand.grid(rep(list(c(0, 1)), n), KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+  apply(grid, 1, paste0, collapse = "")
+}
+
+.calc_cor_to_patterns <- function(group_means, patterns) {
+  P <- do.call(rbind, strsplit(patterns, split = ""))
+  # Ensures numeric matrix even if 1 row or 1 column
+  P_mat <- matrix(as.numeric(P), nrow = nrow(P), ncol = ncol(P))
+  
+  # Vectorized Correlation: cor(Features_Transposed, Patterns_Transposed)
+  # Result: Features x Patterns
+  cors <- stats::cor(t(group_means), t(P_mat), use = "pairwise.complete.obs")
+  
+  colnames(cors) <- patterns
+  rownames(cors) <- rownames(group_means)
+  
+  cors
+}
+
+.calc_counts_gate <- function(x, groups, group_levels, patterns, counts_cutoff) {
+  # returns logical matrix: features x patterns
+  out <- matrix(TRUE, nrow = nrow(x), ncol = length(patterns))
+  rownames(out) <- rownames(x)
+  colnames(out) <- patterns
+  
+  for (j in seq_along(patterns)) {
+    pat <- patterns[j]
+    bits <- as.integer(strsplit(pat, "")[[1]])
+    ones <- which(bits == 1)
+    
+    if (length(ones) == 0) {
+      out[, j] <- FALSE
+      next
+    }
+    
+    cols <- unlist(lapply(group_levels[ones], function(g) which(groups == g)))
+    sub <- x[, cols, drop = FALSE]
+    
+    # Strict check: ALL samples in "1" groups must be valid and > cutoff
+    ok <- apply(sub, 1, function(v) all(is.finite(v) & (v > counts_cutoff)))
+    out[, j] <- ok
+  }
+  out
+}
+
+.best_pattern_per_feature <- function(cor_mat, patterns, pass_counts, corr_cutoff) {
+  feats <- rownames(cor_mat)
+  
+  # Apply gate: set correlation to NA if counts check failed
+  cor_mat[!pass_counts] <- NA_real_
+  
+  # 1. Calculate max values (suppressWarnings for -Inf when all NA)
+  max_vals <- suppressWarnings(apply(cor_mat, 1, max, na.rm = TRUE))
+  
+  # 2. Determine validity (Avoids -Inf and NA issues)
+  is_valid <- !is.infinite(max_vals) & !is.na(max_vals) & (max_vals >= corr_cutoff)
+  
+  best_pat <- rep(NA_character_, length(feats))
+  best_cor <- rep(NA_real_, length(feats))
+  
+  # 3. Only find indices for valid rows
+  if (any(is_valid)) {
+    # Subset to valid rows only
+    valid_mat <- cor_mat[is_valid, , drop = FALSE]
+    
+    # max.col is faster and safer than apply(which.max) for matrices
+    # It handles ties deterministically ("first") and doesn't return list
+    best_inds <- max.col(valid_mat, ties.method = "first")
+    
+    best_pat[is_valid] <- patterns[best_inds]
+    best_cor[is_valid] <- max_vals[is_valid]
+  }
+  
+  data.frame(
+    feature_id   = feats,
+    best_pattern = best_pat,
+    best_corr    = best_cor,
+    stringsAsFactors = FALSE
+  )
+}
+
+
 # Core clustering utilities for omics-agnostic feature clustering
 #
 # The `run_clustering` function applies clustering methods to a set of
@@ -352,56 +576,85 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     z_group_means = z_gm
   )
 }
-
-wrap_clustering_heatmap <- function(expr_mat, meta, cfg, 
-                                    feature_ids,           # The DE or Cluster genes
-                                    ordering = NULL,       # Optional custom order
-                                    out_file = NULL) {
+#' Write cluster data in exact legacy format
+#' Columns: Name (Sample), Group, Exp (Absolute Expression)
+#' Summary File Columns: Cluster, Group, Mean, SE, Mean_SE.y, Mean_SE.ymin, Mean_SE.ymax
+#'
+#' @param expr_mat Original expression matrix (log-intensities), NOT z-scores
+#' @param meta Metadata dataframe
+#' @param clusters Named integer vector of clusters
+#' @param cfg Config list
+#' @param out_dir Output directory
+write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_dir) {
   
-  # 1. Filter & Order Matrix
-  use_ids <- intersect(feature_ids, rownames(expr_mat))
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
   
-  if (!is.null(ordering)) {
-    use_ids <- intersect(ordering, use_ids)
-    mat2plot <- expr_mat[use_ids, , drop = FALSE]
-    cluster_rows_flag <- FALSE
-  } else {
-    mat2plot <- expr_mat[use_ids, , drop = FALSE]
-    cluster_rows_flag <- TRUE
-  }
+  # 1. Prepare Metadata Map (Sample -> Group)
+  group_col  <- cfg$effects$color
+  sample_col <- cfg$effects$samples
   
-  mat2plot <- expr_mat[use_ids, , drop = FALSE]
+  meta_map <- meta |> 
+    dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
   
-  # 2. Prepare Annotation
-  annot <- data.frame(
-    Condition = meta[[cfg$effects$color]],
-    row.names = meta[[cfg$effects$samples]]
+  # 2. Convert Expression Matrix to Long Format
+  # Rows = Genes, Cols = Samples -> Melt
+  df_long <- as.data.frame(expr_mat) |>
+    tibble::rownames_to_column("Gene") |>
+    tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
+  
+  # 3. Join with Metadata
+  df_annotated <- df_long |>
+    dplyr::inner_join(meta_map, by = "Name")
+  
+  # 4. Map Genes to Clusters
+  cluster_map <- data.frame(
+    Gene = names(clusters), 
+    Cluster = as.integer(clusters), 
+    stringsAsFactors = FALSE
   )
   
-  # 3. Plot
-  ph <- plot_heatmap_core(
-    expr_mat = mat2plot,
-    annotation_col = annot,
-    title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
-    scale_rows = TRUE,
-    cluster_rows = cluster_rows_flag,
-    cluster_cols = TRUE,
-    max_rows = NULL
-  )
+  # Final Join: Only keep genes that are in a cluster
+  df_final <- df_annotated |>
+    dplyr::inner_join(cluster_map, by = "Gene")
   
+  files_written <- character(0)
   
-  if (!is.null(ordering)) {
-    use_ids <- intersect(ordering, use_ids)
-    mat2plot <- expr_mat[use_ids, , drop = FALSE]
-    cluster_rows_flag <- FALSE
-  } else {
-    mat2plot <- expr_mat[use_ids, , drop = FALSE]
-    cluster_rows_flag <- TRUE
+  # 5. Write Per-Cluster Files (Raw Data)
+  # Keeping raw data as is (or rounding if you want, usually raw is kept precise)
+  unique_clusters <- sort(unique(df_final$Cluster))
+  
+  for (k in unique_clusters) {
+    clus_data <- df_final |> 
+      dplyr::filter(Cluster == k) |>
+      dplyr::select(Name, Group, Exp) 
+    
+    fname <- file.path(out_dir, sprintf("cluster_profiles_cluster%s_data.txt", k))
+    
+    write.table(clus_data, fname, sep = "\t", quote = FALSE, row.names = FALSE)
+    files_written <- c(files_written, fname)
   }
   
-  # 4. Save & Return
-  if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
-  return(ph)
+  # 6. Write Summary File (Calculated Stats)
+  fname_all <- file.path(out_dir, "cluster_profiles_data.txt")
+  
+  summary_df <- df_final |>
+    dplyr::group_by(Cluster, Group) |>
+    dplyr::summarise(
+      Mean = mean(Exp, na.rm = TRUE),
+      SE   = sd(Exp, na.rm = TRUE) / sqrt(dplyr::n()),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      Mean_SE.y    = Mean,
+      Mean_SE.ymin = Mean - SE,
+      Mean_SE.ymax = Mean + SE
+    ) |>
+    # --- Rounding to 4 decimal places ---
+    dplyr::mutate(across(where(is.numeric), ~ round(., 4)))
+  
+  write.table(summary_df, fname_all, sep = "\t", quote = FALSE, row.names = FALSE)
+  files_written <- c(files_written, fname_all)
+  
+  return(files_written)
 }
-
 

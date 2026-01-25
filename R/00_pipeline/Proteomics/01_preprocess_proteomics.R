@@ -303,6 +303,7 @@ preprocess_proteomics <- function(inputs, config) {
     col_data <- col_data[match(colnames(expr_raw), rownames(col_data)), , drop = FALSE]
     
     filtered <- apply_sample_filter(
+      sample_col = sample_id_col,
       meta  = col_data,
       expr  = expr_raw,
       rules = rules,
@@ -357,7 +358,7 @@ preprocess_proteomics <- function(inputs, config) {
     expr_imp_single  = expr_imp_single,
     row_data         = row_data_f,
     meta             = col_data,
-    imputation    = imputation_qc
+    imputation_qc    = imputation_qc
   )
 }
 
