@@ -159,9 +159,13 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 For exploratory work or debugging, steps can be run interactively.
 
 ``` r
-# Load all functions
-r_files <- list.files("R", pattern = "\\.[Rr]\$", full.names = TRUE, recursive = TRUE)
-invisible(lapply(r_files, source))
+# Load all functions in dependency order
+# 1. Core utilities
+invisible(lapply(list.files("R/core", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
+# 2. Domain logic
+invisible(lapply(list.files("R/domain", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
+# 3. Pipeline modules
+invisible(lapply(list.files("R/modules", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE), source))
 ```
 
 ``` r
