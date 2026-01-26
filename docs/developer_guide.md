@@ -29,16 +29,30 @@ The project is **configuration-driven**, **modular**, and **fully reproducible**
 
 ------------------------------------------------------------------------
 
+## Design Philosophy
+
+**multiomics-core** treats analysis code as infrastructure.
+All analysis decisions live in configuration files; R code defines stable, reusable execution machinery.
+This separation enables reproducibility, scalability, and safe extension across omics modalities.
+
+### What this repository intentionally avoids
+
+-   Ad-hoc scripts
+-   Hard-coded analysis parameters
+-   Hidden file I/O inside logic functions
+-   Mode-specific assumptions outside domain code
+
+------------------------------------------------------------------------
+
 ## High-level Architecture Overview
 
 ### Main directories
 
-### Main directories
-
--   `R/core/` — Generic utilities (I/O, validation, plotting, clustering algorithms)
--   `R/domain/` — Omics-specifc logic (pure functions, e.g. `run_limma_proteomics`)
+-   `R/core/` — Generic utilities (I/O, validation, alignment, helpers)
+-   `R/domain/` — Omics-specific logic (pure functions, e.g. `run_limma_proteomics`)
 -   `R/modules/` — Orchestration wrappers that link domain logic to `{targets}`
 -   `R/pipeline/` — {targets} pipeline definitions and factories
+-   `R/plots/` — Pure plotting functions (no I/O)
 -   `_targets.R` — Orchestration entry point
 
 ### Typical pipeline flow (proteomics example)
@@ -300,6 +314,7 @@ tar_target(..., format = "file")
 ### “Thin orchestration, thick modules”
 
 `_targets.R` should remain short and readable. All logic lives in `R/`.
+-   Method-specific DE logic lives under `R/domain/<mode>/`.
 
 ### “Data in, data out”
 

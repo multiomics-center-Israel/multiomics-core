@@ -181,14 +181,21 @@ prot_pre    <- preprocess_proteomics(prot_inputs, config)
 ### 5.1 Multiple imputation
 
 ``` r
-prot_imps <- make_imputations_proteomics(
-  expr_mat  = prot_pre$expr_filt,
-  cfg       = config,
-  verbose   = TRUE
+# 5.1 Differential Expression Builder (replaces imputation + DE steps)
+prot_de_res <- build_proteomics_de_results(
+  pre          = prot_pre,
+  inputs       = prot_inputs,
+  config       = config,
+  verbose      = TRUE
 )
+```
 
+> ⚠️ Note: `make_imputations_proteomics()` is an internal helper. Prefer `build_proteomics_de_results()` for interactive use unless debugging specific imputation steps.
+
+``` r
+# Validate results if needed
 validate_proteomics_imputations(
-  imputations = prot_imps,
+  imputations = prot_de_res$imputations,
   meta        = prot_pre$meta,
   cfg         = config
 )

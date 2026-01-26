@@ -45,10 +45,11 @@ The onboarding guide explains:
 
 ```         
 R/
-├── core/         # Generic utilities (I/O, validation, plotting, clustering algorithms)
+├── core/         # Generic utilities (I/O, validation, alignment, helpers)
 ├── domain/       # Omics-specific logic (proteomics, rnaseq)
 ├── modules/      # Pipeline steps (wrappers for domain logic)
 ├── pipeline/     # {targets} pipeline orchestration
+├── plots/        # Pure plotting functions (no I/O)
 config/
 ├── config.yaml              # Central configuration file
 ├── templates/               # Analysis config templates
