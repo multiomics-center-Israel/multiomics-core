@@ -12,14 +12,30 @@ pipe_rnaseq <- function() {
             )
         ),
         tar_target(rna_de_res, mod_rnaseq_de(rna_pre, rna_inputs, config, verbose = TRUE)),
+        # Legacy outputs (TSV files)
         tar_target(
-            rna_de_files,
+            rna_outputs_legacy,
             write_rnaseq_outputs_legacy(
                 pre = rna_pre,
                 de_res = rna_de_res,
                 inputs = rna_inputs,
                 config = config,
-                out_dir = rna_out_dir
+                out_dir = file.path(run_dir, "rna")
+            ),
+            format = "file"
+        ),
+
+        # Shiny legacy export (RDS file for old Shiny app)
+        tar_target(
+            rna_shiny_legacy,
+            save_data_to_shiny_legacy_rna(
+                pre = rna_pre,
+                de_res = rna_de_res,
+                inputs = rna_inputs,
+                config = config,
+                pca_res = NULL, # Add PCA results when available
+                clustering_res = NULL, # Add clustering results when available
+                out_file = file.path(run_dir, "rna", "data_to_shiny_legacy.rds")
             ),
             format = "file"
         ),
