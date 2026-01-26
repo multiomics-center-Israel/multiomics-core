@@ -1,12 +1,50 @@
 library(targets)
 
-# 1) modules
-mod_files <- sort(list.files("R", pattern = "^\\d{2}_.*\\.R$", full.names = TRUE))
-invisible(lapply(mod_files, tar_source))
+# ------------------------------------------------------------------------------
+# Source R files in a strict dependency order:
+# 1) core    – generic utilities, no domain knowledge
+# 2) domain  – omics-specific logic (proteomics / rnaseq)
+# 3) modules – target-ready wrappers (qc, de, clustering, etc.)
+# 4) pipeline– targets orchestration only
+# ------------------------------------------------------------------------------
 
-# 2) pipelines (load ALL pipeline scripts)
-pipe_files <- sort(list.files("R/00_pipeline", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE))
-invisible(lapply(pipe_files, tar_source))
+core_files <- sort(list.files(
+  "R/core",
+  pattern = "\\.R$",
+  full.names = TRUE,
+  recursive = TRUE
+))
+
+domain_files <- sort(list.files(
+  "R/domain",
+  pattern = "\\.R$",
+  full.names = TRUE,
+  recursive = TRUE
+))
+
+module_files <- sort(list.files(
+  "R/modules",
+  pattern = "\\.R$",
+  full.names = TRUE,
+  recursive = TRUE
+))
+
+# Source core → domain → modules
+invisible(lapply(c(core_files, domain_files, module_files), tar_source))
+
+# Source pipelines LAST (they depend on everything above)
+pipeline_files <- sort(list.files(
+  "R/pipeline",
+  pattern = "\\.R$",
+  full.names = TRUE,
+  recursive = TRUE
+))
+
+invisible(lapply(pipeline_files, tar_source))
+
+# ------------------------------------------------------------------------------
+# Global targets options
+# ------------------------------------------------------------------------------
 
 tar_option_set(
   packages = c(
@@ -16,14 +54,53 @@ tar_option_set(
   )
 )
 
+# ------------------------------------------------------------------------------
+# Targets definition
+# ------------------------------------------------------------------------------
+
 list(
-  tar_target(config_file, "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/02_Ella_Pick/config.yaml", format = "file"),
-  tar_target(config, load_config(config_file)),
-  tar_target(cfg_validated, { validate_config(config); TRUE }),
-  
-  tar_target(run_dir, get_run_out_dir(config)),
-  tar_target(execution_info_files, write_execution_info(config = config, run_dir = run_dir), format = "file"),
-  
+  # Configuration file (tracked as a file dependency)
+  tar_target(
+    config_file,
+    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/02_Ella_Pick/config.yaml",
+    format = "file"
+  ),
+
+  # Load configuration
+  tar_target(
+    config,
+    load_config(config_file)
+  ),
+
+  # Validate configuration early; downstream targets should depend on this
+  tar_target(
+    cfg_validated,
+    {
+      validate_config(config)
+      TRUE
+    }
+  ),
+
+  # Resolve run output directory
+  tar_target(
+    run_dir,
+    get_run_out_dir(config)
+  ),
+
+  # Write execution metadata (run info, config snapshot, etc.)
+  tar_target(
+    execution_info_files,
+    write_execution_info(
+      config = config,
+      run_dir = run_dir,
+      config_path = config_file
+    ),
+    format = "file"
+  ),
+
+  # Proteomics pipeline (returns a list of targets)
   pipe_proteomics()
+
+  # RNA-seq pipeline (enable when ready)
   # pipe_rnaseq()
 )
