@@ -45,19 +45,16 @@ The onboarding guide explains:
 
 ```         
 R/
-├── core/        # Core utilities (contracts, validation, matrix/meta helpers)
-├── io/          # Data loading, config parsing, and I/O helpers
-├── preprocess/  # Omics-specific preprocessing (filtering, normalization, imputation)
-├── de/          # Differential expression logic (engines, summarization, builders)
-├── qc/          # QC computations (PCA, density, correlation)
-├── plots/       # Pure plotting functions (no I/O)
-├── clustering/  # Clustering algorithms and legacy exporters
-├── pipeline/    # Pipeline modules and {targets} factories
+├── core/         # Generic utilities (I/O, validation, plotting, clustering algorithms)
+├── domain/       # Omics-specific logic (proteomics, rnaseq)
+├── modules/      # Pipeline steps (wrappers for domain logic)
+├── pipeline/     # {targets} pipeline orchestration
 config/
 ├── config.yaml              # Central configuration file
 ├── templates/               # Analysis config templates
 docs/                         # Onboarding and developer documentation
 outputs/                      # Analysis outputs (git-ignored)
+legacy/                       # Deprecated legacy code
 _targets.R                    # {targets} pipeline definition
 ```
 
@@ -196,9 +193,13 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 For exploratory work or debugging:
 
 ``` r
-# Load all functions
-r_files <- list.files("R", pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE)
-invisible(lapply(r_files, source))
+# Load functions in dependency order
+# 1. Core utilities
+invisible(lapply(list.files("R/core", full.names = TRUE, recursive = TRUE), source))
+# 2. Domain logic
+invisible(lapply(list.files("R/domain", full.names = TRUE, recursive = TRUE), source))
+# 3. Modules
+invisible(lapply(list.files("R/modules", full.names = TRUE, recursive = TRUE), source))
 
 # Load config
 config <- load_config("config/config.yaml")
@@ -249,20 +250,18 @@ If you want to extend, modify, or maintain **multiomics-core**, see:
 
 ## Status
 
-**Current version:** v0.2.0
+**Current version:** v0.2.1
 
 ### Implemented
 
--   Proteomics preprocessing
--   Proteomics DE (multi-imputation, method-based; currently limma)
--   QC module
--   Clustering module (hierarchical, partition, binary patterns)
--   Unified config validation
--   `{targets}` pipeline integration
+-   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns)
+-   **QC**: PCA (2D/3D), Sample distance/correlation, Density plots
+-   **Plots**: Volcano, MA, Heatmaps, Profile plots
+-   **Architecture**: Strict dependency loading, `{targets}` orchestration, Unified config validation
 
 ### Planned
 
--   MA / Volcano plots
--   RNA-seq DE integration
+-   RNA-seq DE integration (Foundations present)
 -   Metabolomics / lipidomics DE
 -   Multi-omics integration and reporting
+
