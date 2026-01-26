@@ -131,9 +131,14 @@ build_data_to_shiny_legacy_rna <- function(
     # ============================================================
     # Heatmap data (NO EXTRACTION - only collect)
     # ============================================================
-    # Safe access: check clustering_res is not NULL before accessing fields
-    clust_heat <- if (!is.null(clustering_res)) clustering_res$pheatmap_data else NULL
-    legacy$pheatmap_data_DE_genes <- de_res$pheatmap_data %||% clust_heat %||% NULL
+    # Robust: check multiple possible field names
+    de_heat <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data %||% NULL
+    clust_heat <- if (!is.null(clustering_res)) {
+        clustering_res$pheatmap_data_DE_genes %||% clustering_res$pheatmap_data %||% NULL
+    } else {
+        NULL
+    }
+    legacy$pheatmap_data_DE_genes <- de_heat %||% clust_heat %||% NULL
 
     # ============================================================
     # Clustering results (NO COMPUTATION - only collect)
