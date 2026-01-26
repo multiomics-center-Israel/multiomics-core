@@ -62,6 +62,7 @@ run_deseq2_de <- function(expr_filt, meta, inputs, config) {
         method = "DESeq2",
         tables = tables,
         contrasts = contrasts_df,
+        dds = dds, # Store for legacy export
         info = list(
             design    = paste0("~", factor_col),
             n_genes   = nrow(dds),
