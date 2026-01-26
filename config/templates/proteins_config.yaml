@@ -73,7 +73,7 @@ modes:
     # Multiple imputation
     # --------------------------------------------------------
     imputation:
-      method: "perseus"    # "none" | "perseus"
+      method: "perseus"    # "none" | "perseus" | "dep2"
 
       no_repetitions: 10
       min_no_passed: 8
@@ -81,6 +81,10 @@ modes:
       # Perseus-style parameters
       width: 0.2
       downshift: 1.6
+
+      # DEP2 parameters (future implementation)
+      dep2_method: "MinDet"
+      dep2_random_seed: 1
 
     # --------------------------------------------------------
     # Differential expression
