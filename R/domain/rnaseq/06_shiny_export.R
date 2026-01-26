@@ -186,8 +186,9 @@ build_data_to_shiny_legacy_rna <- function(
 
             # Check order (informational only)
             if (all(expr_samples %in% meta_samples)) {
-                expected_order <- meta_samples[meta_samples %in% expr_samples]
-                if (!identical(expr_samples, expected_order)) {
+                # Check if metadata samples in expression order match expression samples
+                expected <- meta_samples[match(expr_samples, meta_samples)]
+                if (!identical(expr_samples, expected)) {
                     message("Note: col_data rownames are not in the same order as expression colnames (Shiny may reorder internally)")
                 }
             }
