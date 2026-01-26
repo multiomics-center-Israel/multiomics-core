@@ -128,6 +128,21 @@ pipe_proteomics <- function() {
                 NULL
             },
             format = "file"
+        ),
+
+        # Shiny legacy export (RDS file for old Shiny app)
+        tar_target(
+            prot_shiny_legacy,
+            save_data_to_shiny_legacy_proteomics(
+                pre = prot_pre,
+                de_res = prot_de_res,
+                inputs = prot_inputs,
+                config = config,
+                pca_res = NULL, # Add PCA results when available
+                clustering_res = prot_clustering_obj, # Use clustering results
+                out_file = file.path(run_dir, "proteomics", "data_to_shiny_legacy_proteomics.rds")
+            ),
+            format = "file"
         )
     )
 }
