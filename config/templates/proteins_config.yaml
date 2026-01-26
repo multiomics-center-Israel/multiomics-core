@@ -82,7 +82,7 @@ modes:
       width: 0.2
       downshift: 1.6
 
-      # DEP2 parameters
+      # DEP2 parameters (future implementation)
       dep2_method: "MinDet"
       dep2_random_seed: 1
 
@@ -104,9 +104,6 @@ modes:
 
     # --------------------------------------------------------
     # QC_post (plots/tables that depend on DE results)
-    # NOTE: You said you don't want extra config switches.
-    # Still, putting defaults here is useful documentation and keeps future-proofing.
-    # If you prefer: you can ignore this section and keep de_source in the target only.
     # --------------------------------------------------------
     qc_post:
       enabled: true
