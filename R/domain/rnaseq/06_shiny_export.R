@@ -207,12 +207,15 @@ build_data_to_shiny_legacy_rna <- function(
         "legacy_version", "legacy_created_at", "legacy_source",
         "col_data", "contrasts_data", "dds", "norm_counts", "norm_log_counts",
         "norm_log_counts_pca", "mat2plot", "EFFECTS", "PCA_3D_BASENAME",
-        "stats_df", "DE_genes_stats", "pheatmap_data_DE_genes",
+        "stats_df", "DE_genes_stats",
         "patterns", "heatmaps_by_pattern", "New_clusters",
-        "annot", "trinotate_main",
+        "trinotate_main",
         "PADJ_CUTOFF", "DESEQ_PADJ_CUTOFF", "LOG_FC_CUTOFF",
         "LINEAR_FC_CUTOFF", "NORM_METHOD", "GROUP"
     )
+
+    # Note: pheatmap_data_DE_genes and annot are optional and added separately
+    # They're not in expected_keys to avoid validation errors
 
     missing_keys <- setdiff(expected_keys, names(legacy))
     if (length(missing_keys) > 0) {
