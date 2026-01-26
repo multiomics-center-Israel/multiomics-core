@@ -33,15 +33,13 @@ The project is **configuration-driven**, **modular**, and **fully reproducible**
 
 ### Main directories
 
--   `R/core/` — contracts, validations, matrix/meta helpers, utilities
--   `R/io/`— config parsing, loaders, I/O helpers, Excel legacy writers
--   `R/preprocess/` — omics preprocessing (filtering, normalization, imputation)
--   `R/de/` — DE engines + summarization + builders (method-based)
--   `R/qc/` — QC computations (PCA, density, correlation)
--   `R/plots/` — pure plotting (no I/O)
--   `R/clustering/` — clustering algorithms + legacy exporters
--   `R/pipeline/` — pipeline modules + {targets} factories
--   `_targets.R` — orchestration only
+### Main directories
+
+-   `R/core/` — Generic utilities (I/O, validation, plotting, clustering algorithms)
+-   `R/domain/` — Omics-specifc logic (pure functions, e.g. `run_limma_proteomics`)
+-   `R/modules/` — Orchestration wrappers that link domain logic to `{targets}`
+-   `R/pipeline/` — {targets} pipeline definitions and factories
+-   `_targets.R` — Orchestration entry point
 
 ### Typical pipeline flow (proteomics example)
 

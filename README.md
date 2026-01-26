@@ -54,7 +54,6 @@ config/
 ├── templates/               # Analysis config templates
 docs/                         # Onboarding and developer documentation
 outputs/                      # Analysis outputs (git-ignored)
-legacy/                       # Deprecated legacy code
 _targets.R                    # {targets} pipeline definition
 ```
 
