@@ -21,9 +21,11 @@ save_tsv_path <- function(x, path) {
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
     ext <- tolower(tools::file_ext(path))
-    if (ext %in% c("tsv", "txt")) {
+    df <- if (ext %in% c("tsv", "txt")) {
         readr::read_tsv(path, show_col_types = FALSE)
     } else {
         readr::read_csv(path, show_col_types = FALSE)
     }
+    # Convert tibble to data.frame to support rownames and proper subsetting
+    as.data.frame(df)
 }
