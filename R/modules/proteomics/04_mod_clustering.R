@@ -22,6 +22,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
     excel_order <- NULL
 
+    # Objects for legacy Shiny export
+    pheatmap_payload <- NULL
+    patterns_tbl <- NULL
+    heatmaps_by_pattern <- NULL
+    clusters_vec <- NULL
+
     # If clustering is missing/disabled -> no-op
     if (is.null(cl) || isFALSE(cl$enabled)) {
         message("Clustering disabled. Skipping.")
@@ -86,6 +92,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             zscore_mat  = z_de
         )
 
+        # Capture payload for Shiny
+        pheatmap_payload <- list(
+            mat = z_de,
+            annotation_col = annot,
+            feature_ids = de_features,
+            is_zscored = TRUE
+        )
+
         # Heatmap setup
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
 
@@ -112,6 +126,9 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             save_tsv_path(cl_tbl, f_tbl)
             written <- c(written, f_tbl)
             plots$cl_tbl <- cl_tbl
+
+            # Map for Shiny
+            clusters_vec <- hc_res$clusters
         }
     }
 
@@ -129,6 +146,9 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             cfg = cfg,
             de_features = de_features
         )
+
+        # Capture clusters for Shiny
+        clusters_vec <- part_res$clusters %||% NULL
 
         # Final output dir includes number of clusters (legacy style)
         part_dir <- file.path(part_base_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
@@ -243,11 +263,21 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Append results
         if (!is.null(bp_res$files)) written <- c(written, bp_res$files)
         if (!is.null(bp_res$plots)) plots <- c(plots, bp_res$plots)
+
+        # Capture for Shiny
+        patterns_tbl <- bp_res$best %||% NULL
+        heatmaps_by_pattern <- bp_res$plots %||% NULL
     }
 
     return(list(
         plots = plots,
         files = unique(written),
-        excel_order = excel_order
+        excel_order = excel_order,
+        objects = list(
+            pheatmap_data_DE_genes = pheatmap_payload,
+            patterns = patterns_tbl,
+            heatmaps_by_pattern = heatmaps_by_pattern,
+            clusters = clusters_vec
+        )
     ))
 }

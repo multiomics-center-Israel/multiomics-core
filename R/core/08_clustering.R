@@ -133,7 +133,8 @@ run_binary_patterns <- function(expr_mat,
   # --- Final Return: List containing both files and plots ---
   return(list(
     files = unique(written),
-    plots = plots
+    plots = plots,
+    best = best
   ))
 }
 
