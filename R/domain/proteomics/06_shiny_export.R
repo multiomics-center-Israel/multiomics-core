@@ -43,12 +43,24 @@ build_data_to_shiny_legacy_proteomics <- function(
         pca_basename = "prot_pca_3d"
     )
 
+    # Targets-safe: base object may be old
+    if (!("color" %in% names(legacy))) legacy["color"] <- list(NULL)
+    if (!("shape" %in% names(legacy))) legacy["shape"] <- list(NULL)
+
     # ============================================================
     # Populate critical objects
     # ============================================================
 
     # Metadata
     legacy$col_data <- pre$meta %||% NULL
+
+    # Patch: Set rownames from samples column if specified
+    prot_fx <- config$modes$proteomics[["effects"]] %||% list()
+    sample_col <- prot_fx$samples %||% NULL
+    if (!is.null(legacy$col_data) && !is.null(sample_col) && sample_col %in% colnames(legacy$col_data)) {
+        rownames(legacy$col_data) <- as.character(legacy$col_data[[sample_col]])
+    }
+
     legacy$contrasts_data <- inputs$contrasts %||% NULL
 
     # Expression matrices
@@ -56,28 +68,28 @@ build_data_to_shiny_legacy_proteomics <- function(
     legacy$norm_log_counts <- pre$expr_work %||% NULL
 
     # ============================================================
-    # PCA objects (NO COMPUTATION - only collect)
+    # PCA objects + color/shape aesthetics (from QC pre module)
     # ============================================================
-    if (!is.null(pca_res)) {
-        legacy$norm_log_counts_pca <- pca_res$norm_log_counts_pca %||% NULL
-        legacy$mat2plot <- pca_res$mat2plot %||% NULL
+    if (!is.null(pca_res) && !is.null(pca_res$objects)) {
+        legacy$norm_log_counts_pca <- pca_res$objects$norm_log_counts_pca %||% NULL
+        legacy$mat2plot <- pca_res$objects$mat2plot %||% NULL
+        legacy$color <- pca_res$objects$color %||% NULL
+        legacy$shape <- pca_res$objects$shape %||% NULL
     } else {
-        message("pca_res is NULL; PCA plots will be disabled in Shiny (proteomics)")
+        message("pca_res$objects is NULL; PCA plots will be disabled in Shiny (proteomics)")
     }
 
-    # ============================================================
-    # EFFECTS (critical for Shiny PCA)
-    # ============================================================
-    # Safe navigation: step-by-step to avoid errors on missing intermediate paths
-    modes <- config$modes %||% list()
-    prot <- modes$proteomics %||% modes$prot %||% list()
-    effects <- prot$effects %||% list()
+    # Fallback: get color/shape from config if not provided by QC
+    prot_fx <- config$modes$proteomics[["effects"]] %||% list()
+    val_color <- legacy[["color"]] %||% prot_fx[["color"]]
+    val_shape <- legacy[["shape"]] %||% prot_fx[["shape"]]
 
-    if (!is.null(effects$shape) && !is.null(effects$color)) {
-        legacy$EFFECTS <- c(effects$shape, effects$color)
-    } else {
-        warning("Proteomics EFFECTS not fully defined in config; setting to NULL")
-        legacy$EFFECTS <- NULL
+    legacy["color"] <- list(val_color)
+    legacy["shape"] <- list(val_shape)
+
+    # Ensure keys always exist (before validation)
+    for (k in c("color", "shape")) {
+        if (!k %in% names(legacy)) legacy[k] <- list(NULL)
     }
 
     # ============================================================
@@ -136,7 +148,10 @@ build_data_to_shiny_legacy_proteomics <- function(
     legacy$LOG_FC_CUTOFF <- log2(linear_fc)
 
     legacy$NORM_METHOD <- norm_cfg$method %||% "none"
-    legacy$GROUP <- effects$color %||% NULL
+
+    # Get effects safely (avoid conflict with stats::effects function)
+    prot_effects_cfg <- prot[["effects"]] %||% list()
+    legacy$GROUP <- prot_effects_cfg$color %||% NULL
 
     # ============================================================
     # Dimension validation (sanity check)
@@ -167,19 +182,21 @@ build_data_to_shiny_legacy_proteomics <- function(
     # ============================================================
     # Final validation: ensure all expected keys exist
     # ============================================================
+    # Required keys (must always be present, even if NULL)
     expected_keys <- c(
         "legacy_version", "legacy_created_at", "legacy_source",
         "col_data", "contrasts_data", "dds", "norm_counts", "norm_log_counts",
-        "norm_log_counts_pca", "mat2plot", "PCA_3D_BASENAME",
+        "PCA_3D_BASENAME", # EFFECTS removed
         "stats_df", "DE_genes_stats",
         "trinotate_main",
         "PADJ_CUTOFF", "DESEQ_PADJ_CUTOFF", "LOG_FC_CUTOFF",
-        "LINEAR_FC_CUTOFF", "NORM_METHOD", "GROUP"
+        "LINEAR_FC_CUTOFF", "NORM_METHOD", "GROUP",
+        "color", "shape" # Shiny aesthetics (column names)
     )
 
-    # Note: The following are optional and populated separately:
+    # Optional keys (populated only if source data available)
+    # - norm_log_counts_pca, mat2plot, var_expl (require pca_res$objects)
     # - pheatmap_data_DE_genes, annot (may not exist)
-    # - EFFECTS (requires both shape and color in config)
     # - patterns, heatmaps_by_pattern, New_clusters (require clustering_res)
 
     missing_keys <- setdiff(expected_keys, names(legacy))

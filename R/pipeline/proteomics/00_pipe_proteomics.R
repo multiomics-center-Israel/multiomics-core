@@ -155,7 +155,7 @@ pipe_proteomics <- function() {
                 de_res = prot_de_res,
                 inputs = prot_inputs,
                 config = config,
-                pca_res = NULL, # Add PCA results when available
+                pca_res = prot_qc_pre_obj, # Pass QC pre results with PCA objects
                 clustering_res = prot_clustering_obj, # Use clustering results
                 out_file = file.path(run_dir, "proteomics", "data_to_shiny_legacy_proteomics.rds")
             ),

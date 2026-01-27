@@ -28,8 +28,8 @@ build_shiny_legacy_base <- function(legacy_source, pca_basename) {
         dds = NULL,
         norm_counts = NULL,
         norm_log_counts = NULL,
-        norm_log_counts_pca = NULL,
-        mat2plot = NULL,
+        norm_log_counts_pca = NULL, # PCA prcomp object (optional)
+        mat2plot = NULL, # PCA scores data.frame (optional)
         EFFECTS = NULL,
         PCA_3D_BASENAME = pca_basename,
         stats_df = NULL,
@@ -47,6 +47,10 @@ build_shiny_legacy_base <- function(legacy_source, pca_basename) {
         LOG_FC_CUTOFF = NULL,
         LINEAR_FC_CUTOFF = NULL,
         NORM_METHOD = NULL,
-        GROUP = NULL
+        GROUP = NULL,
+
+        # Shiny aesthetics (column names)
+        color = NULL,
+        shape = NULL
     )
 }

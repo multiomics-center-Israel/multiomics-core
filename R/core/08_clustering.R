@@ -1,4 +1,5 @@
 #' Run binary-pattern clustering
+#' Run binary-pattern clustering
 #'
 #' Logic:
 #' 1) Aggregate expression by group -> feature x group means.
