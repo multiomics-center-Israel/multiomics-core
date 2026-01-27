@@ -198,16 +198,17 @@ build_data_to_shiny_legacy_proteomics <- function(
     expected_keys <- c(
         "legacy_version", "legacy_created_at", "legacy_source",
         "col_data", "contrasts_data", "dds", "norm_counts", "norm_log_counts",
-        "norm_log_counts_pca", "mat2plot", "EFFECTS", "PCA_3D_BASENAME",
+        "norm_log_counts_pca", "mat2plot", "PCA_3D_BASENAME",
         "stats_df", "DE_genes_stats",
-        "patterns", "heatmaps_by_pattern", "New_clusters",
         "trinotate_main",
         "PADJ_CUTOFF", "DESEQ_PADJ_CUTOFF", "LOG_FC_CUTOFF",
         "LINEAR_FC_CUTOFF", "NORM_METHOD", "GROUP"
     )
 
-    # Note: pheatmap_data_DE_genes and annot are optional and added separately
-    # They're not in expected_keys to avoid validation errors
+    # Note: The following are optional and populated separately:
+    # - pheatmap_data_DE_genes, annot (may not exist)
+    # - EFFECTS (requires both shape and color in config)
+    # - patterns, heatmaps_by_pattern, New_clusters (require clustering_res)
 
     missing_keys <- setdiff(expected_keys, names(legacy))
     if (length(missing_keys) > 0) {
