@@ -20,19 +20,38 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     contrasts <- names(runs_de_tables[[1]])
     stopifnot(length(contrasts) > 0)
 
-    id_cols <- c("FeatureID", "Protein.Names", "Genes", "First.Protein.Description")
-    ref_df <- runs_de_tables[[1]][[contrasts[1]]]
-    stopifnot(all(id_cols %in% colnames(ref_df)))
+    de_table_cfg <- config$modes$proteomics$de_table %||% list()
+    id_col <- de_table_cfg$id_col %||% "FeatureID"
 
-    out <- ref_df[, id_cols, drop = FALSE]
-    ref_ids <- ref_df$FeatureID
+    # Optional columns that might exist
+    extra_cols <- c("Protein.Names", "Genes", "First.Protein.Description")
+
+    ref_df <- runs_de_tables[[1]][[contrasts[1]]]
+
+    # Check if primary ID column exists
+    if (!id_col %in% colnames(ref_df)) {
+        stop(sprintf(
+            "Configured ID column '%s' not found in DE results. Available: %s",
+            id_col, paste(colnames(ref_df), collapse = ", ")
+        ))
+    }
+
+    # Collect available columns
+    available_cols <- c(id_col, intersect(extra_cols, colnames(ref_df)))
+
+    out <- ref_df[, available_cols, drop = FALSE]
+    ref_ids <- ref_df[[id_col]]
 
     # Validate alignment
     for (n in seq_len(NO_REPETITIONS)) {
         for (cn in contrasts) {
             cur <- runs_de_tables[[n]][[cn]]
             stopifnot(nrow(cur) == length(ref_ids))
-            stopifnot(all(cur$FeatureID == ref_ids))
+
+            # Use dynamic ID column for check
+            if (!all(cur[[id_col]] == ref_ids)) {
+                stop(sprintf("Mismatch in ID column '%s' between imputations/contrasts", id_col))
+            }
         }
     }
 
@@ -52,6 +71,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         })
 
         sum_pass <- rowSums(pass1_mat, na.rm = TRUE)
+
         pass_imputs <- ifelse(sum_pass >= MIN_NO_PASSED, 1, NA)
 
         linearRatio_imputs <- rowMeans(2^logfc_mat, na.rm = TRUE)
@@ -139,16 +159,22 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     feature_id <- ann[[protein_id_col]]
     annot_out <- setdiff(annot_cols, protein_id_col)
 
+    de_table_cfg <- p_cfg$de_table %||% list()
+    target_id_col <- de_table_cfg$id_col %||% "FeatureID"
+
     de_tables <- lapply(colnames(contrast_matrix), function(cn) {
         de <- limma::topTable(fit2, coef = cn, adjust.method = "BH", sort.by = "none", number = Inf)
         de <- align_de_to_expr(de, expr_imp, contrast_name = cn)
-        data.frame(
-            FeatureID = feature_id,
+        df_out <- data.frame(
+            TEMP_ID_COL = feature_id,
             Contrast = cn,
             ann[, annot_out, drop = FALSE],
             de[, c("logFC", "AveExpr", "t", "P.Value", "adj.P.Val", "B")],
             check.names = FALSE
         )
+        # Rename the temporal ID column to the actual configured ID column (target for DE table)
+        names(df_out)[names(df_out) == "TEMP_ID_COL"] <- target_id_col
+        df_out
     })
 
     # IMPORTANT: names(de_tables) are used by summarize_limma_mult_imputation()

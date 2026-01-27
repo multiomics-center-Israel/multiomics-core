@@ -50,9 +50,8 @@ p_tag_generic <- function(config, mode, default = "NA") {
 }
 
 #' Write legacy-style Final_results excels (generic for any mode)
-write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, excel_order = NULL) {
+write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, clustering_res = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
-
     # Validate inputs
     if (is.null(final_results)) {
         stop("final_results is NULL. Cannot export to Excel. Check that DE analysis produced results.")
@@ -86,7 +85,6 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
     is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
     de_df <- final_results[is_de, , drop = FALSE]
     de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs"), drop = FALSE]
-
     if (!is.null(expr_for_de)) {
         expr_for_de <- as.matrix(expr_for_de)
         de_ids <- intersect(de_df[[id_col]], rownames(expr_for_de))
@@ -97,12 +95,50 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             return(c(f_all_created, f_de_created))
         }
 
-        if (!is.null(excel_order)) {
-            # Use provided order
+        # Default ordering and columns
+        z_col_names <- NULL
+
+        # New Logic: Integrate clustering order and z-scores if available
+        # Check both clustering_res (passed from pipeline) and older 'excel_order' arg (backwards compatibility)
+        cl_obj <- clustering_res %||% list()
+        excel_ord <- cl_obj$excel_order %||% NULL
+
+        if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+            ordered_ids <- excel_ord$ordered_ids
+
+            # 1. Add 'order' column (rank)
+            # Features in ordered_ids get their rank, others NA
+            ranks <- match(de_df[[id_col]], ordered_ids)
+            de_df$order <- ranks
+
+            # 2. Add Z-score columns
+            if (!is.null(excel_ord$zscore_mat)) {
+                zmat <- excel_ord$zscore_mat
+                # Match rows of zmat to de_df IDs
+                # zmat rownames are feature IDs
+
+                # Subset zmat to features present in de_df (using match for strict alignment)
+                idx <- match(de_df[[id_col]], rownames(zmat))
+
+                # Create sub-matrix of Z-scores (preserving columns)
+                z_sub <- zmat[idx, , drop = FALSE]
+
+                # Add to de_df
+                de_df <- cbind(de_df, z_sub)
+            }
         } else {
-            # Simple fallback if zscore logic not present
+            message("No clustering excel_order found; skipping hier_order and z-scores")
         }
-        # (Skipping complex zscore logic for brevity or need to check if zscore_rows in core)
+
+        # Combine: Stats + Expression (already in de_df? No, need to bind expression)
+        # We need to add 'mat_de' (expression values) to 'de_df'
+        # mat_de and de_df must align.
+
+        # Align expr matrix to de_df
+        mat_de_aligned <- mat_de[match(de_df[[id_col]], rownames(mat_de)), , drop = FALSE]
+
+        # Final bind: DE Stats (+ optional order/zscore) + Expression
+        de_df <- cbind(de_df, mat_de_aligned)
     }
 
     # Save DE results and capture path
@@ -203,9 +239,9 @@ build_final_results_generic <- function(
         stop("summary_df must be a data.frame, got: ", class(summary_df)[1])
     }
 
-    if (!("FeatureID" %in% colnames(summary_df))) {
+    if (!(feature_id_col %in% colnames(summary_df))) {
         stop(
-            "summary_df must have a 'FeatureID' column. Found columns: ",
+            "summary_df must have a '", feature_id_col, "' column. Found columns: ",
             paste(head(colnames(summary_df), 10), collapse = ", ")
         )
     }
@@ -235,7 +271,7 @@ build_final_results_generic <- function(
     # ============================================================
 
     base <- data.frame(
-        ID = summary_df$FeatureID,
+        ID = summary_df[[feature_id_col]],
         stringsAsFactors = FALSE,
         check.names = FALSE
     )
@@ -315,7 +351,7 @@ build_final_results_generic <- function(
     # ============================================================
 
     contrast_names <- contrasts_df$Contrast_name
-    m <- match(base[[feature_id_col]], summary_df$FeatureID)
+    m <- match(base[[feature_id_col]], summary_df[[feature_id_col]])
 
     for (cn in contrast_names) {
         cols <- get_contrast_cols(cn)
