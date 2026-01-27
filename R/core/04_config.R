@@ -1,5 +1,5 @@
 #' Load pipeline configuration from YAML
-load_config <- function(path = "config/config.yml") {
+load_config <- function(path = NULL) {
     if (!requireNamespace("yaml", quietly = TRUE)) {
         stop("Package 'yaml' is required.")
     }

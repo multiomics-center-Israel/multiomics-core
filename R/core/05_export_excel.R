@@ -40,12 +40,28 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     invisible(TRUE)
 }
 
-#' Write legacy-style Final_results excels (generic for any mode)
-write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, excel_order = NULL) {
-    if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
+#' Get p-value cutoff tag for filename (generic for any mode)
+p_tag_generic <- function(config, mode, default = "NA") {
+    p <- config$modes[[mode]]$de$p_cutoff
+    if (is.null(p) || is.na(p)) {
+        return(default)
+    }
+    format(p, trim = TRUE, scientific = FALSE)
+}
 
-    # Helper p_tag (if not available globally, define locally or assume core loaded)
-    p_tag_val <- if (exists("p_tag")) p_tag(config) else "NA"
+#' Write legacy-style Final_results excels (generic for any mode)
+write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, clustering_res = NULL) {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
+    # Validate inputs
+    if (is.null(final_results)) {
+        stop("final_results is NULL. Cannot export to Excel. Check that DE analysis produced results.")
+    }
+    if (!is.data.frame(final_results)) {
+        stop("final_results must be a data.frame, got: ", class(final_results)[1])
+    }
+
+    # Get p-value cutoff tag for filename
+    p_tag_val <- p_tag_generic(config, mode)
 
     f_all <- file.path(out_dir, sprintf("Final_results_P_%s.xlsx", p_tag_val))
     f_de <- file.path(out_dir, sprintf("Final_results_DE_P_%s.xlsx", p_tag_val))
@@ -60,34 +76,87 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             fill_manual_cutoffs_formulas_legacy(wb, "Results", df, config, mode = mode)
         }
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+        path # Return the file path for targets tracking
     }
 
-    save_wb_results(final_results, f_all, with_cutoffs = isTRUE(with_cutoffs))
+    # Save full results and capture path
+    f_all_created <- save_wb_results(final_results, f_all, with_cutoffs = isTRUE(with_cutoffs))
 
     is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
     de_df <- final_results[is_de, , drop = FALSE]
     de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs"), drop = FALSE]
-
     if (!is.null(expr_for_de)) {
         expr_for_de <- as.matrix(expr_for_de)
         de_ids <- intersect(de_df[[id_col]], rownames(expr_for_de))
         mat_de <- expr_for_de[de_ids, , drop = FALSE]
 
         if (nrow(mat_de) == 0) {
-            save_wb_results(mat_de, f_de, with_cutoffs = FALSE)
-            return(c(f_all, f_de))
+            f_de_created <- save_wb_results(mat_de, f_de, with_cutoffs = FALSE)
+            return(c(f_all_created, f_de_created))
         }
 
-        if (!is.null(excel_order)) {
-            # Use provided order
+        # Default ordering and columns
+        z_col_names <- NULL
+
+        # New Logic: Integrate clustering order and z-scores if available
+        # Check both clustering_res (passed from pipeline) and older 'excel_order' arg (backwards compatibility)
+        cl_obj <- clustering_res %||% list()
+        excel_ord <- cl_obj$excel_order %||% NULL
+
+        if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+            ordered_ids <- excel_ord$ordered_ids
+
+            # 1. Add 'order' column (rank)
+            # Features in ordered_ids get their rank, others NA
+            ranks <- match(de_df[[id_col]], ordered_ids)
+            de_df$order <- ranks
+
+            # 2. Add Z-score columns
+            if (!is.null(excel_ord$zscore_mat)) {
+                zmat <- excel_ord$zscore_mat
+                # Match rows of zmat to de_df IDs
+                # zmat rownames are feature IDs
+
+                # Subset zmat to features present in de_df (using match for strict alignment)
+                idx <- match(de_df[[id_col]], rownames(zmat))
+
+                # Create sub-matrix of Z-scores (preserving columns)
+                z_sub <- zmat[idx, , drop = FALSE]
+
+                # Add to de_df
+                de_df <- cbind(de_df, z_sub)
+            }
         } else {
-            # Simple fallback if zscore logic not present
+            message("No clustering excel_order found; skipping hier_order and z-scores")
         }
-        # (Skipping complex zscore logic for brevity or need to check if zscore_rows in core)
+
+        # Combine: Stats + Expression (already in de_df? No, need to bind expression)
+        # We need to add 'mat_de' (expression values) to 'de_df'
+        # mat_de and de_df must align.
+
+        # Align expr matrix to de_df
+        mat_de_aligned <- mat_de[match(de_df[[id_col]], rownames(mat_de)), , drop = FALSE]
+
+        # Final bind: DE Stats (+ optional order/zscore) + Expression
+        de_df <- cbind(de_df, mat_de_aligned)
     }
 
-    save_wb_results(de_df, f_de, with_cutoffs = FALSE)
-    c(f_all, f_de)
+    # Save DE results and capture path
+    f_de_created <- save_wb_results(de_df, f_de, with_cutoffs = FALSE)
+    c(f_all_created, f_de_created)
+}
+
+#' Get standard column names for a contrast
+get_contrast_cols <- function(contrast) {
+    stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
+    list(
+        fc     = paste0("linearFC.imputs.", contrast),
+        p      = paste0("pvalue.imputs.", contrast),
+        padj   = paste0("padj.imputs.", contrast),
+        pass   = paste0("pass.imputs.", contrast),
+        updown = paste0("upDown.imputs.", contrast),
+        manual = paste0("manual_cutoffs.", contrast)
+    )
 }
 
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config, mode = "proteomics") {
@@ -131,4 +200,248 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
         openxlsx::writeFormula(wb, sheet, x = formulas, startCol = m_i, startRow = start_row)
     }
     invisible(TRUE)
+}
+
+#' Build final results table (generic for any mode)
+#'
+#' SEMANTICS (CRITICAL):
+#' - pass.imputs.<contrast> is {NA, 1}: NA = did not pass, 1 = passed
+#' - pass_any_contrast already exists in summary_df (computed by add_pass_any_contrast)
+#' - upDown.imputs.<contrast> should ONLY be populated when pass == 1
+#' - FC columns are SIGNED (linearFC or logFC), not ratios
+#'
+#' @param summary_df DE summary with FeatureID, contrast columns, pass_any_contrast
+#' @param expr_df Expression matrix (features x samples)
+#' @param contrasts_df Contrasts table with Contrast_name column
+#' @param feature_id_col Name of ID column in output ("Protein", "Gene", etc.)
+#' @param annot_cols Named vector: c(output_col = "source_col_in_summary_or_rowdata")
+#' @param row_data Optional annotation data.frame
+#' @param fc_is_signed Logical; if TRUE (default), FC is signed (linearFC/logFC).
+#'                     If FALSE, must provide fc_direction_col.
+#' @param fc_direction_col Optional; column name for direction if FC is unsigned ratio
+#'
+#' @return data.frame with ID, annotations, expression, DE stats, pass_any_contrast
+build_final_results_generic <- function(
+  summary_df,
+  expr_df,
+  contrasts_df,
+  feature_id_col = "FeatureID",
+  annot_cols = NULL,
+  row_data = NULL,
+  fc_is_signed = TRUE,
+  fc_direction_col = NULL
+) {
+    # ============================================================
+    # VALIDATION (explicit errors, not stopifnot)
+    # ============================================================
+
+    if (!is.data.frame(summary_df)) {
+        stop("summary_df must be a data.frame, got: ", class(summary_df)[1])
+    }
+
+    if (!(feature_id_col %in% colnames(summary_df))) {
+        stop(
+            "summary_df must have a '", feature_id_col, "' column. Found columns: ",
+            paste(head(colnames(summary_df), 10), collapse = ", ")
+        )
+    }
+
+    if (!is.data.frame(contrasts_df)) {
+        stop("contrasts_df must be a data.frame, got: ", class(contrasts_df)[1])
+    }
+
+    if (!("Contrast_name" %in% colnames(contrasts_df))) {
+        stop(
+            "contrasts_df must have a 'Contrast_name' column. Found columns: ",
+            paste(colnames(contrasts_df), collapse = ", ")
+        )
+    }
+
+    if (nrow(contrasts_df) == 0) {
+        stop("contrasts_df is empty. At least one contrast is required.")
+    }
+
+    # FC direction validation
+    if (!isTRUE(fc_is_signed) && is.null(fc_direction_col)) {
+        stop("If fc_is_signed = FALSE, must provide fc_direction_col for determining up/down direction")
+    }
+
+    # ============================================================
+    # BUILD BASE WITH ID
+    # ============================================================
+
+    base <- data.frame(
+        ID = summary_df[[feature_id_col]],
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+    )
+    names(base)[1] <- feature_id_col
+
+    # ============================================================
+    # ADD ANNOTATIONS WITH MATCH-RATE CHECK
+    # ============================================================
+
+    if (!is.null(annot_cols) && length(annot_cols) > 0) {
+        for (out_col in names(annot_cols)) {
+            src_col <- annot_cols[out_col]
+
+            # Try summary_df first
+            if (src_col %in% colnames(summary_df)) {
+                base[[out_col]] <- summary_df[[src_col]]
+            }
+            # Then try row_data
+            else if (!is.null(row_data) && src_col %in% colnames(row_data)) {
+                if (is.null(rownames(row_data))) {
+                    warning(sprintf(
+                        "row_data has no rownames. Cannot match annotation column '%s'. Setting to NA.",
+                        src_col
+                    ))
+                    base[[out_col]] <- NA
+                } else {
+                    matched_vals <- row_data[[src_col]][match(base[[feature_id_col]], rownames(row_data))]
+
+                    # Check match rate
+                    match_rate <- sum(!is.na(matched_vals)) / length(matched_vals)
+                    if (match_rate < 0.95) {
+                        warning(sprintf(
+                            "Low match rate for annotation '%s': %.1f%% (%d/%d features matched). Check that row_data rownames match feature IDs.",
+                            out_col, match_rate * 100, sum(!is.na(matched_vals)), length(matched_vals)
+                        ))
+                    }
+
+                    base[[out_col]] <- matched_vals
+                }
+            }
+            # Not found anywhere
+            else {
+                warning(sprintf(
+                    "Annotation column '%s' not found in summary_df or row_data. Setting to NA.",
+                    src_col
+                ))
+                base[[out_col]] <- NA
+            }
+        }
+    }
+
+    # ============================================================
+    # ADD EXPRESSION VALUES
+    # ============================================================
+
+    expr_df <- as.data.frame(expr_df, check.names = FALSE)
+
+    if (is.null(rownames(expr_df))) {
+        warning("expr_df has no rownames. Cannot add expression values.")
+    } else {
+        expr_matched <- expr_df[match(base[[feature_id_col]], rownames(expr_df)), , drop = FALSE]
+
+        # Check match rate
+        match_rate <- sum(base[[feature_id_col]] %in% rownames(expr_df)) / nrow(base)
+        if (match_rate < 0.95) {
+            warning(sprintf(
+                "Low match rate for expression values: %.1f%% (%d/%d features matched). Check that expr_df rownames match feature IDs.",
+                match_rate * 100, sum(base[[feature_id_col]] %in% rownames(expr_df)), nrow(base)
+            ))
+        }
+
+        base <- cbind(base, expr_matched)
+    }
+
+    # ============================================================
+    # ADD CONTRAST STATISTICS
+    # ============================================================
+
+    contrast_names <- contrasts_df$Contrast_name
+    m <- match(base[[feature_id_col]], summary_df[[feature_id_col]])
+
+    for (cn in contrast_names) {
+        cols <- get_contrast_cols(cn)
+
+        # Validate required columns exist
+        needed <- c(cols$fc, cols$p, cols$padj)
+        missing <- setdiff(needed, colnames(summary_df))
+        if (length(missing) > 0) {
+            stop(sprintf(
+                "Missing required columns for contrast '%s': %s\nAvailable columns: %s",
+                cn,
+                paste(missing, collapse = ", "),
+                paste(head(colnames(summary_df), 20), collapse = ", ")
+            ))
+        }
+
+        # Extract values
+        fc_vals <- summary_df[[cols$fc]][m]
+        pass_vals <- if (cols$pass %in% colnames(summary_df)) {
+            summary_df[[cols$pass]][m]
+        } else {
+            rep(NA, length(m))
+        }
+
+        # Populate FC, p-value, adjusted p-value
+        base[[cols$fc]] <- fc_vals
+        base[[cols$p]] <- summary_df[[cols$p]][m]
+        base[[cols$padj]] <- summary_df[[cols$padj]][m]
+
+        # ============================================================
+        # DETERMINE UP/DOWN DIRECTION
+        # ============================================================
+
+        if (isTRUE(fc_is_signed)) {
+            # FC is signed (linearFC or logFC) - use sign directly
+            # Validate that FC looks signed (has negative values)
+            if (all(fc_vals >= 0, na.rm = TRUE) && any(!is.na(fc_vals))) {
+                warning(sprintf(
+                    "Contrast '%s': FC column '%s' has no negative values. Are you sure fc_is_signed = TRUE?",
+                    cn, cols$fc
+                ))
+            }
+
+            direction <- ifelse(
+                !is.na(pass_vals) & pass_vals == 1,
+                ifelse(as.numeric(fc_vals) >= 0, "up", "down"),
+                ""
+            )
+        } else {
+            # FC is unsigned ratio - use direction column
+            if (is.null(fc_direction_col) || !(fc_direction_col %in% colnames(summary_df))) {
+                stop(sprintf(
+                    "fc_direction_col '%s' not found in summary_df for contrast '%s'",
+                    fc_direction_col, cn
+                ))
+            }
+
+            dir_vals <- summary_df[[fc_direction_col]][m]
+            direction <- ifelse(
+                !is.na(pass_vals) & pass_vals == 1,
+                dir_vals,
+                ""
+            )
+        }
+
+        base[[cols$updown]] <- direction
+        base[[cols$manual]] <- NA
+    }
+
+    # ============================================================
+    # USE EXISTING pass_any_contrast
+    # ============================================================
+
+    if ("pass_any_contrast" %in% colnames(summary_df)) {
+        base$pass_any_contrast <- summary_df$pass_any_contrast[m]
+    } else {
+        # Fallback: compute if missing (shouldn't happen in normal pipeline)
+        warning("pass_any_contrast not found in summary_df. Computing from pass columns.")
+        pass_cols <- paste0("pass.imputs.", contrast_names)
+        existing_pass_cols <- intersect(pass_cols, colnames(summary_df))
+
+        if (length(existing_pass_cols) > 0) {
+            pass_mat <- summary_df[m, existing_pass_cols, drop = FALSE]
+            # Count features where pass == 1 (not just non-NA)
+            n_pass <- rowSums(!is.na(pass_mat) & pass_mat == 1, na.rm = TRUE)
+            base$pass_any_contrast <- ifelse(n_pass > 0, 1, NA)
+        } else {
+            base$pass_any_contrast <- NA
+        }
+    }
+
+    base
 }

@@ -25,7 +25,7 @@ compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = F
   scores$sample <- rownames(scores)
 
   list(
-    pca = pca,
+    pca_obj = pca,
     scores = scores,
     var_expl = var_expl
   )
@@ -82,10 +82,12 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   pc_x <- pcs[1]
   pc_y <- pcs[2]
 
-  # Attach metadata
-  scores[[color_col]] <- meta_sub[[color_col]]
-  if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
-    scores[[shape_col]] <- meta_sub[[shape_col]]
+  # Attach ALL metadata columns to scores (not just color/shape)
+  # This ensures Shiny has access to all metadata via mat2plot
+  for (col in colnames(meta_sub)) {
+    if (!col %in% colnames(scores)) {
+      scores[[col]] <- meta_sub[[col]]
+    }
   }
 
   p <- plot_pca_scatter(
@@ -100,6 +102,11 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 5, height = 5)
   }
+
+  # Attach PCA results as attributes (backward compatible - plot is still returned)
+  attr(p, "pca_result") <- res$pca_obj
+  attr(p, "scores") <- scores # scores now include all metadata
+  attr(p, "var_expl") <- var_expl
 
   invisible(p)
 }

@@ -1,4 +1,5 @@
 #' Run binary-pattern clustering
+#' Run binary-pattern clustering
 #'
 #' Logic:
 #' 1) Aggregate expression by group -> feature x group means.
@@ -132,7 +133,8 @@ run_binary_patterns <- function(expr_mat,
   # --- Final Return: List containing both files and plots ---
   return(list(
     files = unique(written),
-    plots = plots
+    plots = plots,
+    best = best
   ))
 }
 

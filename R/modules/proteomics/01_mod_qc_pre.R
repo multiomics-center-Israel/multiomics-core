@@ -90,5 +90,26 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_hm_nocol)
     plots$heatmap_nocol <- p_hm_nocol
 
-    list(plots = plots, files = unique(files))
+    # ---------- Extract PCA objects from plot attributes ----------
+    # PCA plot p12 has attributes attached by qc_pca_scatter
+    pca_obj <- attr(p12, "pca_result")
+    scores <- attr(p12, "scores")
+    var_expl <- attr(p12, "var_expl")
+
+    # Get color and shape column names from config
+    color <- cfg$effects$color %||% NULL
+    shape <- cfg$effects$shape %||% NULL
+
+    # Return plots, files, AND objects for Shiny export
+    list(
+        plots = plots,
+        files = unique(files),
+        objects = list(
+            norm_log_counts_pca = pca_obj, # prcomp result
+            mat2plot = scores, # data.frame with PCs + metadata
+            var_expl = var_expl, # variance explained
+            color = color, # string: column name for color aesthetic
+            shape = shape # string: column name for shape aesthetic
+        )
+    )
 }

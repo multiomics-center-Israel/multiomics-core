@@ -23,10 +23,11 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
     # 4) final results TSV
     if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
         final_results <- build_final_results_proteomics(
-            pre          = pre,
-            summary_df   = de_res$summary_df,
+            pre = pre,
+            summary_df = de_res$summary_df,
             contrasts_df = inputs$contrasts,
-            row_data     = pre$row_data
+            row_data = pre$row_data,
+            feature_id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID"
         )
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 
@@ -68,30 +69,38 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) 
 
 write_limma_multimp_summary_legacy <- function(summary_df, config, out_dir) {
     dirs <- create_legacy_output_dirs(out_dir)
-    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag(config)))
+    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag_generic(config, "proteomics")))
 }
 
 write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, out_dir) {
     dirs <- create_legacy_output_dirs(out_dir)
-    wide_df <- build_limma_results_multimp_wide(runs_de_tables = de_res$runs_de_tables, contrast_name = contrast_name)
-    fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag(config))
+    feature_id_col <- config$modes$proteomics$de_table$id_col %||% "FeatureID"
+    wide_df <- build_limma_results_multimp_wide(
+        runs_de_tables = de_res$runs_de_tables,
+        contrast_name = contrast_name,
+        feature_id_col = feature_id_col
+    )
+    fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag_generic(config, "proteomics"))
     save_tsv(wide_df, dirs$datasets, fname)
 }
 
-build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stats_cols = c("logFC", "P.Value", "adj.P.Val")) {
+build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stats_cols = c("logFC", "P.Value", "adj.P.Val"), feature_id_col = "FeatureID") {
     stopifnot(length(runs_de_tables) >= 1)
     base <- runs_de_tables[[1]][[contrast_name]]
     if (is.null(base)) stop(sprintf("Contrast '%s' missing in imputation run 1", contrast_name))
-    stopifnot("FeatureID" %in% colnames(base))
 
-    id_cols <- intersect(c("FeatureID", "Protein.Names", "Genes", "First.Protein.Description", "Contrast"), colnames(base))
+    if (!feature_id_col %in% colnames(base)) {
+        stop(sprintf("Feature ID column '%s' missing in base table", feature_id_col))
+    }
+
+    id_cols <- intersect(c(feature_id_col, "Protein.Names", "Genes", "First.Protein.Description", "Contrast"), colnames(base))
     out <- base[, id_cols, drop = FALSE]
 
     for (i in seq_along(runs_de_tables)) {
         tab <- runs_de_tables[[i]][[contrast_name]]
         if (is.null(tab)) stop(sprintf("Critical: Contrast '%s' is missing in imputation run %d", contrast_name, i))
 
-        tab <- align_de_table_by_feature_id(tab = tab, ref_ids = out$FeatureID, run_i = i, contrast_name = contrast_name, id_col = "FeatureID")
+        tab <- align_de_table_by_feature_id(tab = tab, ref_ids = out[[feature_id_col]], run_i = i, contrast_name = contrast_name, id_col = feature_id_col)
         stat_block <- tab[, intersect(stats_cols, colnames(tab)), drop = FALSE]
         colnames(stat_block) <- paste0(colnames(stat_block), ".", i)
         out <- cbind(out, stat_block)
@@ -99,62 +108,18 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
     out
 }
 
-build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL) {
-    expr_df <- as.data.frame(pre$expr_filt, check.names = FALSE)
-    if (is.null(row_data)) row_data <- pre$row_data
-    stopifnot(!is.null(row_data), "Protein.Group" %in% colnames(row_data))
-
-    base <- data.frame(Protein = row_data[["Protein.Group"]], stringsAsFactors = FALSE, check.names = FALSE)
-    m <- match(base$Protein, summary_df$FeatureID)
-
-    for (col in c("Protein.Names", "Genes", "First.Protein.Description")) {
-        val <- if (col %in% colnames(summary_df)) summary_df[[col]][m] else NA
-        if (col %in% colnames(row_data)) {
-            fallback <- row_data[[col]]
-            val <- ifelse(is.na(val), fallback, val)
-        }
-        base[[col]] <- val
-    }
-
-    base <- cbind(base, expr_df)
-    contrast_names <- contrasts_df$Contrast_name
-
-    for (cn in contrast_names) {
-        cols <- get_contrast_cols(cn)
-        needed <- c(cols$fc, cols$p, cols$padj)
-        missing_cols <- setdiff(needed, colnames(summary_df))
-        if (length(missing_cols) > 0) stop(sprintf("Summary DF missing columns for contrast '%s': %s", cn, paste(missing_cols, collapse = ", ")))
-    }
-
-    for (cn in contrast_names) {
-        cols <- get_contrast_cols(cn)
-        fc_vals <- summary_df[[cols$fc]][m]
-        pass_vals <- if (cols$pass %in% colnames(summary_df)) summary_df[[cols$pass]][m] else rep(NA, length(m))
-
-        base[[cols$fc]] <- fc_vals
-        base[[cols$p]] <- summary_df[[cols$p]][m]
-        base[[cols$padj]] <- summary_df[[cols$padj]][m]
-        base[[cols$updown]] <- ifelse(!is.na(pass_vals), ifelse(as.numeric(fc_vals) >= 0, "up", "down"), "")
-        base[[cols$manual]] <- NA
-    }
-
-    pass_cols <- paste0("pass.imputs.", contrast_names)
-    existing_pass_cols <- intersect(pass_cols, colnames(summary_df))
-
-    if (length(existing_pass_cols) == 0) {
-        warning("No 'pass.imputs' columns found in summary_df. pass_any_contrast will be NA.")
-        base$pass_any_contrast <- NA
-    } else {
-        pass_mat <- summary_df[m, existing_pass_cols, drop = FALSE]
-        base$pass_any_contrast <- ifelse(rowSums(!is.na(pass_mat)) > 0, 1, NA)
-    }
-    base
-}
-
-p_tag <- function(config, default = "NA") {
-    p <- config$modes$proteomics$de$p_cutoff
-    if (is.null(p) || is.na(p)) {
-        return(default)
-    }
-    format(p, trim = TRUE, scientific = FALSE)
+build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL, feature_id_col = "FeatureID") {
+    build_final_results_generic(
+        summary_df = summary_df,
+        expr_df = pre$expr_filt,
+        contrasts_df = contrasts_df,
+        feature_id_col = feature_id_col,
+        annot_cols = c(
+            "Protein.Names" = "Protein.Names",
+            "Genes" = "Genes",
+            "First.Protein.Description" = "First.Protein.Description"
+        ),
+        row_data = row_data %||% pre$row_data,
+        fc_is_signed = TRUE # linearFC is signed
+    )
 }
