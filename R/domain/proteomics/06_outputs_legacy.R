@@ -100,53 +100,17 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 }
 
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL) {
-    expr_df <- as.data.frame(pre$expr_filt, check.names = FALSE)
-    if (is.null(row_data)) row_data <- pre$row_data
-    stopifnot(!is.null(row_data), "Protein.Group" %in% colnames(row_data))
-
-    base <- data.frame(Protein = row_data[["Protein.Group"]], stringsAsFactors = FALSE, check.names = FALSE)
-    m <- match(base$Protein, summary_df$FeatureID)
-
-    for (col in c("Protein.Names", "Genes", "First.Protein.Description")) {
-        val <- if (col %in% colnames(summary_df)) summary_df[[col]][m] else NA
-        if (col %in% colnames(row_data)) {
-            fallback <- row_data[[col]]
-            val <- ifelse(is.na(val), fallback, val)
-        }
-        base[[col]] <- val
-    }
-
-    base <- cbind(base, expr_df)
-    contrast_names <- contrasts_df$Contrast_name
-
-    for (cn in contrast_names) {
-        cols <- get_contrast_cols(cn)
-        needed <- c(cols$fc, cols$p, cols$padj)
-        missing_cols <- setdiff(needed, colnames(summary_df))
-        if (length(missing_cols) > 0) stop(sprintf("Summary DF missing columns for contrast '%s': %s", cn, paste(missing_cols, collapse = ", ")))
-    }
-
-    for (cn in contrast_names) {
-        cols <- get_contrast_cols(cn)
-        fc_vals <- summary_df[[cols$fc]][m]
-        pass_vals <- if (cols$pass %in% colnames(summary_df)) summary_df[[cols$pass]][m] else rep(NA, length(m))
-
-        base[[cols$fc]] <- fc_vals
-        base[[cols$p]] <- summary_df[[cols$p]][m]
-        base[[cols$padj]] <- summary_df[[cols$padj]][m]
-        base[[cols$updown]] <- ifelse(!is.na(pass_vals), ifelse(as.numeric(fc_vals) >= 0, "up", "down"), "")
-        base[[cols$manual]] <- NA
-    }
-
-    pass_cols <- paste0("pass.imputs.", contrast_names)
-    existing_pass_cols <- intersect(pass_cols, colnames(summary_df))
-
-    if (length(existing_pass_cols) == 0) {
-        warning("No 'pass.imputs' columns found in summary_df. pass_any_contrast will be NA.")
-        base$pass_any_contrast <- NA
-    } else {
-        pass_mat <- summary_df[m, existing_pass_cols, drop = FALSE]
-        base$pass_any_contrast <- ifelse(rowSums(!is.na(pass_mat)) > 0, 1, NA)
-    }
-    base
+    build_final_results_generic(
+        summary_df = summary_df,
+        expr_df = pre$expr_filt,
+        contrasts_df = contrasts_df,
+        feature_id_col = "Protein",
+        annot_cols = c(
+            "Protein.Names" = "Protein.Names",
+            "Genes" = "Genes",
+            "First.Protein.Description" = "First.Protein.Description"
+        ),
+        row_data = row_data %||% pre$row_data,
+        fc_is_signed = TRUE # linearFC is signed
+    )
 }
