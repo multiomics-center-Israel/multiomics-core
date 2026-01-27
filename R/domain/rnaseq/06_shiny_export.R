@@ -36,39 +36,11 @@ build_data_to_shiny_legacy_rna <- function(
 ) {
     # ============================================================
     # Initialize with ALL keys set to NULL (predictable structure)
+    # Using generic base builder with EXACT legacy values
     # ============================================================
-    legacy <- list(
-        # Metadata
-        legacy_version = "1.0",
-        legacy_created_at = Sys.time(),
-        legacy_source = "RNAseq pipeline",
-
-        # Data objects
-        col_data = NULL,
-        contrasts_data = NULL,
-        dds = NULL,
-        norm_counts = NULL,
-        norm_log_counts = NULL,
-        norm_log_counts_pca = NULL,
-        mat2plot = NULL,
-        EFFECTS = NULL,
-        PCA_3D_BASENAME = "rna_pca_3d",
-        stats_df = NULL,
-        DE_genes_stats = NULL,
-        pheatmap_data_DE_genes = NULL,
-        patterns = NULL,
-        heatmaps_by_pattern = NULL,
-        New_clusters = NULL,
-        annot = NULL,
-        trinotate_main = NULL,
-
-        # Config parameters
-        PADJ_CUTOFF = NULL,
-        DESEQ_PADJ_CUTOFF = NULL,
-        LOG_FC_CUTOFF = NULL,
-        LINEAR_FC_CUTOFF = NULL,
-        NORM_METHOD = NULL,
-        GROUP = NULL
+    legacy <- build_shiny_legacy_base(
+        legacy_source = "RNAseq pipeline", # EXACT pre-refactor value (not "RNA-seq")
+        pca_basename = "rna_pca_3d"
     )
 
     # ============================================================

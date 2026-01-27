@@ -36,39 +36,11 @@ build_data_to_shiny_legacy_proteomics <- function(
 ) {
     # ============================================================
     # Initialize with ALL keys set to NULL (predictable structure)
+    # Using generic base builder with EXACT legacy values
     # ============================================================
-    legacy <- list(
-        # Metadata
-        legacy_version = "1.0",
-        legacy_created_at = Sys.time(),
-        legacy_source = "Proteomics pipeline",
-
-        # Data objects
-        col_data = NULL,
-        contrasts_data = NULL,
-        dds = NULL, # Not applicable for proteomics; kept for legacy compatibility
-        norm_counts = NULL,
-        norm_log_counts = NULL,
-        norm_log_counts_pca = NULL,
-        mat2plot = NULL,
-        EFFECTS = NULL,
-        PCA_3D_BASENAME = "prot_pca_3d",
-        stats_df = NULL,
-        DE_genes_stats = NULL,
-        pheatmap_data_DE_genes = NULL,
-        patterns = NULL,
-        heatmaps_by_pattern = NULL,
-        New_clusters = NULL,
-        annot = NULL,
-        trinotate_main = NULL,
-
-        # Config parameters
-        PADJ_CUTOFF = NULL,
-        DESEQ_PADJ_CUTOFF = NULL,
-        LOG_FC_CUTOFF = NULL,
-        LINEAR_FC_CUTOFF = NULL,
-        NORM_METHOD = NULL,
-        GROUP = NULL
+    legacy <- build_shiny_legacy_base(
+        legacy_source = "Proteomics pipeline", # EXACT pre-refactor value
+        pca_basename = "prot_pca_3d"
     )
 
     # ============================================================
