@@ -68,13 +68,13 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) 
 
 write_limma_multimp_summary_legacy <- function(summary_df, config, out_dir) {
     dirs <- create_legacy_output_dirs(out_dir)
-    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag(config)))
+    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag_generic(config, "proteomics")))
 }
 
 write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, out_dir) {
     dirs <- create_legacy_output_dirs(out_dir)
     wide_df <- build_limma_results_multimp_wide(runs_de_tables = de_res$runs_de_tables, contrast_name = contrast_name)
-    fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag(config))
+    fname <- sprintf("limma_results_multimp_p%s.tsv", p_tag_generic(config, "proteomics"))
     save_tsv(wide_df, dirs$datasets, fname)
 }
 
@@ -149,12 +149,4 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         base$pass_any_contrast <- ifelse(rowSums(!is.na(pass_mat)) > 0, 1, NA)
     }
     base
-}
-
-p_tag <- function(config, default = "NA") {
-    p <- config$modes$proteomics$de$p_cutoff
-    if (is.null(p) || is.na(p)) {
-        return(default)
-    }
-    format(p, trim = TRUE, scientific = FALSE)
 }

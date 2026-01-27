@@ -17,7 +17,8 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     # optional mapping
     map_from <- cfg$id_columns$map_from
     map_to <- cfg$id_columns$map_to
-    if (!is.null(inputs$sample_map) && all(c(map_from, map_to) %in% names(inputs$sample_map))) {
+    if (!is.null(inputs$sample_map) && !is.null(map_from) && !is.null(map_to) &&
+        all(c(map_from, map_to) %in% names(inputs$sample_map))) {
         m <- setNames(inputs$sample_map[[map_to]], inputs$sample_map[[map_from]])
         mapped <- m[colnames(counts)]
         if (sum(!is.na(mapped)) > 0) colnames(counts)[!is.na(mapped)] <- unname(mapped[!is.na(mapped)])

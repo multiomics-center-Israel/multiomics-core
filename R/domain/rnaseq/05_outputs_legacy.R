@@ -18,7 +18,7 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir) {
 
     # 2) summary_df
     summary_df <- build_rnaseq_summary_df(de_res, config)
-    files <- c(files, save_tsv(summary_df, dirs$datasets, sprintf("deseq2_summary_p%s.tsv", p_tag(config))))
+    files <- c(files, save_tsv(summary_df, dirs$datasets, sprintf("deseq2_summary_p%s.tsv", p_tag_generic(config, "rna"))))
 
     # 3) final results TSV
     if (!is.null(inputs$contrasts)) {
@@ -90,13 +90,4 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
         base$pass_any_contrast <- NA
     }
     base
-}
-
-# Helpers if not available globally
-p_tag <- function(config, default = "NA") {
-    p_val <- config$modes$rna$de$padj_cutoff %||% config$modes$proteomics$de$p_cutoff
-    if (is.null(p_val) || is.na(p_val)) {
-        return(default)
-    }
-    format(p_val, trim = TRUE, scientific = FALSE)
 }

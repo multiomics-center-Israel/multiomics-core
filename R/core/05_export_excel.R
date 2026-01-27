@@ -40,12 +40,29 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     invisible(TRUE)
 }
 
+#' Get p-value cutoff tag for filename (generic for any mode)
+p_tag_generic <- function(config, mode, default = "NA") {
+    p <- config$modes[[mode]]$de$p_cutoff
+    if (is.null(p) || is.na(p)) {
+        return(default)
+    }
+    format(p, trim = TRUE, scientific = FALSE)
+}
+
 #' Write legacy-style Final_results excels (generic for any mode)
 write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, excel_order = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
-    # Helper p_tag (if not available globally, define locally or assume core loaded)
-    p_tag_val <- if (exists("p_tag")) p_tag(config) else "NA"
+    # Validate inputs
+    if (is.null(final_results)) {
+        stop("final_results is NULL. Cannot export to Excel. Check that DE analysis produced results.")
+    }
+    if (!is.data.frame(final_results)) {
+        stop("final_results must be a data.frame, got: ", class(final_results)[1])
+    }
+
+    # Get p-value cutoff tag for filename
+    p_tag_val <- p_tag_generic(config, mode)
 
     f_all <- file.path(out_dir, sprintf("Final_results_P_%s.xlsx", p_tag_val))
     f_de <- file.path(out_dir, sprintf("Final_results_DE_P_%s.xlsx", p_tag_val))
@@ -60,9 +77,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             fill_manual_cutoffs_formulas_legacy(wb, "Results", df, config, mode = mode)
         }
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+        path # Return the file path for targets tracking
     }
 
-    save_wb_results(final_results, f_all, with_cutoffs = isTRUE(with_cutoffs))
+    # Save full results and capture path
+    f_all_created <- save_wb_results(final_results, f_all, with_cutoffs = isTRUE(with_cutoffs))
 
     is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
     de_df <- final_results[is_de, , drop = FALSE]
@@ -74,8 +93,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         mat_de <- expr_for_de[de_ids, , drop = FALSE]
 
         if (nrow(mat_de) == 0) {
-            save_wb_results(mat_de, f_de, with_cutoffs = FALSE)
-            return(c(f_all, f_de))
+            f_de_created <- save_wb_results(mat_de, f_de, with_cutoffs = FALSE)
+            return(c(f_all_created, f_de_created))
         }
 
         if (!is.null(excel_order)) {
@@ -86,8 +105,22 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # (Skipping complex zscore logic for brevity or need to check if zscore_rows in core)
     }
 
-    save_wb_results(de_df, f_de, with_cutoffs = FALSE)
-    c(f_all, f_de)
+    # Save DE results and capture path
+    f_de_created <- save_wb_results(de_df, f_de, with_cutoffs = FALSE)
+    c(f_all_created, f_de_created)
+}
+
+#' Get standard column names for a contrast
+get_contrast_cols <- function(contrast) {
+    stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
+    list(
+        fc     = paste0("linearFC.imputs.", contrast),
+        p      = paste0("pvalue.imputs.", contrast),
+        padj   = paste0("padj.imputs.", contrast),
+        pass   = paste0("pass.imputs.", contrast),
+        updown = paste0("upDown.imputs.", contrast),
+        manual = paste0("manual_cutoffs.", contrast)
+    )
 }
 
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config, mode = "proteomics") {

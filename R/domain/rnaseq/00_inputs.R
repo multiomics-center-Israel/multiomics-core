@@ -54,7 +54,10 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
 
     for (nm in names(files)) {
         rel <- files[[nm]]
-        if (!nzchar(rel)) stop("Empty file path for ", nm)
+        # Skip NULL or empty file paths
+        if (is.null(rel) || !nzchar(rel)) {
+            next
+        }
         abs <- resolve_raw_path(config, rel)
         if (!file.exists(abs)) stop("File not found: ", abs)
         inputs[[nm]] <- read_table_auto(abs)

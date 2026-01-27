@@ -102,6 +102,23 @@ pipe_proteomics <- function() {
             format = "file"
         ),
 
+        # ---- build final results table ----
+        tar_target(
+            prot_final_results,
+            {
+                if (is.null(prot_inputs$contrasts) || is.null(prot_de_res$summary_df)) {
+                    NULL
+                } else {
+                    build_final_results_proteomics(
+                        pre          = prot_pre,
+                        summary_df   = prot_de_res$summary_df,
+                        contrasts_df = prot_inputs$contrasts,
+                        row_data     = prot_pre$row_data
+                    )
+                }
+            }
+        ),
+
         # ---- workspace snapshot (file) ----
         # Note: write_project_rdata might be in core/01_io.R or similar?
         # If not migrated yet, this might fail unless tar_source finds it in leftover files?
@@ -142,6 +159,24 @@ pipe_proteomics <- function() {
                 clustering_res = prot_clustering_obj, # Use clustering results
                 out_file = file.path(run_dir, "proteomics", "data_to_shiny_legacy_proteomics.rds")
             ),
+            format = "file"
+        ),
+
+        # Excel export (legacy format with cutoffs)
+        tar_target(
+            prot_excel_files,
+            {
+                write_final_results_excels_legacy_generic(
+                    final_results = prot_final_results,
+                    config = config,
+                    out_dir = file.path(run_dir, "proteomics", "Datasets"),
+                    mode = "proteomics",
+                    id_col = "FeatureID",
+                    expr_for_de = prot_pre$expr,
+                    with_cutoffs = TRUE,
+                    excel_order = prot_clustering_obj$excel_order
+                )
+            },
             format = "file"
         )
     )

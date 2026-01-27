@@ -35,7 +35,7 @@ pipe_rnaseq <- function() {
                 config = config,
                 pca_res = NULL, # Add PCA results when available
                 clustering_res = NULL, # Add clustering results when available
-                out_file = file.path(run_dir, "rna", "data_to_shiny_legacy.rds")
+                out_file = file.path(run_dir, "rna", "data_to_shiny_legacy_rna.rds")
             ),
             format = "file"
         ),

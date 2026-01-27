@@ -100,18 +100,6 @@ add_pass_any_contrast <- function(summary_df, pass_prefix = "^pass\\.imputs\\.",
     summary_df
 }
 
-get_contrast_cols <- function(contrast) {
-    stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
-    list(
-        fc     = paste0("linearFC.imputs.", contrast),
-        p      = paste0("pvalue.imputs.", contrast),
-        padj   = paste0("padj.imputs.", contrast),
-        pass   = paste0("pass.imputs.", contrast),
-        updown = paste0("upDown.imputs.", contrast),
-        manual = paste0("manual_cutoffs.", contrast)
-    )
-}
-
 #' Run limma differential analysis for proteomics with contrast support
 #'
 #' Fits a limma linear model on an imputed proteomics expression matrix and
