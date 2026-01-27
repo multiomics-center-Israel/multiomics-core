@@ -41,7 +41,7 @@ reports/
 data/
 
 # Local scratch scripts
-scripts/test_*.R
+scripts/*.R
 
 Rplots.pdf
 .lintr
