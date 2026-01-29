@@ -17,7 +17,30 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir) {
     files <- c(files, write_rnaseq_datasets_legacy(pre, config, out_dir))
 
     # 2) summary_df
-    summary_df <- build_rnaseq_summary_df(de_res, config)
+    summary_df <- build_rnaseq_summary_df(de_res$tables, config)
+    # Ensure ID column is named "Gene" for compatibility with generic export (which expects 'Gene')
+    if ("FeatureID" %in% names(summary_df) && !"Gene" %in% names(summary_df)) {
+        names(summary_df)[names(summary_df) == "FeatureID"] <- "Gene"
+    }
+
+    # ---- Validation / Logging ----
+    p_cutoff <- config$modes$rna$de$p_cutoff %||% 0.05
+    n_total <- nrow(summary_df)
+    n_sig <- if ("pass_any_contrast" %in% names(summary_df)) {
+        sum(summary_df$pass_any_contrast == 1, na.rm = TRUE)
+    } else {
+        NA
+    }
+
+    message(sprintf("[RNA-seq Export] Total Genes: %d", n_total))
+    message(sprintf("[RNA-seq Export] Significant DE Genes (p < %.2f): %s", p_cutoff, if (is.na(n_sig)) "N/A" else n_sig))
+
+    if (n_total == 0) {
+        warning("[RNA-seq Export] CRITICAL: Summary DataFrame is empty!")
+    } else if (!is.na(n_sig) && n_sig == 0) {
+        warning("[RNA-seq Export] No significant DE genes found across any contrast.")
+    }
+
     files <- c(files, save_tsv(summary_df, dirs$datasets, sprintf("deseq2_summary_p%s.tsv", p_tag_generic(config, "rna"))))
 
     # 3) final results TSV

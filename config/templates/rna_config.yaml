@@ -57,6 +57,12 @@ modes:
     # --------------------------------------------------------
     de:
       method: "deseq2"          # "deseq2" | "limma_voom" (example; depends what you implement)
+      
+      # DESeq2 mode: "default" uses modern DESeq2 defaults (betaPrior=FALSE)
+      #              "legacy" uses older behavior (betaPrior=TRUE, modelMatrixType="expanded")
+      #              Legacy mode may produce different results (not necessarily better)
+      deseq_mode: "default"     # "default" | "legacy"
+      
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
       use_adj: true

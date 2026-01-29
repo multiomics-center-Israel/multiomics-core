@@ -1,28 +1,36 @@
-#' Run DESeq2 differential expression
+#' Run DESeq2 differential expression analysis
 #'
-#' @param expr_filt Filtered counts matrix (integers)
-#' @param meta Metadata dataframe
-#' @param inputs rna inputs list (must contain contrasts)
-#' @param config full config
-run_deseq2_de <- function(expr_filt, meta, inputs, config) {
-    cfg <- config$modes$rna
-    contrasts_df <- inputs$contrasts
-
-    if (is.null(contrasts_df) || nrow(contrasts_df) == 0) {
-        stop("No contrasts provided for RNA DE.")
+#' @param counts Integer count matrix (genes x samples)
+#' @param meta Data frame with sample metadata
+#' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator
+#' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, etc.)
+#' @return List of DE result tables (one per contrast)
+#' @export
+run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
+    # Validate inputs
+    if (!is.matrix(counts) && !is.data.frame(counts)) {
+        stop("counts must be a matrix or data frame")
+    }
+    if (nrow(contrasts_df) == 0) {
+        stop("contrasts_df is empty")
     }
 
-    # Prepare counts (integer)
-    counts <- expr_filt
-    storage.mode(counts) <- "integer"
-
-    # Factor column
+    # Get factor column
     factor_col <- unique(contrasts_df$Factor)
-    if (length(factor_col) != 1) stop("RNA contrasts must use a single Factor.")
+    if (length(factor_col) != 1) {
+        stop("All contrasts must use the same factor column")
+    }
     factor_col <- factor_col[[1]]
 
-    if (!factor_col %in% colnames(meta)) stop("meta missing Factor column: ", factor_col)
+    if (!factor_col %in% colnames(meta)) {
+        stop(sprintf("Factor column '%s' not found in metadata", factor_col))
+    }
+
+    # Ensure factor
     meta[[factor_col]] <- as.factor(meta[[factor_col]])
+
+    # Store levels for validation
+    valid_levels <- levels(meta[[factor_col]])
 
     # DESeq2 dataset
     dds0 <- DESeq2::DESeqDataSetFromMatrix(
@@ -31,92 +39,144 @@ run_deseq2_de <- function(expr_filt, meta, inputs, config) {
         design    = stats::as.formula(paste0("~ ", factor_col))
     )
 
-    # Run DESeq
-    dds <- DESeq2::DESeq(dds0)
+    # DESeq2 mode selection from config
+    deseq_mode <- de_cfg$deseq_mode %||% "default"
+
+    if (deseq_mode == "legacy") {
+        # Legacy mode: betaPrior=TRUE, modelMatrixType="expanded"
+        # This matches the old "Neat RNA-Seq" pipeline behavior
+        message("Using DESeq2 LEGACY mode (betaPrior=TRUE, expanded model)")
+        dds <- DESeq2::DESeq(
+            dds0,
+            betaPrior = TRUE,
+            modelMatrixType = "expanded"
+        )
+    } else {
+        # Default mode: uses package defaults (betaPrior=FALSE in modern DESeq2)
+        message("Using DESeq2 DEFAULT mode (package defaults)")
+        dds <- DESeq2::DESeq(dds0)
+    }
 
     # Extract results per contrast
     tables <- list()
-    for (i in seq_len(nrow(contrasts_df))) {
+    for (i in 1:nrow(contrasts_df)) {
         cn <- contrasts_df$Contrast_name[i]
         num <- contrasts_df$Numerator[i]
         den <- contrasts_df$Denominator[i]
+        contrast <- c(contrasts_df[i, "Factor"], contrasts_df[i, "Numerator"], contrasts_df[i, "Denominator"])
+        # Level Validation
+        if (!num %in% valid_levels) {
+            warning(sprintf("Numerator '%s' not in factor levels for contrast '%s'. Skipping.", num, cn))
+            next
+        }
+        if (!den %in% valid_levels) {
+            warning(sprintf("Denominator '%s' not in factor levels for contrast '%s'. Skipping.", den, cn))
+            next
+        }
 
+        # Compute alpha cutoff
+        alpha_cut <- de_cfg$p_cutoff %||% de_cfg$padj_cutoff %||% 0.05
+
+        # Extract results
         res <- DESeq2::results(
             dds,
-            contrast = c(factor_col, num, den),
-            independentFiltering = FALSE,
-            cooksCutoff = FALSE
+            contrast = contrast,
+            alpha = alpha_cut
         )
 
+        # Convert to data frame with explicit column enforcement
         tab <- as.data.frame(res)
-        tab$FeatureID <- rownames(tab)
-        tab$Contrast <- cn
 
-        # Keep relevant columns
-        cols <- intersect(c("FeatureID", "Contrast", "log2FoldChange", "pvalue", "padj"), colnames(tab))
-        tab <- tab[, cols, drop = FALSE]
+        # CRITICAL: Ensure required columns exist (even if NA)
+        required_cols <- c("log2FoldChange", "pvalue", "padj")
+        for (col in required_cols) {
+            if (!col %in% colnames(tab)) {
+                warning(sprintf("Column '%s' missing in results for contrast '%s'. Adding as NA.", col, cn))
+                tab[[col]] <- NA_real_
+            }
+        }
+
+        # Add gene IDs
+        tab$FeatureID <- rownames(tab)
+
         tables[[cn]] <- tab
     }
 
-    list(
-        method = "DESeq2",
-        tables = tables,
-        contrasts = contrasts_df,
-        dds = dds, # Store for legacy export
-        info = list(
-            design    = paste0("~", factor_col),
-            n_genes   = nrow(dds),
-            n_samples = ncol(dds)
-        )
-    )
+    # Return both dds and tables for Shiny export
+    return(list(
+        dds = dds,
+        tables = tables
+    ))
 }
 
-build_rnaseq_summary_df <- function(de_res, config) {
-    stopifnot(is.list(de_res), !is.null(de_res$tables), !is.null(de_res$contrasts))
-    contrasts_df <- de_res$contrasts
 
-    de_cfg <- config$modes$rna$de %||% list()
-    padj_cutoff <- as.numeric(de_cfg$padj_cutoff %||% 0.05)
-    linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff %||% 1.5)
-
-    cn0 <- contrasts_df$Contrast_name[[1]]
-    tab0 <- de_res$tables[[cn0]]
-    if (is.null(tab0)) stop("RNA DE tables missing first contrast: ", cn0)
-
-    base_ids <- tab0$FeatureID
-    if (is.null(base_ids)) stop("FeatureID missing in first contrast table")
-
-    out <- data.frame(FeatureID = base_ids, stringsAsFactors = FALSE, check.names = FALSE)
-    pass_counts <- integer(length(base_ids))
-
-    for (i in seq_len(nrow(contrasts_df))) {
-        cn <- contrasts_df$Contrast_name[i]
-        tab <- de_res$tables[[cn]]
-
-        tab <- tab[match(base_ids, tab$FeatureID), , drop = FALSE]
-
-        log2fc <- tab$log2FoldChange
-        pval <- tab$pvalue
-        padj <- tab$padj
-
-        linearFC <- ifelse(is.na(log2fc), NA_real_, ifelse(log2fc > 0, 2^log2fc, -1 / (2^log2fc)))
-        linearRatio <- ifelse(is.na(log2fc), NA_real_, 2^log2fc)
-
-        pass_dir <- ifelse(!is.na(padj) & (padj <= padj_cutoff) & (abs(linearFC) >= linear_fc_cutoff),
-            ifelse(linearFC > 0, "up", "down"), NA_character_
-        )
-
-        out[[paste0("sum.pass.", cn)]] <- ifelse(is.na(pass_dir), 0, 1)
-        out[[paste0("pass.imputs.", cn)]] <- pass_dir
-        out[[paste0("linearRatio.imputs.", cn)]] <- signif(linearRatio, 6)
-        out[[paste0("linearFC.imputs.", cn)]] <- signif(linearFC, 6)
-        out[[paste0("pvalue.imputs.", cn)]] <- signif(pval, 6)
-        out[[paste0("padj.imputs.", cn)]] <- signif(padj, 6)
-
-        pass_counts <- pass_counts + ifelse(is.na(pass_dir), 0L, 1L)
+#' Build RNA-seq summary data frame from DESeq2 results
+#'
+#' @param de_tables List of DESeq2 result tables (output from run_deseq2_de)
+#' @param de_cfg DE configuration list
+#' @return Data frame with summary statistics and pass flags
+#' @export
+build_rnaseq_summary_df <- function(de_tables, de_cfg) {
+    if (length(de_tables) == 0) {
+        warning("No DE tables provided to build_rnaseq_summary_df")
+        return(data.frame())
     }
 
-    out$n_pass_contrasts <- pass_counts
-    out$pass_any_contrast <- ifelse(pass_counts > 0, 1L, NA_integer_)
-    out
+    # Extract thresholds from config
+    # CRITICAL FIX: Use p_cutoff (standard key) instead of padj_cutoff
+    padj_cutoff <- de_cfg$p_cutoff %||% de_cfg$padj_cutoff %||% 0.05
+    linear_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+
+    # Debug logging
+    message(sprintf(
+        "[build_rnaseq_summary_df] Using padj_cutoff=%.2f, linear_fc_cutoff=%.2f",
+        padj_cutoff, linear_fc_cutoff
+    ))
+
+    # Get all genes
+    all_genes <- unique(unlist(lapply(de_tables, function(x) x$FeatureID)))
+
+    # Initialize summary data frame
+    summary_df <- data.frame(
+        FeatureID = all_genes,
+        stringsAsFactors = FALSE
+    )
+
+    # Add columns for each contrast (using proteomics-compatible naming)
+    for (cn in names(de_tables)) {
+        tab <- de_tables[[cn]]
+
+        # Match genes
+        idx <- match(summary_df$FeatureID, tab$FeatureID)
+
+        # Add linearFC (convert log2FC to linear FC for compatibility)
+        fc_col <- paste0("linearFC.imputs.", cn)
+        summary_df[[fc_col]] <- 2^tab$log2FoldChange[idx]
+
+        # Add pvalue
+        pval_col <- paste0("pvalue.imputs.", cn)
+        summary_df[[pval_col]] <- tab$pvalue[idx]
+
+        # Add padj
+        padj_col <- paste0("padj.imputs.", cn)
+        summary_df[[padj_col]] <- tab$padj[idx]
+
+        # Add pass flag
+        pass_col <- paste0(cn, "_pass")
+        summary_df[[pass_col]] <- (
+            !is.na(tab$padj[idx]) &
+                tab$padj[idx] <= padj_cutoff &
+                abs(tab$log2FoldChange[idx]) >= log2(linear_fc_cutoff)
+        )
+    }
+
+    # Add pass_any_contrast column
+    pass_cols <- grep("_pass$", colnames(summary_df), value = TRUE)
+    if (length(pass_cols) > 0) {
+        summary_df$pass_any_contrast <- apply(summary_df[, pass_cols, drop = FALSE], 1, any, na.rm = TRUE)
+    } else {
+        summary_df$pass_any_contrast <- FALSE
+    }
+
+    return(summary_df)
 }
