@@ -7,7 +7,7 @@
 #' @param inputs  output of load_proteomics_inputs()
 #' @param config  full config
 #' @param verbose logical
-#' @return list(method, runs, runs_de_tables, summary_df)
+#' @return list(method, runs, runs_de_tables, summary_df, de_model)
 mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
     assert_pre_contract(pre, stage = "proteomics")
 
@@ -47,7 +47,8 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             imputations = imputations,
             runs = runs,
             runs_de_tables = runs_de_tables,
-            summary_df = summary_df
+            summary_df = summary_df,
+            de_model = runs[[1]]$fit2
         ))
     }
 

@@ -48,12 +48,22 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
 write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) {
     dirs <- create_legacy_output_dirs(out_dir)
     cfg <- config$modes$proteomics
+    id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
+
     files <- character(0)
 
-    files <- c(files, save_tsv(as.data.frame(pre$expr_filt, check.names = FALSE), dirs$datasets, "protein_log2_filtered_unimputed.tsv"))
+    # Helper: add ID column from rownames
+    add_id <- function(x) {
+        df <- as.data.frame(x, check.names = FALSE)
+        df <- cbind(TEMP_ID = rownames(df), df)
+        names(df)[1] <- id_col
+        df
+    }
+
+    files <- c(files, save_tsv(add_id(pre$expr_filt), dirs$datasets, "protein_log2_filtered_unimputed.tsv"))
 
     fname_imp <- sprintf("protein_log2_filtered_imputed_once_width_%s_shift_%s.tsv", cfg$imputation$width, cfg$imputation$downshift)
-    files <- c(files, save_tsv(as.data.frame(pre$expr_imp_single, check.names = FALSE), dirs$datasets, fname_imp))
+    files <- c(files, save_tsv(add_id(pre$expr_imp_single), dirs$datasets, fname_imp))
 
     if (!is.null(runs) && length(runs) > 0) {
         rep_dir <- file.path(dirs$datasets, "imputed_repetitions")
@@ -61,7 +71,7 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) 
         for (i in seq_along(runs)) {
             expr_i <- runs[[i]]$expr_imp
             if (is.null(expr_i)) next
-            files <- c(files, save_tsv(as.data.frame(expr_i, check.names = FALSE), rep_dir, sprintf("protein_log2_filtered_imputed_%02d.tsv", i)))
+            files <- c(files, save_tsv(add_id(expr_i), rep_dir, sprintf("protein_log2_filtered_imputed_%02d.tsv", i)))
         }
     }
     unique(files)

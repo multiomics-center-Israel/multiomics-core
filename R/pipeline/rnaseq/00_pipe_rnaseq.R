@@ -24,21 +24,6 @@ pipe_rnaseq <- function() {
             ),
             format = "file"
         ),
-
-        # Shiny legacy export (RDS file for old Shiny app)
-        tar_target(
-            rna_shiny_legacy,
-            save_data_to_shiny_legacy_rna(
-                pre = rna_pre,
-                de_res = rna_de_res,
-                inputs = rna_inputs,
-                config = config,
-                pca_res = NULL, # Add PCA results when available
-                clustering_res = NULL, # Add clustering results when available
-                out_file = file.path(run_dir, "rna", "data_to_shiny_legacy_rna.rds")
-            ),
-            format = "file"
-        ),
         tar_target(
             rna_qc_post_obj,
             mod_rnaseq_qc_post(
@@ -47,6 +32,28 @@ pipe_rnaseq <- function() {
                 config  = config,
                 out_dir = rna_out_dir
             )
+        ),
+        tar_target(
+            rna_clustering_obj,
+            mod_rnaseq_clustering(
+                pre = rna_pre,
+                de_res = rna_de_res,
+                config = config,
+                out_dir = rna_out_dir
+            )
+        ),
+        tar_target(
+            rna_shiny_legacy,
+            save_data_to_shiny_legacy_rna(
+                pre = rna_pre,
+                de_res = rna_de_res,
+                inputs = rna_inputs,
+                config = config,
+                pca_res = rna_qc_pre_obj,
+                clustering_res = rna_clustering_obj,
+                out_file = file.path(rna_out_dir, "data_to_shiny_legacy_rnaseq.rds")
+            ),
+            format = "file"
         )
     )
 }

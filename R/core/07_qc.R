@@ -108,7 +108,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   attr(p, "scores") <- scores # scores now include all metadata
   attr(p, "var_expl") <- var_expl
 
-  invisible(p)
+  p
 }
 
 
@@ -468,11 +468,24 @@ qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
 }
 
 # (Existing function, kept for completeness)
-imputed_histograms_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
+#' Imputation QC Summary (Wrapper)
+#'
+#' @param imputed Numeric matrix (imputed expression)
+#' @param imputed_flag Logical matrix (TRUE if imputed)
+#' @param cfg Config object (optional, for consistency but unused logic-wise)
+#' @param out_file Output file path
+#' @return ggplot object
+qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
   p <- plot_imputation_summary(imputed, imputed_flag)
+
   if (!is.null(out_file)) {
-    ggplot2::ggsave(out_file, plot = p, width = 12, height = 5, dpi = 150)
+    # Ensure correct extension if missing
+    if (!grepl("\\.png$", out_file, ignore.case = TRUE)) {
+      out_file <- paste0(out_file, ".png")
+    }
+    ggplot2::ggsave(out_file, plot = p, width = 12, height = 8, dpi = 150)
   }
+
   invisible(p)
 }
 

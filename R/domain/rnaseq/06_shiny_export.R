@@ -66,7 +66,9 @@ build_data_to_shiny_legacy_rna <- function(
     # ============================================================
     if (!is.null(pca_res)) {
         legacy$norm_log_counts_pca <- pca_res$norm_log_counts_pca %||% NULL
-        legacy$mat2plot <- pca_res$mat2plot %||% NULL
+        # NOTE: In legacy Proteomics, mat2plot IS PCA scores.
+        # But in legacy RNA-seq Neat script, mat2plot IS heatmap expression matrix.
+        # We will populate mat2plot logic below in the Heatmap section to match RNA legacy.
     } else {
         # Use message instead of warning to reduce noise when PCA is intentionally skipped
         message("pca_res is NULL; PCA plots will be disabled in Shiny")
@@ -90,7 +92,14 @@ build_data_to_shiny_legacy_rna <- function(
     # ============================================================
     # DE summary and stats
     # ============================================================
-    legacy$stats_df <- build_rnaseq_summary_df(de_res, config)
+    # Extract dds object (required by Shiny)
+    legacy$dds <- de_res$dds
+
+    legacy$stats_df <- build_rnaseq_summary_df(de_res$tables, config)
+    # Ensure ID column is named "Gene" (standard for RNA legacy Shiny)
+    if (!is.null(legacy$stats_df) && "FeatureID" %in% names(legacy$stats_df) && !"Gene" %in% names(legacy$stats_df)) {
+        names(legacy$stats_df)[names(legacy$stats_df) == "FeatureID"] <- "Gene"
+    }
 
     # Filter for significant genes
     if (!is.null(legacy$stats_df) && "pass_any_contrast" %in% colnames(legacy$stats_df)) {
@@ -101,9 +110,22 @@ build_data_to_shiny_legacy_rna <- function(
     }
 
     # ============================================================
-    # Heatmap data (NO EXTRACTION - only collect)
+    # Heatmap data (mat2plot)
     # ============================================================
-    # Robust: check multiple possible field names
+    # In legacy RNA script: mat2plot = filter_expression_matrix_by_gene_list(norm_log_counts, top_DE_genes)
+    if (!is.null(legacy$norm_log_counts) && !is.null(legacy$DE_genes_stats)) {
+        sig_genes <- legacy$DE_genes_stats$Gene
+        if (length(sig_genes) > 0) {
+            # Filter expression matrix
+            legacy$mat2plot <- legacy$norm_log_counts[rownames(legacy$norm_log_counts) %in% sig_genes, , drop = FALSE]
+        } else {
+            legacy$mat2plot <- NULL
+        }
+    } else {
+        legacy$mat2plot <- NULL
+    }
+
+    # Robust: check multiple possible field names for pre-computed heatmaps
     de_heat <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data %||% NULL
     clust_heat <- if (!is.null(clustering_res)) {
         clustering_res$pheatmap_data_DE_genes %||% clustering_res$pheatmap_data %||% NULL
@@ -116,9 +138,13 @@ build_data_to_shiny_legacy_rna <- function(
     # Clustering results (NO COMPUTATION - only collect)
     # ============================================================
     if (!is.null(clustering_res)) {
-        legacy$patterns <- clustering_res$patterns %||% NULL
-        legacy$heatmaps_by_pattern <- clustering_res$heatmaps %||% NULL
-        legacy$New_clusters <- clustering_res$clusters %||% NULL
+        # Check if objects are nested in 'objects' list (standard for modules)
+        # or at top level (legacy fallback)
+        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
+
+        if (!is.null(src$patterns)) legacy$patterns <- src$patterns
+        if (!is.null(src$heatmaps)) legacy$heatmaps_by_pattern <- src$heatmaps
+        if (!is.null(src$clusters)) legacy$New_clusters <- src$clusters
     }
 
     # ============================================================

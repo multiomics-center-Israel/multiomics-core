@@ -41,11 +41,12 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     # ---------- Imputation QC ----------
     if (!is.null(pre$imputation_qc) && !is.null(pre$imputation_qc$imputed_flag)) {
         f_imp_hist <- file.path(out_qc, "imputed_histograms_samples_summary.png")
-        p_imp <- plot_imputation_summary(
-            pre$expr_imp_single,
-            pre$imputation_qc$imputed_flag
+        p_imp <- qc_imputation_summary(
+            imputed      = pre$expr_imp_single,
+            imputed_flag = pre$imputation_qc$imputed_flag,
+            cfg          = cfg,
+            out_file     = f_imp_hist
         )
-        ggplot2::ggsave(f_imp_hist, plot = p_imp, width = 12, height = 8, dpi = 150)
         files <- c(files, f_imp_hist)
         plots$imputation_hist <- p_imp
 

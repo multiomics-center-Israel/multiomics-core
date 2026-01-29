@@ -72,7 +72,8 @@ build_data_to_shiny_legacy_proteomics <- function(
     # ============================================================
     if (!is.null(pca_res) && !is.null(pca_res$objects)) {
         legacy$norm_log_counts_pca <- pca_res$objects$norm_log_counts_pca %||% NULL
-        legacy$mat2plot <- pca_res$objects$mat2plot %||% NULL
+        # legacy$mat2plot was incorrectly assigning PCA scores here.
+        # We will calculate it below as the expression matrix of significant features.
         legacy$color <- pca_res$objects$color %||% NULL
         legacy$shape <- pca_res$objects$shape %||% NULL
     } else {
@@ -97,13 +98,41 @@ build_data_to_shiny_legacy_proteomics <- function(
     # ============================================================
     legacy$stats_df <- de_res$summary_df %||% NULL
 
-    # Filter for significant proteins
+    # Initialize DE_genes_stats (using list syntax to guarantee key exists)
+    legacy["DE_genes_stats"] <- list(NULL)
     if (!is.null(legacy$stats_df) && "pass_any_contrast" %in% colnames(legacy$stats_df)) {
         legacy$DE_genes_stats <- legacy$stats_df[
             !is.na(legacy$stats_df$pass_any_contrast) & legacy$stats_df$pass_any_contrast == 1, ,
             drop = FALSE
         ]
     }
+
+    # ============================================================
+    # Heatmap data matrix (mat2plot)
+    # ============================================================
+    # Initialize mat2plot (using list syntax to guarantee key exists even if NULL)
+    legacy["mat2plot"] <- list(NULL)
+    # Filter expression matrix by significant DE features (matches RNAseq logic)
+    if (!is.null(legacy$norm_log_counts) && !is.null(legacy$DE_genes_stats) && nrow(legacy$DE_genes_stats) > 0) {
+        # Use config-defined ID column (fallback to common column names)
+        prot_cfg <- config$modes$proteomics %||% list()
+        de_table_cfg <- prot_cfg$de_table %||% list()
+        id_col <- de_table_cfg$id_col %||% "FeatureID"
+
+        # Try configured column, then fallback to common alternatives
+        possible_cols <- c(id_col, "Protein", "FeatureID", "Protein.Group")
+        id_col_found <- intersect(possible_cols, colnames(legacy$DE_genes_stats))[1]
+
+        if (!is.na(id_col_found)) {
+            sig_ids <- legacy$DE_genes_stats[[id_col_found]]
+            legacy$mat2plot <- legacy$norm_log_counts[rownames(legacy$norm_log_counts) %in% sig_ids, , drop = FALSE]
+        }
+    }
+
+    # ============================================================
+    # DE Model (limma fit or DESeq2 dds)
+    # ============================================================
+    legacy$de_model <- de_res$de_model %||% NULL
 
     # ============================================================
     # Heatmap data (NO EXTRACTION - only collect)
@@ -186,6 +215,7 @@ build_data_to_shiny_legacy_proteomics <- function(
     expected_keys <- c(
         "legacy_version", "legacy_created_at", "legacy_source",
         "col_data", "contrasts_data", "dds", "norm_counts", "norm_log_counts",
+        "de_model", "mat2plot",
         "PCA_3D_BASENAME", # EFFECTS removed
         "stats_df", "DE_genes_stats",
         "trinotate_main",
@@ -194,10 +224,12 @@ build_data_to_shiny_legacy_proteomics <- function(
         "color", "shape" # Shiny aesthetics (column names)
     )
 
-    # Optional keys (populated only if source data available)
-    # - norm_log_counts_pca, mat2plot, var_expl (require pca_res$objects)
-    # - pheatmap_data_DE_genes, annot (may not exist)
-    # - patterns, heatmaps_by_pattern, New_clusters (require clustering_res)
+    # Defensive: ensure all expected keys exist (even if NULL)
+    for (k in expected_keys) {
+        if (!k %in% names(legacy)) {
+            legacy[k] <- list(NULL)
+        }
+    }
 
     missing_keys <- setdiff(expected_keys, names(legacy))
     if (length(missing_keys) > 0) {
