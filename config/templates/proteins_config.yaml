@@ -141,11 +141,6 @@ modes:
           k: null
           k_max: 20
           nstart: 25
-          outputs:
-            write_profiles_pdf: true
-            write_heatmap_png: true
-          use_group_averages: true
-
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8

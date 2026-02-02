@@ -166,68 +166,64 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         plots$pt_tbl <- clusters_tbl
 
         # (2) heatmap
-        if (isTRUE(cfg$clustering$steps$partition$outputs$write_heatmap_png %||% TRUE)) {
-            feats <- names(part_res$clusters)
-            mat <- as.matrix(pre$expr_imp_single)[feats, , drop = FALSE]
+        feats <- names(part_res$clusters)
+        mat <- as.matrix(pre$expr_imp_single)[feats, , drop = FALSE]
 
-            # Order rows: cluster then name
-            ord <- order(part_res$clusters, names(part_res$clusters))
-            mat_ord <- mat[ord, , drop = FALSE]
+        # Order rows: cluster then name
+        ord <- order(part_res$clusters, names(part_res$clusters))
+        mat_ord <- mat[ord, , drop = FALSE]
 
-            f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
+        f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
 
-            # Using Core Plotter directly for custom ordering
-            p_part <- plot_heatmap_core(
-                expr_mat       = mat_ord,
-                annotation_col = annot,
-                title          = sprintf("Partition clustering (k=%d) on DE features (n=%d)", part_res$k, nrow(mat_ord)),
-                scale_rows     = TRUE,
-                cluster_rows   = FALSE,
-                cluster_cols   = TRUE,
-                max_rows       = NULL
-            )
+        # Using Core Plotter directly for custom ordering
+        p_part <- plot_heatmap_core(
+            expr_mat       = mat_ord,
+            annotation_col = annot,
+            title          = sprintf("Partition clustering (k=%d) on DE features (n=%d)", part_res$k, nrow(mat_ord)),
+            scale_rows     = TRUE,
+            cluster_rows   = FALSE,
+            cluster_cols   = TRUE,
+            max_rows       = NULL
+        )
 
-            save_heatmap_to_file(p_part, f_hm)
-            plots$partition_heatmap <- p_part
-            written <- c(written, f_hm)
-        }
+        save_heatmap_to_file(p_part, f_hm)
+        plots$partition_heatmap <- p_part
+        written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        if (isTRUE(cfg$clustering$steps$partition$outputs$write_profiles_pdf %||% TRUE)) {
-            # Prepare data from Z-scored Group Means (returned by the clustering func)
-            zgm <- part_res$z_group_means
-            clv <- part_res$clusters[rownames(zgm)]
+        # Prepare data from Z-scored Group Means (returned by the clustering func)
+        zgm <- part_res$z_group_means
+        clv <- part_res$clusters[rownames(zgm)]
 
-            k <- part_res$k
-            groups <- colnames(zgm)
+        k <- part_res$k
+        groups <- colnames(zgm)
 
-            prof_list <- lapply(1:k, function(ci) {
-                rows <- which(clv == ci)
-                sub <- zgm[rows, , drop = FALSE]
-                data.frame(
-                    cluster = ci,
-                    group = groups,
-                    mean = colMeans(sub, na.rm = TRUE),
-                    sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                    n_features = nrow(sub),
-                    stringsAsFactors = FALSE
-                )
-            })
+        prof_list <- lapply(1:k, function(ci) {
+            rows <- which(clv == ci)
+            sub <- zgm[rows, , drop = FALSE]
+            data.frame(
+                cluster = ci,
+                group = groups,
+                mean = colMeans(sub, na.rm = TRUE),
+                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
+                n_features = nrow(sub),
+                stringsAsFactors = FALSE
+            )
+        })
 
-            prof <- do.call(rbind, prof_list)
+        prof <- do.call(rbind, prof_list)
 
-            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            p_prof <- plot_cluster_profiles(prof, x_label = cfg$effects$color)
+        f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
+        p_prof <- plot_cluster_profiles(prof, x_label = cfg$effects$color)
 
-            # Dynamic height
-            n_clusters <- length(unique(prof$cluster))
-            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
+        # Dynamic height
+        n_clusters <- length(unique(prof$cluster))
+        calc_height <- max(6, ceiling(n_clusters / 2) * 3)
 
-            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
+        ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
 
-            written <- c(written, f_pdf)
-            plots$cluster_profiles <- p_prof
-        }
+        written <- c(written, f_pdf)
+        plots$cluster_profiles <- p_prof
 
         # --- FIX: Export Legacy Data (Moved INSIDE the IF block) ---
         # This must be here because part_res and part_dir are only defined here.

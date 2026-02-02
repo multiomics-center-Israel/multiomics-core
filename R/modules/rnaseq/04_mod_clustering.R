@@ -202,99 +202,93 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_tbl)
 
         # (2) heatmap
-        write_hm <- cfg$clustering$steps$partition$outputs$write_heatmap_png
-        if (is.null(write_hm) || isTRUE(write_hm)) {
-            feats <- names(part_res$clusters)
-            # Use intersection to be safe
-            valid_feats <- intersect(feats, rownames(expr_mat))
-            mat <- expr_mat[valid_feats, , drop = FALSE]
+        feats <- names(part_res$clusters)
+        # Use intersection to be safe
+        valid_feats <- intersect(feats, rownames(expr_mat))
+        mat <- expr_mat[valid_feats, , drop = FALSE]
 
-            ord <- order(part_res$clusters[valid_feats], valid_feats)
-            mat_ord <- mat[ord, , drop = FALSE]
+        ord <- order(part_res$clusters[valid_feats], valid_feats)
+        mat_ord <- mat[ord, , drop = FALSE]
 
-            # Task 6: Multi-column annotations
-            annot_cols_config <- cfg$effects$heatmap_annotations %||% NULL
-            if (!is.null(annot_cols_config)) {
-                annot_col <- pre$meta[, annot_cols_config, drop = FALSE]
-                rownames(annot_col) <- pre$meta[[cfg$effects$samples]]
-                annot_col <- annot_col[colnames(mat_ord), , drop = FALSE]
-            } else {
-                # Fallback to single column
-                annot_col <- annot[colnames(mat_ord), , drop = FALSE]
-            }
-
-            # Task 6: Row annotations showing cluster assignments
-            clusters_ordered <- part_res$clusters[rownames(mat_ord)]
-            annot_row <- data.frame(
-                Cluster = factor(paste0("C", clusters_ordered)),
-                row.names = rownames(mat_ord)
-            )
-
-            # Task 6: Compute gaps_row for visual cluster separation
-            cluster_sizes <- table(clusters_ordered)[unique(clusters_ordered)]
-            gaps_row <- cumsum(cluster_sizes)[-length(cluster_sizes)]
-
-            f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
-
-            p_part <- plot_heatmap_core(
-                expr_mat         = mat_ord,
-                annotation_col   = annot_col,
-                annotation_row   = annot_row,
-                gaps_row         = gaps_row,
-                title            = sprintf("Partition clustering (k=%d)", part_res$k),
-                scale_rows       = TRUE,
-                cluster_rows     = FALSE,
-                cluster_cols     = TRUE,
-                max_rows         = NULL
-            )
-            save_heatmap_to_file(p_part, f_hm)
-            written <- c(written, f_hm)
+        # Task 6: Multi-column annotations
+        annot_cols_config <- cfg$effects$heatmap_annotations %||% NULL
+        if (!is.null(annot_cols_config)) {
+            annot_col <- pre$meta[, annot_cols_config, drop = FALSE]
+            rownames(annot_col) <- pre$meta[[cfg$effects$samples]]
+            annot_col <- annot_col[colnames(mat_ord), , drop = FALSE]
+        } else {
+            # Fallback to single column
+            annot_col <- annot[colnames(mat_ord), , drop = FALSE]
         }
 
+        # Task 6: Row annotations showing cluster assignments
+        clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+        annot_row <- data.frame(
+            Cluster = factor(paste0("C", clusters_ordered)),
+            row.names = rownames(mat_ord)
+        )
+
+        # Task 6: Compute gaps_row for visual cluster separation
+        cluster_sizes <- table(clusters_ordered)[unique(clusters_ordered)]
+        gaps_row <- cumsum(cluster_sizes)[-length(cluster_sizes)]
+
+        f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
+
+        p_part <- plot_heatmap_core(
+            expr_mat         = mat_ord,
+            annotation_col   = annot_col,
+            annotation_row   = annot_row,
+            gaps_row         = gaps_row,
+            title            = sprintf("Partition clustering (k=%d)", part_res$k),
+            scale_rows       = TRUE,
+            cluster_rows     = FALSE,
+            cluster_cols     = TRUE,
+            max_rows         = NULL
+        )
+        save_heatmap_to_file(p_part, f_hm)
+        written <- c(written, f_hm)
+
         # (3) cluster profiles pdf
-        write_prof <- cfg$clustering$steps$partition$outputs$write_profiles_pdf
-        if (is.null(write_prof) || isTRUE(write_prof)) {
-            zgm <- part_res$z_group_means
-            clv <- part_res$clusters[rownames(zgm)]
-            k <- part_res$k
-            groups <- colnames(zgm)
+        zgm <- part_res$z_group_means
+        clv <- part_res$clusters[rownames(zgm)]
+        k <- part_res$k
+        groups <- colnames(zgm)
 
-            prof_list <- lapply(1:k, function(ci) {
-                rows <- which(clv == ci)
-                sub <- zgm[rows, , drop = FALSE]
-                if (nrow(sub) == 0) {
-                    return(NULL)
-                } # Safety
-                data.frame(
-                    cluster = ci,
-                    group = groups,
-                    mean = colMeans(sub, na.rm = TRUE),
-                    sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                    n_features = nrow(sub),
-                    stringsAsFactors = FALSE
-                )
-            })
+        prof_list <- lapply(1:k, function(ci) {
+            rows <- which(clv == ci)
+            sub <- zgm[rows, , drop = FALSE]
+            if (nrow(sub) == 0) {
+                return(NULL)
+            } # Safety
+            data.frame(
+                cluster = ci,
+                group = groups,
+                mean = colMeans(sub, na.rm = TRUE),
+                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
+                n_features = nrow(sub),
+                stringsAsFactors = FALSE
+            )
+        })
 
-            # Filter NULLs
-            prof_list <- Filter(Negate(is.null), prof_list)
+        # Filter NULLs
+        prof_list <- Filter(Negate(is.null), prof_list)
 
-            if (length(prof_list) > 0) {
-                prof <- do.call(rbind, prof_list)
+        if (length(prof_list) > 0) {
+            prof <- do.call(rbind, prof_list)
 
-                f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-                eff_col_name <- eff_color %||% "Group"
+            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
+            eff_col_name <- eff_color %||% "Group"
 
-                # Check for NA group names
-                if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
+            # Check for NA group names
+            if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
 
-                p_prof <- plot_cluster_profiles(prof, x_label = eff_col_name)
+            p_prof <- plot_cluster_profiles(prof, x_label = eff_col_name)
 
-                n_clusters <- length(unique(prof$cluster))
-                calc_height <- max(6, ceiling(n_clusters / 2) * 3)
+            n_clusters <- length(unique(prof$cluster))
+            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
 
-                ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
-                written <- c(written, f_pdf)
-            }
+            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
+            written <- c(written, f_pdf)
         }
     }
 

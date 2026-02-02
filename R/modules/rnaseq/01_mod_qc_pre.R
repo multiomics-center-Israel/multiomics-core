@@ -39,13 +39,6 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     max_samples_heatmaps <- thresh$max_samples_for_heatmaps %||% 120
     max_samples_expr_heatmap <- thresh$max_samples_for_expr_heatmap %||% 60
 
-    # --- Get optional flags ---
-    generate_pca_1v3 <- if (!is.null(cfg$qc)) {
-        isTRUE(cfg$qc$generate_pca_1v3)
-    } else {
-        FALSE
-    }
-
     n_samples <- nrow(meta)
 
     # --- Parse color configuration (string OR array) ---
@@ -94,29 +87,26 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         }
     }
 
-    # PCA 1v3 (optional, all colors)
-    should_generate_pca1v3 <- !isTRUE(adaptive_enabled) || isTRUE(generate_pca_1v3)
-    if (should_generate_pca1v3) {
-        for (i in seq_along(color_values)) {
-            color_var <- color_values[i]
-            cfg_temp <- cfg
-            cfg_temp$effects$color <- color_var
+    # PCA 1v3 (always generated, all colors)
+    for (i in seq_along(color_values)) {
+        color_var <- color_values[i]
+        cfg_temp <- cfg
+        cfg_temp$effects$color <- color_var
 
-            if (i == 1) {
-                f_pca13 <- file.path(out_qc, "PCA_PC1.vs.PC3.png")
-            } else {
-                safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
-                f_pca13 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC3_by_%s.png", safe_name))
-            }
+        if (i == 1) {
+            f_pca13 <- file.path(out_qc, "PCA_PC1.vs.PC3.png")
+        } else {
+            safe_name <- gsub("[^A-Za-z0-9_]", "_", color_var)
+            f_pca13 <- file.path(out_qc, sprintf("PCA_PC1.vs.PC3_by_%s.png", safe_name))
+        }
 
-            p13 <- qc_pca_scatter(mat, meta, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
-            files <- c(files, f_pca13)
+        p13 <- qc_pca_scatter(mat, meta, cfg_temp, pcs = c(1, 3), out_file = f_pca13)
+        files <- c(files, f_pca13)
 
-            if (i == 1) {
-                plots$pca_1_3 <- p13
-            } else {
-                plots[[sprintf("pca_1_3_by_%s", color_var)]] <- p13
-            }
+        if (i == 1) {
+            plots$pca_1_3 <- p13
+        } else {
+            plots[[sprintf("pca_1_3_by_%s", color_var)]] <- p13
         }
     }
 
