@@ -12,7 +12,17 @@ pipe_rnaseq <- function() {
             )
         ),
         tar_target(rna_de_res, mod_rnaseq_de(rna_pre, rna_inputs, config, verbose = TRUE)),
-        # Legacy outputs (TSV files)
+        # Clustering (run before outputs to provide excel_order)
+        tar_target(
+            rna_clustering_obj,
+            mod_rnaseq_clustering(
+                pre = rna_pre,
+                de_res = rna_de_res,
+                config = config,
+                out_dir = rna_out_dir
+            )
+        ),
+        # Legacy outputs (TSV files) - now receives clustering_res
         tar_target(
             rna_outputs_legacy,
             write_rnaseq_outputs_legacy(
@@ -20,7 +30,8 @@ pipe_rnaseq <- function() {
                 de_res = rna_de_res,
                 inputs = rna_inputs,
                 config = config,
-                out_dir = file.path(run_dir, "rna")
+                out_dir = file.path(run_dir, "rna"),
+                clustering_res = rna_clustering_obj
             ),
             format = "file"
         ),
@@ -30,15 +41,6 @@ pipe_rnaseq <- function() {
                 pre     = rna_pre,
                 de_res  = rna_de_res,
                 config  = config,
-                out_dir = rna_out_dir
-            )
-        ),
-        tar_target(
-            rna_clustering_obj,
-            mod_rnaseq_clustering(
-                pre = rna_pre,
-                de_res = rna_de_res,
-                config = config,
                 out_dir = rna_out_dir
             )
         ),

@@ -18,6 +18,14 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     cfg <- config$modes$rna
     cl <- cfg$clustering
 
+    # Extract primary color (handle array config for multi-color PCA)
+    color_config <- cfg$effects$color
+    if (!is.null(color_config)) {
+        eff_color <- as.character(color_config[[1]])
+    } else {
+        eff_color <- NULL
+    }
+
     # Initialize Objects for legacy Shiny export (MUST exist)
     objects <- list(
         patterns = NULL,
@@ -37,7 +45,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
 
     # 2. Validate prerequisites explicitly
     # Check 1: Effects definition
-    if (is.null(cfg$effects$color) || is.null(cfg$effects$samples)) {
+    if (is.null(eff_color) || is.null(cfg$effects$samples)) {
         warning("[rnaseq clustering] skipped: effects$color or effects$samples missing in config.")
         return(list(plots = plots, files = written, objects = objects))
     }
@@ -67,15 +75,15 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
 
     # ---- build annotation_col for heatmaps using effects ----
     annot <- NULL
-    if (cfg$effects$color %in% colnames(pre$meta)) {
+    if (eff_color %in% colnames(pre$meta)) {
         annot <- data.frame(
-            Condition = pre$meta[[cfg$effects$color]],
+            Condition = pre$meta[[eff_color]],
             row.names = pre$meta[[cfg$effects$samples]]
         )
     }
 
     # Rebuild summary_df to identify DE features
-    summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, config), error = function(e) NULL)
+    summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, config$modes$rna$de), error = function(e) NULL)
     if (is.null(summary_df)) {
         warning("[rnaseq clustering] skipped: Could not build RNA summary_df.")
         return(list(plots = plots, files = written, objects = objects))
@@ -118,15 +126,29 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             zscore_mat  = z_de
         )
 
+        # Build DE pattern row annotations (up/down per contrast)
+        de_cfg <- config$modes$rna$de %||% list()
+        p_cutoff <- de_cfg$p_cutoff %||% 0.05
+        lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+        log2fc_cutoff <- log2(lin_fc_cutoff)
+
+        row_annot <- build_de_row_annotations(
+            summary_df    = summary_df,
+            feature_ids   = de_features,
+            p_cutoff      = p_cutoff,
+            log2fc_cutoff = log2fc_cutoff
+        )
+
         # Heatmap
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
         p_cluster <- wrap_clustering_heatmap(
-            expr_mat    = expr_mat,
-            meta        = pre$meta,
-            cfg         = cfg,
-            feature_ids = de_features,
-            ordering    = hc_res$ordering,
-            out_file    = f_hm
+            expr_mat       = expr_mat,
+            meta           = pre$meta,
+            cfg            = cfg,
+            feature_ids    = de_features,
+            ordering       = hc_res$ordering,
+            annotation_row = row_annot,
+            out_file       = f_hm
         )
         written <- c(written, f_hm)
         plots$p_cluster <- p_cluster
@@ -190,16 +212,40 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             ord <- order(part_res$clusters[valid_feats], valid_feats)
             mat_ord <- mat[ord, , drop = FALSE]
 
+            # Task 6: Multi-column annotations
+            annot_cols_config <- cfg$effects$heatmap_annotations %||% NULL
+            if (!is.null(annot_cols_config)) {
+                annot_col <- pre$meta[, annot_cols_config, drop = FALSE]
+                rownames(annot_col) <- pre$meta[[cfg$effects$samples]]
+                annot_col <- annot_col[colnames(mat_ord), , drop = FALSE]
+            } else {
+                # Fallback to single column
+                annot_col <- annot[colnames(mat_ord), , drop = FALSE]
+            }
+
+            # Task 6: Row annotations showing cluster assignments
+            clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+            annot_row <- data.frame(
+                Cluster = factor(paste0("C", clusters_ordered)),
+                row.names = rownames(mat_ord)
+            )
+
+            # Task 6: Compute gaps_row for visual cluster separation
+            cluster_sizes <- table(clusters_ordered)[unique(clusters_ordered)]
+            gaps_row <- cumsum(cluster_sizes)[-length(cluster_sizes)]
+
             f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
 
             p_part <- plot_heatmap_core(
-                expr_mat       = mat_ord,
-                annotation_col = annot,
-                title          = sprintf("Partition clustering (k=%d)", part_res$k),
-                scale_rows     = TRUE,
-                cluster_rows   = FALSE,
-                cluster_cols   = TRUE,
-                max_rows       = NULL
+                expr_mat         = mat_ord,
+                annotation_col   = annot_col,
+                annotation_row   = annot_row,
+                gaps_row         = gaps_row,
+                title            = sprintf("Partition clustering (k=%d)", part_res$k),
+                scale_rows       = TRUE,
+                cluster_rows     = FALSE,
+                cluster_cols     = TRUE,
+                max_rows         = NULL
             )
             save_heatmap_to_file(p_part, f_hm)
             written <- c(written, f_hm)
@@ -236,7 +282,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
                 prof <- do.call(rbind, prof_list)
 
                 f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-                eff_col_name <- cfg$effects$color %||% "Group"
+                eff_col_name <- eff_color %||% "Group"
 
                 # Check for NA group names
                 if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"

@@ -82,7 +82,19 @@ build_data_to_shiny_legacy_rna <- function(
     rna <- modes$rna %||% list()
     effects <- rna$effects %||% list()
 
+    # Extract primary color (handle array config for multi-color PCA)
+    if (!is.null(effects$color)) {
+        if (length(effects$color) > 1) {
+            primary_color <- as.character(effects$color[[1]])
+        } else {
+            primary_color <- as.character(effects$color[[1]])
+        }
+    } else {
+        primary_color <- NULL
+    }
+
     if (!is.null(effects$shape) && !is.null(effects$color)) {
+        # EFFECTS contains all aesthetic variables (shape + all colors)
         legacy$EFFECTS <- c(effects$shape, effects$color)
     } else {
         warning("EFFECTS not fully defined in config; setting to NULL")
@@ -95,7 +107,7 @@ build_data_to_shiny_legacy_rna <- function(
     # Extract dds object (required by Shiny)
     legacy$dds <- de_res$dds
 
-    legacy$stats_df <- build_rnaseq_summary_df(de_res$tables, config)
+    legacy$stats_df <- build_rnaseq_summary_df(de_res$tables, config$modes$rna$de)
     # Ensure ID column is named "Gene" (standard for RNA legacy Shiny)
     if (!is.null(legacy$stats_df) && "FeatureID" %in% names(legacy$stats_df) && !"Gene" %in% names(legacy$stats_df)) {
         names(legacy$stats_df)[names(legacy$stats_df) == "FeatureID"] <- "Gene"
@@ -169,7 +181,8 @@ build_data_to_shiny_legacy_rna <- function(
     legacy$LOG_FC_CUTOFF <- log2(linear_fc)
 
     legacy$NORM_METHOD <- norm_cfg$method %||% "TMMlogCPM"
-    legacy$GROUP <- effects$color %||% NULL
+    # GROUP is the primary grouping variable (first color only)
+    legacy$GROUP <- primary_color %||% NULL
 
     # ============================================================
     # Dimension validation (sanity check)

@@ -1,0 +1,233 @@
+================================================================================
+METADATA PROFILER: TEST SUITE STRUCTURE
+================================================================================
+
+📁 Project Structure
+────────────────────────────────────────────────────────────────────────────
+multiomics-core/
+│
+├── R/core/
+│   └── 08_metadata_profile.R ⭐ NEW
+│       ├── assess_metadata_complexity()
+│       └── print_metadata_profile()
+│
+├── tests/
+│   ├── testthat/
+│   │   ├── helper.R (existing - sources all R files)
+│   │   ├── test-normalize.R (existing)
+│   │   └── test-metadata_profile.R ⭐ NEW (28 tests)
+│   │
+│   ├── run_profiler_tests.R ⭐ NEW
+│   ├── PROFILER_TESTS.md ⭐ NEW
+│   ├── TESTING_GUIDE.md ⭐ NEW
+│   └── TEST_STRUCTURE.txt (this file)
+│
+└── PROFILER_DELIVERY.md ⭐ NEW
+
+
+================================================================================
+TEST CATEGORIES (28 tests total)
+================================================================================
+
+┌─ BASIC FUNCTIONALITY (5 tests)
+│  ├─ ✓ Returns expected structure
+│  ├─ ✓ Identifies simple 2-group design
+│  ├─ ✓ Identifies moderate complexity
+│  ├─ ✓ Identifies complex design
+│  └─ ✓ Validates required fields
+│
+├─ BATCH DETECTION (2 tests)
+│  ├─ ✓ Detects batch/lane/run/plate columns
+│  └─ ✓ No false positives
+│
+├─ ID COLUMN EXCLUSION (1 test)
+│  └─ ✓ Excludes high-uniqueness columns (>90%)
+│
+├─ ANNOTATION SELECTION (5 tests)
+│  ├─ ✓ Prioritizes primary grouping
+│  ├─ ✓ Includes batch columns
+│  ├─ ✓ Respects max_annotation_cols threshold
+│  ├─ ✓ Orders categorical before numeric
+│  └─ ✓ Excludes sample IDs
+│
+├─ AESTHETIC SUGGESTIONS (4 tests)
+│  ├─ ✓ Suggests primary for color
+│  ├─ ✓ Suggests batch for shape (low cardinality)
+│  ├─ ✓ Skips shape for high cardinality
+│  └─ ✓ Respects configured shape
+│
+├─ PLOT GATING (3 tests)
+│  ├─ ✓ Respects sample count thresholds
+│  ├─ ✓ Skips heatmaps for large datasets
+│  └─ ✓ Always enables core plots
+│
+├─ EDGE CASES (5 tests)
+│  ├─ ✓ No categorical columns
+│  ├─ ✓ Missing color column
+│  ├─ ✓ All ID columns
+│  ├─ ✓ Single sample
+│  └─ ✓ Minimal metadata
+│
+├─ THRESHOLD OVERRIDES (2 tests)
+│  ├─ ✓ Custom thresholds work
+│  └─ ✓ Partial specs merge with defaults
+│
+├─ PRINT FUNCTION (1 test)
+│  └─ ✓ No crashes
+│
+└─ REALISTIC SCENARIOS (3 tests)
+   ├─ ✓ Case-control (simple)
+   ├─ ✓ Time-course with batches (moderate/complex)
+   └─ ✓ Drug screen (very complex)
+
+
+================================================================================
+MOCK DATA GENERATORS
+================================================================================
+
+Function                     Samples  Complexity  Use Case
+──────────────────────────────────────────────────────────────────────────
+make_simple_meta()           20       Simple      2-group comparison
+make_moderate_meta()         30       Moderate    3-5 groups, 2-3 factors
+make_complex_meta()          60       Complex     >5 groups, batch structure
+make_meta_with_ids()         20       N/A         ID exclusion testing
+make_minimal_meta()          15       Edge        Numeric-only metadata
+
+
+================================================================================
+HOW TO RUN TESTS
+================================================================================
+
+From RStudio / R Console:
+─────────────────────────────────────────────────────────────────────────────
+  # All tests
+  testthat::test_file("tests/testthat/test-metadata_profile.R")
+
+  # With runner script
+  source("tests/run_profiler_tests.R")
+
+  # Specific category
+  testthat::test_file("tests/testthat/test-metadata_profile.R",
+                      filter = "batch")
+
+  # Interactive debugging
+  source("R/core/08_metadata_profile.R")
+  meta <- make_simple_meta(20)
+  effects <- list(color = "Treatment", samples = "SampleID")
+  prof <- assess_metadata_complexity(meta, effects)
+  print_metadata_profile(prof)
+
+
+================================================================================
+WHAT GETS TESTED
+================================================================================
+
+INPUT:
+  ┌─────────────────┐
+  │ Sample Metadata │  (data.frame with rownames = sample IDs)
+  └─────────────────┘
+          +
+  ┌─────────────────┐
+  │ Effects Config  │  (list: color, shape, samples)
+  └─────────────────┘
+          +
+  ┌─────────────────┐
+  │ Thresholds      │  (optional: max samples, max levels, etc.)
+  └─────────────────┘
+
+          ↓
+
+  assess_metadata_complexity()
+
+          ↓
+
+OUTPUT:
+  ┌──────────────────────────────────────┐
+  │ Profile List                          │
+  │  ├─ n_samples, n_vars                │
+  │  ├─ primary_col, n_groups_primary    │
+  │  ├─ is_simple_2group                 │ ← TESTED
+  │  ├─ has_batch_like, batch_cols       │ ← TESTED
+  │  ├─ complexity_label                 │ ← TESTED
+  │  ├─ suggested_mappings (color/shape) │ ← TESTED
+  │  ├─ annotation_cols (for heatmaps)   │ ← TESTED
+  │  ├─ plots (gating decisions)         │ ← TESTED
+  │  └─ thresholds (stored config)       │ ← TESTED
+  └──────────────────────────────────────┘
+
+
+================================================================================
+TEST ASSERTIONS USED
+================================================================================
+
+Structure:
+  • expect_type(prof, "list")
+  • expect_true("plots" %in% names(prof))
+
+Complexity:
+  • expect_equal(prof$complexity_label, "simple")
+  • expect_true(prof$is_simple_2group)
+  • expect_equal(prof$n_groups_primary, 2)
+
+Batch Detection:
+  • expect_true(prof$has_batch_like)
+  • expect_true("Batch" %in% prof$batch_cols)
+
+Annotations:
+  • expect_true("Condition" %in% prof$annotation_cols)
+  • expect_equal(prof$annotation_cols[1], "PrimaryColumn")
+  • expect_lte(length(prof$annotation_cols), 5)
+
+Plot Gating:
+  • expect_true(prof$plots$pca_1v2)
+  • expect_false(prof$plots$expr_heatmap)
+
+Thresholds:
+  • expect_equal(prof$thresholds$max_samples_for_heatmaps, 120)
+
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+✅ Step 1: RUN THE TESTS
+   testthat::test_file("tests/testthat/test-metadata_profile.R")
+   → Expect: 28 tests pass
+
+✅ Step 2: TEST WITH YOUR DATA
+   source("R/core/08_metadata_profile.R")
+   meta <- read.csv("your/metadata.csv", row.names = 1)
+   prof <- assess_metadata_complexity(meta, effects)
+   print_metadata_profile(prof)
+
+✅ Step 3: ADD CUSTOM TESTS (if needed)
+   Add test for your specific metadata patterns
+
+✅ Step 4: INTEGRATE INTO PIPELINE
+   Follow implementation plan:
+   • Modify R/domain/rnaseq/03_preprocess.R
+   • Update R/modules/rnaseq/01_mod_qc_pre.R
+   • Refactor R/core/07_qc.R heatmap functions
+   • Add config schema
+
+
+================================================================================
+DOCUMENTATION FILES
+================================================================================
+
+📄 PROFILER_DELIVERY.md     Main summary (what was delivered, quick start)
+📄 tests/PROFILER_TESTS.md  Detailed test documentation
+📄 tests/TESTING_GUIDE.md   How to run tests (Windows-friendly)
+📄 tests/TEST_STRUCTURE.txt This file (visual overview)
+
+
+================================================================================
+QUESTIONS?
+================================================================================
+
+• How to run tests?          → tests/TESTING_GUIDE.md
+• What gets tested?          → tests/PROFILER_TESTS.md
+• What was delivered?        → PROFILER_DELIVERY.md
+• How does profiler work?    → R/core/08_metadata_profile.R (comments)
+
+================================================================================

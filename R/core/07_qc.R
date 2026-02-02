@@ -100,7 +100,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   )
 
   if (!is.null(out_file)) {
-    ggplot2::ggsave(out_file, plot = p, width = 5, height = 5)
+    ggplot2::ggsave(out_file, plot = p, width = 6, height = 5)
   }
 
   # Attach PCA results as attributes (backward compatible - plot is still returned)
@@ -128,6 +128,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   sample_col <- eff$samples
   color_col <- eff$color
   shape_col <- eff$shape
+  label_col <- eff$label
   if (is.null(shape_col)) shape_col <- NULL
 
   if (!sample_col %in% colnames(meta)) {
@@ -150,8 +151,16 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     scores[[shape_col]] <- meta_sub[[shape_col]]
   }
 
+  # Attach label column if configured
+  if (!is.null(label_col) && label_col %in% colnames(meta_sub)) {
+    scores[[label_col]] <- meta_sub[[label_col]]
+  }
+
   # Hover text
   hover_text <- scores$sample
+  if (!is.null(label_col) && label_col %in% colnames(scores)) {
+    hover_text <- paste0(hover_text, "<br>", label_col, ": ", scores[[label_col]])
+  }
   if (!is.null(color_col)) {
     hover_text <- paste0(hover_text, "<br>", color_col, ": ", scores[[color_col]])
   }
@@ -338,6 +347,8 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
       axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
     )
 
+
+
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 8, height = 5)
   }
@@ -372,49 +383,84 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-wrap_qc_heatmap <- function(expr_mat, meta, cfg, out_file = NULL) {
+wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL) {
   # 1. Prepare Data
-  # (Assuming prepare_qc_data logic is simple annotation creation)
-  annot <- data.frame(
-    Condition = meta[[cfg$effects$color]],
-    row.names = meta[[cfg$effects$samples]]
-  )
+  d <- prepare_qc_data(expr_mat, meta, cfg)
 
-  # 2. Plot
+  # Rename column to match config
+  col_name <- d$color_col
+  annot <- d$annot
+  if ("Condition" %in% names(annot)) {
+    colnames(annot)[which(names(annot) == "Condition")] <- col_name
+  }
+
   ph <- plot_heatmap_core(
-    expr_mat = expr_mat,
+    expr_mat = d$expr,
     annotation_col = annot,
-    title = "QC: Sample Protein Expression",
-    max_rows = 2000, # QC usually needs subsampling
+    title = paste0("QC: Sample ", stage, " Expression"),
+    max_rows = 2000,
     cluster_rows = TRUE,
     cluster_cols = TRUE
   )
 
-  # 3. Save & Return
-  if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
+  if (!is.null(out_file)) {
+    save_heatmap_to_file(ph, out_file)
+  }
+
   return(ph)
 }
 
 #' Sample–sample correlation heatmap (proteomics QC)
+#' @param annot_cols Character vector of metadata columns for annotations.
+#'   If NULL (default), uses cfg$effects$color only (backward compatible).
+#' @param show_labels Show sample names on axes (default FALSE to prevent overload)
+#' @param cluster_samples Enable hierarchical clustering (default TRUE)
+#' @param adjust_scale Adjust color scale for tight correlation ranges (default TRUE)
 qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
-                                          method = "pearson", fontsize = 12) {
+                                          annot_cols = NULL,
+                                          method = "pearson",
+                                          fontsize = 10,
+                                          show_labels = FALSE,
+                                          cluster_samples = TRUE,
+                                          adjust_scale = TRUE) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
+
+  # Build annotations: use multi-column if provided, otherwise default
+  if (!is.null(annot_cols)) {
+    annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
+    rownames(annot) <- d$sample_ids
+  } else {
+    annot <- d$annot  # Default single-column annotation
+  }
 
   ph <- plot_sample_correlation_heatmap(
     expr_mat = d$expr,
     method = method,
-    annotation_col = d$annot,
-    fontsize = fontsize
+    annotation_col = annot,
+    fontsize = fontsize,
+    show_labels = show_labels,
+    cluster_rows = cluster_samples,
+    cluster_cols = cluster_samples,
+    adjust_scale = adjust_scale
   )
 
-  save_heatmap_to_file(ph, out_file, width = 1600, height = 1200, res = 150)
+  # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
+  save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
   invisible(ph)
 }
 
 
 #' Sample–sample distance heatmap (QC)
+#' @param annot_cols Character vector of metadata columns for annotations.
+#'   If NULL (default), uses cfg$effects$color only (backward compatible).
+#' @param show_labels Show sample names on axes (default FALSE to prevent overload)
+#' @param cluster_samples Enable hierarchical clustering (default TRUE)
 qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
-                                       with_na = FALSE, fontsize = 12) {
+                                       annot_cols = NULL,
+                                       with_na = FALSE,
+                                       fontsize = 10,
+                                       show_labels = FALSE,
+                                       cluster_samples = TRUE) {
   # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
   # This prevents data.frame type coercion issues
   expr_mat <- as.matrix(expr_mat)
@@ -427,13 +473,25 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
   # Validate & Prepare (after filtering NAs)
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
+  # Build annotations: use multi-column if provided, otherwise default
+  if (!is.null(annot_cols)) {
+    annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
+    rownames(annot) <- d$sample_ids
+  } else {
+    annot <- d$annot  # Default single-column annotation
+  }
+
   ph <- plot_sample_distance_heatmap(
     expr_mat = d$expr,
-    annotation_col = d$annot,
-    fontsize = fontsize
+    annotation_col = annot,
+    fontsize = fontsize,
+    show_labels = show_labels,
+    cluster_rows = cluster_samples,
+    cluster_cols = cluster_samples
   )
 
-  save_heatmap_to_file(ph, out_file, width = 1600, height = 1200, res = 150)
+  # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
+  save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
   invisible(ph)
 }
 
@@ -443,19 +501,20 @@ qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
                                   alpha = 0.3, show_legend = TRUE,
                                   title = "Density plot of normalized intensities") {
   # Keeping prepare_qc_data here intentionally.
-  # Even though density doesn't strictly need metadata to run,
-  # we want to ensure the input data is consistent with the pipeline standards.
   d <- prepare_qc_data(expr_mat, meta, cfg)
+  df_long <- to_long_format(d)
 
-  p <- plot_density_overlay(
-    expr_mat = d$expr,
-    title    = title,
-    alpha    = alpha
-  )
+  # Task 2: Density line only (no fill) - remove fill aesthetic, set alpha=1
+  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = value, colour = .data[[d$color_col]])) +
+    ggplot2::geom_density(alpha = 1) +
+    ggplot2::labs(title = title, x = "Intensity", colour = d$color_col) +
+    ggplot2::theme_minimal()
 
   if (!show_legend) {
     p <- p + ggplot2::theme(legend.position = "none")
   }
+
+
 
   if (!is.null(out_file)) {
     if (!grepl("\\.png$", out_file, ignore.case = TRUE)) {

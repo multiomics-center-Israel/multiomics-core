@@ -17,7 +17,10 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     mat <- pre$expr_work
     meta <- pre$meta
     cfg <- config$modes$rna
-    eff_color <- cfg$effects$color %||% "Group"
+
+    # Extract primary color (handle array config for multi-color PCA)
+    color_config <- cfg$effects$color %||% "Group"
+    eff_color <- as.character(color_config[[1]])
 
     files <- character(0)
     plots <- list()
@@ -25,7 +28,7 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     # 1. Ensure summary_df exists
     sumdf <- de_res$summary_df
     if (is.null(sumdf)) {
-        sumdf <- tryCatch(build_rnaseq_summary_df(de_res$tables, config), error = function(e) NULL)
+        sumdf <- tryCatch(build_rnaseq_summary_df(de_res$tables, config$modes$rna$de), error = function(e) NULL)
         if (is.null(sumdf)) {
             warning("RNA QC-post: Could not build summary_df. Skipping QC post plots.")
             return(list(files = character(0)))
@@ -106,35 +109,67 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     }
 
     # 4. Global Top DE Heatmap (Legacy/Bonus feature)
-    # Recalculate de_ids logic
+    # Task 4: Fix 2-feature bug + add multi-column annotations + configurable max
     de_ids <- get_rna_de_features_qc(sumdf)
     de_ids <- de_ids[!is.na(de_ids)]
 
+    # Get max top DE features from config (default 100)
+    qc_post_cfg <- cfg$qc_post %||% list()
+    max_top_de <- qc_post_cfg$max_top_de_features %||% 100
+
     if (length(de_ids) >= 2) {
         # choose top N by min padj across contrasts
+        # ROBUST SELECTION: Only rank features with valid padj values
         padj_cols <- grep("^padj\\.", names(sumdf), value = TRUE)
         min_padj <- apply(sumdf[, padj_cols, drop = FALSE], 1, function(x) {
             if (all(is.na(x))) NA_real_ else min(x, na.rm = TRUE)
         })
-        ord <- order(min_padj, na.last = NA)
-        top_n <- min(2000L, length(ord))
-        top_ids <- sumdf$FeatureID[ord][seq_len(top_n)]
+
+        # Filter to features with at least one valid padj value
+        valid_mask <- !is.na(min_padj)
+        valid_count <- sum(valid_mask)
+
+        if (valid_count == 0) {
+            warning("[QC_post] No features with valid padj values for top DE heatmap")
+        } else {
+            # Order valid features by padj (smallest first)
+            valid_padj <- min_padj[valid_mask]
+            valid_ids <- sumdf$FeatureID[valid_mask]
+            ord <- order(valid_padj)
+
+            # Select up to max_top_de features
+            top_n <- min(max_top_de, length(ord))
+            top_ids <- valid_ids[ord[seq_len(top_n)]]
+
+            message(sprintf("[QC_post] Selecting %d/%d features for top DE heatmap (requested: %d)",
+                            top_n, valid_count, max_top_de))
 
         m <- mat[intersect(top_ids, rownames(mat)), , drop = FALSE]
-        if (nrow(m) > 2) {
+        if (nrow(m) >= 2) {  # Changed from > to >= (allow 2-feature heatmaps)
             # z-score by gene (for visualization only)
             m_z <- t(scale(t(m)))
-            m_z <- m_z[complete.cases(m_z), , drop = FALSE]
 
-            ann <- data.frame(Condition = meta[[eff_color]])
-            rownames(ann) <- rownames(meta)
+            # ROOT CAUSE FIX: Replace NaN with 0 instead of removing rows
+            # NaN occurs when a gene has SD=0 (constant expression)
+            m_z[is.nan(m_z)] <- 0
+
+            # Multi-column annotations (Task 4)
+            annot_cols <- cfg$effects$heatmap_annotations %||% NULL
+            if (!is.null(annot_cols)) {
+                ann <- meta[, annot_cols, drop = FALSE]
+                rownames(ann) <- meta[[cfg$effects$samples]]
+            } else {
+                # Fallback to primary color only
+                ann <- data.frame(Condition = meta[[eff_color]])
+                rownames(ann) <- meta[[cfg$effects$samples]]  # FIX: Use sample ID column consistently
+            }
 
             # Align annotation to matrix columns
             ann <- ann[colnames(m_z), , drop = FALSE]
 
             hm_png <- file.path(dirs$diagnostic_plots, "heatmap_top_DE.png")
 
-            grDevices::png(hm_png, width = 1400, height = 1200, res = 150)
+            grDevices::png(hm_png, width = 2000, height = 1400, res = 150)
             pheatmap::pheatmap(
                 m_z,
                 show_rownames = FALSE,
@@ -145,6 +180,7 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
             grDevices::dev.off()
             files <- c(files, hm_png)
         }
+        }  # Close valid_count > 0 check
     }
 
     list(files = unique(files), plots = plots)
@@ -159,59 +195,32 @@ get_rna_de_tables_qc_post <- function(summary_df, cfg, expr_mat) {
     # RNA summary always has FeatureID (fixed previously)
     src_id_col <- "FeatureID"
 
-    # Identify contrasts from columns like padj.imputs.<Contrast>
-    # Note: RNA might use "padj.<Contrast>" directly if not using "imputs" naming convention everywhere
-    # But current RNA summary (domain/rnaseq/04_de_summary) uses "padj.<name>"
+    # FIX 2: Updated to handle new column naming (removed ".imputs.")
+    # RNA summary now uses: "padj.<Contrast>", "pvalue.<Contrast>", "linearFC.<Contrast>"
 
-    # Check column patterns for RNA summary DF:
-    # It constructs cols like: "padj.<Contrast>", "pvalue.<Contrast>", "log2FoldChange.<Contrast>"
-    # Or strict Proteomics compatibility might have imposed "padj.imputs."?
-    # Let's check the patterns present.
-
-    # Try generic pattern detection
     cols <- colnames(summary_df)
     padj_cols <- grep("^padj\\.", cols, value = TRUE)
-    padj_cols <- padj_cols[!grep("^padj\\.imputs\\.", padj_cols)] # exclude if mix
 
-    # If using Proteomics style "padj.imputs.", adapt
-    padj_imp <- grep("^padj\\.imputs\\.", cols, value = TRUE)
-
-    if (length(padj_imp) > 0) {
-        # It's using imputation style naming (unlikely for pure RNA but possible if shimmed)
-        contrasts <- sub("^padj\\.imputs\\.", "", padj_imp)
-        style <- "imputs"
-    } else {
-        # RNA native
-        contrasts <- sub("^padj\\.", "", padj_cols)
-        style <- "native"
-    }
-
-    if (length(contrasts) == 0) {
+    if (length(padj_cols) == 0) {
         return(list())
     }
+
+    # Extract contrast names from padj columns
+    contrasts <- sub("^padj\\.", "", padj_cols)
 
     out <- setNames(vector("list", length(contrasts)), contrasts)
 
     for (cn in contrasts) {
-        if (style == "imputs") {
-            p_col_adj <- paste0("padj.imputs.", cn)
-            p_col_raw <- paste0("pvalue.imputs.", cn)
-            fc_col <- paste0("linearFC.imputs.", cn) # Proteomics uses linearFC
-        } else {
-            p_col_adj <- paste0("padj.", cn)
-            p_col_raw <- paste0("pvalue.", cn)
-            fc_col <- paste0("log2FoldChange.", cn) # RNA native
-        }
+        # RNA column names after FIX 2
+        p_col_adj <- paste0("padj.", cn)
+        p_col_raw <- paste0("pvalue.", cn)
+        fc_col <- paste0("linearFC.", cn)
 
         if (!all(c(p_col_adj, fc_col) %in% colnames(summary_df))) next
 
-        # Extract base values
-        if (style == "imputs") {
-            lin_fc <- summary_df[[fc_col]]
-            log_fc <- log2(abs(lin_fc)) * sign(lin_fc)
-        } else {
-            log_fc <- summary_df[[fc_col]]
-        }
+        # Convert linearFC to log2FC for plotting
+        lin_fc <- summary_df[[fc_col]]
+        log_fc <- log2(abs(lin_fc)) * sign(lin_fc)
 
         # Build Table
         de_tbl <- data.frame(

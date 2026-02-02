@@ -1,13 +1,32 @@
 #' Run binary-pattern clustering
-#' Run binary-pattern clustering
 #'
-#' Logic:
-#' 1) Aggregate expression by group -> feature x group means.
-#' 2) Enumerate binary patterns.
-#' 3) Compute correlation (vectorized).
-#' 4) Filter and write results.
+#' Binary pattern clustering identifies expression patterns across biological groups.
+#' Each feature (gene/protein) is assigned to a binary pattern based on correlation.
 #'
-#' @return character vector of written file paths
+#' How it works:
+#' 1) Groups are defined by cfg$clustering$steps$binary_patterns$group_col
+#'    (e.g., "treatment" column with values: control, drugA, drugB)
+#' 2) Calculate mean expression for each feature across groups (feature x group matrix)
+#' 3) Generate all binary patterns based on number of groups
+#'    - For 3 groups: 000, 001, 010, 011, 100, 101, 110, 111
+#'    - Excludes trivial patterns (all-0, all-1) if skip_trivial_patterns=TRUE
+#' 4) For each feature, compute Pearson correlation between its group means and each pattern
+#' 5) Assign feature to pattern with highest correlation (if above corr_cutoff threshold)
+#' 6) Output: heatmaps, gene lists, and statistics per pattern
+#'
+#' Configuration:
+#' - group_col: Metadata column defining biological groups (REQUIRED)
+#' - corr_cutoff: Minimum correlation to assign feature to pattern (default 0.8)
+#' - counts_cutoff: Minimum count threshold per group (default 0)
+#'
+#' @param expr_mat Feature x sample expression matrix
+#' @param meta Sample metadata
+#' @param cfg Full config list (uses clustering$steps$binary_patterns)
+#' @param de_features Character vector of feature IDs to cluster
+#' @param out_dir Output directory for results
+#' @param corr_cutoff Minimum correlation threshold (overrides config)
+#' @param counts_cutoff Minimum count threshold (overrides config)
+#' @return List with files (paths), plots (ggplot objects), best (pattern assignments)
 run_binary_patterns <- function(expr_mat,
                                 meta,
                                 cfg,
@@ -23,12 +42,22 @@ run_binary_patterns <- function(expr_mat,
   # Ensure directory exists
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  group_col <- cfg$effects$color
+  # Task 5: Use configured group_col from binary_patterns config
+  # If not set, fall back to effects$color (for backward compatibility)
+  bin_cfg <- cfg$clustering$steps$binary_patterns %||% list()
+  group_col <- bin_cfg$group_col
+
+  if (is.null(group_col)) {
+    # Fallback to primary color for backward compatibility
+    color_config <- cfg$effects$color
+    group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  }
+
   sample_col <- cfg$effects$samples
 
   # --- Validations ---
   if (is.null(group_col) || !(group_col %in% colnames(meta))) {
-    stop(sprintf("Binary patterns: effects$color column '%s' not found in meta", group_col))
+    stop(sprintf("Binary patterns: group_col '%s' not found in meta", group_col))
   }
   if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
     stop(sprintf("Binary patterns: effects$samples column '%s' not found in meta", sample_col))
@@ -340,9 +369,15 @@ run_partition_clustering <- function(z_expr, config) {
 #' @return integer number of groups (levels)
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
-  color_col <- cfg$effects$color
 
-  if (is.null(color_col) || !nzchar(color_col)) {
+  # Extract primary color (handle array config for multi-color PCA)
+  color_config <- cfg$effects$color
+  if (is.null(color_config)) {
+    return(0L)
+  }
+  color_col <- as.character(color_config[[1]])
+
+  if (!nzchar(color_col)) {
     return(0L)
   }
   if (!(color_col %in% colnames(pre$meta))) {
@@ -379,9 +414,17 @@ clustering_run_flags <- function(pre, cfg) {
 
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE
   steps <- cl$steps %||% list()
-  hier_enabled <- isTRUE(steps$hierarchical$enabled %||% TRUE) # default TRUE if clustering enabled
+
+  hier_enabled <- isTRUE(steps$hierarchical$enabled %||% TRUE)
   part_enabled <- isTRUE(steps$partition$enabled %||% FALSE)
-  bin_enabled <- isTRUE(steps$binary_patterns$enabled %||% FALSE)
+
+  # Task 5: Binary clustering conditional on group_col
+  # If group_col is NULL/missing, don't perform binary clustering
+  bin_cfg <- steps$binary_patterns %||% list()
+  bin_enabled <- isTRUE(bin_cfg$enabled %||% FALSE)
+  bin_group_col <- bin_cfg$group_col
+  # Only enable if both enabled flag is TRUE AND group_col is provided (non-NULL)
+  bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
 
   # guards for data suitability
   can_multi_group <- isTRUE(n_groups >= as.integer(min_groups))
@@ -406,7 +449,9 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   stopifnot(is.data.frame(meta))
   expr_mat <- as.matrix(expr_mat)
 
-  group_col <- cfg$effects$color
+  # Extract primary color (handle array config for multi-color PCA)
+  color_config <- cfg$effects$color
+  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
   sample_col <- cfg$effects$samples
 
   if (is.null(group_col) || !(group_col %in% colnames(meta))) {
@@ -596,7 +641,9 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- cfg$effects$color
+  # Extract primary color (handle array config for multi-color PCA)
+  color_config <- cfg$effects$color
+  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
   sample_col <- cfg$effects$samples
 
   meta_map <- meta |>
@@ -678,4 +725,85 @@ zscore_rows <- function(mat) {
   scaled <- sweep(mat, 1, row_means, FUN = "-")
   scaled <- sweep(scaled, 1, row_sds, FUN = "/")
   scaled
+}
+
+#' Build row annotations for DE heatmap showing up/down patterns per contrast
+#'
+#' Creates a data frame with genes as rows and contrasts as columns,
+#' showing which genes are up-regulated, down-regulated, or not significant
+#' in each contrast.
+#'
+#' @param summary_df DE summary data frame with columns like padj.<contrast>, log2FoldChange.<contrast>
+#' @param feature_ids Character vector of feature IDs to include in heatmap
+#' @param p_cutoff P-value cutoff (default 0.05)
+#' @param log2fc_cutoff log2 fold-change cutoff (default log2(1.5) = 0.585)
+#'
+#' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/"ns"
+#' @export
+build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585) {
+  stopifnot(is.data.frame(summary_df))
+  stopifnot("FeatureID" %in% colnames(summary_df))
+
+  # Identify contrast columns from padj.* pattern
+  cols <- colnames(summary_df)
+  padj_cols <- grep("^padj\\.", cols, value = TRUE)
+
+  if (length(padj_cols) == 0) {
+    warning("build_de_row_annotations: No padj.* columns found in summary_df")
+    return(NULL)
+  }
+
+  # Extract contrast names
+  contrasts <- sub("^padj\\.", "", padj_cols)
+
+  # Filter summary_df to only genes in feature_ids
+  sumdf_sub <- summary_df[summary_df$FeatureID %in% feature_ids, , drop = FALSE]
+
+  if (nrow(sumdf_sub) == 0) {
+    warning("build_de_row_annotations: No features found in summary_df")
+    return(NULL)
+  }
+
+  # Initialize annotation data frame
+  annot_list <- list()
+
+  for (cn in contrasts) {
+    padj_col <- paste0("padj.", cn)
+    fc_col <- paste0("log2FoldChange.", cn)
+
+    # Check if FC column exists
+    if (!fc_col %in% colnames(sumdf_sub)) {
+      warning(sprintf("Missing log2FoldChange column for contrast '%s', skipping", cn))
+      next
+    }
+
+    padj_vals <- sumdf_sub[[padj_col]]
+    fc_vals <- sumdf_sub[[fc_col]]
+
+    # Classify each gene
+    pattern <- rep("ns", nrow(sumdf_sub))
+    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
+            padj_vals <= p_cutoff &
+            fc_vals > log2fc_cutoff] <- "up"
+    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
+            padj_vals <= p_cutoff &
+            fc_vals < -log2fc_cutoff] <- "down"
+
+    annot_list[[cn]] <- pattern
+  }
+
+  if (length(annot_list) == 0) {
+    return(NULL)
+  }
+
+  # Build data frame
+  annot_df <- as.data.frame(annot_list, stringsAsFactors = FALSE)
+  rownames(annot_df) <- sumdf_sub$FeatureID
+
+  # Convert to factor for pheatmap
+  for (col in colnames(annot_df)) {
+    annot_df[[col]] <- factor(annot_df[[col]], levels = c("down", "ns", "up"))
+  }
+
+  annot_df
 }
