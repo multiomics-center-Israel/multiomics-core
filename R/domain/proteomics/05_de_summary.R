@@ -160,6 +160,66 @@ build_de_contrast_summary <- function(summary_df) {
     do.call(rbind, results)
 }
 
+#' Build DE summary counts table (RNA-seq-compatible format)
+#'
+#' Creates a summary table with columns Name, up, down, any — matching the
+#' output format of the RNA-seq \code{build_de_summary_counts()} so that the
+#' same Shiny visualisations work across omics types.
+#'
+#' @param summary_df The summary dataframe from summarize_limma_mult_imputation()
+#' @return A data.frame with columns: Name, up, down, any
+#' @export
+build_de_summary_counts_proteomics <- function(summary_df) {
+    if (is.null(summary_df) || nrow(summary_df) == 0) {
+        return(data.frame(Name = character(0), up = integer(0),
+                          down = integer(0), any = integer(0)))
+    }
+
+    pass_cols <- grep("^pass\\.imputs\\.", names(summary_df), value = TRUE)
+    if (length(pass_cols) == 0) return(NULL)
+
+    contrasts <- sub("^pass\\.imputs\\.", "", pass_cols)
+
+    result <- data.frame(
+        Name = character(), up = integer(),
+        down = integer(), any = integer(),
+        stringsAsFactors = FALSE
+    )
+
+    for (cn in contrasts) {
+        pass_col <- paste0("pass.imputs.", cn)
+        fc_col   <- paste0("linearFC.imputs.", cn)
+
+        if (!pass_col %in% names(summary_df)) next
+
+        passed <- !is.na(summary_df[[pass_col]]) & summary_df[[pass_col]] == 1
+
+        if (fc_col %in% names(summary_df)) {
+            fc_vals <- summary_df[[fc_col]]
+            n_up   <- sum(passed & !is.na(fc_vals) & fc_vals > 0, na.rm = TRUE)
+            n_down <- sum(passed & !is.na(fc_vals) & fc_vals < 0, na.rm = TRUE)
+        } else {
+            n_up   <- 0L
+            n_down <- 0L
+        }
+
+        result <- rbind(result, data.frame(
+            Name = cn, up = n_up, down = n_down, any = n_up + n_down,
+            stringsAsFactors = FALSE
+        ))
+    }
+
+    if ("pass_any_contrast" %in% names(summary_df)) {
+        n_any <- sum(summary_df$pass_any_contrast %in% 1, na.rm = TRUE)
+        result <- rbind(result, data.frame(
+            Name = "pass_any", up = 0L, down = 0L, any = n_any,
+            stringsAsFactors = FALSE
+        ))
+    }
+
+    result
+}
+
 #' Mark differential expression pass for a single result table
 mark_pass1 <- function(de_table, p_cutoff, lfc_cutoff, use_adj = TRUE) {
     pcol <- if (isTRUE(use_adj)) "adj.P.Val" else "P.Value"

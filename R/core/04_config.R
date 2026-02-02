@@ -61,18 +61,6 @@ write_execution_info <- function(config, run_dir, config_path = NULL, manifest_d
     written_files
 }
 
-write_project_rdata <- function(run_dir, ..., filename = "project.Rdata") {
-    exec_dir <- file.path(run_dir, "execution_info")
-    dir.create(exec_dir, recursive = TRUE, showWarnings = FALSE)
-    out <- file.path(exec_dir, filename)
-
-    objects_list <- list(...)
-    save(list = names(objects_list), envir = list2env(objects_list), file = out)
-
-    if (!file.exists(out)) stop("save() did not create project.Rdata.")
-    out
-}
-
 # Helper for %||%
 `%||%` <- function(x, y) {
     if (is.null(x)) y else x

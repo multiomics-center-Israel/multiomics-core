@@ -125,35 +125,7 @@ pipe_proteomics <- function() {
                 }
             }
         ),
-
-        # ---- workspace snapshot (file) ----
-        # Note: write_project_rdata might be in core/01_io.R or similar?
-        # If not migrated yet, this might fail unless tar_source finds it in leftover files?
-        # write_project_rdata was usually in 00_utils.R (deleted).
-        # I need to ensure write_project_rdata is available.
-        # I moved read_table/save_tsv to 01_io.R. Did I move write_project_rdata?
-        # I did not see it explicitly.
-        # I should check if I missed it. I will keep it commented out or assume I need to restore it.
-        # For now I will reproduce the line but add a TODO if missing.
-        tar_target(
-            project_rdata_file,
-            if (exists("write_project_rdata")) {
-                write_project_rdata(
-                    run_dir      = run_dir,
-                    config       = config,
-                    inputs       = prot_inputs,
-                    pre_process  = prot_pre,
-                    imputations  = prot_de_res$imputations,
-                    de_results   = prot_de_res,
-                    qc_results   = prot_qc_pre_obj
-                )
-            } else {
-                # Fallback or skip
-                NULL
-            },
-            format = "file"
-        ),
-
+        
         # Shiny legacy export (RDS file for old Shiny app)
         tar_target(
             prot_shiny_legacy,

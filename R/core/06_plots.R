@@ -222,16 +222,17 @@ plot_heatmap_core <- function(expr_mat,
 
   do.call(pheatmap::pheatmap, args)
 }
-# TODO: add width and downshift to the plot title
 #' Build an imputed histograms/density summary plot (legacy "imputed_histograms_summary")
 #'
 #' Produces a single summary figure showing the distribution of observed vs imputed
 #' values per sample (faceted), similar in spirit to the legacy pipeline output.
 #'
 #' @param expr_mat Numeric matrix (features x samples), typically log2.
-#' @param flags Logical matrix (features x samples), TRUE where value was imputed.
+#' @param imputed_flag Logical matrix (features x samples), TRUE where value was imputed.
+#' @param width Imputation width parameter (optional, shown in title).
+#' @param downshift Imputation downshift parameter (optional, shown in title).
 #' @return A ggplot object.
-plot_imputation_summary <- function(expr_mat, imputed_flag) {
+plot_imputation_summary <- function(expr_mat, imputed_flag, width = NULL, downshift = NULL) {
   stopifnot(requireNamespace("ggplot2", quietly = TRUE))
 
   df <- build_imputation_long_df(expr_mat, imputed_flag)
@@ -259,7 +260,10 @@ plot_imputation_summary <- function(expr_mat, imputed_flag) {
     ggplot2::facet_wrap(~sample, scales = "free_y") +
     ggplot2::scale_fill_manual(values = c("Imputed" = "#00BFC4", "Observed" = "#F8766D")) +
     ggplot2::labs(
-      title = "Imputation QC: observed vs imputed distributions (per sample)",
+      title = if (!is.null(width) && !is.null(downshift))
+        sprintf("Imputation QC: observed vs imputed (width = %s, shift = %s)", width, downshift)
+      else
+        "Imputation QC: observed vs imputed distributions (per sample)",
       x = "Expression (log2)",
       y = "Count",
       fill = NULL
