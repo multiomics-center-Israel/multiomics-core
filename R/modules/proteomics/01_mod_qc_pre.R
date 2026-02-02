@@ -6,8 +6,9 @@
 #' @param out_dir Output root directory
 #' @return list(plots, files)
 mod_proteomics_qc_pre <- function(pre, config, out_dir) {
+    stage <- "proteomics"
     stopifnot(is.character(out_dir), length(out_dir) == 1)
-    assert_pre_contract(pre, stage = "proteomics")
+    assert_pre_contract(pre, stage = stage)
 
     dirs <- create_legacy_output_dirs(out_dir)
     out_qc <- dirs$diagnostic_plots
@@ -82,14 +83,14 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
 
     # ---------- Expression heatmaps ----------
     f_hm <- file.path(out_qc, "samples_protein_heatmap.png")
-    p_hm <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, out_file = f_hm)
+    hm_clusters <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm)
     files <- c(files, f_hm)
-    plots$heatmap_clusters <- p_hm
+    plots$heatmap_clusters <- hm_clusters
 
     f_hm_nocol <- file.path(out_qc, "samples_protein_heatmap_wo_col.png")
-    p_hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, out_file = f_hm_nocol)
+    hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm_nocol)
     files <- c(files, f_hm_nocol)
-    plots$heatmap_nocol <- p_hm_nocol
+    plots$heatmap_nocol <- hm_nocol
 
     # ---------- Extract PCA objects from plot attributes ----------
     # PCA plot p12 has attributes attached by qc_pca_scatter

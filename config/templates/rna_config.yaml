@@ -42,8 +42,15 @@ modes:
       method: "TMMlogCPM"   # "TMMlogCPM" | "VST"
       prior.count: 1
 
-    # Example filter (if you use TPM or CPM/mean-count based filters, adapt in code)
-    filter_tpm: 3
+    # Feature filtering
+    filtering:
+      group_col: "line"
+      # Auto-filter calculates threshold based on CPM distribution.
+      # You can override limits here:
+      auto_filter:
+        min: 0.5
+        max: 2.0
+        fallback: 1.0
 
     # Optional sample filtering by metadata (if you support it in code)
     # sample_filter:
@@ -76,6 +83,7 @@ modes:
     qc_post:
       enabled: true
       de_source: "summary"      # "summary" | "table1" (table1 might not exist for RNA—depends on implementation)
+      max_top_de_features: 100  # Max features to show in top DE heatmap (default 100)
       plots:
         volcano: true
         ma: true
@@ -106,8 +114,9 @@ modes:
           use_group_averages: true
         binary_patterns:
           enabled: true
-          corr_cutoff: 0.8
-          counts_cutoff: 0
+          group_col: "line"          # Metadata column defining biological groups (required if enabled)
+          corr_cutoff: 0.8           # Minimum correlation to assign feature to pattern
+          counts_cutoff: 0           # Minimum count threshold per group
           skip_trivial_patterns: true
       heatmap:
         max_rows: null
@@ -117,9 +126,59 @@ modes:
     # Plotting / QC aesthetics
     # --------------------------------------------------------
     effects:
-      color:   "line"
-      shape:   "labels"
+      # Color variable for plots
+      # Single value (default):
+      color: "line"
+
+      # OR multiple values for multiple PCA plots (generates one PCA per color):
+      # color:
+      #   - "line"
+      #   - "time_point"
+      #   - "treatment"
+
+      # Shape variable (must be single value if color is an array)
+      shape: "labels"
+
+      # Sample identifier column
       samples: "SampleID"
+
+      # Heatmap annotation columns (optional)
+      # If not specified, uses color variable only
+      # heatmap_annotations:
+      #   - "line"
+      #   - "time_point"
+      #   - "treatment"
+      #   - "batch"
+
+    # --------------------------------------------------------
+    # QC plot generation (threshold-based adaptive plotting)
+    # --------------------------------------------------------
+    qc:
+      # Enable adaptive plot generation based on sample counts
+      # If FALSE, all plots are generated (backward compatible behavior)
+      # If TRUE or unset, plots adapt based on thresholds below
+      adaptive_plots: true  # default: true
+
+      # Generate PCA PC1 vs PC3 plots (in addition to PC1 vs PC2)
+      # Only applies when adaptive_plots is true
+      generate_pca_1v3: false  # default: false
+
+      # Thresholds for adaptive decisions (all optional)
+      thresholds:
+        min_samples_for_pca3d: 10         # Skip 3D PCA below this
+        max_samples_for_heatmaps: 120     # Skip distance/corr heatmaps above this
+        max_samples_for_expr_heatmap: 60  # Skip expression heatmap above this
+
+      # Sample correlation/distance heatmap visualization (all optional)
+      # These settings improve readability for large sample sets
+      heatmap_viz:
+        show_sample_labels: false   # Show sample names on axes (default: false to prevent overload)
+        cluster_samples: true       # Enable hierarchical clustering (default: true)
+        adjust_correlation_scale: true  # Adjust color scale for tight ranges (default: true)
+
+      # To disable adaptive plotting and generate all plots unconditionally:
+      #   qc:
+      #     adaptive_plots: false
 
 params:
   seed: 1

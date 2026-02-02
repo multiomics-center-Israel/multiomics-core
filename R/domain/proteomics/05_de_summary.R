@@ -92,6 +92,74 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     return(out)
 }
 
+#' Build DE contrast summary statistics
+#'
+#' Creates a summary data.frame showing for each contrast:
+#' - total_genes: Total number of genes/proteins analyzed
+#' - n_significant: Number passing DE thresholds
+#' - n_up: Number of upregulated (passed + positive FC)
+#' - n_down: Number of downregulated (passed + negative FC)
+#'
+#' @param summary_df The summary dataframe from summarize_limma_mult_imputation()
+#' @return A data.frame with one row per contrast
+#' @export
+build_de_contrast_summary <- function(summary_df) {
+    if (is.null(summary_df) || nrow(summary_df) == 0) {
+        return(NULL)
+    }
+
+    # Find all contrast names from pass columns
+    pass_cols <- grep("^pass\\.imputs\\.", names(summary_df), value = TRUE)
+    if (length(pass_cols) == 0) {
+        return(NULL)
+    }
+
+    # Extract contrast names
+    contrasts <- sub("^pass\\.imputs\\.", "", pass_cols)
+
+    total_genes <- nrow(summary_df)
+
+    results <- lapply(contrasts, function(cn) {
+        pass_col <- paste0("pass.imputs.", cn)
+        fc_col <- paste0("linearFC.imputs.", cn)
+
+        # Check columns exist
+        if (!pass_col %in% names(summary_df)) {
+            return(data.frame(
+                Contrast = cn,
+                total_genes = total_genes,
+                n_significant = NA_integer_,
+                n_up = NA_integer_,
+                n_down = NA_integer_,
+                stringsAsFactors = FALSE
+            ))
+        }
+
+        passed <- !is.na(summary_df[[pass_col]]) & summary_df[[pass_col]] == 1
+        n_significant <- sum(passed, na.rm = TRUE)
+
+        if (fc_col %in% names(summary_df)) {
+            fc_vals <- summary_df[[fc_col]]
+            n_up <- sum(passed & !is.na(fc_vals) & fc_vals > 0, na.rm = TRUE)
+            n_down <- sum(passed & !is.na(fc_vals) & fc_vals < 0, na.rm = TRUE)
+        } else {
+            n_up <- NA_integer_
+            n_down <- NA_integer_
+        }
+
+        data.frame(
+            Contrast = cn,
+            total_genes = total_genes,
+            n_significant = n_significant,
+            n_up = n_up,
+            n_down = n_down,
+            stringsAsFactors = FALSE
+        )
+    })
+
+    do.call(rbind, results)
+}
+
 #' Mark differential expression pass for a single result table
 mark_pass1 <- function(de_table, p_cutoff, lfc_cutoff, use_adj = TRUE) {
     pcol <- if (isTRUE(use_adj)) "adj.P.Val" else "P.Value"

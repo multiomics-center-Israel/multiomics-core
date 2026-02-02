@@ -63,13 +63,20 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     norm_for_filter <- if (use_tpm) compute_tpm(counts, gene_lengths) else compute_cpm(counts)
     norm_mode <- if (use_tpm) "TPM" else "CPM"
 
-    fr <- filter_features_dynamic(
-        norm_mat   = norm_for_filter,
-        meta       = meta2,
-        sample_col = sample_col,
-        group_col  = group_col,
-        threshold  = thr
+    # Define plot path for filtering QC
+    plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+
+    # Run auto-filtering pipeline
+    fr <- run_auto_filter_pipeline(
+        cpm_mat     = norm_for_filter,
+        meta        = meta2,
+        sample_col  = sample_col,
+        group_col   = group_col,
+        output_plot = plot_path
     )
+
+    # Capture used threshold for info
+    thr <- fr$used_threshold
 
     if (sum(fr$keep_vec) == 0) stop("Filtering removed all features.")
 

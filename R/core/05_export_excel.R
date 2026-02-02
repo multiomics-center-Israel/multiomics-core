@@ -63,7 +63,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
     # Get p-value cutoff tag for filename
     p_tag_val <- p_tag_generic(config, mode)
 
-    f_all <- file.path(out_dir, sprintf("Final_results_P_%s.xlsx", p_tag_val))
+    # Renamed: Final_results_P -> Final_results_ALL
+    f_all <- file.path(out_dir, sprintf("Final_results_ALL_P_%s.xlsx", p_tag_val))
     f_de <- file.path(out_dir, sprintf("Final_results_DE_P_%s.xlsx", p_tag_val))
 
     save_wb_results <- function(df, path, with_cutoffs = FALSE) {
@@ -79,66 +80,71 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         path # Return the file path for targets tracking
     }
 
-    # Save full results and capture path
+    # Save full results (ALL table) and capture path
     f_all_created <- save_wb_results(final_results, f_all, with_cutoffs = isTRUE(with_cutoffs))
 
+    # Build DE table with proper column ordering
     is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
     de_df <- final_results[is_de, , drop = FALSE]
-    de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs"), drop = FALSE]
+
+    # Remove manual_cutoffs and pass_any_contrast columns
+    de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
     if (!is.null(expr_for_de)) {
         expr_for_de <- as.matrix(expr_for_de)
         de_ids <- intersect(de_df[[id_col]], rownames(expr_for_de))
         mat_de <- expr_for_de[de_ids, , drop = FALSE]
 
         if (nrow(mat_de) == 0) {
-            f_de_created <- save_wb_results(mat_de, f_de, with_cutoffs = FALSE)
+            f_de_created <- save_wb_results(de_df, f_de, with_cutoffs = FALSE)
             return(c(f_all_created, f_de_created))
         }
 
-        # Default ordering and columns
-        z_col_names <- NULL
-
-        # New Logic: Integrate clustering order and z-scores if available
-        # Check both clustering_res (passed from pipeline) and older 'excel_order' arg (backwards compatibility)
+        # Integrate clustering order and z-scores if available
         cl_obj <- clustering_res %||% list()
         excel_ord <- cl_obj$excel_order %||% NULL
 
         if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
             ordered_ids <- excel_ord$ordered_ids
 
-            # 1. Add 'order' column (rank)
-            # Features in ordered_ids get their rank, others NA
+            # 1. Add 'order' column (hierarchical clustering rank)
             ranks <- match(de_df[[id_col]], ordered_ids)
             de_df$order <- ranks
 
             # 2. Add Z-score columns
             if (!is.null(excel_ord$zscore_mat)) {
                 zmat <- excel_ord$zscore_mat
-                # Match rows of zmat to de_df IDs
-                # zmat rownames are feature IDs
-
-                # Subset zmat to features present in de_df (using match for strict alignment)
                 idx <- match(de_df[[id_col]], rownames(zmat))
-
-                # Create sub-matrix of Z-scores (preserving columns)
                 z_sub <- zmat[idx, , drop = FALSE]
-
-                # Add to de_df
                 de_df <- cbind(de_df, z_sub)
             }
         } else {
-            message("No clustering excel_order found; skipping hier_order and z-scores")
+            # No clustering: add order column with NA
+            de_df$order <- NA_integer_
         }
 
-        # Combine: Stats + Expression (already in de_df? No, need to bind expression)
-        # We need to add 'mat_de' (expression values) to 'de_df'
-        # mat_de and de_df must align.
+        # Reorder columns to: ID, raw_counts, DE_stats, order, z-scores
+        # Identify column groups
+        id_cols <- id_col
+        expr_cols <- colnames(mat_de)
+        de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        order_col <- "order"
+        zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
 
-        # Align expr matrix to de_df
-        mat_de_aligned <- mat_de[match(de_df[[id_col]], rownames(mat_de)), , drop = FALSE]
+        # Check which expression columns are already present (from build_final_results_generic)
+        expr_cols_present <- intersect(expr_cols, names(de_df))
 
-        # Final bind: DE Stats (+ optional order/zscore) + Expression
-        de_df <- cbind(de_df, mat_de_aligned)
+        # Build desired column order
+        desired_order <- c(
+            id_cols,
+            expr_cols_present,  # Raw counts (already in de_df)
+            de_stat_cols,
+            order_col,
+            zscore_cols
+        )
+
+        # Reorder columns
+        de_df <- de_df[, desired_order, drop = FALSE]
     }
 
     # Save DE results and capture path
@@ -147,16 +153,32 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 }
 
 #' Get standard column names for a contrast
-get_contrast_cols <- function(contrast) {
+#' @param contrast Contrast name
+#' @param mode "proteomics" (uses .imputs.) or "rna" (no .imputs.)
+get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
-    list(
-        fc     = paste0("linearFC.imputs.", contrast),
-        p      = paste0("pvalue.imputs.", contrast),
-        padj   = paste0("padj.imputs.", contrast),
-        pass   = paste0("pass.imputs.", contrast),
-        updown = paste0("upDown.imputs.", contrast),
-        manual = paste0("manual_cutoffs.", contrast)
-    )
+
+    # FIX 2: RNA doesn't use ".imputs." in column names
+    if (mode == "rna") {
+        list(
+            fc     = paste0("linearFC.", contrast),
+            p      = paste0("pvalue.", contrast),
+            padj   = paste0("padj.", contrast),
+            pass   = paste0("pass.", contrast),
+            updown = paste0("upDown.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
+        )
+    } else {
+        # Proteomics (uses imputation naming)
+        list(
+            fc     = paste0("linearFC.imputs.", contrast),
+            p      = paste0("pvalue.imputs.", contrast),
+            padj   = paste0("padj.imputs.", contrast),
+            pass   = paste0("pass.imputs.", contrast),
+            updown = paste0("upDown.imputs.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
+        )
+    }
 }
 
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config, mode = "proteomics") {
@@ -229,7 +251,8 @@ build_final_results_generic <- function(
   annot_cols = NULL,
   row_data = NULL,
   fc_is_signed = TRUE,
-  fc_direction_col = NULL
+  fc_direction_col = NULL,
+  mode = "proteomics"  # FIX 2: Add mode parameter for column naming
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -354,7 +377,7 @@ build_final_results_generic <- function(
     m <- match(base[[feature_id_col]], summary_df[[feature_id_col]])
 
     for (cn in contrast_names) {
-        cols <- get_contrast_cols(cn)
+        cols <- get_contrast_cols(cn, mode = mode)  # FIX 2: Pass mode parameter
 
         # Validate required columns exist
         needed <- c(cols$fc, cols$p, cols$padj)

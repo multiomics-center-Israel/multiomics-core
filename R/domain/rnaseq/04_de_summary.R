@@ -63,7 +63,9 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         cn <- contrasts_df$Contrast_name[i]
         num <- contrasts_df$Numerator[i]
         den <- contrasts_df$Denominator[i]
-        contrast <- c(contrasts_df[i, "Factor"], contrasts_df[i, "Numerator"], contrasts_df[i, "Denominator"])
+        # FIX: Ensure contrast is a character vector, not a data.frame row
+        # Using $ accessor guarantees vector extraction
+        contrast <- c(as.character(contrasts_df$Factor[i]), as.character(num), as.character(den))
         # Level Validation
         if (!num %in% valid_levels) {
             warning(sprintf("Numerator '%s' not in factor levels for contrast '%s'. Skipping.", num, cn))
@@ -142,23 +144,25 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
         stringsAsFactors = FALSE
     )
 
-    # Add columns for each contrast (using proteomics-compatible naming)
+    # Add columns for each contrast
+    # FIX 2: Remove "impute/imputs" from column names (RNA doesn't use imputation)
     for (cn in names(de_tables)) {
         tab <- de_tables[[cn]]
 
         # Match genes
         idx <- match(summary_df$FeatureID, tab$FeatureID)
 
-        # Add linearFC (convert log2FC to linear FC for compatibility)
-        fc_col <- paste0("linearFC.imputs.", cn)
-        summary_df[[fc_col]] <- 2^tab$log2FoldChange[idx]
+        # Add linearFC (signed: positive for upregulation, negative for downregulation)
+        fc_col <- paste0("linearFC.", cn)  # FIX 2: Removed ".imputs."
+        lfc <- tab$log2FoldChange[idx]
+        summary_df[[fc_col]] <- ifelse(lfc >= 0, 2^lfc, -1 * 2^(-lfc))
 
         # Add pvalue
-        pval_col <- paste0("pvalue.imputs.", cn)
+        pval_col <- paste0("pvalue.", cn)  # FIX 2: Removed ".imputs."
         summary_df[[pval_col]] <- tab$pvalue[idx]
 
         # Add padj
-        padj_col <- paste0("padj.imputs.", cn)
+        padj_col <- paste0("padj.", cn)  # FIX 2: Removed ".imputs."
         summary_df[[padj_col]] <- tab$padj[idx]
 
         # Add pass flag
@@ -179,4 +183,83 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
     }
 
     return(summary_df)
+}
+
+
+#' Build DE summary counts table
+#'
+#' Creates a summary table showing counts of upregulated, downregulated,
+#' and total DE genes for each contrast, plus an overall pass_any row.
+#'
+#' @param summary_df Summary data frame from build_rnaseq_summary_df()
+#' @param contrasts_df Contrasts data frame with Contrast_name column
+#' @return Data frame with columns: Name, up, down, any
+#' @export
+build_de_summary_counts <- function(summary_df, contrasts_df) {
+    if (is.null(summary_df) || nrow(summary_df) == 0) {
+        warning("Summary data frame is empty, cannot build summary counts")
+        return(data.frame(Name = character(0), up = integer(0), down = integer(0), any = integer(0)))
+    }
+
+    # Get contrast names from contrasts_df
+    contrast_names <- contrasts_df$Contrast_name
+
+    # Initialize result data frame
+    result <- data.frame(
+        Name = character(),
+        up = integer(),
+        down = integer(),
+        any = integer(),
+        stringsAsFactors = FALSE
+    )
+
+    # Process each contrast
+    for (cn in contrast_names) {
+        # Get pass column for this contrast
+        pass_col <- paste0(cn, "_pass")
+        fc_col <- paste0("linearFC.", cn)
+
+        # Check if columns exist
+        if (!pass_col %in% colnames(summary_df) || !fc_col %in% colnames(summary_df)) {
+            warning(sprintf("Missing columns for contrast '%s', skipping", cn))
+            next
+        }
+
+        # Get pass mask (only genes passing significance)
+        pass_mask <- summary_df[[pass_col]] %in% TRUE
+
+        # Count up (positive linearFC and pass)
+        up_mask <- pass_mask & (summary_df[[fc_col]] > 0)
+        n_up <- sum(up_mask, na.rm = TRUE)
+
+        # Count down (negative linearFC and pass)
+        down_mask <- pass_mask & (summary_df[[fc_col]] < 0)
+        n_down <- sum(down_mask, na.rm = TRUE)
+
+        # Any = up + down
+        n_any <- n_up + n_down
+
+        # Add row
+        result <- rbind(result, data.frame(
+            Name = cn,
+            up = n_up,
+            down = n_down,
+            any = n_any,
+            stringsAsFactors = FALSE
+        ))
+    }
+
+    # Add pass_any row
+    if ("pass_any_contrast" %in% colnames(summary_df)) {
+        n_pass_any <- sum(summary_df$pass_any_contrast %in% TRUE, na.rm = TRUE)
+        result <- rbind(result, data.frame(
+            Name = "pass_any",
+            up = 0L,
+            down = 0L,
+            any = n_pass_any,
+            stringsAsFactors = FALSE
+        ))
+    }
+
+    return(result)
 }

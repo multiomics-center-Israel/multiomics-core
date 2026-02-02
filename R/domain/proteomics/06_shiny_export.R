@@ -135,6 +135,14 @@ build_data_to_shiny_legacy_proteomics <- function(
     legacy$de_model <- de_res$de_model %||% NULL
 
     # ============================================================
+    # DE Contrast Summary (counts per contrast)
+    # ============================================================
+    legacy["de_contrast_summary"] <- list(NULL)
+    if (!is.null(legacy$stats_df)) {
+        legacy$de_contrast_summary <- build_de_contrast_summary(legacy$stats_df)
+    }
+
+    # ============================================================
     # Heatmap data (NO EXTRACTION - only collect)
     # ============================================================
     # Robust: check multiple possible field names

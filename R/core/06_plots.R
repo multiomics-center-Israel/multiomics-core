@@ -56,13 +56,18 @@ plot_density_overlay <- function(expr_mat,
 #'
 #' @param expr_mat numeric matrix (features x samples)
 #' @param dist_method distance metric
+#' @param show_labels show sample names on axes (default FALSE for readability)
+#' @param cluster_rows,cluster_cols enable hierarchical clustering (default TRUE)
 #' @return invisibly returns pheatmap object
 plot_sample_distance_heatmap <- function(expr_mat,
                                          dist_method = "euclidean",
                                          annotation_col = NULL,
                                          main = NULL,
                                          colors = NULL,
-                                         fontsize = 12) {
+                                         fontsize = 12,
+                                         show_labels = FALSE,
+                                         cluster_rows = TRUE,
+                                         cluster_cols = TRUE) {
   expr_mat <- as.matrix(expr_mat)
   sampleDists <- stats::dist(t(expr_mat), method = dist_method)
   mat <- as.matrix(sampleDists)
@@ -72,15 +77,25 @@ plot_sample_distance_heatmap <- function(expr_mat,
   }
   if (is.null(main)) main <- sprintf("Sample distance heatmap (%s)", dist_method)
 
+  # Issue 1 FIX: Suppress axis labels by default to prevent overload
+  # Issue 5 FIX: Make clustering configurable
   pheatmap::pheatmap(
     mat,
     clustering_distance_rows = sampleDists,
     clustering_distance_cols = sampleDists,
+    cluster_rows = cluster_rows,
+    cluster_cols = cluster_cols,
     annotation_col = annotation_col,
+    annotation_row = annotation_col,  # Issue 2 FIX: Mirror annotations for symmetry
     main = main,
     col = colors,
+    show_rownames = show_labels,  # Issue 1 FIX: Hide by default
+    show_colnames = show_labels,  # Issue 1 FIX: Hide by default
     fontsize_row = fontsize,
-    fontsize_col = fontsize
+    fontsize_col = fontsize,
+    annotation_legend = TRUE,
+    legend = TRUE,
+    border_color = NA  # Issue 2 FIX: Remove grid lines for cleaner look
   )
 }
 #' Sample–sample correlation heatmap
@@ -111,7 +126,11 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             annotation_col = NULL,
                                             main = NULL,
                                             colors = NULL,
-                                            fontsize = 12) {
+                                            fontsize = 12,
+                                            show_labels = FALSE,
+                                            cluster_rows = TRUE,
+                                            cluster_cols = TRUE,
+                                            adjust_scale = TRUE) {
   expr_mat <- as.matrix(expr_mat)
 
   cor_mat <- stats::cor(
@@ -125,16 +144,49 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     main <- sprintf("Sample correlation heatmap (%s)", method)
   }
 
+  # Issue 4 FIX: Improve contrast for high-correlation matrices
+  # When correlations are tight (e.g., 0.8-0.95), use focused scale
+  breaks <- NULL
+  if (adjust_scale) {
+    cor_range <- range(cor_mat[lower.tri(cor_mat)], na.rm = TRUE)
+    cor_min <- cor_range[1]
+    cor_max <- cor_range[2]
+
+    # If range is narrow (typical for good QC data), adjust color scale
+    if ((cor_max - cor_min) < 0.3) {
+      # Use quantile-based breaks for better visual separation
+      q_breaks <- stats::quantile(cor_mat[lower.tri(cor_mat)],
+                                   probs = seq(0, 1, length.out = 256),
+                                   na.rm = TRUE)
+      breaks <- unique(q_breaks)
+
+      # Regenerate colors to match breaks
+      if (length(breaks) > 2) {
+        colors <- get_heatmap_colors(length(breaks) - 1)
+      }
+    }
+  }
+
+  # Issue 1, 2, 5 FIX: Hide labels, add row annotations, make clustering configurable
   pheatmap::pheatmap(
     cor_mat,
     annotation_col = annotation_col,
-    annotation_row = annotation_col,
+    annotation_row = annotation_col,  # Mirror annotations for symmetry
+    cluster_rows = cluster_rows,
+    cluster_cols = cluster_cols,
     main = main,
     col = colors,
+    breaks = breaks,  # Issue 4 FIX: Adjusted scale
+    show_rownames = show_labels,  # Issue 1 FIX
+    show_colnames = show_labels,  # Issue 1 FIX
     fontsize_row = fontsize,
-    fontsize_col = fontsize
+    fontsize_col = fontsize,
+    annotation_legend = TRUE,
+    legend = TRUE,
+    border_color = NA  # Issue 2 FIX: Cleaner appearance
   )
 }
+
 #' Core wrapper for pheatmap
 #' @return A pheatmap object
 plot_heatmap_core <- function(expr_mat,
@@ -159,16 +211,16 @@ plot_heatmap_core <- function(expr_mat,
   if (is.null(title)) title <- sprintf("Heatmap (%d features)", nrow(expr_mat))
 
   # 3. Draw
-  pheatmap::pheatmap(
-    mat = as.matrix(expr_mat),
-    scale = if (scale_rows) "row" else "none",
-    cluster_rows = cluster_rows,
-    cluster_cols = cluster_cols,
-    show_rownames = FALSE,
-    annotation_col = annotation_col,
-    main = title,
-    ...
-  )
+  args <- list(...)
+  args$mat <- as.matrix(expr_mat)
+  args$scale <- if (scale_rows) "row" else "none"
+  args$cluster_rows <- cluster_rows
+  args$cluster_cols <- cluster_cols
+  args$show_rownames <- FALSE
+  args$annotation_col <- annotation_col
+  args$main <- title
+
+  do.call(pheatmap::pheatmap, args)
 }
 # TODO: add width and downshift to the plot title
 #' Build an imputed histograms/density summary plot (legacy "imputed_histograms_summary")
@@ -299,7 +351,7 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
     aes_args$shape <- rlang::sym(shape_col)
   }
 
-  ggplot2::ggplot(scores, do.call(ggplot2::aes, aes_args)) +
+  p <- ggplot2::ggplot(scores, do.call(ggplot2::aes, aes_args)) +
     ggplot2::geom_point(size = 3) +
     ggplot2::labs(
       title  = sprintf("PCA: PC%d vs PC%d", pc_x, pc_y),
@@ -309,6 +361,8 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
       shape  = if (!is.null(shape_col)) shape_col else NULL
     ) +
     ggplot2::theme_minimal()
+
+  p
 }
 #' Plot cluster profiles using ggplot2
 #' Replaces the manual base-R loop for cluster visualization.
@@ -494,7 +548,7 @@ add_A_from_expr <- function(de_tbl, expr_mat, id_col = "FeatureID") {
 
 #' Save a pheatmap object to file
 save_heatmap_to_file <- function(pheatmap_obj, out_file,
-                                 width = 1600, height = 1200, res = 150) {
+                                 width = 2000, height = 1400, res = 150) {
   if (is.null(out_file)) {
     return(invisible(NULL))
   }
@@ -502,6 +556,7 @@ save_heatmap_to_file <- function(pheatmap_obj, out_file,
   dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
   if (!grepl("\\.png$", out_file, ignore.case = TRUE)) out_file <- paste0(out_file, ".png")
 
+  # Task 3: Increase size to prevent legend cutoff with multi-column annotations
   grDevices::png(filename = out_file, width = width, height = height, res = res)
   on.exit(grDevices::dev.off(), add = TRUE)
 
@@ -537,6 +592,7 @@ get_heatmap_colors <- function(n = 255) {
 wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
                                     feature_ids,
                                     ordering = NULL,
+                                    annotation_row = NULL,
                                     out_file = NULL) {
   # 1) choose features present in matrix
   use_ids <- intersect(feature_ids, rownames(expr_mat))
@@ -553,20 +609,46 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
 
   # 2) annotation (aligned to matrix columns)
   sample_col <- cfg$effects$samples
-  color_col <- cfg$effects$color
+  # Extract primary color (handle array config for multi-color PCA)
+  color_config <- cfg$effects$color
+  color_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
 
-  annot <- data.frame(
+  annot_col <- data.frame(
     Condition = meta[[color_col]],
     row.names = meta[[sample_col]]
   )
 
   # align annotation to columns actually in the matrix
-  annot <- annot[colnames(mat2plot), , drop = FALSE]
+  annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
 
-  # 3) plot
+  # 3) Align row annotations to the features being plotted
+  annot_row <- NULL
+  annot_colors <- NULL
+
+  if (!is.null(annotation_row)) {
+    # Filter to only features in the heatmap
+    common_features <- intersect(use_ids, rownames(annotation_row))
+    if (length(common_features) > 0) {
+      annot_row <- annotation_row[common_features, , drop = FALSE]
+
+      # Define colors for DE patterns (up = red, down = blue, ns = grey)
+      annot_colors <- list()
+      for (col_name in colnames(annot_row)) {
+        annot_colors[[col_name]] <- c(
+          "down" = "#2166AC",  # Blue
+          "ns"   = "#F7F7F7",  # Light grey
+          "up"   = "#B2182B"   # Red
+        )
+      }
+    }
+  }
+
+  # 4) plot
   ph <- plot_heatmap_core(
     expr_mat = mat2plot,
-    annotation_col = annot,
+    annotation_col = annot_col,
+    annotation_row = annot_row,
+    annotation_colors = annot_colors,
     title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
     scale_rows = TRUE,
     cluster_rows = cluster_rows_flag,
@@ -574,7 +656,7 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
     max_rows = NULL
   )
 
-  # 4) save & return
+  # 5) save & return
   if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
   ph
 }
