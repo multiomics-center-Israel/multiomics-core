@@ -108,10 +108,6 @@ modes:
           k: null
           k_max: 20
           nstart: 25
-          outputs:
-            write_profiles_pdf: true
-            write_heatmap_png: true
-          use_group_averages: true
         binary_patterns:
           enabled: true
           group_col: "line"          # Metadata column defining biological groups (required if enabled)
@@ -158,10 +154,6 @@ modes:
       # If FALSE, all plots are generated (backward compatible behavior)
       # If TRUE or unset, plots adapt based on thresholds below
       adaptive_plots: true  # default: true
-
-      # Generate PCA PC1 vs PC3 plots (in addition to PC1 vs PC2)
-      # Only applies when adaptive_plots is true
-      generate_pca_1v3: false  # default: false
 
       # Thresholds for adaptive decisions (all optional)
       thresholds:
