@@ -535,7 +535,9 @@ qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
 #' @param out_file Output file path
 #' @return ggplot object
 qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = NULL) {
-  p <- plot_imputation_summary(imputed, imputed_flag)
+  imp_width <- cfg$imputation$width %||% NULL
+  imp_shift <- cfg$imputation$downshift %||% NULL
+  p <- plot_imputation_summary(imputed, imputed_flag, width = imp_width, downshift = imp_shift)
 
   if (!is.null(out_file)) {
     # Ensure correct extension if missing

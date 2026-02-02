@@ -41,7 +41,9 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
 
     # ---------- Imputation QC ----------
     if (!is.null(pre$imputation_qc) && !is.null(pre$imputation_qc$imputed_flag)) {
-        f_imp_hist <- file.path(out_qc, "imputed_histograms_samples_summary.png")
+        imp_w <- cfg$imputation$width %||% "NA"
+        imp_s <- cfg$imputation$downshift %||% "NA"
+        f_imp_hist <- file.path(out_qc, sprintf("imputed_histograms_samples_summary_w%s_s%s.png", imp_w, imp_s))
         p_imp <- qc_imputation_summary(
             imputed      = pre$expr_imp_single,
             imputed_flag = pre$imputation_qc$imputed_flag,

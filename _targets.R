@@ -62,7 +62,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/01_Aaron_Fait/config.yaml",
+    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/02_Ella_Pick/config.yaml",
     format = "file"
   ),
 
@@ -99,8 +99,8 @@ list(
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  # pipe_proteomics()
+  pipe_proteomics()
 
   # RNA-seq pipeline (enable when ready)
-  pipe_rnaseq()
+  # pipe_rnaseq()
 )

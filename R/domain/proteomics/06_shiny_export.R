@@ -142,6 +142,12 @@ build_data_to_shiny_legacy_proteomics <- function(
         legacy$de_contrast_summary <- build_de_contrast_summary(legacy$stats_df)
     }
 
+    # DE summary counts (RNA-seq-compatible format: Name, up, down, any)
+    legacy["de_summary_counts"] <- list(NULL)
+    if (!is.null(legacy$stats_df)) {
+        legacy$de_summary_counts <- build_de_summary_counts_proteomics(legacy$stats_df)
+    }
+
     # ============================================================
     # Heatmap data (NO EXTRACTION - only collect)
     # ============================================================
@@ -189,6 +195,27 @@ build_data_to_shiny_legacy_proteomics <- function(
     # Get effects safely (avoid conflict with stats::effects function)
     prot_effects_cfg <- prot[["effects"]] %||% list()
     legacy$GROUP <- prot_effects_cfg$color %||% NULL
+
+    # ============================================================
+    # QC plot objects for interactive Shiny use
+    # ============================================================
+    if (!is.null(pca_res) && !is.null(pca_res$plots)) {
+        legacy$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        legacy$prot_hist     <- pca_res$plots$density         %||% NULL
+        legacy$imp_box       <- pca_res$plots$boxplot          %||% NULL
+        legacy$prot_hm       <- pca_res$plots$heatmap_clusters %||% NULL
+        legacy$prot_hm_noNA  <- pca_res$plots$heatmap_nocol    %||% NULL
+    } else {
+        legacy["imp_hist_samp"] <- list(NULL)
+        legacy["prot_hist"]     <- list(NULL)
+        legacy["imp_box"]       <- list(NULL)
+        legacy["prot_hm"]       <- list(NULL)
+        legacy["prot_hm_noNA"]  <- list(NULL)
+    }
+
+    # Expression matrices (explicit names for Shiny convenience)
+    legacy$prot_log2_raw  <- pre$expr_filt       %||% NULL
+    legacy$prot_log2_imp1 <- pre$expr_imp_single  %||% NULL
 
     # ============================================================
     # Dimension validation (sanity check)
