@@ -35,7 +35,7 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
 
     # ---------- Density ----------
     f_hist <- file.path(out_qc, "protein_histograms_summary.png")
-    p_dens <- qc_proteomics_density(pre$expr_imp_single, pre$meta, cfg, out_file = f_hist)
+    p_dens <- qc_omic_density(pre$expr_imp_single, pre$meta, cfg, out_file = f_hist)
     files <- c(files, f_hist)
     plots$density <- p_dens
 

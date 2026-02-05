@@ -49,7 +49,7 @@ invisible(lapply(pipeline_files, tar_source))
 tar_option_set(
   packages = c(
     "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
-    "openxlsx", "readr", "tidyr", "tibble",
+    "openxlsx", "readr", "readxl", "tidyr", "tibble",
     "edgeR", "DESeq2", "SummarizedExperiment"
   )
 )
@@ -62,7 +62,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/02_Ella_Pick/config.yaml",
+    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/03_Inna_Khozin/config.yaml",
     format = "file"
   ),
 
@@ -99,8 +99,11 @@ list(
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  pipe_proteomics()
+  # pipe_proteomics(),
 
   # RNA-seq pipeline (enable when ready)
   # pipe_rnaseq()
+
+  # Metabolomics pipeline – Stage 1 (enable when ready)
+  pipe_metabolomics()
 )

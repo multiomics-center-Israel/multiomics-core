@@ -128,7 +128,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
     f_hist <- file.path(out_qc, "rna_histograms_summary.png")
-    p_dens <- qc_proteomics_density(
+    p_dens <- qc_omic_density(
         mat, meta, cfg_temp,
         out_file = f_hist,
         title = "Density plot of normalized counts"
