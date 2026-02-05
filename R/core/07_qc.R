@@ -206,15 +206,6 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
 #' Prepare data for QC plotting
 #'
 #' Handles common tasks: matrix conversion, metadata matching, and annotation creation.
-#' Includes strict validation to fail fast on data inconsistencies.
-#'
-#' @param expr Numeric matrix or data.frame.
-#' @param meta Metadata data.frame.
-#' @param cfg Config object containing effects$samples and effects$color.
-#' @return A list containing aligned expr, meta, annot, and column names.
-#' Prepare data for QC plotting
-#'
-#' Handles common tasks: matrix conversion, metadata matching, and annotation creation.
 #' Includes strict validation to fail fast on data inconsistencies (duplicates, missing samples).
 #'
 #' @param expr Numeric matrix or data.frame.
@@ -327,9 +318,11 @@ to_long_format <- function(prep_data) {
 
 
 #' Boxplots of normalized expression per sample
-norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
+norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
   df_long <- to_long_format(d)
+
+  if (is.null(title)) title <- "Normalized expression boxplots"
 
   p <- ggplot2::ggplot(
     df_long,
@@ -337,7 +330,7 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
   ) +
     ggplot2::geom_boxplot(outlier.size = 0.4) +
     ggplot2::labs(
-      title  = "Normalized expression boxplots",
+      title  = title,
       x      = "Sample",
       y      = "log2(normalized intensity)",
       colour = d$color_col
@@ -497,7 +490,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
 
 
 #' Density overlay of normalized expression
-qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
+qc_omic_density <- function(expr_mat, meta, cfg, out_file = NULL,
                                   alpha = 0.3, show_legend = TRUE,
                                   title = "Density plot of normalized intensities") {
   # Keeping prepare_qc_data here intentionally.
@@ -505,7 +498,7 @@ qc_proteomics_density <- function(expr_mat, meta, cfg, out_file = NULL,
   df_long <- to_long_format(d)
 
   # Task 2: Density line only (no fill) - remove fill aesthetic, set alpha=1
-  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = value, colour = .data[[d$color_col]])) +
+  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = value, colour = .data[["sample"]])) +
     ggplot2::geom_density(alpha = 1) +
     ggplot2::labs(title = title, x = "Intensity", colour = d$color_col) +
     ggplot2::theme_minimal()

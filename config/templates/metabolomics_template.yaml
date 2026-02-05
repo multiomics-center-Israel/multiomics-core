@@ -1,0 +1,164 @@
+# ==============================================================================
+# Metabolomics Stage 1 config template
+# ==============================================================================
+# Add this block under modes: in your project config.yaml
+
+project:
+  dir: "C:/path/to/your/project"
+  name: "MyProject"
+  analysis_round: "01"
+
+paths:
+  raw: "data"
+  out: "outputs"
+
+params:
+  seed: 1
+
+modes:
+  metabolomics:
+
+    # ---- Input specification ----
+    input:
+      # "cd_raw"         : Compound Discoverer raw export (Area: columns)
+      # "processed_wide" : Already-processed wide table (clean sample columns)
+      format: "cd_raw"
+      sheet: null          # Excel sheet name/index (optional, for xlsx)
+
+    files:
+      data: "metabolomics/cd_export.xlsx"          # REQUIRED
+      metadata: "metabolomics/sample_metadata.csv"  # Optional (pipeline infers minimal meta if absent)
+
+    # ---- Parsing rules (for cd_raw format) ----
+    parsing:
+      cd_area_prefix: "Area:"
+      # Regex to extract sample_id from CD column names.
+      # Default captures: "Area: <SAMPLE_ID>.raw (Fn)"
+      # Group 1 = sample_id
+      cd_sample_regex: null  # null = use default
+
+    # ---- Feature ID construction ----
+    id_columns:
+      # If set and exists in data, use this column directly as feature_id
+      feature_id_col: null
+      # Columns used to construct feature_id when feature_id_col is absent
+      name_col: "Name"
+      mz_col: "m/z"
+      rt_col: "RT [min]"
+      # For processed_wide: list annotation columns so sample columns can be
+      # identified by exclusion. Not needed if metadata is provided.
+      annotation_cols: null
+        # - "Name"
+        # - "Formula"
+        # - "m/z"
+        # - "RT [min]"
+        # - "KEGG ID"
+
+    # ---- Normalization ----
+    normalization:
+      # Set to true if the input file is already biologically normalized.
+      # When true, sample_norm defaults to "none" (no double-normalization).
+      # Transformation and scaling are still applied if configured.
+      input_already_normalized: false
+
+      # 1. Sample normalization: "none" | "sum" | "median" | "pqn" | "is"
+      sample_norm: "pqn"
+
+      # 2. Transformation: "none" | "log2" | "log10"
+      transform: "log2"
+
+      # 3. Scaling: "none" | "auto" | "pareto" | "range"
+      scaling: "none"
+
+      # Pseudocount added before log transform (default 1)
+      pseudocount: 1
+
+      # How to handle NA values before normalization:
+      #   "keep"  (default) — pass NAs through; norm functions use na.rm=TRUE
+      #   "zero"  — replace NA with 0 (treat as below-detection)
+      # expr_filt is never modified; only the working copy (expr_for_norm) is affected.
+      na_policy: "keep"
+
+      # Column in row_data marking internal standard (only if sample_norm = "is")
+      is_ref_col: null
+
+      # ---- Method evaluation (optional) ----
+      # List of method combos to compare. Each entry must have:
+      #   sample_norm, transform, scaling
+      # Pipeline will produce a comparison table with QC metrics.
+      evaluate_methods:
+        - sample_norm: "none"
+          transform: "log2"
+          scaling: "none"
+        - sample_norm: "pqn"
+          transform: "log2"
+          scaling: "none"
+        - sample_norm: "pqn"
+          transform: "log2"
+          scaling: "pareto"
+        - sample_norm: "median"
+          transform: "log2"
+          scaling: "auto"
+
+    # ---- Sample filtering (optional) ----
+    sample_filter:
+      enabled: false
+      rules:
+        exclude_blanks: true
+        exclude_qc: false
+        exclude_samples: null  # list of sample IDs to exclude
+
+    # ---- Effects (for QC plots) ----
+    effects:
+      # Column in metadata used as sample identifier
+      samples: "sample_id"
+      # Column(s) for PCA coloring (single string or list for multi-color)
+      color: "sample_type"
+      # Column for PCA shape aesthetic (optional)
+      shape: null
+      # Columns to show as heatmap annotations (optional list)
+      heatmap_annotations: null
+        # - "Treatment"
+        # - "TimePoint"
+
+    # ---- QC plot settings ----
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+
+# ==============================================================================
+# Example: "processed" input (already normalized)
+# ==============================================================================
+# modes:
+#   metabolomics:
+#     input:
+#       format: "processed_wide"
+#     files:
+#       data: "metabolomics/processed_metabolites.csv"
+#       metadata: "metabolomics/meta.csv"
+#     id_columns:
+#       feature_id_col: "Name"
+#       annotation_cols:
+#         - "Name"
+#         - "Formula"
+#         - "m/z"
+#         - "RT [min]"
+#         - "KEGG ID"
+#         - "TreatmentP"
+#         - "TimeP"
+#         - "InteractionP"
+#     normalization:
+#       input_already_normalized: true
+#       sample_norm: "none"          # skip: already normalized
+#       transform: "log2"            # still apply log2
+#       scaling: "pareto"            # still apply scaling
+#     effects:
+#       samples: "sample_id"
+#       color: "Treatment"
+#       shape: "TimePoint"
+#       heatmap_annotations:
+#         - "Treatment"
+#         - "TimePoint"
