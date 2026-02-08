@@ -31,33 +31,56 @@ filter_proteomics_by_min_count <- function(expr_mat, row_data, meta, cfg, group_
     list(expr_mat = expr_mat_filt, row_data = row_data_filt, ids = ids, keep = keep)
 }
 
-filter_features_dynamic <- function(norm_mat, meta, sample_col, group_col, threshold = 3) {
+# ==============================================================================
+# Optimized Filtering Engine (Vectorized)
+# ==============================================================================
+filter_features_optimized <- function(norm_mat, meta, sample_col, group_col, threshold) {
+    # Validity checks
     stopifnot(sample_col %in% colnames(meta))
     stopifnot(group_col %in% colnames(meta))
 
-    if (!all(colnames(norm_mat) %in% meta[[sample_col]])) {
-        miss <- setdiff(colnames(norm_mat), meta[[sample_col]])
-        stop("Samples missing in metadata: ", paste(miss, collapse = ", "))
-    }
-    meta2 <- meta[match(colnames(norm_mat), meta[[sample_col]]), , drop = FALSE]
+    norm_mat <- as.matrix(norm_mat)
 
+    # Ensure samples match metadata
+    if (!all(colnames(norm_mat) %in% meta[[sample_col]])) {
+        stop("Samples missing in metadata")
+    }
+
+    # Align metadata
+    meta2 <- meta[match(colnames(norm_mat), meta[[sample_col]]), , drop = FALSE]
     group_list <- split(meta2[[sample_col]], meta2[[group_col]])
 
-    keep_feature <- function(expr_values) {
-        for (grp in names(group_list)) {
-            samp <- group_list[[grp]]
-            sub_vals <- expr_values[samp]
-            n_reps <- sum(!is.na(sub_vals))
-            min_pass <- ceiling(n_reps / 2)
-            if (sum(sub_vals >= threshold, na.rm = TRUE) >= min_pass) {
-                return(TRUE)
-            }
-        }
-        FALSE
+    # Initialize keep vector (FALSE for all genes)
+    keep_vec <- rep(FALSE, nrow(norm_mat))
+
+    # Iterate over groups
+    for (grp in names(group_list)) {
+        samp <- group_list[[grp]]
+        sub_mat <- norm_mat[, samp, drop = FALSE]
+
+        # Calculate replicates present per gene
+        n_reps <- rowSums(!is.na(sub_mat))
+
+        # Determine minimum required replicates (at least half, rounded up)
+        min_pass <- ceiling(n_reps / 2)
+
+        # Count how many samples pass the threshold
+        n_above_threshold <- rowSums(sub_mat >= threshold, na.rm = TRUE)
+
+        # Update keep vector using OR logic
+        keep_vec <- keep_vec | (n_above_threshold >= min_pass)
     }
 
-    keep_vec <- apply(norm_mat, 1, keep_feature)
     list(filtered = norm_mat[keep_vec, , drop = FALSE], keep_vec = keep_vec)
+}
+
+# ==============================================================================
+# Legacy wrapper (DEPRECATED)
+# ==============================================================================
+#' @deprecated Use filter_features_optimized() instead
+filter_features_dynamic <- function(norm_mat, meta, sample_col, group_col, threshold = 3) {
+    warning("filter_features_dynamic is deprecated. Using optimized engine with provided threshold.")
+    filter_features_optimized(norm_mat, meta, sample_col, group_col, threshold)
 }
 
 # --- Generic helpers (duplicated from 01_preprocessing.R to ensure domain independence or assume loaded) ---

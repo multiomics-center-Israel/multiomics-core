@@ -28,7 +28,7 @@ plot_density_overlay <- function(expr_mat,
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.data.frame(expr_mat)
 
-  df_long <- expr_mat |>
+  norm_expr_long <- expr_mat |>
     tibble::rownames_to_column("feature") |>
     tidyr::pivot_longer(
       cols = -feature,
@@ -36,9 +36,9 @@ plot_density_overlay <- function(expr_mat,
       values_to = "value"
     )
 
-  df_long <- df_long[is.finite(df_long$value), , drop = FALSE]
+  norm_expr_long <- norm_expr_long[is.finite(norm_expr_long$value), , drop = FALSE]
 
-  ggplot2::ggplot(df_long, ggplot2::aes(x = value, color = SampleID)) +
+  ggplot2::ggplot(norm_expr_long, ggplot2::aes(x = value, color = SampleID)) +
     ggplot2::geom_density(alpha = alpha, linewidth = 0.7) +
     ggplot2::labs(
       title = title,

@@ -651,12 +651,12 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
 
   # 2. Convert Expression Matrix to Long Format
   # Rows = Genes, Cols = Samples -> Melt
-  df_long <- as.data.frame(expr_mat) |>
+  norm_expr_long <- as.data.frame(expr_mat) |>
     tibble::rownames_to_column("Gene") |>
     tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
 
   # 3. Join with Metadata
-  df_annotated <- df_long |>
+  df_annotated <- norm_expr_long |>
     dplyr::inner_join(meta_map, by = "Name")
 
   # 4. Map Genes to Clusters

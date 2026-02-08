@@ -174,8 +174,3 @@ run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
     ))
 }
 
-# Legacy wrapper for backward compatibility (optional)
-filter_features_dynamic <- function(norm_mat, meta, sample_col, group_col, threshold = 3) {
-    warning("filter_features_dynamic is deprecated. Using optimized engine with provided threshold.")
-    filter_features_optimized(norm_mat, meta, sample_col, group_col, threshold)
-}
