@@ -1,6 +1,9 @@
 pipe_rnaseq <- function() {
     list(
         tar_target(rna_inputs, load_rna_inputs(config)),
+        # Optional annotation inputs (NULL if not configured)
+        tar_target(rna_annot, load_and_process_annotation(config)),
+        tar_target(rna_trinotate_main, load_and_process_trinotate(config)),
         tar_target(rna_pre, preprocess_rna(rna_inputs, config, gene_lengths = NULL, verbose = TRUE)),
         tar_target(rna_out_dir, get_mode_out_dir(run_dir, "rna")),
         tar_target(
@@ -54,6 +57,8 @@ pipe_rnaseq <- function() {
                 config = config,
                 pca_res = rna_qc_pre_obj,
                 clustering_res = rna_clustering_obj,
+                annot = rna_annot,                    # Optional: gene annotation
+                trinotate_main = rna_trinotate_main,  # Optional: Trinotate annotation
                 include_legacy = TRUE,  # Include legacy aliases for backward compatibility
                 out_file = file.path(rna_out_dir, "shiny_payload_rnaseq.rds")
             ),

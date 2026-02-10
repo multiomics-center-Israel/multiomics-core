@@ -26,6 +26,7 @@
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
 #' @param annot Optional: external annotation data.frame
+#' @param trinotate_main Optional: Trinotate annotation data.frame (for legacy compatibility)
 #' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
 #'
 #' @return A named list with 26 canonical keys (+ legacy aliases if requested)
@@ -39,6 +40,7 @@ build_shiny_payload_rnaseq <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
+    trinotate_main = NULL,
     include_legacy = TRUE
 ) {
     # ============================================================
@@ -226,7 +228,8 @@ build_shiny_payload_rnaseq <- function(
     if (isTRUE(include_legacy)) {
         payload <- attach_legacy_aliases(payload)
 
-        payload$trinotate_main <- NULL
+        # Trinotate annotation (legacy key, passed through from pipeline)
+        payload$trinotate_main <- trinotate_main
 
         if (!is.null(payload$stats_df) && "feature_id" %in% names(payload$stats_df)) {
             if (!"Gene" %in% names(payload$stats_df)) {

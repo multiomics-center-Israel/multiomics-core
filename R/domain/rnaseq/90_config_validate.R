@@ -45,5 +45,15 @@ validate_rna_config <- function(cfg) {
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
     }
 
+    # 5. Annotation (optional)
+    if (!is.null(cfg$annotation) && !is.null(cfg$annotation$source)) {
+        assert_one_of(
+            cfg$annotation$source,
+            "annotation$source",
+            c("Ensembl", "NCBI_GTF", "Generic"),
+            allow_null = TRUE
+        )
+    }
+
     invisible(TRUE)
 }
