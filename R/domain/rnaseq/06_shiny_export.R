@@ -102,6 +102,9 @@ build_shiny_payload_rnaseq <- function(
         # pca_scores: PCA scores data.frame with metadata
         pca_sc <- pca_res$pca_scores %||% pca_res$objects$pca_scores
         if (!is.null(pca_sc)) payload$pca_scores <- pca_sc
+        # QC plot
+        payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
+
     }
 
     # ============================================================
@@ -260,17 +263,17 @@ build_shiny_payload_rnaseq <- function(
 build_de_summary_counts_rnaseq <- function(de_stats) {
     if (is.null(de_stats)) return(NULL)
 
-    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    pass_cols <- grep("_pass", names(de_stats), value = TRUE)
     pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
     if (length(pass_cols) == 0) return(NULL)
 
     summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass_", "", col)
+        contrast_name <- sub("_pass", "", col)
 
-        fc_col <- paste0("log2FoldChange_", contrast_name)
+        fc_col <- paste0("linearFC.", contrast_name)
         if (!fc_col %in% names(de_stats)) {
-            fc_col <- grep(paste0("log2.*", contrast_name), names(de_stats), value = TRUE)[1]
+            fc_col <- grep(paste0("linearFC.*", contrast_name), names(de_stats), value = TRUE)[1]
         }
 
         sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1

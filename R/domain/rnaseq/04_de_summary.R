@@ -1,16 +1,17 @@
 #' Run DESeq2 differential expression analysis
 #'
-#' @param counts Integer count matrix (genes x samples)
+#' Accepts either raw integer count matrices or tximport objects. Input type is
+#' detected automatically and the appropriate DESeq2 constructor is used.
+#'
+#' @param counts Expression input: integer count matrix (genes x samples) OR tximport object.
+#'   For tximport, must contain 'counts', 'abundance', and 'length' matrices.
 #' @param meta Data frame with sample metadata
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator
-#' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, etc.)
-#' @return List of DE result tables (one per contrast)
+#' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, sample_col, sample_alignment, etc.)
+#' @return List with 'dds' (DESeqDataSet) and 'tables' (list of DE result data frames)
 #' @export
 run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
-    # Validate inputs
-    if (!is.matrix(counts) && !is.data.frame(counts)) {
-        stop("counts must be a matrix or data frame")
-    }
+    # Validate contrasts
     if (nrow(contrasts_df) == 0) {
         stop("contrasts_df is empty")
     }
@@ -32,11 +33,30 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Store levels for validation
     valid_levels <- levels(meta[[factor_col]])
 
-    # DESeq2 dataset
-    dds0 <- DESeq2::DESeqDataSetFromMatrix(
-        countData = counts,
-        colData   = as.data.frame(meta),
-        design    = stats::as.formula(paste0("~ ", factor_col))
+    # Extract sample column from config (default to rownames-based alignment)
+    sample_col <- de_cfg$sample_col %||% de_cfg$id_columns$sample_col %||% "SampleID"
+
+    # Ensure sample_col exists in meta; if not, try to use rownames
+    if (!sample_col %in% colnames(meta)) {
+        if (!is.null(rownames(meta)) && !any(rownames(meta) == "")) {
+            meta[[sample_col]] <- rownames(meta)
+            message(sprintf("[run_deseq2_de] Using rownames as sample_col '%s'", sample_col))
+        } else {
+            stop(sprintf("Sample column '%s' not found in metadata and rownames are not usable", sample_col))
+        }
+    }
+
+    # Determine alignment mode from config (strict by default)
+    lenient_alignment <- identical(de_cfg$sample_alignment, "lenient")
+
+    # Create DESeqDataSet using factory (handles both matrix and tximport)
+    design_formula <- stats::as.formula(paste0("~ ", factor_col))
+    dds0 <- create_deseq_dataset(
+        expr = counts,
+        meta = meta,
+        design = design_formula,
+        sample_col = sample_col,
+        lenient_alignment = lenient_alignment
     )
 
     # DESeq2 mode selection from config

@@ -388,7 +388,7 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
 
     # 8. Config variable validation
     if (!is.null(payload$color)) {
-        if (!payload$color %in% colnames(payload$sample_meta)) {
+        if (any(!payload$color %in% colnames(payload$sample_meta))) {
             warning(prefix, " color '", payload$color,
                     "' not found in sample_meta columns")
         }

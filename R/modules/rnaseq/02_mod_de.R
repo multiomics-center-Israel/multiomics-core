@@ -14,7 +14,7 @@ mod_rnaseq_de <- function(pre, inputs, config, verbose = FALSE) {
 
     # Delegate actual DE run to domain function
     run_deseq2_de(
-        counts = pre$expr_filt,
+        counts = pre$de_input,
         meta = pre$meta,
         contrasts_df = contrasts_df,
         de_cfg = de_cfg
