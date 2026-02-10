@@ -90,7 +90,22 @@ get_payload_key_definitions <- function() {
         qc_plots = list(
             type = "list",
             required = FALSE,
-            description = "Named list of pre-rendered QC plots (ggplot objects)"
+            description = "Named list of pre-rendered QC plots (ggplot objects) - DEPRECATED, use individual plot keys"
+        ),
+        imp_hist_samp = list(
+            type = "ggplot",
+            required = FALSE,
+            description = "Imputation histogram plot (ggplot object)"
+        ),
+        samples_hm = list(
+            type = "pheatmap",
+            required = FALSE,
+            description = "Samples distance heatmap "
+        ),
+        samples_hm_w_na = list(
+            type = "pheatmap",
+            required = FALSE,
+            description = "Samples distance heatmap with NA (relevant to proteomics)"
         ),
 
         # --- DE Results (5 keys) ---

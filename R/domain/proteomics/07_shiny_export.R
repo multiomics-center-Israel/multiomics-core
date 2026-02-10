@@ -86,6 +86,9 @@ build_shiny_payload_proteomics <- function(
     # expr_norm: Imputed expression (NO NAs allowed)
     # In proteomics, we use the imputed matrix
     payload$expr_norm <- pre$expr_imp_single %||% pre$expr_work
+    
+    # expr_long: Long-format expression with metadata
+    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
 
     # ============================================================
     # QC/PCA (3 keys)
@@ -102,19 +105,6 @@ build_shiny_payload_proteomics <- function(
 
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
-    }
-
-    # qc_plots: Named list of QC plots (proteomics has many)
-    if (!is.null(pca_res) && !is.null(pca_res$plots)) {
-        payload$qc_plots <- list(
-            imputation_hist = pca_res$plots$imputation_hist %||% NULL,
-            density = pca_res$plots$density %||% NULL,
-            boxplot = pca_res$plots$boxplot %||% NULL,
-            heatmap_clusters = pca_res$plots$heatmap_clusters$gtable %||% NULL,
-            heatmap_nocol = pca_res$plots$heatmap_nocol$gtable %||% NULL
-        )
-    } else {
-        payload$qc_plots <- list()
     }
 
     # ============================================================
@@ -245,10 +235,8 @@ build_shiny_payload_proteomics <- function(
         # QC plot legacy aliases
         if (!is.null(pca_res) && !is.null(pca_res$plots)) {
             payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
-            payload$prot_hist <- pca_res$plots$density %||% NULL
-            payload$imp_box <- pca_res$plots$boxplot %||% NULL
-            payload$prot_hm <- pca_res$plots$heatmap_clusters %||% NULL
-            payload$prot_hm_noNA <- pca_res$plots$heatmap_nocol %||% NULL
+            payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
+            payload$samples_hm_w_na <- pca_res$plots$dist_heatmap_na %||% NULL
         }
 
         # DE contrast summary (proteomics-specific)
@@ -536,8 +524,8 @@ build_data_to_shiny_legacy_proteomics <- function(
         legacy$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
         legacy$prot_hist <- pca_res$plots$density %||% NULL
         legacy$imp_box <- pca_res$plots$boxplot %||% NULL
-        legacy$prot_hm <- pca_res$plots$heatmap_clusters %||% NULL
-        legacy$prot_hm_noNA <- pca_res$plots$heatmap_nocol %||% NULL
+        legacy$sample_hm <- pca_res$pplots$dist_heatmap_na %||% NULL
+        legacy$prot_hm_noNA <- pca_res$plots$dist_heatmap %||% NULL
     } else {
         legacy["imp_hist_samp"] <- list(NULL)
         legacy["prot_hist"] <- list(NULL)
