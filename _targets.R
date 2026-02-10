@@ -62,7 +62,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/03_Inna_Khozin/config.yaml",
+    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
     format = "file"
   ),
 
@@ -99,11 +99,11 @@ list(
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  # pipe_proteomics(),
+  # pipe_proteomics()
 
   # RNA-seq pipeline (enable when ready)
-  # pipe_rnaseq()
+  pipe_rnaseq()
 
   # Metabolomics pipeline – Stage 1 (enable when ready)
-  pipe_metabolomics()
+  # pipe_metabolomics()
 )

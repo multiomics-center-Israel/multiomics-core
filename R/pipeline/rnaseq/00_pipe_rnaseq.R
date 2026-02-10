@@ -44,16 +44,18 @@ pipe_rnaseq <- function() {
                 out_dir = rna_out_dir
             )
         ),
+        # Shiny payload export (canonical v2.0 with legacy aliases)
         tar_target(
-            rna_shiny_legacy,
-            save_data_to_shiny_legacy_rna(
+            rna_shiny_payload,
+            save_shiny_payload_rnaseq(
                 pre = rna_pre,
                 de_res = rna_de_res,
                 inputs = rna_inputs,
                 config = config,
                 pca_res = rna_qc_pre_obj,
                 clustering_res = rna_clustering_obj,
-                out_file = file.path(rna_out_dir, "data_to_shiny_legacy_rnaseq.rds")
+                include_legacy = TRUE,  # Include legacy aliases for backward compatibility
+                out_file = file.path(rna_out_dir, "shiny_payload_rnaseq.rds")
             ),
             format = "file"
         )

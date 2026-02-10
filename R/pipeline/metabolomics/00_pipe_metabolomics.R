@@ -65,6 +65,22 @@ pipe_metabolomics <- function() {
                 out_dir = metab_out_dir
             ),
             format = "file"
+        ),
+
+        # ---- Shiny payload export (canonical v2.0) ----
+        tar_target(
+            metab_shiny_payload,
+            save_shiny_payload_metabolomics(
+                pre = metab_pre,
+                de_res = NULL,  # No DE analysis yet for metabolomics
+                inputs = metab_inputs,
+                config = config,
+                pca_res = metab_qc_pre_obj,
+                clustering_res = NULL,  # No clustering yet for metabolomics
+                include_legacy = TRUE,
+                out_file = file.path(metab_out_dir, "shiny_payload_metabolomics.rds")
+            ),
+            format = "file"
         )
     )
 }

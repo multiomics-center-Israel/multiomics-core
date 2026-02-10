@@ -1,0 +1,426 @@
+# ============================================================
+# Shiny Export — Metabolomics
+# ============================================================
+# This file contains the canonical builder for metabolomics.
+# Since metabolomics is newly added to the pipeline, there is
+# no legacy builder - only the canonical contract (v2.0).
+#
+# New code should use build_shiny_payload_metabolomics().
+# ============================================================
+
+
+# ============================================================
+# CANONICAL BUILDER (v2.0)
+# ============================================================
+
+#' Build canonical Shiny payload for Metabolomics
+#'
+#' Creates a Shiny payload conforming to the canonical contract (v2.0).
+#' All 26 keys are guaranteed to exist (NULL if not applicable).
+#'
+#' @param pre Preprocessing results (from preprocess_metabolomics)
+#' @param de_res DE results (from metabolomics DE analysis). Can be NULL if DE was skipped.
+#' @param inputs Input list (contrasts, metadata, etc.)
+#' @param config Full config object
+#' @param pca_res Optional: pre-computed PCA results
+#' @param clustering_res Optional: pre-computed clustering results
+#' @param annot Optional: external annotation data.frame
+#' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
+#'
+#' @return A named list with 26 canonical keys (+ legacy aliases if requested)
+#'
+#' @export
+build_shiny_payload_metabolomics <- function(
+    pre,
+    de_res = NULL,
+    inputs,
+    config,
+    pca_res = NULL,
+    clustering_res = NULL,
+    annot = NULL,
+    include_legacy = TRUE
+) {
+    # ============================================================
+    # Initialize canonical payload structure
+    # ============================================================
+    payload <- init_shiny_payload("metabolomics")
+
+    # ============================================================
+    # Extract config shortcuts
+    # ============================================================
+    modes <- config$modes %||% list()
+    metab_cfg <- modes$metabolomics %||% list()
+    de_cfg <- metab_cfg$de %||% list()
+    norm_cfg <- metab_cfg$normalization %||% list()
+    effects_cfg <- metab_cfg$effects %||% list()
+
+    # ============================================================
+    # METADATA (3 keys)
+    # ============================================================
+
+    # sample_meta: Sample metadata with rownames as sample IDs
+    payload$sample_meta <- pre$meta
+    if (!is.null(payload$sample_meta)) {
+        sample_col <- effects_cfg$samples %||% "sample_id"
+        if (sample_col %in% colnames(payload$sample_meta)) {
+            rownames(payload$sample_meta) <- as.character(payload$sample_meta[[sample_col]])
+        }
+    }
+
+    # contrasts: Contrast definitions
+    payload$contrasts <- inputs$contrasts %||% NULL
+
+    # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.)
+    if (!is.null(annot)) {
+        payload$feature_annot <- annot
+    } else if (!is.null(pre$row_data)) {
+        # Use row_data as feature annotations if no external annot provided
+        payload$feature_annot <- pre$row_data
+    }
+
+    # ============================================================
+    # EXPRESSION DATA (2 keys)
+    # ============================================================
+
+    # expr_raw: Filtered expression (before normalization, may have NAs)
+    payload$expr_raw <- pre$expr_filt
+
+    # expr_norm: Normalized expression (NO NAs allowed)
+    # In metabolomics, expr_work is the normalized matrix
+    # Check for NA policy - if na_policy="zero", NAs were replaced
+    payload$expr_norm <- pre$expr_work
+
+    # Handle NAs in expr_norm if present (warn but don't fail)
+    if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
+        na_count <- sum(is.na(payload$expr_norm))
+        warning(
+            "metabolomics expr_norm contains ", na_count, " NA values. ",
+            "Consider using na_policy='zero' in config or imputation. ",
+            "Replacing NAs with row medians for contract compliance."
+        )
+        # Replace NAs with row medians as fallback
+        for (i in seq_len(nrow(payload$expr_norm))) {
+            row_i <- payload$expr_norm[i, ]
+            na_mask <- is.na(row_i)
+            if (any(na_mask)) {
+                row_median <- median(row_i, na.rm = TRUE)
+                if (is.na(row_median)) row_median <- 0
+                payload$expr_norm[i, na_mask] <- row_median
+            }
+        }
+    }
+
+    # ============================================================
+    # QC/PCA (3 keys)
+    # ============================================================
+
+    if (!is.null(pca_res)) {
+        # Handle nested structure (objects list) or flat structure
+        pca_objects <- pca_res$objects %||% pca_res
+
+        # pca_object: prcomp result
+        payload$pca_object <- pca_objects$norm_log_counts_pca %||%
+                              pca_objects$pca_object %||%
+                              pca_objects$pca %||%
+                              NULL
+
+        # pca_scores: PCA scores data.frame with metadata
+        payload$pca_scores <- pca_objects$pca_scores %||% NULL
+    }
+
+    # qc_plots: Named list of QC plots
+    if (!is.null(pca_res) && !is.null(pca_res$plots)) {
+        payload$qc_plots <- list(
+            density = pca_res$plots$density %||% NULL,
+            boxplot = pca_res$plots$boxplot %||% NULL,
+            pca_2d = pca_res$plots$pca_2d %||% NULL,
+            missing_heatmap = pca_res$plots$missing_heatmap %||% NULL,
+            correlation = pca_res$plots$correlation %||% NULL
+        )
+    } else {
+        payload$qc_plots <- list()
+    }
+
+    # ============================================================
+    # DE RESULTS (5 keys)
+    # Note: Keys already initialized to NULL by init_shiny_payload()
+    # Do NOT use payload$key <- NULL here as it REMOVES the key!
+    # ============================================================
+
+    if (!is.null(de_res)) {
+        # de_model: Statistical model object (limma fit, etc.)
+        de_model_val <- de_res$de_model %||% de_res$fit
+        if (!is.null(de_model_val)) payload$de_model <- de_model_val
+
+        # de_stats: Full DE statistics table
+        de_stats_val <- de_res$summary_df %||% de_res$de_table
+        if (!is.null(de_stats_val)) payload$de_stats <- de_stats_val
+
+        # Ensure feature_id column exists
+        if (!is.null(payload$de_stats)) {
+            possible_id_cols <- c("feature_id", "FeatureID", "metabolite", "compound", "name")
+            found_col <- intersect(possible_id_cols, names(payload$de_stats))[1]
+
+            if (!is.na(found_col) && !"feature_id" %in% names(payload$de_stats)) {
+                payload$de_stats$feature_id <- payload$de_stats[[found_col]]
+            }
+        }
+
+        # de_sig_stats: Subset of de_stats for significant features
+        if (!is.null(payload$de_stats) && "pass_any_contrast" %in% colnames(payload$de_stats)) {
+            payload$de_sig_stats <- payload$de_stats[
+                !is.na(payload$de_stats$pass_any_contrast) &
+                payload$de_stats$pass_any_contrast == 1, ,
+                drop = FALSE
+            ]
+        }
+
+        # de_expr_norm: Expression matrix subset to significant features
+        if (!is.null(payload$expr_norm) && !is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
+            sig_ids <- payload$de_sig_stats$feature_id %||%
+                       payload$de_sig_stats$FeatureID %||%
+                       payload$de_sig_stats$metabolite
+
+            if (!is.null(sig_ids) && length(sig_ids) > 0) {
+                matched_ids <- intersect(sig_ids, rownames(payload$expr_norm))
+                if (length(matched_ids) > 0) {
+                    payload$de_expr_norm <- payload$expr_norm[matched_ids, , drop = FALSE]
+                }
+            }
+        }
+
+        # de_summary: Per-contrast summary counts
+        if (!is.null(payload$de_stats)) {
+            payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats)
+        }
+    }
+
+    # ============================================================
+    # CLUSTERING (4 keys)
+    # Note: Keys already initialized to NULL by init_shiny_payload()
+    # Do NOT use payload$key <- NULL here as it REMOVES the key!
+    # ============================================================
+
+    if (!is.null(clustering_res)) {
+        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
+
+        val <- src$clusters %||% src$New_clusters
+        if (!is.null(val)) payload$clust_partition <- val
+        if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
+        val <- src$heatmaps %||% src$heatmaps_by_pattern
+        if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
+    }
+
+    # clust_heatmap_hier: Hierarchical clustering (pheatmap + dendrogram)
+    if (!is.null(de_res)) {
+        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
+        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    }
+    if (is.null(payload$clust_heatmap_hier) && !is.null(clustering_res)) {
+        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
+        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
+        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    }
+
+    # ============================================================
+    # CONFIGURATION (6 keys)
+    # ============================================================
+
+    payload$config_padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
+
+    linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
+    payload$config_log_fc_cutoff <- log2(linear_fc)
+
+    # Build normalization method description
+    norm_method <- paste0(
+        norm_cfg$sample_norm %||% "none",
+        "/",
+        norm_cfg$transform %||% "none",
+        "/",
+        norm_cfg$scaling %||% "none"
+    )
+    payload$config_norm_method <- norm_method
+
+    # Group and aesthetic variables
+    if (!is.null(effects_cfg$color)) {
+        payload$config_group_var <- as.character(effects_cfg$color[[1]])
+    } else if (!is.null(effects_cfg$group)) {
+        payload$config_group_var <- as.character(effects_cfg$group[[1]])
+    } else {
+        payload$config_group_var <- "sample_type"
+    }
+
+    if (!is.null(effects_cfg$color)) {
+        payload$config_color_var <- as.character(effects_cfg$color)
+    }
+
+    if (!is.null(effects_cfg$shape)) {
+        payload$config_shape_var <- as.character(effects_cfg$shape)
+    }
+
+    # ============================================================
+    # VALIDATION
+    # ============================================================
+
+    assert_shiny_payload_contract(payload, strict = FALSE, context = "metabolomics")
+
+    # ============================================================
+    # LEGACY ALIASES (optional)
+    # ============================================================
+
+    if (isTRUE(include_legacy)) {
+        payload <- attach_legacy_aliases(payload)
+
+        # Metabolomics-specific legacy keys
+        payload$metab_raw <- pre$expr_raw %||% NULL
+        payload$metab_filt <- pre$expr_filt %||% NULL
+        payload$metab_norm <- pre$expr_work %||% NULL
+
+        # Missingness info (useful for metabolomics QC)
+        if (!is.null(pre$info) && !is.null(pre$info$missingness)) {
+            payload$missingness <- pre$info$missingness
+        }
+
+        # Normalization evaluation results (if any)
+        if (!is.null(pre$normalization_eval)) {
+            payload$normalization_eval <- pre$normalization_eval
+        }
+
+        # Sample map (CD column to sample_id mapping)
+        if (!is.null(pre$sample_map)) {
+            payload$sample_map <- pre$sample_map
+        }
+
+        # Row data (feature annotations) for compatibility
+        payload$row_data <- pre$row_data %||% NULL
+    }
+
+    # ============================================================
+    # SUMMARY
+    # ============================================================
+
+    message("Metabolomics payload created successfully")
+    message("  - Canonical keys: ", length(get_canonical_keys()))
+    message("  - Total keys: ", length(payload))
+    message("  - NULL keys: ", sum(sapply(payload, is.null)))
+    message("  - Non-NULL keys: ", sum(!sapply(payload, is.null)))
+
+    payload
+}
+
+
+#' Build DE summary counts for Metabolomics
+#'
+#' @param de_stats DE statistics data.frame with pass columns
+#' @return data.frame with columns: contrast, up, down, total
+#' @keywords internal
+build_de_summary_counts_metabolomics <- function(de_stats) {
+    if (is.null(de_stats)) return(NULL)
+
+    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+
+    if (length(pass_cols) == 0) return(NULL)
+
+    summaries <- lapply(pass_cols, function(col) {
+        contrast_name <- sub("^pass_", "", col)
+
+        # Try multiple FC column name patterns
+        fc_patterns <- c(
+            paste0("logFC_", contrast_name),
+            paste0("log2FoldChange_", contrast_name),
+            paste0("logFC.", contrast_name),
+            paste0("FC_", contrast_name)
+        )
+        fc_col <- NULL
+        for (pat in fc_patterns) {
+            if (pat %in% names(de_stats)) {
+                fc_col <- pat
+                break
+            }
+        }
+
+        sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1
+
+        if (!is.null(fc_col)) {
+            up <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
+            down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
+        } else {
+            up <- NA
+            down <- NA
+        }
+
+        data.frame(
+            contrast = contrast_name,
+            up = up,
+            down = down,
+            total = sum(sig_rows, na.rm = TRUE),
+            stringsAsFactors = FALSE
+        )
+    })
+
+    do.call(rbind, summaries)
+}
+
+
+#' Save Metabolomics Shiny payload to RDS file
+#'
+#' @param ... Arguments passed to build_shiny_payload_metabolomics()
+#' @param out_file Output file path
+#' @return Path to saved file (invisibly)
+#' @export
+save_shiny_payload_metabolomics <- function(..., out_file = "shiny_payload_metabolomics.rds") {
+    payload <- build_shiny_payload_metabolomics(...)
+
+    out_dir <- dirname(out_file)
+    if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
+        dir.create(out_dir, recursive = TRUE)
+    }
+
+    saveRDS(payload, out_file)
+    message("Saved metabolomics payload to: ", out_file)
+
+    invisible(out_file)
+}
+
+
+#' Load and validate metabolomics Shiny payload
+#'
+#' @param file Path to RDS file
+#' @param verbose Print diagnostic information
+#' @return The loaded payload list
+#' @export
+load_shiny_payload_metabolomics <- function(file, verbose = TRUE) {
+    if (!file.exists(file)) {
+        stop("File not found: ", file)
+    }
+
+    payload <- readRDS(file)
+
+    if (verbose) {
+        message("Loaded metabolomics payload from: ", file)
+        message("  Version: ", payload$payload_version %||% payload$legacy_version %||% "unknown")
+        message("  Created: ", payload$payload_created_at %||% payload$legacy_created_at %||% "unknown")
+        message("  Source: ", payload$payload_source %||% payload$legacy_source %||% "unknown")
+        message("  Total keys: ", length(payload))
+        message("  NULL keys: ", sum(sapply(payload, is.null)))
+        message("  Non-NULL keys: ", sum(!sapply(payload, is.null)))
+
+        # Check critical keys
+        critical <- c("sample_meta", "expr_raw", "expr_norm", "de_stats", "pca_object")
+        for (key in critical) {
+            if (key %in% names(payload)) {
+                status <- if (is.null(payload[[key]])) "NULL" else "OK"
+                message("  [", status, "] ", key)
+            }
+        }
+
+        # Report expression dimensions
+        if (!is.null(payload$expr_norm)) {
+            message("  Expression: ", nrow(payload$expr_norm), " features x ",
+                    ncol(payload$expr_norm), " samples")
+        }
+    }
+
+    payload
+}

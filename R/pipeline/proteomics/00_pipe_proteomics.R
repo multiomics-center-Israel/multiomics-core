@@ -87,76 +87,18 @@ pipe_proteomics <- function() {
             )
         ),
 
-        # ---- write outputs (files) ----
+        # ---- unified exports (TSV, Excel, Shiny payload) ----
         tar_target(
-            prot_de_files,
-            write_proteomics_multimpute_outputs(
-                pre         = prot_pre,
-                de_res      = prot_de_res,
-                inputs      = prot_inputs,
-                config      = config,
-                out_dir     = prot_out_dir,
-                write_runs  = FALSE,
-                excel_order = prot_clustering_obj$excel_order
-            ),
-            format = "file"
-        ),
-
-        # ---- build final results table ----
-        tar_target(
-            prot_final_results,
-            {
-                if (is.null(prot_inputs$contrasts) || is.null(prot_de_res$summary_df)) {
-                    NULL
-                } else {
-                    # DEBUG: Enforce config availability
-                    conf_id <- config$modes$proteomics$de_table$id_col
-                    if (is.null(conf_id)) {
-                        stop("CRITICAL CONFIG ERROR: config$modes$proteomics$de_table$id_col is NULL. Check config.yaml indentation or spelling.")
-                    }
-
-                    build_final_results_proteomics(
-                        pre = prot_pre,
-                        summary_df = prot_de_res$summary_df,
-                        contrasts_df = prot_inputs$contrasts,
-                        row_data = prot_pre$row_data,
-                        feature_id_col = conf_id
-                    )
-                }
-            }
-        ),
-        
-        # Shiny legacy export (RDS file for old Shiny app)
-        tar_target(
-            prot_shiny_legacy,
-            save_data_to_shiny_legacy_proteomics(
-                pre = prot_pre,
-                de_res = prot_de_res,
-                inputs = prot_inputs,
-                config = config,
-                pca_res = prot_qc_pre_obj, # Pass QC pre results with PCA objects
-                clustering_res = prot_clustering_obj, # Use clustering results
-                out_file = file.path(run_dir, "proteomics", "data_to_shiny_legacy_proteomics.rds")
-            ),
-            format = "file"
-        ),
-
-        # Excel export (legacy format with cutoffs)
-        tar_target(
-            prot_excel_files,
-            {
-                write_final_results_excels_legacy_generic(
-                    final_results = prot_final_results,
-                    config = config,
-                    out_dir = file.path(run_dir, "proteomics"),
-                    mode = "proteomics",
-                    id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID",
-                    expr_for_de = prot_pre$expr_imp_single,
-                    with_cutoffs = TRUE,
-                    clustering_res = prot_clustering_obj
-                )
-            },
-            format = "file"
+            prot_exports,
+            mod_proteomics_exports(
+                pre            = prot_pre,
+                de_res         = prot_de_res,
+                inputs         = prot_inputs,
+                config         = config,
+                qc_pre_obj     = prot_qc_pre_obj,
+                clustering_res = prot_clustering_obj,
+                out_dir        = prot_out_dir
+            )
         )
     )
 }

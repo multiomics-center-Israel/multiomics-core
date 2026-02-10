@@ -215,7 +215,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files  = unique(files),
         objects = list(
             norm_log_counts_pca = pca_obj,
-            mat2plot  = scores,
+            pca_scores = assert_pca_scores(scores, context = "metabolomics QC"),
             var_expl  = var_expl,
             color     = cfg$effects$color,
             shape     = cfg$effects$shape %||% NULL

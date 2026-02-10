@@ -90,7 +90,7 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     plots$heatmap_clusters <- hm_clusters
 
     f_hm_nocol <- file.path(out_qc, "samples_protein_heatmap_wo_col.png")
-    hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm_nocol)
+    hm_nocol <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage, out_file = f_hm_nocol, cluster_cols = FALSE)
     files <- c(files, f_hm_nocol)
     plots$heatmap_nocol <- hm_nocol
 
@@ -110,7 +110,7 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
         files = unique(files),
         objects = list(
             norm_log_counts_pca = pca_obj, # prcomp result
-            mat2plot = scores, # data.frame with PCs + metadata
+            pca_scores = assert_pca_scores(scores, context = "proteomics QC"), # data.frame with PCs + metadata
             var_expl = var_expl, # variance explained
             color = color, # string: column name for color aesthetic
             shape = shape # string: column name for shape aesthetic
