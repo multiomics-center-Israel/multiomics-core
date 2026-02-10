@@ -252,7 +252,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # objects list (Proteomics style)
     objs <- list(
         norm_log_counts_pca = pca_obj,
-        mat2plot = scores,
+        pca_scores = assert_pca_scores(scores, context = "rnaseq QC"),
         var_expl = var_expl,
         color = eff_color,
         shape = eff_shape
@@ -265,7 +265,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         # Keep these at top level for compatibility with current build_data_to_shiny_legacy_rna
         # (until that function is updated to look inside 'objects')
         norm_log_counts_pca = pca_obj,
-        mat2plot = scores
+        pca_scores = assert_pca_scores(scores, context = "rnaseq QC")
     )
 }
 

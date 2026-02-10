@@ -249,3 +249,77 @@ assert_one_of <- function(x, name, choices, allow_null = FALSE) {
     }
     invisible(TRUE)
 }
+
+#' Assert PCA Scores Contract
+#'
+#' Validates that an object conforms to the PCA scores data.frame contract.
+#' Use at: QC module return points, when storing PCA scores in objects list.
+#'
+#' @param x Object to validate (expected: data.frame with PC1, PC2, ... columns)
+#' @param context Character string for error messages (e.g., "proteomics QC")
+#' @return x (invisibly) if valid, otherwise stops with informative error
+assert_pca_scores <- function(x, context = "PCA scores") {
+    prefix <- sprintf("[%s]", context)
+
+    if (is.null(x)) {
+        return(invisible(NULL))
+    }
+
+    if (!is.data.frame(x)) {
+        stop(prefix, " Expected data.frame, got ", class(x)[1], call. = FALSE)
+    }
+
+    required_cols <- c("PC1", "PC2")
+    missing <- setdiff(required_cols, colnames(x))
+    if (length(missing) > 0) {
+        stop(prefix, " Missing required columns: ", paste(missing, collapse = ", "), call. = FALSE)
+    }
+
+    if (!is.numeric(x$PC1) || !is.numeric(x$PC2)) {
+        stop(prefix, " PC1 and PC2 must be numeric", call. = FALSE)
+    }
+
+    if (nrow(x) == 0) {
+        warning(prefix, " PCA scores has 0 rows (no samples)")
+    }
+
+    invisible(x)
+}
+
+#' Assert DE Expression Matrix Contract
+#'
+#' Validates that an object conforms to the DE expression matrix contract.
+#' Use at: Shiny export layer, before assigning to legacy$mat2plot or legacy$de_expr_norm.
+#'
+#' @param x Object to validate (expected: numeric matrix with rownames and colnames)
+#' @param context Character string for error messages
+#' @return x (invisibly) if valid, otherwise stops with informative error
+assert_de_expr_matrix <- function(x, context = "DE expression matrix") {
+    prefix <- sprintf("[%s]", context)
+
+    if (is.null(x)) {
+        return(invisible(NULL))
+    }
+
+    if (!is.matrix(x)) {
+        stop(prefix, " Expected matrix, got ", class(x)[1], call. = FALSE)
+    }
+
+    if (!is.numeric(x)) {
+        stop(prefix, " Matrix must be numeric, got ", typeof(x), call. = FALSE)
+    }
+
+    if (is.null(rownames(x))) {
+        stop(prefix, " Matrix must have rownames (feature IDs)", call. = FALSE)
+    }
+
+    if (is.null(colnames(x))) {
+        stop(prefix, " Matrix must have colnames (sample IDs)", call. = FALSE)
+    }
+
+    if (nrow(x) == 0) {
+        warning(prefix, " Matrix has 0 rows (no DE features)")
+    }
+
+    invisible(x)
+}

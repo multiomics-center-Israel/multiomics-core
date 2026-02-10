@@ -83,7 +83,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   pc_y <- pcs[2]
 
   # Attach ALL metadata columns to scores (not just color/shape)
-  # This ensures Shiny has access to all metadata via mat2plot
+  # This ensures Shiny has access to all metadata via pca_scores
   for (col in colnames(meta_sub)) {
     if (!col %in% colnames(scores)) {
       scores[[col]] <- meta_sub[[col]]
@@ -376,7 +376,7 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL) {
+wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster_cols = TRUE) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
@@ -393,7 +393,7 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL) {
     title = paste0("QC: Sample ", stage, " Expression"),
     max_rows = 2000,
     cluster_rows = TRUE,
-    cluster_cols = TRUE
+    cluster_cols = cluster_cols
   )
 
   if (!is.null(out_file)) {
