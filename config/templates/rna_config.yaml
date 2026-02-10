@@ -25,6 +25,17 @@ modes:
       sample_map: "rna/sample_map.csv"       # raw → unified sample IDs (optional but recommended)
       metadata:   "rna/meta_rna.csv"         # sample-level metadata
       contrasts:  "rna/contrasts_rna.csv"    # optional; can be generated later from metadata
+      annotation: ""                          # optional: gene annotation file (e.g., Ensembl BioMart export)
+      trinotate:  ""                          # optional: Trinotate annotation report TSV
+
+    # --------------------------------------------------------
+    # Annotation processing (optional)
+    # Only used if files.annotation is specified
+    # --------------------------------------------------------
+    annotation:
+      source: "Ensembl"   # "Ensembl" | "NCBI_GTF" | "Generic"
+      # Column mappings are currently hardcoded per source type.
+      # Future: make these config-driven.
 
     # --------------------------------------------------------
     # Column naming conventions (REQUIRED)

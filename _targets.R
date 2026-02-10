@@ -62,7 +62,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/01_Aaron_Fait/config.yaml",
+    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
     format = "file"
   ),
 
