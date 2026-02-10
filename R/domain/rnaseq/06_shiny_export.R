@@ -104,9 +104,6 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(pca_sc)) payload$pca_scores <- pca_sc
     }
 
-    # qc_plots: Named list of QC plots (empty for RNA-seq, populated in proteomics)
-    payload$qc_plots <- list()
-
     # ============================================================
     # DE RESULTS (5 keys)
     # Note: Keys already initialized to NULL by init_shiny_payload()
