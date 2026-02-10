@@ -105,6 +105,13 @@ build_shiny_payload_proteomics <- function(
 
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
+        
+        # QC plot
+        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
+        payload$samples_hm_w_na <- pca_res$plots$dist_heatmap_na %||% NULL
+      
+        
     }
 
     # ============================================================
@@ -232,13 +239,7 @@ build_shiny_payload_proteomics <- function(
         payload$prot_log2_raw <- pre$expr_filt %||% NULL
         payload$prot_log2_imp1 <- pre$expr_imp_single %||% NULL
 
-        # QC plot legacy aliases
-        if (!is.null(pca_res) && !is.null(pca_res$plots)) {
-            payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
-            payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
-            payload$samples_hm_w_na <- pca_res$plots$dist_heatmap_na %||% NULL
-        }
-
+        
         # DE contrast summary (proteomics-specific)
         if (!is.null(payload$de_stats)) {
             payload$de_contrast_summary <- build_de_contrast_summary(payload$de_stats)

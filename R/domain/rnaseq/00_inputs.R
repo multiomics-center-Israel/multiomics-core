@@ -1,16 +1,51 @@
-#' Load rna inputs
+#' Load RNA inputs
+#'
+#' Supports both raw count matrices and tximport objects.
+#' - For raw counts: specify files$counts pointing to CSV/TSV
+#' - For tximport: specify files$txi pointing to RDS file containing tximport object
 #'
 #' @param config list as returned by load_config()
-#' @return list (counts, sample_map, meta, contrasts, engine, ...)
+#' @return list with one of: (counts, ...) for raw counts OR (txi, ...) for tximport
 load_rna_inputs <- function(config) {
-    load_omics_inputs(config, mode = "rna")
+    inputs <- load_omics_inputs(config, mode = "rna")
+
+    # Check if txi was loaded
+    if (!is.null(inputs$txi)) {
+        # Validate tximport structure
+        if (!is_valid_tximport_structure(inputs$txi, validate_only = TRUE)) {
+            stop(
+                "[load_rna_inputs] File loaded as 'txi' is not a valid tximport object. ",
+                "Expected list with 'counts', 'abundance', 'length' matrices.",
+                call. = FALSE
+            )
+        }
+        message("[load_rna_inputs] Loaded tximport object from RDS")
+        inputs$source_type <- "tximport"
+    } else if (!is.null(inputs$counts)) {
+        message("[load_rna_inputs] Loaded raw count matrix")
+        inputs$source_type <- "matrix"
+    }
+
+    inputs
 }
 
-#' Validate RNA inputs
+#' Validate RNA inputs (for raw count matrix path only)
 #'
 #' @param inputs List returned by \code{load_rna_inputs()}
 #' @param cfg    The \code{config$modes$rna} sub-list
 validate_rna_inputs <- function(inputs, cfg) {
+    # This validation is only for raw count matrices
+    # tximport validation is handled separately by validate_tximport()
+    if (identical(inputs$source_type, "tximport") || !is.null(inputs$txi)) {
+        # For tximport, metadata validation only
+        sample_col <- cfg$id_columns$sample_col %||% "SampleID"
+        meta <- inputs$metadata
+        if (!sample_col %in% names(meta)) {
+            stop("metadata missing sample column: ", sample_col)
+        }
+        return(invisible(TRUE))
+    }
+
     gene_id_col <- cfg$id_columns$gene_id
     sample_col <- cfg$id_columns$sample_col %||% "SampleID"
 
@@ -27,23 +62,30 @@ validate_rna_inputs <- function(inputs, cfg) {
     sample_cols <- setdiff(names(inputs$counts), gene_id_col)
     if (length(sample_cols) == 0) stop("Counts table has no sample columns.")
 
-    # Check alignment consistency
+    # Check alignment consistency (informational, strict check happens later)
     meta_samples <- unique(as.character(meta[[sample_col]]))
     count_samples <- sample_cols
 
     missing_in_counts <- setdiff(meta_samples, count_samples)
     if (length(missing_in_counts) > 0) {
-        stop("metadata contains samples not present in counts: ", paste(missing_in_counts, collapse = ", "))
+        stop(
+            "metadata contains samples not present in counts: ",
+            paste(missing_in_counts, collapse = ", ")
+        )
     }
 
     invisible(TRUE)
 }
 
-#' Generic loader helper (likely available in domain/proteomics/00_inputs too, or should be in core if strictly dry)
-#' Keeping local copy or assuming sourced if not in core.
-# For safety in this refactor step, I will rely on the fact that we might have moved load_omics_inputs to core?
-# No, I put it in R/domain/proteomics/00_inputs.R. I should properly put it in R/core/01_io.R or duplicating it.
-# Duplicating small helpers avoids cross-domain fragility if core isn't strict.
+#' Generic loader helper
+#'
+#' Loads files specified in config. Supports:
+#' - CSV/TSV files (loaded via read_table_auto)
+#' - RDS files (loaded via readRDS, used for tximport objects)
+#'
+#' @param config Configuration list
+#' @param mode One of "proteomics" or "rna"
+#' @return List of loaded objects
 load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     mode <- match.arg(mode)
     cfg <- config$modes[[mode]]
@@ -60,7 +102,20 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
         }
         abs <- resolve_raw_path(config, rel)
         if (!file.exists(abs)) stop("File not found: ", abs)
-        inputs[[nm]] <- read_table_auto(abs)
+
+        # Detect file type and load appropriately
+        ext <- tolower(tools::file_ext(abs))
+
+        if (ext == "rds") {
+            # RDS file - use readRDS (for tximport objects, etc.)
+            message(sprintf("[load_omics_inputs] Loading RDS file: %s", nm))
+            nm <- "txi"
+            inputs[[nm]] <- readRDS(abs)
+            
+        } else {
+            # Tabular file - use standard reader
+            inputs[[nm]] <- read_table_auto(abs)
+        }
     }
 
     if (!is.null(cfg$engine)) inputs$engine <- cfg$engine

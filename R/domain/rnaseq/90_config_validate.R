@@ -2,9 +2,17 @@
 validate_rna_config <- function(cfg) {
     assert_named_list(cfg, "modes$rna")
 
+    # Detect if tximport is being used (txi file configured instead of counts)
+    uses_tximport <- !is.null(cfg$files$txi) && nzchar(cfg$files$txi %||% "")
+
     # 1. ID Columns
     assert_named_list(cfg$id_columns, "rna$id_columns")
-    assert_scalar_chr(cfg$id_columns$gene_id, "id_columns$gene_id")
+
+    # gene_id is required for raw counts, but optional for tximport
+    # (tximport uses rownames for gene IDs)
+    if (!uses_tximport) {
+        assert_scalar_chr(cfg$id_columns$gene_id, "id_columns$gene_id", allow_null = TRUE)
+    }
     # sample_col is optional (defaults to SampleID), map_from/map_to optional too
 
     # 2. Normalization
@@ -12,6 +20,15 @@ validate_rna_config <- function(cfg) {
         n <- cfg$normalization
         assert_one_of(n$method, "normalization$method", c("TMMlogCPM", "VST"), allow_null = TRUE)
         assert_scalar_num(n$prior.count, "normalization$prior.count", allow_null = TRUE, min_val = 0)
+
+        # tximport requires VST (TMMlogCPM not supported)
+        if (uses_tximport && identical(n$method, "TMMlogCPM")) {
+            stop(
+                "[config] normalization$method = 'TMMlogCPM' is not compatible with tximport input. ",
+                "Use 'VST' instead.",
+                call. = FALSE
+            )
+        }
     }
 
     # 3. Filtering
