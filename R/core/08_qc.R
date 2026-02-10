@@ -297,7 +297,7 @@ to_long_format <- function(prep_data) {
   n_features <- nrow(prep_data$expr)
 
   # Vectorized creation of long vectors
-  df_long <- data.frame(
+  norm_expr_long <- data.frame(
     sample = rep(prep_data$sample_ids, each = n_features),
     value = as.vector(prep_data$expr),
     stringsAsFactors = FALSE
@@ -307,10 +307,10 @@ to_long_format <- function(prep_data) {
   # Since prep_data$meta is guaranteed to be sorted by sample_ids (from prepare_qc_data),
   # we can simply repeat each condition n_features times.
   cond_values <- prep_data$meta[[prep_data$color_col]]
-  df_long[[prep_data$color_col]] <- rep(cond_values, each = n_features)
+  norm_expr_long[[prep_data$color_col]] <- rep(cond_values, each = n_features)
 
   # Filter non-finite values (NA/NaN/Inf) to keep plots clean
-  df_long[is.finite(df_long$value), , drop = FALSE]
+  norm_expr_long[is.finite(norm_expr_long$value), , drop = FALSE]
 }
 
 
@@ -320,12 +320,12 @@ to_long_format <- function(prep_data) {
 #' Boxplots of normalized expression per sample
 norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
-  df_long <- to_long_format(d)
+  norm_expr_long <- to_long_format(d)
 
   if (is.null(title)) title <- "Normalized expression boxplots"
 
   p <- ggplot2::ggplot(
-    df_long,
+    norm_expr_long,
     ggplot2::aes(x = sample, y = value, colour = .data[[d$color_col]])
   ) +
     ggplot2::geom_boxplot(outlier.size = 0.4) +
@@ -353,10 +353,10 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
 #' Histogram summary of normalized expression by condition
 norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
-  df_long <- to_long_format(d)
+  norm_expr_long <- to_long_format(d)
 
   p <- ggplot2::ggplot(
-    df_long,
+    norm_expr_long,
     ggplot2::aes(x = value, fill = .data[[d$color_col]])
   ) +
     ggplot2::geom_histogram(alpha = 0.6, bins = 60, position = "identity") +
@@ -495,10 +495,10 @@ qc_omic_density <- function(expr_mat, meta, cfg, out_file = NULL,
                                   title = "Density plot of normalized intensities") {
   # Keeping prepare_qc_data here intentionally.
   d <- prepare_qc_data(expr_mat, meta, cfg)
-  df_long <- to_long_format(d)
+  norm_expr_long <- to_long_format(d)
 
   # Task 2: Density line only (no fill) - remove fill aesthetic, set alpha=1
-  p <- ggplot2::ggplot(df_long, ggplot2::aes(x = value, colour = .data[["sample"]])) +
+  p <- ggplot2::ggplot(norm_expr_long, ggplot2::aes(x = value, colour = .data[["sample"]])) +
     ggplot2::geom_density(alpha = 1) +
     ggplot2::labs(title = title, x = "Intensity", colour = d$color_col) +
     ggplot2::theme_minimal()
