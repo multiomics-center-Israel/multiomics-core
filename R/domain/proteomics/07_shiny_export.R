@@ -191,8 +191,8 @@ build_shiny_payload_proteomics <- function(
         val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
     }
     if (is.null(val) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
+        src <- if (!is.null(clustering_res$plots)) clustering_res$plots else clustering_res
+        val <- src$pheatmap_data_DE_genes %||% src$p_cluster_hier
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 
@@ -276,19 +276,20 @@ build_shiny_payload_proteomics <- function(
 build_de_summary_counts_proteomics <- function(de_stats) {
     if (is.null(de_stats)) return(NULL)
 
-    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    pass_cols <- grep("^pass.", names(de_stats), value = TRUE)
     pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
     if (length(pass_cols) == 0) return(NULL)
 
     summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass_", "", col)
+        contrast_name <- sub("^pass.", "", col)
 
         # Try multiple FC column name patterns
         fc_patterns <- c(
             paste0("logFC_", contrast_name),
             paste0("log2FoldChange_", contrast_name),
-            paste0("logFC.", contrast_name)
+            paste0("logFC.", contrast_name),
+            paste0("linearFC.", contrast_name)
         )
         fc_col <- NULL
         for (pat in fc_patterns) {

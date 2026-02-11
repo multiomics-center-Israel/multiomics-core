@@ -217,8 +217,8 @@ build_shiny_payload_metabolomics <- function(
         if (!is.null(val)) payload$clust_heatmap_hier <- val
     }
     if (is.null(payload$clust_heatmap_hier) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
+        src <- if (!is.null(clustering_res$plots)) clustering_res$plots else clustering_res
+        val <- src$pheatmap_data_DE_genes %||% src$p_cluster_hier
         if (!is.null(val)) payload$clust_heatmap_hier <- val
     }
 
