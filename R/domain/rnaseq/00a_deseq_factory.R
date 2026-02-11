@@ -304,72 +304,79 @@ align_samples_strict <- function(expr_samples, meta, sample_col, lenient = TRUE)
 #' @return DESeqDataSet object
 #' @export
 create_deseq_dataset <- function(expr, meta, design, sample_col, lenient_alignment = FALSE) {
-    if (!requireNamespace("DESeq2", quietly = TRUE)) {
-        stop("Package 'DESeq2' is required.", call. = FALSE)
+  if (!requireNamespace("DESeq2", quietly = TRUE)) {
+    stop("Package 'DESeq2' is required.", call. = FALSE)
+  }
+  
+  # Detect and validate source type
+  source_type <- detect_source_type(expr)
+  
+  if (source_type == "tximport") {
+    # Validate tximport structure
+    validate_tximport(expr)
+    
+    # Get sample IDs from tximport
+    expr_samples <- colnames(expr$counts)
+    
+    # Align samples (strict by default)
+    meta_aligned <- align_samples_strict(expr_samples, meta, sample_col, lenient = lenient_alignment)
+    
+    # Subset tximport to aligned samples if needed
+    aligned_samples <- rownames(meta_aligned)
+    if (!identical(expr_samples, aligned_samples)) {
+      expr <- subset_tximport(expr, samples = aligned_samples)
     }
-
-    # Detect and validate source type
-
-    source_type <- detect_source_type(expr)
-
-    if (source_type == "tximport") {
-        # Validate tximport structure
-        validate_tximport(expr)
-
-        # Get sample IDs from tximport
-        expr_samples <- colnames(expr$counts)
-
-        # Align samples (strict by default)
-        meta_aligned <- align_samples_strict(expr_samples, meta, sample_col, lenient = lenient_alignment)
-
-        # Subset tximport to aligned samples if needed
-        aligned_samples <- rownames(meta_aligned)
-        if (!identical(expr_samples, aligned_samples)) {
-            expr <- subset_tximport(expr, samples = aligned_samples)
-        }
-
-        # Create DESeqDataSet via tximport path
-        message("[DESeq2] Constructing dataset via DESeqDataSetFromTximport")
-        dds <- DESeq2::DESeqDataSetFromTximport(
-            txi = expr,
-            colData = as.data.frame(meta_aligned),
-            design = design
-        )
-
-    } else {
-        # source_type == "matrix"
-        # Validate count matrix (strict integer enforcement)
-        validate_count_matrix(expr)
-
-        # Convert to matrix if data.frame
-        counts_mat <- as.matrix(expr)
-        storage.mode(counts_mat) <- "integer"
-
-        # Get sample IDs
-        expr_samples <- colnames(counts_mat)
-
-        # Align samples (strict by default)
-        meta_aligned <- align_samples_strict(expr_samples, meta, sample_col, lenient = lenient_alignment)
-
-        # Subset counts to aligned samples if needed
-        aligned_samples <- rownames(meta_aligned)
-        if (!identical(expr_samples, aligned_samples)) {
-            counts_mat <- counts_mat[, aligned_samples, drop = FALSE]
-        }
-
-        # Create DESeqDataSet via matrix path
-        message("[DESeq2] Constructing dataset via DESeqDataSetFromMatrix")
-        dds <- DESeq2::DESeqDataSetFromMatrix(
-            countData = counts_mat,
-            colData = as.data.frame(meta_aligned),
-            design = design
-        )
+    
+    # --- OPTION A: Fix zero/negative lengths for DESeq2 robustness ---
+    if (any(expr$length <= 0)) {
+      n_fix <- sum(expr$length <= 0)
+      message(sprintf("[tximport] Fixing %d cells with length <= 0 (setting to 1) to prevent DESeq2 crash.", n_fix))
+      expr$length[expr$length <= 0] <- 1
     }
-
-    # Attach source_type to DDS for downstream reference
-    S4Vectors::metadata(dds)$source_type <- source_type
-
-    dds
+    # -----------------------------------------------------------------
+    
+    # Create DESeqDataSet via tximport path
+    message("[DESeq2] Constructing dataset via DESeqDataSetFromTximport")
+    dds <- DESeq2::DESeqDataSetFromTximport(
+      txi = expr,
+      colData = as.data.frame(meta_aligned),
+      design = design
+    )
+    
+  } else {
+    # source_type == "matrix"
+    # Validate count matrix (strict integer enforcement)
+    validate_count_matrix(expr)
+    
+    # Convert to matrix if data.frame
+    counts_mat <- as.matrix(expr)
+    storage.mode(counts_mat) <- "integer"
+    
+    # Get sample IDs
+    expr_samples <- colnames(counts_mat)
+    
+    # Align samples (strict by default)
+    meta_aligned <- align_samples_strict(expr_samples, meta, sample_col, lenient = lenient_alignment)
+    
+    # Subset counts to aligned samples if needed
+    aligned_samples <- rownames(meta_aligned)
+    if (!identical(expr_samples, aligned_samples)) {
+      counts_mat <- counts_mat[, aligned_samples, drop = FALSE]
+    }
+    
+    # Create DESeqDataSet via matrix path
+    message("[DESeq2] Constructing dataset via DESeqDataSetFromMatrix")
+    dds <- DESeq2::DESeqDataSetFromMatrix(
+      countData = counts_mat,
+      colData = as.data.frame(meta_aligned),
+      design = design
+    )
+  }
+  
+  # Attach source_type to DDS for downstream reference
+  S4Vectors::metadata(dds)$source_type <- source_type
+  
+  return(dds)
 }
 
 # =============================================================================

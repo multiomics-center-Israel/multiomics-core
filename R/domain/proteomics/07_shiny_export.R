@@ -276,19 +276,20 @@ build_shiny_payload_proteomics <- function(
 build_de_summary_counts_proteomics <- function(de_stats) {
     if (is.null(de_stats)) return(NULL)
 
-    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    pass_cols <- grep("^pass.", names(de_stats), value = TRUE)
     pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
     if (length(pass_cols) == 0) return(NULL)
 
     summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass_", "", col)
+        contrast_name <- sub("^pass.", "", col)
 
         # Try multiple FC column name patterns
         fc_patterns <- c(
             paste0("logFC_", contrast_name),
             paste0("log2FoldChange_", contrast_name),
-            paste0("logFC.", contrast_name)
+            paste0("logFC.", contrast_name),
+            paste0("linearFC.", contrast_name)
         )
         fc_col <- NULL
         for (pat in fc_patterns) {
