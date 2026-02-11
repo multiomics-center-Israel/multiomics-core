@@ -1,7 +1,8 @@
 # R/pipeline/metabolomics/00_pipe_metabolomics.R
 #
-# Targets assembly for metabolomics Stage 1:
-#   inspect input data, normalize, and produce QC diagnostics.
+# Targets assembly for metabolomics:
+#   Stage 1: inspect input data, normalize, and produce QC diagnostics.
+#   Stage 2: differential expression, feature selection, enrichment.
 
 
 pipe_metabolomics <- function() {
@@ -46,10 +47,50 @@ pipe_metabolomics <- function() {
             preprocess_metabolomics(metab_inputs, config)
         ),
 
-        # ---- QC diagnostics ----
+        # ---- QC diagnostics (Stage 1) ----
         tar_target(
             metab_qc_pre_obj,
             mod_metabolomics_qc_pre(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ---- differential expression (Stage 2) ----
+        tar_target(
+            metab_de_res,
+            mod_metabolomics_de(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ---- random forest feature importance (Stage 2, optional) ----
+        tar_target(
+            metab_rf_res,
+            mod_metabolomics_rf(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ---- PLS-DA + VIP scores (Stage 2, optional) ----
+        tar_target(
+            metab_plsda_res,
+            mod_metabolomics_plsda(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ---- pathway enrichment: QEA + ssGSEA (Stage 2, optional) ----
+        tar_target(
+            metab_enrichment_res,
+            mod_metabolomics_enrichment(
                 pre     = metab_pre,
                 config  = config,
                 out_dir = metab_out_dir
@@ -71,14 +112,18 @@ pipe_metabolomics <- function() {
         tar_target(
             metab_shiny_payload,
             save_shiny_payload_metabolomics(
-                pre = metab_pre,
-                de_res = NULL,  # No DE analysis yet for metabolomics
-                inputs = metab_inputs,
-                config = config,
-                pca_res = metab_qc_pre_obj,
-                clustering_res = NULL,  # No clustering yet for metabolomics
+                pre            = metab_pre,
+                de_res         = metab_de_res,
+                inputs         = metab_inputs,
+                config         = config,
+                pca_res        = metab_qc_pre_obj,
+                clustering_res = NULL,
+                rf_res         = metab_rf_res,
+                plsda_res      = metab_plsda_res,
+                enrichment_res = metab_enrichment_res,
                 include_legacy = TRUE,
-                out_file = file.path(metab_out_dir, "shiny_payload_metabolomics.rds")
+                out_file       = file.path(metab_out_dir,
+                                            "shiny_payload_metabolomics.rds")
             ),
             format = "file"
         )

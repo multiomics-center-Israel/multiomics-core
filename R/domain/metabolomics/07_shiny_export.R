@@ -24,6 +24,9 @@
 #' @param config Full config object
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
+#' @param rf_res Optional: random forest results (from mod_metabolomics_rf)
+#' @param plsda_res Optional: PLS-DA results (from mod_metabolomics_plsda)
+#' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
 #' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
 #'
@@ -37,6 +40,9 @@ build_shiny_payload_metabolomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
+    rf_res = NULL,
+    plsda_res = NULL,
+    enrichment_res = NULL,
     annot = NULL,
     include_legacy = TRUE
 ) {
@@ -293,6 +299,29 @@ build_shiny_payload_metabolomics <- function(
 
         # Row data (feature annotations) for compatibility
         payload$row_data <- pre$row_data %||% NULL
+
+        # Random forest results
+        if (!is.null(rf_res)) {
+            payload$rf_importance <- rf_res$importance_df %||% NULL
+            payload$rf_method     <- rf_res$method %||% NULL
+        }
+
+        # PLS-DA results
+        if (!is.null(plsda_res)) {
+            payload$plsda_vip_df           <- plsda_res$vip_df %||% NULL
+            payload$plsda_explained_variance <- plsda_res$explained_variance %||% NULL
+        }
+
+        # Enrichment results
+        if (!is.null(enrichment_res)) {
+            if (!is.null(enrichment_res$qea)) {
+                payload$enrichment_qea <- enrichment_res$qea$table %||% NULL
+            }
+            if (!is.null(enrichment_res$ssgsea)) {
+                payload$enrichment_ssgsea       <- enrichment_res$ssgsea$table %||% NULL
+                payload$enrichment_ssgsea_scores <- enrichment_res$ssgsea$scores %||% NULL
+            }
+        }
     }
 
     # ============================================================
