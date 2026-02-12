@@ -1,0 +1,91 @@
+# ==============================================================================
+# GT4 genotype metabolomics analysis (2024 vs 2013)
+# ==============================================================================
+
+project:
+  dir: "/home/ozsol/MultiOmics_Projects/MultiOmics_Projects/2025_06_Yonatan_Sharabi"
+  name: "GT4"
+  analysis_round: "01"
+
+paths:
+  raw: "Results/Metabolomics"
+  out: "Results/Metabolomics"
+
+params:
+  seed: 1234
+
+modes:
+  metabolomics:
+
+    # ---- Input specification ----
+    input:
+      format: "processed_wide"
+      has_group_row: true        # Row 2 = condition assignments per sample
+
+    files:
+      data: "01.Lab_res/GT4_flt.level1.txt"
+      metadata: null             # Auto-generated from group row
+
+    # ---- Feature ID construction ----
+    id_columns:
+      feature_id_col: "Molecule"
+      annotation_cols:
+        - "Molecule"
+        - "HMDB"
+
+    # ---- Normalization ----
+    # Original: SumNorm → LogNorm → MeanCenter
+    normalization:
+      input_already_normalized: false
+      sample_norm: "sum"         # SumNorm
+      transform: "log2"         # LogNorm
+      scaling: "center"         # MeanCenter
+      pseudocount: 1
+      na_policy: "zero"
+
+    # ---- Effects (for QC plots) ----
+    effects:
+      samples: "sample_id"
+      color: "condition"
+
+    # ---- QC plot settings ----
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+    # ---- Differential expression ----
+    de:
+      method: "t_test"
+      condition_column: "condition"
+      contrasts:
+        - "GT4_2024 - GT4_2013"
+      p_cutoff: 0.05
+      pval_cutoff: 0.05
+      linear_fc_cutoff: 2       # log2FC threshold = 1 → 2^1 = 2
+
+    # ---- Random forest feature importance ----
+    rf:
+      run_rf: true
+      n_trees: 500
+      importance: "permutation"
+      top_n: 20
+      seed: 1234
+
+    # ---- PLS-DA multivariate analysis ----
+    plsda:
+      run_plsda: true
+      vip_top_n: 15
+      colors:
+        - "#E41A1C"
+        - "#377EB8"
+
+    # ---- Pathway enrichment ----
+    enrichment:
+      run_enrichment: true
+      libraries: []
+      gmt_file:
+        - "/mnt/c/Users/ozsol/Technion/MultiOmicsCenter - Documents/Projects/2025_06_Yonatan_Sharabi/Results/Metabolomics/03.Analysis/kegg_legionella_compound_pathway.gmt"
+        - "/mnt/c/Users/ozsol/Technion/MultiOmicsCenter - Documents/Projects/2025_06_Yonatan_Sharabi/Results/Metabolomics/03.Analysis/smpdb_metabolites_pathway.gmt"
+      mapping_file: "/mnt/c/Users/ozsol/Technion/MultiOmicsCenter - Documents/ref_genomes/pathways/smpdb/HMDB2kegg_cpd.Jan2026.v2.txt"
