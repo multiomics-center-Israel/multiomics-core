@@ -31,8 +31,8 @@ core (validation, I/O, plots, contracts)
 ## Milestone 1: Foundation Hardening
 
 **Priority:** Critical
-**Estimated effort:** 3–4 weeks (1–2 developers)
-**Goal:** Make the existing proteomics and RNA-seq pipelines production-reliable.
+**Estimated effort:** 5–7 weeks (1–2 developers)
+**Goal:** Make the existing proteomics and RNA-seq pipelines production-reliable; add a QC-only workflow and DEP2 imputation.
 
 ### 1.1 Expand Test Suite
 
@@ -66,7 +66,31 @@ core (validation, I/O, plots, contracts)
 | **Risks** | Breaking existing user workflows — mitigate by checking the old path as a fallback with a deprecation warning |
 | **Acceptance criteria** | (1) `_targets.R` contains no absolute user-specific paths; (2) pipeline runs with config at default location; (3) `OMICS_CONFIG` env var override works; (4) deprecation warning if old path is used |
 
-### 1.4 Standardize Error Messages & Logging
+### 1.4 QC-Only Pipeline Mode
+
+| Item | Detail |
+|------|--------|
+| **What** | A `run_mode: "qc_only"` option that executes only up to the QC pre-stage, produces a self-contained QC report, and stops — so the bioinformatician can review sample quality, clustering, and distributions before committing to DE parameters |
+| **Technical approach** | **(a) Config flag.** Add a top-level `run_mode` field (`"full"` default, `"qc_only"`) to the config schema; validate in `validate_config()`. **(b) Pipeline gating.** In each `pipe_*()` factory, wrap DE / clustering / export targets in an `if (run_mode != "qc_only")` guard so {targets} simply does not register them. Alternatively, use `tar_cue(mode = "never")` — but conditional list building is cleaner and avoids stale cache confusion. **(c) QC report target.** Add a new terminal target (`*_qc_report`) that renders a parameterised Quarto/RMarkdown template (`reports/qc_report.qmd`) receiving the QC pre output object. The report should include: (1) sample count & group balance table, (2) missingness heatmap (proteomics) or library-size bar chart (RNA-seq), (3) PCA 1v2 + 1v3 colored by every configured color variable, (4) sample-distance & correlation heatmaps, (5) density/boxplot overlays, (6) filtering impact summary (features before → after), (7) a "Recommended next steps" checklist stub the bioinformatician fills in. **(d) {targets} caching.** When the user later switches to `run_mode: "full"`, all QC pre targets are already cached — DE starts from warm cache with zero rework. **(e) Per-mode support.** Works for proteomics, RNA-seq, and (once implemented) metabolomics, since all share the same `mod_*_qc_pre()` interface and return the same structure (plots, files, objects). |
+| **Files to create/modify** | `R/core/04_config.R` (validate `run_mode`), `R/pipeline/proteomics/00_pipe_proteomics.R`, `R/pipeline/rnaseq/00_pipe_rnaseq.R`, `R/pipeline/metabolomics/00_pipe_metabolomics.R` (gating logic), `reports/qc_report.qmd` (new), `R/modules/*/01_mod_qc_pre.R` (ensure filtering-impact stats are returned) |
+| **Config example** | `run_mode: "qc_only"  # "qc_only" or "full"` at the top level of the YAML |
+| **Dependencies** | None — uses existing QC pre modules |
+| **Risks** | (a) Bioinformaticians may forget to switch back to `"full"` — mitigate with a clear log message: *"QC-only mode: pipeline stopped after QC. Set run_mode: full to continue."* (b) Report template maintenance — keep it minimal and data-driven so it works across omics modes |
+| **Acceptance criteria** | (1) `tar_make()` with `run_mode: "qc_only"` completes in <30 s on a typical dataset (no DE computation); (2) an HTML QC report is written to the output directory; (3) report contains all 7 sections listed above; (4) switching to `run_mode: "full"` reuses all cached QC targets; (5) works for both proteomics and RNA-seq pipelines; (6) config validation rejects unknown `run_mode` values |
+
+### 1.5 DEP2 Imputation for Proteomics
+
+| Item | Detail |
+|------|--------|
+| **What** | Add DEP2-based imputation as an alternative to the existing Perseus-style method, selectable via the existing config field `imputation.method: "dep2"` |
+| **Technical approach** | **(a) New imputation function.** Create `impute_proteomics_dep2()` in `R/domain/proteomics/03_imputation.R`. This wraps `DEP::impute()` (which itself delegates to `MSnbase::impute()`), supporting the methods already anticipated in the config: MinDet, MinProb, KNN, MLE, QRILC, man, min, zero, mixed, bpca, and others provided by MSnbase. The function accepts `expr_mat` (log2, features × samples with NAs) and `cfg` (which contains `dep2_method` and `dep2_random_seed`), converts the matrix to a `SummarizedExperiment`, calls the imputation, and extracts back to a plain matrix. Returns `list(imputed, imputed_flag)` — same contract as `perseus_impute_with_flags()`. **(b) Multiple-imputation wrapper.** Create `make_imputations_dep2()` analogous to `make_imputations_proteomics()`. For stochastic methods (MinDet, MinProb, QRILC, bpca), run N repetitions with incremented seeds, exactly like Perseus. For deterministic methods (KNN, MLE, SVD), run once and replicate (with a log warning that multiple imputation is not meaningful for deterministic methods). **(c) Dispatch in preprocessing.** Modify `preprocess_proteomics()` and `mod_proteomics_de()` to dispatch on `cfg$imputation$method`: `"perseus"` → current path, `"dep2"` → new path. The downstream contract (matrix dimensions, rownames, colnames, no NAs) is identical, so DE and everything downstream is unchanged. **(d) Config integration.** The config template already has the fields (`dep2_method: "MinDet"`, `dep2_random_seed: 1`). Add validation: if `method == "dep2"`, require `dep2_method` to be one of the supported values; warn if `dep2_method` is deterministic and `no_repetitions > 1`. **(e) QC comparison.** In the QC pre module, if imputation method is DEP2, generate the same imputation histogram and boxplot using the existing `qc_imputation_summary()` (it only needs the imputed matrix and flag — method-agnostic). |
+| **New dependency** | `DEP` (Bioconductor — already depends on `SummarizedExperiment` and `limma` which are in renv). Transitively pulls in `MSnbase` for the actual imputation engines |
+| **Files to modify** | `R/domain/proteomics/03_imputation.R` (add `impute_proteomics_dep2()`, `make_imputations_dep2()`), `R/domain/proteomics/04_preprocess.R` (dispatch), `R/modules/proteomics/02_mod_de.R` (dispatch), `R/domain/proteomics/90_config_validate.R` (validate dep2 fields), `config/templates/proteins_config.yaml` (document dep2 options) |
+| **Dependencies** | None — proteomics pipeline is already stable |
+| **Risks** | (a) `DEP`/`MSnbase` add ~15 transitive dependencies — test that `renv::restore()` still works cleanly; (b) some MSnbase imputation methods require complete columns or have minimum-sample-count requirements — add pre-flight checks; (c) KNN imputation can be slow for >10k proteins — document performance expectations |
+| **Acceptance criteria** | (1) `imputation.method: "dep2"` with `dep2_method: "MinDet"` produces a fully imputed matrix passing `assert_numeric_matrix()`; (2) multiple imputations with stochastic methods produce N distinct matrices; (3) deterministic methods produce 1 matrix with a warning; (4) DE results downstream are structurally identical to Perseus path; (5) imputation QC plots generate correctly; (6) existing Perseus path is completely unaffected (no regression); (7) unit tests cover at least MinDet, KNN, and MLE methods with synthetic data |
+
+### 1.6 Standardize Error Messages & Logging
 
 | Item | Detail |
 |------|--------|
@@ -273,13 +297,13 @@ core (validation, I/O, plots, contracts)
 
 ```
           Month 1–2          Month 3–4          Month 5–6         Month 7–8
-         ┌──────────┐      ┌──────────┐      ┌──────────┐      ┌──────────┐
-    M1   │ Foundation│      │          │      │          │      │          │
-         │ Hardening │──────│          │      │          │      │          │
-         └──────────┘      │          │      │          │      │          │
-         ┌──────────┐      │          │      │          │      │          │
-    M2   │Metabolom. │──────│──────────│      │          │      │          │
-         │ Pipeline  │      │          │      │          │      │          │
+         ┌─────────────────────────────┐
+    M1   │ Foundation Hardening        │
+         │ Tests, CI, QC Mode, DEP2    │
+         └─────────────────────────────┘
+         ┌──────────┐      ┌──────────┐
+    M2   │Metabolom. │──────│──────────│
+         │ Pipeline  │      │          │      ┌──────────┐      ┌──────────┐
          └──────────┘      └──────────┘      │          │      │          │
                            ┌──────────┐      │          │      │          │
     M3   ·················>│Enrichment│──────│          │      │          │
@@ -326,6 +350,8 @@ As configuration grows more complex (integration, enrichment, Shiny), consider a
 | Shiny app scope creep | High | Medium | Strict rule: only visualize what the payload contains |
 | Test data availability (multi-engine, multi-omics) | Medium | Medium | Create synthetic fixtures; partner with lab for anonymized real data |
 | Single developer bus factor | Medium | High | Document everything; pair-program on critical modules; enforce PR reviews |
+| DEP/MSnbase transitive dependency bloat | Medium | Medium | Pin versions via renv; test `renv::restore()` after adding DEP; fallback to Perseus if install fails |
+| QC-only mode cache invalidation confusion | Low | Low | Clear log messages when mode switches; document {targets} caching behavior in onboarding |
 | Large dataset performance (>50k features) | Low | Medium | Profile with large data early; use sparse matrices where applicable |
 
 ---
