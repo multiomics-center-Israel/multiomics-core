@@ -248,20 +248,51 @@ If you want to extend, modify, or maintain **multiomics-core**, see:
 
 ------------------------------------------------------------------------
 
+## Acknowledgments
+
+-   AI-powered figure commentary uses scientific domain knowledge templates informed by [K-Dense AI claude-scientific-skills](https://github.com/K-Dense-AI/claude-scientific-skills) (MIT License). To enable AI commentary, clone their repository into the project root and set your API key (see below).
+-   Commentary generation is powered by [Claude](https://www.anthropic.com/) (Anthropic) or [GPT-4o](https://openai.com/) (OpenAI).
+
+### AI commentary setup (optional)
+
+AI commentary requires your own API key. No keys are stored in or shared via this repository.
+
+```bash
+# For Claude backend:
+export ANTHROPIC_API_KEY="your-key-here"
+
+# For OpenAI backend:
+export OPENAI_API_KEY="your-key-here"
+```
+
+Enable in your config YAML:
+
+```yaml
+commentary:
+  enabled: true
+  backend: "claude"   # or "openai" or "data-driven" (no API needed)
+```
+
+If no API key is set, the pipeline automatically falls back to data-driven commentary (no AI, no cost).
+
+------------------------------------------------------------------------
+
 ## Status
 
 **Current version:** v0.2.1
 
 ### Implemented
 
--   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns)
--   **QC**: PCA (2D/3D), Sample distance/correlation, Density plots
--   **Plots**: Volcano, MA, Heatmaps, Profile plots
+-   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
+-   **RNA-seq**: Full pipeline (DESeq2), Batch correction (ComBat-Seq/SVA/RUV), Cell-type deconvolution (xCell2), Pathway enrichment (fGSEA/ORA)
+-   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection
+-   **Plots**: Volcano, MA, Heatmaps, Profile plots (3-color Up/Down/NS scheme)
+-   **Reporting**: Interactive HTML reports, Executive summaries, Pipeline summaries, AI figure commentary
+-   **Infrastructure**: Docker support, CLI wizard (`run.R`), Environment-variable config, Organism auto-detection, Multi-organism annotation
 -   **Architecture**: Strict dependency loading, `{targets}` orchestration, Unified config validation
 
 ### Planned
 
--   RNA-seq DE integration (Foundations present)
 -   Metabolomics / lipidomics DE
 -   Multi-omics integration and reporting
 
