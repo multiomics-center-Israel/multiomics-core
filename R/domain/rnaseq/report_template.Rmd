@@ -1,0 +1,2702 @@
+---
+title: "RNA-seq Analysis Report"
+subtitle: "multiomics-core Pipeline"
+author: "Bioinformatician: `r yaml::read_yaml(file.path(normalizePath(dirname(knitr::current_input())), 'execution_info', 'config_used.yaml'))$project$analyst`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    number_sections: true
+    fig_width: 10
+    fig_height: 7
+    self_contained: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.align = "center", out.width = "100%"
+)
+
+library(yaml)
+library(knitr)
+library(DT)
+library(plotly)
+library(ggplot2)
+library(htmltools)
+library(jsonlite)
+
+# Load ggVennDiagram if available
+has_ggVennDiagram <- FALSE
+tryCatch({
+    library(ggVennDiagram)
+    has_ggVennDiagram <- TRUE
+}, error = function(e) {
+    message("ggVennDiagram not available: ", e$message)
+})
+
+# Helper function for downloadable DT tables
+make_dt <- function(df, caption = NULL, pageLength = 15) {
+    DT::datatable(
+        df,
+        caption = caption,
+        extensions = 'Buttons',
+        options = list(
+            scrollX = TRUE,
+            pageLength = pageLength,
+            dom = 'Bfrtip',
+            buttons = list(
+                list(extend = 'csv', filename = gsub("[^a-zA-Z0-9]", "_", caption %||% "data")),
+                list(extend = 'excel', filename = gsub("[^a-zA-Z0-9]", "_", caption %||% "data"))
+            )
+        ),
+        rownames = FALSE
+    )
+}
+
+# Paths
+run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+diag_dir <- file.path(run_dir, "rna", "Diagnostic_plots")
+qc_post_dir <- file.path(diag_dir, "QC_post")
+datasets_dir <- file.path(run_dir, "rna", "Datasets")
+enrich_dir <- file.path(run_dir, "rna", "Enrichment")
+enrich_plot_dir <- file.path(enrich_dir, "plots")
+filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
+commentary_dir <- file.path(run_dir, "rna", "commentary")
+
+# Load commentary if available
+commentary <- NULL
+has_commentary <- FALSE
+commentary_json <- file.path(commentary_dir, "commentary_all.json")
+if (file.exists(commentary_json)) {
+    commentary <- tryCatch(
+        jsonlite::read_json(commentary_json),
+        error = function(e) NULL
+    )
+    has_commentary <- !is.null(commentary) && length(commentary) > 0
+}
+
+# Helper: render figure legend (paper-style caption below figure)
+figure_legend <- function(text) {
+    cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
+}
+
+# Helper: render commentary block for a figure_id (collapsible)
+render_commentary <- function(figure_id) {
+    if (!has_commentary) return(invisible(NULL))
+    c <- commentary[[figure_id]]
+    if (is.null(c)) return(invisible(NULL))
+
+    cat("<details class='commentary-details' style='margin: 4px 0 18px 0;'>\n")
+    cat("<summary style='cursor: pointer; color: #4a90d9; font-weight: 500; font-size: 0.93em; padding: 3px 0;'>Show AI Interpretation</summary>\n")
+
+    html <- "<div class='commentary-block' style='background: #f8f9fa; border-left: 4px solid #4a90d9; padding: 12px 16px; margin: 6px 0 4px 0; border-radius: 0 4px 4px 0; font-size: 0.92em;'>\n"
+    html <- paste0(html, "<p style='margin: 0 0 8px 0;'><strong>What this shows:</strong> ",
+                   htmltools::htmlEscape(c$what_is_this %||% ""), "</p>\n")
+
+    # Biological interpretation (prose paragraph)
+    bio_interp <- c$biological_interpretation %||% ""
+    if (nzchar(bio_interp)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Interpretation:</strong> ",
+                       htmltools::htmlEscape(bio_interp), "</p>\n")
+    }
+
+    obs <- c$observations
+    if (length(obs) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Key observations:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (o in obs) html <- paste0(html, "<li>", htmltools::htmlEscape(o), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    # Statistical assessment
+    stat_assess <- c$statistical_assessment %||% ""
+    if (nzchar(stat_assess)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Statistical note:</strong> ",
+                       htmltools::htmlEscape(stat_assess), "</p>\n")
+    }
+
+    issues <- c$issues_checks
+    if (length(issues) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Checks:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (issue in issues) html <- paste0(html, "<li>", htmltools::htmlEscape(issue), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    steps <- c$next_steps
+    if (length(steps) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Next steps:</strong></p>\n<ul style='margin: 2px 0 4px 0; padding-left: 20px;'>\n")
+        for (s in steps) html <- paste0(html, "<li>", htmltools::htmlEscape(s), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    backend <- c$backend %||% "unknown"
+    confidence <- c$confidence %||% ""
+    footer <- backend
+    if (nzchar(confidence) && confidence != "none") footer <- paste0(footer, " | confidence: ", confidence)
+    # Attribution: Claude (Anthropic) + K-Dense AI scientific-skills
+    backend_label <- if (grepl("claude", backend, ignore.case = TRUE)) {
+        "Claude (Anthropic) + K-Dense AI scientific-skills"
+    } else if (grepl("openai", backend, ignore.case = TRUE)) {
+        "OpenAI + K-Dense AI scientific-skills"
+    } else if (backend == "data_driven") {
+        "data-driven + K-Dense AI scientific-skills"
+    } else {
+        footer
+    }
+    if (nzchar(confidence) && confidence != "none") {
+        backend_label <- paste0(backend_label, " | confidence: ", confidence)
+    }
+    html <- paste0(html, "<p style='margin: 4px 0 0 0; color: #888; font-size: 0.85em;'><em>Generated by: ",
+                   htmltools::htmlEscape(backend_label), "</em></p>\n</div>\n")
+
+    cat(html)
+    cat("</details>\n")
+}
+
+# Load config
+cfg <- yaml::read_yaml(config_path)
+rna_cfg <- cfg$modes$rna
+
+# Load DE data (used in multiple sections)
+final_results_file <- file.path(datasets_dir, "final_results.tsv")
+de_data <- NULL
+if (file.exists(final_results_file)) {
+    de_data <- read.delim(final_results_file, stringsAsFactors = FALSE, check.names = FALSE)
+    # Add gene names from annotation if available
+    anno_file_setup <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_setup)) {
+        anno_setup <- read.csv(anno_file_setup, stringsAsFactors = FALSE)
+        id_col_setup <- if ("Gene" %in% names(de_data)) "Gene" else if ("FeatureID" %in% names(de_data)) "FeatureID" else NULL
+        if (!is.null(id_col_setup)) {
+            de_data$gene_id_clean <- gsub("^Gene:", "", de_data[[id_col_setup]])
+            anno_match_setup <- anno_setup[match(de_data$gene_id_clean, anno_setup$gene_id), ]
+            de_data$GeneName <- ifelse(
+                !is.na(anno_match_setup$symbol) & anno_match_setup$symbol != anno_match_setup$gene_id,
+                anno_match_setup$symbol,
+                de_data$gene_id_clean
+            )
+        }
+    }
+}
+
+# Get contrast names from column patterns
+contrast_names <- character(0)
+if (!is.null(de_data)) {
+    padj_cols <- grep("^padj\\.", names(de_data), value = TRUE)
+    contrast_names <- gsub("^padj\\.", "", padj_cols)
+}
+
+# Target genes from config (if specified)
+target_genes <- rna_cfg$target_genes %||% character(0)
+```
+
+```{r force-dependencies, include=FALSE}
+# Force DT and Plotly dependencies to be included in the HTML
+# This ensures the JavaScript/CSS is loaded before any dynamic content
+DT::datatable(data.frame(x = 1))
+plotly::plot_ly(data.frame(x = 1, y = 1), x = ~x, y = ~y, type = "scatter", mode = "markers")
+```
+
+```{r report-mode-note, results='asis', echo=FALSE}
+cat('<div style="background: #eef6ff; border: 1px solid #b8d4f0; border-radius: 6px; padding: 10px 16px; margin: 0 0 20px 0; font-size: 0.9em; color: #2c5282;">
+<strong>Report mode:</strong> This report is in <em>clean mode</em> by default (code hidden). To view the R code behind any section, click the <code style="background: #fff; padding: 1px 5px; border-radius: 3px; border: 1px solid #ccc;">Code</code> button that appears at the top-right of each section. Use the global <code style="background: #fff; padding: 1px 5px; border-radius: 3px; border: 1px solid #ccc;">Code</code> dropdown at the top of the page to show/hide all code at once.
+</div>\n')
+```
+
+# Technical Summary
+
+```{r technical-summary, results='asis', echo=FALSE}
+tech <- rna_cfg$technical_report
+
+# --- Sample & Sequencing Overview ---
+# Always render this subsection using computed stats + config
+meta_ts <- tryCatch(
+    read.csv(file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata),
+             stringsAsFactors = FALSE),
+    error = function(e) NULL
+)
+grp_col <- rna_cfg$filtering$group_col
+
+n_samples_ts <- if (!is.null(meta_ts)) nrow(meta_ts) else NA
+n_groups_ts <- if (!is.null(meta_ts) && grp_col %in% names(meta_ts)) length(unique(meta_ts[[grp_col]])) else NA
+
+cat("## Sample & Sequencing Overview\n\n")
+overview_parts <- character(0)
+if (!is.na(n_samples_ts) && !is.na(n_groups_ts)) {
+    overview_parts <- c(overview_parts,
+        sprintf("This analysis comprises **%d samples** across **%d experimental groups** (grouping variable: *%s*).",
+                n_samples_ts, n_groups_ts, grp_col))
+}
+if (!is.null(tech$facility)) {
+    overview_parts <- c(overview_parts,
+        sprintf("Sequencing was performed at the **%s**.", tech$facility))
+}
+if (length(overview_parts) > 0) cat(paste(overview_parts, collapse = " "), "\n\n")
+
+# --- Upstream sections (conditional on technical_report block) ---
+if (!is.null(tech)) {
+
+    if (!is.null(tech$library_prep)) {
+        cat("## Library Preparation\n\n")
+        cat(tech$library_prep, "\n\n")
+    }
+
+    if (!is.null(tech$sequencing)) {
+        cat("## Sequencing\n\n")
+        cat(tech$sequencing, "\n\n")
+    }
+
+    if (!is.null(tech$upstream_bioinformatics)) {
+        cat("## Upstream Bioinformatics\n\n")
+        cat(tech$upstream_bioinformatics, "\n\n")
+    }
+}
+
+# --- Downstream Analysis (always rendered from pipeline config) ---
+cat("## Downstream Analysis (multiomics-core)\n\n")
+
+norm_method <- rna_cfg$normalization$method %||% "TMM"
+prior_ct <- rna_cfg$normalization$prior.count %||% 1
+filt_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
+filt_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
+de_method <- rna_cfg$de$method %||% "deseq2"
+deseq_mode <- rna_cfg$de$deseq_mode %||% "default"
+p_cut <- rna_cfg$de$p_cutoff %||% 0.05
+fc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
+use_adj <- isTRUE(rna_cfg$de$use_adj)
+p_label <- if (use_adj) "adjusted p-value" else "p-value"
+p_corr <- if (use_adj) " P-values were corrected using Benjamini-Hochberg FDR." else ""
+
+pathway_enabled <- isTRUE(rna_cfg$pathway$enabled)
+pathway_method <- rna_cfg$pathway$method %||% "fgsea"
+pathway_dbs <- paste(rna_cfg$pathway$databases %||% "GO", collapse = " and ")
+
+cat(sprintf(
+    paste0(
+        "Gene filtering was performed using an adaptive density-based threshold ",
+        "(KDE on log2-CPM distribution), selecting an optimal CPM threshold within the ",
+        "[%.1f\u2013%.1f] range. Genes passing the threshold in at least one complete ",
+        "biological group were retained. Normalization was performed using the %s method ",
+        "with log2-CPM transformation (prior count = %d). ",
+        "Differential expression was tested using %s (%s test, %s mode). ",
+        "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
+    ),
+    filt_min, filt_max,
+    norm_method, prior_ct,
+    toupper(de_method), "Wald", deseq_mode,
+    p_label, format(p_cut, nsmall = 2), fc_cut,
+    p_corr
+))
+
+if (pathway_enabled) {
+    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
+                pathway_method, pathway_dbs))
+}
+cat("\n\n")
+
+# --- Methodological Note (conditional on upstream_de_note) ---
+if (!is.null(tech$upstream_de_note)) {
+    cat("## Methodological Note\n\n")
+
+    # Compute our pipeline DE count if available
+    de_counts_ts_file <- file.path(datasets_dir, "de_summary_counts.tsv")
+    our_de_n <- NA
+    if (file.exists(de_counts_ts_file)) {
+        de_cnt_ts <- read.delim(de_counts_ts_file, stringsAsFactors = FALSE)
+        pass_row <- de_cnt_ts[grepl("pass_any", de_cnt_ts[[1]], ignore.case = TRUE), ]
+        if (nrow(pass_row) > 0 && ncol(de_cnt_ts) >= 4) {
+            our_de_n <- pass_row[1, 4]
+        }
+    }
+    # Fallback: count from final_results
+    if (is.na(our_de_n) && !is.null(de_data)) {
+        pac <- grep("pass_any", names(de_data), value = TRUE)[1]
+        if (!is.na(pac)) our_de_n <- sum(de_data[[pac]] == TRUE, na.rm = TRUE)
+    }
+
+    cat(tech$upstream_de_note, " ")
+    cat(sprintf(
+        paste0(
+            "This report applies additional filtering: adaptive CPM-based gene filtering, ",
+            "%s normalization, and a fold-change cutoff of \u2265 %.1f"
+        ),
+        norm_method, fc_cut
+    ))
+    if (!is.na(our_de_n)) {
+        cat(sprintf(", resulting in **%s DEGs**", format(as.integer(our_de_n), big.mark = ",")))
+    }
+    cat(". The stricter criteria focus on genes with both statistical significance and biological effect size.\n\n")
+}
+
+# --- Acknowledgment (conditional) ---
+if (!is.null(tech$acknowledgment)) {
+    cat("## Acknowledgment\n\n")
+    cat(sprintf("*%s*\n\n", tech$acknowledgment))
+}
+```
+
+# Analysis Parameters {.tabset}
+
+## Project
+
+```{r params-project}
+proj <- data.frame(
+  Parameter = c("Project Name", "Analysis Round", "Project Directory",
+                 "Raw Data Path", "Output Path"),
+  Value = c(cfg$project$name, cfg$project$analysis_round, cfg$project$dir,
+            cfg$paths$raw, cfg$paths$out),
+  stringsAsFactors = FALSE
+)
+kable(proj, col.names = c("Parameter", "Value"))
+```
+
+## Experimental Design
+
+```{r params-design}
+meta <- read.csv(
+  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata),
+  stringsAsFactors = FALSE
+)
+group_col <- rna_cfg$filtering$group_col
+
+design_tbl <- as.data.frame(table(meta[[group_col]]))
+colnames(design_tbl) <- c("Group", "n (replicates)")
+kable(design_tbl)
+```
+
+**Grouping variable:** `r group_col`
+**Total samples:** `r nrow(meta)`
+
+## Pipeline Settings
+
+```{r params-pipeline}
+prior_count <- rna_cfg$normalization$prior.count %||% 1
+settings <- data.frame(
+  Parameter = c(
+    "Normalization Method",
+    paste0("Prior Count (added before log2 to avoid log(0): log2(CPM + ", prior_count, "))"),
+    "Filtering Group Column", "Auto-filter CPM Threshold Range",
+    "DE Method", "DESeq2 Mode",
+    "Adjusted p-value Cutoff", "Linear FC Cutoff",
+    "Clustering Enabled"
+  ),
+  Value = c(
+    rna_cfg$normalization$method,
+    prior_count,
+    rna_cfg$filtering$group_col,
+    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline selects optimal within this range)"),
+    rna_cfg$de$method, rna_cfg$de$deseq_mode,
+    rna_cfg$de$p_cutoff, rna_cfg$de$linear_fc_cutoff,
+    ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
+  ),
+  stringsAsFactors = FALSE
+)
+kable(settings, col.names = c("Parameter", "Value"))
+```
+
+## Contrasts
+
+```{r params-contrasts}
+contrasts <- read.csv(
+  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$contrasts),
+  stringsAsFactors = FALSE
+)
+kable(contrasts)
+```
+
+## Filtering Strategy
+
+The pipeline applies **CPM-based auto-filtering** to remove lowly expressed genes before differential expression analysis. Genes that do **not** reach a minimum expression level (CPM threshold) are removed. This is a standard and necessary practice in RNA-seq to:
+
+1. **Reduce noise**: Genes with very low counts have unreliable fold-change estimates
+2. **Improve statistical power**: Fewer tests means less severe multiple testing correction
+3. **Remove technical artifacts**: Many zero/low counts represent sequencing noise, not biology
+
+**How auto-filtering works:**
+
+```{r filtering-strategy}
+filter_params <- data.frame(
+  Parameter = c(
+    "Grouping Column",
+    "CPM Threshold Search Range",
+    "Fallback Threshold",
+    "Filtering Rule"
+  ),
+  Value = c(
+    rna_cfg$filtering$group_col,
+    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline automatically selects the optimal threshold within this range)"),
+    paste0(rna_cfg$filtering$auto_filter$fallback %||% 1.0, " CPM"),
+    "Gene is KEPT only if it has CPM ≥ threshold in ALL samples of at least ONE biological group"
+  ),
+  stringsAsFactors = FALSE
+)
+kable(filter_params, col.names = c("Parameter", "Value"))
+```
+
+**Algorithm:**
+
+1. Calculate CPM (counts per million) for each gene in each sample
+2. For each candidate threshold (from min to max range):
+   - For each biological group, check if the gene has CPM ≥ threshold in ALL samples of that group
+   - A gene is **kept** if it meets the threshold in at least one complete group; otherwise it is **removed**
+3. The pipeline automatically selects the optimal threshold that balances gene retention with noise reduction
+4. The selected threshold is shown in the QC plot below
+
+This group-aware filtering ensures that genes specific to certain conditions are retained, even if they have low expression in other conditions. Genes that are lowly expressed across **all** conditions are removed as uninformative.
+
+---
+
+# Executive Summary
+
+```{r executive-summary, results='asis', echo=FALSE}
+# Compute gene counts early (also used by filter-stats section later)
+raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts)
+filt_counts_file_exec <- file.path(datasets_dir, "rna_counts_filtered.tsv")
+n_genes_raw <- NA
+n_genes_filt <- NA
+if (file.exists(raw_counts_file_exec)) {
+    n_genes_raw <- nrow(read.csv(raw_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
+}
+if (file.exists(filt_counts_file_exec)) {
+    n_genes_filt <- nrow(read.delim(filt_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
+}
+
+exec_summary_path <- file.path(run_dir, "rna", "executive_summary.md")
+exec_available <- file.exists(exec_summary_path)
+exec_md_raw <- ""
+if (exec_available) {
+    exec_md_raw <- paste(readLines(exec_summary_path, warn = FALSE), collapse = "\n")
+    # Remove duplicate heading if present (the section heading above is enough)
+    exec_md_raw <- gsub("^##?\\s*Executive\\s*Summary\\s*\n+", "", exec_md_raw)
+}
+
+# Build a rich executive summary from available data
+cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+
+# Key numbers panel
+cat("<div style='display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;'>\n")
+
+# Samples
+n_samp <- if (exists("meta") && is.data.frame(meta)) nrow(meta) else NA
+if (!is.na(n_samp)) {
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Samples</div></div>\n", n_samp))
+}
+
+# Groups
+n_groups <- if (exists("meta") && is.data.frame(meta) && exists("group_col") && group_col %in% names(meta)) length(unique(meta[[group_col]])) else NA
+if (!is.na(n_groups)) {
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Groups</div></div>\n", n_groups))
+}
+
+# Genes after filtering
+if (!is.na(n_genes_filt)) {
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%s</div><div style='font-size: 0.85em; color: #666;'>Genes (filtered)</div></div>\n", format(n_genes_filt, big.mark = ",")))
+}
+
+# Contrasts
+n_contrasts <- length(contrast_names)
+if (n_contrasts > 0) {
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Contrasts</div></div>\n", n_contrasts))
+}
+
+# Total DE genes
+if (!is.null(de_data)) {
+    pass_any_col <- grep("pass_any", names(de_data), value = TRUE)[1]
+    if (!is.na(pass_any_col)) {
+        n_de_total <- sum(de_data[[pass_any_col]] == TRUE, na.rm = TRUE)
+    } else {
+        padj_cols_exec <- grep("^padj\\.", names(de_data), value = TRUE)
+        if (length(padj_cols_exec) > 0) {
+            any_sig <- apply(de_data[, padj_cols_exec, drop = FALSE], 1, function(x) any(x <= 0.05, na.rm = TRUE))
+            n_de_total <- sum(any_sig, na.rm = TRUE)
+        } else {
+            n_de_total <- NA
+        }
+    }
+    if (!is.na(n_de_total)) {
+        cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #c0392b;'>%s</div><div style='font-size: 0.85em; color: #666;'>DE Genes</div></div>\n", format(n_de_total, big.mark = ",")))
+    }
+}
+
+cat("</div>\n")
+
+# DE breakdown per contrast (skip pass_any rows)
+de_counts_exec <- file.path(datasets_dir, "de_summary_counts.tsv")
+if (file.exists(de_counts_exec)) {
+    de_cnt <- read.delim(de_counts_exec, stringsAsFactors = FALSE)
+    # Filter out pass_any rows
+    de_cnt <- de_cnt[!grepl("pass_any", de_cnt[[1]], ignore.case = TRUE), , drop = FALSE]
+    if (nrow(de_cnt) > 0) {
+        cat("<div style='margin: 12px 0;'>\n")
+        cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
+        for (i in seq_len(nrow(de_cnt))) {
+            cn_name <- de_cnt[i, 1]
+            up_val <- if (ncol(de_cnt) >= 2) de_cnt[i, 2] else "?"
+            dn_val <- if (ncol(de_cnt) >= 3) de_cnt[i, 3] else "?"
+            total_val <- if (ncol(de_cnt) >= 4) de_cnt[i, 4] else "?"
+            cat(sprintf("<li><strong>%s</strong>: %s DE genes (%s up, %s down)</li>\n",
+                        cn_name, total_val, up_val, dn_val))
+        }
+        cat("</ul>\n</div>\n")
+    }
+}
+
+# Pipeline-generated summary (from exec summary module)
+if (nzchar(trimws(exec_md_raw)) && trimws(exec_md_raw) != "No summary available.") {
+    cat("<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #dee2e6;'>\n")
+    cat(exec_md_raw, "\n")
+    cat("</div>\n")
+}
+
+cat("</div>\n")
+```
+
+---
+
+# Quality Control — Pre-DE
+
+## Gene Filtering
+
+Lowly expressed genes were removed using the auto-filtering strategy described above.
+The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
+
+```{r filter-stats}
+# Read raw and filtered counts to get gene numbers
+raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts)
+filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
+
+n_genes_raw <- NA
+n_genes_filt <- NA
+raw_counts <- NULL
+filt_counts <- NULL
+
+if (file.exists(raw_counts_file)) {
+    raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+    n_genes_raw <- nrow(raw_counts)
+}
+if (file.exists(filt_counts_file)) {
+    filt_counts <- read.delim(filt_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+    n_genes_filt <- nrow(filt_counts)
+}
+
+if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
+    n_removed <- n_genes_raw - n_genes_filt
+    pct_kept <- round(100 * n_genes_filt / n_genes_raw, 1)
+    cat(sprintf("**Genes before filtering:** %s\n\n", format(n_genes_raw, big.mark = ",")))
+    cat(sprintf("**Genes after filtering:** %s\n\n", format(n_genes_filt, big.mark = ",")))
+    cat(sprintf("**Genes removed:** %s (%.1f%% retained)\n\n",
+                format(n_removed, big.mark = ","), pct_kept))
+}
+```
+
+```{r filter-plot, fig.cap="CPM filtering threshold selection"}
+if (file.exists(filter_plot)) knitr::include_graphics(filter_plot)
+```
+
+```{r legend-filter-plot, results='asis', echo=FALSE}
+if (file.exists(filter_plot)) {
+    figure_legend("CPM filtering threshold selection. The pipeline evaluates the number of genes retained at each candidate CPM threshold within the specified range and selects the optimal value that balances noise reduction with gene retention.")
+}
+```
+
+### Expression Distribution Before vs After Filtering {.tabset}
+
+These histograms demonstrate why filtering is necessary: the "Before" histogram shows a large spike of lowly/non-expressed genes (noise), which is removed after filtering.
+
+#### Before Filtering
+
+```{r filter-hist-before, fig.height=5, fig.width=8}
+if (!is.null(raw_counts)) {
+    # Compute log2 CPM for raw counts (skip first column if it's gene IDs)
+    num_cols_raw <- sapply(raw_counts, is.numeric)
+    if (any(num_cols_raw)) {
+        raw_mat <- as.matrix(raw_counts[, num_cols_raw, drop = FALSE])
+        raw_mat[is.na(raw_mat)] <- 0
+        lib_sizes <- colSums(raw_mat, na.rm = TRUE)
+        raw_cpm <- t(t(raw_mat) / lib_sizes * 1e6)
+        raw_log2cpm <- log2(raw_cpm + 1)
+        avg_expr_raw <- rowMeans(raw_log2cpm, na.rm = TRUE)
+
+        hist(avg_expr_raw, breaks = 80, col = "#E41A1C88", border = "white",
+             main = paste0("Before Filtering (", format(length(avg_expr_raw), big.mark = ","), " genes)"),
+             xlab = "log2(CPM + 1)", ylab = "Number of genes", cex.main = 1.2)
+        abline(v = median(avg_expr_raw), col = "black", lty = 2, lwd = 2)
+        legend("topright", legend = paste("Median:", round(median(avg_expr_raw), 2)),
+               lty = 2, lwd = 2, col = "black", bty = "n")
+    }
+} else {
+    cat("Raw counts not available for histogram.\n")
+}
+```
+
+```{r legend-hist-before, results='asis', echo=FALSE}
+figure_legend("Distribution of mean log2(CPM + 1) expression per gene before low-expression filtering. The prominent left-hand peak represents lowly/non-expressed genes (noise) that will be removed by filtering. Dashed line indicates the median expression.")
+```
+
+#### After Filtering
+
+```{r filter-hist-after, fig.height=5, fig.width=8}
+if (!is.null(filt_counts)) {
+    num_cols_filt <- sapply(filt_counts, is.numeric)
+    if (any(num_cols_filt)) {
+        filt_mat <- as.matrix(filt_counts[, num_cols_filt, drop = FALSE])
+        filt_mat[is.na(filt_mat)] <- 0
+        lib_sizes_f <- colSums(filt_mat, na.rm = TRUE)
+        filt_cpm <- t(t(filt_mat) / lib_sizes_f * 1e6)
+        filt_log2cpm <- log2(filt_cpm + 1)
+        avg_expr_filt <- rowMeans(filt_log2cpm, na.rm = TRUE)
+
+        hist(avg_expr_filt, breaks = 80, col = "#377EB888", border = "white",
+             main = paste0("After Filtering (", format(length(avg_expr_filt), big.mark = ","), " genes)"),
+             xlab = "log2(CPM + 1)", ylab = "Number of genes", cex.main = 1.2)
+        abline(v = median(avg_expr_filt), col = "black", lty = 2, lwd = 2)
+        legend("topright", legend = paste("Median:", round(median(avg_expr_filt), 2)),
+               lty = 2, lwd = 2, col = "black", bty = "n")
+    }
+} else {
+    cat("Filtered counts not available for histogram.\n")
+}
+```
+
+```{r legend-hist-after, results='asis', echo=FALSE}
+figure_legend("Distribution of mean log2(CPM + 1) expression per gene after low-expression filtering. The left-hand noise peak has been removed, leaving a more symmetric distribution of expressed genes suitable for differential expression analysis.")
+```
+
+## Expression Distributions {.tabset}
+
+**Normalization method: TMMlogCPM**
+
+TMMlogCPM is a two-step normalization approach commonly used in RNA-seq analysis:
+
+1. **TMM (Trimmed Mean of M-values)**: A normalization method from the edgeR package that calculates scaling factors to account for differences in library composition between samples. TMM trims the most extreme log-fold-changes and absolute expression values before computing a weighted mean, making it robust to outliers and genes with very high/low expression.
+
+2. **logCPM (log2 Counts Per Million)**: After TMM scaling, counts are converted to CPM (counts per million) to normalize for sequencing depth, then log2-transformed to stabilize variance and make the data more normally distributed.
+
+The resulting **TMMlogCPM** values are suitable for visualization, clustering, and downstream analysis, providing comparable expression levels across samples regardless of library size or composition differences.
+
+### Before Normalization
+
+```{r boxplot-raw, fig.cap="Per-sample expression boxplot — before normalization (log2 raw counts + 1)"}
+bp_raw <- file.path(diag_dir, "raw_boxplot.png")
+if (file.exists(bp_raw)) {
+    knitr::include_graphics(bp_raw)
+} else {
+    cat("Raw counts boxplot not available.")
+}
+```
+
+```{r legend-raw-boxplot, results='asis', echo=FALSE}
+figure_legend("Per-sample distribution of raw expression values (log2 counts + 1). Differences in box heights reflect variation in library sizes and composition before normalization. Boxes show the interquartile range (IQR), with whiskers extending to 1.5x IQR.")
+```
+
+```{r commentary-raw-boxplot, results='asis'}
+render_commentary("raw_boxplot")
+```
+
+### After Normalization
+
+```{r boxplot, fig.cap="Per-sample normalized expression boxplot (TMMlogCPM)"}
+bp <- file.path(diag_dir, "norm_boxplot.png")
+if (file.exists(bp)) knitr::include_graphics(bp)
+```
+
+```{r legend-norm-boxplot, results='asis', echo=FALSE}
+figure_legend("Per-sample distribution of TMMlogCPM-normalized expression values. Alignment of median lines and box heights indicates successful normalization for library size and composition differences.")
+```
+
+```{r commentary-boxplot, results='asis'}
+render_commentary("norm_boxplot")
+```
+
+### Density Plot
+
+```{r histograms, fig.cap="Expression distribution histograms"}
+hp <- file.path(diag_dir, "rna_histograms_summary.png")
+if (file.exists(hp)) knitr::include_graphics(hp)
+```
+
+```{r legend-density, results='asis', echo=FALSE}
+figure_legend("Kernel density estimates of per-sample expression distributions. Overlapping curves indicate consistent expression profiles across samples after normalization. Deviating samples may warrant further investigation.")
+```
+
+```{r commentary-density, results='asis'}
+render_commentary("density_plot")
+```
+
+## Principal Component Analysis (PCA) {.tabset}
+
+PCA was performed on normalized log-CPM values to assess overall sample
+grouping and detect potential outliers or batch effects.
+
+### By Top Variable Genes
+
+Select the number of top variable genes used for PCA calculation:
+
+```{r pca-var-genes-setup, echo=FALSE}
+# Find all PCA files with top N variable genes pattern
+pca_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
+
+# Build a map of n_top -> image data URI
+pca_data_map <- list()
+available_n_top <- c()
+
+if (length(pca_files) > 0) {
+    for (f in pca_files) {
+        n_val <- as.numeric(sub(".*PCA_top([0-9]+)\\.png$", "\\1", basename(f)))
+        if (file.exists(f)) {
+            pca_data_map[[as.character(n_val)]] <- knitr::image_uri(f)
+            available_n_top <- c(available_n_top, n_val)
+        }
+    }
+}
+
+# Sort available options
+if (length(available_n_top) > 0) {
+    available_n_top <- sort(unique(available_n_top))
+    default_n_top <- available_n_top[1]
+    default_img_uri <- pca_data_map[[as.character(default_n_top)]]
+} else {
+    # Fallback: use standard PCA plot
+    default_pca_path <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
+    if (file.exists(default_pca_path)) {
+        default_n_top <- 0
+        default_img_uri <- knitr::image_uri(default_pca_path)
+        pca_data_map[["0"]] <- default_img_uri
+        available_n_top <- 0
+    } else {
+        default_n_top <- NULL
+        default_img_uri <- NULL
+    }
+}
+```
+
+<div style="margin-bottom: 20px;">
+<label for="pca_selector"><strong>Number of top variable genes:</strong></label>
+<select id="pca_selector" onchange="updatePCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
+```{r pca-dropdown, echo=FALSE, results='asis'}
+if (length(available_n_top) > 0 && available_n_top[1] != 0) {
+    for (n_val in available_n_top) {
+        selected <- if (n_val == default_n_top) " selected" else ""
+        cat(sprintf('<option value="%d"%s>%s genes</option>\n', n_val, selected, format(n_val, big.mark = ",")))
+    }
+} else if (!is.null(default_img_uri)) {
+    cat('<option value="0" selected>All genes (default)</option>\n')
+} else {
+    cat('<option disabled>No PCA plots found</option>\n')
+}
+```
+</select>
+</div>
+
+<div id="pca_plot_container" style="text-align: center;">
+```{r pca-render, echo=FALSE, results='asis'}
+if (!is.null(default_img_uri)) {
+    cat(sprintf('<img id="pca_main_image" src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA Plot" />', default_img_uri))
+} else {
+    cat('<p><em>PCA plot not available.</em></p>')
+}
+```
+</div>
+
+<script>
+var embeddedPcaImages = `r if (length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"`;
+
+function updatePCAPlot(n_top) {
+    var img = document.getElementById("pca_main_image");
+    if (embeddedPcaImages && embeddedPcaImages[n_top]) {
+        img.src = embeddedPcaImages[n_top];
+    }
+}
+</script>
+
+### PC1 vs PC2
+
+```{r pca-12, fig.cap="PCA — PC1 vs PC2"}
+p <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-pca-12, results='asis', echo=FALSE}
+figure_legend("Principal Component Analysis (PCA) of normalized expression data, showing sample separation along PC1 and PC2. Each point represents one sample, colored by experimental group. The percentage of variance explained by each component is indicated on the axes. Samples clustering by group suggest a strong biological signal relative to technical noise.")
+```
+
+```{r commentary-pca, results='asis'}
+render_commentary("pca_plot")
+```
+
+### PC1 vs PC3
+
+```{r pca-13, fig.cap="PCA — PC1 vs PC3"}
+p <- file.path(diag_dir, "PCA_PC1.vs.PC3.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-pca-13, results='asis', echo=FALSE}
+figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may capture additional biological variation or batch effects not visible in the PC1-PC2 projection.")
+```
+
+```{r commentary-pca-13, results='asis'}
+render_commentary("pca_plot_13")
+```
+
+### 3D Interactive
+
+An interactive 3D PCA plot is available:
+
+```{r pca-3d-link, results='asis'}
+pca3d_file <- file.path(diag_dir, "PCA_3D.html")
+if (file.exists(pca3d_file)) {
+    cat(sprintf('<p><a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
+} else {
+    cat("*3D PCA plot not available.*")
+}
+```
+
+## Sample Similarity {.tabset}
+
+### Correlation Heatmap
+
+```{r corr-heatmap, fig.cap="Sample-to-sample correlation heatmap"}
+p <- file.path(diag_dir, "sample_correlation_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-corr-heatmap, results='asis', echo=FALSE}
+figure_legend("Pairwise Pearson correlation heatmap of normalized expression profiles. Higher correlation values (warmer colors) indicate greater transcriptomic similarity between samples. Within-group correlations should be higher than between-group correlations.")
+```
+
+```{r commentary-correlation, results='asis'}
+render_commentary("sample_correlation")
+```
+
+### Distance Heatmap
+
+```{r dist-heatmap, fig.cap="Sample-to-sample distance heatmap"}
+p <- file.path(diag_dir, "sample_distance_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-dist-heatmap, results='asis', echo=FALSE}
+figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate smaller distances (higher similarity). Samples from the same experimental group are expected to cluster together with smaller inter-sample distances.")
+```
+
+```{r commentary-distance, results='asis'}
+render_commentary("sample_distance")
+```
+
+## Expression Heatmaps {.tabset}
+
+### With Clustering
+
+```{r expr-heatmap, fig.cap="Sample expression heatmap (subsampled to top variable genes)"}
+p <- file.path(diag_dir, "samples_rna_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-expr-heatmap, results='asis', echo=FALSE}
+figure_legend("Unsupervised hierarchical clustering heatmap based on the top most variable genes. Both rows (genes) and columns (samples) are clustered by expression similarity. Color scale represents z-score normalized expression (row-scaled).")
+```
+
+```{r commentary-expr-heatmap, results='asis'}
+render_commentary("expr_heatmap")
+```
+
+### Without Column Clustering
+
+```{r expr-heatmap-nocol, fig.cap="Expression heatmap — without column clustering"}
+p <- file.path(diag_dir, "samples_rna_heatmap_wo_col.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-expr-heatmap-nocol, results='asis', echo=FALSE}
+figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the clustered version above.")
+```
+
+---
+
+# Differential Expression Analysis
+
+Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode` mode).
+Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
+and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
+
+## DE Summary
+
+```{r de-summary}
+de_counts_file <- file.path(datasets_dir, "de_summary_counts.tsv")
+if (file.exists(de_counts_file)) {
+    de_counts <- read.delim(de_counts_file, stringsAsFactors = FALSE)
+    kable(de_counts, col.names = c("Contrast", "Up-regulated", "Down-regulated", "Total DE"),
+          caption = "Number of differentially expressed genes per contrast")
+} else {
+    cat("DE summary counts file not found.")
+}
+```
+
+**Column definitions in DE results tables:**
+
+- **`[contrast]_pass`**: Whether the gene is significantly DE in that specific contrast (TRUE/FALSE), based on the p-value and fold-change cutoffs defined above.
+
+## DE Gene Overlap {.tabset}
+
+### All DE Genes
+
+```{r de-overlap-venn-all, fig.height=6, fig.width=10, results='asis'}
+# Create Venn diagram of DE genes across contrasts
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    # Get DE genes for each contrast
+    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
+
+    de_gene_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
+        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
+        if (!is.na(padj_col) && !is.na(lfc_col)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(lfc_vals) >= lfc_cut
+            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+            de_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_de]
+        }
+    }
+
+    if (length(de_gene_lists) >= 2 && length(de_gene_lists) <= 7) {
+        # Use ggVennDiagram if available
+        if (has_ggVennDiagram) {
+            total_unique <- length(unique(unlist(de_gene_lists)))
+            # Shorten category names for cleaner display
+            short_names <- gsub(" vs ", "\nvs ", names(de_gene_lists))
+            names(de_gene_lists) <- short_names
+            venn_plot <- ggVennDiagram(de_gene_lists, label_alpha = 0,
+                                       label = "both", label_percent_digit = 1,
+                                       set_size = 3.5) +
+                scale_fill_gradient(low = "white", high = "steelblue") +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
+                labs(title = "DE Gene Overlap (All)",
+                     subtitle = paste0("Total unique DE genes: ", total_unique)) +
+                theme(legend.position = "none",
+                      plot.title = element_text(hjust = 0),
+                      plot.subtitle = element_text(hjust = 0),
+                      plot.margin = margin(10, 40, 10, 40))
+            print(venn_plot)
+        } else {
+            # Fallback: simple overlap table
+            cat("**DE gene counts per contrast:**\n\n")
+            for (nm in names(de_gene_lists)) {
+                cat(sprintf("- **%s**: %d genes\n", nm, length(de_gene_lists[[nm]])))
+            }
+            # Calculate pairwise overlaps
+            if (length(de_gene_lists) == 2) {
+                overlap <- length(intersect(de_gene_lists[[1]], de_gene_lists[[2]]))
+                cat(sprintf("\n- **Shared**: %d genes\n", overlap))
+            }
+        }
+    } else if (length(de_gene_lists) > 7) {
+        cat("Too many contrasts for Venn diagram (max 7). Showing summary:\n\n")
+        for (nm in names(de_gene_lists)) {
+            cat(sprintf("- **%s**: %d genes\n", nm, length(de_gene_lists[[nm]])))
+        }
+    }
+} else if (length(contrast_names) < 2) {
+    cat("Venn diagram requires at least 2 contrasts.\n")
+} else {
+    cat("DE data not available for Venn diagram.\n")
+}
+```
+
+### Up-regulated
+
+```{r de-overlap-venn-up, fig.height=6, fig.width=10, results='asis'}
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
+
+    up_gene_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
+        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
+        if (!is.na(padj_col) && !is.na(lfc_col)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_up <- !is.na(padj_vals) & padj_vals <= padj_cut & lfc_vals >= lfc_cut
+            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+            up_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_up]
+        }
+    }
+
+    if (length(up_gene_lists) >= 2 && length(up_gene_lists) <= 7) {
+        if (has_ggVennDiagram) {
+            total_up <- length(unique(unlist(up_gene_lists)))
+            short_names_up <- gsub(" vs ", "\nvs ", names(up_gene_lists))
+            names(up_gene_lists) <- short_names_up
+            venn_plot <- ggVennDiagram(up_gene_lists, label_alpha = 0,
+                                       label = "both", label_percent_digit = 1,
+                                       set_size = 3.5) +
+                scale_fill_gradient(low = "white", high = "#E41A1C") +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
+                labs(title = "Up-regulated Gene Overlap",
+                     subtitle = paste0("Total unique up-regulated genes: ", total_up)) +
+                theme(legend.position = "none",
+                      plot.title = element_text(hjust = 0),
+                      plot.subtitle = element_text(hjust = 0),
+                      plot.margin = margin(10, 40, 10, 40))
+            print(venn_plot)
+        } else {
+            cat("**Up-regulated gene counts:**\n\n")
+            for (nm in names(up_gene_lists)) {
+                cat(sprintf("- **%s**: %d genes\n", nm, length(up_gene_lists[[nm]])))
+            }
+        }
+    }
+}
+```
+
+### Down-regulated
+
+```{r de-overlap-venn-down, fig.height=6, fig.width=10, results='asis'}
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
+
+    down_gene_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- grep(paste0("padj\\.", cn), names(de_data), value = TRUE)[1]
+        lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", cn), names(de_data), value = TRUE)[1]
+        if (!is.na(padj_col) && !is.na(lfc_col)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            if (grepl("^linearFC", lfc_col)) lfc_vals <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_down <- !is.na(padj_vals) & padj_vals <= padj_cut & lfc_vals <= -lfc_cut
+            gene_col <- if ("GeneName" %in% names(de_data)) "GeneName" else names(de_data)[1]
+            down_gene_lists[[gsub("_", " ", cn)]] <- de_data[[gene_col]][is_down]
+        }
+    }
+
+    if (length(down_gene_lists) >= 2 && length(down_gene_lists) <= 7) {
+        if (has_ggVennDiagram) {
+            total_down <- length(unique(unlist(down_gene_lists)))
+            short_names_dn <- gsub(" vs ", "\nvs ", names(down_gene_lists))
+            names(down_gene_lists) <- short_names_dn
+            venn_plot <- ggVennDiagram(down_gene_lists, label_alpha = 0,
+                                       label = "both", label_percent_digit = 1,
+                                       set_size = 3.5) +
+                scale_fill_gradient(low = "white", high = "#377EB8") +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
+                labs(title = "Down-regulated Gene Overlap",
+                     subtitle = paste0("Total unique down-regulated genes: ", total_down)) +
+                theme(legend.position = "none",
+                      plot.title = element_text(hjust = 0),
+                      plot.subtitle = element_text(hjust = 0),
+                      plot.margin = margin(10, 40, 10, 40))
+            print(venn_plot)
+        } else {
+            cat("**Down-regulated gene counts:**\n\n")
+            for (nm in names(down_gene_lists)) {
+                cat(sprintf("- **%s**: %d genes\n", nm, length(down_gene_lists[[nm]])))
+            }
+        }
+    }
+}
+```
+
+## Volcano Plots {.tabset}
+
+```{r volcano-data-prep, include=FALSE}
+# Load DE data for interactive plots
+final_results_file <- file.path(datasets_dir, "final_results.tsv")
+de_data <- NULL
+if (file.exists(final_results_file)) {
+    de_data <- read.delim(final_results_file, stringsAsFactors = FALSE, check.names = FALSE)
+    # Add gene names from annotation if available
+    anno_file_vol <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_vol)) {
+        anno_vol <- read.csv(anno_file_vol, stringsAsFactors = FALSE)
+        id_col_vol <- if ("Gene" %in% names(de_data)) "Gene" else if ("FeatureID" %in% names(de_data)) "FeatureID" else NULL
+        if (!is.null(id_col_vol)) {
+            de_data$gene_id_clean <- gsub("^Gene:", "", de_data[[id_col_vol]])
+            anno_match_vol <- anno_vol[match(de_data$gene_id_clean, anno_vol$gene_id), ]
+            de_data$GeneName <- ifelse(
+                !is.na(anno_match_vol$symbol) & anno_match_vol$symbol != anno_match_vol$gene_id,
+                anno_match_vol$symbol,
+                de_data$gene_id_clean
+            )
+        }
+    }
+}
+
+# Create interactive volcano plot
+make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+    lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", contrast), names(df), value = TRUE)[1]
+    padj_col <- grep(paste0("padj\\.", contrast), names(df), value = TRUE)[1]
+    if (is.na(lfc_col) || is.na(padj_col)) return(NULL)
+
+    plot_df <- data.frame(
+        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        logFC = as.numeric(df[[lfc_col]]),
+        padj = as.numeric(df[[padj_col]]),
+        stringsAsFactors = FALSE
+    )
+    if (grepl("^linearFC", lfc_col)) {
+        plot_df$logFC <- log2(abs(plot_df$logFC)) * sign(plot_df$logFC)
+    }
+    plot_df$neglog10padj <- -log10(pmax(plot_df$padj, 1e-300))
+    plot_df$Direction <- ifelse(
+        !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
+        ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
+    )
+    plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
+
+    p <- ggplot(plot_df, aes(x = logFC, y = neglog10padj, color = Direction,
+                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 3),
+                                           "\npadj: ", signif(padj, 3)))) +
+        geom_point(alpha = 0.6, size = 1.5) +
+        scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+        geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dashed") +
+        geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
+        labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
+        theme_minimal()
+    ggplotly(p, tooltip = "text")
+}
+
+volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
+contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
+```
+
+### Static {.tabset}
+
+```{r volcano-static, results='asis'}
+padj_cut_vol <- rna_cfg$de$p_cutoff %||% 0.05
+lfc_cut_vol <- rna_cfg$de$linear_fc_cutoff %||% 1.5
+if (length(volcano_files) > 0) {
+    for (i in seq_along(volcano_files)) {
+        vf <- volcano_files[i]
+        cn <- contrast_names[i]
+        contrast_clean <- gsub("_", " ", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+        cat(sprintf("![Volcano — %s](%s)\n\n", contrast_clean, vf))
+        figure_legend(sprintf("Volcano plot for the %s contrast. Each point represents a gene; the x-axis shows log2 fold change and the y-axis shows -log10 adjusted p-value. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s). Dashed lines indicate significance thresholds.", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        render_commentary(paste0("volcano_", cn))
+    }
+} else {
+    cat("No volcano plots found.\n")
+}
+```
+
+### Interactive {.tabset}
+
+Hover over points to see gene names and statistics. Enter gene names to highlight them on the plot.
+
+```{r volcano-interactive, results='asis', fig.height=6}
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    for (i in seq_along(contrast_names)) {
+        cn <- contrast_names[i]
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+
+        # Add gene highlighting controls with autocomplete
+        cat(sprintf('
+<div style="margin-bottom: 15px; position: relative;">
+<label for="volcano_genes_%s"><strong>Highlight genes:</strong></label>
+<div style="display: inline-block; position: relative; margin-left: 10px;">
+<input type="text" id="volcano_genes_%s" placeholder="Start typing a gene name..." autocomplete="off"
+  style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
+  oninput="volcanoAutocomplete_%s(this)" onkeydown="volcanoAutoKey_%s(event)">
+<div id="volcano_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+</div>
+<button onclick="highlightVolcanoGenes_%s()" style="padding: 8px 15px; margin-left: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Highlight</button>
+<button onclick="clearVolcanoHighlight_%s()" style="padding: 8px 15px; margin-left: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+<div id="volcano_tags_%s" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+</div>
+', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
+
+        p <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+                                  log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        if (!is.null(p)) {
+            p$elementId <- paste0("volcano_plot_", clean_id)
+            print(htmltools::tagList(p))
+
+            # Add JavaScript for autocomplete + gene highlighting
+            cat(sprintf('
+<script>
+(function() {
+    var cid = "%s";
+    var selectedGenes = [];
+    var acIndex = -1;
+
+    // Extract all gene names from the plotly data
+    function getGeneNames() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Gene:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+
+    // Autocomplete
+    window.volcanoAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = "";
+        acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        // Get text after last comma
+        var parts = val.split(",");
+        var current = parts[parts.length - 1].trim();
+        if (current.length < 1) { acDiv.style.display = "none"; return; }
+        var allGenes = getGeneNames();
+        var matches = allGenes.filter(function(g) {
+            return g.toLowerCase().indexOf(current) !== -1 && selectedGenes.indexOf(g) === -1;
+        }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g, idx) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+
+    // Keyboard nav for autocomplete
+    window.volcanoAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            acIndex = Math.min(acIndex + 1, items.length - 1);
+            updateAcHighlight(items);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            acIndex = Math.max(acIndex - 1, 0);
+            updateAcHighlight(items);
+        } else if (e.key === "Enter" && acIndex >= 0) {
+            e.preventDefault();
+            items[acIndex].click();
+        }
+    };
+
+    function updateAcHighlight(items) {
+        for (var i = 0; i < items.length; i++) {
+            items[i].style.background = i === acIndex ? "#e9ecef" : "white";
+        }
+    }
+
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags();
+        applyHighlight();
+    }
+
+    function renderTags() {
+        var container = document.getElementById("volcano_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeVolcanoGene_" + cid + "(\'" + g + "\')\\">×</span>";
+            container.appendChild(tag);
+        });
+    }
+
+    window["removeVolcanoGene_" + cid] = function(gene) {
+        selectedGenes = selectedGenes.filter(function(g) { return g !== gene; });
+        renderTags();
+        applyHighlight();
+    };
+
+    function applyHighlight() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) {
+            Plotly.relayout(plotDiv, { annotations: [] });
+            return;
+        }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var geneName = parts[0].replace(/Gene:\\s*/i, "").trim();
+                    if (genesLower.indexOf(geneName.toLowerCase()) !== -1) {
+                        annotations.push({
+                            x: data.x[i], y: data.y[i], text: geneName,
+                            showarrow: true, arrowhead: 2, ax: 20, ay: -30,
+                            font: { size: 12, color: "black" },
+                            bgcolor: "rgba(255,255,255,0.9)",
+                            bordercolor: "black", borderwidth: 1
+                        });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+
+    // Highlight button: also accepts comma-separated manual input
+    window.highlightVolcanoGenes_%s = function() {
+        var input = document.getElementById("volcano_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        // Match manual entries to actual gene names (case-insensitive)
+        var allGenes = getGeneNames();
+        manual.forEach(function(m) {
+            var mLower = m.toLowerCase();
+            var match = allGenes.find(function(g) { return g.toLowerCase() === mLower; });
+            if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match);
+        });
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags();
+        applyHighlight();
+    };
+
+    // Clear button
+    window.clearVolcanoHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("volcano_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+
+    // Close autocomplete on outside click
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var input = document.getElementById("volcano_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) {
+            acDiv.style.display = "none";
+        }
+    });
+})();
+</script>
+', clean_id, clean_id, clean_id, clean_id, clean_id))
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Interactive plots require DE data.\n")
+}
+```
+
+## MA Plots {.tabset}
+
+### Static {.tabset}
+
+```{r ma-plots-static, results='asis'}
+ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
+if (length(ma_files) > 0) {
+    for (mf in ma_files) {
+        cn <- gsub("^ma_|\\.png$", "", basename(mf))
+        contrast_label <- gsub("_", " ", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_label))
+        cat(sprintf("![MA — %s](%s)\n\n", contrast_label, mf))
+        figure_legend(sprintf("MA plot for the %s contrast. The x-axis shows mean expression (log10 base mean) and the y-axis shows log2 fold change. Red: significantly up-regulated; blue: significantly down-regulated. Dashed lines indicate fold-change cutoffs. Genes with higher expression have more reliable fold-change estimates.", contrast_label))
+        render_commentary(paste0("ma_", cn))
+    }
+} else {
+    cat("No MA plots found.\n")
+}
+```
+
+### Interactive {.tabset}
+
+Enter gene names to highlight them on the plot (comma-separated).
+
+```{r ma-interactive-setup, include=FALSE}
+# Function to create interactive MA plot with gene highlighting
+make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+    lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", contrast), names(df), value = TRUE)[1]
+    padj_col <- grep(paste0("padj\\.", contrast), names(df), value = TRUE)[1]
+
+    if (is.na(lfc_col) || is.na(padj_col)) return(NULL)
+
+    # Calculate baseMean from expression columns (numeric columns that aren't stats)
+    # These are sample columns with expression values
+    stat_patterns <- "^(Gene|linearFC|log2FoldChange|pvalue|padj|upDown|manual_cutoffs|pass|FeatureID|GeneName)"
+    expr_cols <- names(df)[!grepl(stat_patterns, names(df), ignore.case = TRUE)]
+    expr_cols <- expr_cols[sapply(df[expr_cols], is.numeric)]
+
+    if (length(expr_cols) == 0) return(NULL)
+
+    # Calculate mean expression per gene
+    baseMean <- rowMeans(as.matrix(df[, expr_cols, drop = FALSE]), na.rm = TRUE)
+
+    plot_df <- data.frame(
+        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        logFC = as.numeric(df[[lfc_col]]),
+        padj = as.numeric(df[[padj_col]]),
+        baseMean = baseMean,
+        stringsAsFactors = FALSE
+    )
+
+    if (grepl("^linearFC", lfc_col)) {
+        plot_df$logFC <- log2(abs(plot_df$logFC)) * sign(plot_df$logFC)
+    }
+
+    # Filter valid rows
+    plot_df <- plot_df[!is.na(plot_df$baseMean) & plot_df$baseMean > 0, ]
+    plot_df$log10baseMean <- log10(plot_df$baseMean)
+
+    plot_df$Direction <- ifelse(
+        !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
+        ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
+    )
+    plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
+
+    p <- ggplot(plot_df, aes(x = log10baseMean, y = logFC, color = Direction,
+                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 3),
+                                           "\nbaseMean: ", round(baseMean, 1),
+                                           "\npadj: ", signif(padj, 3)))) +
+        geom_point(alpha = 0.6, size = 1.5) +
+        scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+        geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
+        geom_hline(yintercept = 0, color = "black", size = 0.3) +
+        labs(title = title, x = "log10(baseMean)", y = "log2 Fold Change") +
+        theme_minimal()
+
+    ggplotly(p, tooltip = "text")
+}
+```
+
+```{r ma-interactive, results='asis', fig.height=6}
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    for (i in seq_along(contrast_names)) {
+        cn <- contrast_names[i]
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+
+        # Create unique ID for this contrast's MA plot with autocomplete
+        cat(sprintf('
+<div style="margin-bottom: 15px; position: relative;">
+<label for="ma_genes_%s"><strong>Highlight genes:</strong></label>
+<div style="display: inline-block; position: relative; margin-left: 10px;">
+<input type="text" id="ma_genes_%s" placeholder="Start typing a gene name..." autocomplete="off"
+  style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
+  oninput="maAutocomplete_%s(this)" onkeydown="maAutoKey_%s(event)">
+<div id="ma_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+</div>
+<button onclick="highlightMAGenes_%s()" style="padding: 8px 15px; margin-left: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Highlight</button>
+<button onclick="clearMAHighlight_%s()" style="padding: 8px 15px; margin-left: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+<div id="ma_tags_%s" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+</div>
+', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
+
+        p <- make_ma_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+                            log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        if (!is.null(p)) {
+            # Assign unique div ID
+            p$elementId <- paste0("ma_plot_", clean_id)
+            print(htmltools::tagList(p))
+
+            # Add JavaScript for autocomplete + gene highlighting (MA)
+            cat(sprintf('
+<script>
+(function() {
+    var cid = "%s";
+    var selectedGenes = [];
+    var acIndex = -1;
+
+    function getGeneNames() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Gene:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+
+    window.maAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = "";
+        acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var parts = val.split(",");
+        var current = parts[parts.length - 1].trim();
+        if (current.length < 1) { acDiv.style.display = "none"; return; }
+        var allGenes = getGeneNames();
+        var matches = allGenes.filter(function(g) {
+            return g.toLowerCase().indexOf(current) !== -1 && selectedGenes.indexOf(g) === -1;
+        }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g, idx) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+
+    window.maAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            acIndex = Math.min(acIndex + 1, items.length - 1);
+            updateAcHighlight(items);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            acIndex = Math.max(acIndex - 1, 0);
+            updateAcHighlight(items);
+        } else if (e.key === "Enter" && acIndex >= 0) {
+            e.preventDefault();
+            items[acIndex].click();
+        }
+    };
+
+    function updateAcHighlight(items) {
+        for (var i = 0; i < items.length; i++) {
+            items[i].style.background = i === acIndex ? "#e9ecef" : "white";
+        }
+    }
+
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags();
+        applyHighlight();
+    }
+
+    function renderTags() {
+        var container = document.getElementById("ma_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeMAGene_" + cid + "(\'" + g + "\')\\">×</span>";
+            container.appendChild(tag);
+        });
+    }
+
+    window["removeMAGene_" + cid] = function(gene) {
+        selectedGenes = selectedGenes.filter(function(g) { return g !== gene; });
+        renderTags();
+        applyHighlight();
+    };
+
+    function applyHighlight() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) {
+            Plotly.relayout(plotDiv, { annotations: [] });
+            return;
+        }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var geneName = parts[0].replace(/Gene:\\s*/i, "").trim();
+                    if (genesLower.indexOf(geneName.toLowerCase()) !== -1) {
+                        annotations.push({
+                            x: data.x[i], y: data.y[i], text: geneName,
+                            showarrow: true, arrowhead: 2, ax: 20, ay: -30,
+                            font: { size: 12, color: "black" },
+                            bgcolor: "rgba(255,255,255,0.9)",
+                            bordercolor: "black", borderwidth: 1
+                        });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+
+    window.highlightMAGenes_%s = function() {
+        var input = document.getElementById("ma_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allGenes = getGeneNames();
+        manual.forEach(function(m) {
+            var mLower = m.toLowerCase();
+            var match = allGenes.find(function(g) { return g.toLowerCase() === mLower; });
+            if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match);
+        });
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags();
+        applyHighlight();
+    };
+
+    window.clearMAHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("ma_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var input = document.getElementById("ma_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) {
+            acDiv.style.display = "none";
+        }
+    });
+})();
+</script>
+', clean_id, clean_id, clean_id, clean_id, clean_id))
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Interactive MA plots require DE data.\n")
+}
+```
+
+## Top DE Genes
+
+```{r de-table-prep, include=FALSE}
+de_summary_file <- file.path(datasets_dir, "deseq2_summary_p0.05.tsv")
+anno_file <- file.path(enrich_dir, "gene_annotation.csv")
+de_summary_full <- NULL
+
+if (file.exists(de_summary_file)) {
+    de_summary_full <- read.delim(de_summary_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+    # Try to add gene names from annotation file
+    if (file.exists(anno_file)) {
+        anno <- read.csv(anno_file, stringsAsFactors = FALSE)
+        id_col <- if ("Gene" %in% names(de_summary_full)) "Gene" else if ("FeatureID" %in% names(de_summary_full)) "FeatureID" else NULL
+
+        if (!is.null(id_col) && "gene_id" %in% names(anno)) {
+            de_summary_full$gene_id_clean <- gsub("^Gene:", "", de_summary_full[[id_col]])
+            anno_match <- anno[match(de_summary_full$gene_id_clean, anno$gene_id), ]
+            de_summary_full$GeneName <- ifelse(
+                !is.na(anno_match$symbol) & anno_match$symbol != anno_match$gene_id,
+                anno_match$symbol,
+                de_summary_full$gene_id_clean
+            )
+            de_summary_full$gene_id_clean <- NULL
+            cols <- names(de_summary_full)
+            id_idx <- which(cols == id_col)
+            new_order <- c(cols[1:id_idx], "GeneName",
+                           setdiff(cols[(id_idx + 1):length(cols)], "GeneName"))
+            de_summary_full <- de_summary_full[, new_order]
+        }
+    }
+
+    padj_cols <- grep("^padj\\.", names(de_summary_full), value = TRUE)
+    if (length(padj_cols) > 0) {
+        de_summary_full$min_padj <- apply(de_summary_full[, padj_cols, drop = FALSE], 1, min, na.rm = TRUE)
+        de_summary_full <- de_summary_full[order(de_summary_full$min_padj), ]
+    }
+}
+```
+
+```{r de-table}
+if (!is.null(de_summary_full)) {
+    de_top <- head(de_summary_full, 50)
+    de_top$min_padj <- NULL
+    # Remove pass_any_contrast column from display
+    pass_any_cols <- grep("pass_any", names(de_top), value = TRUE)
+    if (length(pass_any_cols) > 0) de_top <- de_top[, !names(de_top) %in% pass_any_cols, drop = FALSE]
+
+    DT::datatable(
+      de_top,
+      caption = "Top 50 differentially expressed genes (sorted by smallest adjusted p-value)",
+      extensions = 'Buttons',
+      options = list(
+          scrollX = TRUE,
+          pageLength = 15,
+          dom = 'Bfrtip',
+          buttons = list(
+              list(extend = 'csv', filename = 'top_DE_genes'),
+              list(extend = 'excel', filename = 'top_DE_genes')
+          )
+      ),
+      rownames = FALSE
+    ) |> DT::formatSignif(columns = which(sapply(de_top, is.numeric)), digits = 4)
+} else {
+    cat("DE summary file not found.\n")
+}
+```
+
+## Gene Lookup
+
+Search for any gene by name or ID to see its differential expression statistics across all contrasts.
+
+```{r gene-lookup}
+if (!is.null(de_summary_full)) {
+    # Remove min_padj and pass_any_contrast columns from display
+    display_cols <- setdiff(names(de_summary_full), c("min_padj", grep("pass_any", names(de_summary_full), value = TRUE)))
+
+    DT::datatable(
+      de_summary_full[, display_cols],
+      caption = "Full DE results — search for any gene",
+      extensions = 'Buttons',
+      options = list(
+          scrollX = TRUE,
+          pageLength = 10,
+          dom = 'Bfrtip',
+          buttons = list(
+              list(extend = 'csv', filename = 'all_DE_results'),
+              list(extend = 'excel', filename = 'all_DE_results')
+          ),
+          search = list(regex = TRUE, caseInsensitive = TRUE)
+      ),
+      rownames = FALSE,
+      filter = 'top'
+    ) |> DT::formatSignif(columns = which(sapply(de_summary_full[, display_cols], is.numeric)), digits = 4)
+}
+```
+
+## Gene Expression Explorer
+
+Type a gene name and click **Add Gene** to visualize its expression across experimental groups. Add multiple genes to create a combined comparison plot. Export figures as SVG or PNG.
+
+```{r gene-explorer-data, include=FALSE}
+# Prepare data for interactive gene boxplot explorer
+explorer_ready <- FALSE
+explorer_json_str <- "{}"
+
+# Load normalized expression matrix
+norm_expr_file_exp <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr_exp <- NULL
+if (file.exists(norm_expr_file_exp)) {
+    norm_expr_exp <- read.delim(norm_expr_file_exp, stringsAsFactors = FALSE,
+                                 row.names = 1, check.names = FALSE)
+}
+
+# Load metadata for group assignment
+meta_file_exp <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
+meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+group_col_exp <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+
+if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
+    # Build gene display names
+    gene_ids_exp <- rownames(norm_expr_exp)
+    gene_display_exp <- gsub("^Gene:", "", gene_ids_exp)
+
+    # Try annotation for gene symbols
+    anno_file_exp <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_exp)) {
+        anno_exp <- read.csv(anno_file_exp, stringsAsFactors = FALSE)
+        symbols_exp <- anno_exp$symbol[match(gene_display_exp, anno_exp$gene_id)]
+        has_sym <- !is.na(symbols_exp) & symbols_exp != gene_display_exp
+        gene_display_exp[has_sym] <- symbols_exp[has_sym]
+    }
+
+    # Build sample -> group mapping
+    sample_col_exp <- rna_cfg$effects$samples %||% "SampleID"
+    if (sample_col_exp %in% names(meta_df_exp) && !is.null(group_col_exp) && group_col_exp %in% names(meta_df_exp)) {
+        group_map_exp <- setNames(as.character(meta_df_exp[[group_col_exp]]), meta_df_exp[[sample_col_exp]])
+        sample_groups_exp <- as.character(group_map_exp[colnames(norm_expr_exp)])
+        sample_groups_exp[is.na(sample_groups_exp)] <- "Unknown"
+    } else {
+        sample_groups_exp <- rep("All", ncol(norm_expr_exp))
+    }
+
+    # Build matrix as list of numeric vectors (one per gene), rounded to 3 decimals
+    expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
+        round(as.numeric(norm_expr_exp[i, ]), 3)
+    })
+
+    explorer_data <- list(
+        genes = gene_display_exp,
+        samples = colnames(norm_expr_exp),
+        groups = sample_groups_exp,
+        expr = expr_matrix_list
+    )
+
+    explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = FALSE)
+    explorer_ready <- TRUE
+}
+```
+
+```{r gene-explorer-ui, eval=explorer_ready, results='asis', echo=FALSE}
+cat('
+<div style="margin: 15px 0 20px 0;">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+<label for="boxplot_gene_input" style="font-weight: bold; white-space: nowrap;">Search gene:</label>
+<div style="position: relative; flex: 1; max-width: 400px;">
+<input type="text" id="boxplot_gene_input" placeholder="Start typing a gene name..."
+  autocomplete="off"
+  style="padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; width: 100%; font-size: 14px; box-sizing: border-box;"
+  oninput="boxplotAutocomplete(this)" onkeydown="boxplotAutoKey(event)">
+<div id="boxplot_ac" style="position: absolute; top: 100%; left: 0; width: 100%; max-height: 220px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 6px 6px; z-index: 1000; display: none; box-shadow: 0 4px 8px rgba(0,0,0,0.12);"></div>
+</div>
+<button onclick="addGeneToPlot()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Add Gene</button>
+<button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
+</div>
+<div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
+</div>
+<div id="boxplot_container" style="width: 100%; min-height: 450px; margin-bottom: 10px;"></div>
+<div id="boxplot_export_bar" style="display: none; margin-bottom: 20px; gap: 8px; align-items: center;">
+  <span style="font-size: 0.85em; color: #555; margin-right: 4px;">Export:</span>
+  <button onclick="exportBoxplot(\'svg\')" style="padding: 5px 14px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">SVG</button>
+  <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
+  <button onclick="exportBoxplot(\'tiff\')" style="padding: 5px 14px; background: #6f42c1; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">TIFF</button>
+</div>
+')
+```
+
+```{r gene-explorer-js, eval=explorer_ready, results='asis', echo=FALSE}
+# Emit JSON data directly (avoid sprintf which can choke on large strings or % in data)
+cat('<script>\nvar geneExprData = ')
+cat(explorer_json_str)
+cat(';\n')
+cat(sprintf('var bpGroupLabel = "%s";\n', group_col_exp))
+cat('
+var boxplotAcIndex = -1;
+var selectedGenes = [];  // array of {name, idx}
+
+function boxplotAutocomplete(el) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var val = el.value.trim().toLowerCase();
+    acDiv.innerHTML = "";
+    boxplotAcIndex = -1;
+    if (val.length < 1) { acDiv.style.display = "none"; return; }
+    var matches = [];
+    for (var i = 0; i < geneExprData.genes.length; i++) {
+        if (geneExprData.genes[i].toLowerCase().indexOf(val) !== -1) {
+            // Skip if already selected
+            if (selectedGenes.some(function(g) { return g.idx === i; })) continue;
+            matches.push({name: geneExprData.genes[i], idx: i});
+            if (matches.length >= 20) break;
+        }
+    }
+    if (matches.length === 0) { acDiv.style.display = "none"; return; }
+    matches.forEach(function(m) {
+        var item = document.createElement("div");
+        item.textContent = m.name;
+        item.style.cssText = "padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0;";
+        item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+        item.onmouseleave = function() { this.style.background = "white"; };
+        item.onclick = function() {
+            document.getElementById("boxplot_gene_input").value = "";
+            acDiv.style.display = "none";
+            addGeneByIdx(m.idx, m.name);
+        };
+        acDiv.appendChild(item);
+    });
+    acDiv.style.display = "block";
+}
+
+function boxplotAutoKey(e) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var items = acDiv.children;
+    if (e.key === "Escape") { acDiv.style.display = "none"; return; }
+    if (items.length === 0) {
+        if (e.key === "Enter") { addGeneToPlot(); }
+        return;
+    }
+    if (e.key === "ArrowDown") {
+        e.preventDefault();
+        boxplotAcIndex = Math.min(boxplotAcIndex + 1, items.length - 1);
+        for (var i = 0; i < items.length; i++) items[i].style.background = i === boxplotAcIndex ? "#e9ecef" : "white";
+    } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        boxplotAcIndex = Math.max(boxplotAcIndex - 1, 0);
+        for (var i = 0; i < items.length; i++) items[i].style.background = i === boxplotAcIndex ? "#e9ecef" : "white";
+    } else if (e.key === "Enter" && boxplotAcIndex >= 0) {
+        e.preventDefault();
+        items[boxplotAcIndex].click();
+    }
+}
+
+function addGeneByIdx(idx, name) {
+    if (selectedGenes.some(function(g) { return g.idx === idx; })) return;
+    selectedGenes.push({name: name, idx: idx});
+    renderGeneTags();
+    renderMultiBoxplot();
+}
+
+function addGeneToPlot() {
+    var val = document.getElementById("boxplot_gene_input").value.trim().toLowerCase();
+    if (!val) return;
+    // Exact match
+    for (var i = 0; i < geneExprData.genes.length; i++) {
+        if (geneExprData.genes[i].toLowerCase() === val) {
+            document.getElementById("boxplot_gene_input").value = "";
+            addGeneByIdx(i, geneExprData.genes[i]);
+            return;
+        }
+    }
+    // Partial match fallback
+    for (var i = 0; i < geneExprData.genes.length; i++) {
+        if (geneExprData.genes[i].toLowerCase().indexOf(val) !== -1) {
+            document.getElementById("boxplot_gene_input").value = "";
+            addGeneByIdx(i, geneExprData.genes[i]);
+            return;
+        }
+    }
+    document.getElementById("boxplot_gene_info").innerHTML = "<span style=\\"color: #c0392b;\\">Gene not found. Try a different name.</span>";
+}
+
+function removeGene(idx) {
+    selectedGenes = selectedGenes.filter(function(g) { return g.idx !== idx; });
+    renderGeneTags();
+    if (selectedGenes.length > 0) {
+        renderMultiBoxplot();
+    } else {
+        Plotly.purge("boxplot_container");
+        document.getElementById("boxplot_gene_info").innerHTML = "";
+        document.getElementById("boxplot_export_bar").style.display = "none";
+    }
+}
+
+function renderGeneTags() {
+    var tagsDiv = document.getElementById("boxplot_gene_tags");
+    tagsDiv.innerHTML = "";
+    selectedGenes.forEach(function(g) {
+        var tag = document.createElement("span");
+        tag.style.cssText = "display: inline-flex; align-items: center; gap: 4px; background: #e3f2fd; color: #1565c0; padding: 4px 10px; border-radius: 16px; font-size: 13px; font-weight: 500;";
+        tag.innerHTML = g.name + " <span onclick=\\"removeGene(" + g.idx + ")\\" style=\\"cursor: pointer; color: #c62828; font-weight: bold; margin-left: 2px; font-size: 15px;\\">&times;</span>";
+        tagsDiv.appendChild(tag);
+    });
+}
+
+function renderMultiBoxplot() {
+    if (selectedGenes.length === 0) return;
+
+    var groups = geneExprData.groups;
+    var samples = geneExprData.samples;
+    var uniqueGroups = [];
+    groups.forEach(function(g) { if (uniqueGroups.indexOf(g) === -1) uniqueGroups.push(g); });
+
+    var colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"];
+    var nGenes = selectedGenes.length;
+    var traces = [];
+
+    if (nGenes === 1) {
+        // Single gene: one box per group on the x-axis
+        var geneIdx = selectedGenes[0].idx;
+        var values = geneExprData.expr[geneIdx];
+        uniqueGroups.forEach(function(g, gi) {
+            var gValues = [], gSamples = [];
+            for (var i = 0; i < values.length; i++) {
+                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+            }
+            traces.push({
+                y: gValues, type: "box", name: g,
+                boxpoints: "all", jitter: 0.4, pointpos: 0,
+                text: gSamples,
+                hovertemplate: "Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                marker: { color: colors[gi % colors.length], size: 6, opacity: 0.7 },
+                line: { color: colors[gi % colors.length] },
+                fillcolor: colors[gi % colors.length] + "33"
+            });
+        });
+        var layout = {
+            title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
+            yaxis: { title: "Expression (TMMlogCPM)" },
+            xaxis: { title: bpGroupLabel },
+            showlegend: false,
+            margin: { t: 50, b: 80, l: 70, r: 30 },
+            boxgap: 0.3
+        };
+        var containerH = 450;
+    } else {
+        // Multiple genes: single combined plot, genes on x-axis, grouped by condition
+        var containerH = Math.max(450, 350 + nGenes * 30);
+
+        // One trace per group — each trace has x = gene names for that group
+        uniqueGroups.forEach(function(g, gi) {
+            var xVals = [], yVals = [], sampleTexts = [];
+            selectedGenes.forEach(function(sg) {
+                var values = geneExprData.expr[sg.idx];
+                for (var i = 0; i < values.length; i++) {
+                    if (groups[i] === g) {
+                        xVals.push(sg.name);
+                        yVals.push(values[i]);
+                        sampleTexts.push(samples[i]);
+                    }
+                }
+            });
+            traces.push({
+                x: xVals, y: yVals, type: "box", name: g,
+                boxpoints: "all", jitter: 0.4, pointpos: 0,
+                text: sampleTexts,
+                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
+                line: { color: colors[gi % colors.length] },
+                fillcolor: colors[gi % colors.length] + "33"
+            });
+        });
+
+        var geneNames = selectedGenes.map(function(sg) { return sg.name; });
+        var layout = {
+            title: { text: "Gene Expression Comparison", font: { size: 16 } },
+            yaxis: { title: "Expression (TMMlogCPM)" },
+            xaxis: { title: "Gene", categoryorder: "array", categoryarray: geneNames },
+            showlegend: true,
+            legend: { title: { text: bpGroupLabel } },
+            boxmode: "group",
+            margin: { t: 50, b: 100, l: 70, r: 30 },
+            boxgap: 0.15,
+            boxgroupgap: 0.1
+        };
+    }
+
+    document.getElementById("boxplot_container").style.height = containerH + "px";
+    Plotly.newPlot("boxplot_container", traces, layout, { responsive: true });
+
+    // Show info
+    var infoLines = selectedGenes.map(function(sg) {
+        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
+        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " TMMlogCPM (" + vals.length + " samples)";
+    });
+    document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
+    document.getElementById("boxplot_export_bar").style.display = "flex";
+}
+
+function clearBoxplot() {
+    selectedGenes = [];
+    document.getElementById("boxplot_gene_input").value = "";
+    document.getElementById("boxplot_gene_info").innerHTML = "";
+    document.getElementById("boxplot_gene_tags").innerHTML = "";
+    document.getElementById("boxplot_export_bar").style.display = "none";
+    Plotly.purge("boxplot_container");
+}
+
+function exportBoxplot(fmt) {
+    var container = document.getElementById("boxplot_container");
+    if (!container || !container.data) { alert("No plot to export."); return; }
+    var geneNames = selectedGenes.map(function(g) { return g.name; }).join("_");
+    if (fmt === "tiff") {
+        // Plotly does not natively support TIFF. Export as high-res PNG instead
+        // and inform the user.
+        Plotly.downloadImage(container, {
+            format: "png", width: 2400, height: 1600, scale: 3,
+            filename: "gene_expression_" + geneNames
+        });
+        alert("TIFF is not natively supported in browsers. A high-resolution PNG (300 DPI equivalent) has been saved instead. You can convert it to TIFF using ImageMagick or any image editor.");
+    } else {
+        var w = fmt === "svg" ? 1200 : 2400;
+        var h = fmt === "svg" ? 800 : 1600;
+        var s = fmt === "svg" ? 1 : 3;
+        Plotly.downloadImage(container, {
+            format: fmt, width: w, height: h, scale: s,
+            filename: "gene_expression_" + geneNames
+        });
+    }
+}
+
+// Close autocomplete on outside click
+document.addEventListener("click", function(e) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var input = document.getElementById("boxplot_gene_input");
+    if (acDiv && e.target !== input && !acDiv.contains(e.target)) {
+        acDiv.style.display = "none";
+    }
+});
+</script>')
+```
+
+```{r gene-explorer-fallback, eval=!explorer_ready, results='asis', echo=FALSE}
+cat("*Gene expression explorer requires normalized expression data and metadata.*\n")
+```
+
+## Normalized Counts
+
+Download the full normalized expression matrix (TMMlogCPM) for all genes that passed filtering. Use the search box to find specific genes.
+
+```{r norm-counts-table}
+norm_counts_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+if (file.exists(norm_counts_file)) {
+    norm_counts_df <- read.delim(norm_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+    # Add gene names from annotation if available
+    anno_file_nc <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_nc)) {
+        anno_nc <- read.csv(anno_file_nc, stringsAsFactors = FALSE)
+        id_col_nc <- names(norm_counts_df)[1]
+        clean_ids <- gsub("^Gene:", "", norm_counts_df[[id_col_nc]])
+        anno_match_nc <- anno_nc[match(clean_ids, anno_nc$gene_id), ]
+        norm_counts_df$GeneName <- ifelse(
+            !is.na(anno_match_nc$symbol) & anno_match_nc$symbol != anno_match_nc$gene_id,
+            anno_match_nc$symbol,
+            clean_ids
+        )
+        # Move GeneName to second column
+        cols_nc <- names(norm_counts_df)
+        norm_counts_df <- norm_counts_df[, c(cols_nc[1], "GeneName",
+                                              setdiff(cols_nc[-1], "GeneName"))]
+    }
+
+    num_cols_nc <- which(sapply(norm_counts_df, is.numeric))
+
+    DT::datatable(
+        norm_counts_df,
+        caption = paste0("Normalized expression (TMMlogCPM) — ",
+                         format(nrow(norm_counts_df), big.mark = ","), " genes"),
+        extensions = 'Buttons',
+        options = list(
+            scrollX = TRUE,
+            pageLength = 15,
+            dom = 'Bfrtip',
+            buttons = list(
+                list(extend = 'csv', filename = 'normalized_counts_TMMlogCPM'),
+                list(extend = 'excel', filename = 'normalized_counts_TMMlogCPM')
+            ),
+            search = list(regex = TRUE, caseInsensitive = TRUE)
+        ),
+        rownames = FALSE,
+        filter = 'top'
+    ) |> DT::formatRound(columns = num_cols_nc, digits = 3)
+} else {
+    cat("Normalized counts file not found.\n")
+}
+```
+
+## Top DE Heatmap {.tabset}
+
+Expression heatmap of top differentially expressed genes. Select the number of genes to display.
+
+```{r top-de-heatmap-prep, include=FALSE}
+# Load normalized expression data
+norm_expr_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+norm_expr <- NULL
+if (file.exists(norm_expr_file) && !is.null(de_summary_full)) {
+    norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
+}
+
+# Function to create heatmap for top N genes
+make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
+    if (is.null(expr_mat) || is.null(de_df)) return(NULL)
+
+    # Get top N gene IDs
+    top_genes <- head(de_df, n_genes)
+    id_col <- if ("Gene" %in% names(top_genes)) "Gene" else names(top_genes)[1]
+    gene_ids <- as.character(top_genes[[id_col]])
+
+    # Match to expression matrix
+    gene_ids_clean <- gsub("^Gene:", "", gene_ids)
+    matched_idx <- which(rownames(expr_mat) %in% gene_ids | rownames(expr_mat) %in% gene_ids_clean)
+
+    if (length(matched_idx) < 2) return(NULL)
+
+    mat <- as.matrix(expr_mat[matched_idx, , drop = FALSE])
+
+    # Use gene names if available
+    if ("GeneName" %in% names(top_genes)) {
+        name_map <- setNames(top_genes$GeneName, gsub("^Gene:", "", top_genes[[id_col]]))
+        new_names <- name_map[rownames(mat)]
+        new_names[is.na(new_names)] <- rownames(mat)[is.na(new_names)]
+        rownames(mat) <- new_names
+    }
+
+    # Scale rows
+    mat_scaled <- t(scale(t(mat)))
+    mat_scaled[is.na(mat_scaled)] <- 0
+
+    # Create annotation
+    if (!is.null(meta_df) && !is.null(group_col) && group_col %in% names(meta_df)) {
+        sample_col <- rna_cfg$effects$samples %||% "SampleID"
+        if (sample_col %in% names(meta_df)) {
+            anno_df <- data.frame(Group = meta_df[[group_col]], row.names = meta_df[[sample_col]])
+            # Match columns
+            common_samples <- intersect(colnames(mat_scaled), rownames(anno_df))
+            if (length(common_samples) > 0) {
+                mat_scaled <- mat_scaled[, common_samples, drop = FALSE]
+                anno_df <- anno_df[common_samples, , drop = FALSE]
+            }
+        } else {
+            anno_df <- NULL
+        }
+    } else {
+        anno_df <- NULL
+    }
+
+    # Create heatmap
+    if (requireNamespace("pheatmap", quietly = TRUE)) {
+        pheatmap::pheatmap(
+            mat_scaled,
+            annotation_col = anno_df,
+            show_rownames = nrow(mat_scaled) <= 50,
+            show_colnames = ncol(mat_scaled) <= 30,
+            cluster_rows = TRUE,
+            cluster_cols = TRUE,
+            main = sprintf("Top %d DE Genes (z-score)", n_genes),
+            fontsize_row = if (nrow(mat_scaled) <= 30) 8 else 6,
+            silent = TRUE
+        )
+    }
+}
+
+# Load metadata
+meta_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
+meta_df <- if (file.exists(meta_file)) read.csv(meta_file, stringsAsFactors = FALSE) else NULL
+group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+```
+
+### Top 10
+
+```{r heatmap-top10, fig.height=6, fig.width=10}
+if (!is.null(norm_expr)) {
+    hm <- make_top_de_heatmap(10, norm_expr, de_summary_full, meta_df, group_col)
+    if (!is.null(hm)) hm
+} else {
+    cat("Expression matrix not available.")
+}
+```
+
+### Top 50
+
+```{r heatmap-top50, fig.height=8, fig.width=10}
+if (!is.null(norm_expr)) {
+    hm <- make_top_de_heatmap(50, norm_expr, de_summary_full, meta_df, group_col)
+    if (!is.null(hm)) hm
+}
+```
+
+### Top 100
+
+```{r heatmap-top100, fig.height=10, fig.width=10}
+if (!is.null(norm_expr)) {
+    hm <- make_top_de_heatmap(100, norm_expr, de_summary_full, meta_df, group_col)
+    if (!is.null(hm)) hm
+}
+```
+
+### Top 200
+
+```{r heatmap-top200, fig.height=12, fig.width=10}
+if (!is.null(norm_expr)) {
+    hm <- make_top_de_heatmap(200, norm_expr, de_summary_full, meta_df, group_col)
+    if (!is.null(hm)) hm
+}
+```
+
+### All DE
+
+```{r heatmap-all, fig.height=14, fig.width=10}
+if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+    n_all <- nrow(de_summary_full)
+    if (n_all > 500) {
+        cat(sprintf("Showing top 500 of %d DE genes (full heatmap too large).\n\n", n_all))
+        n_all <- 500
+    }
+    hm <- make_top_de_heatmap(n_all, norm_expr, de_summary_full, meta_df, group_col)
+    if (!is.null(hm)) hm
+}
+```
+
+---
+
+# Cell Type Deconvolution
+
+```{r deconv-setup}
+deconv_dir <- file.path(run_dir, "rna", "Deconvolution")
+has_deconvolution <- dir.exists(deconv_dir) &&
+    (file.exists(file.path(deconv_dir, "xcell2_scores.csv")) ||
+     file.exists(file.path(deconv_dir, "deconvolution_results.rds")))
+```
+
+```{r deconv-skip, eval=!has_deconvolution, results='asis'}
+cat("Cell type deconvolution was not run. This analysis is only available for **human** and **mouse** datasets.\n\n")
+cat("To enable, set `deconvolution.enabled: true` in the configuration file.\n")
+```
+
+```{r deconv-heatmap, eval=has_deconvolution, fig.cap="Cell type enrichment scores (xCell2)"}
+heatmap_path <- file.path(deconv_dir, "plots", "xcell2_heatmap.png")
+if (file.exists(heatmap_path)) knitr::include_graphics(heatmap_path)
+```
+
+```{r legend-deconv-heatmap, eval=has_deconvolution, results='asis', echo=FALSE}
+figure_legend("Cell type enrichment score heatmap (xCell2). Rows represent inferred cell types and columns represent samples. Higher scores indicate greater predicted abundance of a given cell type in the sample.")
+```
+
+```{r deconv-heatmap-commentary, eval=has_deconvolution, results='asis'}
+render_commentary("deconv_heatmap")
+```
+
+```{r deconv-barplot, eval=has_deconvolution, fig.cap="Cell type composition by condition"}
+bar_path <- file.path(deconv_dir, "plots", "celltype_stacked_bar.png")
+if (file.exists(bar_path)) knitr::include_graphics(bar_path)
+```
+
+```{r legend-deconv-barplot, eval=has_deconvolution, results='asis', echo=FALSE}
+figure_legend("Stacked bar chart of estimated cell type proportions across experimental conditions. Each bar represents a sample or condition, with segments showing the relative abundance of different cell types.")
+```
+
+```{r deconv-barplot-commentary, eval=has_deconvolution, results='asis'}
+render_commentary("deconv_stacked_bar")
+```
+
+```{r deconv-diff-table, eval=has_deconvolution}
+diff_comp_file <- file.path(deconv_dir, "differential_composition.csv")
+if (file.exists(diff_comp_file)) {
+    diff_comp <- read.csv(diff_comp_file, stringsAsFactors = FALSE)
+    make_dt(diff_comp, caption = "Differential Cell Type Composition")
+}
+```
+
+---
+
+# Enrichment / Pathway Analysis
+
+```{r pathway-setup}
+# Check if enrichment results exist
+has_enrichment <- dir.exists(enrich_dir) && length(list.files(enrich_dir, pattern = "\\.csv$")) > 0
+has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
+```
+
+```{r pathway-skip, eval=!has_enrichment, results='asis'}
+cat("Pathway analysis was not run or produced no results. To enable it, set ",
+    "`pathway.enabled: true` in the configuration file and ensure the required ",
+    "R packages are installed (fgsea, org.*.eg.db, clusterProfiler).\n")
+```
+
+```{r pathway-annotation, eval=has_enrichment}
+anno_file <- file.path(enrich_dir, "gene_annotation.csv")
+if (file.exists(anno_file)) {
+    anno <- read.csv(anno_file, stringsAsFactors = FALSE)
+    n_annotated <- sum(!is.na(anno$symbol) & anno$symbol != anno$gene_id)
+    n_total <- nrow(anno)
+    cat(sprintf("**Gene annotation:** %d / %d genes annotated (%.1f%%)\n\n",
+                n_annotated, n_total, 100 * n_annotated / n_total))
+}
+```
+
+**Method:** Fast Gene Set Enrichment Analysis (fGSEA) ranks all genes by their differential expression statistic and tests whether genes in each pathway are enriched at the top or bottom of the ranked list.
+
+**Key metrics:**
+
+- **NES (Normalized Enrichment Score)**: The primary statistic from fGSEA. Positive NES indicates the pathway is enriched in **up-regulated** genes; negative NES indicates enrichment in **down-regulated** genes. The magnitude reflects the degree of enrichment.
+- **padj**: Benjamini-Hochberg adjusted p-value (FDR). Pathways with padj < 0.05 are considered significant.
+- **size**: Number of genes in the pathway that were present in the dataset.
+
+## fGSEA Results {.tabset}
+
+```{r fgsea-tables-prep, eval=has_enrichment, include=FALSE}
+# Pre-load fGSEA data for rendering in regular (non-asis) chunks
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+fgsea_tables <- list()
+if (length(fgsea_files) > 0) {
+    for (i in seq_along(fgsea_files)) {
+        ff <- fgsea_files[i]
+        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+        label_clean <- gsub("_", " ", label)
+        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+        if (nrow(sig) > 0) {
+            sig <- sig[order(sig$padj), ]
+            if ("pathway_name" %in% names(sig)) {
+                show_cols <- intersect(c("pathway_name", "pval", "padj", "NES", "size"), names(sig))
+            } else {
+                show_cols <- intersect(c("pathway", "pval", "padj", "NES", "size"), names(sig))
+            }
+            sig_show <- sig[, show_cols]
+            sig_show$Direction <- ifelse(sig_show$NES > 0, "Up-regulated", "Down-regulated")
+            fgsea_tables[[i]] <- list(label = label_clean, data = sig_show)
+        } else {
+            fgsea_tables[[i]] <- list(label = label_clean, data = NULL)
+        }
+    }
+}
+```
+
+```{r fgsea-tables, eval=has_enrichment, results='asis'}
+if (length(fgsea_tables) > 0) {
+    for (i in seq_along(fgsea_tables)) {
+        tbl <- fgsea_tables[[i]]
+        cat(sprintf("\n### %s {.tabset}\n\n", tbl$label))
+        if (is.null(tbl$data)) {
+            cat("No significant pathways (padj < 0.05) for this contrast/database.\n\n")
+            next
+        }
+        sig_show <- tbl$data
+        n_up <- sum(sig_show$Direction == "Up-regulated")
+        n_down <- sum(sig_show$Direction == "Down-regulated")
+
+        cat(sprintf("\n#### All (%d pathways)\n\n", nrow(sig_show)))
+        cat(sprintf("**Up-regulated: %d** | **Down-regulated: %d**\n\n", n_up, n_down))
+        sig_all <- sig_show[order(sig_show$padj), ]
+        print(knitr::kable(sig_all, caption = paste("All significant pathways —", tbl$label),
+                           row.names = FALSE, digits = 4))
+        cat("\n\n")
+
+        if (n_up > 0) {
+            cat(sprintf("\n#### Up-regulated (%d)\n\n", n_up))
+            cat("Pathways enriched in **up-regulated** genes (positive NES).\n\n")
+            sig_up <- sig_show[sig_show$Direction == "Up-regulated", ]
+            sig_up <- sig_up[order(sig_up$padj), ]
+            print(knitr::kable(sig_up, caption = paste("Up-regulated pathways —", tbl$label),
+                               row.names = FALSE, digits = 4))
+            cat("\n\n")
+        }
+
+        if (n_down > 0) {
+            cat(sprintf("\n#### Down-regulated (%d)\n\n", n_down))
+            cat("Pathways enriched in **down-regulated** genes (negative NES).\n\n")
+            sig_down <- sig_show[sig_show$Direction == "Down-regulated", ]
+            sig_down <- sig_down[order(sig_down$padj), ]
+            print(knitr::kable(sig_down, caption = paste("Down-regulated pathways —", tbl$label),
+                               row.names = FALSE, digits = 4))
+            cat("\n\n")
+        }
+    }
+} else {
+    cat("No fGSEA result files found.\n")
+}
+```
+
+## Pathway Dotplots {.tabset}
+
+```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
+plot_pngs <- list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
+if (length(plot_pngs) > 0) {
+    for (pp in plot_pngs) {
+        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
+        label <- gsub("_", " ", label_raw)
+        cat(sprintf("\n### %s\n\n", label))
+        cat(sprintf("![%s](%s)\n\n", label, pp))
+        render_commentary(paste0("pathway_", label_raw))
+    }
+}
+```
+
+## Leading Edge Genes {.tabset}
+
+The **leading edge** genes are those that contribute most to the enrichment signal of each pathway. These are the genes that appear before the peak of the running enrichment score.
+
+```{r leading-edge, eval=has_enrichment, results='asis'}
+# Load annotation for gene name lookup
+anno_le <- NULL
+anno_file_le <- file.path(enrich_dir, "gene_annotation.csv")
+if (file.exists(anno_file_le)) {
+    anno_le <- read.csv(anno_file_le, stringsAsFactors = FALSE)
+}
+
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (length(fgsea_files) > 0) {
+    for (ff in fgsea_files) {
+        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+        label_clean <- gsub("_", " ", label)
+        cat(sprintf("\n### %s\n\n", label_clean))
+
+        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+
+        if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
+            sig <- head(sig[order(sig$padj), ], 10)  # Top 10 pathways
+
+            le_list <- list()
+            for (i in seq_len(nrow(sig))) {
+                pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
+                le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
+
+                # Convert to gene symbols if annotation available
+                if (!is.null(anno_le)) {
+                    le_symbols <- anno_le$symbol[match(le_genes, anno_le$gene_id)]
+                    le_symbols[is.na(le_symbols)] <- le_genes[is.na(le_symbols)]
+                    le_genes <- le_symbols
+                }
+
+                le_list[[i]] <- data.frame(
+                    Pathway = pathway_name,
+                    NES = round(sig$NES[i], 2),
+                    padj = signif(sig$padj[i], 3),
+                    `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
+                    check.names = FALSE,
+                    stringsAsFactors = FALSE
+                )
+            }
+
+            le_df <- do.call(rbind, le_list)
+            print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
+                               row.names = FALSE))
+            cat("\n\n")
+        } else {
+            cat("No significant pathways with leading edge information.\n\n")
+        }
+    }
+}
+```
+
+---
+
+# Output Files
+
+```{r output-files}
+files_tbl <- data.frame(
+  File = c(
+    "Final_results_ALL_P_0.05.xlsx",
+    "Final_results_DE_P_0.05.xlsx",
+    "Datasets/final_results.tsv",
+    "Datasets/deseq2_summary_p0.05.tsv",
+    "Datasets/de_summary_counts.tsv",
+    "Datasets/rna_counts_filtered.tsv",
+    "Datasets/rna_norm_TMMlogCPM.tsv"
+  ),
+  Description = c(
+    "Excel workbook with all genes and DE statistics (p < 0.05)",
+    "Excel workbook with DE genes only (p < 0.05)",
+    "Full results table (TSV) — all genes with fold changes, p-values, and pass flags",
+    "DESeq2 summary for significant genes",
+    "DE gene counts per contrast (up/down/total)",
+    "Filtered raw counts matrix (genes that passed CPM threshold)",
+    "TMMlogCPM-normalized expression matrix"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Add enrichment files if they exist
+if (has_enrichment) {
+    enrich_csvs <- list.files(enrich_dir, pattern = "\\.csv$")
+    if (length(enrich_csvs) > 0) {
+        enrich_tbl <- data.frame(
+            File = paste0("Enrichment/", enrich_csvs),
+            Description = paste("Pathway analysis results —",
+                                gsub("^pathway_|\\.csv$", "", enrich_csvs)),
+            stringsAsFactors = FALSE
+        )
+        files_tbl <- rbind(files_tbl, enrich_tbl)
+    }
+}
+
+kable(files_tbl, caption = "Key output files in the rna/ directory")
+```
+
+---
+
+# Methods
+
+This section provides a summary suitable for publication methods sections.
+
+```{r methods-text, results='asis'}
+# Auto-generate methods paragraph based on config
+norm_method <- rna_cfg$normalization$method %||% "TMMlogCPM"
+de_method <- rna_cfg$de$method %||% "DESeq2"
+padj_cut <- rna_cfg$de$p_cutoff %||% 0.05
+lfc_cut <- rna_cfg$de$linear_fc_cutoff %||% 1.5
+filter_min <- rna_cfg$filtering$auto_filter$min %||% 0.5
+filter_max <- rna_cfg$filtering$auto_filter$max %||% 2.0
+
+# Get sample and gene counts
+n_samples <- if (exists("meta") && is.data.frame(meta)) nrow(meta) else "N"
+n_genes_final <- if (!is.null(de_summary_full)) nrow(de_summary_full) else "N"
+n_de <- if (!is.null(de_summary_full)) {
+    pass_col <- grep("pass_any", names(de_summary_full), value = TRUE)[1]
+    if (!is.na(pass_col)) sum(de_summary_full[[pass_col]] == TRUE, na.rm = TRUE) else "N"
+} else "N"
+
+# Pathway info
+pathway_method <- rna_cfg$pathway$method %||% "fGSEA"
+pathway_dbs <- paste(rna_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
+
+cat("**RNA-seq Analysis Methods**\n\n")
+
+cat(sprintf(
+"RNA-seq count data from %s samples were processed using the multiomics-core pipeline. ",
+n_samples
+))
+
+cat(sprintf(
+"Lowly expressed genes were filtered using an adaptive CPM threshold approach (range: %.1f–%.1f CPM), ",
+filter_min, filter_max
+))
+
+cat(sprintf(
+"retaining genes with sufficient expression in at least one biological group. "
+))
+
+cat(sprintf(
+"Expression values were normalized using the %s method, which applies TMM (Trimmed Mean of M-values) scaling factors followed by log2 CPM transformation. ",
+norm_method
+))
+
+cat(sprintf(
+"Differential expression analysis was performed using %s with default parameters. ",
+de_method
+))
+
+cat(sprintf(
+"Genes were considered differentially expressed at adjusted p-value ≤ %.2f and |fold change| ≥ %.1f. ",
+padj_cut, lfc_cut
+))
+
+cat(sprintf(
+"A total of %s genes were tested, with %s identified as differentially expressed in at least one contrast. ",
+format(as.numeric(n_genes_final), big.mark = ","),
+format(as.numeric(n_de), big.mark = ",")
+))
+
+cat(sprintf(
+"Pathway enrichment analysis was conducted using %s on %s gene sets. ",
+pathway_method, pathway_dbs
+))
+
+cat("Pathways with adjusted p-value < 0.05 were considered significantly enriched.\n\n")
+
+cat("**Copy-ready version:**\n\n")
+cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
+
+cat(sprintf(
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). Lowly expressed genes were filtered using adaptive CPM thresholds (%.1f–%.1f CPM range). Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
+filter_min, filter_max, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
+))
+
+cat("\n</div>\n")
+```
+
+---
+
+# Session Info
+
+```{r session-info, comment=""}
+si_file <- file.path(run_dir, "execution_info", "sessionInfo.txt")
+if (file.exists(si_file)) {
+    si <- readLines(si_file)
+    cat(paste(si, collapse = "\n"))
+} else {
+    cat(capture.output(sessionInfo()), sep = "\n")
+}
+```
+
+---
+
+<p style="text-align:center; color:grey; font-size:0.9em;">
+Report generated by multiomics-core pipeline | `r format(Sys.time(), '%Y-%m-%d %H:%M')`
+</p>

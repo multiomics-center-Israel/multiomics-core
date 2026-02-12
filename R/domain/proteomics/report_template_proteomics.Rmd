@@ -1,0 +1,2062 @@
+---
+title: "Proteomics Analysis Report"
+subtitle: "multiomics-core Pipeline"
+author: "Bioinformatician: `r yaml::read_yaml(file.path(normalizePath(dirname(knitr::current_input())), 'execution_info', 'config_used.yaml'))$project$analyst`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    number_sections: true
+    fig_width: 10
+    fig_height: 7
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, warning = FALSE, message = FALSE,
+  fig.align = "center", out.width = "100%"
+)
+
+library(yaml)
+library(knitr)
+library(DT)
+library(plotly)
+library(ggplot2)
+library(htmltools)
+library(jsonlite)
+
+# Load ggVennDiagram if available
+has_ggVennDiagram <- FALSE
+tryCatch({
+    library(ggVennDiagram)
+    has_ggVennDiagram <- TRUE
+}, error = function(e) {
+    message("ggVennDiagram not available: ", e$message)
+})
+
+# Helper function for downloadable DT tables
+make_dt <- function(df, caption = NULL, pageLength = 15) {
+    DT::datatable(
+        df,
+        caption = caption,
+        extensions = 'Buttons',
+        options = list(
+            scrollX = TRUE,
+            pageLength = pageLength,
+            dom = 'Bfrtip',
+            buttons = list(
+                list(extend = 'csv', filename = gsub("[^a-zA-Z0-9]", "_", caption %||% "data")),
+                list(extend = 'excel', filename = gsub("[^a-zA-Z0-9]", "_", caption %||% "data"))
+            )
+        ),
+        rownames = FALSE
+    )
+}
+
+# Helper: render figure legend (paper-style caption below figure)
+figure_legend <- function(text) {
+    cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
+}
+
+# Paths
+run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+prot_dir <- file.path(run_dir, "proteomics")
+diag_dir <- file.path(prot_dir, "Diagnostic_plots")
+qc_post_dir <- file.path(diag_dir, "QC_post")
+datasets_dir <- file.path(prot_dir, "Datasets")
+clustering_dir <- file.path(prot_dir, "Clustering")
+enrich_dir <- file.path(prot_dir, "Enrichment")
+enrich_plot_dir <- file.path(enrich_dir, "plots")
+ppi_dir <- file.path(prot_dir, "ppi_networks")
+ppi_plot_dir <- file.path(ppi_dir, "plots")
+adv_stats_dir <- file.path(prot_dir, "advanced_stats")
+adv_stats_plot_dir <- file.path(adv_stats_dir, "plots")
+commentary_dir <- file.path(prot_dir, "commentary")
+
+# Load commentary if available
+commentary <- NULL
+has_commentary <- FALSE
+commentary_json <- file.path(commentary_dir, "commentary_all.json")
+if (file.exists(commentary_json)) {
+    commentary <- tryCatch(
+        jsonlite::read_json(commentary_json),
+        error = function(e) NULL
+    )
+    has_commentary <- !is.null(commentary) && length(commentary) > 0
+}
+
+# Helper: render commentary block for a figure_id (collapsible)
+render_commentary <- function(figure_id) {
+    if (!has_commentary) return(invisible(NULL))
+    c <- commentary[[figure_id]]
+    if (is.null(c)) return(invisible(NULL))
+
+    cat("<details class='commentary-details' style='margin: 4px 0 18px 0;'>\n")
+    cat("<summary style='cursor: pointer; color: #4a90d9; font-weight: 500; font-size: 0.93em; padding: 3px 0;'>Show AI Interpretation</summary>\n")
+
+    html <- "<div class='commentary-block' style='background: #f8f9fa; border-left: 4px solid #4a90d9; padding: 12px 16px; margin: 6px 0 4px 0; border-radius: 0 4px 4px 0; font-size: 0.92em;'>\n"
+    html <- paste0(html, "<p style='margin: 0 0 8px 0;'><strong>What this shows:</strong> ",
+                   htmltools::htmlEscape(c$what_is_this %||% ""), "</p>\n")
+
+    bio_interp <- c$biological_interpretation %||% ""
+    if (nzchar(bio_interp)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Interpretation:</strong> ",
+                       htmltools::htmlEscape(bio_interp), "</p>\n")
+    }
+
+    obs <- c$observations
+    if (length(obs) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Key observations:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (o in obs) html <- paste0(html, "<li>", htmltools::htmlEscape(o), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    stat_assess <- c$statistical_assessment %||% ""
+    if (nzchar(stat_assess)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Statistical note:</strong> ",
+                       htmltools::htmlEscape(stat_assess), "</p>\n")
+    }
+
+    issues <- c$issues_checks
+    if (length(issues) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Checks:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (issue in issues) html <- paste0(html, "<li>", htmltools::htmlEscape(issue), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    steps <- c$next_steps
+    if (length(steps) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0;'><strong>Next steps:</strong></p>\n<ul style='margin: 2px 0 4px 0; padding-left: 20px;'>\n")
+        for (s in steps) html <- paste0(html, "<li>", htmltools::htmlEscape(s), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    backend <- c$backend %||% "unknown"
+    confidence <- c$confidence %||% ""
+    backend_label <- if (grepl("claude", backend, ignore.case = TRUE)) {
+        "Claude (Anthropic) + K-Dense AI scientific-skills"
+    } else if (grepl("openai", backend, ignore.case = TRUE)) {
+        "OpenAI + K-Dense AI scientific-skills"
+    } else if (backend == "data_driven") {
+        "data-driven + K-Dense AI scientific-skills"
+    } else {
+        backend
+    }
+    if (nzchar(confidence) && confidence != "none") {
+        backend_label <- paste0(backend_label, " | confidence: ", confidence)
+    }
+    html <- paste0(html, "<p style='margin: 4px 0 0 0; color: #888; font-size: 0.85em;'><em>Generated by: ",
+                   htmltools::htmlEscape(backend_label), "</em></p>\n</div>\n")
+
+    cat(html)
+    cat("</details>\n")
+}
+
+# Load config
+cfg <- yaml::read_yaml(config_path)
+prot_cfg <- cfg$modes$proteomics
+
+# Load DE summary data (used in multiple sections)
+de_summary_file <- file.path(qc_post_dir, "de_summary_all.tsv")
+de_data <- NULL
+if (file.exists(de_summary_file)) {
+    de_data <- read.delim(de_summary_file, stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+# Get contrast names from column patterns
+contrast_names <- character(0)
+if (!is.null(de_data)) {
+    padj_cols <- grep("^padj\\.imputs\\.", names(de_data), value = TRUE)
+    contrast_names <- gsub("^padj\\.imputs\\.", "", padj_cols)
+}
+```
+
+```{r force-dependencies, include=FALSE}
+# Force DT and Plotly dependencies to be included in the HTML
+DT::datatable(data.frame(x = 1))
+plotly::plot_ly(data.frame(x = 1, y = 1), x = ~x, y = ~y, type = "scatter", mode = "markers")
+```
+
+# Analysis Parameters {.tabset}
+
+## Project
+
+```{r params-project}
+proj <- data.frame(
+  Parameter = c("Project Name", "Analysis Round", "Project Directory",
+                 "Raw Data Path", "Output Path"),
+  Value = c(cfg$project$name, cfg$project$analysis_round, cfg$project$dir,
+            cfg$paths$raw, cfg$paths$out),
+  stringsAsFactors = FALSE
+)
+kable(proj, col.names = c("Parameter", "Value"))
+```
+
+## Experimental Design
+
+```{r params-design}
+meta_file <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
+if (file.exists(meta_file)) {
+    meta <- read.csv(meta_file, stringsAsFactors = FALSE)
+    group_col <- prot_cfg$effects$color %||% "Condition"
+
+    if (group_col %in% names(meta)) {
+        design_tbl <- as.data.frame(table(meta[[group_col]]))
+        colnames(design_tbl) <- c("Group", "n (replicates)")
+        kable(design_tbl)
+    }
+}
+```
+
+## Pipeline Settings
+
+```{r params-pipeline}
+settings <- data.frame(
+  Parameter = c(
+    "Search Engine",
+    "Imputation Method",
+    "DE Method",
+    "Adjusted p-value Cutoff",
+    "Linear FC Cutoff",
+    "Clustering Enabled",
+    "Pathway Analysis",
+    "PPI Networks",
+    "Advanced Statistics"
+  ),
+  Value = c(
+    prot_cfg$engine %||% "unknown",
+    prot_cfg$imputation$method %||% "none",
+    prot_cfg$de$method %||% "limma",
+    prot_cfg$de$p_cutoff %||% 0.05,
+    prot_cfg$de$linear_fc_cutoff %||% 1.5,
+    ifelse(isTRUE(prot_cfg$clustering$enabled), "Yes", "No"),
+    ifelse(isTRUE(prot_cfg$pathway$enabled), "Yes", "No"),
+    ifelse(isTRUE(prot_cfg$ppi$enabled), "Yes", "No"),
+    ifelse(isTRUE(prot_cfg$advanced_stats$enabled), "Yes", "No")
+  ),
+  stringsAsFactors = FALSE
+)
+kable(settings, col.names = c("Parameter", "Value"))
+```
+
+## Contrasts
+
+```{r params-contrasts}
+contrasts_file <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$contrasts)
+if (file.exists(contrasts_file)) {
+    contrasts <- read.csv(contrasts_file, stringsAsFactors = FALSE)
+    kable(contrasts)
+} else {
+    cat("No contrasts file specified.\n")
+}
+```
+
+---
+
+# Technical Summary
+
+```{r technical-summary, results='asis'}
+tech <- prot_cfg$technical_report
+
+meta_ts <- tryCatch(
+    read.csv(file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata),
+             stringsAsFactors = FALSE),
+    error = function(e) NULL
+)
+group_col_ts <- prot_cfg$effects$color
+
+n_samples_ts <- if (!is.null(meta_ts)) nrow(meta_ts) else NA
+n_groups_ts <- if (!is.null(meta_ts) && group_col_ts %in% names(meta_ts)) length(unique(meta_ts[[group_col_ts]])) else NA
+
+cat("## Sample & Acquisition Overview\n\n")
+overview <- character(0)
+if (!is.na(n_samples_ts) && !is.na(n_groups_ts)) {
+    overview <- c(overview, sprintf("This analysis comprises **%d samples** across **%d experimental groups** (grouping variable: *%s*).",
+                                     n_samples_ts, n_groups_ts, group_col_ts))
+}
+if (!is.null(tech$facility) && nzchar(tech$facility)) {
+    overview <- c(overview, sprintf("Data were acquired at the **%s**.", tech$facility))
+}
+if (length(overview) > 0) cat(paste(overview, collapse = " "), "\n\n")
+
+if (!is.null(tech)) {
+    if (!is.null(tech$sample_prep) && nzchar(tech$sample_prep)) {
+        cat("## Sample Preparation\n\n", tech$sample_prep, "\n\n")
+    }
+    if (!is.null(tech$ms_acquisition) && nzchar(tech$ms_acquisition)) {
+        cat("## MS Acquisition\n\n", tech$ms_acquisition, "\n\n")
+    }
+    if (!is.null(tech$search_engine) && nzchar(tech$search_engine)) {
+        cat("## Database Search\n\n", tech$search_engine, "\n\n")
+    }
+    if (!is.null(tech$search_parameters) && nzchar(tech$search_parameters)) {
+        cat("## Search Parameters\n\n", tech$search_parameters, "\n\n")
+    }
+}
+
+cat("## Downstream Analysis (multiomics-core)\n\n")
+cat(sprintf("- **Imputation:** %s", prot_cfg$imputation$method %||% "none"))
+if (!is.null(prot_cfg$imputation$width)) cat(sprintf(" (width=%.1f, downshift=%.1f)", prot_cfg$imputation$width, prot_cfg$imputation$downshift))
+cat("\n")
+cat(sprintf("- **DE method:** %s (adj.p <= %s, |FC| >= %s)\n",
+            prot_cfg$de$method %||% "limma", prot_cfg$de$p_cutoff %||% 0.05, prot_cfg$de$linear_fc_cutoff %||% 1.5))
+cat(sprintf("- **Pathway:** %s\n", if (isTRUE(prot_cfg$pathway$enabled)) paste(prot_cfg$pathway$databases, collapse = ", ") else "disabled"))
+cat(sprintf("- **PPI:** %s\n", if (isTRUE(prot_cfg$ppi$enabled)) "STRING" else "disabled"))
+```
+
+---
+
+# Executive Summary
+
+```{r executive-summary, results='asis'}
+exec_summary_path <- file.path(prot_dir, "executive_summary.md")
+exec_available <- file.exists(exec_summary_path)
+
+# Build key metrics panel
+cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+cat("<div style='display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;'>\n")
+
+# Samples
+if (exists("meta") && is.data.frame(meta)) {
+    n_samp <- nrow(meta)
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Samples</div></div>\n", n_samp))
+}
+
+# Groups
+if (exists("meta") && is.data.frame(meta) && exists("group_col") && group_col %in% names(meta)) {
+    n_groups <- length(unique(meta[[group_col]]))
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Groups</div></div>\n", n_groups))
+}
+
+# Proteins quantified
+if (!is.null(de_data)) {
+    n_proteins <- nrow(de_data)
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%s</div><div style='font-size: 0.85em; color: #666;'>Proteins Quantified</div></div>\n", format(n_proteins, big.mark = ",")))
+}
+
+# Contrasts
+n_contrasts <- length(contrast_names)
+if (n_contrasts > 0) {
+    cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #2c3e50;'>%d</div><div style='font-size: 0.85em; color: #666;'>Contrasts</div></div>\n", n_contrasts))
+}
+
+# Total DE proteins
+if (!is.null(de_data)) {
+    pass_any_col <- grep("pass_any", names(de_data), value = TRUE)[1]
+    if (!is.na(pass_any_col)) {
+        n_de_total <- sum(de_data[[pass_any_col]] == TRUE, na.rm = TRUE)
+        cat(sprintf("<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: #c0392b;'>%s</div><div style='font-size: 0.85em; color: #666;'>DE Proteins</div></div>\n", format(n_de_total, big.mark = ",")))
+    }
+}
+
+cat("</div>\n")
+
+# DE breakdown per contrast
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+
+    cat("<div style='margin: 12px 0;'>\n")
+    cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
+    for (cn in contrast_names) {
+        padj_col <- paste0("padj.imputs.", cn)
+        lfc_col <- paste0("linearFC.imputs.", cn)
+        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
+            n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
+            n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
+            cat(sprintf("<li><strong>%s</strong>: %d DE proteins (%d up, %d down)</li>\n",
+                        cn, n_up + n_down, n_up, n_down))
+        }
+    }
+    cat("</ul>\n</div>\n")
+}
+
+# Pipeline-generated executive summary
+if (exec_available) {
+    exec_md_raw <- paste(readLines(exec_summary_path, warn = FALSE), collapse = "\n")
+    exec_md_raw <- gsub("^##?\\s*Executive\\s*Summary\\s*\n+", "", exec_md_raw)
+    if (nzchar(trimws(exec_md_raw)) && trimws(exec_md_raw) != "No summary available.") {
+        cat("<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #dee2e6;'>\n")
+        cat(exec_md_raw, "\n")
+        cat("</div>\n")
+    }
+}
+
+cat("</div>\n")
+```
+
+---
+
+# Quality Control — Pre-DE
+
+## Filtering Statistics
+
+```{r filtering-stats, results='asis'}
+# Try to load filtering stats from pre-computed file or compute inline
+filt_stats_file <- file.path(prot_dir, "filtering_stats.csv")
+if (file.exists(filt_stats_file)) {
+    filt_stats <- read.csv(filt_stats_file, stringsAsFactors = FALSE)
+    for (i in seq_len(nrow(filt_stats))) {
+        cat(sprintf("**%s:** %s\n\n", filt_stats$metric[i], filt_stats$value[i]))
+    }
+} else if (!is.null(de_data)) {
+    n_quantified <- nrow(de_data)
+    cat(sprintf("**Proteins in final dataset:** %s\n\n", format(n_quantified, big.mark = ",")))
+
+    imp_method <- prot_cfg$imputation$method %||% "none"
+    if (tolower(imp_method) != "none") {
+        cat(sprintf("**Imputation method:** %s\n\n", imp_method))
+    }
+}
+```
+
+## PCA {.tabset}
+
+### PC1 vs PC2
+
+```{r pca-12, fig.cap="PCA -- PC1 vs PC2"}
+p <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-pca-12, results='asis'}
+figure_legend("Principal Component Analysis (PCA) of imputed protein expression data, showing sample separation along PC1 and PC2. Each point represents one sample, colored by experimental group.")
+```
+
+```{r commentary-pca, results='asis'}
+render_commentary("pca_plot")
+```
+
+### By Top Variable Proteins
+
+Select the number of top variable proteins used for PCA calculation:
+
+```{r pca-var-prot-setup, echo=FALSE}
+pca_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
+
+pca_data_map <- list()
+available_n_top <- c()
+
+if (length(pca_files) > 0) {
+    for (f in pca_files) {
+        n_val <- as.numeric(sub(".*PCA_top([0-9]+)\\.png$", "\\1", basename(f)))
+        if (file.exists(f)) {
+            pca_data_map[[as.character(n_val)]] <- knitr::image_uri(f)
+            available_n_top <- c(available_n_top, n_val)
+        }
+    }
+}
+
+if (length(available_n_top) > 0) {
+    available_n_top <- sort(unique(available_n_top))
+    default_n_top <- available_n_top[1]
+    default_img_uri <- pca_data_map[[as.character(default_n_top)]]
+} else {
+    default_pca_path <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
+    if (file.exists(default_pca_path)) {
+        default_n_top <- 0
+        default_img_uri <- knitr::image_uri(default_pca_path)
+        pca_data_map[["0"]] <- default_img_uri
+        available_n_top <- 0
+    } else {
+        default_n_top <- NULL
+        default_img_uri <- NULL
+    }
+}
+```
+
+<div style="margin-bottom: 20px;">
+<label for="pca_prot_selector"><strong>Number of top variable proteins:</strong></label>
+<select id="pca_prot_selector" onchange="updateProtPCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
+```{r pca-prot-dropdown, echo=FALSE, results='asis'}
+if (length(available_n_top) > 0 && available_n_top[1] != 0) {
+    for (n_val in available_n_top) {
+        selected <- if (n_val == default_n_top) " selected" else ""
+        cat(sprintf('<option value="%d"%s>%s proteins</option>\n', n_val, selected, format(n_val, big.mark = ",")))
+    }
+} else if (!is.null(default_img_uri)) {
+    cat('<option value="0" selected>All proteins (default)</option>\n')
+} else {
+    cat('<option disabled>No PCA plots found</option>\n')
+}
+```
+</select>
+</div>
+
+<div id="pca_prot_container" style="text-align: center;">
+```{r pca-prot-render, echo=FALSE, results='asis'}
+if (!is.null(default_img_uri)) {
+    cat(sprintf('<img id="pca_prot_image" src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA Plot" />', default_img_uri))
+} else {
+    cat('<p><em>PCA plot not available.</em></p>')
+}
+```
+</div>
+
+<script>
+var embeddedProtPcaImages = `r if (length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"`;
+
+function updateProtPCAPlot(n_top) {
+    var img = document.getElementById("pca_prot_image");
+    if (embeddedProtPcaImages && embeddedProtPcaImages[n_top]) {
+        img.src = embeddedProtPcaImages[n_top];
+    }
+}
+</script>
+
+### PC1 vs PC3
+
+```{r pca-13, fig.cap="PCA -- PC1 vs PC3"}
+p <- file.path(diag_dir, "PCA_PC1.vs.PC3.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-pca-13, results='asis'}
+figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may capture additional biological variation or batch effects not visible in the PC1-PC2 projection.")
+```
+
+### 3D Interactive
+
+```{r pca-3d-link, results='asis'}
+pca3d_file <- file.path(diag_dir, "PCA_3D.html")
+if (file.exists(pca3d_file)) {
+    cat(sprintf('<p><a href="proteomics/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">Open 3D PCA (new tab)</a></p>'))
+} else {
+    cat("*3D PCA plot not available.*")
+}
+```
+
+### UMAP
+
+```{r umap, fig.cap="UMAP embedding of protein expression"}
+umap_file <- file.path(diag_dir, "UMAP.png")
+if (file.exists(umap_file)) {
+    knitr::include_graphics(umap_file)
+} else {
+    cat("*UMAP plot not available. Enable with `qc.run_umap: true` in config.*\n")
+}
+```
+
+```{r legend-umap, results='asis'}
+if (file.exists(file.path(diag_dir, "UMAP.png"))) {
+    figure_legend("Uniform Manifold Approximation and Projection (UMAP) of imputed protein expression data. UMAP preserves local structure and may reveal non-linear groupings not apparent in PCA.")
+}
+```
+
+```{r commentary-umap, results='asis'}
+render_commentary("umap_plot")
+```
+
+## Protein Distribution
+
+```{r density, fig.cap="Protein expression density"}
+hp <- file.path(diag_dir, "protein_histograms_summary.png")
+if (file.exists(hp)) knitr::include_graphics(hp)
+```
+
+```{r legend-density, results='asis'}
+figure_legend("Kernel density estimates of per-sample protein expression distributions. Overlapping curves indicate consistent expression profiles across samples.")
+```
+
+```{r commentary-density, results='asis'}
+render_commentary("density_plot")
+```
+
+## Imputation QC {.tabset}
+
+```{r imputation-check, include=FALSE}
+imp_method <- prot_cfg$imputation$method %||% "none"
+has_imputation <- tolower(imp_method) != "none"
+```
+
+```{r imputation-section, eval=has_imputation, results='asis'}
+cat("Imputation was performed using the **", imp_method, "** method.\n\n")
+
+if (tolower(imp_method) == "perseus") {
+    imp_w <- prot_cfg$imputation$width %||% 0.3
+    imp_s <- prot_cfg$imputation$downshift %||% 1.8
+    imp_n <- prot_cfg$imputation$n_imputations %||% 1
+    imp_min <- prot_cfg$imputation$min_passed %||% 1
+
+    cat("#### How Perseus-style imputation works\n\n")
+    cat("Missing values in label-free proteomics are often *missing not at random* (MNAR): ",
+        "they arise because the protein abundance is below the instrument's detection limit. ",
+        "Perseus-style imputation models these missing values by drawing random intensities ",
+        "from a **downshifted normal distribution** relative to each sample's observed values.\n\n")
+    cat("For each sample, the imputed values are drawn from:\n\n")
+    cat(sprintf("- **Mean** = sample mean - %.1f x sample SD (downshift)\n", imp_s))
+    cat(sprintf("- **SD** = %.1f x sample SD (width)\n\n", imp_w))
+    cat("This places imputed values in the low-abundance tail of the distribution, ",
+        "consistent with the MNAR assumption. ",
+        "The narrow width (relative to the observed distribution) prevents imputed values ",
+        "from inflating variance estimates.\n\n")
+    if (imp_n > 1) {
+        cat(sprintf("To account for imputation uncertainty, the procedure is repeated **%d times** ", imp_n))
+        cat("and differential expression is computed on each imputed dataset independently. ",
+            "Final p-values and fold changes are aggregated across imputations.\n\n")
+    }
+    cat(sprintf("Only proteins detected in at least **%d sample(s)** per group were retained for analysis.\n\n", imp_min))
+}
+```
+
+### Imputation Histograms
+
+```{r imp-hist, eval=has_imputation, fig.cap="Imputed vs original intensity distributions"}
+imp_w <- prot_cfg$imputation$width %||% "NA"
+imp_s <- prot_cfg$imputation$downshift %||% "NA"
+f_imp <- file.path(diag_dir, sprintf("imputed_histograms_samples_summary_w%s_s%s.png", imp_w, imp_s))
+if (file.exists(f_imp)) knitr::include_graphics(f_imp)
+```
+
+```{r commentary-imp-hist, results='asis'}
+render_commentary("imputation_histogram")
+```
+
+### Boxplot Before Imputation
+
+```{r imp-boxplot-pre, eval=has_imputation, fig.cap="Expression boxplot before imputation"}
+f_box_pre <- file.path(diag_dir, "pre_imputation_boxplot.png")
+if (file.exists(f_box_pre)) {
+    knitr::include_graphics(f_box_pre)
+} else {
+    cat("*Pre-imputation boxplot not available.*\n")
+}
+```
+
+```{r commentary-boxplot-pre, results='asis'}
+render_commentary("pre_imputation_boxplot")
+```
+
+### Boxplot After Imputation
+
+```{r imp-boxplot, eval=has_imputation, fig.cap="Expression boxplot after imputation"}
+f_box <- file.path(diag_dir, "imputed_boxplot.png")
+if (file.exists(f_box)) knitr::include_graphics(f_box)
+```
+
+```{r commentary-boxplot-post, results='asis'}
+render_commentary("imputation_boxplot")
+```
+
+## Sample Similarity {.tabset}
+
+### Distance Heatmap (Imputed)
+
+```{r dist-heatmap, fig.cap="Sample-to-sample distance heatmap (imputed data)"}
+p <- file.path(diag_dir, "sample_distance_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-dist-heatmap, results='asis'}
+figure_legend("Euclidean distance matrix of imputed protein expression values. Darker colors indicate smaller distances (higher similarity). Samples from the same experimental group should cluster together.")
+```
+
+```{r commentary-distance, results='asis'}
+render_commentary("sample_distance")
+```
+
+### Distance Heatmap (Raw, with NAs)
+
+```{r dist-heatmap-na, fig.cap="Sample-to-sample distance heatmap (raw data, NAs present)"}
+p <- file.path(diag_dir, "sample_distance_heatmap_NA.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+### Correlation Heatmap
+
+```{r corr-heatmap, fig.cap="Sample-to-sample correlation heatmap"}
+p <- file.path(diag_dir, "sample_correlation_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-corr-heatmap, results='asis'}
+figure_legend("Pairwise Pearson correlation heatmap of protein expression profiles. Within-group correlations should be higher than between-group correlations.")
+```
+
+```{r commentary-correlation, results='asis'}
+render_commentary("sample_correlation")
+```
+
+## Expression Heatmap
+
+```{r expr-heatmap, fig.cap="Sample expression heatmap (top variable proteins)"}
+p <- file.path(diag_dir, "samples_protein_heatmap.png")
+if (file.exists(p)) knitr::include_graphics(p)
+```
+
+```{r legend-expr-heatmap, results='asis'}
+figure_legend("Unsupervised hierarchical clustering heatmap based on the top most variable proteins. Both rows (proteins) and columns (samples) are clustered by expression similarity.")
+```
+
+```{r commentary-expr-heatmap, results='asis'}
+render_commentary("expr_heatmap")
+```
+
+## Outlier Detection
+
+```{r outlier-detection, results='asis'}
+outlier_file <- file.path(diag_dir, "outlier_report.csv")
+if (file.exists(outlier_file)) {
+    outlier_df <- read.csv(outlier_file, stringsAsFactors = FALSE)
+    if (nrow(outlier_df) > 0) {
+        cat(sprintf("**%d potential outlier sample(s) detected:**\n\n", nrow(outlier_df)))
+        make_dt(outlier_df, caption = "Outlier Samples", pageLength = 10)
+    } else {
+        cat("No outlier samples detected.\n")
+    }
+} else {
+    cat("Outlier detection results not available.\n")
+}
+```
+
+---
+
+# Differential Expression Analysis
+
+Differential expression was performed using **`r prot_cfg$de$method %||% "limma"`**.
+Proteins were considered significant at adjusted p-value $\leq$ `r prot_cfg$de$p_cutoff %||% 0.05`
+and |linear fold change| $\geq$ `r prot_cfg$de$linear_fc_cutoff %||% 1.5`.
+
+## DE Summary
+
+```{r de-summary}
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+
+    total_proteins <- nrow(de_data)
+
+    de_counts_list <- list()
+    for (cn in contrast_names) {
+        padj_col <- paste0("padj.imputs.", cn)
+        lfc_col <- paste0("linearFC.imputs.", cn)
+        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
+            n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
+            n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
+            de_counts_list[[cn]] <- data.frame(
+                Contrast = cn, Up = n_up, Down = n_down, Total = n_up + n_down,
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+
+    if (length(de_counts_list) > 0) {
+        de_counts_df <- do.call(rbind, de_counts_list)
+        cat(sprintf("**Total proteins quantified:** %s\n\n", format(total_proteins, big.mark = ",")))
+        kable(de_counts_df, col.names = c("Contrast", "Up-regulated", "Down-regulated", "Total DE"),
+              caption = "Number of differentially expressed proteins per contrast", row.names = FALSE)
+    }
+} else {
+    cat("DE summary data not available.\n")
+}
+```
+
+## DE Protein Overlap {.tabset}
+
+### All DE Proteins
+
+```{r de-overlap-venn-all, fig.height=6, fig.width=10, results='asis'}
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(prot_cfg$de$linear_fc_cutoff %||% 1.5)
+    id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+
+    de_protein_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- paste0("padj.imputs.", cn)
+        lfc_col <- paste0("linearFC.imputs.", cn)
+        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= lfc_cut
+            protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
+            de_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_de]
+        }
+    }
+
+    if (length(de_protein_lists) >= 2 && length(de_protein_lists) <= 7) {
+        if (has_ggVennDiagram) {
+            total_unique <- length(unique(unlist(de_protein_lists)))
+            short_names <- gsub(" vs ", "\nvs ", names(de_protein_lists))
+            names(de_protein_lists) <- short_names
+            venn_plot <- ggVennDiagram(de_protein_lists, label_alpha = 0,
+                                       label = "both", label_percent_digit = 1,
+                                       set_size = 3.5) +
+                scale_fill_gradient(low = "white", high = "steelblue") +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
+                labs(title = "DE Protein Overlap (All)",
+                     subtitle = paste0("Total unique DE proteins: ", total_unique)) +
+                theme(legend.position = "none",
+                      plot.title = element_text(hjust = 0),
+                      plot.subtitle = element_text(hjust = 0),
+                      plot.margin = margin(10, 40, 10, 40))
+            print(venn_plot)
+        } else {
+            cat("**DE protein counts per contrast:**\n\n")
+            for (nm in names(de_protein_lists)) {
+                cat(sprintf("- **%s**: %d proteins\n", nm, length(de_protein_lists[[nm]])))
+            }
+        }
+    }
+} else if (length(contrast_names) < 2) {
+    cat("Venn diagram requires at least 2 contrasts.\n")
+} else {
+    cat("DE data not available for Venn diagram.\n")
+}
+```
+
+### Up-regulated
+
+```{r de-overlap-venn-up, fig.height=6, fig.width=10, results='asis'}
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(prot_cfg$de$linear_fc_cutoff %||% 1.5)
+    id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+
+    up_protein_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- paste0("padj.imputs.", cn)
+        lfc_col <- paste0("linearFC.imputs.", cn)
+        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_up <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc >= lfc_cut
+            protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
+            up_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_up]
+        }
+    }
+
+    if (length(up_protein_lists) >= 2 && length(up_protein_lists) <= 7 && has_ggVennDiagram) {
+        total_up <- length(unique(unlist(up_protein_lists)))
+        short_names_up <- gsub(" vs ", "\nvs ", names(up_protein_lists))
+        names(up_protein_lists) <- short_names_up
+        venn_plot <- ggVennDiagram(up_protein_lists, label_alpha = 0,
+                                   label = "both", label_percent_digit = 1,
+                                   set_size = 3.5) +
+            scale_fill_gradient(low = "white", high = "#E41A1C") +
+            scale_x_continuous(expand = expansion(mult = 0.25)) +
+            labs(title = "Up-regulated Protein Overlap",
+                 subtitle = paste0("Total unique up-regulated: ", total_up)) +
+            theme(legend.position = "none",
+                  plot.title = element_text(hjust = 0),
+                  plot.subtitle = element_text(hjust = 0),
+                  plot.margin = margin(10, 40, 10, 40))
+        print(venn_plot)
+    }
+}
+```
+
+### Down-regulated
+
+```{r de-overlap-venn-down, fig.height=6, fig.width=10, results='asis'}
+if (!is.null(de_data) && length(contrast_names) >= 2) {
+    padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+    lfc_cut <- log2(prot_cfg$de$linear_fc_cutoff %||% 1.5)
+    id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+
+    down_protein_lists <- list()
+    for (cn in contrast_names) {
+        padj_col <- paste0("padj.imputs.", cn)
+        lfc_col <- paste0("linearFC.imputs.", cn)
+        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            padj_vals <- as.numeric(de_data[[padj_col]])
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            is_down <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc <= -lfc_cut
+            protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
+            down_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_down]
+        }
+    }
+
+    if (length(down_protein_lists) >= 2 && length(down_protein_lists) <= 7 && has_ggVennDiagram) {
+        total_down <- length(unique(unlist(down_protein_lists)))
+        short_names_dn <- gsub(" vs ", "\nvs ", names(down_protein_lists))
+        names(down_protein_lists) <- short_names_dn
+        venn_plot <- ggVennDiagram(down_protein_lists, label_alpha = 0,
+                                   label = "both", label_percent_digit = 1,
+                                   set_size = 3.5) +
+            scale_fill_gradient(low = "white", high = "#377EB8") +
+            scale_x_continuous(expand = expansion(mult = 0.25)) +
+            labs(title = "Down-regulated Protein Overlap",
+                 subtitle = paste0("Total unique down-regulated: ", total_down)) +
+            theme(legend.position = "none",
+                  plot.title = element_text(hjust = 0),
+                  plot.subtitle = element_text(hjust = 0),
+                  plot.margin = margin(10, 40, 10, 40))
+        print(venn_plot)
+    }
+}
+```
+
+## DE Results Table
+
+```{r de-table}
+if (!is.null(de_data)) {
+    # Show first 500 rows max for performance
+    show_df <- head(de_data, 500)
+    make_dt(show_df, caption = "DE Summary (top 500 rows)", pageLength = 15)
+}
+```
+
+## Volcano Plots {.tabset}
+
+### Static {.tabset}
+
+```{r volcano-plots-static, results='asis'}
+volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
+padj_cut_vol <- prot_cfg$de$p_cutoff %||% 0.05
+lfc_cut_vol <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+if (length(volcano_files) > 0) {
+    for (vf in volcano_files) {
+        cn <- gsub("^volcano_|\\.png$", "", basename(vf))
+        contrast_clean <- gsub("_", " ", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+        cat(sprintf("![Volcano -- %s](%s)\n\n", contrast_clean, vf))
+        figure_legend(sprintf("Volcano plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s).", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        render_commentary(paste0("volcano_", cn))
+    }
+} else {
+    cat("No volcano plots found.\n")
+}
+```
+
+### Interactive {.tabset}
+
+```{r volcano-interactive-setup, include=FALSE}
+# Create interactive volcano plot
+make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+    padj_col <- paste0("padj.imputs.", contrast)
+    lfc_col <- paste0("linearFC.imputs.", contrast)
+    if (!(padj_col %in% names(df)) || !(lfc_col %in% names(df))) return(NULL)
+
+    id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+    gene_col <- if ("Genes" %in% names(df)) "Genes" else if (id_col %in% names(df)) id_col else names(df)[1]
+
+    plot_df <- data.frame(
+        protein = df[[gene_col]],
+        logFC = log2(abs(as.numeric(df[[lfc_col]]))) * sign(as.numeric(df[[lfc_col]])),
+        padj = as.numeric(df[[padj_col]]),
+        stringsAsFactors = FALSE
+    )
+    plot_df$neglog10padj <- -log10(pmax(plot_df$padj, 1e-300))
+    plot_df$Direction <- ifelse(
+        !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
+        ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
+    )
+    plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
+
+    p <- ggplot(plot_df, aes(x = logFC, y = neglog10padj, color = Direction,
+                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
+                                           "\npadj: ", signif(padj, 3)))) +
+        geom_point(alpha = 0.6, size = 1.5) +
+        scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+        geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dashed") +
+        geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
+        labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
+        theme_minimal()
+    ggplotly(p, tooltip = "text")
+}
+```
+
+Hover over points to see protein names and statistics. Enter protein names to highlight them.
+
+```{r volcano-interactive, results='asis', fig.height=6}
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    for (i in seq_along(contrast_names)) {
+        cn <- contrast_names[i]
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+
+        cat(sprintf('
+<div style="margin-bottom: 15px; position: relative;">
+<label for="volcano_genes_%s"><strong>Highlight proteins:</strong></label>
+<div style="display: inline-block; position: relative; margin-left: 10px;">
+<input type="text" id="volcano_genes_%s" placeholder="Start typing a protein name..." autocomplete="off"
+  style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
+  oninput="volcanoAutocomplete_%s(this)" onkeydown="volcanoAutoKey_%s(event)">
+<div id="volcano_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+</div>
+<button onclick="highlightVolcanoGenes_%s()" style="padding: 8px 15px; margin-left: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Highlight</button>
+<button onclick="clearVolcanoHighlight_%s()" style="padding: 8px 15px; margin-left: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+<div id="volcano_tags_%s" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+</div>
+', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
+
+        p <- make_volcano_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
+                                      log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        if (!is.null(p)) {
+            p$elementId <- paste0("volcano_plot_", clean_id)
+            print(htmltools::tagList(p))
+
+            cat(sprintf('
+<script>
+(function() {
+    var cid = "%s";
+    var selectedGenes = [];
+    var acIndex = -1;
+    function getGeneNames() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Protein:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+    window.volcanoAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = ""; acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var parts = val.split(","); var current = parts[parts.length - 1].trim();
+        if (current.length < 1) { acDiv.style.display = "none"; return; }
+        var allGenes = getGeneNames();
+        var matches = allGenes.filter(function(g) { return g.toLowerCase().indexOf(current) !== -1 && selectedGenes.indexOf(g) === -1; }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+    window.volcanoAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcHighlight(items); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcHighlight(items); }
+        else if (e.key === "Enter" && acIndex >= 0) { e.preventDefault(); items[acIndex].click(); }
+    };
+    function updateAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === acIndex ? "#e9ecef" : "white"; }
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    }
+    function renderTags() {
+        var container = document.getElementById("volcano_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeVolcanoGene_" + cid + "(\'" + g + "\')\\">x</span>";
+            container.appendChild(tag);
+        });
+    }
+    window["removeVolcanoGene_" + cid] = function(gene) { selectedGenes = selectedGenes.filter(function(g) { return g !== gene; }); renderTags(); applyHighlight(); };
+    function applyHighlight() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) { Plotly.relayout(plotDiv, { annotations: [] }); return; }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var geneName = parts[0].replace(/Protein:\\s*/i, "").trim();
+                    if (genesLower.indexOf(geneName.toLowerCase()) !== -1) {
+                        annotations.push({ x: data.x[i], y: data.y[i], text: geneName, showarrow: true, arrowhead: 2, ax: 20, ay: -30, font: { size: 12, color: "black" }, bgcolor: "rgba(255,255,255,0.9)", bordercolor: "black", borderwidth: 1 });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+    window.highlightVolcanoGenes_%s = function() {
+        var input = document.getElementById("volcano_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allGenes = getGeneNames();
+        manual.forEach(function(m) { var mLower = m.toLowerCase(); var match = allGenes.find(function(g) { return g.toLowerCase() === mLower; }); if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match); });
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    };
+    window.clearVolcanoHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("volcano_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var input = document.getElementById("volcano_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
+    });
+})();
+</script>
+', clean_id, clean_id, clean_id, clean_id, clean_id))
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Interactive plots require DE data.\n")
+}
+```
+
+## MA Plots {.tabset}
+
+### Static {.tabset}
+
+```{r ma-plots-static, results='asis'}
+ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
+if (length(ma_files) > 0) {
+    for (mf in ma_files) {
+        cn <- gsub("^ma_|\\.png$", "", basename(mf))
+        contrast_clean <- gsub("_", " ", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+        cat(sprintf("![MA -- %s](%s)\n\n", contrast_clean, mf))
+        figure_legend(sprintf("MA plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated.", contrast_clean))
+        render_commentary(paste0("ma_", cn))
+    }
+} else {
+    cat("No MA plots found.\n")
+}
+```
+
+### Interactive {.tabset}
+
+```{r ma-interactive-setup, include=FALSE}
+make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+    padj_col <- paste0("padj.imputs.", contrast)
+    lfc_col <- paste0("linearFC.imputs.", contrast)
+    if (!(padj_col %in% names(df)) || !(lfc_col %in% names(df))) return(NULL)
+
+    id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+    gene_col <- if ("Genes" %in% names(df)) "Genes" else if (id_col %in% names(df)) id_col else names(df)[1]
+
+    # Calculate baseMean from numeric non-stat columns
+    stat_patterns <- "^(padj|pvalue|linearFC|upDown|pass|FeatureID|Protein\\.Names|Genes|First\\.Protein)"
+    expr_cols <- names(df)[!grepl(stat_patterns, names(df))]
+    expr_cols <- expr_cols[sapply(df[expr_cols], is.numeric)]
+
+    if (length(expr_cols) == 0) return(NULL)
+    baseMean <- rowMeans(as.matrix(df[, expr_cols, drop = FALSE]), na.rm = TRUE)
+
+    plot_df <- data.frame(
+        protein = df[[gene_col]],
+        logFC = log2(abs(as.numeric(df[[lfc_col]]))) * sign(as.numeric(df[[lfc_col]])),
+        padj = as.numeric(df[[padj_col]]),
+        baseMean = baseMean,
+        stringsAsFactors = FALSE
+    )
+    plot_df <- plot_df[!is.na(plot_df$baseMean) & plot_df$baseMean > 0, ]
+    plot_df$log10baseMean <- log10(plot_df$baseMean)
+    plot_df$Direction <- ifelse(
+        !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
+        ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
+    )
+    plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
+
+    p <- ggplot(plot_df, aes(x = log10baseMean, y = logFC, color = Direction,
+                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
+                                           "\nbaseMean: ", round(baseMean, 1),
+                                           "\npadj: ", signif(padj, 3)))) +
+        geom_point(alpha = 0.6, size = 1.5) +
+        scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+        geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
+        geom_hline(yintercept = 0, color = "black", linewidth = 0.3) +
+        labs(title = title, x = "log10(Mean Intensity)", y = "log2 Fold Change") +
+        theme_minimal()
+    ggplotly(p, tooltip = "text")
+}
+```
+
+```{r ma-interactive, results='asis', fig.height=6}
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    for (i in seq_along(contrast_names)) {
+        cn <- contrast_names[i]
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+
+        p <- make_ma_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
+                                  log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        if (!is.null(p)) {
+            p$elementId <- paste0("ma_plot_", clean_id)
+            print(htmltools::tagList(p))
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Interactive MA plots require DE data.\n")
+}
+```
+
+## Top DE Heatmaps {.tabset}
+
+```{r top-de-heatmaps, results='asis'}
+heatmap_files <- list.files(qc_post_dir, pattern = "^heatmap_top.*\\.png$", full.names = TRUE)
+if (length(heatmap_files) > 0) {
+    # Parse contrast names and sizes
+    for (hf in heatmap_files) {
+        label <- gsub("^heatmap_|\\.png$", "", basename(hf))
+        label_clean <- gsub("_", " ", label)
+        cat(sprintf("\n### %s\n\n", label_clean))
+        cat(sprintf("![%s](%s)\n\n", label_clean, hf))
+        figure_legend(sprintf("Heatmap of %s across samples. Rows are z-score normalized. Samples are annotated by experimental group.", label_clean))
+        render_commentary(paste0("heatmap_", label))
+    }
+} else {
+    cat("No top DE heatmaps found. Enable with `qc.top_de_heatmap_sizes` in config.\n")
+}
+```
+
+## Protein Expression Explorer
+
+```{r protein-explorer-data, include=FALSE}
+explorer_ready <- FALSE
+explorer_json_str <- "{}"
+
+# Load expression data: use final_results.tsv which has per-sample columns + annotations
+meta_file_exp <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
+meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+group_col_exp <- prot_cfg$effects$color %||% "Condition"
+sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
+
+norm_expr_exp <- NULL
+
+if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
+    meta_sample_ids <- as.character(meta_df_exp[[sample_col_exp]])
+
+    # Primary: final_results.tsv (has expression + annotation columns)
+    final_file <- file.path(datasets_dir, "final_results.tsv")
+    if (file.exists(final_file)) {
+        final_df <- tryCatch(
+            read.delim(final_file, stringsAsFactors = FALSE, check.names = FALSE),
+            error = function(e) NULL
+        )
+        if (!is.null(final_df)) {
+            id_col_exp <- prot_cfg$de_table$id_col %||% "FeatureID"
+            # Extract only sample columns that match metadata
+            expr_cols_exp <- intersect(meta_sample_ids, names(final_df))
+            if (length(expr_cols_exp) > 0 && id_col_exp %in% names(final_df)) {
+                norm_expr_exp <- final_df[, expr_cols_exp, drop = FALSE]
+                rownames(norm_expr_exp) <- final_df[[id_col_exp]]
+            }
+        }
+    }
+
+    # Fallback: imputed expression file
+    if (is.null(norm_expr_exp)) {
+        imp_files <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)
+        if (length(imp_files) > 0) {
+            norm_expr_exp <- tryCatch(
+                read.delim(imp_files[1], stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
+                error = function(e) NULL
+            )
+            if (!is.null(norm_expr_exp)) {
+                # Keep only columns matching metadata sample IDs
+                keep <- intersect(meta_sample_ids, colnames(norm_expr_exp))
+                if (length(keep) > 0) norm_expr_exp <- norm_expr_exp[, keep, drop = FALSE]
+                else norm_expr_exp <- NULL
+            }
+        }
+    }
+}
+
+if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2) {
+    protein_ids <- rownames(norm_expr_exp)
+    protein_display <- protein_ids
+
+    # Use Genes column from de_data if available
+    if (!is.null(de_data) && "Genes" %in% names(de_data)) {
+        id_col_map <- prot_cfg$de_table$id_col %||% "FeatureID"
+        if (id_col_map %in% names(de_data)) {
+            gene_map <- setNames(de_data$Genes, de_data[[id_col_map]])
+            mapped <- gene_map[protein_ids]
+            has_map <- !is.na(mapped) & nzchar(mapped)
+            protein_display[has_map] <- mapped[has_map]
+        }
+    }
+
+    # Build sample -> group mapping
+    if (sample_col_exp %in% names(meta_df_exp) && group_col_exp %in% names(meta_df_exp)) {
+        group_map_exp <- setNames(as.character(meta_df_exp[[group_col_exp]]), meta_df_exp[[sample_col_exp]])
+        sample_groups_exp <- as.character(group_map_exp[colnames(norm_expr_exp)])
+        sample_groups_exp[is.na(sample_groups_exp)] <- "Unknown"
+    } else {
+        sample_groups_exp <- rep("All", ncol(norm_expr_exp))
+    }
+
+    expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
+        round(as.numeric(norm_expr_exp[i, ]), 3)
+    })
+
+    explorer_data <- list(
+        genes = protein_display,
+        samples = colnames(norm_expr_exp),
+        groups = sample_groups_exp,
+        expr = expr_matrix_list
+    )
+    explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = FALSE)
+    explorer_ready <- TRUE
+}
+```
+
+```{r protein-explorer-ui, eval=explorer_ready, results='asis'}
+cat('
+<div style="margin: 15px 0 20px 0;">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+<label for="boxplot_gene_input" style="font-weight: bold; white-space: nowrap;">Search protein:</label>
+<div style="position: relative; flex: 1; max-width: 400px;">
+<input type="text" id="boxplot_gene_input" placeholder="Start typing a protein name..."
+  autocomplete="off"
+  style="padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; width: 100%; font-size: 14px; box-sizing: border-box;"
+  oninput="boxplotAutocomplete(this)" onkeydown="boxplotAutoKey(event)">
+<div id="boxplot_ac" style="position: absolute; top: 100%; left: 0; width: 100%; max-height: 220px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 6px 6px; z-index: 1000; display: none; box-shadow: 0 4px 8px rgba(0,0,0,0.12);"></div>
+</div>
+<button onclick="addGeneToPlot()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Add Protein</button>
+<button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
+</div>
+<div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
+</div>
+<div id="boxplot_container" style="width: 100%; min-height: 450px; margin-bottom: 10px;"></div>
+<div id="boxplot_export_bar" style="display: none; margin-bottom: 20px; gap: 8px; align-items: center;">
+  <span style="font-size: 0.85em; color: #555; margin-right: 4px;">Export:</span>
+  <button onclick="exportBoxplot(\'svg\')" style="padding: 5px 14px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">SVG</button>
+  <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
+</div>
+')
+```
+
+```{r protein-explorer-js, eval=explorer_ready, results='asis'}
+cat('<script>\nvar geneExprData = ')
+cat(explorer_json_str)
+cat(';\n')
+cat(sprintf('var bpGroupLabel = "%s";\n', group_col_exp))
+cat('
+var boxplotAcIndex = -1;
+var selectedGenes = [];
+
+function boxplotAutocomplete(el) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var val = el.value.trim().toLowerCase();
+    acDiv.innerHTML = ""; boxplotAcIndex = -1;
+    if (val.length < 1) { acDiv.style.display = "none"; return; }
+    var matches = [];
+    for (var i = 0; i < geneExprData.genes.length; i++) {
+        if (geneExprData.genes[i].toLowerCase().indexOf(val) !== -1) {
+            matches.push({name: geneExprData.genes[i], idx: i});
+            if (matches.length >= 20) break;
+        }
+    }
+    if (matches.length === 0) { acDiv.style.display = "none"; return; }
+    matches.forEach(function(m) {
+        var item = document.createElement("div");
+        item.textContent = m.name;
+        item.style.cssText = "padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0;";
+        item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+        item.onmouseleave = function() { this.style.background = "white"; };
+        item.onclick = function() { document.getElementById("boxplot_gene_input").value = m.name; acDiv.style.display = "none"; addGeneToPlot(); };
+        acDiv.appendChild(item);
+    });
+    acDiv.style.display = "block";
+}
+
+function boxplotAutoKey(e) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var items = acDiv.children;
+    if (items.length === 0) { if (e.key === "Enter") addGeneToPlot(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); boxplotAcIndex = Math.min(boxplotAcIndex + 1, items.length - 1); updateBpAcHighlight(items); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); boxplotAcIndex = Math.max(boxplotAcIndex - 1, 0); updateBpAcHighlight(items); }
+    else if (e.key === "Enter") { e.preventDefault(); if (boxplotAcIndex >= 0) items[boxplotAcIndex].click(); else addGeneToPlot(); }
+}
+
+function updateBpAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === boxplotAcIndex ? "#e9ecef" : "white"; }
+
+function addGeneToPlot() {
+    var input = document.getElementById("boxplot_gene_input");
+    var val = input.value.trim();
+    if (!val) return;
+    var valLower = val.toLowerCase();
+    var found = -1;
+    for (var i = 0; i < geneExprData.genes.length; i++) {
+        if (geneExprData.genes[i].toLowerCase() === valLower) { found = i; break; }
+    }
+    if (found === -1) {
+        for (var i = 0; i < geneExprData.genes.length; i++) {
+            if (geneExprData.genes[i].toLowerCase().indexOf(valLower) !== -1) { found = i; break; }
+        }
+    }
+    if (found === -1) { document.getElementById("boxplot_gene_info").textContent = "Protein not found: " + val; return; }
+    if (selectedGenes.some(function(g) { return g.idx === found; })) { document.getElementById("boxplot_gene_info").textContent = "Already added."; input.value = ""; return; }
+    selectedGenes.push({name: geneExprData.genes[found], idx: found});
+    input.value = "";
+    document.getElementById("boxplot_ac").style.display = "none";
+    document.getElementById("boxplot_gene_info").textContent = "";
+    renderBoxplotTags();
+    renderMultiBoxplot();
+}
+
+function renderBoxplotTags() {
+    var container = document.getElementById("boxplot_gene_tags");
+    container.innerHTML = "";
+    selectedGenes.forEach(function(g, i) {
+        var tag = document.createElement("span");
+        tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 3px 10px; border-radius: 14px; font-size: 13px; gap: 5px;";
+        tag.innerHTML = g.name + " <span style=\\"cursor:pointer; font-weight:bold;\\" onclick=\\"removeBoxplotGene(" + i + ")\\">&times;</span>";
+        container.appendChild(tag);
+    });
+}
+
+function removeBoxplotGene(idx) {
+    selectedGenes.splice(idx, 1);
+    renderBoxplotTags();
+    if (selectedGenes.length > 0) { renderMultiBoxplot(); }
+    else { Plotly.purge("boxplot_container"); document.getElementById("boxplot_export_bar").style.display = "none"; document.getElementById("boxplot_gene_info").textContent = ""; }
+}
+function clearBoxplot() {
+    selectedGenes = [];
+    renderBoxplotTags();
+    Plotly.purge("boxplot_container");
+    document.getElementById("boxplot_gene_info").textContent = "";
+    document.getElementById("boxplot_export_bar").style.display = "none";
+}
+
+function renderMultiBoxplot() {
+    if (selectedGenes.length === 0) return;
+
+    var groups = geneExprData.groups;
+    var samples = geneExprData.samples;
+    var uniqueGroups = [];
+    groups.forEach(function(g) { if (uniqueGroups.indexOf(g) === -1) uniqueGroups.push(g); });
+
+    var colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"];
+    var nGenes = selectedGenes.length;
+    var traces = [];
+
+    if (nGenes === 1) {
+        // Single protein: one box per group, distinct colors
+        var geneIdx = selectedGenes[0].idx;
+        var values = geneExprData.expr[geneIdx];
+        uniqueGroups.forEach(function(g, gi) {
+            var gValues = [], gSamples = [];
+            for (var i = 0; i < values.length; i++) {
+                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+            }
+            traces.push({
+                y: gValues, type: "box", name: g,
+                boxpoints: "all", jitter: 0.4, pointpos: 0,
+                text: gSamples,
+                hovertemplate: "Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                marker: { color: colors[gi % colors.length], size: 6, opacity: 0.7 },
+                line: { color: colors[gi % colors.length] },
+                fillcolor: colors[gi % colors.length] + "33"
+            });
+        });
+        var layout = {
+            title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
+            yaxis: { title: "Expression (log2 intensity)" },
+            xaxis: { title: bpGroupLabel },
+            showlegend: false,
+            margin: { t: 50, b: 80, l: 70, r: 30 },
+            boxgap: 0.3
+        };
+        var containerH = 450;
+    } else {
+        // Multiple proteins: genes on x-axis, grouped by condition
+        var containerH = Math.max(450, 350 + nGenes * 30);
+        uniqueGroups.forEach(function(g, gi) {
+            var xVals = [], yVals = [], sampleTexts = [];
+            selectedGenes.forEach(function(sg) {
+                var values = geneExprData.expr[sg.idx];
+                for (var i = 0; i < values.length; i++) {
+                    if (groups[i] === g) {
+                        xVals.push(sg.name);
+                        yVals.push(values[i]);
+                        sampleTexts.push(samples[i]);
+                    }
+                }
+            });
+            traces.push({
+                x: xVals, y: yVals, type: "box", name: g,
+                boxpoints: "all", jitter: 0.4, pointpos: 0,
+                text: sampleTexts,
+                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
+                line: { color: colors[gi % colors.length] },
+                fillcolor: colors[gi % colors.length] + "33"
+            });
+        });
+
+        var protNames = selectedGenes.map(function(sg) { return sg.name; });
+        var layout = {
+            title: { text: "Protein Expression Comparison", font: { size: 16 } },
+            yaxis: { title: "Expression (log2 intensity)" },
+            xaxis: { title: "Protein", categoryorder: "array", categoryarray: protNames },
+            showlegend: true,
+            legend: { title: { text: bpGroupLabel } },
+            boxmode: "group",
+            margin: { t: 50, b: 100, l: 70, r: 30 },
+            boxgap: 0.15,
+            boxgroupgap: 0.1
+        };
+    }
+
+    document.getElementById("boxplot_container").style.height = containerH + "px";
+    Plotly.newPlot("boxplot_container", traces, layout, { responsive: true });
+
+    // Show info
+    var infoLines = selectedGenes.map(function(sg) {
+        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
+        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " (" + vals.length + " samples)";
+    });
+    document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
+    document.getElementById("boxplot_export_bar").style.display = "flex";
+}
+
+function exportBoxplot(format) {
+    var container = document.getElementById("boxplot_container");
+    if (!container || !container.data) return;
+    var names = selectedGenes.map(function(g) { return g.name; }).join("_");
+    if (format === "svg") Plotly.downloadImage(container, {format: "svg", width: 1200, height: 800, filename: "protein_expression_" + names});
+    else Plotly.downloadImage(container, {format: "png", width: 2400, height: 1600, scale: 3, filename: "protein_expression_" + names});
+}
+
+document.addEventListener("click", function(e) {
+    var acDiv = document.getElementById("boxplot_ac");
+    var input = document.getElementById("boxplot_gene_input");
+    if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
+});
+</script>
+')
+```
+
+```{r protein-explorer-fallback, eval=!explorer_ready, results='asis'}
+cat("*Protein expression explorer not available. Normalized expression matrix not found.*\n")
+```
+
+---
+
+```{r clustering-check, include=FALSE}
+clustering_enabled <- isTRUE(prot_cfg$clustering$enabled)
+```
+
+```{r clustering-header, eval=clustering_enabled, results='asis'}
+cat("# Clustering\n\n")
+cat("Clustering was performed on differentially expressed proteins.\n\n")
+```
+
+```{r clustering-hierarchical, eval=clustering_enabled, results='asis', fig.cap="Hierarchical clustering heatmap"}
+hm_file <- file.path(clustering_dir, "hierarchical_heatmap.png")
+if (file.exists(hm_file)) {
+    cat("## Hierarchical Clustering\n\n")
+    cat(sprintf("![Hierarchical clustering](%s)\n\n", hm_file))
+}
+```
+
+```{r clustering-partition, eval=clustering_enabled, results='asis'}
+part_hm <- file.path(clustering_dir, "partition_heatmap.png")
+part_profiles <- file.path(clustering_dir, "partition_profiles.png")
+if (file.exists(part_hm) || file.exists(part_profiles)) {
+    cat("## Partition Clustering {.tabset}\n\n")
+    if (file.exists(part_hm)) {
+        cat("### Heatmap\n\n")
+        cat(sprintf("![Partition heatmap](%s)\n\n", part_hm))
+    }
+    if (file.exists(part_profiles)) {
+        cat("### Cluster Profiles\n\n")
+        cat(sprintf("![Partition profiles](%s)\n\n", part_profiles))
+    }
+}
+```
+
+---
+
+# Enrichment / Pathway Analysis
+
+```{r pathway-setup, include=FALSE}
+has_enrichment <- dir.exists(enrich_dir) && length(list.files(enrich_dir, pattern = "\\.csv$")) > 0
+has_pathway_plots <- dir.exists(enrich_plot_dir) && length(list.files(enrich_plot_dir, pattern = "\\.png$")) > 0
+pathway_enabled <- isTRUE(prot_cfg$pathway$enabled)
+```
+
+```{r pathway-skip, eval=!has_enrichment, results='asis'}
+if (!pathway_enabled) {
+    cat("Pathway analysis was disabled. To enable it, set `pathway.enabled: true` in the configuration file.\n")
+} else {
+    cat("Pathway analysis was enabled but produced no results.\n")
+}
+```
+
+```{r pathway-method-note, eval=has_enrichment, results='asis'}
+cat("**Method:** Pathway enrichment analysis was performed using gene set enrichment approaches. Proteins were mapped to gene symbols for compatibility with standard pathway databases.\n\n")
+cat("**Key metrics:**\n\n")
+cat("- **NES (Normalized Enrichment Score)**: Positive NES = enrichment in up-regulated proteins; negative NES = enrichment in down-regulated proteins.\n")
+cat("- **padj**: Benjamini-Hochberg adjusted p-value. Pathways with padj < 0.05 are significant.\n")
+cat("- **size**: Number of mapped proteins in the pathway.\n\n")
+```
+
+## fGSEA Results {.tabset}
+
+```{r fgsea-tables, eval=has_enrichment, results='asis'}
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (length(fgsea_files) > 0) {
+    for (ff in fgsea_files) {
+        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+        label_clean <- gsub("_", " ", label)
+
+        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+
+        cat(sprintf("\n### %s {.tabset}\n\n", label_clean))
+
+        if (nrow(sig) > 0) {
+            sig <- sig[order(sig$padj), ]
+            if ("pathway_name" %in% names(sig)) {
+                show_cols <- intersect(c("pathway_name", "pval", "padj", "NES", "size"), names(sig))
+            } else {
+                show_cols <- intersect(c("pathway", "pval", "padj", "NES", "size"), names(sig))
+            }
+            sig_show <- sig[, show_cols]
+            sig_show$Direction <- ifelse(sig_show$NES > 0, "Up-regulated", "Down-regulated")
+            n_up <- sum(sig_show$Direction == "Up-regulated")
+            n_down <- sum(sig_show$Direction == "Down-regulated")
+
+            cat(sprintf("\n#### All (%d pathways)\n\n", nrow(sig_show)))
+            cat(sprintf("**Up-regulated: %d** | **Down-regulated: %d**\n\n", n_up, n_down))
+            print(knitr::kable(sig_show, caption = paste("All significant pathways -", label_clean),
+                               row.names = FALSE, digits = 4))
+            cat("\n\n")
+
+            if (n_up > 0) {
+                cat(sprintf("\n#### Up-regulated (%d)\n\n", n_up))
+                sig_up <- sig_show[sig_show$Direction == "Up-regulated", ]
+                print(knitr::kable(sig_up[order(sig_up$padj), ], caption = paste("Up-regulated -", label_clean),
+                                   row.names = FALSE, digits = 4))
+                cat("\n\n")
+            }
+
+            if (n_down > 0) {
+                cat(sprintf("\n#### Down-regulated (%d)\n\n", n_down))
+                sig_down <- sig_show[sig_show$Direction == "Down-regulated", ]
+                print(knitr::kable(sig_down[order(sig_down$padj), ], caption = paste("Down-regulated -", label_clean),
+                                   row.names = FALSE, digits = 4))
+                cat("\n\n")
+            }
+        } else {
+            cat("No significant pathways (padj < 0.05) for this contrast/database.\n\n")
+        }
+    }
+} else if (has_enrichment) {
+    cat("No fGSEA result files found.\n")
+}
+```
+
+## ORA Results {.tabset}
+
+```{r ora-tables, eval=has_enrichment, results='asis'}
+ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora\\.csv$", full.names = TRUE)
+if (length(ora_files) > 0) {
+    for (of in ora_files) {
+        label <- gsub("^pathway_|_ora\\.csv$", "", basename(of))
+        label_clean <- gsub("_", " ", label)
+
+        ora_df <- read.csv(of, stringsAsFactors = FALSE)
+        sig <- ora_df[!is.na(ora_df$p.adjust) & ora_df$p.adjust < 0.05, ]
+
+        cat(sprintf("\n### %s\n\n", label_clean))
+
+        if (nrow(sig) > 0) {
+            sig <- sig[order(sig$p.adjust), ]
+            show_cols <- intersect(c("Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "Count"), names(sig))
+            if (length(show_cols) > 0) {
+                print(knitr::kable(head(sig[, show_cols], 30), caption = paste("ORA -", label_clean),
+                                   row.names = FALSE, digits = 4))
+            }
+        } else {
+            cat("No significant pathways (padj < 0.05).\n\n")
+        }
+    }
+}
+```
+
+## Pathway Dotplots {.tabset}
+
+```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}
+plot_pngs <- list.files(enrich_plot_dir, pattern = "\\.png$", full.names = TRUE)
+if (length(plot_pngs) > 0) {
+    for (pp in plot_pngs) {
+        label_raw <- gsub("^pathway_|\\.png$", "", basename(pp))
+        label <- gsub("_", " ", label_raw)
+        cat(sprintf("\n### %s\n\n", label))
+        cat(sprintf("![%s](%s)\n\n", label, pp))
+        render_commentary(paste0("pathway_", label_raw))
+    }
+}
+```
+
+## Leading Edge Genes {.tabset}
+
+```{r leading-edge, eval=has_enrichment, results='asis'}
+fgsea_files <- list.files(enrich_dir, pattern = "pathway_.*_fgsea\\.csv$", full.names = TRUE)
+if (length(fgsea_files) > 0) {
+    for (ff in fgsea_files) {
+        label <- gsub("^pathway_|_fgsea\\.csv$", "", basename(ff))
+        label_clean <- gsub("_", " ", label)
+        cat(sprintf("\n### %s\n\n", label_clean))
+
+        fgsea_df <- read.csv(ff, stringsAsFactors = FALSE)
+        sig <- fgsea_df[!is.na(fgsea_df$padj) & fgsea_df$padj < 0.05, ]
+
+        if (nrow(sig) > 0 && "leadingEdge" %in% names(sig)) {
+            sig <- head(sig[order(sig$padj), ], 10)
+            le_list <- list()
+            for (i in seq_len(nrow(sig))) {
+                pathway_name <- if ("pathway_name" %in% names(sig)) sig$pathway_name[i] else sig$pathway[i]
+                le_genes <- strsplit(sig$leadingEdge[i], ",")[[1]]
+                le_list[[i]] <- data.frame(
+                    Pathway = pathway_name,
+                    NES = round(sig$NES[i], 2),
+                    padj = signif(sig$padj[i], 3),
+                    `Leading Edge Proteins` = paste(head(le_genes, 15), collapse = ", "),
+                    check.names = FALSE,
+                    stringsAsFactors = FALSE
+                )
+            }
+            le_df <- do.call(rbind, le_list)
+            print(knitr::kable(le_df, caption = paste("Leading edge -", label_clean), row.names = FALSE))
+            cat("\n\n")
+        } else {
+            cat("No significant pathways with leading edge information.\n\n")
+        }
+    }
+}
+```
+
+---
+
+# PPI Network Analysis
+
+```{r ppi-setup, include=FALSE}
+has_ppi <- dir.exists(ppi_dir) && (
+    length(list.files(ppi_dir, pattern = "\\.csv$")) > 0 ||
+    length(list.files(ppi_plot_dir, pattern = "\\.png$")) > 0
+)
+ppi_enabled <- isTRUE(prot_cfg$ppi$enabled)
+```
+
+```{r ppi-skip, eval=!has_ppi, results='asis'}
+if (!ppi_enabled) {
+    cat("PPI network analysis was disabled. Enable with `ppi.enabled: true`.\n")
+} else {
+    cat("PPI analysis was enabled but produced no results.\n")
+}
+```
+
+```{r ppi-summary, eval=has_ppi, results='asis'}
+cat("Protein-protein interaction networks were constructed using the STRING database.\n\n")
+
+# Load summary if available
+ppi_summary_file <- file.path(ppi_dir, "ppi_summary.csv")
+if (file.exists(ppi_summary_file)) {
+    ppi_summary <- read.csv(ppi_summary_file, stringsAsFactors = FALSE)
+    make_dt(ppi_summary, caption = "PPI Network Summary")
+}
+```
+
+## Network Plots {.tabset}
+
+```{r ppi-plots, eval=has_ppi, results='asis'}
+if (dir.exists(ppi_plot_dir)) {
+    ppi_pngs <- list.files(ppi_plot_dir, pattern = "\\.png$", full.names = TRUE)
+    if (length(ppi_pngs) > 0) {
+        for (pp in ppi_pngs) {
+            label_raw <- gsub("\\.png$", "", basename(pp))
+            label <- gsub("_", " ", label_raw)
+            cat(sprintf("\n### %s\n\n", label))
+            cat(sprintf("![%s](%s)\n\n", label, pp))
+            render_commentary(paste0("ppi_", label_raw))
+        }
+    } else {
+        cat("No PPI plots found.\n")
+    }
+}
+```
+
+## Network Statistics
+
+```{r ppi-topology, eval=has_ppi}
+topo_file <- file.path(ppi_dir, "network_topology.csv")
+if (file.exists(topo_file)) {
+    topo <- read.csv(topo_file, stringsAsFactors = FALSE)
+    make_dt(topo, caption = "Network Topology Statistics")
+}
+```
+
+## Hub Proteins
+
+```{r ppi-hubs, eval=has_ppi}
+hubs_file <- file.path(ppi_dir, "hub_proteins.csv")
+if (file.exists(hubs_file)) {
+    hubs <- read.csv(hubs_file, stringsAsFactors = FALSE)
+    make_dt(hubs, caption = "Hub Proteins (top connectivity)")
+}
+```
+
+## Communities
+
+```{r ppi-communities, eval=has_ppi}
+comm_file <- file.path(ppi_dir, "communities.csv")
+if (file.exists(comm_file)) {
+    comm <- read.csv(comm_file, stringsAsFactors = FALSE)
+    make_dt(comm, caption = "Network Communities")
+}
+```
+
+---
+
+# Advanced Statistics
+
+```{r adv-stats-setup, include=FALSE}
+has_adv_stats <- dir.exists(adv_stats_dir) && (
+    length(list.files(adv_stats_dir, pattern = "\\.csv$")) > 0 ||
+    length(list.files(adv_stats_plot_dir, pattern = "\\.png$")) > 0
+)
+adv_stats_enabled <- isTRUE(prot_cfg$advanced_stats$enabled)
+```
+
+```{r adv-stats-skip, eval=!has_adv_stats, results='asis'}
+if (!adv_stats_enabled) {
+    cat("Advanced statistics was disabled. Enable with `advanced_stats.enabled: true`.\n")
+} else {
+    cat("Advanced statistics was enabled but produced no results.\n")
+}
+```
+
+```{r adv-stats-intro, eval=has_adv_stats, results='asis'}
+cat("Advanced statistical analyses including effect size estimation, power analysis, and multiple testing correction comparison.\n\n")
+```
+
+## Effect Sizes
+
+```{r adv-stats-effect-sizes, eval=has_adv_stats}
+es_file <- file.path(adv_stats_dir, "effect_sizes.csv")
+if (file.exists(es_file)) {
+    es <- read.csv(es_file, stringsAsFactors = FALSE)
+    make_dt(head(es, 100), caption = "Effect Sizes (top 100 by significance)")
+}
+```
+
+## Plots {.tabset}
+
+```{r adv-stats-plots, eval=has_adv_stats, results='asis'}
+if (dir.exists(adv_stats_plot_dir)) {
+    adv_pngs <- list.files(adv_stats_plot_dir, pattern = "\\.png$", full.names = TRUE)
+    if (length(adv_pngs) > 0) {
+        for (ap in adv_pngs) {
+            label_raw <- gsub("\\.png$", "", basename(ap))
+            label <- gsub("_", " ", label_raw)
+            cat(sprintf("\n### %s\n\n", label))
+            cat(sprintf("![%s](%s)\n\n", label, ap))
+            figure_legend(sprintf("%s from the advanced statistics module.", label))
+            render_commentary(paste0("adv_stats_", label_raw))
+        }
+    } else {
+        cat("No advanced statistics plots found.\n")
+    }
+}
+```
+
+## Power Analysis
+
+```{r adv-stats-power, eval=has_adv_stats}
+power_file <- file.path(adv_stats_dir, "power_analysis.csv")
+if (file.exists(power_file)) {
+    power <- read.csv(power_file, stringsAsFactors = FALSE)
+    make_dt(power, caption = "Statistical Power Analysis")
+}
+```
+
+## Multiple Testing Comparison
+
+```{r adv-stats-mtc, eval=has_adv_stats}
+mtc_file <- file.path(adv_stats_dir, "mtc_comparison.csv")
+if (file.exists(mtc_file)) {
+    mtc <- read.csv(mtc_file, stringsAsFactors = FALSE)
+    make_dt(mtc, caption = "Multiple Testing Correction Comparison")
+}
+```
+
+---
+
+# Output Files
+
+```{r output-files}
+files_tbl <- data.frame(
+  File = c(
+    "Final_results_ALL_P_0.05.xlsx",
+    "Final_results_DE_P_0.05.xlsx",
+    "Datasets/",
+    "Diagnostic_plots/",
+    "Diagnostic_plots/QC_post/"
+  ),
+  Description = c(
+    "Excel workbook with all proteins and DE statistics (p < 0.05)",
+    "Excel workbook with DE proteins only (p < 0.05)",
+    "Intermediate datasets (expression matrices, DE tables)",
+    "QC and diagnostic plots (PCA, density, heatmaps, UMAP)",
+    "Post-DE QC plots (volcano, MA, top DE heatmaps)"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Add enrichment files if they exist
+if (has_enrichment) {
+    enrich_csvs <- list.files(enrich_dir, pattern = "\\.csv$")
+    if (length(enrich_csvs) > 0) {
+        enrich_tbl <- data.frame(
+            File = paste0("Enrichment/", enrich_csvs),
+            Description = paste("Pathway analysis results -",
+                                gsub("^pathway_|\\.csv$", "", enrich_csvs)),
+            stringsAsFactors = FALSE
+        )
+        files_tbl <- rbind(files_tbl, enrich_tbl)
+    }
+}
+
+if (has_ppi) {
+    files_tbl <- rbind(files_tbl, data.frame(
+        File = "ppi_networks/", Description = "PPI network analysis results and plots",
+        stringsAsFactors = FALSE
+    ))
+}
+
+if (has_adv_stats) {
+    files_tbl <- rbind(files_tbl, data.frame(
+        File = "advanced_stats/", Description = "Advanced statistics results and plots",
+        stringsAsFactors = FALSE
+    ))
+}
+
+kable(files_tbl, caption = "Key output files in the proteomics/ directory")
+```
+
+---
+
+# Methods
+
+```{r methods-text, results='asis'}
+imp_method <- prot_cfg$imputation$method %||% "none"
+de_method <- prot_cfg$de$method %||% "limma"
+padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
+lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+engine <- prot_cfg$engine %||% "unknown"
+
+n_proteins <- if (!is.null(de_data)) nrow(de_data) else "N"
+n_de <- "N"
+if (!is.null(de_data)) {
+    pass_col <- grep("pass_any", names(de_data), value = TRUE)[1]
+    if (!is.na(pass_col)) n_de <- sum(de_data[[pass_col]] == TRUE, na.rm = TRUE)
+}
+
+cat("**Proteomics Analysis Methods**\n\n")
+
+cat(sprintf(
+"Proteomics data were acquired using %s and processed using the multiomics-core pipeline. ", engine
+))
+
+if (tolower(imp_method) != "none") {
+    cat(sprintf(
+    "Missing values were imputed using the %s method. ", imp_method
+    ))
+}
+
+cat(sprintf(
+"Differential expression analysis was performed using %s. ", de_method
+))
+
+cat(sprintf(
+"Proteins were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
+padj_cut, lfc_cut
+))
+
+cat(sprintf(
+"A total of %s proteins were quantified, with %s identified as differentially expressed in at least one contrast.",
+format(as.numeric(n_proteins), big.mark = ","),
+format(as.numeric(n_de), big.mark = ",")
+))
+
+if (pathway_enabled) {
+    pathway_method <- prot_cfg$pathway$method %||% "both"
+    pathway_dbs <- paste(prot_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
+    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
+                pathway_method, pathway_dbs))
+}
+
+if (ppi_enabled) {
+    cat(" Protein-protein interaction networks were constructed using the STRING database.")
+}
+
+cat("\n\n")
+
+cat("**Copy-ready version:**\n\n")
+cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
+
+cat(sprintf(
+"Proteomics analysis was performed using the multiomics-core pipeline (v1.0). Data were acquired using %s. %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f).",
+engine,
+if (tolower(imp_method) != "none") sprintf("Missing values were imputed using the %s method. ", imp_method) else "",
+de_method, padj_cut, lfc_cut
+))
+
+cat("\n</div>\n")
+```
+
+---
+
+# Session Info
+
+```{r session-info, comment=""}
+si_file <- file.path(run_dir, "execution_info", "sessionInfo.txt")
+if (file.exists(si_file)) {
+    si <- readLines(si_file)
+    cat(paste(si, collapse = "\n"))
+} else {
+    cat(capture.output(sessionInfo()), sep = "\n")
+}
+```
+
+---
+
+<p style="text-align:center; color:grey; font-size:0.9em;">
+Report generated by multiomics-core pipeline | `r format(Sys.time(), '%Y-%m-%d %H:%M')`
+</p>
