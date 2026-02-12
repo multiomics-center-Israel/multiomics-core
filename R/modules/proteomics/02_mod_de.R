@@ -25,11 +25,13 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
         )
 
         # 2) run limma on imputations
+        # Use pre$row_data (with custom annotation + contaminant filtering applied)
+        # instead of raw inputs$protein so gene names propagate to DE tables
         runs <- run_limma_multimp(
             imputations  = imputations,
             meta         = pre$meta,
             contrasts_df = inputs$contrasts,
-            prot_tbl     = inputs$protein,
+            prot_tbl     = pre$row_data,
             cfg          = config,
             verbose      = verbose
         )

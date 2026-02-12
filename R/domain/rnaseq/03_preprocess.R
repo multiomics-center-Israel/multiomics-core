@@ -55,12 +55,36 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
                 call. = FALSE
             )
         }
-        row_data <- inputs$counts[, gene_id_col, drop = FALSE]
-        sample_cols <- setdiff(names(inputs$counts), gene_id_col)
+        # Identify annotation columns vs sample columns:
+        # Keep only columns that are numeric (counts); exclude gene_id and any other
+        # annotation columns (e.g. gene_position, transcript_id).
+        all_cols <- names(inputs$counts)
+        non_id_cols <- setdiff(all_cols, gene_id_col)
+        is_numeric <- vapply(inputs$counts[, non_id_cols, drop = FALSE],
+                             function(x) is.numeric(x) || is.integer(x),
+                             logical(1))
+        anno_cols <- non_id_cols[!is_numeric]
+        sample_cols <- non_id_cols[is_numeric]
+
+        if (length(sample_cols) == 0) stop("Counts table has no numeric sample columns.")
+
+        row_data <- inputs$counts[, c(gene_id_col, anno_cols), drop = FALSE]
 
         counts <- as.matrix(inputs$counts[, sample_cols, drop = FALSE])
         storage.mode(counts) <- "numeric"
-        rownames(counts) <- inputs$counts[[gene_id_col]]
+
+        # Aggregate duplicate gene IDs (multiple transcripts per gene) by summing counts
+        gene_ids <- inputs$counts[[gene_id_col]]
+        if (anyDuplicated(gene_ids)) {
+            if (verbose) message("Aggregating ", length(gene_ids), " transcript rows to ",
+                                 length(unique(gene_ids)), " unique gene IDs (summing counts).")
+            counts <- rowsum(counts, group = gene_ids, reorder = FALSE)
+            # Keep first annotation row per gene for row_data
+            first_idx <- !duplicated(gene_ids)
+            row_data <- row_data[first_idx, , drop = FALSE]
+            gene_ids <- gene_ids[first_idx]
+        }
+        rownames(counts) <- gene_ids
 
         # Validate strict integer counts
         validate_count_matrix(counts)
@@ -180,17 +204,38 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
         message(sprintf("[Filtering] Threshold evaluation using %s", norm_mode))
     }
 
-    # Define plot path for filtering QC
-    plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+    filter_mode <- cfg$filtering$mode %||% "adaptive"
 
-    # Run auto-filtering pipeline
-    fr <- run_auto_filter_pipeline(
-        cpm_mat     = norm_for_filter,
-        meta        = meta2,
-        sample_col  = sample_col,
-        group_col   = group_col,
-        output_plot = plot_path
-    )
+    if (filter_mode == "deseq2_only") {
+        # Only remove all-zero genes; let DESeq2 handle the rest
+        message("Filtering mode: deseq2_only \u2014 removing all-zero genes only.")
+        keep_vec <- rowSums(counts) > 0
+        fr <- list(keep_vec = keep_vec, used_threshold = NA)
+
+    } else if (filter_mode == "fixed") {
+        # Classic fixed CPM threshold
+        fixed_thr <- as.numeric(cfg$filtering$fixed_threshold %||% 1.0)
+        message(sprintf("Filtering mode: fixed CPM threshold = %.2f", fixed_thr))
+        fr <- filter_features_optimized(
+            norm_mat    = norm_for_filter,
+            meta        = meta2,
+            sample_col  = sample_col,
+            group_col   = group_col,
+            threshold   = fixed_thr
+        )
+        fr$used_threshold <- fixed_thr
+
+    } else {
+        # Default: adaptive KDE
+        plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+        fr <- run_auto_filter_pipeline(
+            cpm_mat     = norm_for_filter,
+            meta        = meta2,
+            sample_col  = sample_col,
+            group_col   = group_col,
+            output_plot = plot_path
+        )
+    }
 
     # Capture used threshold for info
     thr <- fr$used_threshold

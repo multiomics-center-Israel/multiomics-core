@@ -388,7 +388,8 @@ build_data_to_shiny_legacy_rna <- function(
         primary_color <- as.character(effects$color[[1]])
     }
 
-    if (!is.null(effects$shape) && !is.null(effects$color)) {
+    if (!is.null(effects$color)) {
+        # EFFECTS contains all aesthetic variables (shape if present + all colors)
         legacy$EFFECTS <- c(effects$shape, effects$color)
     } else {
         legacy$EFFECTS <- NULL

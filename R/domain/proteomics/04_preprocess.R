@@ -32,6 +32,11 @@ preprocess_proteomics <- function(inputs, config) {
     }
     assert_numeric_matrix(expr_raw, "expr_raw")
 
+    # Contaminant filtering (e.g. cRAP proteins)
+    contam_res <- filter_contaminants(expr_raw, row_data, cfg)
+    expr_raw <- contam_res$expr_mat
+    row_data <- contam_res$row_data
+
     # Align col_data
     sample_id_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
     check_has_cols(col_data, sample_id_col, df_name = "col_data")
@@ -59,8 +64,17 @@ preprocess_proteomics <- function(inputs, config) {
     row_data_f <- filt$row_data
     assert_numeric_matrix(expr_filt, "expr_filt")
 
-    # Single imputation (QC/plots)
-    imp_res <- impute_proteomics_perseus(expr_mat = expr_filt, cfg = cfg, return_flags = TRUE)
+    # Normalization — dispatches based on cfg$normalization$method
+    norm_method <- cfg$normalization$method %||% "none"
+    if (norm_method == "median") {
+        expr_filt <- normalize_proteomics_median(expr_filt)
+        message("Normalization: median centering applied.")
+    } else if (norm_method != "none") {
+        stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median'.", norm_method))
+    }
+
+    # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
+    imp_res <- impute_proteomics(expr_mat = expr_filt, cfg = cfg, return_flags = TRUE)
     expr_imp_single <- imp_res$imputed
     assert_numeric_matrix(expr_imp_single, "expr_imp_single")
 
@@ -72,12 +86,25 @@ preprocess_proteomics <- function(inputs, config) {
     list(
         expr_raw = expr_raw,
         expr_filt = expr_filt,
+        expr_filt_pre_imp = expr_filt,
         expr_work = expr_imp_single,
         expr_imp_single = expr_imp_single,
         row_data = row_data_f,
         meta = col_data,
         imputation_qc = imputation_qc
     )
+}
+
+#' Median centering normalization for proteomics
+#'
+#' Centers each sample (column) by subtracting its median, so all samples
+#' have the same median intensity. Common for log2-transformed proteomics data.
+#' @param expr_mat numeric matrix (proteins x samples)
+#' @return normalized matrix
+normalize_proteomics_median <- function(expr_mat) {
+    col_medians <- apply(expr_mat, 2, median, na.rm = TRUE)
+    global_median <- median(col_medians, na.rm = TRUE)
+    sweep(expr_mat, 2, col_medians - global_median)
 }
 
 get_sample_filter_rules <- function(config, mode) {

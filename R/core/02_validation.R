@@ -239,6 +239,17 @@ assert_scalar_num <- function(x, name, allow_null = FALSE, min_val = -Inf, max_v
     invisible(TRUE)
 }
 
+#' Convert signed linear fold change to log2 fold change
+#'
+#' Proteomics linear FC convention: positive values = up, negative = down
+#' (e.g. 2 = 2x up, -1.5 = 1.5x down). Converts to log2 space preserving sign.
+#' @param fc Numeric vector of signed linear fold changes
+#' @return Numeric vector of log2 fold changes
+signed_fc_to_log2 <- function(fc) {
+    fc <- as.numeric(fc)
+    ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
+}
+
 assert_one_of <- function(x, name, choices, allow_null = FALSE) {
     if (allow_null && is.null(x)) {
         return(invisible(TRUE))

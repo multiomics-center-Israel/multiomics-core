@@ -114,7 +114,7 @@ modes:
           k: null
         partition:
           enabled: true
-          method: "hclust"
+          algorithm: "hclust"
           distance: "euclidean"
           k: null
           k_max: 20

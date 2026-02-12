@@ -29,7 +29,7 @@ module_files <- sort(list.files(
   recursive = TRUE
 ))
 
-# Source core → domain → modules
+# Source core -> domain -> modules
 invisible(lapply(c(core_files, domain_files, module_files), tar_source))
 
 # Source pipelines LAST (they depend on everything above)
@@ -60,9 +60,17 @@ tar_option_set(
 
 list(
   # Configuration file (tracked as a file dependency)
+  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
+  # Or defaults to config/rna_amir_sapir.yaml
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
+    {
+      cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+      if (cfg_path == "") {
+        cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
+      }
+      normalizePath(cfg_path, mustWork = TRUE)
+    },
     format = "file"
   ),
 
@@ -98,12 +106,14 @@ list(
     format = "file"
   ),
 
-  # Proteomics pipeline (returns a list of targets)
-  # pipe_proteomics()
-
-  # RNA-seq pipeline (enable when ready)
-  pipe_rnaseq()
-
-  # Metabolomics pipeline – Stage 1 (enable when ready)
-  # pipe_metabolomics()
+  # Mode-specific pipelines (only run if mode is present in config)
+  {
+    cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+    if (cfg_path == "") cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
+    cfg_raw <- yaml::read_yaml(cfg_path)
+    mode_targets <- list()
+    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
+    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
+    mode_targets
+  }
 )

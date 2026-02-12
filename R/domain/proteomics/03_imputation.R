@@ -1,3 +1,32 @@
+#' Dispatch imputation based on config method
+#'
+#' Routes to the correct imputation function based on cfg$imputation$method.
+#' @param expr_mat numeric matrix (proteins x samples), may contain NAs
+#' @param cfg      mode-level config (config$modes$proteomics)
+#' @param return_flags if TRUE, return list(imputed, imputed_flag)
+#' @return imputed matrix or list(imputed, imputed_flag)
+impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
+    method <- cfg$imputation$method %||% "perseus"
+
+    if (method == "none") {
+        # No imputation: return as-is (NAs remain)
+        if (return_flags) {
+            return(list(imputed = expr_mat, imputed_flag = is.na(expr_mat)))
+        }
+        return(expr_mat)
+    }
+
+    if (method == "perseus") {
+        return(impute_proteomics_perseus(expr_mat, cfg, return_flags))
+    }
+
+    if (method == "dep2") {
+        return(impute_proteomics_dep2(expr_mat, cfg, return_flags))
+    }
+
+    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2'.", method))
+}
+
 #' Impute proteomics expr_mat using Perseus-style method
 impute_proteomics_perseus <- function(expr_mat, cfg, return_flags = FALSE) {
     width <- cfg$imputation$width %||% 0.3
@@ -12,25 +41,91 @@ impute_proteomics_perseus <- function(expr_mat, cfg, return_flags = FALSE) {
     if (return_flags) res else res$imputed
 }
 
+#' Impute proteomics expr_mat using DEP2 / MinDet method
+#'
+#' Deterministic minimum-based imputation: replaces each missing value with
+#' a small value drawn from the lower tail of the observed distribution per sample.
+#' MinDet uses the q-th quantile of observed values per sample as the imputed value.
+#' MinProb draws from a Gaussian centered at that quantile (stochastic variant).
+#'
+#' @param expr_mat numeric matrix (proteins x samples), may contain NAs
+#' @param cfg      mode-level config (config$modes$proteomics)
+#' @param return_flags if TRUE, return list(imputed, imputed_flag)
+#' @return imputed matrix or list(imputed, imputed_flag)
+impute_proteomics_dep2 <- function(expr_mat, cfg, return_flags = FALSE) {
+    dep2_method <- cfg$imputation$dep2_method %||% "MinDet"
+    dep2_seed <- as.integer(cfg$imputation$dep2_random_seed %||% 1)
+
+    expr_mat <- as.matrix(expr_mat)
+    imputed_flag <- is.na(expr_mat)
+    imputed <- expr_mat
+
+    set.seed(dep2_seed)
+
+    if (dep2_method == "MinDet") {
+        # Deterministic: replace NAs with 1st percentile of observed values per sample
+        for (j in seq_len(ncol(imputed))) {
+            x <- imputed[, j]
+            if (all(is.na(x))) stop("Imputation failed: sample '", colnames(imputed)[j], "' is all-NA.")
+            obs <- x[!is.na(x)]
+            q01 <- quantile(obs, probs = 0.01, na.rm = TRUE)
+            x[is.na(x)] <- q01
+            imputed[, j] <- x
+        }
+    } else if (dep2_method == "MinProb") {
+        # Stochastic: draw from Gaussian at the 1st percentile, narrow width
+        for (j in seq_len(ncol(imputed))) {
+            x <- imputed[, j]
+            if (all(is.na(x))) stop("Imputation failed: sample '", colnames(imputed)[j], "' is all-NA.")
+            obs <- x[!is.na(x)]
+            q01 <- quantile(obs, probs = 0.01, na.rm = TRUE)
+            s <- sd(obs)
+            if (!is.finite(s) || s == 0) s <- 1e-8
+            n_miss <- sum(is.na(x))
+            if (n_miss > 0) {
+                x[is.na(x)] <- rnorm(n_miss, mean = q01, sd = s * 0.3)
+            }
+            imputed[, j] <- x
+        }
+    } else {
+        stop(sprintf("Unknown dep2_method: '%s'. Supported: 'MinDet', 'MinProb'.", dep2_method))
+    }
+
+    if (return_flags) list(imputed = imputed, imputed_flag = imputed_flag) else imputed
+}
+
 #' Wrapper to run multiple imputations (with seed increments)
 make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imp_cfg <- cfg$modes$proteomics$imputation
+    method <- imp_cfg$method %||% "perseus"
     n_imputations <- as.integer(imp_cfg$no_repetitions)
     seed_base <- cfg$params$seed
 
     stopifnot(is.matrix(expr_mat))
 
+    # For deterministic methods (none, MinDet), all runs are identical —
+    # still produce n_imputations copies for pipeline compatibility
+    is_deterministic <- method == "none" ||
+        (method == "dep2" && (imp_cfg$dep2_method %||% "MinDet") == "MinDet")
+
     imps <- vector("list", n_imputations)
     for (i in seq_len(n_imputations)) {
-        if (isTRUE(verbose)) message(sprintf("Imputation: %d / %d", i, n_imputations))
+        if (isTRUE(verbose)) message(sprintf("Imputation [%s]: %d / %d", method, i, n_imputations))
         set.seed(as.integer(seed_base) + i)
 
-        expr_imp_i <- impute_proteomics_perseus(
+        expr_imp_i <- impute_proteomics(
             expr_mat,
             cfg = cfg$modes$proteomics,
             return_flags = FALSE
         )
         imps[[i]] <- expr_imp_i
+
+        # For deterministic methods, copy the first result to skip redundant work
+        if (is_deterministic && i == 1) {
+            for (k in 2:n_imputations) imps[[k]] <- expr_imp_i
+            if (isTRUE(verbose)) message(sprintf("  Deterministic method '%s' — copied run 1 to all %d slots.", method, n_imputations))
+            break
+        }
     }
     imps
 }

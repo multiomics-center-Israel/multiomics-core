@@ -247,13 +247,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         # Run function and capture result
         bp_res <- run_binary_patterns(
-            expr_mat      = expr_mat,
-            meta          = pre$meta,
-            cfg           = cfg,
-            de_features   = de_features,
-            out_dir       = clust_out_dir,
-            corr_cutoff   = bcfg$corr_cutoff %||% 0.8,
-            counts_cutoff = bcfg$counts_cutoff %||% 0
+            expr_mat              = expr_mat,
+            meta                  = pre$meta,
+            cfg                   = cfg,
+            de_features           = de_features,
+            out_dir               = clust_out_dir,
+            corr_cutoff           = bcfg$corr_cutoff %||% 0.8,
+            counts_cutoff         = bcfg$counts_cutoff %||% 0,
+            skip_trivial_patterns = bcfg$skip_trivial_patterns %||% TRUE
         )
 
         # Append results

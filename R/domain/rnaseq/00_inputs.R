@@ -58,9 +58,13 @@ validate_rna_inputs <- function(inputs, cfg) {
         stop("metadata missing sample column: ", sample_col)
     }
 
-    # Basic checks for counts (numeric columns)
-    sample_cols <- setdiff(names(inputs$counts), gene_id_col)
-    if (length(sample_cols) == 0) stop("Counts table has no sample columns.")
+    # Basic checks for counts (numeric columns only — exclude annotation columns)
+    non_id_cols <- setdiff(names(inputs$counts), gene_id_col)
+    is_numeric <- vapply(inputs$counts[, non_id_cols, drop = FALSE],
+                         function(x) is.numeric(x) || is.integer(x),
+                         logical(1))
+    sample_cols <- non_id_cols[is_numeric]
+    if (length(sample_cols) == 0) stop("Counts table has no numeric sample columns.")
 
     # Check alignment consistency (informational, strict check happens later)
     meta_samples <- unique(as.character(meta[[sample_col]]))

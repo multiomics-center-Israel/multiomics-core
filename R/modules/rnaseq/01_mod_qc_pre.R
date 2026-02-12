@@ -124,6 +124,31 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
                         n_samples, min_samples_pca3d))
     }
 
+    # ---------- PCA with top variable genes (for report dropdown) ----------
+    n_top_values <- c(500, 1000, 2000, 5000)
+    n_features <- nrow(mat)
+    cfg_temp <- cfg
+    cfg_temp$effects$color <- primary_color
+
+    for (n_top in n_top_values) {
+        if (n_top <= n_features) {
+            # Select top N most variable genes
+            gene_vars <- apply(mat, 1, var, na.rm = TRUE)
+            top_idx <- order(gene_vars, decreasing = TRUE)[1:n_top]
+            mat_top <- mat[top_idx, , drop = FALSE]
+
+            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+            tryCatch({
+                p_top <- qc_pca_scatter(mat_top, meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
+                files <- c(files, f_pca_top)
+                plots[[sprintf("pca_top%d", n_top)]] <- p_top
+                message(sprintf("  Generated PCA with top %d variable genes", n_top))
+            }, error = function(e) {
+                message(sprintf("  Could not generate PCA with top %d genes: %s", n_top, e$message))
+            })
+        }
+    }
+
     # ---------- Density (primary color only) ----------
     cfg_temp <- cfg
     cfg_temp$effects$color <- primary_color
@@ -137,8 +162,18 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     plots$density <- p_dens
 
     # ---------- Boxplots (primary color only) ----------
+    # Raw counts boxplot (before normalization)
+    f_box_raw <- file.path(out_qc, "raw_boxplot.png")
+    raw_log2 <- log2(pre$expr_filt + 1)  # log2(counts + 1) for visualization
+    p_bp_raw <- norm_boxplot(raw_log2, meta, cfg_temp, out_file = f_box_raw,
+                             title = "Raw Counts (log2 + 1) — Before Normalization")
+    files <- c(files, f_box_raw)
+    plots$boxplot_raw <- p_bp_raw
+
+    # Normalized boxplot
     f_box <- file.path(out_qc, "norm_boxplot.png")
-    p_bp <- norm_boxplot(mat, meta, cfg_temp, out_file = f_box)
+    p_bp <- norm_boxplot(mat, meta, cfg_temp, out_file = f_box,
+                         title = "Normalized Expression (TMMlogCPM)")
     files <- c(files, f_box)
     plots$boxplot <- p_bp
 

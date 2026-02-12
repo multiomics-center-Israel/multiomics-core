@@ -33,7 +33,8 @@ run_binary_patterns <- function(expr_mat,
                                 de_features,
                                 out_dir,
                                 corr_cutoff = 0.8,
-                                counts_cutoff = 0) {
+                                counts_cutoff = 0,
+                                skip_trivial_patterns = TRUE) {
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.matrix(expr_mat)
   stopifnot(is.data.frame(meta))
@@ -99,10 +100,12 @@ run_binary_patterns <- function(expr_mat,
   })
   group_means <- as.matrix(group_means) # features x groups
 
-  # 2) Patterns (exclude all-0 / all-1)
+  # 2) Patterns (optionally exclude all-0 / all-1)
   patterns <- .get_all_binary_patterns(n_groups)
-  patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
-  patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]
+  if (isTRUE(skip_trivial_patterns)) {
+    patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
+    patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]
+  }
 
   # 3) Counts gate
   pass_counts <- .calc_counts_gate(x, groups, group_levels, patterns, counts_cutoff)

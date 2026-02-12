@@ -28,6 +28,29 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_pca13)
     plots$pca_1_3 <- p13
 
+    # ---------- PCA with top variable proteins (for report dropdown) ----------
+    n_top_values <- c(100, 500, 1000, 2000)
+    n_features <- nrow(pre$expr_imp_single)
+    cfg_temp <- cfg
+
+    for (n_top in n_top_values) {
+        if (n_top <= n_features) {
+            prot_vars <- apply(pre$expr_imp_single, 1, var, na.rm = TRUE)
+            top_idx <- order(prot_vars, decreasing = TRUE)[1:n_top]
+            mat_top <- pre$expr_imp_single[top_idx, , drop = FALSE]
+
+            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+            tryCatch({
+                p_top <- qc_pca_scatter(mat_top, pre$meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
+                files <- c(files, f_pca_top)
+                plots[[sprintf("pca_top%d", n_top)]] <- p_top
+                message(sprintf("  Generated PCA with top %d variable proteins", n_top))
+            }, error = function(e) {
+                message(sprintf("  Could not generate PCA with top %d proteins: %s", n_top, e$message))
+            })
+        }
+    }
+
     f_pca3d <- file.path(out_qc, "PCA_3D.html")
     p_3d <- qc_pca_3d(pre$expr_imp_single, pre$meta, cfg, out_file = f_pca3d)
     files <- c(files, f_pca3d)
@@ -38,6 +61,16 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     p_dens <- qc_omic_density(pre$expr_imp_single, pre$meta, cfg, out_file = f_hist)
     files <- c(files, f_hist)
     plots$density <- p_dens
+
+    # ---------- Pre-imputation boxplot ----------
+    if (!is.null(pre$expr_filt_pre_imp)) {
+        f_box_pre <- file.path(out_qc, "pre_imputation_boxplot.png")
+        p_bp_pre <- norm_boxplot(pre$expr_filt_pre_imp, pre$meta, cfg,
+                                  out_file = f_box_pre,
+                                  title = "Expression boxplots (before imputation)")
+        files <- c(files, f_box_pre)
+        plots$boxplot_pre_imp <- p_bp_pre
+    }
 
     # ---------- Imputation QC ----------
     if (!is.null(pre$imputation_qc) && !is.null(pre$imputation_qc$imputed_flag)) {
@@ -104,6 +137,34 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     color <- cfg$effects$color %||% NULL
     shape <- cfg$effects$shape %||% NULL
 
+    # ---------- UMAP ----------
+    umap_res <- NULL
+    if (isTRUE(cfg$qc$run_umap)) {
+        umap_res <- tryCatch(
+            run_proteomics_umap(pre$expr_imp_single, pre$meta, cfg),
+            error = function(e) {
+                message("UMAP generation failed: ", e$message)
+                NULL
+            }
+        )
+        if (!is.null(umap_res) && !is.null(umap_res$plot)) {
+            f_umap <- file.path(out_qc, "UMAP.png")
+            ggplot2::ggsave(f_umap, plot = umap_res$plot, width = 8, height = 6, dpi = 150)
+            files <- c(files, f_umap)
+            plots$umap <- umap_res$plot
+        }
+    }
+
+    # ---------- Outlier detection ----------
+    outlier_res <- NULL
+    cor_mat <- cor(pre$expr_imp_single, use = "pairwise.complete.obs")
+    outlier_res <- detect_proteomics_outliers(pre$expr_imp_single, pca_obj, cor_mat, cfg)
+    if (!is.null(outlier_res) && nrow(outlier_res$flagged_samples_df) > 0) {
+        f_outlier <- file.path(out_qc, "outlier_report.csv")
+        write.csv(outlier_res$flagged_samples_df, f_outlier, row.names = FALSE)
+        files <- c(files, f_outlier)
+    }
+
     # Return plots, files, AND objects for Shiny export
     list(
         plots = plots,
@@ -113,7 +174,9 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
             pca_scores = assert_pca_scores(scores, context = "proteomics QC"), # data.frame with PCs + metadata
             var_expl = var_expl, # variance explained
             color = color, # string: column name for color aesthetic
-            shape = shape # string: column name for shape aesthetic
+            shape = shape, # string: column name for shape aesthetic
+            umap_res = umap_res, # UMAP coordinates + plot
+            outlier_res = outlier_res # outlier detection results
         )
     )
 }
