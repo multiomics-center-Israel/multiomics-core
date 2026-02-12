@@ -126,6 +126,22 @@ pipe_metabolomics <- function() {
                                             "shiny_payload_metabolomics.rds")
             ),
             format = "file"
+        ),
+
+        # ---- HTML report ----
+        tar_target(
+            metab_report,
+            mod_metabolomics_report(
+                pre            = metab_pre,
+                qc_res         = metab_qc_pre_obj,
+                de_res         = metab_de_res,
+                rf_res         = metab_rf_res,
+                plsda_res      = metab_plsda_res,
+                enrichment_res = metab_enrichment_res,
+                config         = config,
+                out_dir        = metab_out_dir
+            ),
+            format = "file"
         )
     )
 }

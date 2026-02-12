@@ -179,7 +179,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
     text = hover_text,
     hoverinfo = "text"
-  ) |>
+  ) %>%
     plotly::layout(
       scene = list(
         xaxis = list(title = pc_labels[1]),

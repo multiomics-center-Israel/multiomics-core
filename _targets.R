@@ -46,13 +46,17 @@ invisible(lapply(pipeline_files, tar_source))
 # Global targets options
 # ------------------------------------------------------------------------------
 
-tar_option_set(
-  packages = c(
-    "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
-    "openxlsx", "readr", "readxl", "tidyr", "tibble",
-    "edgeR", "DESeq2", "SummarizedExperiment"
-  )
+required_pkgs <- c(
+  "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
+  "openxlsx", "readr", "readxl", "tidyr", "tibble",
+  "edgeR", "DESeq2", "SummarizedExperiment"
 )
+# Only require packages that are actually installed (allows running a
+# subset of pipelines when some omics-specific packages are absent).
+available_pkgs <- required_pkgs[vapply(required_pkgs, requireNamespace,
+                                       logical(1), quietly = TRUE)]
+
+tar_option_set(packages = available_pkgs)
 
 # ------------------------------------------------------------------------------
 # Targets definition
@@ -60,9 +64,11 @@ tar_option_set(
 
 list(
   # Configuration file (tracked as a file dependency)
+  # Override with: Sys.setenv(PIPELINE_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
+    Sys.getenv("PIPELINE_CONFIG",
+               "config/config_GT15.yaml"),
     format = "file"
   ),
 
@@ -101,9 +107,9 @@ list(
   # Proteomics pipeline (returns a list of targets)
   # pipe_proteomics()
 
-  # RNA-seq pipeline (enable when ready)
-  pipe_rnaseq()
+  # RNA-seq pipeline
+  # pipe_rnaseq()
 
-  # Metabolomics pipeline – Stage 1 (enable when ready)
-  # pipe_metabolomics()
+  # Metabolomics pipeline (Stages 1 + 2)
+  pipe_metabolomics()
 )
