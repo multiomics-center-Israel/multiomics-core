@@ -191,8 +191,8 @@ build_shiny_payload_proteomics <- function(
         val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
     }
     if (is.null(val) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
+        src <- if (!is.null(clustering_res$plots)) clustering_res$plots else clustering_res
+        val <- src$pheatmap_data_DE_genes %||% src$p_cluster_hier
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 

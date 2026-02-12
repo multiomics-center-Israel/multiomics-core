@@ -113,7 +113,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             out_file    = f_hm
         )
         written <- c(written, f_hm)
-        plots$p_cluster <- p_cluster
+        plots$p_cluster_hier <- p_cluster
 
         # Save cluster assignments
         if (!is.null(hc_res$clusters)) {
