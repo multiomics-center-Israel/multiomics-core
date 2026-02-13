@@ -40,9 +40,10 @@ modes:
       input_already_normalized: false
       sample_norm: "sum"         # SumNorm
       transform: "log2"         # LogNorm
-      scaling: "center"         # MeanCenter
+      scaling: "auto"           # Autoscale (mean-center + divide by SD)
       pseudocount: 1
-      na_policy: "zero"
+      na_policy: "lod"
+      na_lod_fraction: 0.2
 
     # ---- Effects (for QC plots) ----
     effects:

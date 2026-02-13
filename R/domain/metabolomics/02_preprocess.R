@@ -81,6 +81,41 @@ preprocess_metabolomics <- function(inputs, config) {
             message(sprintf("metabolomics: replacing %d NA values with 0 (na_policy='zero').", na_count))
         }
         expr_for_norm[is.na(expr_for_norm)] <- 0
+    } else if (na_policy == "lod") {
+        # Replace zeros and NAs with a fraction of the minimum positive value per feature
+        lod_frac <- norm_cfg_raw$na_lod_fraction %||% 0.2
+        n_replaced <- 0
+        for (i in seq_len(nrow(expr_for_norm))) {
+            row_vals <- expr_for_norm[i, ]
+            is_missing <- is.na(row_vals) | row_vals == 0
+            if (any(is_missing)) {
+                pos_vals <- row_vals[!is_missing & row_vals > 0]
+                fill_val <- if (length(pos_vals) > 0) min(pos_vals) * lod_frac else NA_real_
+                expr_for_norm[i, is_missing] <- fill_val
+                n_replaced <- n_replaced + sum(is_missing)
+            }
+        }
+        if (n_replaced > 0) {
+            message(sprintf("metabolomics: imputed %d zero/NA values with %.1f%% of min per feature (na_policy='lod').",
+                            n_replaced, lod_frac * 100))
+        }
+    } else if (na_policy == "min_half") {
+        # Replace zeros and NAs with half the minimum positive value per feature
+        # (matches MetaboAnalyst default imputation)
+        n_replaced <- 0
+        for (i in seq_len(nrow(expr_for_norm))) {
+            row_vals <- expr_for_norm[i, ]
+            is_missing <- is.na(row_vals) | row_vals == 0
+            if (any(is_missing)) {
+                pos_vals <- row_vals[!is_missing & row_vals > 0]
+                fill_val <- if (length(pos_vals) > 0) min(pos_vals) / 2 else NA_real_
+                expr_for_norm[i, is_missing] <- fill_val
+                n_replaced <- n_replaced + sum(is_missing)
+            }
+        }
+        if (n_replaced > 0) {
+            message(sprintf("metabolomics: imputed %d zero/NA values with min/2 per feature (na_policy='min_half').", n_replaced))
+        }
     } else if (na_count > 0) {
         message(sprintf("metabolomics: keeping %d NA values as-is (na_policy='keep').", na_count))
     }
@@ -93,6 +128,13 @@ preprocess_metabolomics <- function(inputs, config) {
     norm_cfg$transform   <- norm_cfg$transform   %||% "none"
     norm_cfg$scaling     <- norm_cfg$scaling     %||% "none"
 
+    # Run sample_norm + transform first (pre-scaling matrix for logFC)
+    norm_cfg_no_scale <- norm_cfg
+    norm_cfg_no_scale$scaling <- "none"
+    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data)
+    expr_log <- pre_scale_result$expr_norm
+
+    # Full pipeline (with scaling) for statistical tests
     norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data)
     expr_work <- norm_result$expr_norm
 
@@ -129,6 +171,7 @@ preprocess_metabolomics <- function(inputs, config) {
     list(
         expr_raw   = expr_raw,
         expr_filt  = expr_filt,
+        expr_log   = expr_log,
         expr_work  = expr_work,
         meta       = meta,
         row_data   = row_data,

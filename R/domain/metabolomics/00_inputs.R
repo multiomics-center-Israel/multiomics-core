@@ -93,7 +93,7 @@ validate_metabolomics_config <- function(cfg) {
                       c("none", "center", "auto", "pareto", "range"),
                       allow_null = TRUE)
         assert_one_of(norm$na_policy, "normalization$na_policy",
-                      c("keep", "zero"),
+                      c("keep", "zero", "min_half", "lod"),
                       allow_null = TRUE)
     }
     invisible(TRUE)

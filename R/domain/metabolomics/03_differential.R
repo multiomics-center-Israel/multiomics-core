@@ -34,6 +34,8 @@ run_metabolomics_de <- function(pre, config) {
     if (is.list(contrasts)) contrasts <- unlist(contrasts)
 
     mat  <- pre$expr_work
+    # Use pre-scaling (log-transformed) matrix for logFC if available
+    mat_for_fc <- pre$expr_log %||% mat
     meta <- pre$meta
     assert_numeric_matrix(mat, "metab_expr_work")
 
@@ -55,9 +57,9 @@ run_metabolomics_de <- function(pre, config) {
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma    = de_limma(mat, condition, ctr),
-            t_test   = de_t_test(mat, condition, ctr),
-            wilcoxon = de_wilcoxon(mat, condition, ctr)
+            limma    = de_limma(mat, condition, ctr, mat_for_fc = mat_for_fc),
+            t_test   = de_t_test(mat, condition, ctr, mat_for_fc = mat_for_fc),
+            wilcoxon = de_wilcoxon(mat, condition, ctr, mat_for_fc = mat_for_fc)
         )
 
         # Capture limma model from first contrast
@@ -91,7 +93,7 @@ run_metabolomics_de <- function(pre, config) {
 #' @param condition Factor of conditions.
 #' @param contrast_str  Character, e.g. "B - A".
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val
-de_limma <- function(mat, condition, contrast_str) {
+de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for limma DE.")
     }
@@ -123,6 +125,18 @@ de_limma <- function(mat, condition, contrast_str) {
         adj.P.Val  = tt$adj.P.Val,
         stringsAsFactors = FALSE
     )
+
+    # Override logFC from pre-scaling matrix if provided
+    if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
+        groups <- parse_metab_contrast(contrast_str)
+        idx_A <- which(condition == groups$denominator)
+        idx_B <- which(condition == groups$numerator)
+        for (i in seq_len(nrow(mat_for_fc))) {
+            res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
+                            mean(mat_for_fc[i, idx_A], na.rm = TRUE)
+        }
+    }
+
     attr(res, "fit") <- fit2
     res
 }
@@ -131,7 +145,7 @@ de_limma <- function(mat, condition, contrast_str) {
 # ---- t-test ----------------------------------------------------------------
 
 #' Run Welch t-tests per feature on a single contrast
-de_t_test <- function(mat, condition, contrast_str) {
+de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     groups <- parse_metab_contrast(contrast_str)
     idx_A <- which(condition == groups$denominator)
     idx_B <- which(condition == groups$numerator)
@@ -139,6 +153,9 @@ de_t_test <- function(mat, condition, contrast_str) {
     if (length(idx_A) == 0 || length(idx_B) == 0) {
         stop("No samples for one of the groups in contrast: ", contrast_str)
     }
+
+    # Use pre-scaling matrix for logFC if provided, else use mat
+    fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
 
     res <- data.frame(
         feature_id = rownames(mat),
@@ -153,8 +170,11 @@ de_t_test <- function(mat, condition, contrast_str) {
         vals_A <- mat[i, idx_A]
         vals_B <- mat[i, idx_B]
 
-        res$logFC[i]   <- mean(vals_B, na.rm = TRUE) - mean(vals_A, na.rm = TRUE)
-        res$AveExpr[i] <- mean(c(vals_A, vals_B), na.rm = TRUE)
+        # logFC from pre-scaling matrix; stat test on scaled matrix
+        fc_A <- fc_mat[i, idx_A]
+        fc_B <- fc_mat[i, idx_B]
+        res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
+        res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
 
         tt <- tryCatch(
             stats::t.test(vals_B, vals_A, var.equal = FALSE),
@@ -174,7 +194,7 @@ de_t_test <- function(mat, condition, contrast_str) {
 # ---- wilcoxon --------------------------------------------------------------
 
 #' Run Wilcoxon rank-sum tests per feature on a single contrast
-de_wilcoxon <- function(mat, condition, contrast_str) {
+de_wilcoxon <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     groups <- parse_metab_contrast(contrast_str)
     idx_A <- which(condition == groups$denominator)
     idx_B <- which(condition == groups$numerator)
@@ -182,6 +202,9 @@ de_wilcoxon <- function(mat, condition, contrast_str) {
     if (length(idx_A) == 0 || length(idx_B) == 0) {
         stop("No samples for one of the groups in contrast: ", contrast_str)
     }
+
+    # Use pre-scaling matrix for logFC if provided, else use mat
+    fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
 
     res <- data.frame(
         feature_id = rownames(mat),
@@ -196,8 +219,10 @@ de_wilcoxon <- function(mat, condition, contrast_str) {
         vals_A <- mat[i, idx_A]
         vals_B <- mat[i, idx_B]
 
-        res$logFC[i]   <- mean(vals_B, na.rm = TRUE) - mean(vals_A, na.rm = TRUE)
-        res$AveExpr[i] <- mean(c(vals_A, vals_B), na.rm = TRUE)
+        fc_A <- fc_mat[i, idx_A]
+        fc_B <- fc_mat[i, idx_B]
+        res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
+        res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
 
         wt <- tryCatch(
             stats::wilcox.test(vals_B, vals_A, exact = FALSE),
