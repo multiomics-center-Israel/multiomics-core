@@ -356,21 +356,6 @@ run_partition_clustering <- function(z_expr, config) {
   )
 }
 
-# ---- DRY helper: extract primary color column from config ----
-
-#' Extract primary color column name from config
-#'
-#' Handles both scalar and array config formats for effects$color.
-#' Returns NULL if color config is missing.
-#'
-#' @param cfg Mode config list (e.g., config$modes$proteomics)
-#' @return Character string (column name) or NULL
-get_color_config <- function(cfg) {
-  color_config <- cfg$effects$color
-  if (is.null(color_config)) return(NULL)
-  as.character(color_config[[1]])
-}
-
 # ---- Clustering guards (effects-driven; no GROUP/GROUP1) ----
 
 #' Count how many distinct groups exist for clustering
