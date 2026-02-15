@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>multiomics-core Pipeline Overview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .slide {
+    display: none;
+    width: 100vw;
+    height: 100vh;
+    padding: 60px 80px;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .slide.active { display: flex; }
+
+  /* --- Title Slide --- */
+  .slide-title {
+    text-align: center;
+    justify-content: center;
+    align-items: center;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  }
+
+  .slide-title h1 {
+    font-size: 3.4rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 20px;
+  }
+
+  .slide-title .subtitle {
+    font-size: 1.5rem;
+    color: #94a3b8;
+    font-weight: 300;
+    margin-bottom: 40px;
+  }
+
+  .slide-title .tagline {
+    font-size: 1.1rem;
+    color: #64748b;
+    max-width: 700px;
+    line-height: 1.6;
+  }
+
+  /* --- Section Headers --- */
+  h2 {
+    font-size: 2.2rem;
+    font-weight: 600;
+    margin-bottom: 40px;
+    color: #f8fafc;
+  }
+
+  h2 .accent { color: #60a5fa; }
+  h2 .accent-purple { color: #a78bfa; }
+  h2 .accent-pink { color: #f472b6; }
+  h2 .accent-green { color: #4ade80; }
+  h2 .accent-amber { color: #fbbf24; }
+
+  /* --- Content Layouts --- */
+  .columns { display: flex; gap: 40px; flex: 1; align-items: flex-start; }
+  .col { flex: 1; }
+  .col-wide { flex: 1.5; }
+
+  .card {
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 28px;
+    margin-bottom: 20px;
+    border: 1px solid #334155;
+  }
+
+  .card-highlight {
+    border-color: #3b82f6;
+    background: linear-gradient(135deg, #1e293b, #1e2a4a);
+  }
+
+  .card h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .card p, .card li {
+    font-size: 0.95rem;
+    color: #94a3b8;
+    line-height: 1.7;
+  }
+
+  .card ul { padding-left: 18px; }
+  .card li { margin-bottom: 6px; }
+
+  .icon {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .icon-blue { background: #1d4ed8; }
+  .icon-purple { background: #7c3aed; }
+  .icon-pink { background: #db2777; }
+  .icon-green { background: #16a34a; }
+  .icon-amber { background: #d97706; }
+  .icon-cyan { background: #0891b2; }
+
+  /* --- Pipeline Flow Diagram --- */
+  .pipeline-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 30px 0;
+    flex-wrap: wrap;
+  }
+
+  .pipeline-step {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px 22px;
+    text-align: center;
+    min-width: 130px;
+  }
+
+  .pipeline-step .step-label {
+    font-size: 0.8rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+
+  .pipeline-step .step-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  .pipeline-step.ps-blue { border-color: #3b82f6; background: linear-gradient(180deg, #1e293b, #1e2a4a); }
+  .pipeline-step.ps-purple { border-color: #8b5cf6; background: linear-gradient(180deg, #1e293b, #2e1e4a); }
+  .pipeline-step.ps-pink { border-color: #ec4899; background: linear-gradient(180deg, #1e293b, #3a1e3a); }
+  .pipeline-step.ps-green { border-color: #22c55e; background: linear-gradient(180deg, #1e293b, #1e3a2a); }
+  .pipeline-step.ps-amber { border-color: #f59e0b; background: linear-gradient(180deg, #1e293b, #3a2e1e); }
+
+  .arrow {
+    color: #475569;
+    font-size: 1.4rem;
+    flex-shrink: 0;
+  }
+
+  /* --- Data Type Badges --- */
+  .badge-row {
+    display: flex;
+    gap: 16px;
+    margin: 20px 0;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    padding: 10px 24px;
+    border-radius: 50px;
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+
+  .badge-blue { background: #1d4ed830; color: #60a5fa; border: 1px solid #1d4ed860; }
+  .badge-purple { background: #7c3aed30; color: #a78bfa; border: 1px solid #7c3aed60; }
+  .badge-pink { background: #db277730; color: #f472b6; border: 1px solid #db277760; }
+  .badge-amber { background: #d9770630; color: #fbbf24; border: 1px solid #d9770660; }
+
+  /* --- Table Styles --- */
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-top: 10px;
+    font-size: 0.9rem;
+  }
+
+  th {
+    background: #334155;
+    color: #e2e8f0;
+    padding: 12px 18px;
+    text-align: left;
+    font-weight: 500;
+  }
+
+  th:first-child { border-radius: 10px 0 0 0; }
+  th:last-child { border-radius: 0 10px 0 0; }
+
+  td {
+    padding: 12px 18px;
+    border-bottom: 1px solid #1e293b;
+    color: #94a3b8;
+  }
+
+  tr:nth-child(even) td { background: #0f172a; }
+  tr:nth-child(odd) td { background: #1a2332; }
+
+  /* --- Diagram: Clustering --- */
+  .cluster-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    margin-top: 10px;
+  }
+
+  .cluster-card {
+    background: #1e293b;
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid #334155;
+    text-align: center;
+  }
+
+  .cluster-card h4 {
+    font-size: 1.05rem;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+
+  .cluster-card p {
+    font-size: 0.88rem;
+    color: #94a3b8;
+    line-height: 1.6;
+  }
+
+  .cluster-card .cluster-icon {
+    font-size: 2.2rem;
+    margin-bottom: 14px;
+  }
+
+  /* --- Output Grid --- */
+  .output-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-top: 10px;
+  }
+
+  .output-item {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 20px 24px;
+    border: 1px solid #334155;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .output-item .out-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .output-item h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .output-item p {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    line-height: 1.5;
+  }
+
+  /* --- Navigation --- */
+  .nav {
+    position: fixed;
+    bottom: 30px;
+    right: 40px;
+    display: flex;
+    gap: 10px;
+    z-index: 100;
+  }
+
+  .nav button {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #94a3b8;
+    padding: 10px 20px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+
+  .nav button:hover {
+    background: #334155;
+    color: #e2e8f0;
+  }
+
+  .progress {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
+    transition: width 0.3s ease;
+  }
+
+  .slide-number {
+    position: fixed;
+    bottom: 36px;
+    left: 40px;
+    color: #475569;
+    font-size: 0.85rem;
+  }
+
+  /* --- Diagram styles --- */
+  .big-text {
+    font-size: 1.05rem;
+    color: #94a3b8;
+    line-height: 1.8;
+    max-width: 800px;
+  }
+
+  .highlight { color: #60a5fa; font-weight: 500; }
+  .highlight-purple { color: #a78bfa; font-weight: 500; }
+  .highlight-pink { color: #f472b6; font-weight: 500; }
+  .highlight-green { color: #4ade80; font-weight: 500; }
+
+  .vertical-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .vertical-flow .arrow { transform: rotate(90deg); }
+
+  .note {
+    background: #1e293b;
+    border-left: 3px solid #3b82f6;
+    padding: 16px 20px;
+    border-radius: 0 10px 10px 0;
+    margin-top: 20px;
+    font-size: 0.9rem;
+    color: #94a3b8;
+  }
+
+  .note strong { color: #60a5fa; }
+
+  /* Binary pattern visual */
+  .pattern-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-family: monospace;
+  }
+
+  .pattern-cell {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .cell-on { background: #3b82f6; color: #fff; }
+  .cell-off { background: #1e293b; color: #475569; border: 1px solid #334155; }
+
+  .pattern-label {
+    margin-left: 10px;
+    font-family: 'Inter', sans-serif;
+    color: #94a3b8;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== SLIDE 1: Title ===== -->
+<div class="slide slide-title active">
+  <h1>multiomics-core</h1>
+  <div class="subtitle">A Unified Multi-Omics Analysis Pipeline</div>
+  <div class="badge-row" style="justify-content: center;">
+    <span class="badge badge-blue">Proteomics</span>
+    <span class="badge badge-purple">RNA-seq</span>
+    <span class="badge badge-pink">Metabolomics</span>
+    <span class="badge badge-amber">Lipidomics</span>
+  </div>
+  <br>
+  <div class="tagline" style="margin: 0 auto;">
+    From raw data to biological insight &mdash; reproducible, configurable, and ready for your next experiment.
+  </div>
+</div>
+
+<!-- ===== SLIDE 2: The Problem ===== -->
+<div class="slide">
+  <h2>Why do we need <span class="accent">this pipeline</span>?</h2>
+  <div class="columns">
+    <div class="col">
+      <div class="card">
+        <h3><span class="icon icon-pink">!</span> The challenge</h3>
+        <ul>
+          <li>Every experiment means <strong style="color:#f472b6">re-writing scripts</strong> from scratch</li>
+          <li>Hard to <strong style="color:#f472b6">compare</strong> results across experiments</li>
+          <li>Different people, different analysis choices</li>
+          <li>Plots and tables in <strong style="color:#f472b6">inconsistent formats</strong></li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card card-highlight">
+        <h3><span class="icon icon-blue">&#10003;</span> Our solution</h3>
+        <ul>
+          <li><strong style="color:#60a5fa">One pipeline</strong> for all omics types</li>
+          <li>Describe your experiment in a simple <strong style="color:#60a5fa">config file</strong></li>
+          <li>Standardized, <strong style="color:#60a5fa">publication-quality</strong> outputs</li>
+          <li><strong style="color:#60a5fa">Reproducible</strong> &mdash; same config = same results</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 3: What data types? ===== -->
+<div class="slide">
+  <h2>What <span class="accent-purple">data</span> does it handle?</h2>
+  <div class="columns">
+    <div class="col">
+      <div class="card" style="border-color: #3b82f6;">
+        <h3><span class="icon icon-blue">P</span> Proteomics</h3>
+        <p>Mass spectrometry data (DIA-NN output). Identifies and quantifies <strong style="color:#e2e8f0">thousands of proteins</strong> across your samples.</p>
+        <br>
+        <p style="font-size: 0.82rem;"><span class="highlight">Input:</span> Protein intensity matrix + sample metadata</p>
+      </div>
+      <div class="card" style="border-color: #ec4899;">
+        <h3><span class="icon icon-pink">M</span> Metabolomics</h3>
+        <p>LC-MS metabolite data (Compound Discoverer). Measures <strong style="color:#e2e8f0">small molecules</strong> and metabolic changes.</p>
+        <br>
+        <p style="font-size: 0.82rem;"><span class="highlight-pink">Input:</span> Compound Discoverer export + metadata</p>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card" style="border-color: #8b5cf6;">
+        <h3><span class="icon icon-purple">R</span> RNA-seq</h3>
+        <p>Gene expression from sequencing. Measures <strong style="color:#e2e8f0">which genes are turned on or off</strong> and by how much.</p>
+        <br>
+        <p style="font-size: 0.82rem;"><span class="highlight-purple">Input:</span> Count matrix (or tximport) + metadata</p>
+      </div>
+      <div class="card" style="border-color: #f59e0b;">
+        <h3><span class="icon icon-amber">L</span> Lipidomics</h3>
+        <p>Lipid species quantification. Maps <strong style="color:#e2e8f0">lipid composition</strong> changes across conditions.</p>
+        <br>
+        <p style="font-size: 0.82rem;"><span class="highlight" style="color:#fbbf24;">Status:</span> Coming soon (built on metabolomics framework)</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 4: Pipeline Overview ===== -->
+<div class="slide">
+  <h2>The analysis <span class="accent-green">pipeline</span> at a glance</h2>
+  <div class="pipeline-flow">
+    <div class="pipeline-step ps-blue">
+      <div class="step-label">Step 1</div>
+      <div class="step-name">Load &amp; Validate</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="pipeline-step ps-purple">
+      <div class="step-label">Step 2</div>
+      <div class="step-name">Preprocess</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="pipeline-step ps-green">
+      <div class="step-label">Step 3</div>
+      <div class="step-name">Quality Control</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="pipeline-step ps-pink">
+      <div class="step-label">Step 4</div>
+      <div class="step-name">Differential<br>Expression</div>
+    </div>
+    <div class="arrow">&rarr;</div>
+    <div class="pipeline-step ps-amber">
+      <div class="step-label">Step 5</div>
+      <div class="step-name">Clustering</div>
+    </div>
+  </div>
+  <br>
+  <div class="columns">
+    <div class="col">
+      <div class="note">
+        <strong>Key idea:</strong> Every step is automatic. You describe your experiment once in a config file, and the pipeline handles everything&mdash;from filtering to final plots.
+      </div>
+    </div>
+    <div class="col">
+      <div class="note" style="border-left-color: #22c55e;">
+        <strong style="color: #4ade80;">Smart caching:</strong> Only re-runs steps that changed. If you tweak a clustering parameter, it won't re-run DE from scratch.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 5: Preprocessing ===== -->
+<div class="slide">
+  <h2>Step 1&ndash;2: <span class="accent">Loading &amp; Preprocessing</span></h2>
+  <div class="columns">
+    <div class="col">
+      <div class="card">
+        <h3><span class="icon icon-blue">P</span> Proteomics</h3>
+        <ul>
+          <li><strong style="color:#e2e8f0">Filter</strong> low-confidence proteins (must appear in enough replicates)</li>
+          <li><strong style="color:#e2e8f0">Normalize</strong> across samples to make them comparable</li>
+          <li><strong style="color:#e2e8f0">Impute</strong> missing values &mdash; MS data always has gaps where a protein wasn't detected</li>
+          <li>Uses <strong style="color:#60a5fa">multiple imputation</strong> (10 rounds) so no single guess drives the results</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h3><span class="icon icon-purple">R</span> RNA-seq</h3>
+        <ul>
+          <li><strong style="color:#e2e8f0">Filter</strong> lowly expressed genes (need detectable expression in your conditions)</li>
+          <li><strong style="color:#e2e8f0">Normalize</strong> for library size differences (TMM or VST methods)</li>
+          <li><strong style="color:#e2e8f0">Annotate</strong> genes with readable names (Ensembl IDs &rarr; gene symbols)</li>
+          <li>Supports <strong style="color:#a78bfa">non-model organisms</strong> via Trinotate</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Why impute?</strong> In mass-spec proteomics, a protein not detected doesn't mean it's absent &mdash; it might just be below the detection limit. Multiple imputation draws plausible values from the low-abundance range and repeats the analysis 10 times for robustness.
+  </div>
+</div>
+
+<!-- ===== SLIDE 6: Quality Control ===== -->
+<div class="slide">
+  <h2>Step 3: <span class="accent-green">Quality Control</span></h2>
+  <p class="big-text" style="margin-bottom: 30px;">Before testing for differences, we check: <em>do my samples look right?</em></p>
+  <div class="output-grid">
+    <div class="output-item">
+      <div class="out-icon" style="color:#60a5fa;">&#9673;</div>
+      <div>
+        <h4>PCA (2D &amp; 3D)</h4>
+        <p>See how your samples cluster. Do biological replicates group together? Do conditions separate? Outliers are easy to spot.</p>
+      </div>
+    </div>
+    <div class="output-item">
+      <div class="out-icon" style="color:#a78bfa;">&#9638;</div>
+      <div>
+        <h4>Sample Distance Heatmap</h4>
+        <p>Pairwise similarity between all samples. Replicates should be most similar to each other.</p>
+      </div>
+    </div>
+    <div class="output-item">
+      <div class="out-icon" style="color:#f472b6;">&#9644;</div>
+      <div>
+        <h4>Correlation Heatmap</h4>
+        <p>How well do expression profiles correlate? Helps identify batch effects or sample swaps.</p>
+      </div>
+    </div>
+    <div class="output-item">
+      <div class="out-icon" style="color:#4ade80;">&#8767;</div>
+      <div>
+        <h4>Density Plots</h4>
+        <p>Expression distribution per sample. All samples should look similar after normalization.</p>
+      </div>
+    </div>
+  </div>
+  <div class="note" style="border-left-color: #8b5cf6; margin-top: 24px;">
+    <strong style="color:#a78bfa;">Adaptive:</strong> The pipeline automatically adjusts its QC plots based on sample count &mdash; skips 3D PCA for tiny experiments, simplifies heatmaps for very large cohorts.
+  </div>
+</div>
+
+<!-- ===== SLIDE 7: Differential Expression ===== -->
+<div class="slide">
+  <h2>Step 4: <span class="accent-pink">Differential Expression</span></h2>
+  <p class="big-text" style="margin-bottom: 24px;">The core question: <em>which genes/proteins change between my conditions?</em></p>
+  <div class="columns">
+    <div class="col">
+      <div class="card" style="border-color: #3b82f6;">
+        <h3>How it works</h3>
+        <ul>
+          <li>You define <strong style="color:#e2e8f0">contrasts</strong>: e.g., <em>"Treatment vs Control"</em></li>
+          <li>Statistical models test each gene/protein for significant change</li>
+          <li>Results are filtered by:
+            <ul>
+              <li><strong style="color:#60a5fa">Fold change</strong> &mdash; how much did it change?</li>
+              <li><strong style="color:#60a5fa">Adjusted p-value</strong> &mdash; is the change statistically reliable?</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+      <div class="card" style="border-color: #334155;">
+        <h3>Methods used</h3>
+        <table>
+          <tr><th>Data type</th><th>Method</th></tr>
+          <tr><td>Proteomics</td><td>Limma (multi-imputation consensus)</td></tr>
+          <tr><td>RNA-seq</td><td>DESeq2 or Limma-voom</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card" style="border-color: #ec4899;">
+        <h3>What you get</h3>
+        <ul>
+          <li><strong style="color:#f472b6">Volcano plots</strong> &mdash; visualize effect size vs significance for each contrast</li>
+          <li><strong style="color:#f472b6">MA plots</strong> &mdash; mean expression vs fold change</li>
+          <li><strong style="color:#f472b6">Heatmaps</strong> of top differentially expressed features</li>
+          <li>Tabular results with <strong style="color:#e2e8f0">log2 fold-change, p-values, and gene annotations</strong></li>
+        </ul>
+      </div>
+      <div class="note" style="border-left-color: #ec4899;">
+        <strong style="color:#f472b6;">Proteomics bonus:</strong> Multi-imputation consensus means a protein is only called significant if it passes in most of the 10 imputation rounds &mdash; reducing false positives from imputation noise.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 8: Clustering ===== -->
+<div class="slide">
+  <h2>Step 5: <span class="accent-amber">Clustering</span> &mdash; finding patterns</h2>
+  <p class="big-text" style="margin-bottom: 24px;">Group genes/proteins that <em>behave similarly</em> across your conditions.</p>
+  <div class="cluster-grid">
+    <div class="cluster-card" style="border-color: #3b82f6;">
+      <div class="cluster-icon" style="color:#60a5fa;">&#9781;</div>
+      <h4 style="color:#60a5fa;">Hierarchical</h4>
+      <p>Builds a tree (dendrogram) showing which features are most similar. Cut the tree to get clusters.</p>
+      <br>
+      <p style="font-size:0.8rem; color:#64748b;">Best for: exploring overall structure</p>
+    </div>
+    <div class="cluster-card" style="border-color: #8b5cf6;">
+      <div class="cluster-icon" style="color:#a78bfa;">&#9684;</div>
+      <h4 style="color:#a78bfa;">Partition (k-means)</h4>
+      <p>Splits features into k groups that minimize within-group variance. Auto-picks the best k.</p>
+      <br>
+      <p style="font-size:0.8rem; color:#64748b;">Best for: clean, distinct clusters</p>
+    </div>
+    <div class="cluster-card" style="border-color: #f59e0b;">
+      <div class="cluster-icon" style="color:#fbbf24;">&#9783;</div>
+      <h4 style="color:#fbbf24;">Binary Patterns</h4>
+      <p>Assigns features to up/down patterns across conditions (e.g., "up in A, down in B and C").</p>
+      <br>
+      <p style="font-size:0.8rem; color:#64748b;">Best for: condition-specific responses</p>
+    </div>
+  </div>
+  <div class="note" style="border-left-color: #f59e0b; margin-top: 24px;">
+    <strong style="color:#fbbf24;">Binary Patterns explained:</strong> With 3 conditions, a protein with pattern <span style="font-family: monospace; color:#60a5fa">1-0-0</span> is high in condition A but low in B and C. The pipeline finds all such patterns and groups proteins accordingly &mdash; great for identifying condition-specific biology.
+  </div>
+</div>
+
+<!-- ===== SLIDE 9: Binary Patterns Visual ===== -->
+<div class="slide">
+  <h2>Binary Patterns: <span class="accent-amber">a closer look</span></h2>
+  <div class="columns">
+    <div class="col">
+      <p class="big-text" style="margin-bottom: 24px;">Each gene/protein is matched to a response pattern across your experimental groups:</p>
+      <div class="card">
+        <div style="margin-bottom: 16px; color: #64748b; font-size: 0.82rem; display: flex; gap: 6px;">
+          <span style="width: 32px; text-align: center;">Ctrl</span>
+          <span style="width: 32px; text-align: center;">DrugA</span>
+          <span style="width: 32px; text-align: center;">DrugB</span>
+        </div>
+        <div class="pattern-row">
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-cell cell-on">1</span>
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-label">"Responds only to Drug A"</span>
+        </div>
+        <div class="pattern-row">
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-cell cell-on">1</span>
+          <span class="pattern-label">"Responds only to Drug B"</span>
+        </div>
+        <div class="pattern-row">
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-cell cell-on">1</span>
+          <span class="pattern-cell cell-on">1</span>
+          <span class="pattern-label">"Responds to both drugs"</span>
+        </div>
+        <div class="pattern-row">
+          <span class="pattern-cell cell-on">1</span>
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-cell cell-off">0</span>
+          <span class="pattern-label">"High only in control (down with both)"</span>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card card-highlight">
+        <h3>Why this is useful</h3>
+        <ul>
+          <li>Immediately tells you which proteins/genes respond to <strong style="color:#e2e8f0">which treatment</strong></li>
+          <li>Finds <strong style="color:#60a5fa">shared responses</strong> across conditions (common pathways)</li>
+          <li>Finds <strong style="color:#f472b6">condition-specific</strong> responses (unique biology)</li>
+          <li>Each pattern group can be sent to <strong style="color:#4ade80">pathway enrichment</strong> for biological interpretation</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>How assignment works</h3>
+        <p>Each gene's expression profile is correlated with every possible pattern. It gets assigned to the <strong style="color:#e2e8f0">best-matching pattern</strong> (Pearson correlation &ge; 0.8). Unmatched genes are left unassigned.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 10: Outputs ===== -->
+<div class="slide">
+  <h2>What do you <span class="accent-purple">get out</span>?</h2>
+  <div class="output-grid">
+    <div class="output-item" style="border-color: #3b82f6;">
+      <div class="out-icon" style="color:#60a5fa;">&#128202;</div>
+      <div>
+        <h4>Publication-Ready Plots</h4>
+        <p>PCA, volcano, heatmaps, cluster profiles &mdash; all as PNG/PDF, ready for papers and presentations.</p>
+      </div>
+    </div>
+    <div class="output-item" style="border-color: #8b5cf6;">
+      <div class="out-icon" style="color:#a78bfa;">&#128209;</div>
+      <div>
+        <h4>Excel Workbooks</h4>
+        <p>Multi-sheet workbooks with metadata, expression data, DE results per contrast, and clustering assignments.</p>
+      </div>
+    </div>
+    <div class="output-item" style="border-color: #22c55e;">
+      <div class="out-icon" style="color:#4ade80;">&#128196;</div>
+      <div>
+        <h4>TSV Tables</h4>
+        <p>Filtered expression matrices, DE result tables (logFC, p-values, annotations), cluster assignments.</p>
+      </div>
+    </div>
+    <div class="output-item" style="border-color: #f59e0b;">
+      <div class="out-icon" style="color:#fbbf24;">&#128300;</div>
+      <div>
+        <h4>Interactive Shiny App</h4>
+        <p>Exports an RDS payload for an interactive web app &mdash; explore PCA, DE results, and clustering live.</p>
+      </div>
+    </div>
+  </div>
+  <div class="note" style="margin-top: 30px;">
+    <strong>Reproducibility:</strong> Every run also saves the exact config used, R session info, and a timestamp &mdash; so you can always recreate any result.
+  </div>
+</div>
+
+<!-- ===== SLIDE 11: How to use ===== -->
+<div class="slide">
+  <h2>How do you <span class="accent-green">use it</span>?</h2>
+  <div class="columns">
+    <div class="col-wide">
+      <div class="card" style="border-color: #22c55e;">
+        <h3><span class="icon icon-green">1</span> Prepare your config</h3>
+        <p>A YAML file describing your experiment: where the data lives, what your conditions are, which contrasts to test.</p>
+        <div style="background:#0f172a; border-radius:10px; padding:16px 20px; margin-top:14px; font-family:monospace; font-size:0.82rem; color:#94a3b8; line-height:1.7;">
+          <span style="color:#4ade80">modes</span>:<br>
+          &nbsp;&nbsp;<span style="color:#60a5fa">proteomics</span>:<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#94a3b8">engine: "DIANN"</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#fbbf24">effects</span>:<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;color: <span style="color:#f472b6">"Treatment"</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;samples: <span style="color:#f472b6">"SampleID"</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#fbbf24">de</span>:<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;p_cutoff: <span style="color:#a78bfa">0.05</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;linear_fc_cutoff: <span style="color:#a78bfa">1.5</span>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card" style="border-color: #3b82f6;">
+        <h3><span class="icon icon-blue">2</span> Run the pipeline</h3>
+        <p>A single command runs everything:</p>
+        <div style="background:#0f172a; border-radius:10px; padding:14px 18px; margin-top:12px; font-family:monospace; font-size:0.88rem; color:#60a5fa;">
+          targets::tar_make()
+        </div>
+      </div>
+      <div class="card" style="border-color: #8b5cf6;">
+        <h3><span class="icon icon-purple">3</span> Collect outputs</h3>
+        <p>Find plots, tables, and Excel files organized by analysis step in your output directory.</p>
+      </div>
+      <div class="card" style="border-color: #f59e0b;">
+        <h3><span class="icon icon-amber">4</span> Iterate</h3>
+        <p>Change a parameter in the config, re-run &mdash; only affected steps recompute.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SLIDE 12: Summary ===== -->
+<div class="slide slide-title" style="background: linear-gradient(135deg, #0f172a 0%, #1a1e3a 50%, #1e293b 100%);">
+  <h1 style="font-size: 2.6rem;">Key Takeaways</h1>
+  <div style="max-width: 750px; margin: 0 auto; text-align: left;">
+    <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 22px;">
+      <span class="icon icon-blue" style="margin-top:2px;">1</span>
+      <div>
+        <div style="font-size: 1.1rem; font-weight: 600; color: #e2e8f0;">One pipeline, multiple omics</div>
+        <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 4px;">Proteomics, RNA-seq, metabolomics &mdash; same workflow, same quality standards.</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 22px;">
+      <span class="icon icon-purple" style="margin-top:2px;">2</span>
+      <div>
+        <div style="font-size: 1.1rem; font-weight: 600; color: #e2e8f0;">Config-driven, not code-driven</div>
+        <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 4px;">Biologists describe the experiment; the pipeline handles the statistics.</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 22px;">
+      <span class="icon icon-green" style="margin-top:2px;">3</span>
+      <div>
+        <div style="font-size: 1.1rem; font-weight: 600; color: #e2e8f0;">Robust statistics</div>
+        <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 4px;">Multi-imputation, established DE methods (DESeq2, Limma), multiple-testing correction.</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 22px;">
+      <span class="icon icon-pink" style="margin-top:2px;">4</span>
+      <div>
+        <div style="font-size: 1.1rem; font-weight: 600; color: #e2e8f0;">Rich, interpretable outputs</div>
+        <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 4px;">Publication-ready plots, Excel reports, interactive Shiny exploration.</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 16px;">
+      <span class="icon icon-amber" style="margin-top:2px;">5</span>
+      <div>
+        <div style="font-size: 1.1rem; font-weight: 600; color: #e2e8f0;">Fully reproducible</div>
+        <div style="font-size: 0.9rem; color: #94a3b8; margin-top: 4px;">Locked package versions, config snapshots, smart caching. Every result is traceable.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Navigation -->
+<div class="nav">
+  <button onclick="prevSlide()">&#8592; Prev</button>
+  <button onclick="nextSlide()">Next &#8594;</button>
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="slide-number" id="slideNum"></div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function showSlide(n) {
+    slides[current].classList.remove('active');
+    current = (n + slides.length) % slides.length;
+    slides[current].classList.add('active');
+    document.getElementById('progress').style.width = ((current + 1) / slides.length * 100) + '%';
+    document.getElementById('slideNum').textContent = (current + 1) + ' / ' + slides.length;
+  }
+
+  function nextSlide() { showSlide(current + 1); }
+  function prevSlide() { showSlide(current - 1); }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextSlide(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevSlide(); }
+  });
+
+  showSlide(0);
+</script>
+
+</body>
+</html>
