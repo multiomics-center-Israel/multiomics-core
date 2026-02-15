@@ -46,10 +46,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     ))
 
     # ---- build annotation_col for heatmaps using effects ----
+    eff_color <- get_color_config(cfg)
     annot <- NULL
-    if (!is.null(cfg$effects$color) && cfg$effects$color %in% colnames(pre$meta)) {
+    if (!is.null(eff_color) && eff_color %in% colnames(pre$meta)) {
         annot <- data.frame(
-            Condition = pre$meta[[cfg$effects$color]],
+            Condition = pre$meta[[eff_color]],
             row.names = pre$meta[[cfg$effects$samples]]
         )
     }
@@ -118,12 +119,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Save cluster assignments
         if (!is.null(hc_res$clusters)) {
             f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
-            cl_tbl <- data.frame(
-                feature_id = names(hc_res$clusters),
-                cluster = as.integer(hc_res$clusters),
-                stringsAsFactors = FALSE
-            )
-            save_tsv_path(cl_tbl, f_tbl)
+            cl_tbl <- build_clustering_output_table(hc_res$clusters, f_tbl)
             written <- c(written, f_tbl)
             plots$cl_tbl <- cl_tbl
 
@@ -155,13 +151,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         ensure_dir(part_dir)
 
         # (1) write clusters table
-        clusters_tbl <- data.frame(
-            feature_id = names(part_res$clusters),
-            cluster = as.integer(part_res$clusters),
-            stringsAsFactors = FALSE
-        )
         f_tbl <- file.path(part_dir, "partition_clusters.tsv")
-        save_tsv_path(clusters_tbl, f_tbl)
+        clusters_tbl <- build_clustering_output_table(part_res$clusters, f_tbl)
         written <- c(written, f_tbl)
         plots$pt_tbl <- clusters_tbl
 
@@ -191,39 +182,20 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        # Prepare data from Z-scored Group Means (returned by the clustering func)
-        zgm <- part_res$z_group_means
-        clv <- part_res$clusters[rownames(zgm)]
+        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
 
-        k <- part_res$k
-        groups <- colnames(zgm)
+        if (!is.null(prof)) {
+            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
+            p_prof <- plot_cluster_profiles(prof, x_label = eff_color)
 
-        prof_list <- lapply(1:k, function(ci) {
-            rows <- which(clv == ci)
-            sub <- zgm[rows, , drop = FALSE]
-            data.frame(
-                cluster = ci,
-                group = groups,
-                mean = colMeans(sub, na.rm = TRUE),
-                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                n_features = nrow(sub),
-                stringsAsFactors = FALSE
-            )
-        })
+            n_clusters <- length(unique(prof$cluster))
+            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
 
-        prof <- do.call(rbind, prof_list)
+            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
 
-        f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-        p_prof <- plot_cluster_profiles(prof, x_label = cfg$effects$color)
-
-        # Dynamic height
-        n_clusters <- length(unique(prof$cluster))
-        calc_height <- max(6, ceiling(n_clusters / 2) * 3)
-
-        ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
-
-        written <- c(written, f_pdf)
-        plots$cluster_profiles <- p_prof
+            written <- c(written, f_pdf)
+            plots$cluster_profiles <- p_prof
+        }
 
         # --- FIX: Export Legacy Data (Moved INSIDE the IF block) ---
         # This must be here because part_res and part_dir are only defined here.

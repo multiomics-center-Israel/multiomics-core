@@ -49,8 +49,7 @@ run_binary_patterns <- function(expr_mat,
 
   if (is.null(group_col)) {
     # Fallback to primary color for backward compatibility
-    color_config <- cfg$effects$color
-    group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+    group_col <- get_color_config(cfg)
   }
 
   sample_col <- cfg$effects$samples
@@ -357,6 +356,21 @@ run_partition_clustering <- function(z_expr, config) {
   )
 }
 
+# ---- DRY helper: extract primary color column from config ----
+
+#' Extract primary color column name from config
+#'
+#' Handles both scalar and array config formats for effects$color.
+#' Returns NULL if color config is missing.
+#'
+#' @param cfg Mode config list (e.g., config$modes$proteomics)
+#' @return Character string (column name) or NULL
+get_color_config <- function(cfg) {
+  color_config <- cfg$effects$color
+  if (is.null(color_config)) return(NULL)
+  as.character(color_config[[1]])
+}
+
 # ---- Clustering guards (effects-driven; no GROUP/GROUP1) ----
 
 #' Count how many distinct groups exist for clustering
@@ -370,12 +384,10 @@ run_partition_clustering <- function(z_expr, config) {
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
 
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  if (is.null(color_config)) {
+  color_col <- get_color_config(cfg)
+  if (is.null(color_col)) {
     return(0L)
   }
-  color_col <- as.character(color_config[[1]])
 
   if (!nzchar(color_col)) {
     return(0L)
@@ -449,9 +461,7 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   stopifnot(is.data.frame(meta))
   expr_mat <- as.matrix(expr_mat)
 
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
   if (is.null(group_col) || !(group_col %in% colnames(meta))) {
@@ -628,6 +638,58 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     z_group_means = z_gm
   )
 }
+
+#' Build cluster assignment table and optionally write to TSV
+#'
+#' @param clusters Named integer vector (names = feature IDs, values = cluster numbers)
+#' @param out_file Optional file path; if provided, writes TSV via save_tsv_path
+#' @return Data frame with columns: feature_id, cluster
+build_clustering_output_table <- function(clusters, out_file = NULL) {
+  tbl <- data.frame(
+    feature_id = names(clusters),
+    cluster = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(out_file)) save_tsv_path(tbl, out_file)
+  tbl
+}
+
+#' Build cluster profile data frame from z-scored group means
+#'
+#' Computes per-cluster mean and SD of z-scored group means. Handles empty
+#' clusters and NA group names safely.
+#'
+#' @param z_group_means Matrix (features x groups) of z-scored group means
+#' @param clusters Named integer vector mapping feature IDs to cluster numbers
+#' @param k Number of clusters
+#' @return Data frame with columns: cluster, group, mean, sd, n_features.
+#'         Returns NULL if all clusters are empty.
+build_cluster_profiles <- function(z_group_means, clusters, k) {
+  clv <- clusters[rownames(z_group_means)]
+  groups <- colnames(z_group_means)
+
+  prof_list <- lapply(seq_len(k), function(ci) {
+    rows <- which(clv == ci)
+    sub <- z_group_means[rows, , drop = FALSE]
+    if (nrow(sub) == 0) return(NULL)
+    data.frame(
+      cluster = ci,
+      group = groups,
+      mean = colMeans(sub, na.rm = TRUE),
+      sd = apply(sub, 2, stats::sd, na.rm = TRUE),
+      n_features = nrow(sub),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  prof_list <- Filter(Negate(is.null), prof_list)
+  if (length(prof_list) == 0) return(NULL)
+
+  prof <- do.call(rbind, prof_list)
+  if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
+  prof
+}
+
 #' Write cluster data in exact legacy format
 #' Columns: Name (Sample), Group, Exp (Absolute Expression)
 #' Summary File Columns: Cluster, Group, Mean, SE, Mean_SE.y, Mean_SE.ymin, Mean_SE.ymax
@@ -641,9 +703,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   # 1. Prepare Metadata Map (Sample -> Group)
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
   meta_map <- meta |>

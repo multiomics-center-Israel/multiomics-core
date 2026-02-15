@@ -613,9 +613,7 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
 
   # 2) annotation (aligned to matrix columns)
   sample_col <- cfg$effects$samples
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  color_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  color_col <- get_color_config(cfg)
 
   annot_col <- data.frame(
     Condition = meta[[color_col]],
