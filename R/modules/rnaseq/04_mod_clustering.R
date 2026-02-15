@@ -18,13 +18,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     cfg <- config$modes$rna
     cl <- cfg$clustering
 
-    # Extract primary color (handle array config for multi-color PCA)
-    color_config <- cfg$effects$color
-    if (!is.null(color_config)) {
-        eff_color <- as.character(color_config[[1]])
-    } else {
-        eff_color <- NULL
-    }
+    eff_color <- get_color_config(cfg)
 
     # Initialize Objects for legacy Shiny export (MUST exist)
     objects <- list(
@@ -156,12 +150,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         # Save clusters
         if (!is.null(hc_res$clusters)) {
             f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
-            cl_tbl <- data.frame(
-                feature_id = names(hc_res$clusters),
-                cluster = as.integer(hc_res$clusters),
-                stringsAsFactors = FALSE
-            )
-            save_tsv_path(cl_tbl, f_tbl)
+            build_clustering_output_table(hc_res$clusters, f_tbl)
             written <- c(written, f_tbl)
 
             # Populate Shiny Object
@@ -192,13 +181,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         ensure_dir(part_dir)
 
         # (1) write clusters table
-        clusters_tbl <- data.frame(
-            feature_id = names(part_res$clusters),
-            cluster = as.integer(part_res$clusters),
-            stringsAsFactors = FALSE
-        )
         f_tbl <- file.path(part_dir, "partition_clusters.tsv")
-        save_tsv_path(clusters_tbl, f_tbl)
+        clusters_tbl <- build_clustering_output_table(part_res$clusters, f_tbl)
         written <- c(written, f_tbl)
 
         # (2) heatmap
@@ -249,38 +233,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        zgm <- part_res$z_group_means
-        clv <- part_res$clusters[rownames(zgm)]
-        k <- part_res$k
-        groups <- colnames(zgm)
+        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
 
-        prof_list <- lapply(1:k, function(ci) {
-            rows <- which(clv == ci)
-            sub <- zgm[rows, , drop = FALSE]
-            if (nrow(sub) == 0) {
-                return(NULL)
-            } # Safety
-            data.frame(
-                cluster = ci,
-                group = groups,
-                mean = colMeans(sub, na.rm = TRUE),
-                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                n_features = nrow(sub),
-                stringsAsFactors = FALSE
-            )
-        })
-
-        # Filter NULLs
-        prof_list <- Filter(Negate(is.null), prof_list)
-
-        if (length(prof_list) > 0) {
-            prof <- do.call(rbind, prof_list)
-
+        if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
             eff_col_name <- eff_color %||% "Group"
-
-            # Check for NA group names
-            if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
 
             p_prof <- plot_cluster_profiles(prof, x_label = eff_col_name)
 
