@@ -54,6 +54,11 @@ tar_option_set(
   )
 )
 
+# Resolve config path once at plan-definition time so the literal path is
+# baked into the target command.  This ensures {targets} detects a change
+# when MULTIOMICS_CONFIG points to a different file between runs.
+config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
+
 # ------------------------------------------------------------------------------
 # Targets definition
 # ------------------------------------------------------------------------------
@@ -62,7 +67,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
+    !!config_path,
     format = "file"
   ),
 
