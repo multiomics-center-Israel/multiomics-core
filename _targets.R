@@ -62,7 +62,7 @@ list(
   # Configuration file (tracked as a file dependency)
   tar_target(
     config_file,
-    "C:/Users/sharabmi/Documents/BGU/MultiOmics/projects/04_Uri_Gat/config.yaml",
+    Sys.getenv("MULTIOMICS_CONFIG", "config.yaml"),
     format = "file"
   ),
 
