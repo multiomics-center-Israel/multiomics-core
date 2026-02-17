@@ -352,8 +352,8 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
           )
 
           cmd <- sprintf(
-            "claude --print --output-format json --model sonnet --json-schema '%s' --no-session-persistence %s",
-            json_schema,
+            "claude --print --output-format json --model sonnet --json-schema %s --no-session-persistence %s",
+            shQuote(json_schema),
             shQuote(prompt)
           )
 
@@ -863,8 +863,8 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
           )
 
           cmd <- sprintf(
-            "claude --print --output-format json --model sonnet --json-schema '%s' --no-session-persistence %s",
-            json_schema,
+            "claude --print --output-format json --model sonnet --json-schema %s --no-session-persistence %s",
+            shQuote(json_schema),
             shQuote(prompt)
           )
 

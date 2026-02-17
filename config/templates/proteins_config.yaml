@@ -220,13 +220,13 @@ modes:
     # --------------------------------------------------------
     # Technical report (auto-populated by wizard from log file)
     # --------------------------------------------------------
-    # technical_report:
-    #   facility: ""
-    #   sample_prep: ""
-    #   ms_acquisition: ""
-    #   search_engine: ""
-    #   search_parameters: ""
-    #   acknowledgment: ""
+    technical_report:
+      facility: ""
+      sample_prep: ""
+      ms_acquisition: ""
+      search_engine: ""
+      search_parameters: ""
+      acknowledgment: ""
 
     # --------------------------------------------------------
     # AI commentary

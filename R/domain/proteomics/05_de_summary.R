@@ -211,7 +211,6 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     meta_aligned[[group_col]] <- factor(meta_aligned[[group_col]])
     orig_levels <- levels(meta_aligned[[group_col]])
     safe_levels <- make.names(orig_levels)
-    level_map <- setNames(orig_levels, safe_levels)  # safe -> original
     levels(meta_aligned[[group_col]]) <- safe_levels
 
     design <- model.matrix(stats::as.formula(paste0("~ 0 + ", group_col)), data = meta_aligned)

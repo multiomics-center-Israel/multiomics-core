@@ -183,5 +183,14 @@ modes:
       #   qc:
       #     adaptive_plots: false
 
+    # --------------------------------------------------------
+    # Technical report (auto-populated by wizard from facility report)
+    # --------------------------------------------------------
+    technical_report:
+      facility: ""
+      library_prep: ""
+      sequencing: ""
+      acknowledgment: ""
+
 params:
   seed: 1

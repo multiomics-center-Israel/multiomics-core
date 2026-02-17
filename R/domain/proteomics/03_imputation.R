@@ -119,13 +119,6 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
             return_flags = FALSE
         )
         imps[[i]] <- expr_imp_i
-
-        # For deterministic methods, copy the first result to skip redundant work
-        if (is_deterministic && i == 1) {
-            for (k in 2:n_imputations) imps[[k]] <- expr_imp_i
-            if (isTRUE(verbose)) message(sprintf("  Deterministic method '%s' — copied run 1 to all %d slots.", method, n_imputations))
-            break
-        }
     }
     imps
 }

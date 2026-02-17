@@ -54,9 +54,15 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     files <- cfg$files
     inputs <- list()
 
+    # Files that may legitimately have blank/null paths in the config
+    optional_files <- c("peptides", "sample_map", "annotation", "trinotate", "contrasts")
+
     for (nm in names(files)) {
         rel <- files[[nm]]
-        if (is.null(rel) || !nzchar(rel)) next
+        if (is.null(rel) || !nzchar(rel)) {
+            if (nm %in% optional_files) next
+            stop(sprintf("Required input file '%s' has an empty or missing path in config.", nm))
+        }
         abs <- resolve_raw_path(config, rel)
         if (!file.exists(abs)) stop("File not found: ", abs)
         inputs[[nm]] <- read_table_auto(abs)

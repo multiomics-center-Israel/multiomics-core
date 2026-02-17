@@ -2,14 +2,22 @@ library(targets)
 
 # ------------------------------------------------------------------------------
 # Source R files in a strict dependency order:
-# 1) core    – generic utilities, no domain knowledge
-# 2) domain  – omics-specific logic (proteomics / rnaseq)
-# 3) modules – target-ready wrappers (qc, de, clustering, etc.)
-# 4) pipeline– targets orchestration only
+# 1) core     – generic utilities, no domain knowledge
+# 2) services – external-facing helpers (AI commentary, etc.)
+# 3) domain   – omics-specific logic (proteomics / rnaseq)
+# 4) modules  – target-ready wrappers (qc, de, clustering, etc.)
+# 5) pipeline – targets orchestration only
 # ------------------------------------------------------------------------------
 
 core_files <- sort(list.files(
   "R/core",
+  pattern = "\\.R$",
+  full.names = TRUE,
+  recursive = TRUE
+))
+
+service_files <- sort(list.files(
+  "R/services",
   pattern = "\\.R$",
   full.names = TRUE,
   recursive = TRUE
@@ -29,8 +37,8 @@ module_files <- sort(list.files(
   recursive = TRUE
 ))
 
-# Source core -> domain -> modules
-invisible(lapply(c(core_files, domain_files, module_files), tar_source))
+# Source core -> services -> domain -> modules
+invisible(lapply(c(core_files, service_files, domain_files, module_files), tar_source))
 
 # Source pipelines LAST (they depend on everything above)
 pipeline_files <- sort(list.files(
