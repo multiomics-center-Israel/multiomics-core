@@ -169,6 +169,12 @@ modes:
       # condition_column: "treatment"  # defaults to de$condition_column
 
     # ---- Pathway enrichment (optional) ----
+    # Four methods are available (each runs independently):
+    #   QEA    — globaltest: quantitative enrichment on raw expression
+    #   ssGSEA — GSVA + Wilcoxon: single-sample enrichment scores
+    #   ORA    — Fisher's exact test: significant features (fg) vs all (bg)
+    #   GSEA   — fgsea: ranked by log2FC from DE results
+    # ORA and GSEA require DE results; QEA and ssGSEA do not.
     enrichment:
       run_enrichment: false        # set to true to enable
 
@@ -176,7 +182,7 @@ modes:
       # Leave empty to use only gmt_file entries below.
       libraries: []
 
-      # GMT files for QEA (globaltest) and ssGSEA:
+      # GMT files (used by all four methods):
       gmt_file: null
         # - "path/to/custom_pathways.gmt"
 
