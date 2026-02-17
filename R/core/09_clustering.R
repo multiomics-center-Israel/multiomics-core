@@ -6,18 +6,23 @@
 #' How it works:
 #' 1) Groups are defined by cfg$clustering$steps$binary_patterns$group_col
 #'    (e.g., "treatment" column with values: control, drugA, drugB)
-#' 2) Calculate mean expression for each feature across groups (feature x group matrix)
-#' 3) Generate all binary patterns based on number of groups
+#' 2) Generate all binary patterns based on number of groups
 #'    - For 3 groups: 000, 001, 010, 011, 100, 101, 110, 111
 #'    - Excludes trivial patterns (all-0, all-1) if skip_trivial_patterns=TRUE
-#' 4) For each feature, compute Pearson correlation between its group means and each pattern
-#' 5) Assign feature to pattern with highest correlation (if above corr_cutoff threshold)
-#' 6) Output: heatmaps, gene lists, and statistics per pattern
+#' 3) Each pattern is expanded to match the sample replicate structure
+#'    (e.g., pattern "101" with 3 reps/group becomes (1,1,1,0,0,0,1,1,1))
+#' 4) For each feature, compute Pearson correlation between its full sample-level
+#'    expression vector and each expanded pattern (captures within-group variability)
+#' 5) Apply dual count gating: "1" positions must exceed counts_cutoff_high,
+#'    "0" positions must be below counts_cutoff_low (if set)
+#' 6) Assign feature to pattern with highest correlation (if above corr_cutoff threshold)
+#' 7) Output: heatmaps, gene lists, and statistics per pattern
 #'
 #' Configuration:
 #' - group_col: Metadata column defining biological groups (REQUIRED)
 #' - corr_cutoff: Minimum correlation to assign feature to pattern (default 0.8)
-#' - counts_cutoff: Minimum count threshold per group (default 0)
+#' - counts_cutoff_high: Minimum count threshold for "on" groups (default 0)
+#' - counts_cutoff_low: Maximum count threshold for "off" groups (default NULL = disabled)
 #'
 #' @param expr_mat Feature x sample expression matrix
 #' @param meta Sample metadata
@@ -25,7 +30,8 @@
 #' @param de_features Character vector of feature IDs to cluster
 #' @param out_dir Output directory for results
 #' @param corr_cutoff Minimum correlation threshold (overrides config)
-#' @param counts_cutoff Minimum count threshold (overrides config)
+#' @param counts_cutoff_high Minimum count for "1" positions (overrides config)
+#' @param counts_cutoff_low Maximum count for "0" positions; NULL disables (overrides config)
 #' @return List with files (paths), plots (ggplot objects), best (pattern assignments)
 run_binary_patterns <- function(expr_mat,
                                 meta,
@@ -33,7 +39,8 @@ run_binary_patterns <- function(expr_mat,
                                 de_features,
                                 out_dir,
                                 corr_cutoff = 0.8,
-                                counts_cutoff = 0) {
+                                counts_cutoff_high = 0,
+                                counts_cutoff_low = NULL) {
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.matrix(expr_mat)
   stopifnot(is.data.frame(meta))
@@ -103,11 +110,13 @@ run_binary_patterns <- function(expr_mat,
   patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
   patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]
 
-  # 3) Counts gate
-  pass_counts <- .calc_counts_gate(x, groups, group_levels, patterns, counts_cutoff)
+  # 3) Counts gate (dual cutoff: high for "1" positions, low for "0" positions)
+  pass_counts <- .calc_counts_gate(x, groups, group_levels, patterns,
+                                   counts_cutoff_high, counts_cutoff_low)
 
-  # 4) Correlation to patterns (Vectorized!)
-  cor_mat <- .calc_cor_to_patterns(group_means, patterns)
+  # 4) Correlation to patterns at sample level (matches Neat_RNA-Seq)
+  # Each pattern is expanded to replicate structure before correlating
+  cor_mat <- .calc_cor_to_patterns(x, groups, group_levels, patterns)
 
   # Best pattern selection (Robust Logic)
   best <- .best_pattern_per_feature(cor_mat, patterns, pass_counts, corr_cutoff)
@@ -173,22 +182,30 @@ run_binary_patterns <- function(expr_mat,
   apply(grid, 1, paste0, collapse = "")
 }
 
-.calc_cor_to_patterns <- function(group_means, patterns) {
-  P <- do.call(rbind, strsplit(patterns, split = ""))
-  # Ensures numeric matrix even if 1 row or 1 column
-  P_mat <- matrix(as.numeric(P), nrow = nrow(P), ncol = ncol(P))
+.calc_cor_to_patterns <- function(expr_mat, groups, group_levels, patterns) {
+  # Build pattern matrix expanded to sample level
+  # Each pattern "101" becomes (1,1,1,0,0,0,1,1,1) matching sample order
+  P_expanded <- do.call(rbind, lapply(patterns, function(pat) {
+    bits <- as.integer(strsplit(pat, "")[[1]])
+    sample_pattern <- numeric(ncol(expr_mat))
+    for (g_idx in seq_along(group_levels)) {
+      cols <- which(groups == group_levels[g_idx])
+      sample_pattern[cols] <- bits[g_idx]
+    }
+    sample_pattern
+  }))
+  # P_expanded: patterns x samples
 
-  # Vectorized Correlation: cor(Features_Transposed, Patterns_Transposed)
-  # Result: Features x Patterns
-  cors <- stats::cor(t(group_means), t(P_mat), use = "pairwise.complete.obs")
+  # Vectorized Pearson correlation: features x patterns
+  cors <- stats::cor(t(expr_mat), t(P_expanded), use = "pairwise.complete.obs")
 
   colnames(cors) <- patterns
-  rownames(cors) <- rownames(group_means)
-
+  rownames(cors) <- rownames(expr_mat)
   cors
 }
 
-.calc_counts_gate <- function(x, groups, group_levels, patterns, counts_cutoff) {
+.calc_counts_gate <- function(x, groups, group_levels, patterns,
+                              counts_cutoff_high, counts_cutoff_low = NULL) {
   # returns logical matrix: features x patterns
   out <- matrix(TRUE, nrow = nrow(x), ncol = length(patterns))
   rownames(out) <- rownames(x)
@@ -198,18 +215,27 @@ run_binary_patterns <- function(expr_mat,
     pat <- patterns[j]
     bits <- as.integer(strsplit(pat, "")[[1]])
     ones <- which(bits == 1)
+    zeros <- which(bits == 0)
 
+    # Gate "1" groups: ALL samples must have counts > counts_cutoff_high
     if (length(ones) == 0) {
       out[, j] <- FALSE
       next
     }
 
-    cols <- unlist(lapply(group_levels[ones], function(g) which(groups == g)))
-    sub <- x[, cols, drop = FALSE]
+    cols_high <- unlist(lapply(group_levels[ones], function(g) which(groups == g)))
+    sub_high <- x[, cols_high, drop = FALSE]
+    ok_high <- apply(sub_high, 1, function(v) all(is.finite(v) & (v > counts_cutoff_high)))
 
-    # Strict check: ALL samples in "1" groups must be valid and > cutoff
-    ok <- apply(sub, 1, function(v) all(is.finite(v) & (v > counts_cutoff)))
-    out[, j] <- ok
+    # Gate "0" groups: ALL samples must have counts < counts_cutoff_low
+    if (!is.null(counts_cutoff_low) && length(zeros) > 0) {
+      cols_low <- unlist(lapply(group_levels[zeros], function(g) which(groups == g)))
+      sub_low <- x[, cols_low, drop = FALSE]
+      ok_low <- apply(sub_low, 1, function(v) all(is.finite(v) & (v < counts_cutoff_low)))
+      out[, j] <- ok_high & ok_low
+    } else {
+      out[, j] <- ok_high
+    }
   }
   out
 }
@@ -517,6 +543,37 @@ choose_k_silhouette <- function(mat_fg, algorithm = c("pam", "kmeans"), k_max = 
   best_k
 }
 
+#' Choose k by gap statistic
+#'
+#' Uses cluster::clusGap() with hclust (Pearson correlation + Ward.D2) to find
+#' optimal k. Matches Neat_RNA-Seq behavior: firstSEmax with SE.factor=1.
+#'
+#' @param mat_fg Feature x group z-scored matrix
+#' @param k_max Maximum K to test (default 20)
+#' @param B Number of bootstrap samples (default 10)
+#' @return integer k
+choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
+  stopifnot(is.matrix(mat_fg))
+  n <- nrow(mat_fg)
+  if (n < 2) stop("choose_k_gap_statistic: need at least 2 features")
+  k_max <- min(as.integer(k_max), n - 1L)
+  if (k_max < 2) return(2L)
+
+  # Clustering function: hclust with Pearson correlation distance + Ward.D2
+  hclust_func <- function(x, k) {
+    d <- as.dist(1 - cor(t(x)))
+    hc <- stats::hclust(d, method = "ward.D2")
+    list(cluster = stats::cutree(hc, k = k))
+  }
+
+  gap <- cluster::clusGap(mat_fg, FUNcluster = hclust_func, K.max = k_max, B = B)
+  best_k <- cluster::maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"],
+                           method = "firstSEmax", SE.factor = 1)
+
+  # Guard: maxSE can return 1; force minimum of 2
+  max(as.integer(best_k), 2L)
+}
+
 #' Perform partition clustering on DE features using group means (legacy-like)
 #'
 #' @param expr_mat features x samples (imputed)
@@ -575,19 +632,24 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     if (!is.null(k_fixed)) {
       final_k <- as.integer(k_fixed)
     } else {
-      # Optimize K using Silhouette on the hierarchical tree cuts
-      # This mimics finding the "best cut"
-      sil_width <- numeric(k_max)
+      k_method <- tolower(cl_cfg$k_method %||% "silhouette")
 
-      for (i in 2:k_max) {
-        ct <- stats::cutree(hc, k = i)
-        # Calculate silhouette for this cut
-        sil <- cluster::silhouette(ct, dist_mat)
-        sil_width[i] <- mean(sil[, 3])
+      if (k_method == "gap") {
+        # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
+        gap_B <- cl_cfg$gap_B %||% 10
+        final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
+      } else {
+        # Default: Silhouette on hierarchical tree cuts
+        sil_width <- numeric(k_max)
+
+        for (i in 2:k_max) {
+          ct <- stats::cutree(hc, k = i)
+          sil <- cluster::silhouette(ct, dist_mat)
+          sil_width[i] <- mean(sil[, 3])
+        }
+
+        final_k <- which.max(sil_width[-1]) + 1
       }
-
-      # Pick K with max silhouette (ignoring k=1 which is 0)
-      final_k <- which.max(sil_width[-1]) + 1
     }
 
     # 4. Cut the tree
