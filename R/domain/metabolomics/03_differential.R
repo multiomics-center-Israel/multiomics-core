@@ -142,10 +142,17 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 }
 
 
-# ---- t-test ----------------------------------------------------------------
+# ---- nonparametric / parametric two-group test (shared) --------------------
 
-#' Run Welch t-tests per feature on a single contrast
-de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+#' Per-feature two-group test (shared logic for t-test and Wilcoxon)
+#'
+#' @param mat          Numeric matrix (features x samples) for statistical test.
+#' @param condition    Factor of conditions.
+#' @param contrast_str Character, e.g. "B - A".
+#' @param mat_for_fc   Optional pre-scaling matrix for logFC computation.
+#' @param test_fn      Function(vals_B, vals_A) returning list(statistic, p.value).
+#' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val.
+de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_fn) {
     groups <- parse_metab_contrast(contrast_str)
     idx_A <- which(condition == groups$denominator)
     idx_B <- which(condition == groups$numerator)
@@ -154,7 +161,6 @@ de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
         stop("No samples for one of the groups in contrast: ", contrast_str)
     }
 
-    # Use pre-scaling matrix for logFC if provided, else use mat
     fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
 
     res <- data.frame(
@@ -167,17 +173,13 @@ de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     )
 
     for (i in seq_len(nrow(mat))) {
-        vals_A <- mat[i, idx_A]
-        vals_B <- mat[i, idx_B]
-
-        # logFC from pre-scaling matrix; stat test on scaled matrix
         fc_A <- fc_mat[i, idx_A]
         fc_B <- fc_mat[i, idx_B]
         res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
         res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
 
         tt <- tryCatch(
-            stats::t.test(vals_B, vals_A, var.equal = FALSE),
+            test_fn(mat[i, idx_B], mat[i, idx_A]),
             error = function(e) NULL
         )
         if (!is.null(tt)) {
@@ -191,51 +193,21 @@ de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 }
 
 
+# ---- t-test ----------------------------------------------------------------
+
+#' Run Welch t-tests per feature on a single contrast
+de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
+                 test_fn = function(b, a) stats::t.test(b, a, var.equal = FALSE))
+}
+
+
 # ---- wilcoxon --------------------------------------------------------------
 
 #' Run Wilcoxon rank-sum tests per feature on a single contrast
 de_wilcoxon <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
-    groups <- parse_metab_contrast(contrast_str)
-    idx_A <- which(condition == groups$denominator)
-    idx_B <- which(condition == groups$numerator)
-
-    if (length(idx_A) == 0 || length(idx_B) == 0) {
-        stop("No samples for one of the groups in contrast: ", contrast_str)
-    }
-
-    # Use pre-scaling matrix for logFC if provided, else use mat
-    fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
-
-    res <- data.frame(
-        feature_id = rownames(mat),
-        logFC      = NA_real_,
-        AveExpr    = NA_real_,
-        statistic  = NA_real_,
-        P.Value    = NA_real_,
-        stringsAsFactors = FALSE
-    )
-
-    for (i in seq_len(nrow(mat))) {
-        vals_A <- mat[i, idx_A]
-        vals_B <- mat[i, idx_B]
-
-        fc_A <- fc_mat[i, idx_A]
-        fc_B <- fc_mat[i, idx_B]
-        res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
-        res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
-
-        wt <- tryCatch(
-            stats::wilcox.test(vals_B, vals_A, exact = FALSE),
-            error = function(e) NULL
-        )
-        if (!is.null(wt)) {
-            res$statistic[i] <- wt$statistic
-            res$P.Value[i]   <- wt$p.value
-        }
-    }
-
-    res$adj.P.Val <- stats::p.adjust(res$P.Value, method = "BH")
-    res
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
+                 test_fn = function(b, a) stats::wilcox.test(b, a, exact = FALSE))
 }
 
 
@@ -243,24 +215,27 @@ de_wilcoxon <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 
 #' Parse a metabolomics contrast string "B - A" into numerator/denominator
 #'
-#' @param contrast_str Character, e.g. "2024 - 2013".
+#' Splits on " - " (space-dash-space) so that group names containing hyphens
+#' (e.g. "pre-treatment - post-treatment") are handled correctly.
+#'
+#' @param contrast_str Character, e.g. "post-treatment - pre-treatment".
 #' @return list(numerator, denominator)
 parse_metab_contrast <- function(contrast_str) {
-    parts <- trimws(strsplit(contrast_str, "-")[[1]])
+    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
     if (length(parts) != 2) {
         stop("Cannot parse contrast: '", contrast_str,
              "'. Expected format: 'groupB - groupA'")
     }
-    list(numerator = parts[1], denominator = parts[2])
+    list(numerator = trimws(parts[1]), denominator = trimws(parts[2]))
 }
 
 
 #' Create a clean label from a contrast string
 #'
-#' Converts "2024 - 2013" to "2024_vs_2013".
+#' Converts "post-treatment - pre-treatment" to "post-treatment_vs_pre-treatment".
 make_contrast_label <- function(contrast_str) {
-    parts <- trimws(strsplit(contrast_str, "-")[[1]])
-    paste(parts, collapse = "_vs_")
+    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+    paste(trimws(parts), collapse = "_vs_")
 }
 
 
