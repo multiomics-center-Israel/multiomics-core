@@ -77,11 +77,12 @@ pipe_metabolomics <- function() {
             )
         ),
 
-        # ---- pathway enrichment: QEA + ssGSEA (Stage 2, optional) ----
+        # ---- pathway enrichment: QEA + ssGSEA + ORA + GSEA (Stage 2, optional) ----
         tar_target(
             metab_enrichment_res,
             mod_metabolomics_enrichment(
                 pre     = metab_pre,
+                de_res  = metab_de_res,
                 config  = config,
                 out_dir = metab_out_dir
             )

@@ -465,8 +465,8 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
 
   ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .pass, alpha = .pass), size = 1.5, na.rm = TRUE) +
-    ggplot2::scale_color_manual(values = c("FALSE" = "grey70", "TRUE" = "red"), guide = "none") +
-    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.25, "TRUE" = 0.9), guide = "none") +
+    ggplot2::scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"), guide = "none") +
+    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.4, "TRUE" = 0.9), guide = "none") +
     ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "black") +
     ggplot2::geom_hline(yintercept = -log10(padj_cut), linetype = "dashed", color = "black") +
     ggplot2::labs(

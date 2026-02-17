@@ -321,6 +321,12 @@ build_shiny_payload_metabolomics <- function(
                 payload$enrichment_ssgsea       <- enrichment_res$ssgsea$table %||% NULL
                 payload$enrichment_ssgsea_scores <- enrichment_res$ssgsea$scores %||% NULL
             }
+            if (!is.null(enrichment_res$ora)) {
+                payload$enrichment_ora <- enrichment_res$ora$table %||% NULL
+            }
+            if (!is.null(enrichment_res$gsea)) {
+                payload$enrichment_gsea <- enrichment_res$gsea$table %||% NULL
+            }
         }
     }
 

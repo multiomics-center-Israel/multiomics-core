@@ -39,6 +39,22 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
 
     message("Rendering metabolomics report -> ", out_file)
 
+    # Attach module-level plots to rf/plsda sub-results so the Rmd template
+    # can access them as rf_res$plots$rf_importance, plsda_res$plots$plsda_scores, etc.
+    rf_res_out    <- NULL
+    plsda_res_out <- NULL
+    if (!is.null(feature_sel_res)) {
+        fs_plots <- feature_sel_res$plots %||% list()
+        if (!is.null(feature_sel_res$rf)) {
+            rf_res_out <- feature_sel_res$rf
+            rf_res_out$plots <- fs_plots[grep("^rf_", names(fs_plots))]
+        }
+        if (!is.null(feature_sel_res$plsda)) {
+            plsda_res_out <- feature_sel_res$plsda
+            plsda_res_out$plots <- fs_plots[grep("^plsda_", names(fs_plots))]
+        }
+    }
+
     rmarkdown::render(
         input       = template,
         output_file = basename(out_file),
@@ -47,8 +63,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
             pre            = pre,
             qc_res         = qc_res,
             de_res         = de_res,
-            rf_res         = if (!is.null(feature_sel_res)) feature_sel_res$rf else NULL,
-            plsda_res      = if (!is.null(feature_sel_res)) feature_sel_res$plsda else NULL,
+            rf_res         = rf_res_out,
+            plsda_res      = plsda_res_out,
             enrichment_res = enrichment_res,
             config         = config
         ),
