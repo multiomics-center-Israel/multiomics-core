@@ -9,7 +9,7 @@
 
 #' Metabolomics enrichment module
 #'
-#' Runs QEA (MetaboAnalystR/globaltest) and ssGSEA (GSVA) enrichment analysis.
+#' Runs QEA (globaltest) and ssGSEA (GSVA) enrichment analysis.
 #' Each is independently optional — if one fails or is unavailable, the other
 #' still runs.
 #'

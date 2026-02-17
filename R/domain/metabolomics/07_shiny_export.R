@@ -24,8 +24,8 @@
 #' @param config Full config object
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
-#' @param rf_res Optional: random forest results (from mod_metabolomics_rf)
-#' @param plsda_res Optional: PLS-DA results (from mod_metabolomics_plsda)
+#' @param rf_res Optional: random forest results (from feature_sel_res$rf)
+#' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
 #' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
 #' @param include_legacy Logical. If TRUE (default), attach legacy aliases.

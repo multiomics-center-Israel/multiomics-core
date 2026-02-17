@@ -1,6 +1,6 @@
 # R/domain/metabolomics/01_normalization.R
 #
-# MetaboAnalyst-style normalization for metabolomics data.
+# Three-step normalization for metabolomics data.
 # Three independent steps (applied in order):
 #   1. Sample normalization  (sum, median, PQN, internal standard)
 #   2. Transformation        (log2, log10)

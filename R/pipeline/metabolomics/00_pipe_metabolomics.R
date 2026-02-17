@@ -67,20 +67,10 @@ pipe_metabolomics <- function() {
             )
         ),
 
-        # ---- random forest feature importance (Stage 2, optional) ----
+        # ---- feature selection: RF + PLS-DA (Stage 2, optional) ----
         tar_target(
-            metab_rf_res,
-            mod_metabolomics_rf(
-                pre     = metab_pre,
-                config  = config,
-                out_dir = metab_out_dir
-            )
-        ),
-
-        # ---- PLS-DA + VIP scores (Stage 2, optional) ----
-        tar_target(
-            metab_plsda_res,
-            mod_metabolomics_plsda(
+            metab_feature_sel_res,
+            mod_metabolomics_feature_selection(
                 pre     = metab_pre,
                 config  = config,
                 out_dir = metab_out_dir
@@ -118,8 +108,8 @@ pipe_metabolomics <- function() {
                 config         = config,
                 pca_res        = metab_qc_pre_obj,
                 clustering_res = NULL,
-                rf_res         = metab_rf_res,
-                plsda_res      = metab_plsda_res,
+                rf_res         = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$rf else NULL,
+                plsda_res      = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$plsda else NULL,
                 enrichment_res = metab_enrichment_res,
                 include_legacy = TRUE,
                 out_file       = file.path(metab_out_dir,
@@ -132,14 +122,13 @@ pipe_metabolomics <- function() {
         tar_target(
             metab_report,
             mod_metabolomics_report(
-                pre            = metab_pre,
-                qc_res         = metab_qc_pre_obj,
-                de_res         = metab_de_res,
-                rf_res         = metab_rf_res,
-                plsda_res      = metab_plsda_res,
-                enrichment_res = metab_enrichment_res,
-                config         = config,
-                out_dir        = metab_out_dir
+                pre             = metab_pre,
+                qc_res          = metab_qc_pre_obj,
+                de_res          = metab_de_res,
+                feature_sel_res = metab_feature_sel_res,
+                enrichment_res  = metab_enrichment_res,
+                config          = config,
+                out_dir         = metab_out_dir
             ),
             format = "file"
         )

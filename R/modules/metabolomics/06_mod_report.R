@@ -13,14 +13,13 @@
 #' @param pre             List from preprocess_metabolomics().
 #' @param qc_res          List from mod_metabolomics_qc_pre().
 #' @param de_res          List from mod_metabolomics_de().
-#' @param rf_res          List from mod_metabolomics_rf() (or NULL).
-#' @param plsda_res       List from mod_metabolomics_plsda() (or NULL).
+#' @param feature_sel_res List from mod_metabolomics_feature_selection() (or NULL).
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
 #' @return Character path to the rendered HTML file.
-mod_metabolomics_report <- function(pre, qc_res, de_res, rf_res,
-                                    plsda_res, enrichment_res,
+mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
+                                    enrichment_res,
                                     config, out_dir) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
@@ -48,8 +47,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, rf_res,
             pre            = pre,
             qc_res         = qc_res,
             de_res         = de_res,
-            rf_res         = rf_res,
-            plsda_res      = plsda_res,
+            rf_res         = if (!is.null(feature_sel_res)) feature_sel_res$rf else NULL,
+            plsda_res      = if (!is.null(feature_sel_res)) feature_sel_res$plsda else NULL,
             enrichment_res = enrichment_res,
             config         = config
         ),

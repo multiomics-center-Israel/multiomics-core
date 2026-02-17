@@ -101,7 +101,6 @@ preprocess_metabolomics <- function(inputs, config) {
         }
     } else if (na_policy == "min_half") {
         # Replace zeros and NAs with half the minimum positive value per feature
-        # (matches MetaboAnalyst default imputation)
         n_replaced <- 0
         for (i in seq_len(nrow(expr_for_norm))) {
             row_vals <- expr_for_norm[i, ]
