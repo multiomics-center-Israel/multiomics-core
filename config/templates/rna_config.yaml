@@ -118,12 +118,15 @@ modes:
           distance: "euclidean"
           k: null
           k_max: 20
+          k_method: "silhouette"   # "silhouette" | "gap" — method for automatic K selection
+          gap_B: 10                # Bootstrap samples for gap statistic (only used when k_method: "gap")
           nstart: 25
         binary_patterns:
           enabled: true
-          group_col: "line"          # Metadata column defining biological groups (required if enabled)
-          corr_cutoff: 0.8           # Minimum correlation to assign feature to pattern
-          counts_cutoff: 0           # Minimum count threshold per group
+          group_col: "line"            # Metadata column defining biological groups (required if enabled)
+          corr_cutoff: 0.8             # Minimum correlation to assign feature to pattern
+          counts_cutoff_high: 0        # Minimum counts for "on" (1) positions
+          counts_cutoff_low: null      # Maximum counts for "off" (0) positions (null = disabled)
           skip_trivial_patterns: true
       heatmap:
         max_rows: null

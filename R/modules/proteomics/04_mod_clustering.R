@@ -246,17 +246,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         # Run function and capture result
         bp_res <- run_binary_patterns(
-            expr_mat      = expr_mat,
-            meta          = pre$meta,
-            cfg           = cfg,
-            de_features   = de_features,
-            out_dir       = clust_out_dir,
-            corr_cutoff   = bcfg$corr_cutoff %||% 0.8,
-            counts_cutoff = bcfg$counts_cutoff %||% 0,
-            summary_df    = de_res$summary_df,
-            p_cutoff      = bp_p_cutoff,
-            log2fc_cutoff = bp_log2fc_cutoff,
-            id_col        = bp_id_col
+            expr_mat           = expr_mat,
+            meta               = pre$meta,
+            cfg                = cfg,
+            de_features        = de_features,
+            out_dir            = clust_out_dir,
+            corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
+            counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
+            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
         )
 
         # Append results
