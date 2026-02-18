@@ -105,10 +105,10 @@ list(
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  pipe_proteomics()
+  #pipe_proteomics()
 
   # RNA-seq pipeline (enable when ready)
-  # pipe_rnaseq()
+  pipe_rnaseq()
 
   # Metabolomics pipeline – Stage 1 (enable when ready)
   # pipe_metabolomics()

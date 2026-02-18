@@ -413,7 +413,7 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           annot_cols = NULL,
                                           method = "pearson",
                                           fontsize = 10,
-                                          show_labels = FALSE,
+                                          show_labels = TRUE,
                                           cluster_samples = TRUE,
                                           adjust_scale = TRUE) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
@@ -452,7 +452,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
                                        annot_cols = NULL,
                                        with_na = FALSE,
                                        fontsize = 10,
-                                       show_labels = FALSE,
+                                       show_labels = TRUE,
                                        cluster_samples = TRUE) {
   # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
   # This prevents data.frame type coercion issues

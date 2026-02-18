@@ -144,35 +144,23 @@ run_binary_patterns <- function(expr_mat,
 
     annot_df <- data.frame(Condition = groups, row.names = samples)
 
-    # Build DE contrast row annotations if summary_df is provided
-    annot_row <- NULL
-    if (!is.null(summary_df)) {
-      annot_row <- build_de_row_annotations(
-        summary_df    = summary_df,
-        feature_ids   = feats_pat,
-        p_cutoff      = p_cutoff,
-        log2fc_cutoff = log2fc_cutoff,
-        id_col        = id_col
-      )
-    }
-
     # Create Object
     p <- plot_heatmap_core(
       expr_mat         = mat2plot,
       annotation_col   = annot_df,
-      annotation_row   = annot_row,
+      annotation_row   = NULL,
       max_rows         = NULL,
       main             = sprintf("Pattern %s (%d features)", pat, length(feats_pat)),
       scale_rows       = TRUE,
       cluster_rows     = TRUE,
-      cluster_cols     = TRUE
+      cluster_cols     = FALSE
     )
 
     # Save File
     save_heatmap_to_file(p, f_hm)
 
-    # Store Object and Path
-    plots[[paste0("pattern_", pat)]] <- p
+    # Store Object and Path (include mat for Shiny app usage)
+    plots[[pat]] <- list(pheatmap = p, mat = mat2plot)
     written <- c(written, f_hm)
 
     # Gene list per pattern
@@ -687,8 +675,15 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     }
   }
 
-  # Ensure names are set correctly
-  names(clusters) <- rownames(z_gm)
+  # Ensure names are set correctly (with defensive check)
+  z_gm_rownames <- rownames(z_gm)
+  if (length(clusters) != length(z_gm_rownames)) {
+    stop(sprintf(
+      "Partition clustering: cluster vector length (%d) does not match z_gm rows (%d)",
+      length(clusters), length(z_gm_rownames)
+    ))
+  }
+  names(clusters) <- z_gm_rownames
 
   list(
     algorithm = alg,

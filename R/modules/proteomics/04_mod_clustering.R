@@ -93,13 +93,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             zscore_mat  = z_de
         )
 
-        # Capture payload for Shiny
+        # Capture payload for Shiny (pheatmap will be added after creation)
         pheatmap_payload <- list(
             mat = z_de,
             annotation_col = annot,
             feature_ids = de_features,
             is_zscored = TRUE
         )
+        # Note: pheatmap object added below after wrap_clustering_heatmap call
 
         # Build DE pattern row annotations (up/down per contrast)
         prot_de_cfg <- cfg$de %||% list()
@@ -133,6 +134,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         )
         written <- c(written, f_hm)
         plots$p_cluster_hier <- p_cluster
+
+        # Add pheatmap to payload for Shiny (includes tree_col from pheatmap)
+        pheatmap_payload$pheatmap <- p_cluster
+        # Add tree_row from hierarchical clustering (pheatmap doesn't generate it when ordering is provided)
+        pheatmap_payload$tree_row <- hc_res$details
 
         # Save cluster assignments
         if (!is.null(hc_res$clusters)) {
