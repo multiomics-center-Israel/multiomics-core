@@ -53,8 +53,11 @@ render_dt <- function(df, caption = NULL, pageLength = 10) {
   htmltools::tagList(
     DT::datatable(df, caption = caption,
                   rownames = FALSE,
+                  extensions = "Buttons",
                   options = list(pageLength = pageLength,
-                                 scrollX = TRUE),
+                                 scrollX = TRUE,
+                                 dom = "Bfrtip",
+                                 buttons = list("csv", "excel")),
                   class = "compact stripe hover")
   )
 }
@@ -231,24 +234,81 @@ if (!is.null(de_contrasts)) {
       cat("\n\n")
     }
 
-    # Top results table
+    # Interactive volcano (plotly with searchable metabolite selector)
     ctr_tbl <- tryCatch(
       extract_contrast_table(de_res$summary_df, ctr_label),
       error = function(e) NULL
     )
+    if (!is.null(ctr_tbl) &&
+        requireNamespace("plotly", quietly = TRUE) &&
+        requireNamespace("crosstalk", quietly = TRUE)) {
+
+      # Attach compound names
+      name_map_v <- NULL
+      if (!is.null(pre$row_data) && "Name" %in% colnames(pre$row_data)) {
+        name_map_v <- stats::setNames(
+          as.character(pre$row_data$Name),
+          as.character(pre$row_data$feature_id)
+        )
+      }
+
+      vdf <- ctr_tbl
+      vdf$Name <- if (!is.null(name_map_v)) {
+        ifelse(is.na(name_map_v[vdf$feature_id]),
+               vdf$feature_id, name_map_v[vdf$feature_id])
+      } else {
+        vdf$feature_id
+      }
+      vdf$neglog10_FDR <- -log10(pmax(
+        ifelse(is.na(vdf$adj.P.Val), 1, vdf$adj.P.Val), 1e-300
+      ))
+      vdf$logFC_display <- round(vdf$logFC, 4)
+      vdf$FDR_display   <- signif(vdf$adj.P.Val, 3)
+
+      cat("### Interactive Volcano\n\n")
+      cat("*Type metabolite names in the search box to highlight them. ",
+          "Hover over any point to see details. Use lasso/box select on the plot.*\n\n")
+
+      sd <- crosstalk::SharedData$new(vdf, key = ~Name, group = paste0("volcano_", ctr_label))
+
+      vol_fig <- plotly::plot_ly(
+        sd, x = ~logFC, y = ~neglog10_FDR,
+        type = "scatter", mode = "markers",
+        text = ~paste0(Name, "\nlog2FC: ", logFC_display, "\nFDR: ", FDR_display),
+        hoverinfo = "text",
+        marker = list(size = 7, opacity = 0.5, color = "grey30")
+      )
+      vol_fig <- plotly::layout(
+        vol_fig,
+        title = list(text = paste0("Volcano: ", ctr), font = list(size = 14)),
+        xaxis = list(title = "log2 Fold Change"),
+        yaxis = list(title = "-log10(FDR)"),
+        dragmode = "lasso"
+      )
+      vol_fig <- plotly::highlight(
+        vol_fig,
+        on = "plotly_selected",
+        off = "plotly_deselect",
+        selectize = TRUE,
+        persistent = TRUE,
+        color = "dodgerblue",
+        opacityDim = 0.15,
+        selected = plotly::attrs_selected(
+          marker = list(size = 10, opacity = 1),
+          showlegend = FALSE
+        )
+      )
+
+      print(htmltools::tagList(vol_fig))
+      cat("\n\n")
+    }
+
+    # Top results table
     if (!is.null(ctr_tbl)) {
       ctr_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ]
       top_tbl <- head(ctr_tbl, 50)
       cat("### Top Results\n\n")
-      print(
-        htmltools::tagList(
-          DT::datatable(top_tbl,
-                        caption = paste0("Top DE features: ", ctr),
-                        rownames = FALSE,
-                        options = list(pageLength = 10, scrollX = TRUE),
-                        class = "compact stripe hover")
-        )
-      )
+      print(render_dt(top_tbl, caption = paste0("Top DE features: ", ctr)))
       cat("\n\n")
     }
   }
