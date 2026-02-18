@@ -109,7 +109,6 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     }
 
     # 4. Global Top DE Heatmap (Legacy/Bonus feature)
-    # Task 4: Fix 2-feature bug + add multi-column annotations + configurable max
     de_ids <- get_rna_de_features_qc(sumdf)
     de_ids <- de_ids[!is.na(de_ids)]
 
@@ -119,68 +118,97 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
     if (length(de_ids) >= 2) {
         # choose top N by min padj across contrasts
-        # ROBUST SELECTION: Only rank features with valid padj values
         padj_cols <- grep("^padj\\.", names(sumdf), value = TRUE)
         min_padj <- apply(sumdf[, padj_cols, drop = FALSE], 1, function(x) {
             if (all(is.na(x))) NA_real_ else min(x, na.rm = TRUE)
         })
 
-        # Filter to features with at least one valid padj value
         valid_mask <- !is.na(min_padj)
         valid_count <- sum(valid_mask)
 
         if (valid_count == 0) {
             warning("[QC_post] No features with valid padj values for top DE heatmap")
         } else {
-            # Order valid features by padj (smallest first)
             valid_padj <- min_padj[valid_mask]
             valid_ids <- sumdf$FeatureID[valid_mask]
             ord <- order(valid_padj)
 
-            # Select up to max_top_de features
             top_n <- min(max_top_de, length(ord))
             top_ids <- valid_ids[ord[seq_len(top_n)]]
 
-            message(sprintf("[QC_post] Selecting %d/%d features for top DE heatmap (requested: %d)",
-                            top_n, valid_count, max_top_de))
+            message(sprintf(
+                "[QC_post] Selecting %d/%d features for top DE heatmap (requested: %d)",
+                top_n, valid_count, max_top_de
+            ))
 
-        m <- mat[intersect(top_ids, rownames(mat)), , drop = FALSE]
-        if (nrow(m) >= 2) {  # Changed from > to >= (allow 2-feature heatmaps)
-            # z-score by gene (for visualization only)
-            m_z <- t(scale(t(m)))
+            m <- mat[intersect(top_ids, rownames(mat)), , drop = FALSE]
+            if (nrow(m) >= 2) {
+                # z-score by gene (for visualization only)
+                m_z <- t(scale(t(m)))
 
-            # ROOT CAUSE FIX: Replace NaN with 0 instead of removing rows
-            # NaN occurs when a gene has SD=0 (constant expression)
-            m_z[is.nan(m_z)] <- 0
+                # Replace NaN/Inf with 0 (NaN from SD=0, Inf from near-zero SD)
+                m_z[!is.finite(m_z)] <- 0
 
-            # Multi-column annotations (Task 4)
-            annot_cols <- cfg$effects$heatmap_annotations %||% NULL
-            if (!is.null(annot_cols)) {
-                ann <- meta[, annot_cols, drop = FALSE]
-                rownames(ann) <- meta[[cfg$effects$samples]]
-            } else {
-                # Fallback to primary color only
-                ann <- data.frame(Condition = meta[[eff_color]])
-                rownames(ann) <- meta[[cfg$effects$samples]]  # FIX: Use sample ID column consistently
+                # Build column annotation, validating columns exist in meta
+                annot_cols <- cfg$effects$heatmap_annotations %||% NULL
+                if (!is.null(annot_cols)) {
+                    # Filter to columns that actually exist in meta
+                    valid_annot_cols <- intersect(annot_cols, colnames(meta))
+                    if (length(valid_annot_cols) == 0) {
+                        warning(sprintf(
+                            "[QC_post] heatmap_annotations columns [%s] not found in metadata. Using color column.",
+                            paste(annot_cols, collapse = ", ")
+                        ))
+                        ann <- data.frame(Condition = meta[[eff_color]])
+                        rownames(ann) <- meta[[cfg$effects$samples]]
+                    } else {
+                        if (length(valid_annot_cols) < length(annot_cols)) {
+                            missing <- setdiff(annot_cols, valid_annot_cols)
+                            warning(sprintf(
+                                "[QC_post] Annotation columns not found in metadata: %s",
+                                paste(missing, collapse = ", ")
+                            ))
+                        }
+                        ann <- meta[, valid_annot_cols, drop = FALSE]
+                        rownames(ann) <- meta[[cfg$effects$samples]]
+                    }
+                } else {
+                    ann <- data.frame(Condition = meta[[eff_color]])
+                    rownames(ann) <- meta[[cfg$effects$samples]]
+                }
+
+                # Align annotation to matrix columns (only keep matching samples)
+                common_samples <- intersect(colnames(m_z), rownames(ann))
+                if (length(common_samples) == 0) {
+                    warning("[QC_post] No matching sample IDs between expression matrix and annotation. Skipping heatmap.")
+                } else {
+                    ann <- ann[common_samples, , drop = FALSE]
+                    m_z <- m_z[, common_samples, drop = FALSE]
+
+                    hm_png <- file.path(dirs$diagnostic_plots, "heatmap_top_DE.png")
+
+                    tryCatch(
+                        {
+                            grDevices::png(hm_png, width = 2000, height = 1400, res = 150)
+                            print(pheatmap::pheatmap(
+                                m_z,
+                                show_rownames = FALSE,
+                                annotation_col = ann,
+                                main = sprintf("Top DE (%d) - Z-score", nrow(m_z)),
+                                cluster_cols = TRUE
+                            ))
+                            files <- c(files, hm_png)
+                        },
+                        error = function(e) {
+                            warning(sprintf("[QC_post] heatmap_top_DE failed: %s", conditionMessage(e)))
+                        },
+                        finally = {
+                            grDevices::dev.off()
+                        }
+                    )
+                }
             }
-
-            # Align annotation to matrix columns
-            ann <- ann[colnames(m_z), , drop = FALSE]
-
-            hm_png <- file.path(dirs$diagnostic_plots, "heatmap_top_DE.png")
-
-            grDevices::png(hm_png, width = 2000, height = 1400, res = 150)
-            pheatmap::pheatmap(
-                m_z,
-                show_rownames = FALSE,
-                annotation_col = ann,
-                main = sprintf("Top DE (%d) - Z-score", nrow(m_z)),
-                cluster_cols = TRUE
-            )
-            grDevices::dev.off()
-            files <- c(files, hm_png)
-        }
-        }  # Close valid_count > 0 check
+        } # Close valid_count > 0 check
     }
 
     list(files = unique(files), plots = plots)

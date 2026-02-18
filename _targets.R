@@ -98,16 +98,17 @@ list(
     write_execution_info(
       config = config,
       run_dir = run_dir,
-      config_path = config_file
+      config_path = config_file,
+      targets_file = "_targets.R"
     ),
     format = "file"
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  # pipe_proteomics()
+  pipe_proteomics()
 
   # RNA-seq pipeline (enable when ready)
-  pipe_rnaseq()
+  # pipe_rnaseq()
 
   # Metabolomics pipeline – Stage 1 (enable when ready)
   # pipe_metabolomics()

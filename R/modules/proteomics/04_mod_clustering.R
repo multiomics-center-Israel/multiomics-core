@@ -101,17 +101,35 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             is_zscored = TRUE
         )
 
+        # Build DE pattern row annotations (up/down per contrast)
+        prot_de_cfg <- cfg$de %||% list()
+        prot_p_cutoff <- prot_de_cfg$p_cutoff %||% 0.05
+        prot_lin_fc <- prot_de_cfg$linear_fc_cutoff %||% 1.5
+        prot_log2fc <- log2(prot_lin_fc)
+
+        # Get ID column from config (proteomics may use different column name)
+        prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
+
+        row_annot <- build_de_row_annotations(
+            summary_df    = de_res$summary_df,
+            feature_ids   = de_features,
+            p_cutoff      = prot_p_cutoff,
+            log2fc_cutoff = prot_log2fc,
+            id_col        = prot_id_col
+        )
+
         # Heatmap setup
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
 
         # Run wrapper
         p_cluster <- wrap_clustering_heatmap(
-            expr_mat    = pre$expr_imp_single,
-            meta        = pre$meta,
-            cfg         = cfg,
-            feature_ids = de_features,
-            ordering    = hc_res$ordering,
-            out_file    = f_hm
+            expr_mat       = pre$expr_imp_single,
+            meta           = pre$meta,
+            cfg            = cfg,
+            feature_ids    = de_features,
+            ordering       = hc_res$ordering,
+            annotation_row = row_annot,
+            out_file       = f_hm
         )
         written <- c(written, f_hm)
         plots$p_cluster_hier <- p_cluster
@@ -216,6 +234,15 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         clust_out_dir <- file.path(clustering_dir, "Binary_patterns")
         ensure_dir(clust_out_dir)
+
+        # DE cutoffs for row annotations
+        de_cfg <- cfg$de %||% list()
+        bp_p_cutoff <- de_cfg$p_cutoff %||% 0.05
+        bp_lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+        bp_log2fc_cutoff <- log2(bp_lin_fc_cutoff)
+
+        # Get ID column from config (proteomics may use different column name)
+        bp_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
         # Run function and capture result
         bp_res <- run_binary_patterns(

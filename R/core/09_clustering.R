@@ -144,15 +144,28 @@ run_binary_patterns <- function(expr_mat,
 
     annot_df <- data.frame(Condition = groups, row.names = samples)
 
+    # Build DE contrast row annotations if summary_df is provided
+    annot_row <- NULL
+    if (!is.null(summary_df)) {
+      annot_row <- build_de_row_annotations(
+        summary_df    = summary_df,
+        feature_ids   = feats_pat,
+        p_cutoff      = p_cutoff,
+        log2fc_cutoff = log2fc_cutoff,
+        id_col        = id_col
+      )
+    }
+
     # Create Object
     p <- plot_heatmap_core(
-      expr_mat       = mat2plot,
-      annotation_col = annot_df,
-      max_rows       = NULL,
-      main           = sprintf("Pattern %s (%d features)", pat, length(feats_pat)),
-      scale_rows     = TRUE,
-      cluster_rows   = TRUE,
-      cluster_cols   = TRUE
+      expr_mat         = mat2plot,
+      annotation_col   = annot_df,
+      annotation_row   = annot_row,
+      max_rows         = NULL,
+      main             = sprintf("Pattern %s (%d features)", pat, length(feats_pat)),
+      scale_rows       = TRUE,
+      cluster_rows     = TRUE,
+      cluster_cols     = TRUE
     )
 
     # Save File
@@ -718,7 +731,9 @@ build_cluster_profiles <- function(z_group_means, clusters, k) {
   prof_list <- lapply(seq_len(k), function(ci) {
     rows <- which(clv == ci)
     sub <- z_group_means[rows, , drop = FALSE]
-    if (nrow(sub) == 0) return(NULL)
+    if (nrow(sub) == 0) {
+      return(NULL)
+    }
     data.frame(
       cluster = ci,
       group = groups,
@@ -730,7 +745,9 @@ build_cluster_profiles <- function(z_group_means, clusters, k) {
   })
 
   prof_list <- Filter(Negate(is.null), prof_list)
-  if (length(prof_list) == 0) return(NULL)
+  if (length(prof_list) == 0) {
+    return(NULL)
+  }
 
   prof <- do.call(rbind, prof_list)
   if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
@@ -838,65 +855,85 @@ zscore_rows <- function(mat) {
 #'
 #' Creates a data frame with genes as rows and contrasts as columns,
 #' showing which genes are up-regulated, down-regulated, or not significant
-#' in each contrast.
+#' in each contrast. Non-significant genes are set to NA so pheatmap renders
+#' them as white/blank. Columns with all NA (no DE genes) are removed.
 #'
-#' @param summary_df DE summary data frame with columns like padj.<contrast>, log2FoldChange.<contrast>
-#' @param feature_ids Character vector of feature IDs to include in heatmap
-#' @param p_cutoff P-value cutoff (default 0.05)
-#' @param log2fc_cutoff log2 fold-change cutoff (default log2(1.5) = 0.585)
+#' Auto-detects column style:
+#' - RNA-seq:     padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
+#' - Proteomics:  padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
 #'
-#' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/"ns"
+#' @param summary_df DE summary data frame
+#' @param feature_ids Character vector of feature IDs to include
+#' @param p_cutoff P-value cutoff (unused if pass columns exist, kept for API compat)
+#' @param log2fc_cutoff log2 fold-change cutoff (unused if pass columns exist)
+#'
+#' @param id_col Name of the feature ID column in summary_df (default "FeatureID")
+#'
+#' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/NA
 #' @export
-build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585) {
+build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585, id_col = "FeatureID") {
   stopifnot(is.data.frame(summary_df))
-  stopifnot("FeatureID" %in% colnames(summary_df))
+  stopifnot(id_col %in% colnames(summary_df))
 
-  # Identify contrast columns from padj.* pattern
   cols <- colnames(summary_df)
-  padj_cols <- grep("^padj\\.", cols, value = TRUE)
 
-  if (length(padj_cols) == 0) {
-    warning("build_de_row_annotations: No padj.* columns found in summary_df")
+  # Auto-detect column style
+  pass_imputs_cols <- grep("^pass\\.imputs\\.", cols, value = TRUE)
+  pass_suffix_cols <- grep("_pass$", cols, value = TRUE)
+
+  if (length(pass_imputs_cols) > 0) {
+    # Proteomics style: pass.imputs.<contrast>, linearFC.imputs.<contrast>
+    contrasts <- sub("^pass\\.imputs\\.", "", pass_imputs_cols)
+    pass_prefix <- "pass.imputs."
+    fc_prefix <- "linearFC.imputs."
+  } else if (length(pass_suffix_cols) > 0) {
+    # RNA-seq style: <contrast>_pass, linearFC.<contrast>
+    contrasts <- sub("_pass$", "", pass_suffix_cols)
+    pass_prefix <- NULL # special case: suffix pattern
+    fc_prefix <- "linearFC."
+  } else {
+    warning("build_de_row_annotations: No pass columns found in summary_df")
     return(NULL)
   }
 
-  # Extract contrast names
-  contrasts <- sub("^padj\\.", "", padj_cols)
-
-  # Filter summary_df to only genes in feature_ids
-  sumdf_sub <- summary_df[summary_df$FeatureID %in% feature_ids, , drop = FALSE]
+  # Filter to features in heatmap
+  sumdf_sub <- summary_df[summary_df[[id_col]] %in% feature_ids, , drop = FALSE]
 
   if (nrow(sumdf_sub) == 0) {
     warning("build_de_row_annotations: No features found in summary_df")
     return(NULL)
   }
 
-  # Initialize annotation data frame
+  # Build annotation list
   annot_list <- list()
 
   for (cn in contrasts) {
-    padj_col <- paste0("padj.", cn)
-    fc_col <- paste0("log2FoldChange.", cn)
+    # Determine column names
+    if (!is.null(pass_prefix)) {
+      pass_col <- paste0(pass_prefix, cn)
+    } else {
+      pass_col <- paste0(cn, "_pass")
+    }
+    fc_col <- paste0(fc_prefix, cn)
 
-    # Check if FC column exists
-    if (!fc_col %in% colnames(sumdf_sub)) {
-      warning(sprintf("Missing log2FoldChange column for contrast '%s', skipping", cn))
+    if (!pass_col %in% colnames(sumdf_sub) || !fc_col %in% colnames(sumdf_sub)) {
+      warning(sprintf("Missing columns for contrast '%s', skipping", cn))
       next
     }
 
-    padj_vals <- sumdf_sub[[padj_col]]
+    pass_vals <- sumdf_sub[[pass_col]]
     fc_vals <- sumdf_sub[[fc_col]]
 
-    # Classify each gene
-    pattern <- rep("ns", nrow(sumdf_sub))
-    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
-            padj_vals <= p_cutoff &
-            fc_vals > log2fc_cutoff] <- "up"
-    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
-            padj_vals <= p_cutoff &
-            fc_vals < -log2fc_cutoff] <- "down"
+    # Determine if gene passes DE threshold
+    # Proteomics: pass.imputs = 1 or NA;  RNA-seq: _pass = TRUE/FALSE
+    is_de <- !is.na(pass_vals) & (pass_vals == 1 | pass_vals == TRUE)
 
-    annot_list[[cn]] <- pattern
+    # Classify direction: NA = not significant, "up" or "down" = significant
+    direction <- rep(NA_character_, nrow(sumdf_sub))
+    direction[is_de & !is.na(fc_vals) & fc_vals > 0] <- "up"
+    direction[is_de & !is.na(fc_vals) & fc_vals < 0] <- "down"
+
+    annot_list[[cn]] <- direction
   }
 
   if (length(annot_list) == 0) {
@@ -904,12 +941,18 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
   }
 
   # Build data frame
-  annot_df <- as.data.frame(annot_list, stringsAsFactors = FALSE)
-  rownames(annot_df) <- sumdf_sub$FeatureID
+  annot_df <- as.data.frame(annot_list,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  rownames(annot_df) <- sumdf_sub[[id_col]]
 
-  # Convert to factor for pheatmap
-  for (col in colnames(annot_df)) {
-    annot_df[[col]] <- factor(annot_df[[col]], levels = c("down", "ns", "up"))
+  # Remove columns where all values are NA (no DE genes for that contrast)
+  keep <- vapply(annot_df, function(x) any(!is.na(x)), logical(1))
+  annot_df <- annot_df[, keep, drop = FALSE]
+
+  if (ncol(annot_df) == 0) {
+    return(NULL)
   }
 
   annot_df
