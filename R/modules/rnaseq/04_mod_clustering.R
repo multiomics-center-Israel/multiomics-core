@@ -24,7 +24,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     objects <- list(
         patterns = NULL,
         heatmaps = NULL,
-        clusters = NULL # New_clusters
+        clusters = NULL, # New_clusters
+        pheatmap_data_DE_genes = NULL
     )
 
     excel_order <- NULL
@@ -147,6 +148,16 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
         plots$p_cluster <- p_cluster
 
+        # Capture pheatmap payload for Shiny (includes tree_col from pheatmap, mat)
+        objects$pheatmap_data_DE_genes <- list(
+            pheatmap = p_cluster,
+            mat = z_de,
+            annotation_col = annot,
+            feature_ids = de_features,
+            is_zscored = TRUE,
+            tree_row = hc_res$details  # hclust object for row dendrogram
+        )
+
         # Save clusters
         if (!is.null(hc_res$clusters)) {
             f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
@@ -200,9 +211,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             annot_col <- pre$meta[, annot_cols_config, drop = FALSE]
             rownames(annot_col) <- pre$meta[[cfg$effects$samples]]
             annot_col <- annot_col[colnames(mat_ord), , drop = FALSE]
-        } else {
-            # Fallback to single column
+        } else if (!is.null(annot)) {
+            # Fallback to single column (only if annot exists)
             annot_col <- annot[colnames(mat_ord), , drop = FALSE]
+        } else {
+            annot_col <- NULL
         }
 
         # Task 6: Row annotations showing cluster assignments
@@ -213,8 +226,16 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         )
 
         # Task 6: Compute gaps_row for visual cluster separation
-        cluster_sizes <- table(clusters_ordered)[unique(clusters_ordered)]
-        gaps_row <- cumsum(cluster_sizes)[-length(cluster_sizes)]
+        # Filter out NA clusters and ensure proper ordering
+        valid_clusters <- clusters_ordered[!is.na(clusters_ordered)]
+        if (length(valid_clusters) > 0 && length(unique(valid_clusters)) > 1) {
+            # Get sizes in order of appearance
+            cluster_order <- unique(clusters_ordered[!is.na(clusters_ordered)])
+            cluster_sizes <- table(factor(valid_clusters, levels = cluster_order))
+            gaps_row <- as.integer(cumsum(cluster_sizes)[-length(cluster_sizes)])
+        } else {
+            gaps_row <- NULL
+        }
 
         f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
 

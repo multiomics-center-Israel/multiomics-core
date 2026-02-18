@@ -65,7 +65,7 @@ plot_sample_distance_heatmap <- function(expr_mat,
                                          main = NULL,
                                          colors = NULL,
                                          fontsize = 12,
-                                         show_labels = FALSE,
+                                         show_labels = TRUE,
                                          cluster_rows = TRUE,
                                          cluster_cols = TRUE) {
   expr_mat <- as.matrix(expr_mat)
@@ -127,7 +127,7 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             main = NULL,
                                             colors = NULL,
                                             fontsize = 12,
-                                            show_labels = FALSE,
+                                            show_labels = TRUE,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
                                             adjust_scale = TRUE) {
