@@ -262,7 +262,10 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             de_features   = de_features,
             out_dir       = clust_out_dir,
             corr_cutoff   = bcfg$corr_cutoff %||% 0.8,
-            counts_cutoff = bcfg$counts_cutoff %||% 0
+            counts_cutoff = bcfg$counts_cutoff %||% 0,
+            summary_df    = summary_df,
+            p_cutoff      = p_cutoff,
+            log2fc_cutoff = log2fc_cutoff
         )
 
         if (!is.null(bp_res$files)) written <- c(written, bp_res$files)

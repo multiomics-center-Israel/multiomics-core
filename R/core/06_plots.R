@@ -86,16 +86,16 @@ plot_sample_distance_heatmap <- function(expr_mat,
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols,
     annotation_col = annotation_col,
-    annotation_row = annotation_col,  # Issue 2 FIX: Mirror annotations for symmetry
+    annotation_row = annotation_col, # Issue 2 FIX: Mirror annotations for symmetry
     main = main,
     col = colors,
-    show_rownames = show_labels,  # Issue 1 FIX: Hide by default
-    show_colnames = show_labels,  # Issue 1 FIX: Hide by default
+    show_rownames = show_labels, # Issue 1 FIX: Hide by default
+    show_colnames = show_labels, # Issue 1 FIX: Hide by default
     fontsize_row = fontsize,
     fontsize_col = fontsize,
     annotation_legend = TRUE,
     legend = TRUE,
-    border_color = NA  # Issue 2 FIX: Remove grid lines for cleaner look
+    border_color = NA # Issue 2 FIX: Remove grid lines for cleaner look
   )
 }
 #' Sample–sample correlation heatmap
@@ -156,8 +156,9 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     if ((cor_max - cor_min) < 0.3) {
       # Use quantile-based breaks for better visual separation
       q_breaks <- stats::quantile(cor_mat[lower.tri(cor_mat)],
-                                   probs = seq(0, 1, length.out = 256),
-                                   na.rm = TRUE)
+        probs = seq(0, 1, length.out = 256),
+        na.rm = TRUE
+      )
       breaks <- unique(q_breaks)
 
       # Regenerate colors to match breaks
@@ -171,19 +172,19 @@ plot_sample_correlation_heatmap <- function(expr_mat,
   pheatmap::pheatmap(
     cor_mat,
     annotation_col = annotation_col,
-    annotation_row = annotation_col,  # Mirror annotations for symmetry
+    annotation_row = annotation_col, # Mirror annotations for symmetry
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols,
     main = main,
     col = colors,
-    breaks = breaks,  # Issue 4 FIX: Adjusted scale
-    show_rownames = show_labels,  # Issue 1 FIX
-    show_colnames = show_labels,  # Issue 1 FIX
+    breaks = breaks, # Issue 4 FIX: Adjusted scale
+    show_rownames = show_labels, # Issue 1 FIX
+    show_colnames = show_labels, # Issue 1 FIX
     fontsize_row = fontsize,
     fontsize_col = fontsize,
     annotation_legend = TRUE,
     legend = TRUE,
-    border_color = NA  # Issue 2 FIX: Cleaner appearance
+    border_color = NA # Issue 2 FIX: Cleaner appearance
   )
 }
 
@@ -260,10 +261,11 @@ plot_imputation_summary <- function(expr_mat, imputed_flag, width = NULL, downsh
     ggplot2::facet_wrap(~sample, scales = "free_y") +
     ggplot2::scale_fill_manual(values = c("Imputed" = "#00BFC4", "Observed" = "#F8766D")) +
     ggplot2::labs(
-      title = if (!is.null(width) && !is.null(downshift))
+      title = if (!is.null(width) && !is.null(downshift)) {
         sprintf("Imputation QC: observed vs imputed (width = %s, shift = %s)", width, downshift)
-      else
-        "Imputation QC: observed vs imputed distributions (per sample)",
+      } else {
+        "Imputation QC: observed vs imputed distributions (per sample)"
+      },
       x = "Expression (log2)",
       y = "Count",
       fill = NULL
@@ -625,23 +627,12 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
 
   # 3) Align row annotations to the features being plotted
   annot_row <- NULL
-  annot_colors <- NULL
 
   if (!is.null(annotation_row)) {
     # Filter to only features in the heatmap
     common_features <- intersect(use_ids, rownames(annotation_row))
     if (length(common_features) > 0) {
       annot_row <- annotation_row[common_features, , drop = FALSE]
-
-      # Define colors for DE patterns (up = red, down = blue, ns = grey)
-      annot_colors <- list()
-      for (col_name in colnames(annot_row)) {
-        annot_colors[[col_name]] <- c(
-          "down" = "#2166AC",  # Blue
-          "ns"   = "#F7F7F7",  # Light grey
-          "up"   = "#B2182B"   # Red
-        )
-      }
     }
   }
 
@@ -650,7 +641,6 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
     expr_mat = mat2plot,
     annotation_col = annot_col,
     annotation_row = annot_row,
-    annotation_colors = annot_colors,
     title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
     scale_rows = TRUE,
     cluster_rows = cluster_rows_flag,

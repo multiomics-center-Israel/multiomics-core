@@ -35,6 +35,38 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     if (is.null(cfg)) stop("No config for mode ", mode)
 
     files <- cfg$files
+
+    # Validate required files are specified in config
+    required_files <- switch(mode,
+        proteomics = c("protein", "sample_map", "metadata", "contrasts"),
+        rna = c("counts", "metadata", "contrasts"),
+        character(0)
+    )
+
+    missing_files <- setdiff(required_files, names(files))
+    if (length(missing_files) > 0) {
+        stop(
+            sprintf(
+                "[%s] Missing required file(s) in config$modes$%s$files: %s",
+                mode, mode, paste(missing_files, collapse = ", ")
+            ),
+            call. = FALSE
+        )
+    }
+
+    # Check that required files have non-empty paths
+    for (nm in required_files) {
+        if (is.null(files[[nm]]) || !nzchar(files[[nm]])) {
+            stop(
+                sprintf(
+                    "[%s] File '%s' is required but not specified in config$modes$%s$files",
+                    mode, nm, mode
+                ),
+                call. = FALSE
+            )
+        }
+    }
+
     inputs <- list()
 
     for (nm in names(files)) {
@@ -46,5 +78,11 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     }
 
     if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
+
+    # Validate contrasts file content (at least 1 row + expected columns)
+    if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
+        validate_contrasts_content(inputs$contrasts, mode)
+    }
+
     inputs
 }
