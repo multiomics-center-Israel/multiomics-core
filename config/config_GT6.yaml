@@ -63,7 +63,7 @@ modes:
         - "GT6_2024 - GT6_2013"
       p_cutoff: 0.05
       pval_cutoff: 0.05
-      linear_fc_cutoff: 2
+      linear_fc_cutoff: 1       # no FC filter (log2FC threshold = 0)
 
     # ---- Random forest feature importance ----
     rf:

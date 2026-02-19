@@ -34,13 +34,16 @@ run_metabolomics_de <- function(pre, config) {
     if (is.list(contrasts)) contrasts <- unlist(contrasts)
 
     mat  <- pre$expr_work
-    # Use pre-scaling (log-transformed) matrix for logFC if available
-    mat_for_fc <- pre$expr_log %||% mat
+    # Use pre-scaling (log-transformed) matrix for DE statistical tests.
+    # Autoscaling (mean-center + divide by SD) standardises every feature to
+    # mean=0, SD=1 which distorts within-group variance and produces
+    # uniform p-values.  Autoscaled data is for multivariate methods only.
+    mat_for_test <- pre$expr_log %||% mat
     meta <- pre$meta
-    assert_numeric_matrix(mat, "metab_expr_work")
+    assert_numeric_matrix(mat_for_test, "metab_expr_for_test")
 
     # Align metadata to matrix columns
-    meta <- meta[match(colnames(mat), meta[[sample_col]]), , drop = FALSE]
+    meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
     condition <- factor(meta[[condition_col]])
 
     # Thresholds for significance flags
@@ -57,9 +60,9 @@ run_metabolomics_de <- function(pre, config) {
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma    = de_limma(mat, condition, ctr, mat_for_fc = mat_for_fc),
-            t_test   = de_t_test(mat, condition, ctr, mat_for_fc = mat_for_fc),
-            wilcoxon = de_wilcoxon(mat, condition, ctr, mat_for_fc = mat_for_fc)
+            limma    = de_limma(mat_for_test, condition, ctr),
+            t_test   = de_t_test(mat_for_test, condition, ctr),
+            wilcoxon = de_wilcoxon(mat_for_test, condition, ctr)
         )
 
         # Capture limma model from first contrast
