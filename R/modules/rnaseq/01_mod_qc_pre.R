@@ -151,7 +151,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
 
     # --- Get heatmap visualization settings ---
     hm_viz <- cfg$qc$heatmap_viz %||% list()
-    show_labels <- hm_viz$show_sample_labels %||% FALSE
+    show_labels <- hm_viz$show_sample_labels %||% TRUE  # Default TRUE to show sample names
     cluster_samples <- hm_viz$cluster_samples %||% TRUE
     adjust_scale <- hm_viz$adjust_correlation_scale %||% TRUE
 

@@ -105,7 +105,7 @@ list(
   ),
 
   # Proteomics pipeline (returns a list of targets)
-  #pipe_proteomics()
+  # pipe_proteomics()
 
   # RNA-seq pipeline (enable when ready)
   pipe_rnaseq()

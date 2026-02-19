@@ -186,13 +186,21 @@ build_shiny_payload_proteomics <- function(
     }
 
     # clust_heatmap_hier: Hierarchical clustering (pheatmap + dendrogram)
+    # Priority: clustering_res$objects$pheatmap_data_DE_genes (full payload with tree_row, row_order, etc.)
     val <- NULL
-    if (!is.null(de_res)) {
-        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
+    if (!is.null(clustering_res)) {
+        # First check objects (where the full payload is stored)
+        if (!is.null(clustering_res$objects)) {
+            val <- clustering_res$objects$pheatmap_data_DE_genes
+        }
+        # Fallback to plots if needed
+        if (is.null(val) && !is.null(clustering_res$plots)) {
+            val <- clustering_res$plots$pheatmap_data_DE_genes %||% clustering_res$plots$p_cluster_hier
+        }
     }
-    if (is.null(val) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$plots)) clustering_res$plots else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$p_cluster_hier
+    # Legacy fallback: check de_res
+    if (is.null(val) && !is.null(de_res)) {
+        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 

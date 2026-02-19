@@ -274,13 +274,31 @@ get_rna_de_features_qc <- function(summary_df) {
     if (is.null(summary_df) || nrow(summary_df) == 0) {
         return(character(0))
     }
+
+    # Check for pass_any_contrast column (handles both boolean TRUE and numeric 1)
     if ("pass_any_contrast" %in% colnames(summary_df)) {
-        return(summary_df$FeatureID[which(summary_df$pass_any_contrast == 1)])
+        pass_vals <- summary_df$pass_any_contrast
+        # Handle both boolean TRUE and numeric 1
+        is_pass <- !is.na(pass_vals) & (pass_vals == TRUE | pass_vals == 1)
+        return(summary_df$FeatureID[which(is_pass)])
     }
+
+    # Fallback 1: RNA-seq style _pass columns (e.g., "ContrastA_pass")
+    pass_cols <- grep("_pass$", colnames(summary_df), value = TRUE)
+    if (length(pass_cols) > 0) {
+        # Convert to numeric matrix for rowSums (handles TRUE/FALSE and 1/0)
+        pass_mat <- as.matrix(summary_df[, pass_cols, drop = FALSE])
+        mode(pass_mat) <- "numeric"
+        row_sums <- rowSums(pass_mat, na.rm = TRUE)
+        return(summary_df$FeatureID[which(row_sums > 0)])
+    }
+
+    # Fallback 2: Proteomics style sum.pass columns (unlikely for RNA)
     pass_cols <- grep("^sum\\.pass\\.", colnames(summary_df), value = TRUE)
     if (length(pass_cols) > 0) {
         row_sums <- rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE)
         return(summary_df$FeatureID[which(row_sums > 0)])
     }
+
     character(0)
 }
