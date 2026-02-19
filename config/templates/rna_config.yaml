@@ -127,7 +127,6 @@ modes:
           corr_cutoff: 0.8             # Minimum correlation to assign feature to pattern
           counts_cutoff_high: 0        # Minimum counts for "on" (1) positions
           counts_cutoff_low: null      # Maximum counts for "off" (0) positions (null = disabled)
-          skip_trivial_patterns: true
       heatmap:
         max_rows: null
         cluster_cols: true

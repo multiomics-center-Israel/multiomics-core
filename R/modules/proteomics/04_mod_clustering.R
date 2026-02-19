@@ -88,19 +88,15 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         z_de <- zscore_rows(mat_de)
         colnames(z_de) <- paste0(colnames(z_de), ".zscore")
 
+        # Pre-compute ordered matrix for Shiny (Professional approach)
+        # Order rows according to clustering result - makes Shiny app robust
+        ordered_row_ids <- intersect(hc_res$ordering, rownames(z_de))
+        z_de_ordered <- z_de[ordered_row_ids, , drop = FALSE]
+
         excel_order <- list(
             ordered_ids = hc_res$ordering,
             zscore_mat  = z_de
         )
-
-        # Capture payload for Shiny (pheatmap will be added after creation)
-        pheatmap_payload <- list(
-            mat = z_de,
-            annotation_col = annot,
-            feature_ids = de_features,
-            is_zscored = TRUE
-        )
-        # Note: pheatmap object added below after wrap_clustering_heatmap call
 
         # Build DE pattern row annotations (up/down per contrast)
         prot_de_cfg <- cfg$de %||% list()
@@ -111,13 +107,15 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Get ID column from config (proteomics may use different column name)
         prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
-        row_annot <- build_de_row_annotations(
+        row_annot_builder <- function() {
+          build_de_row_annotations(
             summary_df    = de_res$summary_df,
             feature_ids   = de_features,
             p_cutoff      = prot_p_cutoff,
             log2fc_cutoff = prot_log2fc,
             id_col        = prot_id_col
-        )
+          )
+        }
 
         # Heatmap setup
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
@@ -129,16 +127,25 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             cfg            = cfg,
             feature_ids    = de_features,
             ordering       = hc_res$ordering,
-            annotation_row = row_annot,
-            out_file       = f_hm
+            annotation_row_builder = row_annot_builder,
+            out_file       = f_hm,
+            title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
         written <- c(written, f_hm)
         plots$p_cluster_hier <- p_cluster
 
-        # Add pheatmap to payload for Shiny (includes tree_col from pheatmap)
-        pheatmap_payload$pheatmap <- p_cluster
-        # Add tree_row from hierarchical clustering (pheatmap doesn't generate it when ordering is provided)
-        pheatmap_payload$tree_row <- hc_res$details
+        # Capture pheatmap payload for Shiny (Professional pre-compute approach)
+        # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
+        pheatmap_payload <- list(
+            pheatmap = p_cluster,
+            mat = z_de_ordered,                    # Already in clustered order
+            row_order = rownames(z_de_ordered),    # Ordered row names for Plotly
+            col_order = colnames(z_de_ordered),    # Column names
+            annotation_col = annot,
+            feature_ids = de_features,
+            is_zscored = TRUE,
+            tree_row = hc_res$details              # hclust object for dendrogram
+        )
 
         # Save cluster assignments
         if (!is.null(hc_res$clusters)) {
@@ -233,7 +240,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         written <- c(written, legacy_files)
     }
-
+  
     # ---- 3) Binary patterns (only meaningful when >= 3 conditions) ----
     if (isTRUE(flags$binary_patterns)) {
         bcfg <- cl$steps$binary_patterns %||% list()
@@ -251,8 +258,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         bp_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
         # Run function and capture result
+        # For proteomics: both matrices are log2-transformed (no separate counts matrix)
+        # expr_mat_counts = NULL means it will use expr_mat_corr for gating too
         bp_res <- run_binary_patterns(
-            expr_mat           = expr_mat,
+            expr_mat_corr      = expr_mat,
+            expr_mat_counts    = NULL,  # proteomics has no separate counts matrix
             meta               = pre$meta,
             cfg                = cfg,
             de_features        = de_features,
