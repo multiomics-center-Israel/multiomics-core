@@ -28,8 +28,8 @@ plot_density_overlay <- function(expr_mat,
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.data.frame(expr_mat)
 
-  norm_expr_long <- expr_mat |>
-    tibble::rownames_to_column("feature") |>
+  norm_expr_long <- expr_mat %>%
+    tibble::rownames_to_column("feature") %>%
     tidyr::pivot_longer(
       cols = -feature,
       names_to = "SampleID",
@@ -433,17 +433,15 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   df <- de_tbl
 
   # Prepare plotting data
-  # Y-axis uses RAW P-value
+  # Y-axis uses FDR (adj.P.Val)
   df$.logFC <- as.numeric(df[["logFC"]])
-  df$.pval <- as.numeric(df[["P.Value"]])
-  df$.pval_plot <- ifelse(is.na(df$.pval), 1, df$.pval)
-  df$.neglog10p <- -log10(pmax(df$.pval_plot, 1e-300))
+  df$.padj_raw <- as.numeric(df[["adj.P.Val"]])
+  df$.padj_y <- ifelse(is.na(df$.padj_raw), 1, df$.padj_raw)
+  df$.neglog10p <- -log10(pmax(df$.padj_y, 1e-300))
 
-  # Coloring uses ADJ P-value
-  df$.padj <- as.numeric(df[["adj.P.Val"]])
-  df$.padj_plot <- ifelse(is.na(df$.padj), 1, df$.padj)
+  # Pass definition (uses adj.P.Val for significance)
+  df$.padj_plot <- df$.padj_y
 
-  # Pass definition
   is_pass <- !is.na(df$.logFC) &
     (df$.padj_plot <= padj_cut) &
     (abs(df$.logFC) >= log2fc_cut)
@@ -469,14 +467,14 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
 
   ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .pass, alpha = .pass), size = 1.5, na.rm = TRUE) +
-    ggplot2::scale_color_manual(values = c("FALSE" = "grey70", "TRUE" = "red"), guide = "none") +
-    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.25, "TRUE" = 0.9), guide = "none") +
+    ggplot2::scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"), guide = "none") +
+    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.4, "TRUE" = 0.9), guide = "none") +
     ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "black") +
-    ggplot2::geom_hline(yintercept = -log10(pval_cut), linetype = "dashed", color = "black") +
+    ggplot2::geom_hline(yintercept = -log10(padj_cut), linetype = "dashed", color = "black") +
     ggplot2::labs(
       title = title %||% "Volcano plot",
       x = "log2 Fold Change",
-      y = "-log10(P.Value)"
+      y = "-log10(FDR)"
     ) +
     ggplot2::theme_minimal()
 }

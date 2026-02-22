@@ -1,6 +1,6 @@
 # R/domain/metabolomics/01_normalization.R
 #
-# MetaboAnalyst-style normalization for metabolomics data.
+# Three-step normalization for metabolomics data.
 # Three independent steps (applied in order):
 #   1. Sample normalization  (sum, median, PQN, internal standard)
 #   2. Transformation        (log2, log10)
@@ -174,16 +174,19 @@ transform_metab <- function(mat, method = "none", pseudocount = 1) {
 #' @return Scaled matrix.
 scale_metab <- function(mat, method = "none") {
     method <- tolower(method)
-    assert_one_of(method, "scaling", c("none", "auto", "pareto", "range"))
+    assert_one_of(method, "scaling", c("none", "center", "auto", "pareto", "range"))
 
     if (method == "none") return(mat)
 
     # Compute row statistics
     row_means <- rowMeans(mat, na.rm = TRUE)
-    row_sds   <- apply(mat, 1, stats::sd, na.rm = TRUE)
 
     # Center first (all scaling methods center)
     mat_centered <- sweep(mat, 1, row_means, FUN = "-")
+
+    if (method == "center") return(mat_centered)
+
+    row_sds <- apply(mat, 1, stats::sd, na.rm = TRUE)
 
     switch(method,
         auto = {

@@ -24,6 +24,9 @@
 #' @param config Full config object
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
+#' @param rf_res Optional: random forest results (from feature_sel_res$rf)
+#' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
+#' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
 #'
 #' @return A named list with 26 canonical keys (+ legacy aliases if requested)
@@ -36,7 +39,12 @@ build_shiny_payload_metabolomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
-    annot = NULL) {
+    rf_res = NULL,
+    plsda_res = NULL,
+    enrichment_res = NULL,
+    annot = NULL,
+    include_legacy = TRUE
+) {
     # ============================================================
     # Initialize canonical payload structure
     # ============================================================
@@ -271,6 +279,66 @@ build_shiny_payload_metabolomics <- function(
     # ============================================================
 
     assert_shiny_payload_contract(payload, strict = FALSE, context = "metabolomics")
+
+    # ============================================================
+    # LEGACY ALIASES (optional)
+    # ============================================================
+
+    if (isTRUE(include_legacy)) {
+        payload <- attach_legacy_aliases(payload)
+
+        # Metabolomics-specific legacy keys
+        payload$metab_raw <- pre$expr_raw %||% NULL
+        payload$metab_filt <- pre$expr_filt %||% NULL
+        payload$metab_norm <- pre$expr_work %||% NULL
+
+        # Missingness info (useful for metabolomics QC)
+        if (!is.null(pre$info) && !is.null(pre$info$missingness)) {
+            payload$missingness <- pre$info$missingness
+        }
+
+        # Normalization evaluation results (if any)
+        if (!is.null(pre$normalization_eval)) {
+            payload$normalization_eval <- pre$normalization_eval
+        }
+
+        # Sample map (CD column to sample_id mapping)
+        if (!is.null(pre$sample_map)) {
+            payload$sample_map <- pre$sample_map
+        }
+
+        # Row data (feature annotations) for compatibility
+        payload$row_data <- pre$row_data %||% NULL
+
+        # Random forest results
+        if (!is.null(rf_res)) {
+            payload$rf_importance <- rf_res$importance_df %||% NULL
+            payload$rf_method     <- rf_res$method %||% NULL
+        }
+
+        # PLS-DA results
+        if (!is.null(plsda_res)) {
+            payload$plsda_vip_df           <- plsda_res$vip_df %||% NULL
+            payload$plsda_explained_variance <- plsda_res$explained_variance %||% NULL
+        }
+
+        # Enrichment results
+        if (!is.null(enrichment_res)) {
+            if (!is.null(enrichment_res$qea)) {
+                payload$enrichment_qea <- enrichment_res$qea$table %||% NULL
+            }
+            if (!is.null(enrichment_res$ssgsea)) {
+                payload$enrichment_ssgsea       <- enrichment_res$ssgsea$table %||% NULL
+                payload$enrichment_ssgsea_scores <- enrichment_res$ssgsea$scores %||% NULL
+            }
+            if (!is.null(enrichment_res$ora)) {
+                payload$enrichment_ora <- enrichment_res$ora$table %||% NULL
+            }
+            if (!is.null(enrichment_res$gsea)) {
+                payload$enrichment_gsea <- enrichment_res$gsea$table %||% NULL
+            }
+        }
+    }
 
     # ============================================================
     # SUMMARY

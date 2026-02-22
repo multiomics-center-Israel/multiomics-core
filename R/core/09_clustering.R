@@ -912,17 +912,17 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
-  meta_map <- meta |>
+  meta_map <- meta %>%
     dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
 
   # 2. Convert Expression Matrix to Long Format
   # Rows = Genes, Cols = Samples -> Melt
-  norm_expr_long <- as.data.frame(expr_mat) |>
-    tibble::rownames_to_column("Gene") |>
+  norm_expr_long <- as.data.frame(expr_mat) %>%
+    tibble::rownames_to_column("Gene") %>%
     tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
 
   # 3. Join with Metadata
-  df_annotated <- norm_expr_long |>
+  df_annotated <- norm_expr_long %>%
     dplyr::inner_join(meta_map, by = "Name")
 
   # 4. Map Genes to Clusters
@@ -933,7 +933,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   )
 
   # Final Join: Only keep genes that are in a cluster
-  df_final <- df_annotated |>
+  df_final <- df_annotated %>%
     dplyr::inner_join(cluster_map, by = "Gene")
 
   files_written <- character(0)
@@ -943,8 +943,8 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   unique_clusters <- sort(unique(df_final$Cluster))
 
   for (k in unique_clusters) {
-    clus_data <- df_final |>
-      dplyr::filter(Cluster == k) |>
+    clus_data <- df_final %>%
+      dplyr::filter(Cluster == k) %>%
       dplyr::select(Name, Group, Exp)
 
     fname <- file.path(out_dir, sprintf("cluster_profiles_cluster%s_data.txt", k))
@@ -956,18 +956,18 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   # 6. Write Summary File (Calculated Stats)
   fname_all <- file.path(out_dir, "cluster_profiles_data.txt")
 
-  summary_df <- df_final |>
-    dplyr::group_by(Cluster, Group) |>
+  summary_df <- df_final %>%
+    dplyr::group_by(Cluster, Group) %>%
     dplyr::summarise(
       Mean = mean(Exp, na.rm = TRUE),
       SE = sd(Exp, na.rm = TRUE) / sqrt(dplyr::n()),
       .groups = "drop"
-    ) |>
+    ) %>%
     dplyr::mutate(
       Mean_SE.y    = Mean,
       Mean_SE.ymin = Mean - SE,
       Mean_SE.ymax = Mean + SE
-    ) |>
+    ) %>%
     # --- Rounding to 4 decimal places ---
     dplyr::mutate(across(where(is.numeric), ~ round(., 4)))
 
