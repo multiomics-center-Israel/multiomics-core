@@ -1,7 +1,7 @@
 #' Proteomics Pathway Enrichment
 #'
 #' Bridges proteomics DE results to the shared pathway analysis
-#' (run_pathway_analysis from R/domain/rnaseq/07_pathway.R).
+#' (run_pathway_analysis from R/core/09_enrichment.R).
 
 # ==============================================================================
 # DE TABLE EXTRACTION

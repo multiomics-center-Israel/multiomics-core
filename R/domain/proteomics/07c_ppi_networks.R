@@ -26,6 +26,9 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     cfg <- config$modes$proteomics
     ppi_cfg <- cfg$ppi %||% list()
 
+    # Resolve organism name for OrgDb dispatch (used by subcellular + enrichment)
+    organism <- normalize_organism_name(cfg$annotation$organism %||% "Homo sapiens")
+
     # Set up output directories
     output_dir <- file.path(out_dir, "ppi_networks")
     plots_dir  <- file.path(output_dir, "plots")
@@ -119,7 +122,7 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     }
 
     # Subcellular localization
-    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, output_dir)
+    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, output_dir, organism = organism)
 
     # Network-based enrichment
     network_enrichment <- run_network_enrichment(
@@ -541,16 +544,19 @@ get_corum_database <- function(species) {
 # Subcellular Localization
 # -----------------------------------------------------------------------------
 
-analyze_subcellular_localization <- function(proteins, da_results, output_dir) {
+analyze_subcellular_localization <- function(proteins, da_results, output_dir,
+                                             organism = "Homo sapiens") {
     message("Analyzing subcellular localization...")
 
-    if (!requireNamespace("org.Hs.eg.db", quietly = TRUE)) {
-        message("  org.Hs.eg.db not available. Skipping.")
+    orgdb_pkg <- get_orgdb_package(organism)
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping subcellular localization.")
         return(NULL)
     }
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     tryCatch({
-        go_cc <- AnnotationDbi::select(org.Hs.eg.db::org.Hs.eg.db,
+        go_cc <- AnnotationDbi::select(org_db,
             keys = proteins, keytype = "SYMBOL", columns = c("GOALL", "ONTOLOGYALL"))
         go_cc <- go_cc[go_cc$ONTOLOGYALL == "CC" & !is.na(go_cc$GOALL), ]
         if (nrow(go_cc) == 0) return(NULL)
@@ -592,6 +598,15 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         return(NULL)
     }
 
+    cfg_prot <- config$modes$proteomics
+    organism <- normalize_organism_name(cfg_prot$annotation$organism %||% "Homo sapiens")
+    orgdb_pkg <- get_orgdb_package(organism)
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping network enrichment.")
+        return(NULL)
+    }
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
+
     enrichment_results <- list()
     community_df <- community_results$membership
     communities_ids <- unique(community_df$community)
@@ -601,13 +616,13 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         if (length(comm_proteins) < 3) next
 
         tryCatch({
-            entrez <- AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db,
+            entrez <- AnnotationDbi::mapIds(org_db,
                 keys = comm_proteins, keytype = "SYMBOL", column = "ENTREZID")
             entrez <- entrez[!is.na(entrez)]
             if (length(entrez) < 3) next
 
             go_result <- clusterProfiler::enrichGO(
-                gene = entrez, OrgDb = org.Hs.eg.db::org.Hs.eg.db,
+                gene = entrez, OrgDb = org_db,
                 ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.1
             )
 
