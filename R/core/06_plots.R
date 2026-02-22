@@ -598,7 +598,7 @@ get_heatmap_colors <- function(n = 255) {
 wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
                                     feature_ids,
                                     ordering = NULL,
-                                    annotation_row_builder = NULL, # function(use_ids, context) -> df
+                                    annotation_row_builder = FALSE, # function(use_ids, context) -> df
                                     annotation_row_context = NULL,
                                     out_file = NULL,
                                     title = NULL,
@@ -627,8 +627,8 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
   annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
   
   annot_row <- NULL
-  if (!is.null(annotation_row_builder)) {
-    annot_row <- annotation_row_builder(use_ids, annotation_row_context)
+  if (annotation_row_builder) {
+    annot_row <- build_contrast_row_context(use_ids, annotation_row_context)
   }
   
   if (is.null(title)) title <- sprintf("Heatmap (%d features)", nrow(mat2plot))
@@ -649,7 +649,7 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
 }
 
 
-build_contrast_row_annot <- function(use_ids, context) {
+build_contrast_row_context <- function(use_ids, context) {
   summary_df    <- context$summary_df
   p_cutoff      <- context$p_cutoff %||% 0.05
   log2fc_cutoff <- context$log2fc_cutoff %||% 0.585
@@ -679,62 +679,3 @@ build_contrast_row_annot <- function(use_ids, context) {
   full[common, ] <- ar[common, , drop = FALSE]
   full
 }
-
-
-# wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
-#                                     feature_ids,
-#                                     ordering = NULL,
-#                                     annotation_row = NULL,
-#                                     out_file = NULL) {
-#   # 1) choose features present in matrix
-#   use_ids <- intersect(feature_ids, rownames(expr_mat))
-# 
-#   # preserve ordering if provided
-#   if (!is.null(ordering)) {
-#     use_ids <- ordering[ordering %in% use_ids]
-#     cluster_rows_flag <- FALSE
-#   } else {
-#     cluster_rows_flag <- TRUE
-#   }
-# 
-#   mat2plot <- expr_mat[use_ids, , drop = FALSE]
-# 
-#   # 2) annotation (aligned to matrix columns)
-#   sample_col <- cfg$effects$samples
-#   color_col <- get_color_config(cfg)
-# 
-#   annot_col <- data.frame(
-#     Condition = meta[[color_col]],
-#     row.names = meta[[sample_col]]
-#   )
-# 
-#   # align annotation to columns actually in the matrix
-#   annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
-# 
-#   # 3) Align row annotations to the features being plotted
-#   annot_row <- NULL
-# 
-#   if (!is.null(annotation_row)) {
-#     # Filter to only features in the heatmap
-#     common_features <- intersect(use_ids, rownames(annotation_row))
-#     if (length(common_features) > 0) {
-#       annot_row <- annotation_row[common_features, , drop = FALSE]
-#     }
-#   }
-# 
-#   # 4) plot
-#   ph <- plot_heatmap_core(
-#     expr_mat = mat2plot,
-#     annotation_col = annot_col,
-#     annotation_row = annot_row,
-#     title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
-#     scale_rows = TRUE,
-#     cluster_rows = cluster_rows_flag,
-#     cluster_cols = TRUE,
-#     max_rows = NULL
-#   )
-# 
-#   # 5) save & return
-#   if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
-#   ph
-# }

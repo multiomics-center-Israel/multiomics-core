@@ -103,7 +103,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # Integrate clustering order and z-scores if available
         cl_obj <- clustering_res %||% list()
         excel_ord <- cl_obj$excel_order %||% NULL
-
+        
+        
         if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
             ordered_ids <- excel_ord$ordered_ids
 
@@ -122,6 +123,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             # No clustering: add order column with NA
             de_df$order <- NA_integer_
         }
+        
+        de_df <- add_default_order_if_missing(de_df, mat_de, id_col)
+        de_df <- add_zscores_if_missing(de_df, mat_de, id_col)
 
         # Reorder columns to: ID, raw_counts, DE_stats, order, z-scores
         # Identify column groups
@@ -467,4 +471,52 @@ build_final_results_generic <- function(
     }
 
     base
+}
+
+
+#' Safe Z-score calculation for DE tables
+add_zscores_if_missing <- function(df, expr_mat, id_col) {
+  # If Z-scores already exist, just return the data frame
+  if (any(grepl("\\.zscore$", names(df)))) return(df)
+  
+  # Otherwise, calculate and bind
+  row_means <- rowMeans(expr_mat, na.rm = TRUE)
+  row_sds   <- apply(expr_mat, 1, sd, na.rm = TRUE)
+  z_mat     <- (expr_mat - row_means) / (row_sds + 1e-6) # Avoid div by zero
+  colnames(z_mat) <- paste0(colnames(expr_mat), ".zscore")
+  
+  # Match and join
+  idx <- match(df[[id_col]], rownames(z_mat))
+  return(cbind(df, z_mat[idx, , drop = FALSE]))
+}
+
+#' Fallback hierarchical clustering for row order
+add_default_order_if_missing <- function(df, expr_mat, id_col) {
+  # If order is already populated (not all NA), keep it
+  if ("order" %in% names(df) && !all(is.na(df$order))) {
+    return(df)
+  }
+  
+  # Calculate a simple hierarchical clustering order
+  # We use a basic Euclidean/Complete linkage
+  message("Calculating fallback hierarchical clustering order...")
+  
+  # Handle NAs by replacing with row mean (safe for proteomics)
+  mat_clean <- expr_mat
+  if (any(is.na(mat_clean))) {
+    row_means <- rowMeans(mat_clean, na.rm = TRUE)
+    idx_na <- which(is.na(mat_clean), arr.ind = TRUE)
+    mat_clean[idx_na] <- row_means[idx_na[,1]]
+  }
+  
+  # Simple clustering
+  dists <- dist(mat_clean)
+  hc <- hclust(dists, method = "complete")
+  
+  # Create an order mapping
+  ordered_ids <- rownames(mat_clean)[hc$order]
+  ranks <- match(df[[id_col]], ordered_ids)
+  
+  df$order <- ranks
+  return(df)
 }

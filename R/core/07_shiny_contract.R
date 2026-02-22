@@ -48,11 +48,6 @@ get_payload_key_definitions <- function() {
             required = TRUE,
             description = "Sample metadata; rownames = sample IDs matching expr colnames"
         ),
-        contrasts_data = list(
-            type = "data.frame",
-            required = FALSE,
-            description = "Contrast definitions (columns: name, numerator, denominator)"
-        ),
         feature_annot = list(
             type = "data.frame",
             required = FALSE,
@@ -76,7 +71,7 @@ get_payload_key_definitions <- function() {
             description = "Long-format expression data (feature_id, sample_id, value + metadata)"
         ),
 
-        # --- QC/PCA (3 keys) ---
+        # --- QC/PCA (4 keys) ---
         pca_object = list(
             type = "prcomp",
             required = FALSE,
@@ -87,11 +82,12 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "PCA scores with metadata (PC1, PC2, ..., sample info)"
         ),
-        qc_plots = list(
-            type = "list",
+        pca_3d = list(
+            type = "plotly",
             required = FALSE,
-            description = "Named list of pre-rendered QC plots (ggplot objects) - DEPRECATED, use individual plot keys"
+            description = "3-D PCA plotly widget (PC1 x PC2 x PC3)"
         ),
+        
         imp_hist_samp = list(
             type = "ggplot",
             required = FALSE,
@@ -134,6 +130,11 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "Per-contrast summary counts (up, down, total)"
         ),
+        de_final_table = list(
+            type = "data.frame",
+            required = FALSE,
+            description = "DE-significant rows from final results table (equivalent to Final_results_DE_P_*.xlsx content)"
+        ),
 
         # --- Clustering (4 keys) ---
         clust_partition = list(
@@ -155,6 +156,16 @@ get_payload_key_definitions <- function() {
             type = "list",
             required = FALSE,
             description = "Named list of pheatmap objects per pattern"
+        ),
+        clust_heatmap_partition = list(
+            type = "list",
+            required = FALSE,
+            description = "Partition clustering heatmap (pheatmap figure)"
+        ),
+        clust_heatmap_hier_fig = list(
+            type = "list",
+            required = FALSE,
+            description = "Hierarchical clustering heatmap figure (pheatmap object only, extracted from clust_heatmap_hier)"
         ),
 
         # --- Configuration (6 keys) ---
@@ -289,25 +300,6 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
             paste(missing_keys, collapse = ", "),
             call. = FALSE
         )
-    }
-
-    # 3. Check no unexpected keys (strict mode)
-    if (strict) {
-        extra_keys <- setdiff(names(payload), canonical_keys)
-        # Allow legacy keys (they start with uppercase or are known aliases)
-        legacy_prefixes <- c("PADJ", "LOG_", "LINEAR", "NORM_", "GROUP", "EFFECTS", "PCA_3D")
-        is_legacy <- vapply(extra_keys, function(k) {
-            any(startsWith(k, legacy_prefixes)) || k %in% c("dds", "stats_df", "mat2plot", "col_data")
-        }, logical(1))
-        non_legacy_extra <- extra_keys[!is_legacy]
-
-        if (length(non_legacy_extra) > 0) {
-            stop(
-                prefix, " has unexpected non-legacy keys: ",
-                paste(non_legacy_extra, collapse = ", "),
-                call. = FALSE
-            )
-        }
     }
 
     # 4. Check required keys are not NULL
@@ -448,79 +440,6 @@ assert_de_stats <- function(de_stats, context = "de_stats") {
 # Legacy Alias Helpers
 # ------------------------------------------------------------
 
-#' Attach legacy aliases to canonical payload
-#'
-#' Adds legacy keys that point to canonical values for backward compatibility.
-#' Call this AFTER populating canonical keys, BEFORE saving.
-#'
-#' @param payload Canonical payload (already validated)
-#'
-#' @return payload with additional legacy alias keys
-#' @export
-attach_legacy_aliases <- function(payload) {
-    # Expression aliases
-    payload$col_data <- payload$sample_meta
-    payload$norm_counts <- payload$expr_raw
-    payload$norm_log_counts <- payload$expr_norm
-
-    # DE aliases
-    payload$stats_df <- payload$de_stats
-    payload$DE_genes_stats <- payload$de_sig_stats
-    payload$mat2plot <- payload$de_expr_norm
-
-    # Model aliases (RNA-seq specific)
-    if (!is.null(payload$de_model) && inherits(payload$de_model, "DESeqDataSet")) {
-        payload$dds <- payload$de_model
-    }
-
-    # Config aliases (UPPERCASE for legacy)
-    payload$PADJ_CUTOFF <- payload$padj_cutoff
-    payload$DESEQ_PADJ_CUTOFF <- payload$padj_cutoff
-    payload$LOG_FC_CUTOFF <- payload$log_fc_cutoff
-    payload$LINEAR_FC_CUTOFF <- 2^payload$log_fc_cutoff
-    payload$NORM_METHOD <- payload$norm_method
-    payload$GROUP <- payload$group
-
-    # PCA aliases
-    payload$norm_log_counts_pca <- payload$pca_object
-    payload$PCA_3D_BASENAME <- switch(
-        payload$payload_source,
-        rnaseq = "rna_pca_3d",
-        proteomics = "prot_pca_3d",
-        metabolomics = "metab_pca_3d",
-        "pca_3d"
-    )
-
-    # Clustering aliases
-    payload$New_clusters <- payload$clust_partition
-    payload$patterns <- payload$clust_patterns
-    payload$pheatmap_data_DE_genes <- payload$clust_heatmap_hier
-    payload$heatmaps_by_pattern <- payload$clust_heatmaps_by_pattern
-
-    # Aesthetics (build EFFECTS from color + shape)
-    effects <- c()
-    if (!is.null(payload$shape)) effects <- c(effects, payload$shape)
-    if (!is.null(payload$color)) effects <- c(effects, payload$color)
-    payload$EFFECTS <- if (length(effects) > 0) effects else NULL
-
-    payload$color <- payload$color
-    payload$shape <- payload$shape
-
-    # Metadata
-    payload$legacy_version <- "1.0"
-    payload$legacy_created_at <- payload$payload_created_at
-    payload$legacy_source <- switch(
-        payload$payload_source,
-        rnaseq = "RNAseq pipeline",
-        proteomics = "Proteomics pipeline",
-        metabolomics = "Metabolomics pipeline",
-        payload$payload_source
-    )
-
-    payload
-}
-
-
 #' Remove legacy aliases from payload
 #'
 #' Strips legacy keys, leaving only canonical keys.
@@ -530,10 +449,10 @@ attach_legacy_aliases <- function(payload) {
 #'
 #' @return Payload with only canonical keys
 #' @export
-strip_legacy_aliases <- function(payload) {
-    canonical_keys <- get_canonical_keys()
-    payload[canonical_keys]
-}
+# strip_legacy_aliases <- function(payload) {
+#     canonical_keys <- get_canonical_keys()
+#     payload[canonical_keys]
+# }
 
 
 # ------------------------------------------------------------
@@ -552,55 +471,55 @@ strip_legacy_aliases <- function(payload) {
 #' @param pca_basename PCA 3D basename (e.g., "prot_pca_3d", "rna_pca_3d")
 #' @return List with all legacy keys initialized to NULL
 #' @export
-build_shiny_legacy_base <- function(legacy_source, pca_basename) {
+# build_shiny_legacy_base <- function(legacy_source, pca_basename) {
     # Validate inputs
-    if (!is.character(legacy_source) || length(legacy_source) != 1 || nchar(legacy_source) == 0) {
-        stop("legacy_source must be a non-empty string")
-    }
-    if (!is.character(pca_basename) || length(pca_basename) != 1 || nchar(pca_basename) == 0) {
-        stop("pca_basename must be a non-empty string")
-    }
-
-    # Return structure with EXACT legacy values
-    list(
-        # Metadata
-        legacy_version = "1.0",
-        legacy_created_at = Sys.time(),
-        legacy_source = legacy_source, # EXACT value, no transformations
-
-        # Data objects (full union of keys from both modes)
-        col_data = NULL,
-        contrasts_data = NULL,
-        dds = NULL,
-        norm_counts = NULL,
-        norm_log_counts = NULL,
-        norm_log_counts_pca = NULL, # PCA prcomp object (optional)
-        mat2plot = NULL, # LEGACY: DE expression matrix (features x samples) - use de_expr_norm in new code
-        de_expr_norm = NULL, # DE expression matrix (features x samples) - canonical key
-        EFFECTS = NULL,
-        PCA_3D_BASENAME = pca_basename,
-        stats_df = NULL,
-        DE_genes_stats = NULL,
-        pheatmap_data_DE_genes = NULL,
-        patterns = NULL,
-        heatmaps_by_pattern = NULL,
-        New_clusters = NULL,
-        annot = NULL,
-        trinotate_main = NULL,
-
-        # Config parameters
-        PADJ_CUTOFF = NULL,
-        DESEQ_PADJ_CUTOFF = NULL,
-        LOG_FC_CUTOFF = NULL,
-        LINEAR_FC_CUTOFF = NULL,
-        NORM_METHOD = NULL,
-        GROUP = NULL,
-
-        # Shiny aesthetics (column names)
-        color = NULL,
-        shape = NULL
-    )
-}
+    # if (!is.character(legacy_source) || length(legacy_source) != 1 || nchar(legacy_source) == 0) {
+    #     stop("legacy_source must be a non-empty string")
+    # }
+    # if (!is.character(pca_basename) || length(pca_basename) != 1 || nchar(pca_basename) == 0) {
+    #     stop("pca_basename must be a non-empty string")
+    # }
+    # 
+    # # Return structure with EXACT legacy values
+    # list(
+    #     # Metadata
+    #     legacy_version = "1.0",
+    #     legacy_created_at = Sys.time(),
+    #     legacy_source = legacy_source, # EXACT value, no transformations
+    # 
+    #     # Data objects (full union of keys from both modes)
+    #     col_data = NULL,
+    #     contrasts_data = NULL,
+        # dds = NULL,
+        # norm_counts = NULL,
+        # norm_log_counts = NULL,
+        # norm_log_counts_pca = NULL, # PCA prcomp object (optional)
+        # mat2plot = NULL, # LEGACY: DE expression matrix (features x samples) - use de_expr_norm in new code
+        # de_expr_norm = NULL, # DE expression matrix (features x samples) - canonical key
+        # EFFECTS = NULL,
+        # PCA_3D_BASENAME = pca_basename,
+#         stats_df = NULL,
+#         DE_genes_stats = NULL,
+#         hm_hier_de = NULL,
+#         patterns = NULL,
+#         heatmaps_by_pattern = NULL,
+#         New_clusters = NULL,
+#         annot = NULL,
+#         trinotate_main = NULL,
+# 
+#         # Config parameters
+#         PADJ_CUTOFF = NULL,
+#         DESEQ_PADJ_CUTOFF = NULL,
+#         LOG_FC_CUTOFF = NULL,
+#         LINEAR_FC_CUTOFF = NULL,
+#         NORM_METHOD = NULL,
+#         GROUP = NULL,
+# 
+#         # Shiny aesthetics (column names)
+#         color = NULL,
+#         shape = NULL
+#     )
+# }
 
 
 # ------------------------------------------------------------

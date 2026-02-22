@@ -25,7 +25,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         patterns = NULL,
         heatmaps = NULL,
         clusters = NULL, # New_clusters
-        pheatmap_data_DE_genes = NULL
+        hm_hier_de = NULL
     )
 
     excel_order <- NULL
@@ -132,42 +132,43 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
         log2fc_cutoff <- log2(lin_fc_cutoff)
 
-        
+
         annot_context <- list(
-          summary_df    = summary_df,
-          p_cutoff      = p_cutoff,
-          log2fc_cutoff = log2fc_cutoff,
-          id_col        = "FeatureID"
+            summary_df    = summary_df,
+            p_cutoff      = p_cutoff,
+            log2fc_cutoff = log2fc_cutoff,
+            id_col        = "FeatureID"
         )
 
         # Heatmap
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
         p_cluster <- wrap_clustering_heatmap(
-          expr_mat = expr_mat,
-          meta = pre$meta,
-          cfg = cfg,
-          feature_ids = de_features,
-          ordering = hc_res$ordering,
-          annotation_row_builder = build_contrast_row_annot,
-          annotation_row_context = annot_context,
-          out_file = f_hm,
-          title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
+            expr_mat = expr_mat,
+            meta = pre$meta,
+            cfg = cfg,
+            feature_ids = de_features,
+            ordering = hc_res$ordering,
+            annotation_row_builder = TRUE,
+            annotation_row_context = annot_context,
+            out_file = f_hm,
+            cluster_cols = FALSE,
+            title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
-        
+
         written <- c(written, f_hm)
-        plots$p_cluster <- p_cluster
+        plots$partition_heatmap <- p_cluster
 
         # Capture pheatmap payload for Shiny (Professional pre-compute approach)
         # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
-        objects$pheatmap_data_DE_genes <- list(
+        objects$hm_hier_de <- list(
             pheatmap = p_cluster,
-            mat = z_de_ordered,                    # Already in clustered order
-            row_order = rownames(z_de_ordered),    # Ordered row names for Plotly
-            col_order = colnames(z_de_ordered),    # Column names
+            mat = z_de_ordered, # Already in clustered order
+            row_order = rownames(z_de_ordered), # Ordered row names for Plotly
+            col_order = colnames(z_de_ordered), # Column names
             annotation_col = annot,
             feature_ids = de_features,
             is_zscored = TRUE,
-            tree_row = hc_res$details              # hclust object for dendrogram
+            tree_row = hc_res$details # hclust object for dendrogram
         )
 
         # Save clusters
@@ -292,7 +293,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         # expr_mat = pre$expr_work (log-transformed)
         # pre$expr_filt = raw/filtered counts (for threshold gating)
         bp_res <- run_binary_patterns(
-            expr_mat_corr      = expr_mat,                # log-transformed for correlations & heatmaps
+            expr_mat_corr      = expr_mat, # log-transformed for correlations & heatmaps
             expr_mat_counts    = as.matrix(pre$expr_filt), # raw counts for gating thresholds
             meta               = pre$meta,
             cfg                = cfg,
@@ -308,6 +309,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
 
         # Populate Shiny Objects
         objects$patterns <- bp_res$best %||% NULL
+        objects$patterns_list <- bp_res$bp_pat %||% NULL
         objects$heatmaps <- bp_res$plots %||% NULL
     }
 
@@ -338,28 +340,4 @@ get_rna_de_features <- function(summary_df) {
     }
 
     character(0)
-}
-
-contrast_row_builder <- function(use_ids) {
-  ar <- build_de_row_annotations(
-    summary_df    = summary_df,
-    feature_ids   = use_ids,
-    p_cutoff      = p_cutoff,
-    log2fc_cutoff = log2fc_cutoff,
-    id_col        = "FeatureID"   
-  )
-  
-  if (is.null(ar)) return(NULL)
-  
-  full <- as.data.frame(
-    matrix(NA_character_, nrow = length(use_ids), ncol = ncol(ar)),
-    stringsAsFactors = FALSE,
-    check.names = FALSE
-  )
-  colnames(full) <- colnames(ar)
-  rownames(full) <- use_ids
-  
-  common <- intersect(use_ids, rownames(ar))
-  full[common, ] <- ar[common, , drop = FALSE]
-  full
 }

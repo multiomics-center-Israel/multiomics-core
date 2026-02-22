@@ -77,7 +77,6 @@ pipe_metabolomics <- function() {
                 config = config,
                 pca_res = metab_qc_pre_obj,
                 clustering_res = NULL,  # No clustering yet for metabolomics
-                include_legacy = TRUE,
                 out_file = file.path(metab_out_dir, "shiny_payload_metabolomics.rds")
             ),
             format = "file"

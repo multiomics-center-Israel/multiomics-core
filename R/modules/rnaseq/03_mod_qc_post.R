@@ -189,21 +189,19 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
                     tryCatch(
                         {
-                            grDevices::png(hm_png, width = 2000, height = 1400, res = 150)
-                            print(pheatmap::pheatmap(
-                                m_z,
-                                show_rownames = FALSE,
+                            hm_obj <- plot_heatmap_core(
+                                expr_mat = m_z,
                                 annotation_col = ann,
-                                main = sprintf("Top DE (%d) - Z-score", nrow(m_z)),
-                                cluster_cols = TRUE
-                            ))
+                                title = sprintf("Top DE (%d) - Z-score", nrow(m_z)),
+                                scale_rows = FALSE, # already z-scored
+                                cluster_cols = TRUE,
+                                max_rows = max_top_de
+                            )
+                            save_heatmap_to_file(hm_obj, hm_png, width = 2000, height = 1400, res = 150)
                             files <- c(files, hm_png)
                         },
                         error = function(e) {
                             warning(sprintf("[QC_post] heatmap_top_DE failed: %s", conditionMessage(e)))
-                        },
-                        finally = {
-                            grDevices::dev.off()
                         }
                     )
                 }
