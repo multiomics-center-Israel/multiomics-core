@@ -25,8 +25,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     # Objects for legacy Shiny export
     pheatmap_payload <- NULL
     patterns_tbl <- NULL
+    patterns_list <- NULL
     heatmaps_by_pattern <- NULL
     clusters_vec <- NULL
+    excel_order <- NULL
+    written <- character(0)
+    plots <- list()
 
     # If clustering is missing/disabled -> no-op
     if (is.null(cl) || isFALSE(cl$enabled)) {
@@ -107,28 +111,26 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Get ID column from config (proteomics may use different column name)
         prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
-        row_annot_builder <- function() {
-          build_de_row_annotations(
+        annot_context <- list(
             summary_df    = de_res$summary_df,
-            feature_ids   = de_features,
             p_cutoff      = prot_p_cutoff,
             log2fc_cutoff = prot_log2fc,
             id_col        = prot_id_col
-          )
-        }
+        )
 
         # Heatmap setup
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
 
         # Run wrapper
         p_cluster <- wrap_clustering_heatmap(
-            expr_mat       = pre$expr_imp_single,
-            meta           = pre$meta,
-            cfg            = cfg,
-            feature_ids    = de_features,
-            ordering       = hc_res$ordering,
-            annotation_row_builder = row_annot_builder,
-            out_file       = f_hm,
+            expr_mat = pre$expr_imp_single,
+            meta = pre$meta,
+            cfg = cfg,
+            feature_ids = de_features,
+            ordering = hc_res$ordering,
+            annotation_row_builder = TRUE,
+            annotation_row_context = annot_context,
+            out_file = f_hm,
             title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
         written <- c(written, f_hm)
@@ -138,13 +140,14 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
         pheatmap_payload <- list(
             pheatmap = p_cluster,
-            mat = z_de_ordered,                    # Already in clustered order
-            row_order = rownames(z_de_ordered),    # Ordered row names for Plotly
-            col_order = colnames(z_de_ordered),    # Column names
+            mat = z_de_ordered, # Already in clustered order
+            row_order = rownames(z_de_ordered), # Ordered row names for Plotly
+            col_order = colnames(z_de_ordered), # Column names
             annotation_col = annot,
             feature_ids = de_features,
             is_zscored = TRUE,
-            tree_row = hc_res$details              # hclust object for dendrogram
+            cluster_cols = FALSE,
+            tree_row = hc_res$details # hclust object for dendrogram
         )
 
         # Save cluster assignments
@@ -240,11 +243,10 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         written <- c(written, legacy_files)
     }
-  
+
     # ---- 3) Binary patterns (only meaningful when >= 3 conditions) ----
     if (isTRUE(flags$binary_patterns)) {
         bcfg <- cl$steps$binary_patterns %||% list()
-
         clust_out_dir <- file.path(clustering_dir, "Binary_patterns")
         ensure_dir(clust_out_dir)
 
@@ -262,11 +264,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # expr_mat_counts = NULL means it will use expr_mat_corr for gating too
         bp_res <- run_binary_patterns(
             expr_mat_corr      = expr_mat,
-            expr_mat_counts    = NULL,  # proteomics has no separate counts matrix
+            expr_mat_counts    = NULL, # proteomics has no separate counts matrix
             meta               = pre$meta,
             cfg                = cfg,
             de_features        = de_features,
             out_dir            = clust_out_dir,
+            summary_df         = de_res$summary_df,
             corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
             counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
             counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
@@ -279,17 +282,20 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Capture for Shiny
         patterns_tbl <- bp_res$best %||% NULL
         heatmaps_by_pattern <- bp_res$plots %||% NULL
+        patterns_list <- bp_res$bp_pat %||% NULL
+    
     }
-
     return(list(
         plots = plots,
         files = unique(written),
         excel_order = excel_order,
         objects = list(
-            pheatmap_data_DE_genes = pheatmap_payload,
+            hm_hier_de = pheatmap_payload,
             patterns = patterns_tbl,
+            patterns_list = patterns_list,
             heatmaps_by_pattern = heatmaps_by_pattern,
             clusters = clusters_vec
         )
-    ))
+      ))
+    
 }

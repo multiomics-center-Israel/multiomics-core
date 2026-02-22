@@ -250,7 +250,7 @@ run_binary_patterns <- function(expr_mat_corr,
       cfg = cfg,
       feature_ids = feats_pat,
       ordering = NULL,
-      annotation_row_builder = build_contrast_row_annot,
+      annotation_row_builder = TRUE,
       annotation_row_context = annot_context,
       out_file = f_hm,
       title = sprintf("Pattern %s (%d genes)", pat, length(feats_pat)),
@@ -278,7 +278,8 @@ run_binary_patterns <- function(expr_mat_corr,
   return(list(
     files = unique(written),
     plots = plots,
-    best = best
+    best = best,
+    bp_pat = names(table(best$best_pattern))
   ))
 }
 
@@ -1066,8 +1067,8 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
     fc_vals <- sumdf_sub[[fc_col]]
 
     # Determine if gene passes DE threshold
-    # Proteomics: pass.imputs = 1 or NA;  RNA-seq: _pass = TRUE/FALSE
-    is_de <- !is.na(pass_vals) & (pass_vals == 1 | pass_vals == TRUE)
+    # Proteomics: pass.imputs = 1 or NA;  RNA-seq: _pass = "up"/"down"/""
+    is_de <- !is.na(pass_vals) & (pass_vals == 1 | pass_vals == TRUE | pass_vals %in% c("up", "down"))
 
     # Classify direction: NA = not significant, "up" or "down" = significant
     direction <- rep(NA_character_, nrow(sumdf_sub))

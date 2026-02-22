@@ -187,8 +187,8 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     fr = NULL
     keep_vec <- rep(TRUE, nrow(norm_for_filter)) 
     thr = 0
-    
-    if (cfg$filtering$enable){
+    filt_flag = cfg$filtering$enable %||% TRUE
+    if (filt_flag){
       # Run auto-filtering pipeline
       fr <- run_auto_filter_pipeline(
           cpm_mat     = norm_for_filter,
@@ -237,9 +237,8 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     )
     
     # match norm expr and filt expr in case filtering step wasn't apply
-    if (!cfg$filtering$enable){
-      counts_filt = counts_filt[rownames(expr_work), ]
-    }
+    if (!filt_flag) counts_filt = counts_filt[rownames(expr_work), ]
+    
     # =========================================================================
     # Build return object
     # =========================================================================

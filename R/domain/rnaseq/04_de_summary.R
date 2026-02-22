@@ -161,7 +161,7 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
     
     lfc <- tab$log2FoldChange[idx]
     raw_fc <- ifelse(lfc >= 0, 2^lfc, -1 * (2^-lfc))
-    rounded_fc <- signif(raw_fc, 3) # העיגול קורה כאן
+    rounded_fc <- signif(raw_fc, 3) 
     
     fc_col <- paste0("linearFC.", cn)
     summary_df[[fc_col]] <- rounded_fc
@@ -175,9 +175,8 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
       tab$padj[idx] <= padj_cutoff & 
       abs(as.numeric(rounded_fc)) >= linear_fc_cutoff
     
-    summary_df[[pass_col]] <- ifelse(is_sig, 
-                                     ifelse(rounded_fc > 0, "up", "down"), 
-                                     "")
+    summary_df[[pass_col]] <- ifelse(is_sig, 1, NA)
+                                    
   }
   
   # 4. Pass Any 

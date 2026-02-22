@@ -92,7 +92,7 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
                 SummarizedExperiment::assay(vt)
             } else {
                 nsub <- min(1000L, nrow(dds))
-                vt <- DESeq2::vst(dds, blind = TRUE, nsub = nsub)
+                vt <- DESeq2::varianceStabilizingTransformation(dds, blind = TRUE)#, nsub = nsub)
                 SummarizedExperiment::assay(vt)
             }
         },

@@ -73,12 +73,14 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
         } else if (exists("write_final_results_excels_legacy_generic")) {
             # Use generic if wrapper not available
             # Pass RAW counts (expr_filt) and clustering results
+            # ID column will be "Gene" (from legacy rename in write_rnaseq_outputs_legacy)
+            id_col <- if ("Gene" %in% names(final_results)) "Gene" else "FeatureID"
             files <- c(files, write_final_results_excels_legacy_generic(
                 final_results = final_results,
                 config = config,
                 out_dir = out_dir,
                 mode = "rna",
-                id_col = "Gene",
+                id_col = id_col,
                 expr_for_de = pre$expr_filt,  # RAW counts, not normalized
                 with_cutoffs = TRUE,
                 clustering_res = list(excel_order = excel_order)
@@ -93,11 +95,13 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
     # FIX 1: Remove annotation columns (gene_name, symbol, description) from final_results
     # FIX 2: Pass mode="rna" for correct column naming (no ".imputs.")
     # FIX 5: Use RAW counts (expr_filt) not normalized (expr_work)
+    # FIX 6: Auto-detect ID column (may be "Gene" after legacy rename, or "FeatureID" from build_rnaseq_summary_df)
+    id_col <- if ("Gene" %in% names(summary_df)) "Gene" else "FeatureID"
     build_final_results_generic(
         summary_df = summary_df,
         expr_df = pre$expr_filt,  # FIX 5: RAW counts for final results tables
         contrasts_df = contrasts_df,
-        feature_id_col = "Gene",
+        feature_id_col = id_col,  # FIX 6: Auto-detected ID column
         annot_cols = NULL,  # FIX 1: No annotation columns in RNA final_results
         row_data = row_data %||% pre$row_data,
         fc_is_signed = TRUE,  # log2FoldChange is signed
