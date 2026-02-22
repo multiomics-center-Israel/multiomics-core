@@ -145,7 +145,6 @@ modes:
           enabled: true
           corr_cutoff: 0.8
           counts_cutoff: 0
-          skip_trivial_patterns: true
 
       heatmap:
         max_rows: null

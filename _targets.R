@@ -58,6 +58,11 @@ available_pkgs <- required_pkgs[vapply(required_pkgs, requireNamespace,
 
 tar_option_set(packages = available_pkgs)
 
+# Resolve config path once at plan-definition time so the literal path is
+# baked into the target command.  This ensures {targets} detects a change
+# when MULTIOMICS_CONFIG points to a different file between runs.
+config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
+
 # ------------------------------------------------------------------------------
 # Targets definition
 # ------------------------------------------------------------------------------
@@ -67,8 +72,7 @@ list(
   # Override with: Sys.setenv(PIPELINE_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
-    Sys.getenv("PIPELINE_CONFIG",
-               "config/config_GT15.yaml"),
+    !!config_path,
     format = "file"
   ),
 
@@ -99,7 +103,8 @@ list(
     write_execution_info(
       config = config,
       run_dir = run_dir,
-      config_path = config_file
+      config_path = config_file,
+      targets_file = "_targets.R"
     ),
     format = "file"
   ),

@@ -81,7 +81,6 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
     if (nrow(dds) == 0) {
         stop("No rows with nonzero counts available for VST.")
     }
-
     # Store original counts for potential fallback
     original_counts <- if (source_type == "matrix") as.matrix(counts) else NULL
 
@@ -89,12 +88,11 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
         {
             if (nrow(dds) < 50) {
                 vt <- DESeq2::varianceStabilizingTransformation(
-                    dds, blind = TRUE, fitType = "mean"
-                )
+                    dds, blind = TRUE)
                 SummarizedExperiment::assay(vt)
             } else {
                 nsub <- min(1000L, nrow(dds))
-                vt <- DESeq2::vst(dds, blind = TRUE, nsub = nsub, fitType = "mean")
+                vt <- DESeq2::varianceStabilizingTransformation(dds, blind = TRUE)#, nsub = nsub)
                 SummarizedExperiment::assay(vt)
             }
         },

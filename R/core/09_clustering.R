@@ -6,38 +6,80 @@
 #' How it works:
 #' 1) Groups are defined by cfg$clustering$steps$binary_patterns$group_col
 #'    (e.g., "treatment" column with values: control, drugA, drugB)
-#' 2) Calculate mean expression for each feature across groups (feature x group matrix)
-#' 3) Generate all binary patterns based on number of groups
+#' 2) Generate all binary patterns based on number of groups
 #'    - For 3 groups: 000, 001, 010, 011, 100, 101, 110, 111
-#'    - Excludes trivial patterns (all-0, all-1) if skip_trivial_patterns=TRUE
-#' 4) For each feature, compute Pearson correlation between its group means and each pattern
-#' 5) Assign feature to pattern with highest correlation (if above corr_cutoff threshold)
-#' 6) Output: heatmaps, gene lists, and statistics per pattern
+#' 3) Each pattern is expanded to match the sample replicate structure
+#'    (e.g., pattern "101" with 3 reps/group becomes (1,1,1,0,0,0,1,1,1))
+#' 4) For each feature, compute Pearson correlation between its full sample-level
+#'    expression vector and each expanded pattern (captures within-group variability)
+#' 5) Apply dual count gating: "1" positions must exceed counts_cutoff_high,
+#'    "0" positions must be below counts_cutoff_low (if set)
+#' 6) Assign feature to pattern with highest correlation (if above corr_cutoff threshold)
+#' 7) Output: heatmaps, gene lists, and statistics per pattern
 #'
 #' Configuration:
 #' - group_col: Metadata column defining biological groups (REQUIRED)
 #' - corr_cutoff: Minimum correlation to assign feature to pattern (default 0.8)
-#' - counts_cutoff: Minimum count threshold per group (default 0)
+#' - counts_cutoff_high: Minimum count threshold for "on" groups (default 0)
+#' - counts_cutoff_low: Maximum count threshold for "off" groups (default NULL = disabled)
 #'
-#' @param expr_mat Feature x sample expression matrix
+#' @param expr_mat_corr Feature x sample expression matrix (log-transformed) for correlations and heatmaps
+#' @param expr_mat_counts Feature x sample expression matrix (counts) for gating thresholds.
+#'        If NULL, uses expr_mat_corr for both (legacy behavior).
 #' @param meta Sample metadata
 #' @param cfg Full config list (uses clustering$steps$binary_patterns)
 #' @param de_features Character vector of feature IDs to cluster
 #' @param out_dir Output directory for results
 #' @param corr_cutoff Minimum correlation threshold (overrides config)
-#' @param counts_cutoff Minimum count threshold (overrides config)
+#' @param counts_cutoff_high Minimum count for "1" positions (overrides config)
+#' @param counts_cutoff_low Maximum count for "0" positions; NULL disables (overrides config)
 #' @return List with files (paths), plots (ggplot objects), best (pattern assignments)
-run_binary_patterns <- function(expr_mat,
+run_binary_patterns <- function(expr_mat_corr,
+                                expr_mat_counts = NULL,
                                 meta,
                                 cfg,
                                 de_features,
                                 out_dir,
+                                summary_df = NULL,
                                 corr_cutoff = 0.8,
-                                counts_cutoff = 0) {
-  stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
-  expr_mat <- as.matrix(expr_mat)
+                                counts_cutoff_high = 0,
+                                counts_cutoff_low = NULL) {
+  stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
+  expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
   stopifnot(is.character(de_features))
+  
+  de_cfg <- cfg$modes$rna$de %||% list()
+  
+
+  # If no separate counts matrix provided, use the corr matrix for gating (legacy behavior)
+  if (is.null(expr_mat_counts)) {
+    expr_mat_counts <- expr_mat_corr
+    if (any(expr_mat_counts < 0, na.rm = TRUE)) {
+      warning("[binary_patterns] expr_mat_counts has negative values; counts gating expects raw counts. Consider passing expr_mat_counts separately.")
+    }
+  } else {
+    stopifnot(is.matrix(expr_mat_counts) || is.data.frame(expr_mat_counts))
+    expr_mat_counts <- as.matrix(expr_mat_counts)
+    # Validate dimensions match
+    if (!identical(dim(expr_mat_corr), dim(expr_mat_counts))) {
+      stop("[binary_patterns] expr_mat_corr and expr_mat_counts must have identical dimensions")
+    }
+    if (!identical(rownames(expr_mat_corr), rownames(expr_mat_counts))) {
+      stop("[binary_patterns] expr_mat_corr and expr_mat_counts must have identical row names")
+    }
+    if (!identical(colnames(expr_mat_corr), colnames(expr_mat_counts))) {
+      stop("[binary_patterns] expr_mat_corr and expr_mat_counts must have identical column names")
+    }
+    message("[binary_patterns] Using separate matrices: log data for correlations, counts for gating")
+  }
+  
+  
+  # Handle NULL/NA as "disable gating" by using -Inf
+  if (is.null(counts_cutoff_high) || is.na(counts_cutoff_high)) {
+    counts_cutoff_high <- -Inf
+    message("[binary_patterns] counts_cutoff_high=NULL/NA, disabling high counts gate")
+  }
 
   # Ensure directory exists
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -49,8 +91,10 @@ run_binary_patterns <- function(expr_mat,
 
   if (is.null(group_col)) {
     # Fallback to primary color for backward compatibility
-    color_config <- cfg$effects$color
-    group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+    group_col <- get_color_config(cfg)
+    message(sprintf("[binary_patterns] group_col not set, using effects$color fallback: %s", group_col))
+  } else {
+    message(sprintf("[binary_patterns] Using group_col: %s", group_col))
   }
 
   sample_col <- cfg$effects$samples
@@ -64,16 +108,22 @@ run_binary_patterns <- function(expr_mat,
   }
 
   # Align meta order to expression columns
-  samples <- colnames(expr_mat)
+  samples <- colnames(expr_mat_corr)
   m_idx <- match(samples, as.character(meta[[sample_col]]))
   if (any(is.na(m_idx))) {
-    stop("Binary patterns: meta is missing some samples present in expr_mat colnames")
+    stop("Binary patterns: meta is missing some samples present in expr_mat_corr colnames")
   }
   meta2 <- meta[m_idx, , drop = FALSE]
 
-  groups <- droplevels(as.factor(meta2[[group_col]]))
-  group_levels <- levels(groups)
+  # Legacy-equivalent: preserve group order as they appear in meta2 (like fct_inorder)
+  grp_chr <- as.character(meta2[[group_col]])
+  group_levels <- unique(grp_chr)                 # order of appearance
+  groups <- factor(grp_chr, levels = group_levels)
+  
   n_groups <- length(group_levels)
+
+  message(sprintf("[binary_patterns] %d groups detected: %s",
+                  n_groups, paste(group_levels, collapse = ", ")))
 
   # --- Early Return Fix 1: Return empty structure on failure ---
   if (n_groups < 3) {
@@ -82,7 +132,7 @@ run_binary_patterns <- function(expr_mat,
   }
 
   # Restrict to DE features present
-  feats <- intersect(de_features, rownames(expr_mat))
+  feats <- intersect(de_features, rownames(expr_mat_corr))
 
   # --- Early Return Fix 2: Return empty structure on failure ---
   if (length(feats) < 1) {
@@ -90,7 +140,10 @@ run_binary_patterns <- function(expr_mat,
     return(list(files = character(0), plots = list()))
   }
 
-  x <- expr_mat[feats, , drop = FALSE]
+  # x = log data for correlations and heatmaps
+  x <- expr_mat_corr[feats, , drop = FALSE]
+  # x_counts = counts data for gating thresholds
+  x_counts <- expr_mat_counts[feats, , drop = FALSE]
 
   # 1) Feature x Group means
   group_means <- sapply(group_levels, function(g) {
@@ -103,15 +156,30 @@ run_binary_patterns <- function(expr_mat,
   patterns <- .get_all_binary_patterns(n_groups)
   patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
   patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]
+  patterns <- as.character(unlist(patterns))
 
-  # 3) Counts gate
-  pass_counts <- .calc_counts_gate(x, groups, group_levels, patterns, counts_cutoff)
+  # 3) Counts gate (dual cutoff: high for "1" positions, low for "0" positions)
+  # Use x_counts (counts matrix) for gating, NOT the log-transformed x
+  pass_counts <- .calc_counts_gate(x_counts, groups, group_levels, patterns,
+                                   counts_cutoff_high, counts_cutoff_low)
 
-  # 4) Correlation to patterns (Vectorized!)
-  cor_mat <- .calc_cor_to_patterns(group_means, patterns)
+  # Diagnostic: How many features pass counts gate for ANY pattern?
+  n_pass_any <- sum(rowSums(pass_counts) > 0)
+  message(sprintf("[binary_patterns] %d/%d features pass counts gate (cutoff_high=%g, cutoff_low=%s)",
+                  n_pass_any, nrow(x_counts), counts_cutoff_high,
+                  if (is.null(counts_cutoff_low)) "NULL" else as.character(counts_cutoff_low)))
 
-  # Best pattern selection (Robust Logic)
-  best <- .best_pattern_per_feature(cor_mat, patterns, pass_counts, corr_cutoff)
+  # 4) Correlation to patterns
+  # Legacy equivalence: use sample-level correlation (cor with expanded pattern)
+  cor_mat <- .calc_cor_to_patterns(
+    expr_mat      = x,
+    patterns      = patterns,
+    groups        = groups,
+    group_levels  = group_levels
+  )
+
+  # Legacy equivalence: select best pattern based ONLY on correlation, then check counts gate
+ best <- .best_pattern_legacy(cor_mat, patterns, pass_counts, corr_cutoff)
 
   # --- Writing Outputs ---
   written <- character(0)
@@ -122,36 +190,83 @@ run_binary_patterns <- function(expr_mat,
 
   # Stats per pattern
   stats <- as.data.frame(table(best$best_pattern), stringsAsFactors = FALSE)
-  colnames(stats) <- c("pattern", "n_features")
+  if (ncol(stats) >= 2) {
+    colnames(stats) <- c("pattern", "n_features")
+  }
   written <- c(written, save_tsv(stats, out_dir, "corr_stats_patterns.tsv"))
 
   # 5) Heatmaps per pattern
   for (pat in patterns) {
-    # Filter features belonging to this pattern
-    feats_pat <- best$feature_id[which(best$best_pattern == pat)]
-    if (length(feats_pat) < 2) next
+    
+    # Features belonging to this pattern
+    idx_pat <- which(best$best_pattern == pat)
+    if (length(idx_pat) < 2) next
+    
+    feats_pat <- best$feature_id[idx_pat]
+    
+    # ---- LEGACY-EQUIVALENT ORDERING ----
+    # Legacy sorts genes within pattern by correlation to that pattern, descending.
+    # Since these genes have best_pattern==pat, best_corr is the correlation to pat.
+    ord <- order(best$best_corr[idx_pat], decreasing = TRUE, na.last = TRUE)
+    feats_pat <- feats_pat[ord]
+    # -----------------------------------
 
     mat2plot <- x[feats_pat, , drop = FALSE]
     f_hm <- file.path(out_dir, sprintf("Heatmap_%s.png", pat))
 
     annot_df <- data.frame(Condition = groups, row.names = samples)
 
-    # Create Object
-    p <- plot_heatmap_core(
-      expr_mat       = mat2plot,
-      annotation_col = annot_df,
-      max_rows       = NULL,
-      main           = sprintf("Pattern %s (%d features)", pat, length(feats_pat)),
-      scale_rows     = TRUE,
-      cluster_rows   = TRUE,
-      cluster_cols   = TRUE
+    # Pre-compute row clustering for Shiny (Professional approach)
+    # Z-score the rows first (same as pheatmap with scale="row")
+    mat_z <- zscore_rows(mat2plot)
+
+    # Defensive: only cluster if we have enough rows
+    if (nrow(mat_z) >= 2) {
+      row_dists <- stats::dist(mat_z, method = "euclidean")
+      row_hc <- stats::hclust(row_dists, method = "complete")
+      mat_ordered <- mat2plot[row_hc$order, , drop = FALSE]
+    } else {
+      row_hc <- NULL
+      mat_ordered <- mat2plot
+    }
+    
+    # Build DE pattern row annotations (up/down per contrast)
+
+    lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+    log2fc_cutoff <- log2(lin_fc_cutoff)
+    
+    
+    annot_context <- list(
+      summary_df    = summary_df,
+      p_cutoff      = de_cfg$p_cutoff %||% 0.05,
+      log2fc_cutoff = log2fc_cutoff,
+      id_col        = "FeatureID"
+    )
+    
+    
+    p_bin <- wrap_clustering_heatmap(
+      expr_mat = mat2plot,
+      meta = meta2,
+      cfg = cfg,
+      feature_ids = feats_pat,
+      ordering = NULL,
+      annotation_row_builder = TRUE,
+      annotation_row_context = annot_context,
+      out_file = f_hm,
+      title = sprintf("Pattern %s (%d genes)", pat, length(feats_pat)),
+      cluster_cols = FALSE
     )
 
-    # Save File
-    save_heatmap_to_file(p, f_hm)
+    save_heatmap_to_file(p_bin, f_hm)
 
-    # Store Object and Path
-    plots[[paste0("pattern_", pat)]] <- p
+    # Store Object and Path (Professional pre-compute approach for Shiny)
+    plots[[pat]] <- list(
+      pheatmap = p_bin,
+      mat = mat_ordered,                    # Already in clustered order
+      row_order = rownames(mat_ordered),    # Ordered row names for Plotly
+      col_order = colnames(mat_ordered),    # Column names (sample order)
+      tree_row = row_hc                     # hclust object for dendrogram
+    )
     written <- c(written, f_hm)
 
     # Gene list per pattern
@@ -163,33 +278,77 @@ run_binary_patterns <- function(expr_mat,
   return(list(
     files = unique(written),
     plots = plots,
-    best = best
+    best = best,
+    bp_pat = names(table(best$best_pattern))
   ))
 }
 
 # ---- Internal Helpers ----
 
+# Legacy-equivalent pattern generator (depth-first order: 000, 001, 010, 011, 100, 101, 110, 111)
+# This matches the legacy zero_one_sequences_helper() which appends "0" then "1" recursively.
 .get_all_binary_patterns <- function(n) {
-  grid <- expand.grid(rep(list(c(0, 1)), n), KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
-  apply(grid, 1, paste0, collapse = "")
+  .recursive_patterns <- function(prefix, remaining) {
+    if (remaining == 0) {
+      return(prefix)
+    }
+    c(
+      .recursive_patterns(paste0(prefix, "0"), remaining - 1),
+      .recursive_patterns(paste0(prefix, "1"), remaining - 1)
+    )
+  }
+  .recursive_patterns("", n)
 }
 
-.calc_cor_to_patterns <- function(group_means, patterns) {
-  P <- do.call(rbind, strsplit(patterns, split = ""))
-  # Ensures numeric matrix even if 1 row or 1 column
-  P_mat <- matrix(as.numeric(P), nrow = nrow(P), ncol = ncol(P))
+# Legacy-compatible: correlate GROUP MEANS with binary patterns
+# This gives much higher correlations than sample-level because within-group
+# variance is eliminated. With 3 groups, we correlate 3 values vs 3-element pattern.
+.calc_cor_to_patterns_groupmeans <- function(group_means, patterns) {
+  # group_means: features x groups matrix
+  # patterns: character vector like c("001", "010", "011", ...)
+  n_groups <- ncol(group_means)
 
-  # Vectorized Correlation: cor(Features_Transposed, Patterns_Transposed)
-  # Result: Features x Patterns
-  cors <- stats::cor(t(group_means), t(P_mat), use = "pairwise.complete.obs")
+  # Build pattern matrix: patterns x groups
+  P <- do.call(rbind, lapply(patterns, function(pat) {
+    as.numeric(strsplit(pat, "")[[1]])
+  }))
+  colnames(P) <- colnames(group_means)
+  rownames(P) <- patterns
+
+  # Correlation: features x patterns
+  # For each feature (row of group_means), correlate with each pattern (row of P)
+  cors <- stats::cor(t(group_means), t(P), use = "pairwise.complete.obs")
 
   colnames(cors) <- patterns
   rownames(cors) <- rownames(group_means)
-
   cors
 }
 
-.calc_counts_gate <- function(x, groups, group_levels, patterns, counts_cutoff) {
+# Sample-level correlation (kept for reference, but not used by default)
+.calc_cor_to_patterns <- function(expr_mat, patterns, groups, group_levels) {
+  # Build pattern matrix expanded to sample level
+  # Each pattern "101" becomes (1,1,1,0,0,0,1,1,1) matching sample order
+  P_expanded <- do.call(rbind, lapply(patterns, function(pat) {
+    bits <- as.integer(strsplit(pat, "")[[1]])
+    sample_pattern <- numeric(ncol(expr_mat))
+    for (g_idx in seq_along(group_levels)) {
+      cols <- which(groups == group_levels[g_idx])
+      sample_pattern[cols] <- bits[g_idx]
+    }
+    sample_pattern
+  }))
+  # P_expanded: patterns x samples
+  # Vectorized Pearson correlation: features x patterns
+  cors <- stats::cor(t(expr_mat), t(P_expanded), use = "everything")
+  
+  colnames(cors) <- patterns
+  rownames(cors) <- rownames(expr_mat)
+  cors
+}
+
+
+.calc_counts_gate <- function(x, groups, group_levels, patterns,
+                              counts_cutoff_high, counts_cutoff_low = NULL) {
   # returns logical matrix: features x patterns
   out <- matrix(TRUE, nrow = nrow(x), ncol = length(patterns))
   rownames(out) <- rownames(x)
@@ -199,58 +358,72 @@ run_binary_patterns <- function(expr_mat,
     pat <- patterns[j]
     bits <- as.integer(strsplit(pat, "")[[1]])
     ones <- which(bits == 1)
+    zeros <- which(bits == 0)
 
+    # Gate "1" groups: ALL samples must have counts > counts_cutoff_high
     if (length(ones) == 0) {
       out[, j] <- FALSE
       next
     }
 
-    cols <- unlist(lapply(group_levels[ones], function(g) which(groups == g)))
-    sub <- x[, cols, drop = FALSE]
+    cols_high <- unlist(lapply(group_levels[ones], function(g) which(groups == g)))
+    sub_high <- x[, cols_high, drop = FALSE]
+    ok_high <- apply(sub_high, 1, function(v) all(is.finite(v) & (v > counts_cutoff_high)))
 
-    # Strict check: ALL samples in "1" groups must be valid and > cutoff
-    ok <- apply(sub, 1, function(v) all(is.finite(v) & (v > counts_cutoff)))
-    out[, j] <- ok
+    # Gate "0" groups: ALL samples must have counts < counts_cutoff_low
+    if (!is.null(counts_cutoff_low) && length(zeros) > 0) {
+      cols_low <- unlist(lapply(group_levels[zeros], function(g) which(groups == g)))
+      sub_low <- x[, cols_low, drop = FALSE]
+      ok_low <- apply(sub_low, 1, function(v) all(is.finite(v) & (v < counts_cutoff_low)))
+      out[, j] <- ok_high & ok_low
+    } else {
+      out[, j] <- ok_high
+    }
   }
   out
 }
 
-.best_pattern_per_feature <- function(cor_mat, patterns, pass_counts, corr_cutoff) {
+# Legacy-equivalent best pattern selection:
+# 1. Choose best pattern purely from correlation (above corr_cutoff)
+# 2. Then separately check if that pattern passes counts gate
+# 3. Does NOT mask correlations with counts gate before selection
+.best_pattern_legacy <- function(cor_mat, patterns, pass_counts, corr_cutoff) {
   feats <- rownames(cor_mat)
+  n_feats <- length(feats)
 
-  # Apply gate: set correlation to NA if counts check failed
-  cor_mat[!pass_counts] <- NA_real_
+  best_pat <- rep(NA_character_, n_feats)
+  best_cor <- rep(NA_real_, n_feats)
+  best_pass_counts <- rep(NA, n_feats)
 
-  # 1. Calculate max values (suppressWarnings for -Inf when all NA)
-  max_vals <- suppressWarnings(apply(cor_mat, 1, max, na.rm = TRUE))
+ # For each feature, find best pattern based on correlation only
+  for (i in seq_len(n_feats)) {
+    row_cors <- cor_mat[i, ]
 
-  # 2. Determine validity (Avoids -Inf and NA issues)
-  is_valid <- !is.infinite(max_vals) & !is.na(max_vals) & (max_vals >= corr_cutoff)
+    # Skip if all NA
+    if (all(is.na(row_cors))) next
 
-  best_pat <- rep(NA_character_, length(feats))
-  best_cor <- rep(NA_real_, length(feats))
+    # Find max correlation (legacy: which.max returns first max in pattern order)
+    max_idx <- which.max(row_cors)
+    max_cor <- row_cors[max_idx]
 
-  # 3. Only find indices for valid rows
-  if (any(is_valid)) {
-    # Subset to valid rows only
-    valid_mat <- cor_mat[is_valid, , drop = FALSE]
+    # Only assign if above cutoff
+    if (!is.na(max_cor) && max_cor >= corr_cutoff) {
+      best_pat[i] <- patterns[max_idx]
+      best_cor[i] <- max_cor
 
-    # max.col is faster and safer than apply(which.max) for matrices
-    # It handles ties deterministically ("first") and doesn't return list
-    best_inds <- max.col(valid_mat, ties.method = "first")
-
-    best_pat[is_valid] <- patterns[best_inds]
-    best_cor[is_valid] <- max_vals[is_valid]
+      # Legacy: separately check if best pattern passes counts gate
+      best_pass_counts[i] <- pass_counts[i, max_idx]
+    }
   }
 
   data.frame(
     feature_id = feats,
     best_pattern = best_pat,
     best_corr = best_cor,
+    best_pattern_pass_counts_cutoff = best_pass_counts,
     stringsAsFactors = FALSE
   )
 }
-
 
 # Core clustering utilities for omics-agnostic feature clustering
 #
@@ -370,12 +543,10 @@ run_partition_clustering <- function(z_expr, config) {
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
 
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  if (is.null(color_config)) {
+  color_col <- get_color_config(cfg)
+  if (is.null(color_col)) {
     return(0L)
   }
-  color_col <- as.character(color_config[[1]])
 
   if (!nzchar(color_col)) {
     return(0L)
@@ -449,9 +620,7 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   stopifnot(is.data.frame(meta))
   expr_mat <- as.matrix(expr_mat)
 
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
   if (is.null(group_col) || !(group_col %in% colnames(meta))) {
@@ -522,6 +691,37 @@ choose_k_silhouette <- function(mat_fg, algorithm = c("pam", "kmeans"), k_max = 
   best_k
 }
 
+#' Choose k by gap statistic
+#'
+#' Uses cluster::clusGap() with hclust (Pearson correlation + Ward.D2) to find
+#' optimal k. Matches Neat_RNA-Seq behavior: firstSEmax with SE.factor=1.
+#'
+#' @param mat_fg Feature x group z-scored matrix
+#' @param k_max Maximum K to test (default 20)
+#' @param B Number of bootstrap samples (default 10)
+#' @return integer k
+choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
+  stopifnot(is.matrix(mat_fg))
+  n <- nrow(mat_fg)
+  if (n < 2) stop("choose_k_gap_statistic: need at least 2 features")
+  k_max <- min(as.integer(k_max), n - 1L)
+  if (k_max < 2) return(2L)
+
+  # Clustering function: hclust with Pearson correlation distance + Ward.D2
+  hclust_func <- function(x, k) {
+    d <- as.dist(1 - cor(t(x)))
+    hc <- stats::hclust(d, method = "ward.D2")
+    list(cluster = stats::cutree(hc, k = k))
+  }
+
+  gap <- cluster::clusGap(mat_fg, FUNcluster = hclust_func, K.max = k_max, B = B)
+  best_k <- cluster::maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"],
+                           method = "firstSEmax", SE.factor = 1)
+
+  # Guard: maxSE can return 1; force minimum of 2
+  max(as.integer(best_k), 2L)
+}
+
 #' Perform partition clustering on DE features using group means (legacy-like)
 #'
 #' @param expr_mat features x samples (imputed)
@@ -580,19 +780,24 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     if (!is.null(k_fixed)) {
       final_k <- as.integer(k_fixed)
     } else {
-      # Optimize K using Silhouette on the hierarchical tree cuts
-      # This mimics finding the "best cut"
-      sil_width <- numeric(k_max)
+      k_method <- tolower(cl_cfg$k_method %||% "silhouette")
 
-      for (i in 2:k_max) {
-        ct <- stats::cutree(hc, k = i)
-        # Calculate silhouette for this cut
-        sil <- cluster::silhouette(ct, dist_mat)
-        sil_width[i] <- mean(sil[, 3])
+      if (k_method == "gap") {
+        # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
+        gap_B <- cl_cfg$gap_B %||% 10
+        final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
+      } else {
+        # Default: Silhouette on hierarchical tree cuts
+        sil_width <- numeric(k_max)
+
+        for (i in 2:k_max) {
+          ct <- stats::cutree(hc, k = i)
+          sil <- cluster::silhouette(ct, dist_mat)
+          sil_width[i] <- mean(sil[, 3])
+        }
+
+        final_k <- which.max(sil_width[-1]) + 1
       }
-
-      # Pick K with max silhouette (ignoring k=1 which is 0)
-      final_k <- which.max(sil_width[-1]) + 1
     }
 
     # 4. Cut the tree
@@ -617,8 +822,15 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     }
   }
 
-  # Ensure names are set correctly
-  names(clusters) <- rownames(z_gm)
+  # Ensure names are set correctly (with defensive check)
+  z_gm_rownames <- rownames(z_gm)
+  if (length(clusters) != length(z_gm_rownames)) {
+    stop(sprintf(
+      "Partition clustering: cluster vector length (%d) does not match z_gm rows (%d)",
+      length(clusters), length(z_gm_rownames)
+    ))
+  }
+  names(clusters) <- z_gm_rownames
 
   list(
     algorithm = alg,
@@ -628,6 +840,62 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     z_group_means = z_gm
   )
 }
+
+#' Build cluster assignment table and optionally write to TSV
+#'
+#' @param clusters Named integer vector (names = feature IDs, values = cluster numbers)
+#' @param out_file Optional file path; if provided, writes TSV via save_tsv_path
+#' @return Data frame with columns: feature_id, cluster
+build_clustering_output_table <- function(clusters, out_file = NULL) {
+  tbl <- data.frame(
+    feature_id = names(clusters),
+    cluster = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(out_file)) save_tsv_path(tbl, out_file)
+  tbl
+}
+
+#' Build cluster profile data frame from z-scored group means
+#'
+#' Computes per-cluster mean and SD of z-scored group means. Handles empty
+#' clusters and NA group names safely.
+#'
+#' @param z_group_means Matrix (features x groups) of z-scored group means
+#' @param clusters Named integer vector mapping feature IDs to cluster numbers
+#' @param k Number of clusters
+#' @return Data frame with columns: cluster, group, mean, sd, n_features.
+#'         Returns NULL if all clusters are empty.
+build_cluster_profiles <- function(z_group_means, clusters, k) {
+  clv <- clusters[rownames(z_group_means)]
+  groups <- colnames(z_group_means)
+
+  prof_list <- lapply(seq_len(k), function(ci) {
+    rows <- which(clv == ci)
+    sub <- z_group_means[rows, , drop = FALSE]
+    if (nrow(sub) == 0) {
+      return(NULL)
+    }
+    data.frame(
+      cluster = ci,
+      group = groups,
+      mean = colMeans(sub, na.rm = TRUE),
+      sd = apply(sub, 2, stats::sd, na.rm = TRUE),
+      n_features = nrow(sub),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  prof_list <- Filter(Negate(is.null), prof_list)
+  if (length(prof_list) == 0) {
+    return(NULL)
+  }
+
+  prof <- do.call(rbind, prof_list)
+  if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
+  prof
+}
+
 #' Write cluster data in exact legacy format
 #' Columns: Name (Sample), Group, Exp (Absolute Expression)
 #' Summary File Columns: Cluster, Group, Mean, SE, Mean_SE.y, Mean_SE.ymin, Mean_SE.ymax
@@ -641,9 +909,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   # 1. Prepare Metadata Map (Sample -> Group)
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  group_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
+  group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
   meta_map <- meta %>%
@@ -731,65 +997,85 @@ zscore_rows <- function(mat) {
 #'
 #' Creates a data frame with genes as rows and contrasts as columns,
 #' showing which genes are up-regulated, down-regulated, or not significant
-#' in each contrast.
+#' in each contrast. Non-significant genes are set to NA so pheatmap renders
+#' them as white/blank. Columns with all NA (no DE genes) are removed.
 #'
-#' @param summary_df DE summary data frame with columns like padj.<contrast>, log2FoldChange.<contrast>
-#' @param feature_ids Character vector of feature IDs to include in heatmap
-#' @param p_cutoff P-value cutoff (default 0.05)
-#' @param log2fc_cutoff log2 fold-change cutoff (default log2(1.5) = 0.585)
+#' Auto-detects column style:
+#' - RNA-seq:     padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
+#' - Proteomics:  padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
 #'
-#' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/"ns"
+#' @param summary_df DE summary data frame
+#' @param feature_ids Character vector of feature IDs to include
+#' @param p_cutoff P-value cutoff (unused if pass columns exist, kept for API compat)
+#' @param log2fc_cutoff log2 fold-change cutoff (unused if pass columns exist)
+#'
+#' @param id_col Name of the feature ID column in summary_df (default "FeatureID")
+#'
+#' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/NA
 #' @export
-build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585) {
+build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585, id_col = "FeatureID") {
   stopifnot(is.data.frame(summary_df))
-  stopifnot("FeatureID" %in% colnames(summary_df))
+  stopifnot(id_col %in% colnames(summary_df))
 
-  # Identify contrast columns from padj.* pattern
   cols <- colnames(summary_df)
-  padj_cols <- grep("^padj\\.", cols, value = TRUE)
 
-  if (length(padj_cols) == 0) {
-    warning("build_de_row_annotations: No padj.* columns found in summary_df")
+  # Auto-detect column style
+  pass_imputs_cols <- grep("^pass\\.imputs\\.", cols, value = TRUE)
+  pass_suffix_cols <- grep("_pass$", cols, value = TRUE)
+
+  if (length(pass_imputs_cols) > 0) {
+    # Proteomics style: pass.imputs.<contrast>, linearFC.imputs.<contrast>
+    contrasts <- sub("^pass\\.imputs\\.", "", pass_imputs_cols)
+    pass_prefix <- "pass.imputs."
+    fc_prefix <- "linearFC.imputs."
+  } else if (length(pass_suffix_cols) > 0) {
+    # RNA-seq style: <contrast>_pass, linearFC.<contrast>
+    contrasts <- sub("_pass$", "", pass_suffix_cols)
+    pass_prefix <- NULL # special case: suffix pattern
+    fc_prefix <- "linearFC."
+  } else {
+    warning("build_de_row_annotations: No pass columns found in summary_df")
     return(NULL)
   }
 
-  # Extract contrast names
-  contrasts <- sub("^padj\\.", "", padj_cols)
-
-  # Filter summary_df to only genes in feature_ids
-  sumdf_sub <- summary_df[summary_df$FeatureID %in% feature_ids, , drop = FALSE]
+  # Filter to features in heatmap
+  sumdf_sub <- summary_df[summary_df[[id_col]] %in% feature_ids, , drop = FALSE]
 
   if (nrow(sumdf_sub) == 0) {
     warning("build_de_row_annotations: No features found in summary_df")
     return(NULL)
   }
 
-  # Initialize annotation data frame
+  # Build annotation list
   annot_list <- list()
 
   for (cn in contrasts) {
-    padj_col <- paste0("padj.", cn)
-    fc_col <- paste0("log2FoldChange.", cn)
+    # Determine column names
+    if (!is.null(pass_prefix)) {
+      pass_col <- paste0(pass_prefix, cn)
+    } else {
+      pass_col <- paste0(cn, "_pass")
+    }
+    fc_col <- paste0(fc_prefix, cn)
 
-    # Check if FC column exists
-    if (!fc_col %in% colnames(sumdf_sub)) {
-      warning(sprintf("Missing log2FoldChange column for contrast '%s', skipping", cn))
+    if (!pass_col %in% colnames(sumdf_sub) || !fc_col %in% colnames(sumdf_sub)) {
+      warning(sprintf("Missing columns for contrast '%s', skipping", cn))
       next
     }
 
-    padj_vals <- sumdf_sub[[padj_col]]
+    pass_vals <- sumdf_sub[[pass_col]]
     fc_vals <- sumdf_sub[[fc_col]]
 
-    # Classify each gene
-    pattern <- rep("ns", nrow(sumdf_sub))
-    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
-            padj_vals <= p_cutoff &
-            fc_vals > log2fc_cutoff] <- "up"
-    pattern[!is.na(padj_vals) & !is.na(fc_vals) &
-            padj_vals <= p_cutoff &
-            fc_vals < -log2fc_cutoff] <- "down"
+    # Determine if gene passes DE threshold
+    # Proteomics: pass.imputs = 1 or NA;  RNA-seq: _pass = "up"/"down"/""
+    is_de <- !is.na(pass_vals) & (pass_vals == 1 | pass_vals == TRUE | pass_vals %in% c("up", "down"))
 
-    annot_list[[cn]] <- pattern
+    # Classify direction: NA = not significant, "up" or "down" = significant
+    direction <- rep(NA_character_, nrow(sumdf_sub))
+    direction[is_de & !is.na(fc_vals) & fc_vals > 0] <- "up"
+    direction[is_de & !is.na(fc_vals) & fc_vals < 0] <- "down"
+
+    annot_list[[cn]] <- direction
   }
 
   if (length(annot_list) == 0) {
@@ -797,12 +1083,18 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
   }
 
   # Build data frame
-  annot_df <- as.data.frame(annot_list, stringsAsFactors = FALSE)
-  rownames(annot_df) <- sumdf_sub$FeatureID
+  annot_df <- as.data.frame(annot_list,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  rownames(annot_df) <- sumdf_sub[[id_col]]
 
-  # Convert to factor for pheatmap
-  for (col in colnames(annot_df)) {
-    annot_df[[col]] <- factor(annot_df[[col]], levels = c("down", "ns", "up"))
+  # Remove columns where all values are NA (no DE genes for that contrast)
+  keep <- vapply(annot_df, function(x) any(!is.na(x)), logical(1))
+  annot_df <- annot_df[, keep, drop = FALSE]
+
+  if (ncol(annot_df) == 0) {
+    return(NULL)
   }
 
   annot_df

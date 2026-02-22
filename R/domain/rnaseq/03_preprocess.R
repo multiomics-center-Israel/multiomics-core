@@ -27,7 +27,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
         txi <- inputs$txi
         counts <- txi$counts
         abundance <- txi$abundance  # TPM for filtering
-
+        message(sprintf("[txi_counts] %d", dim(counts)[1]))
         # Gene IDs are rownames
         gene_ids <- rownames(counts)
         row_data <- data.frame(gene_id = gene_ids, stringsAsFactors = FALSE)
@@ -182,31 +182,38 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
 
     # Define plot path for filtering QC
     plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+    
+    # Define initial parameters for unfiltered expression matrix
+    fr = NULL
+    keep_vec <- rep(TRUE, nrow(norm_for_filter)) 
+    thr = 0
+    filt_flag = cfg$filtering$enable %||% TRUE
+    if (filt_flag){
+      # Run auto-filtering pipeline
+      fr <- run_auto_filter_pipeline(
+          cpm_mat     = norm_for_filter,
+          meta        = meta2,
+          sample_col  = sample_col,
+          group_col   = group_col,
+          output_plot = plot_path
+      )
+      keep_vec = fr$keep_vec
+      # Capture used threshold for info
+      thr <- fr$used_threshold
+    }
 
-    # Run auto-filtering pipeline
-    fr <- run_auto_filter_pipeline(
-        cpm_mat     = norm_for_filter,
-        meta        = meta2,
-        sample_col  = sample_col,
-        group_col   = group_col,
-        output_plot = plot_path
-    )
-
-    # Capture used threshold for info
-    thr <- fr$used_threshold
-
-    if (sum(fr$keep_vec) == 0) {
+    if (sum(keep_vec) == 0) {
         stop("Filtering removed all features.")
     }
 
     # Apply gene filter to counts
-    counts_filt <- counts[fr$keep_vec, , drop = FALSE]
-    row_data_filt <- row_data[fr$keep_vec, , drop = FALSE]
+    counts_filt <- counts[keep_vec, , drop = FALSE]
+    row_data_filt <- row_data[keep_vec, , drop = FALSE]
 
     # Apply gene filter to txi (all three matrices together - invariant)
     txi_filt <- NULL
     if (!is.null(txi)) {
-        txi_filt <- subset_tximport_genes(txi, genes = fr$keep_vec)
+        txi_filt <- subset_tximport_genes(txi, genes = keep_vec)
     }
 
     # =========================================================================
@@ -228,7 +235,10 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
         prior.count = as.numeric(ncfg$prior.count %||% 1),
         sample_col  = sample_col
     )
-
+    
+    # match norm expr and filt expr in case filtering step wasn't apply
+    if (!filt_flag) counts_filt = counts_filt[rownames(expr_work), ]
+    
     # =========================================================================
     # Build return object
     # =========================================================================

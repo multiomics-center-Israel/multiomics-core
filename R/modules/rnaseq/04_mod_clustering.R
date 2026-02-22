@@ -18,19 +18,14 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     cfg <- config$modes$rna
     cl <- cfg$clustering
 
-    # Extract primary color (handle array config for multi-color PCA)
-    color_config <- cfg$effects$color
-    if (!is.null(color_config)) {
-        eff_color <- as.character(color_config[[1]])
-    } else {
-        eff_color <- NULL
-    }
+    eff_color <- get_color_config(cfg)
 
     # Initialize Objects for legacy Shiny export (MUST exist)
     objects <- list(
         patterns = NULL,
         heatmaps = NULL,
-        clusters = NULL # New_clusters
+        clusters = NULL, # New_clusters
+        hm_hier_de = NULL
     )
 
     excel_order <- NULL
@@ -121,6 +116,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         z_de <- zscore_rows(mat_de)
         colnames(z_de) <- paste0(colnames(z_de), ".zscore")
 
+        # Pre-compute ordered matrix for Shiny (Professional approach)
+        # Order rows according to clustering result - makes Shiny app robust
+        ordered_row_ids <- intersect(hc_res$ordering, rownames(z_de))
+        z_de_ordered <- z_de[ordered_row_ids, , drop = FALSE]
+
         excel_order <- list(
             ordered_ids = hc_res$ordering,
             zscore_mat  = z_de
@@ -132,36 +132,49 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
         log2fc_cutoff <- log2(lin_fc_cutoff)
 
-        row_annot <- build_de_row_annotations(
+
+        annot_context <- list(
             summary_df    = summary_df,
-            feature_ids   = de_features,
             p_cutoff      = p_cutoff,
-            log2fc_cutoff = log2fc_cutoff
+            log2fc_cutoff = log2fc_cutoff,
+            id_col        = "FeatureID"
         )
 
         # Heatmap
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
         p_cluster <- wrap_clustering_heatmap(
-            expr_mat       = expr_mat,
-            meta           = pre$meta,
-            cfg            = cfg,
-            feature_ids    = de_features,
-            ordering       = hc_res$ordering,
-            annotation_row = row_annot,
-            out_file       = f_hm
+            expr_mat = expr_mat,
+            meta = pre$meta,
+            cfg = cfg,
+            feature_ids = de_features,
+            ordering = hc_res$ordering,
+            annotation_row_builder = TRUE,
+            annotation_row_context = annot_context,
+            out_file = f_hm,
+            cluster_cols = FALSE,
+            title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
+
         written <- c(written, f_hm)
-        plots$p_cluster <- p_cluster
+        plots$partition_heatmap <- p_cluster
+
+        # Capture pheatmap payload for Shiny (Professional pre-compute approach)
+        # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
+        objects$hm_hier_de <- list(
+            pheatmap = p_cluster,
+            mat = z_de_ordered, # Already in clustered order
+            row_order = rownames(z_de_ordered), # Ordered row names for Plotly
+            col_order = colnames(z_de_ordered), # Column names
+            annotation_col = annot,
+            feature_ids = de_features,
+            is_zscored = TRUE,
+            tree_row = hc_res$details # hclust object for dendrogram
+        )
 
         # Save clusters
         if (!is.null(hc_res$clusters)) {
             f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
-            cl_tbl <- data.frame(
-                feature_id = names(hc_res$clusters),
-                cluster = as.integer(hc_res$clusters),
-                stringsAsFactors = FALSE
-            )
-            save_tsv_path(cl_tbl, f_tbl)
+            build_clustering_output_table(hc_res$clusters, f_tbl)
             written <- c(written, f_tbl)
 
             # Populate Shiny Object
@@ -192,13 +205,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         ensure_dir(part_dir)
 
         # (1) write clusters table
-        clusters_tbl <- data.frame(
-            feature_id = names(part_res$clusters),
-            cluster = as.integer(part_res$clusters),
-            stringsAsFactors = FALSE
-        )
         f_tbl <- file.path(part_dir, "partition_clusters.tsv")
-        save_tsv_path(clusters_tbl, f_tbl)
+        clusters_tbl <- build_clustering_output_table(part_res$clusters, f_tbl)
         written <- c(written, f_tbl)
 
         # (2) heatmap
@@ -216,9 +224,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             annot_col <- pre$meta[, annot_cols_config, drop = FALSE]
             rownames(annot_col) <- pre$meta[[cfg$effects$samples]]
             annot_col <- annot_col[colnames(mat_ord), , drop = FALSE]
-        } else {
-            # Fallback to single column
+        } else if (!is.null(annot)) {
+            # Fallback to single column (only if annot exists)
             annot_col <- annot[colnames(mat_ord), , drop = FALSE]
+        } else {
+            annot_col <- NULL
         }
 
         # Task 6: Row annotations showing cluster assignments
@@ -229,8 +239,16 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         )
 
         # Task 6: Compute gaps_row for visual cluster separation
-        cluster_sizes <- table(clusters_ordered)[unique(clusters_ordered)]
-        gaps_row <- cumsum(cluster_sizes)[-length(cluster_sizes)]
+        # Filter out NA clusters and ensure proper ordering
+        valid_clusters <- clusters_ordered[!is.na(clusters_ordered)]
+        if (length(valid_clusters) > 0 && length(unique(valid_clusters)) > 1) {
+            # Get sizes in order of appearance
+            cluster_order <- unique(clusters_ordered[!is.na(clusters_ordered)])
+            cluster_sizes <- table(factor(valid_clusters, levels = cluster_order))
+            gaps_row <- as.integer(cumsum(cluster_sizes)[-length(cluster_sizes)])
+        } else {
+            gaps_row <- NULL
+        }
 
         f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
 
@@ -249,38 +267,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        zgm <- part_res$z_group_means
-        clv <- part_res$clusters[rownames(zgm)]
-        k <- part_res$k
-        groups <- colnames(zgm)
+        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
 
-        prof_list <- lapply(1:k, function(ci) {
-            rows <- which(clv == ci)
-            sub <- zgm[rows, , drop = FALSE]
-            if (nrow(sub) == 0) {
-                return(NULL)
-            } # Safety
-            data.frame(
-                cluster = ci,
-                group = groups,
-                mean = colMeans(sub, na.rm = TRUE),
-                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                n_features = nrow(sub),
-                stringsAsFactors = FALSE
-            )
-        })
-
-        # Filter NULLs
-        prof_list <- Filter(Negate(is.null), prof_list)
-
-        if (length(prof_list) > 0) {
-            prof <- do.call(rbind, prof_list)
-
+        if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
             eff_col_name <- eff_color %||% "Group"
-
-            # Check for NA group names
-            if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
 
             p_prof <- plot_cluster_profiles(prof, x_label = eff_col_name)
 
@@ -298,20 +289,27 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         clust_out_dir <- file.path(clustering_dir, "Binary_patterns")
         ensure_dir(clust_out_dir)
 
+        # For RNA-seq: use log data for correlations, raw counts for gating
+        # expr_mat = pre$expr_work (log-transformed)
+        # pre$expr_filt = raw/filtered counts (for threshold gating)
         bp_res <- run_binary_patterns(
-            expr_mat      = expr_mat,
-            meta          = pre$meta,
-            cfg           = cfg,
-            de_features   = de_features,
-            out_dir       = clust_out_dir,
-            corr_cutoff   = bcfg$corr_cutoff %||% 0.8,
-            counts_cutoff = bcfg$counts_cutoff %||% 0
+            expr_mat_corr      = expr_mat, # log-transformed for correlations & heatmaps
+            expr_mat_counts    = as.matrix(pre$expr_filt), # raw counts for gating thresholds
+            meta               = pre$meta,
+            cfg                = cfg,
+            de_features        = de_features,
+            summary_df         = summary_df,
+            out_dir            = clust_out_dir,
+            corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
+            counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
+            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
         )
 
         if (!is.null(bp_res$files)) written <- c(written, bp_res$files)
 
         # Populate Shiny Objects
         objects$patterns <- bp_res$best %||% NULL
+        objects$patterns_list <- bp_res$bp_pat %||% NULL
         objects$heatmaps <- bp_res$plots %||% NULL
     }
 
