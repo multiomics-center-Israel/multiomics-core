@@ -15,7 +15,14 @@ validate_rna_config <- function(cfg) {
     }
     # sample_col is optional (defaults to SampleID), map_from/map_to optional too
 
-    # 2. Normalization
+    # 2. Files — counts and metadata are required
+    if (!is.null(cfg$files)) {
+        assert_scalar_chr(cfg$files$counts, "files$counts")
+        assert_scalar_chr(cfg$files$metadata, "files$metadata")
+        # sample_map and contrasts are optional
+    }
+
+    # 3. Normalization
     if (!is.null(cfg$normalization)) {
         n <- cfg$normalization
         assert_one_of(n$method, "normalization$method", c("TMMlogCPM", "VST"), allow_null = TRUE)
@@ -31,28 +38,67 @@ validate_rna_config <- function(cfg) {
         }
     }
 
-    # 3. Filtering
+    # 4. Filtering
     if (!is.null(cfg$filtering)) {
         f <- cfg$filtering
         assert_scalar_chr(f$group_col, "filtering$group_col", allow_null = TRUE)
         assert_scalar_num(f$threshold, "filtering$threshold", allow_null = TRUE, min_val = 0)
     }
 
-    # 4. DE
+    # 5. DE
     if (!is.null(cfg$de)) {
         d <- cfg$de
         assert_scalar_num(d$padj_cutoff, "de$padj_cutoff", allow_null = TRUE, min_val = 0, max_val = 1)
         assert_scalar_num(d$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
     }
 
-    # 5. Annotation (optional)
-    if (!is.null(cfg$annotation) && !is.null(cfg$annotation$source)) {
-        assert_one_of(
-            cfg$annotation$source,
-            "annotation$source",
-            c("Ensembl", "NCBI_GTF", "Generic"),
-            allow_null = TRUE
-        )
+    # 6. Annotation (optional)
+    if (!is.null(cfg$annotation)) {
+        a <- cfg$annotation
+        if (!is.null(a$source)) {
+            assert_one_of(
+                a$source,
+                "annotation$source",
+                c("Ensembl", "NCBI_GTF", "Generic"),
+                allow_null = TRUE
+            )
+        }
+        assert_scalar_chr(a$organism, "annotation$organism", allow_null = TRUE)
+        assert_scalar_chr(a$id_type, "annotation$id_type", allow_null = TRUE)
+        assert_scalar_bool(a$skip_annotation, "annotation$skip_annotation", allow_null = TRUE)
+    }
+
+    # 7. Batch Correction
+    if (!is.null(cfg$batch_correction)) {
+        bc <- cfg$batch_correction
+        assert_scalar_bool(bc$enabled, "batch_correction$enabled")
+        if (isTRUE(bc$enabled)) {
+            assert_one_of(bc$method, "batch_correction$method",
+                          c("combat_seq", "sva", "ruv"), allow_null = TRUE)
+        }
+    }
+
+    # 8. Deconvolution
+    if (!is.null(cfg$deconvolution)) {
+        dc <- cfg$deconvolution
+        assert_scalar_bool(dc$enabled, "deconvolution$enabled")
+    }
+
+    # 9. Pathway
+    if (!is.null(cfg$pathway)) {
+        p <- cfg$pathway
+        assert_scalar_bool(p$enabled, "pathway$enabled", allow_null = TRUE)
+        if (isTRUE(p$enabled)) {
+            assert_one_of(p$method, "pathway$method",
+                          c("fgsea", "ora", "gsea"), allow_null = TRUE)
+            if (!is.null(p$min_size) && !is.null(p$max_size)) {
+                assert_scalar_num(p$min_size, "pathway$min_size", min_val = 1)
+                assert_scalar_num(p$max_size, "pathway$max_size", min_val = 1)
+                if (p$min_size >= p$max_size) {
+                    stop("pathway$min_size must be less than pathway$max_size")
+                }
+            }
+        }
     }
 
     invisible(TRUE)

@@ -405,12 +405,12 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
 #' Volcano plot for a single DE table (one contrast)
 #'
 #' Consistent logic:
-#' Y-axis: -log10(P.Value)  [Raw p-value]
-#' Color:  adj.P.Val <= padj_cutoff AND abs(logFC) >= log2fc_cutoff
-#' H-line: pval_cutoff (optional, matches the Y-axis)
+#' Y-axis: -log10(adj.P.Val)  [Adjusted p-value / FDR]
+#' Color:  Up (red), Down (blue), NS (grey) based on padj and logFC thresholds
+#' H-line: padj_cutoff (matches the Y-axis and coloring threshold)
 #'
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
-#' @param cfg Config list (sections de$p_cutoff, de$pval_cutoff, de$linear_fc_cutoff)
+#' @param cfg Config list (sections de$p_cutoff, de$linear_fc_cutoff)
 #' @param title Plot title
 #' @param ... Ignored
 #' @return ggplot object
@@ -425,43 +425,47 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   }
 
   # Thresholds
-  padj_cut <- cfg$de$p_cutoff %||% 0.05 # Significance (coloring)
-  pval_cut <- cfg$de$pval_cutoff %||% 0.05 # H-line (matches Y-axis)
+  padj_cut <- cfg$de$p_cutoff %||% 0.05 # Significance threshold (Y-axis line and coloring)
   lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
   log2fc_cut <- log2(lin_fc_cut)
 
   df <- de_tbl
 
   # Prepare plotting data
-  # Y-axis uses FDR (adj.P.Val)
   df$.logFC <- as.numeric(df[["logFC"]])
-  df$.padj_raw <- as.numeric(df[["adj.P.Val"]])
-  df$.padj_y <- ifelse(is.na(df$.padj_raw), 1, df$.padj_raw)
-  df$.neglog10p <- -log10(pmax(df$.padj_y, 1e-300))
 
-  # Pass definition (uses adj.P.Val for significance)
-  df$.padj_plot <- df$.padj_y
+  # Y-axis uses ADJUSTED P-value (FDR)
+  df$.padj <- as.numeric(df[["adj.P.Val"]])
+  df$.padj_plot <- ifelse(is.na(df$.padj), 1, df$.padj)
+  df$.neglog10padj <- -log10(pmax(df$.padj_plot, 1e-300))
 
-  is_pass <- !is.na(df$.logFC) &
-    (df$.padj_plot <= padj_cut) &
-    (abs(df$.logFC) >= log2fc_cut)
+  # Categorize: Up, Down, NS (not significant)
+  is_sig <- !is.na(df$.logFC) & (df$.padj_plot <= padj_cut) & (abs(df$.logFC) >= log2fc_cut)
+  is_up <- is_sig & (df$.logFC > 0)
+  is_down <- is_sig & (df$.logFC < 0)
 
-  df$.pass <- factor(is_pass, levels = c(FALSE, TRUE))
+  df$.direction <- factor(
+    ifelse(is_up, "Up", ifelse(is_down, "Down", "NS")),
+    levels = c("NS", "Down", "Up")
+  )
 
-  # Debug: Print stats
-  n_pass <- sum(is_pass, na.rm = TRUE)
-  if (n_pass == 0) {
+  # Count stats
+  n_up <- sum(is_up, na.rm = TRUE)
+  n_down <- sum(is_down, na.rm = TRUE)
+  n_total <- n_up + n_down
+
+  if (n_total == 0) {
     if (is.null(title)) title <- "Volcano (0 sig)"
     message(sprintf(
-      "[plot_volcano] '%s': 0 genes passed (padj<=%.2g, |logFC|>=%.2g). Total row: %d",
+      "[plot_volcano] '%s': 0 genes passed (padj<=%.2g, |logFC|>=%.2g). Total rows: %d",
       title, padj_cut, log2fc_cut, nrow(df)
     ))
   } else {
     # Sort so significant points are plotted last (on top)
-    df <- df[order(df$.pass), ]
+    df <- df[order(df$.direction), ]
     message(sprintf(
-      "[plot_volcano] '%s': %d genes passed (padj<=%.2g, |logFC|>=%.2g)",
-      title, n_pass, padj_cut, log2fc_cut
+      "[plot_volcano] '%s': %d up, %d down (padj<=%.2g, |logFC|>=%.2g)",
+      title, n_up, n_down, padj_cut, log2fc_cut
     ))
   }
 
@@ -474,9 +478,10 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::labs(
       title = title %||% "Volcano plot",
       x = "log2 Fold Change",
-      y = "-log10(FDR)"
+      y = "-log10(adj.P.Val)"
     ) +
-    ggplot2::theme_minimal()
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "right")
 }
 
 #' MA plot for a single DE table (one contrast)
@@ -485,6 +490,8 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
 #'   - logFC
 #'   - AveExpr (preferred) OR .A provided externally
 #'   - P.Value and/or adj.P.Val
+#'
+#' Color: Up (red), Down (blue), NS (grey) based on padj and logFC thresholds
 #'
 #' @param de_tbl data.frame with DE results for one contrast
 #' @param cfg mode config (e.g., config$modes$proteomics)
@@ -500,7 +507,7 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   p_col <- if (isTRUE(use_adj) && "adj.P.Val" %in% colnames(de_tbl)) "adj.P.Val" else "P.Value"
   if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' or 'adj.P.Val'.")
 
-  # A column
+  # A column (already log2 scale from DESeq2/edgeR normalization)
   if ("AveExpr" %in% colnames(de_tbl)) {
     A <- as.numeric(de_tbl$AveExpr)
   } else if (".A" %in% colnames(de_tbl)) {
@@ -519,19 +526,45 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   df$.logFC <- as.numeric(df$logFC)
   df$.p <- as.numeric(df[[p_col]])
 
-  df$.pass <- !is.na(df$.p) & !is.na(df$.logFC) &
+  # Categorize: Up, Down, NS (not significant)
+  is_sig <- !is.na(df$.p) & !is.na(df$.logFC) &
     (df$.p <= p_cut) & (abs(df$.logFC) >= log2fc_cut)
+  is_up <- is_sig & (df$.logFC > 0)
+  is_down <- is_sig & (df$.logFC < 0)
+
+  df$.direction <- factor(
+    ifelse(is_up, "Up", ifelse(is_down, "Down", "NS")),
+    levels = c("NS", "Down", "Up")
+  )
+
+  # Count stats
+  n_up <- sum(is_up, na.rm = TRUE)
+  n_down <- sum(is_down, na.rm = TRUE)
+
+  # Sort so significant points are plotted last (on top)
+  df <- df[order(df$.direction), ]
 
   ggplot2::ggplot(df, ggplot2::aes(x = .A, y = .logFC)) +
-    ggplot2::geom_point(ggplot2::aes(color = .pass), alpha = 0.7, size = 1.2, na.rm = TRUE) +
+    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
+    ggplot2::scale_color_manual(
+      name = "Regulation",
+      values = c("NS" = "grey60", "Down" = "blue", "Up" = "red"),
+      labels = c(
+        "NS" = sprintf("NS (%d)", nrow(df) - n_up - n_down),
+        "Down" = sprintf("Down (%d)", n_down),
+        "Up" = sprintf("Up (%d)", n_up)
+      )
+    ) +
+    ggplot2::scale_alpha_manual(values = c("NS" = 0.4, "Down" = 0.8, "Up" = 0.8), guide = "none") +
     ggplot2::geom_hline(yintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed") +
+    ggplot2::geom_hline(yintercept = 0, color = "black", linewidth = 0.3) +
     ggplot2::labs(
       title = title %||% "MA plot",
-      x = "A (mean expression)",
-      y = "M (log2 Fold Change)"
+      x = "log2(Mean Expression)",
+      y = "log2 Fold Change"
     ) +
     ggplot2::theme_minimal() +
-    ggplot2::scale_color_manual(values = c(`FALSE` = "grey60", `TRUE` = "red"), guide = "none")
+    ggplot2::theme(legend.position = "right")
 }
 
 # ---- Helper ----

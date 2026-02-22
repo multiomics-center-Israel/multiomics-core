@@ -1,3 +1,22 @@
+#' Remove contaminant proteins (e.g. cRAP) by ID prefix
+filter_contaminants <- function(expr_mat, row_data, cfg) {
+    contam_prefix <- cfg$filtering$contaminant_prefix %||% "cRAP-"
+
+    ids <- rownames(expr_mat)
+    is_contam <- grepl(paste0("^", contam_prefix), ids)
+    n_contam <- sum(is_contam)
+
+    if (n_contam > 0) {
+        message(sprintf("Contaminant filtering: removing %d proteins with prefix '%s' (keeping %d).",
+                        n_contam, contam_prefix, sum(!is_contam)))
+        expr_mat <- expr_mat[!is_contam, , drop = FALSE]
+        if (!is.null(row_data)) {
+            row_data <- row_data[!is_contam, , drop = FALSE]
+        }
+    }
+    list(expr_mat = expr_mat, row_data = row_data, n_removed = n_contam)
+}
+
 #' Filter proteomics data using min_count per condition
 filter_proteomics_by_min_count <- function(expr_mat, row_data, meta, cfg, group_col = NULL) {
     eff <- cfg$effects

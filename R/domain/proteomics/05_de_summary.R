@@ -209,12 +209,19 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
 
     meta_aligned[[group_col]] <- factor(meta_aligned[[group_col]])
+    orig_levels <- levels(meta_aligned[[group_col]])
+    safe_levels <- make.names(orig_levels)
+    levels(meta_aligned[[group_col]]) <- safe_levels
+
     design <- model.matrix(stats::as.formula(paste0("~ 0 + ", group_col)), data = meta_aligned)
-    colnames(design) <- levels(meta_aligned[[group_col]])
+    colnames(design) <- safe_levels
 
     stopifnot(all(contrasts_df$Factor == group_col))
+    # Map contrast numerator/denominator to safe level names
+    safe_num <- make.names(contrasts_df$Numerator)
+    safe_den <- make.names(contrasts_df$Denominator)
     contrast_formulas <- setNames(
-        paste(contrasts_df$Numerator, contrasts_df$Denominator, sep = " - "),
+        paste(safe_num, safe_den, sep = " - "),
         contrasts_df$Contrast_name
     )
 

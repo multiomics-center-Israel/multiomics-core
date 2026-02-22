@@ -114,7 +114,7 @@ modes:
           k: null
         partition:
           enabled: true
-          method: "hclust"
+          algorithm: "hclust"
           distance: "euclidean"
           k: null
           k_max: 20
@@ -184,6 +184,15 @@ modes:
       # To disable adaptive plotting and generate all plots unconditionally:
       #   qc:
       #     adaptive_plots: false
+
+    # --------------------------------------------------------
+    # Technical report (auto-populated by wizard from facility report)
+    # --------------------------------------------------------
+    technical_report:
+      facility: ""
+      library_prep: ""
+      sequencing: ""
+      acknowledgment: ""
 
 params:
   seed: 1

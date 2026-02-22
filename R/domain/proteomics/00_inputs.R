@@ -15,15 +15,32 @@ validate_proteomics_inputs <- function(inputs, cfg) {
     eff_cols <- cfg$effects
 
     check_has_cols(protein, id_cols$protein_id, df_name = "protein")
-    check_has_cols(sample_map, c(id_cols$map_from, id_cols$map_to), df_name = "sample_map")
 
-    # Check sample columns consistency
-    annot_cols <- unlist(id_cols$protein_annot %||% character(0))
-    non_sample_cols <- unique(c(id_cols$protein_id, annot_cols))
-    protein_sample_cols <- setdiff(colnames(protein), non_sample_cols)
+    if (!is.null(sample_map)) {
+        # Validate sample map columns and consistency
+        check_has_cols(sample_map, c(id_cols$map_from, id_cols$map_to), df_name = "sample_map")
 
-    check_all_in(protein_sample_cols, sample_map[[id_cols$map_from]], "protein cols", "sample_map raw")
-    check_all_in(sample_map[[id_cols$map_to]], meta[[eff_cols$samples]], "sample_map unified", "meta samples")
+        annot_cols <- unlist(id_cols$protein_annot %||% character(0))
+        non_sample_cols <- unique(c(id_cols$protein_id, annot_cols))
+        protein_sample_cols <- setdiff(colnames(protein), non_sample_cols)
+
+        check_all_in(protein_sample_cols, sample_map[[id_cols$map_from]], "protein cols", "sample_map raw")
+        check_all_in(sample_map[[id_cols$map_to]], meta[[eff_cols$samples]], "sample_map unified", "meta samples")
+    } else {
+        # No sample map: protein column names must already match metadata sample IDs
+        annot_cols <- unlist(id_cols$protein_annot %||% character(0))
+        non_sample_cols <- unique(c(id_cols$protein_id, annot_cols))
+        protein_sample_cols <- setdiff(colnames(protein), non_sample_cols)
+
+        meta_samples <- meta[[eff_cols$samples]]
+        matched <- intersect(protein_sample_cols, meta_samples)
+        if (length(matched) == 0) {
+            stop("No sample map provided and protein column names do not match metadata sample IDs. ",
+                 "Provide a sample_map file or ensure column names match.")
+        }
+        message(sprintf("  No sample map: %d/%d protein columns matched metadata sample IDs directly.",
+                        length(matched), length(protein_sample_cols)))
+    }
 
     invisible(TRUE)
 }
@@ -69,9 +86,15 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
 
     inputs <- list()
 
+    # Files that may legitimately have blank/null paths in the config
+    optional_files <- c("peptides", "sample_map", "annotation", "trinotate", "contrasts")
+
     for (nm in names(files)) {
         rel <- files[[nm]]
-        if (!nzchar(rel)) stop("Empty file path for ", nm)
+        if (is.null(rel) || !nzchar(rel)) {
+            if (nm %in% optional_files) next
+            stop(sprintf("Required input file '%s' has an empty or missing path in config.", nm))
+        }
         abs <- resolve_raw_path(config, rel)
         if (!file.exists(abs)) stop("File not found: ", abs)
         inputs[[nm]] <- read_table_auto(abs)

@@ -136,7 +136,7 @@ modes:
 
         partition:
           enabled: true
-          method: "hclust"     # "kmeans" | "pam" | "hclust"
+          algorithm: "hclust"   # "kmeans" | "pam" | "hclust"
           distance: "euclidean"
           k: null
           k_max: 20
@@ -157,6 +157,85 @@ modes:
       color: "Condition"
       shape: null
       samples: "SampleID"
+
+    # --------------------------------------------------------
+    # Annotation / Organism
+    # --------------------------------------------------------
+    annotation:
+      organism: "Homo sapiens"      # or "auto", "Mus musculus", etc.
+      id_type: "auto"               # "auto" | "symbol" | "uniprot" | "ensembl_peptide"
+      skip_annotation: false
+      custom_mapping_file: null      # CSV/TSV with protein_id + gene_name columns (for non-model organisms)
+
+    # --------------------------------------------------------
+    # QC advanced settings
+    # --------------------------------------------------------
+    qc:
+      run_umap: true
+      umap_n_neighbors: 15
+      umap_min_dist: 0.1
+      outlier_sd_threshold: 3
+      min_sample_correlation: 0.8
+      top_de_heatmap_sizes: [25, 50, 100]
+
+    # --------------------------------------------------------
+    # Pathway enrichment
+    # Organism is read from annotation.organism above (single source of truth)
+    # --------------------------------------------------------
+    pathway:
+      enabled: true
+      method: "both"          # "fgsea" | "ora" | "both"
+      databases: ["GO", "KEGG"]
+      gmt_file: null          # Custom GMT file for non-model organisms
+      min_size: 10
+      max_size: 500
+
+    # --------------------------------------------------------
+    # PPI network analysis
+    # Species ID is derived from annotation.organism automatically.
+    # Override with species: <taxid> only if auto-derivation fails.
+    # --------------------------------------------------------
+    ppi:
+      enabled: true
+      # species: 9606         # Derived from annotation.organism; uncomment to override
+      significance_threshold: 0.05
+      lfc_threshold: 0
+      string_score_threshold: 400
+      active_subnetwork: true
+      complex_analysis: true
+
+    # --------------------------------------------------------
+    # Advanced statistics
+    # --------------------------------------------------------
+    advanced_stats:
+      enabled: true
+      compute_effect_size_ci: true
+      bootstrap_n: 1000
+      ci_level: 0.95
+      run_robust_regression: false
+      run_power_analysis: true
+      random_effects: null
+
+    # --------------------------------------------------------
+    # Technical report (auto-populated by wizard from log file)
+    # --------------------------------------------------------
+    technical_report:
+      facility: ""
+      sample_prep: ""
+      ms_acquisition: ""
+      search_engine: ""
+      search_parameters: ""
+      acknowledgment: ""
+
+    # --------------------------------------------------------
+    # AI commentary
+    # --------------------------------------------------------
+    commentary:
+      enabled: true
+      backend: "claude-code"
+      claude_code_model: "sonnet"
+      max_tokens: 1500
+      max_retries: 2
 
 # ============================================================
 # Global parameters

@@ -16,6 +16,12 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
 
     cfg <- config$modes$proteomics
 
+    # Check if QC post is enabled
+    if (isFALSE(cfg$qc_post$enabled)) {
+        message("QC post-DE disabled in config.")
+        return(list(plots = list(), files = character(0)))
+    }
+
     dirs <- create_legacy_output_dirs(out_dir)
     out_qc_post <- file.path(dirs$diagnostic_plots, "QC_post")
     ensure_dir(out_qc_post)
@@ -23,8 +29,13 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
     plots <- list()
     files <- character(0)
 
-    # always write the summary if available
-    if (!is.null(de_res$summary_df)) {
+    # Read plot/output toggles from config
+    do_volcano <- isTRUE(cfg$qc_post$plots$volcano %||% TRUE)
+    do_ma      <- isTRUE(cfg$qc_post$plots$ma %||% TRUE)
+    do_write   <- isTRUE(cfg$qc_post$outputs$write_de_tables %||% TRUE)
+
+    # Write the summary if available and enabled
+    if (do_write && !is.null(de_res$summary_df)) {
         f_all <- file.path(out_qc_post, "de_summary_all.tsv")
         save_tsv_path(de_res$summary_df, f_all)
         files <- c(files, f_all)
@@ -34,42 +45,61 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
     tables <- get_de_tables_qc_post(de_res, cfg, de_source = de_source)
 
 
-    # write per-contrast tables (and later: volcano)
+    # per-contrast plots
     for (cn in names(tables)) {
         de_tbl <- tables[[cn]]
         if (is.null(de_tbl)) next
 
         # Volcano
-        p_volcano <- plot_volcano(de_tbl,
-            cfg = cfg,
-            title = paste0("Volcano: ", cn, " (", de_source, ")"),
-            use_adj = TRUE
-        )
-        f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, de_source))
-        ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
+        if (do_volcano) {
+            p_volcano <- plot_volcano(de_tbl,
+                cfg = cfg,
+                title = paste0("Volcano: ", cn, " (", de_source, ")"),
+                use_adj = TRUE
+            )
+            f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, de_source))
+            ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
 
-        plots[[paste0("volcano_", cn)]] <- p_volcano
-        files <- c(files, f_volcano)
-
-        # MA
-        id_col <- cfg$de_table$id_col %||% "FeatureID"
-        de_tbl_ma <- de_tbl
-        if (!("AveExpr" %in% colnames(de_tbl_ma))) {
-            de_tbl_ma <- add_A_from_expr(de_tbl_ma, pre$expr_imp_single, id_col = "FeatureID")
+            plots[[paste0("volcano_", cn)]] <- p_volcano
+            files <- c(files, f_volcano)
         }
 
-        p_ma <- plot_ma(de_tbl_ma,
-            cfg = cfg,
-            title = paste0("MA: ", cn, " (", de_source, ")"),
-            use_adj = TRUE
-        )
-        f_ma <- file.path(out_qc_post, sprintf("ma_%s_%s.png", cn, de_source))
-        ggplot2::ggsave(f_ma, plot = p_ma, width = 8, height = 6, dpi = 150)
+        # MA
+        if (do_ma) {
+            id_col <- cfg$de_table$id_col %||% "FeatureID"
+            de_tbl_ma <- de_tbl
+            if (!("AveExpr" %in% colnames(de_tbl_ma))) {
+                de_tbl_ma <- add_A_from_expr(de_tbl_ma, pre$expr_imp_single, id_col = "FeatureID")
+            }
 
-        plots[[paste0("ma_", cn)]] <- p_ma
-        files <- c(files, f_ma)
+            p_ma <- plot_ma(de_tbl_ma,
+                cfg = cfg,
+                title = paste0("MA: ", cn, " (", de_source, ")"),
+                use_adj = TRUE
+            )
+            f_ma <- file.path(out_qc_post, sprintf("ma_%s_%s.png", cn, de_source))
+            ggplot2::ggsave(f_ma, plot = p_ma, width = 8, height = 6, dpi = 150)
+
+            plots[[paste0("ma_", cn)]] <- p_ma
+            files <- c(files, f_ma)
+        }
     }
 
+    # ---------- Top DE heatmaps ----------
+    heatmap_sizes <- cfg$qc$top_de_heatmap_sizes %||% c(25, 50, 100)
+    for (cn in names(tables)) {
+        de_tbl <- tables[[cn]]
+        if (is.null(de_tbl)) next
+        for (n_top in heatmap_sizes) {
+            ph <- plot_top_de_heatmap(de_tbl, pre$expr_imp_single, pre$meta, cfg, n_top, cn)
+            if (!is.null(ph)) {
+                f_hm <- file.path(out_qc_post, sprintf("heatmap_top%d_%s.png", n_top, cn))
+                save_heatmap_to_file(ph, f_hm, width = 1200, height = 800 + n_top * 3, res = 150)
+                files <- c(files, f_hm)
+                plots[[sprintf("heatmap_top%d_%s", n_top, cn)]] <- ph
+            }
+        }
+    }
 
     list(plots = plots, files = unique(files))
 }

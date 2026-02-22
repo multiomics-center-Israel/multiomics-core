@@ -152,7 +152,7 @@ run_binary_patterns <- function(expr_mat_corr,
   })
   group_means <- as.matrix(group_means) # features x groups
 
-  # 2) Patterns (exclude all-0 / all-1)
+  # 2) Patterns (optionally exclude all-0 / all-1)
   patterns <- .get_all_binary_patterns(n_groups)
   patterns <- patterns[patterns != paste(rep("0", n_groups), collapse = "")]
   patterns <- patterns[patterns != paste(rep("1", n_groups), collapse = "")]

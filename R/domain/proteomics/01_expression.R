@@ -1,3 +1,54 @@
+#' Apply custom annotation mapping to populate Genes and description columns
+#'
+#' @param row_data Data frame of feature annotations
+#' @param cfg Proteomics mode config
+#' @return Updated row_data with gene names and descriptions filled in
+apply_custom_annotation <- function(row_data, cfg) {
+    ann_cfg <- cfg$annotation %||% list()
+    mapping_file <- ann_cfg$custom_mapping_file
+    if (is.null(mapping_file) || !nzchar(mapping_file) || !file.exists(mapping_file)) {
+        return(row_data)
+    }
+
+    protein_id_col <- cfg$id_columns$protein_id
+    mapping <- read.csv(mapping_file, stringsAsFactors = FALSE)
+
+    # Strip version suffix from protein IDs for matching (e.g. KAE8301209.1 -> KAE8301209)
+    ids_stripped <- sub("\\.[0-9]+$", "", as.character(row_data[[protein_id_col]]))
+
+    # Match to mapping$protein_id
+    idx <- match(ids_stripped, mapping$protein_id)
+
+    mapped_genes <- ifelse(!is.na(idx), mapping$gene_name[idx], NA_character_)
+    mapped_desc  <- ifelse(!is.na(idx), mapping$description[idx], NA_character_)
+
+    # Build display label: "gene_name | description" for readable display
+    mapped_display <- ifelse(
+        !is.na(mapped_genes) & !is.na(mapped_desc) & nzchar(mapped_desc),
+        paste0(mapped_genes, " | ", mapped_desc),
+        mapped_genes
+    )
+
+    # Only overwrite if existing values are empty or just "|"
+    if ("Genes" %in% colnames(row_data)) {
+        empty_genes <- is.na(row_data$Genes) | !nzchar(trimws(gsub("\\|", "", row_data$Genes)))
+        row_data$Genes[empty_genes & !is.na(mapped_display)] <- mapped_display[empty_genes & !is.na(mapped_display)]
+    } else {
+        row_data$Genes <- mapped_display
+    }
+
+    if ("First.Protein.Description" %in% colnames(row_data)) {
+        empty_desc <- is.na(row_data$First.Protein.Description) | !nzchar(trimws(row_data$First.Protein.Description))
+        row_data$First.Protein.Description[empty_desc & !is.na(mapped_desc)] <- mapped_desc[empty_desc & !is.na(mapped_desc)]
+    } else {
+        row_data$First.Protein.Description <- mapped_desc
+    }
+
+    n_mapped <- sum(!is.na(mapped_genes))
+    message(sprintf("Custom annotation: mapped %d / %d protein IDs to gene names.", n_mapped, nrow(row_data)))
+    row_data
+}
+
 #' Build a standardized proteomics expression object (engine-aware)
 #'
 #' @param inputs List from load_proteomics_inputs().
@@ -18,6 +69,7 @@ get_proteomics_expression_matrix <- function(inputs, config) {
 
         # Feature annotations (row_data)
         row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
+        row_data <- apply_custom_annotation(row_data, cfg)
     } else {
         stop(sprintf("Unsupported proteomics engine: %s", cfg$engine))
     }
@@ -89,18 +141,22 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
 
     # 4) Rename columns: raw sample names -> SampleID using sample_map
     raw_names <- colnames(df_m)
-    map_from <- id_cols$map_from
-    map_to <- id_cols$map_to
 
-    check_has_cols(sample_map, c(map_from, map_to), df_name = "sample_map")
-    new_names <- sample_map[[map_to]][match(raw_names, sample_map[[map_from]])]
+    if (!is.null(sample_map)) {
+        map_from <- id_cols$map_from
+        map_to <- id_cols$map_to
 
-    unmatched <- is.na(new_names)
-    if (any(unmatched)) {
-        warning("These DIA-NN columns did not match any row in sample_map$", map_from, ": ", paste(raw_names[unmatched], collapse = ", "))
+        check_has_cols(sample_map, c(map_from, map_to), df_name = "sample_map")
+        new_names <- sample_map[[map_to]][match(raw_names, sample_map[[map_from]])]
+
+        unmatched <- is.na(new_names)
+        if (any(unmatched)) {
+            warning("These DIA-NN columns did not match any row in sample_map$", map_from, ": ", paste(raw_names[unmatched], collapse = ", "))
+        }
+
+        colnames(df_m) <- ifelse(unmatched, raw_names, new_names)
     }
-
-    colnames(df_m) <- ifelse(unmatched, raw_names, new_names)
+    # else: no sample_map — column names are already the sample IDs
 
     # 5) Reorder columns to match metadata sample order
     meta_sample_col <- eff_cols$samples

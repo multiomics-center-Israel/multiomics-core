@@ -1,0 +1,17 @@
+# Don't send these to Docker build context
+_targets/
+outputs/
+data/
+renv/library/
+renv/staging/
+renv/sandbox/
+renv/python/
+.Rproj.user
+.RData
+.Rhistory
+*.log
+.git
+.DS_Store
+Thumbs.db
+Rplots.pdf
+scripts/

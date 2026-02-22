@@ -318,11 +318,18 @@ to_long_format <- function(prep_data) {
 
 
 #' Boxplots of normalized expression per sample
+#' @param expr_norm Expression matrix (genes x samples)
+#' @param meta Sample metadata data.frame
+#' @param cfg Mode config with effects$color, effects$samples
+#' @param out_file Optional output file path
+#' @param title Optional custom title (default: "Normalized expression boxplots")
 norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
   norm_expr_long <- to_long_format(d)
 
   if (is.null(title)) title <- "Normalized expression boxplots"
+
+  plot_title <- title %||% "Normalized expression boxplots"
 
   p <- ggplot2::ggplot(
     norm_expr_long,
@@ -330,7 +337,7 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
   ) +
     ggplot2::geom_boxplot(outlier.size = 0.4) +
     ggplot2::labs(
-      title  = title,
+      title  = plot_title,
       x      = "Sample",
       y      = "log2(normalized intensity)",
       colour = d$color_col
@@ -339,8 +346,6 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
     ggplot2::theme(
       axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
     )
-
-
 
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 8, height = 5)

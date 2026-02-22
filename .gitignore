@@ -40,6 +40,13 @@ reports/
 # Local data (do not commit)
 data/
 
+# Project-specific configs (use config/templates/ as reference)
+config/*.yaml
+!config/templates/*.yaml
+
+# Third-party repos (referenced, not bundled)
+claude-scientific-skills/
+
 # Local scratch scripts
 scripts/*.R
 

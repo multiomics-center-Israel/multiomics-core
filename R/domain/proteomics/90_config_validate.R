@@ -94,7 +94,7 @@ validate_clustering_config <- function(clust_cfg) {
             p <- clust_cfg$steps$partition
             assert_named_list(p, "clustering$steps$partition")
             assert_scalar_bool(p$enabled, "clustering$steps$partition$enabled", allow_null = TRUE)
-            assert_one_of(p$algorithm, "clustering$steps$partition$algorithm", c("pam", "kmeans"), allow_null = TRUE)
+            assert_one_of(p$algorithm, "clustering$steps$partition$algorithm", c("pam", "kmeans", "hclust"), allow_null = TRUE)
 
             if (!is.null(p$k)) assert_scalar_num(p$k, "clustering$steps$partition$k", min_val = 2)
             if (!is.null(p$k_max)) assert_scalar_num(p$k_max, "clustering$steps$partition$k_max", min_val = 2)

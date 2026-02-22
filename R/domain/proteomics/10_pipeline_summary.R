@@ -1,0 +1,699 @@
+#' Proteomics Pipeline Summary HTML Generation
+#'
+#' Generates a dark-themed HTML summary of the complete proteomics pipeline
+#' workflow, from sample prep through downstream analysis. Data is extracted
+#' from pipeline objects and config. Descriptions polished by Claude Code CLI.
+#'
+#' Adapted from RNA-seq version (R/domain/rnaseq/10_pipeline_summary.R).
+
+# ==============================================================================
+# DATA COLLECTION
+# ==============================================================================
+
+#' Collect all pipeline statistics for the proteomics summary
+#'
+#' @param config      Full pipeline config
+#' @param pre         Preprocessed data list (expr_raw, expr_imp_single, meta)
+#' @param de_res      DE results list (summary_df, tables)
+#' @param pathway_res Pathway results list
+#' @return Named list with all stats organized by section
+collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) {
+
+    prot_cfg <- config$modes$proteomics
+    tech_rep <- prot_cfg$technical_report %||% list()
+
+    # --- Project info ---
+    analyst <- gsub("_", " ", config$project$analyst %||% "")
+
+    project <- list(
+        name     = config$project$name %||% "Proteomics Analysis",
+        analyst  = analyst,
+        date     = format(Sys.Date(), "%B %d, %Y"),
+        date_iso = format(Sys.Date(), "%Y-%m-%d"),
+        facility = tech_rep$facility %||% ""
+    )
+
+    # --- Sample & protein overview ---
+    n_samples      <- if (!is.null(pre$expr_imp_single)) ncol(pre$expr_imp_single) else NA
+    n_proteins_raw <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA
+    n_proteins     <- if (!is.null(pre$expr_imp_single)) nrow(pre$expr_imp_single) else NA
+
+    group_col <- prot_cfg$effects$color %||% "Condition"
+    n_groups <- NA
+    groups <- character()
+    if (!is.null(pre$meta) && !is.null(group_col) && group_col %in% names(pre$meta)) {
+        groups <- unique(as.character(pre$meta[[group_col]]))
+        n_groups <- length(groups)
+    }
+
+    # --- DE statistics ---
+    # Proteomics DE uses wide-format summary_df with padj.imputs.ContrastName
+    # and linearFC.imputs.ContrastName columns
+    n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
+    de_contrasts <- list()
+
+    p_cut  <- prot_cfg$de$p_cutoff %||% 0.05
+    fc_lin <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+
+    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+        for (cn in names(de_res$tables)) {
+            tbl <- de_res$tables[[cn]]
+            if (!is.data.frame(tbl) || !("padj" %in% names(tbl))) next
+
+            sig <- !is.na(tbl$padj) & tbl$padj <= p_cut
+
+            # Proteomics uses linearFC (not log2FoldChange)
+            fc_col <- if ("linearFC" %in% names(tbl)) "linearFC"
+                      else if ("log2FoldChange" %in% names(tbl)) "log2FoldChange"
+                      else NULL
+
+            if (!is.null(fc_col)) {
+                if (fc_col == "linearFC") {
+                    sig <- sig & (abs(tbl[[fc_col]]) >= fc_lin | (1 / abs(tbl[[fc_col]])) <= (1 / fc_lin))
+                    up <- sum(sig & tbl[[fc_col]] > 1, na.rm = TRUE)
+                    dn <- sum(sig & tbl[[fc_col]] < 1, na.rm = TRUE)
+                } else {
+                    log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
+                    if (log2_fc > 0) sig <- sig & (abs(tbl[[fc_col]]) >= log2_fc)
+                    up <- sum(sig & tbl[[fc_col]] > 0, na.rm = TRUE)
+                    dn <- sum(sig & tbl[[fc_col]] < 0, na.rm = TRUE)
+                }
+            } else {
+                up <- 0; dn <- 0
+            }
+
+            de_contrasts[[cn]] <- list(
+                name = cn, total = sum(sig, na.rm = TRUE),
+                up = up %||% 0, down = dn %||% 0, tested = sum(!is.na(tbl$padj))
+            )
+            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+            n_de_up <- n_de_up + (up %||% 0); n_de_down <- n_de_down + (dn %||% 0)
+        }
+    } else if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+
+        # Try proteomics-style columns first: padj.imputs.ContrastName
+        padj_cols <- grep("^padj\\.imputs\\.", names(sdf), value = TRUE)
+        if (length(padj_cols) == 0) {
+            padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
+        }
+
+        for (pc in padj_cols) {
+            cn <- sub("^padj\\.imputs\\.", "", sub("^padj\\.", "", pc))
+
+            # Look for linearFC columns
+            lfc_col <- paste0("linearFC.imputs.", cn)
+            if (!(lfc_col %in% names(sdf))) {
+                lfc_col <- paste0("linearFC.", cn)
+            }
+            l2fc_col <- paste0("log2FoldChange.", cn)
+
+            if (lfc_col %in% names(sdf)) {
+                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
+                sig <- sig & (abs(sdf[[lfc_col]]) >= fc_lin | (1 / abs(sdf[[lfc_col]])) <= (1 / fc_lin))
+                up <- sum(sig & sdf[[lfc_col]] > 1, na.rm = TRUE)
+                dn <- sum(sig & sdf[[lfc_col]] < 1, na.rm = TRUE)
+            } else if (l2fc_col %in% names(sdf)) {
+                log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
+                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
+                if (log2_fc > 0) sig <- sig & (abs(sdf[[l2fc_col]]) >= log2_fc)
+                up <- sum(sig & sdf[[l2fc_col]] > 0, na.rm = TRUE)
+                dn <- sum(sig & sdf[[l2fc_col]] < 0, na.rm = TRUE)
+            } else {
+                next
+            }
+
+            de_contrasts[[cn]] <- list(
+                name = cn, total = sum(sig, na.rm = TRUE),
+                up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+            )
+            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+            n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+        }
+    }
+
+    # --- Pathway statistics ---
+    n_pathways_total <- 0; n_pathways_up <- 0; n_pathways_down <- 0
+    if (!is.null(pathway_res$pathway_results)) {
+        count_from_df <- function(df) {
+            if (!is.data.frame(df) || !"padj" %in% names(df)) return(NULL)
+            sig_pw <- df[!is.na(df$padj) & df$padj < 0.05, , drop = FALSE]
+            n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0
+            n_dn <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES < 0, na.rm = TRUE) else 0
+            list(total = nrow(sig_pw), up = n_up, down = n_dn)
+        }
+
+        for (pr_name in names(pathway_res$pathway_results)) {
+            pr <- pathway_res$pathway_results[[pr_name]]
+            if (is.data.frame(pr)) {
+                res <- count_from_df(pr)
+            } else if (is.list(pr)) {
+                res <- list(total = 0, up = 0, down = 0)
+                for (sub_name in names(pr)) {
+                    sub_res <- count_from_df(pr[[sub_name]])
+                    if (!is.null(sub_res)) {
+                        res$total <- res$total + sub_res$total
+                        res$up    <- res$up + sub_res$up
+                        res$down  <- res$down + sub_res$down
+                    }
+                }
+            } else {
+                res <- NULL
+            }
+            if (!is.null(res)) {
+                n_pathways_total <- n_pathways_total + res$total
+                n_pathways_up    <- n_pathways_up + res$up
+                n_pathways_down  <- n_pathways_down + res$down
+            }
+        }
+    }
+
+    # --- Subtitle from organism + groups ---
+    organism <- prot_cfg$annotation$organism %||% ""
+    subtitle <- project$name
+    if (nzchar(organism) && !is.na(n_groups) && n_groups >= 2) {
+        genus <- sub("\\s.*", "", organism)
+        subtitle <- sprintf("%s &mdash; %s %s",
+                            project$name, genus,
+                            paste(groups, collapse = " vs "))
+    }
+
+    # --- Imputation info ---
+    imp_method <- prot_cfg$imputation$method %||% "none"
+    imp_width  <- prot_cfg$imputation$width %||% 0.2
+    imp_down   <- prot_cfg$imputation$downshift %||% 1.6
+
+    list(
+        project  = project,
+        subtitle = subtitle,
+        overview = list(
+            n_samples = n_samples %||% 0, n_groups = n_groups %||% 0,
+            groups = groups, n_proteins = n_proteins %||% 0,
+            n_proteins_fmt = format(n_proteins %||% 0, big.mark = ","),
+            n_de_proteins_fmt = format(n_de_total, big.mark = ",")
+        ),
+        de = list(total = n_de_total, up = n_de_up, down = n_de_down,
+                  contrasts = de_contrasts),
+        pathway = list(total = n_pathways_total, up = n_pathways_up,
+                       down = n_pathways_down),
+        methods = list(
+            normalization = prot_cfg$normalization$method %||% "none",
+            imputation    = imp_method,
+            imp_width     = imp_width,
+            imp_downshift = imp_down,
+            de_method     = prot_cfg$de$method %||% "limma",
+            p_cutoff      = prot_cfg$de$p_cutoff %||% 0.05,
+            fc_cutoff     = prot_cfg$de$linear_fc_cutoff %||% 1.5,
+            pathway_method = prot_cfg$pathway$method %||% "both",
+            pathway_dbs    = prot_cfg$pathway$databases %||% c("GO", "KEGG"),
+            organism       = organism,
+            engine         = prot_cfg$engine %||% "DIANN"
+        ),
+        technical = list(
+            sample_prep       = tech_rep$sample_prep %||% "",
+            ms_acquisition    = tech_rep$ms_acquisition %||% "",
+            search_engine     = tech_rep$search_engine %||% "",
+            search_parameters = tech_rep$search_parameters %||% "",
+            acknowledgment    = tech_rep$acknowledgment %||% ""
+        ),
+        filtering = list(
+            proteins_before = n_proteins_raw %||% 0, proteins_after = n_proteins %||% 0,
+            before_fmt = format(n_proteins_raw %||% 0, big.mark = ","),
+            after_fmt  = format(n_proteins %||% 0, big.mark = ","),
+            pct_retained = if (!is.na(n_proteins_raw) && n_proteins_raw > 0 && !is.na(n_proteins))
+                round(100 * n_proteins / n_proteins_raw, 1) else NA
+        )
+    )
+}
+
+
+# ==============================================================================
+# CLAUDE CODE CLI — generate the complete HTML via `claude --print`
+# ==============================================================================
+
+#' Generate proteomics pipeline summary HTML using Claude Code CLI
+#'
+#' @param stats       Pipeline stats from collect_proteomics_pipeline_stats()
+#' @param comment_cfg Commentary config section (for model selection)
+#' @return Complete HTML document string, or NULL on failure
+generate_proteomics_summary_with_claude <- function(stats, comment_cfg) {
+
+    if (Sys.which("claude") == "") {
+        message("  'claude' CLI not found in PATH.")
+        return(NULL)
+    }
+
+    model <- comment_cfg$claude_code_model %||% "sonnet"
+    stats_json <- jsonlite::toJSON(stats, auto_unbox = TRUE, pretty = TRUE)
+
+    tmp_stats <- tempfile(fileext = ".json")
+    on.exit(unlink(tmp_stats), add = TRUE)
+    writeLines(stats_json, tmp_stats)
+
+    prompt <- paste0(
+        "Read the pipeline statistics JSON file at '", tmp_stats, "' and generate a COMPLETE, self-contained HTML document ",
+        "for a Proteomics pipeline workflow summary page.\n\n",
+        "DESIGN REQUIREMENTS:\n",
+        "- Dark theme: background #0a0e17, cards #111827, border #1e2d45\n",
+        "- Google Fonts: JetBrains Mono (monospace elements) + DM Sans (body text)\n",
+        "- Gradient h1 text (white to sky-blue), subtle background grid, two blurred glow circles\n",
+        "- Vertical timeline with gradient connector line on the left\n",
+        "- Each step: node circle (emoji + step number) + card (title, phase badge, description, tags)\n",
+        "- Cards have hover effects (translateX + border glow + shadow)\n",
+        "- Steps animate in with fadeUp (staggered delays)\n",
+        "- Responsive: mobile breakpoint at 640px\n\n",
+        "STRUCTURE:\n",
+        "Header: badge 'multiomics-core pipeline', h1 'Proteomics Analysis Workflow', subtitle from stats, ",
+        "analyst + date, meta row (Samples, Groups, Proteins, DE Proteins) with actual numbers from stats.\n\n",
+        "Pipeline sections:\n",
+        "1. 'Wet Lab' section (team badge 'Proteomics Core', cyan):\n",
+        "   - Step 01 Sample Preparation (phase-wet, blue, emoji test-tube) — use stats.technical.sample_prep for description\n",
+        "   - Step 02 MS Acquisition (phase-seq, cyan, emoji lightning) — use stats.technical.ms_acquisition\n",
+        "2. 'Upstream Proteomics' section (team badge 'Proteomics Core', cyan):\n",
+        "   - Step 03 Database Search (phase-qc, green, emoji magnifier) — use stats.technical.search_engine\n",
+        "   - Step 04 Protein Inference (phase-align, amber, emoji target) — use stats.technical.search_parameters\n",
+        "3. 'Downstream Analysis' section (team badge 'Multi-omics Core', violet):\n",
+        "   - Step 05 Protein Filtering (phase-filter, orange, emoji funnel) — include stats-row with before/after protein counts\n",
+        "   - Step 06 Normalization & Imputation (phase-norm, rose, emoji scales) — describe method from stats.methods\n",
+        "   - Step 07 Differential Expression (phase-de, violet, emoji chart) — include stats-row with DE/up/down counts\n",
+        "   - Step 08 Pathway Enrichment (phase-enrich, blue, emoji compass) — include stats-row with pathway counts\n",
+        "   - Step 09 Report & Outputs (phase-out, green, emoji folder)\n\n",
+        "Footer: facility name + date.\n\n",
+        "COLOR SCHEME per phase class:\n",
+        "phase-wet: rgba(56,189,248,*), phase-seq: rgba(34,211,238,*), phase-qc: rgba(52,211,153,*), ",
+        "phase-align: rgba(251,191,36,*), phase-filter: rgba(251,146,60,*), phase-norm: rgba(251,113,133,*), ",
+        "phase-de: rgba(167,139,250,*), phase-enrich: rgba(96,165,250,*), phase-out: rgba(52,211,153,*)\n\n",
+        "Tags should be tool names/versions extracted from the technical report text, or method parameters.\n",
+        "Stats rows use class='stat' with 'stat-val' (large colored number) and 'stat-label' (dim text).\n\n",
+        "Write SCIENTIFICALLY PRECISE descriptions. Use HTML entities for special chars.\n",
+        "Output ONLY the complete HTML document — no markdown fences, no explanations."
+    )
+
+    cmd <- sprintf(
+        "claude --print --model %s --no-session-persistence %s",
+        model, shQuote(prompt)
+    )
+
+    result <- tryCatch({
+        raw <- system(cmd, intern = TRUE, timeout = 180)
+        html <- paste(raw, collapse = "\n")
+
+        html <- gsub("^```html\\s*\n?", "", html)
+        html <- gsub("\n?```\\s*$", "", html)
+
+        if (grepl("<!DOCTYPE html>", html, ignore.case = TRUE) &&
+            grepl("phase-de", html) &&
+            grepl("pipeline", html)) {
+            message("  Claude Code generated proteomics pipeline summary HTML")
+            html
+        } else {
+            message("  Claude output did not match expected HTML structure. Using R fallback.")
+            NULL
+        }
+    }, error = function(e) {
+        message("  Claude Code call failed: ", e$message, ". Using R fallback.")
+        NULL
+    })
+
+    result
+}
+
+
+# ==============================================================================
+# R FALLBACK — template-based HTML generation
+# ==============================================================================
+
+#' Build HTML for a single pipeline step card
+#' @noRd
+prot_build_step_html <- function(num, emoji, title, phase_class, phase_label,
+                                  description, tags, stats_html = "") {
+    tags_html <- paste(
+        sprintf('            <span class="tag">%s</span>', tags),
+        collapse = "\n"
+    )
+    sprintf(
+'      <div class="step %s">
+        <div class="node">
+          <div class="node-circle">%s</div>
+          <div class="node-num">%02d</div>
+        </div>
+        <div class="card">
+          <div class="card-title">
+            %s
+            <span class="card-phase">%s</span>
+          </div>
+          <div class="card-desc">%s</div>
+%s          <div class="card-tags">
+%s
+          </div>
+        </div>
+      </div>',
+        phase_class, emoji, num,
+        title, phase_label, description,
+        if (nzchar(stats_html)) paste0(stats_html, "\n") else "",
+        tags_html
+    )
+}
+
+#' Build stats row HTML
+#' @noRd
+prot_build_stats_row <- function(...) {
+    items <- list(...)
+    html_items <- vapply(items, function(item) {
+        if (isTRUE(item$arrow)) {
+            '<div class="stat" style="color:var(--text-dim)">&rarr;</div>'
+        } else {
+            extra <- if (!is.null(item$margin)) sprintf(' style="margin-left:%s"', item$margin) else ""
+            sprintf('<div class="stat"%s><span class="stat-val" style="color:%s">%s</span><span class="stat-label">%s</span></div>',
+                    extra, item$color %||% "var(--text)", item$value, item$label)
+        }
+    }, character(1))
+    sprintf('          <div class="stats-row">\n%s\n          </div>',
+            paste(paste0("            ", html_items), collapse = "\n"))
+}
+
+#' Extract tool tags from text
+#' @noRd
+prot_extract_tags_from_text <- function(text, pattern = NULL, fallback = character()) {
+    if (is.null(text) || !nzchar(text)) return(fallback)
+    if (is.null(pattern))
+        pattern <- "([A-Za-z][A-Za-z0-9_-]+)\\s*[v(]+\\s*v?([0-9]+\\.[0-9.]+)"
+    matches <- gregexpr(pattern, text, perl = TRUE)
+    extracted <- regmatches(text, matches)[[1]]
+    if (length(extracted) == 0) return(fallback)
+    tags <- gsub("\\(v?", "v", extracted)
+    tags <- gsub("[)]", "", tags)
+    tags <- gsub("\\s+v", " v", tags)
+    if (length(tags) == 0) fallback else tags
+}
+
+#' Generate proteomics pipeline body HTML from stats (R fallback)
+#' @noRd
+generate_proteomics_summary_body_r <- function(stats) {
+
+    esc <- function(x) if (requireNamespace("htmltools", quietly = TRUE)) htmltools::htmlEscape(x) else x
+
+    # -- Wet Lab --
+    s_wet <- '      <div class="section-label">Wet Lab <span class="team-badge team-atgc">Proteomics Core</span></div>\n'
+
+    # Step 1: Sample Preparation
+    prep_desc <- if (nzchar(stats$technical$sample_prep)) esc(stats$technical$sample_prep)
+                 else "Protein extraction, enzymatic digestion, and peptide cleanup performed prior to MS analysis."
+    prep_tags <- prot_extract_tags_from_text(stats$technical$sample_prep,
+                                              fallback = c(sprintf("%d samples", stats$overview$n_samples)))
+    step1 <- prot_build_step_html(1, "\U0001F9EA", "Sample Preparation", "phase-wet", "wet lab", prep_desc, prep_tags)
+
+    # Step 2: MS Acquisition
+    ms_desc <- if (nzchar(stats$technical$ms_acquisition)) esc(stats$technical$ms_acquisition)
+               else "Mass spectrometry acquisition performed."
+    ms_tags <- prot_extract_tags_from_text(stats$technical$ms_acquisition, fallback = c("LC-MS/MS"))
+    step2 <- prot_build_step_html(2, "\u26A1", "MS Acquisition", "phase-seq", "acquisition", ms_desc, ms_tags)
+
+    # -- Upstream Proteomics --
+    s_up <- '      <div class="section-label">Upstream Proteomics <span class="team-badge team-atgc">Proteomics Core</span></div>\n'
+
+    # Step 3: Database Search
+    search_desc <- if (nzchar(stats$technical$search_engine)) esc(stats$technical$search_engine)
+                   else sprintf("%s database search performed with FDR control.", stats$methods$engine)
+    search_tags <- prot_extract_tags_from_text(stats$technical$search_engine,
+                                                fallback = c(stats$methods$engine, "1% FDR"))
+    step3 <- prot_build_step_html(3, "\U0001F50D", "Database Search", "phase-qc", "upstream", search_desc, search_tags)
+
+    # Step 4: Protein Inference
+    infer_desc <- if (nzchar(stats$technical$search_parameters)) esc(stats$technical$search_parameters)
+                  else "Protein groups inferred from peptide identifications. Razor peptide assignment for shared sequences."
+    infer_tags <- prot_extract_tags_from_text(stats$technical$search_parameters,
+                                               fallback = c("Protein inference", "Razor peptides"))
+    step4 <- prot_build_step_html(4, "\U0001F3AF", "Protein Inference", "phase-align", "upstream", infer_desc, infer_tags)
+
+    # -- Downstream Analysis --
+    s_down <- '      <div class="section-label">Downstream Analysis <span class="team-badge team-multiomics">Multi-omics Core</span></div>\n'
+
+    # Step 5: Protein Filtering
+    filt_desc <- "Proteins filtered by minimum observation count across biological replicates. Proteins detected in fewer than the required number of samples per condition are removed."
+    filt_stats <- ""
+    if (stats$filtering$proteins_before > 0 && stats$filtering$proteins_after > 0) {
+        filt_stats <- prot_build_stats_row(
+            list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
+            list(arrow = TRUE),
+            list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
+            list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0), margin = "8px", color = "var(--text)"))
+    }
+    step5 <- prot_build_step_html(5, "\U0001F50D", "Protein Filtering", "phase-filter", "downstream", filt_desc,
+                                   c("min-count filter"), filt_stats)
+
+    # Step 6: Normalization & Imputation
+    nm <- stats$methods$normalization
+    imp <- stats$methods$imputation
+    norm_part <- switch(nm,
+        "none"   = "No additional normalization applied (data pre-normalized by search engine).",
+        "median" = "Median centering applied to equalize global intensity distributions.",
+        sprintf("Normalization via %s.", nm))
+    imp_part <- switch(imp,
+        "none"    = " Complete cases only (no imputation).",
+        "perseus" = sprintf(" Missing values imputed via Perseus-style downshifted normal distribution (width = %s, downshift = %s SD).",
+                            stats$methods$imp_width, stats$methods$imp_downshift),
+        "dep2"    = " Missing values imputed using DEP2/MinDet approach.",
+        sprintf(" Imputation via %s.", imp))
+    norm_desc <- paste0(norm_part, imp_part)
+    norm_tags <- c()
+    if (nm != "none") norm_tags <- c(norm_tags, nm)
+    if (imp == "perseus") norm_tags <- c(norm_tags, "Perseus imputation",
+                                          sprintf("width=%.1f", as.numeric(stats$methods$imp_width)),
+                                          sprintf("downshift=%.1f", as.numeric(stats$methods$imp_downshift)))
+    else if (imp != "none") norm_tags <- c(norm_tags, imp)
+    if (length(norm_tags) == 0) norm_tags <- c("pre-normalized", "no imputation")
+    step6 <- prot_build_step_html(6, "\u2696", "Normalization &amp; Imputation", "phase-norm", "downstream", norm_desc, norm_tags)
+
+    # Step 7: Differential Expression
+    de_label <- toupper(stats$methods$de_method)
+    de_desc <- sprintf("%s moderated t-test with empirical Bayes shrinkage. Significance: adj. p-value &le; %s and |linear FC| &ge; %s. FDR via Benjamini-Hochberg.",
+        de_label, stats$methods$p_cutoff, stats$methods$fc_cutoff)
+    de_stats <- prot_build_stats_row(
+        list(value = format(stats$de$total, big.mark = ","), label = "DE proteins", color = "var(--accent-violet)"),
+        list(value = format(stats$de$up, big.mark = ","), label = "up", color = "var(--accent-green)"),
+        list(value = format(stats$de$down, big.mark = ","), label = "down", color = "var(--accent-rose)"))
+    de_tags <- c(de_label, sprintf("padj \u2264 %s", stats$methods$p_cutoff), sprintf("|FC| \u2265 %s", stats$methods$fc_cutoff))
+    step7 <- prot_build_step_html(7, "\U0001F4CA", "Differential Expression", "phase-de", "downstream", de_desc, de_tags, de_stats)
+
+    # Step 8: Pathway Enrichment
+    pw_dbs <- paste(stats$methods$pathway_dbs, collapse = " and ")
+    pw_method_label <- switch(stats$methods$pathway_method,
+        "both"  = "fGSEA and ORA",
+        "fgsea" = "fGSEA",
+        "ora"   = "ORA",
+        toupper(stats$methods$pathway_method))
+    pw_desc <- sprintf("%s used to test enrichment against %s pathway databases. Pathways with adj. p &lt; 0.05 reported.",
+        pw_method_label, pw_dbs)
+    pw_stats <- ""
+    if (stats$pathway$total > 0) {
+        pw_items <- list(list(value = as.character(stats$pathway$total), label = "pathways", color = "var(--accent-blue)"))
+        if (stats$pathway$up > 0) pw_items <- c(pw_items, list(list(value = as.character(stats$pathway$up), label = "up", color = "var(--accent-green)")))
+        if (stats$pathway$down > 0) pw_items <- c(pw_items, list(list(value = as.character(stats$pathway$down), label = "down", color = "var(--accent-rose)")))
+        pw_stats <- do.call(prot_build_stats_row, pw_items)
+    }
+    pw_tags <- c(pw_method_label, stats$methods$pathway_dbs, "padj < 0.05")
+    step8 <- prot_build_step_html(8, "\U0001F9ED", "Pathway Enrichment", "phase-enrich", "downstream", pw_desc, pw_tags, pw_stats)
+
+    # Step 9: Report & Outputs
+    report_tag <- '<a href="report_proteomics.html" class="tag tag-link">HTML report &rarr;</a>'
+    step9 <- prot_build_step_html(9, "\U0001F4C1", "Report &amp; Outputs", "phase-out", "output",
+        "Interactive HTML report with QC, PCA, heatmaps, volcano &amp; MA plots. Excel workbooks with DE results, normalized/imputed intensities, and enrichment tables.",
+        c("Final_results_DE.xlsx", "Imputed intensities", "Enrichment CSVs"),
+        stats_html = "")
+    step9 <- sub("(</div>\\s*</div>\\s*</div>)$",
+                 paste0("\n            ", report_tag, "\\1"), step9)
+
+    paste0(s_wet, "\n", step1, "\n\n", step2, "\n\n",
+           s_up, "\n", step3, "\n\n", step4, "\n\n",
+           s_down, "\n", step5, "\n\n", step6, "\n\n", step7, "\n\n", step8, "\n\n", step9)
+}
+
+
+# ==============================================================================
+# HTML DOCUMENT ASSEMBLY
+# ==============================================================================
+
+#' @noRd
+get_proteomics_pipeline_summary_css <- function() {
+'  :root {
+    --bg: #0a0e17; --surface: #111827; --surface-2: #1a2234; --border: #1e2d45;
+    --text: #e2e8f0; --text-dim: #7a8ba8;
+    --accent-wet: #38bdf8; --accent-green: #34d399; --accent-amber: #fbbf24;
+    --accent-rose: #fb7185; --accent-violet: #a78bfa; --accent-cyan: #22d3ee;
+    --accent-orange: #fb923c; --accent-blue: #60a5fa;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: "DM Sans", sans-serif; min-height: 100vh; overflow-x: hidden; }
+  .bg-grid { position: fixed; inset: 0; background-image: linear-gradient(rgba(56,189,248,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,0.03) 1px, transparent 1px); background-size: 48px 48px; pointer-events: none; z-index: 0; }
+  .bg-glow { position: fixed; width: 600px; height: 600px; border-radius: 50%; filter: blur(120px); opacity: 0.15; pointer-events: none; z-index: 0; }
+  .bg-glow-1 { top: -200px; left: -100px; background: var(--accent-wet); }
+  .bg-glow-2 { bottom: -200px; right: -100px; background: var(--accent-violet); }
+  .container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 48px 24px 80px; }
+  .header { text-align: center; margin-bottom: 56px; }
+  .header-badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2); border-radius: 100px; padding: 6px 18px; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent-wet); margin-bottom: 20px; }
+  .header-badge .dot { width: 6px; height: 6px; background: var(--accent-green); border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(52,211,153,0.5); } 50% { opacity:0.7; box-shadow: 0 0 0 6px rgba(52,211,153,0); } }
+  h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(135deg, #e2e8f0, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 10px; }
+  .header-sub { color: var(--text-dim); font-size: 15px; }
+  .header-author { color: var(--text-dim); font-size: 13px; margin-top: 6px; font-family: "JetBrains Mono", monospace; }
+  .header-meta { display: flex; justify-content: center; gap: 28px; margin-top: 18px; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--text-dim); }
+  .header-meta span { display: flex; align-items: center; gap: 6px; }
+  .header-meta .val { color: var(--accent-wet); font-weight: 500; }
+  .pipeline { position: relative; display: flex; flex-direction: column; gap: 0; }
+  .pipeline::before { content: ""; position: absolute; left: 40px; top: 40px; bottom: 40px; width: 2px; background: linear-gradient(to bottom, var(--accent-wet), var(--accent-green), var(--accent-amber), var(--accent-rose), var(--accent-violet)); opacity: 0.3; }
+  .step { display: flex; gap: 24px; align-items: flex-start; padding: 16px 0; position: relative; opacity: 0; transform: translateY(20px); animation: fadeUp 0.5s ease forwards; }
+  .step:nth-child(1){animation-delay:.1s} .step:nth-child(2){animation-delay:.2s} .step:nth-child(3){animation-delay:.3s}
+  .step:nth-child(4){animation-delay:.4s} .step:nth-child(5){animation-delay:.5s} .step:nth-child(6){animation-delay:.6s}
+  .step:nth-child(7){animation-delay:.7s} .step:nth-child(8){animation-delay:.8s} .step:nth-child(9){animation-delay:.9s}
+  @keyframes fadeUp { to { opacity: 1; transform: translateY(0); } }
+  .node { flex-shrink: 0; width: 80px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .node-circle { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 18px; position: relative; z-index: 2; border: 2px solid; transition: transform 0.2s, box-shadow 0.2s; }
+  .step:hover .node-circle { transform: scale(1.1); }
+  .node-num { font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600; color: var(--text-dim); }
+  .card { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px 26px; transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s; }
+  .step:hover .card { transform: translateX(4px); border-color: rgba(56,189,248,0.25); box-shadow: 0 4px 30px rgba(0,0,0,0.3); }
+  .card-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  .card-phase { font-family: "JetBrains Mono", monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .card-desc { color: var(--text-dim); font-size: 13.5px; line-height: 1.6; margin-bottom: 12px; }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag { font-family: "JetBrains Mono", monospace; font-size: 11px; padding: 3px 10px; border-radius: 6px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); color: var(--text-dim); white-space: nowrap; }
+  .phase-wet .node-circle { background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.35); color: var(--accent-wet); }
+  .phase-wet .card-phase { background: rgba(56,189,248,0.1); color: var(--accent-wet); }
+  .phase-seq .node-circle { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.35); color: var(--accent-cyan); }
+  .phase-seq .card-phase { background: rgba(34,211,238,0.1); color: var(--accent-cyan); }
+  .phase-qc .node-circle { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.35); color: var(--accent-green); }
+  .phase-qc .card-phase { background: rgba(52,211,153,0.1); color: var(--accent-green); }
+  .phase-align .node-circle { background: rgba(251,191,36,0.1); border-color: rgba(251,191,36,0.35); color: var(--accent-amber); }
+  .phase-align .card-phase { background: rgba(251,191,36,0.1); color: var(--accent-amber); }
+  .phase-filter .node-circle { background: rgba(251,146,60,0.1); border-color: rgba(251,146,60,0.35); color: var(--accent-orange); }
+  .phase-filter .card-phase { background: rgba(251,146,60,0.1); color: var(--accent-orange); }
+  .phase-norm .node-circle { background: rgba(251,113,133,0.1); border-color: rgba(251,113,133,0.35); color: var(--accent-rose); }
+  .phase-norm .card-phase { background: rgba(251,113,133,0.1); color: var(--accent-rose); }
+  .phase-de .node-circle { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.35); color: var(--accent-violet); }
+  .phase-de .card-phase { background: rgba(167,139,250,0.1); color: var(--accent-violet); }
+  .phase-enrich .node-circle { background: rgba(96,165,250,0.1); border-color: rgba(96,165,250,0.35); color: var(--accent-blue); }
+  .phase-enrich .card-phase { background: rgba(96,165,250,0.1); color: var(--accent-blue); }
+  .phase-out .node-circle { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.35); color: var(--accent-green); }
+  .phase-out .card-phase { background: rgba(52,211,153,0.1); color: var(--accent-green); }
+  .stats-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .stat { display: flex; align-items: baseline; gap: 5px; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  .stat-val { font-weight: 600; font-size: 16px; }
+  .stat-label { color: var(--text-dim); font-size: 11px; }
+  .section-label { display: flex; align-items: center; gap: 12px; padding: 20px 0 8px 96px; font-family: "JetBrains Mono", monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); opacity: 0; animation: fadeUp 0.5s ease forwards; }
+  .section-label .team-badge { font-size: 9px; letter-spacing: 1px; padding: 2px 10px; border-radius: 100px; border: 1px solid; text-transform: none; font-weight: 500; }
+  .team-atgc { color: var(--accent-cyan); border-color: rgba(34,211,238,0.3) !important; background: rgba(34,211,238,0.08); }
+  .team-multiomics { color: var(--accent-violet); border-color: rgba(167,139,250,0.3) !important; background: rgba(167,139,250,0.08); }
+  .section-label::after { content: ""; flex: 1; height: 1px; background: linear-gradient(to right, var(--border), transparent); }
+  .section-label:nth-of-type(1){animation-delay:.05s} .section-label:nth-of-type(2){animation-delay:.35s} .section-label:nth-of-type(3){animation-delay:.55s}
+  .header-cta { margin-top: 22px; }
+  .header-cta a { display: inline-flex; align-items: center; gap: 8px; padding: 10px 24px; border-radius: 100px; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-wet); font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.5px; text-decoration: none; transition: background 0.2s, border-color 0.2s, box-shadow 0.2s; }
+  .header-cta a:hover { background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.5); box-shadow: 0 0 20px rgba(56,189,248,0.15); }
+  .header-cta a .arrow { transition: transform 0.2s; }
+  .header-cta a:hover .arrow { transform: translateX(3px); }
+  .tag-link { text-decoration: none; color: var(--accent-wet); border-color: rgba(56,189,248,0.2) !important; transition: background 0.2s, border-color 0.2s; }
+  .tag-link:hover { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.35) !important; }
+  .footer { text-align: center; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
+  @media (max-width: 640px) { .container{padding:24px 12px 48px} h1{font-size:24px} .pipeline::before{left:24px} .node{width:48px} .node-circle{width:36px;height:36px;font-size:14px;border-radius:10px} .card{padding:16px} .card-title{font-size:14px} .header-meta{flex-wrap:wrap;justify-content:center;gap:12px} .section-label{padding-left:64px} }'
+}
+
+#' Wrap proteomics body in full HTML document
+#' @noRd
+wrap_proteomics_html_document <- function(body_html, stats) {
+    css <- get_proteomics_pipeline_summary_css()
+    esc <- function(x) if (requireNamespace("htmltools", quietly = TRUE)) htmltools::htmlEscape(x) else x
+
+    sprintf(
+'<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proteomics Pipeline Workflow &mdash; %s</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+%s
+</style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <div class="container">
+    <div class="header">
+      <div class="header-badge"><span class="dot"></span> multiomics-core pipeline</div>
+      <h1>Proteomics Analysis Workflow</h1>
+      <div class="header-sub">%s</div>
+      <div class="header-author">Bioinformatician: %s &nbsp;&middot;&nbsp; %s</div>
+      <div class="header-meta">
+        <span>Samples <span class="val">%s</span></span>
+        <span>Groups <span class="val">%s</span></span>
+        <span>Proteins <span class="val">%s</span></span>
+        <span>DE Proteins <span class="val">%s</span></span>
+      </div>
+      <div class="header-cta">
+        <a href="report_proteomics.html">View Full Interactive Report <span class="arrow">&rarr;</span></a>
+      </div>
+    </div>
+    <div class="pipeline">
+%s
+    </div>
+    <div class="footer">%s &middot; %s</div>
+  </div>
+</body>
+</html>',
+        esc(stats$project$name), css, stats$subtitle,
+        esc(stats$project$analyst), stats$project$date,
+        stats$overview$n_samples, stats$overview$n_groups,
+        stats$overview$n_proteins_fmt, stats$overview$n_de_proteins_fmt,
+        body_html,
+        esc(stats$project$facility), stats$project$date_iso
+    )
+}
+
+
+# ==============================================================================
+# MAIN ENTRY POINT
+# ==============================================================================
+
+#' Generate the proteomics pipeline summary HTML report
+#'
+#' @param config      Full pipeline config
+#' @param pre         Preprocessed data list
+#' @param de_res      DE results list
+#' @param pathway_res Pathway results list
+#' @param run_dir     Run output directory
+#' @return Path to pipeline_summary.html
+#' @export
+generate_proteomics_pipeline_summary <- function(config, pre, de_res, pathway_res, run_dir) {
+
+    message("=== Generating Proteomics Pipeline Summary ===")
+
+    # 1. Collect stats
+    stats <- collect_proteomics_pipeline_stats(config, pre, de_res, pathway_res)
+
+    # 2. Try Claude Code CLI, fall back to R template
+    prot_cfg    <- config$modes$proteomics
+    comment_cfg <- prot_cfg$commentary %||% list()
+    body_html   <- NULL
+
+    if (isTRUE(comment_cfg$enabled) && (comment_cfg$backend %||% "none") == "claude-code") {
+        body_html <- generate_proteomics_summary_with_claude(stats, comment_cfg)
+    }
+
+    if (is.null(body_html)) {
+        message("  Using R-generated proteomics pipeline summary")
+        body_html <- generate_proteomics_summary_body_r(stats)
+        full_html <- wrap_proteomics_html_document(body_html, stats)
+    } else {
+        full_html <- body_html
+    }
+
+    # 3. Save
+    out_dir <- file.path(run_dir, "proteomics")
+    if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+    out_file <- file.path(run_dir, "pipeline_summary.html")
+    writeLines(full_html, out_file, useBytes = TRUE)
+    message("Proteomics pipeline summary saved to: ", out_file)
+    out_file
+}
