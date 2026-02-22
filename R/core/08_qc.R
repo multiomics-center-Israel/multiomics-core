@@ -179,7 +179,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
     text = hover_text,
     hoverinfo = "text"
-  ) |>
+  ) %>%
     plotly::layout(
       scene = list(
         xaxis = list(title = pc_labels[1]),
@@ -418,7 +418,7 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           annot_cols = NULL,
                                           method = "pearson",
                                           fontsize = 10,
-                                          show_labels = FALSE,
+                                          show_labels = TRUE,
                                           cluster_samples = TRUE,
                                           adjust_scale = TRUE) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
@@ -457,7 +457,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
                                        annot_cols = NULL,
                                        with_na = FALSE,
                                        fontsize = 10,
-                                       show_labels = FALSE,
+                                       show_labels = TRUE,
                                        cluster_samples = TRUE) {
   # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
   # This prevents data.frame type coercion issues

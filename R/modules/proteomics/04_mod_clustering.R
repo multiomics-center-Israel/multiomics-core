@@ -25,8 +25,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     # Objects for legacy Shiny export
     pheatmap_payload <- NULL
     patterns_tbl <- NULL
+    patterns_list <- NULL
     heatmaps_by_pattern <- NULL
     clusters_vec <- NULL
+    excel_order <- NULL
+    written <- character(0)
+    plots <- list()
 
     # If clustering is missing/disabled -> no-op
     if (is.null(cl) || isFALSE(cl$enabled)) {
@@ -46,10 +50,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     ))
 
     # ---- build annotation_col for heatmaps using effects ----
+    eff_color <- get_color_config(cfg)
     annot <- NULL
-    if (!is.null(cfg$effects$color) && cfg$effects$color %in% colnames(pre$meta)) {
+    if (!is.null(eff_color) && eff_color %in% colnames(pre$meta)) {
         annot <- data.frame(
-            Condition = pre$meta[[cfg$effects$color]],
+            Condition = pre$meta[[eff_color]],
             row.names = pre$meta[[cfg$effects$samples]]
         )
     }
@@ -87,17 +92,30 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         z_de <- zscore_rows(mat_de)
         colnames(z_de) <- paste0(colnames(z_de), ".zscore")
 
+        # Pre-compute ordered matrix for Shiny (Professional approach)
+        # Order rows according to clustering result - makes Shiny app robust
+        ordered_row_ids <- intersect(hc_res$ordering, rownames(z_de))
+        z_de_ordered <- z_de[ordered_row_ids, , drop = FALSE]
+
         excel_order <- list(
             ordered_ids = hc_res$ordering,
             zscore_mat  = z_de
         )
 
-        # Capture payload for Shiny
-        pheatmap_payload <- list(
-            mat = z_de,
-            annotation_col = annot,
-            feature_ids = de_features,
-            is_zscored = TRUE
+        # Build DE pattern row annotations (up/down per contrast)
+        prot_de_cfg <- cfg$de %||% list()
+        prot_p_cutoff <- prot_de_cfg$p_cutoff %||% 0.05
+        prot_lin_fc <- prot_de_cfg$linear_fc_cutoff %||% 1.5
+        prot_log2fc <- log2(prot_lin_fc)
+
+        # Get ID column from config (proteomics may use different column name)
+        prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
+
+        annot_context <- list(
+            summary_df    = de_res$summary_df,
+            p_cutoff      = prot_p_cutoff,
+            log2fc_cutoff = prot_log2fc,
+            id_col        = prot_id_col
         )
 
         # Heatmap setup
@@ -105,25 +123,37 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         # Run wrapper
         p_cluster <- wrap_clustering_heatmap(
-            expr_mat    = pre$expr_imp_single,
-            meta        = pre$meta,
-            cfg         = cfg,
+            expr_mat = pre$expr_imp_single,
+            meta = pre$meta,
+            cfg = cfg,
             feature_ids = de_features,
-            ordering    = hc_res$ordering,
-            out_file    = f_hm
+            ordering = hc_res$ordering,
+            annotation_row_builder = TRUE,
+            annotation_row_context = annot_context,
+            out_file = f_hm,
+            title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
         written <- c(written, f_hm)
-        plots$p_cluster <- p_cluster
+        plots$p_cluster_hier <- p_cluster
+
+        # Capture pheatmap payload for Shiny (Professional pre-compute approach)
+        # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
+        pheatmap_payload <- list(
+            pheatmap = p_cluster,
+            mat = z_de_ordered, # Already in clustered order
+            row_order = rownames(z_de_ordered), # Ordered row names for Plotly
+            col_order = colnames(z_de_ordered), # Column names
+            annotation_col = annot,
+            feature_ids = de_features,
+            is_zscored = TRUE,
+            cluster_cols = FALSE,
+            tree_row = hc_res$details # hclust object for dendrogram
+        )
 
         # Save cluster assignments
         if (!is.null(hc_res$clusters)) {
             f_tbl <- file.path(clust_out_dir, "Hierarchical_clusters.tsv")
-            cl_tbl <- data.frame(
-                feature_id = names(hc_res$clusters),
-                cluster = as.integer(hc_res$clusters),
-                stringsAsFactors = FALSE
-            )
-            save_tsv_path(cl_tbl, f_tbl)
+            cl_tbl <- build_clustering_output_table(hc_res$clusters, f_tbl)
             written <- c(written, f_tbl)
             plots$cl_tbl <- cl_tbl
 
@@ -155,13 +185,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         ensure_dir(part_dir)
 
         # (1) write clusters table
-        clusters_tbl <- data.frame(
-            feature_id = names(part_res$clusters),
-            cluster = as.integer(part_res$clusters),
-            stringsAsFactors = FALSE
-        )
         f_tbl <- file.path(part_dir, "partition_clusters.tsv")
-        save_tsv_path(clusters_tbl, f_tbl)
+        clusters_tbl <- build_clustering_output_table(part_res$clusters, f_tbl)
         written <- c(written, f_tbl)
         plots$pt_tbl <- clusters_tbl
 
@@ -191,39 +216,20 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        # Prepare data from Z-scored Group Means (returned by the clustering func)
-        zgm <- part_res$z_group_means
-        clv <- part_res$clusters[rownames(zgm)]
+        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
 
-        k <- part_res$k
-        groups <- colnames(zgm)
+        if (!is.null(prof)) {
+            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
+            p_prof <- plot_cluster_profiles(prof, x_label = eff_color)
 
-        prof_list <- lapply(1:k, function(ci) {
-            rows <- which(clv == ci)
-            sub <- zgm[rows, , drop = FALSE]
-            data.frame(
-                cluster = ci,
-                group = groups,
-                mean = colMeans(sub, na.rm = TRUE),
-                sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-                n_features = nrow(sub),
-                stringsAsFactors = FALSE
-            )
-        })
+            n_clusters <- length(unique(prof$cluster))
+            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
 
-        prof <- do.call(rbind, prof_list)
+            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
 
-        f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-        p_prof <- plot_cluster_profiles(prof, x_label = cfg$effects$color)
-
-        # Dynamic height
-        n_clusters <- length(unique(prof$cluster))
-        calc_height <- max(6, ceiling(n_clusters / 2) * 3)
-
-        ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
-
-        written <- c(written, f_pdf)
-        plots$cluster_profiles <- p_prof
+            written <- c(written, f_pdf)
+            plots$cluster_profiles <- p_prof
+        }
 
         # --- FIX: Export Legacy Data (Moved INSIDE the IF block) ---
         # This must be here because part_res and part_dir are only defined here.
@@ -241,20 +247,32 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     # ---- 3) Binary patterns (only meaningful when >= 3 conditions) ----
     if (isTRUE(flags$binary_patterns)) {
         bcfg <- cl$steps$binary_patterns %||% list()
-
         clust_out_dir <- file.path(clustering_dir, "Binary_patterns")
         ensure_dir(clust_out_dir)
 
+        # DE cutoffs for row annotations
+        de_cfg <- cfg$de %||% list()
+        bp_p_cutoff <- de_cfg$p_cutoff %||% 0.05
+        bp_lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+        bp_log2fc_cutoff <- log2(bp_lin_fc_cutoff)
+
+        # Get ID column from config (proteomics may use different column name)
+        bp_id_col <- cfg$de_table$id_col %||% "FeatureID"
+
         # Run function and capture result
+        # For proteomics: both matrices are log2-transformed (no separate counts matrix)
+        # expr_mat_counts = NULL means it will use expr_mat_corr for gating too
         bp_res <- run_binary_patterns(
-            expr_mat              = expr_mat,
-            meta                  = pre$meta,
-            cfg                   = cfg,
-            de_features           = de_features,
-            out_dir               = clust_out_dir,
-            corr_cutoff           = bcfg$corr_cutoff %||% 0.8,
-            counts_cutoff         = bcfg$counts_cutoff %||% 0,
-            skip_trivial_patterns = bcfg$skip_trivial_patterns %||% TRUE
+            expr_mat_corr      = expr_mat,
+            expr_mat_counts    = NULL, # proteomics has no separate counts matrix
+            meta               = pre$meta,
+            cfg                = cfg,
+            de_features        = de_features,
+            out_dir            = clust_out_dir,
+            summary_df         = de_res$summary_df,
+            corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
+            counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
+            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
         )
 
         # Append results
@@ -264,17 +282,20 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Capture for Shiny
         patterns_tbl <- bp_res$best %||% NULL
         heatmaps_by_pattern <- bp_res$plots %||% NULL
+        patterns_list <- bp_res$bp_pat %||% NULL
+    
     }
-
     return(list(
         plots = plots,
         files = unique(written),
         excel_order = excel_order,
         objects = list(
-            pheatmap_data_DE_genes = pheatmap_payload,
+            hm_hier_de = pheatmap_payload,
             patterns = patterns_tbl,
+            patterns_list = patterns_list,
             heatmaps_by_pattern = heatmaps_by_pattern,
             clusters = clusters_vec
         )
-    ))
+      ))
+    
 }

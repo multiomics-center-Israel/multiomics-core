@@ -1,0 +1,1279 @@
+# R/domain/metabolomics/06_enrichment.R
+#
+# Pathway enrichment analysis for metabolomics:
+#   1. QEA  (Quantitative Enrichment Analysis) via globaltest
+#   2. ssGSEA via GSVA + Wilcoxon rank-sum test
+#   3. ORA  (Over-Representation Analysis) via Fisher's exact test
+#   4. GSEA (Gene-Set Enrichment Analysis) via fgsea, ranked by log2FC
+#
+# Operates on the standard pre-processing contract (expr_work, meta, row_data).
+# ORA and GSEA additionally require DE results (de_res).
+# Reuses: %||%
+
+
+# ==== GMT PARSING =============================================================
+
+#' Read a GMT file into a named list of gene/compound sets
+#'
+#' @param gmt_file       Path to GMT file.
+#' @param include_descriptions Logical. If TRUE, also return pathway descriptions.
+#' @return If include_descriptions=TRUE: list(sets, descriptions).
+#'         Otherwise: named list of character vectors.
+read_gmt_list <- function(gmt_file, include_descriptions = FALSE) {
+    # Return empty containers when the file does not exist
+    if (!file.exists(gmt_file)) {
+        if (include_descriptions) return(list(sets = list(), descriptions = character(0)))
+        return(list())
+    }
+
+    lines    <- readLines(gmt_file, warn = FALSE)
+    gmt_list <- list()
+    desc_map <- character(0)
+
+    # Each GMT line is: pathway_id <TAB> description <TAB> member1 <TAB> ...
+    for (line in lines) {
+        parts <- strsplit(line, "\t")[[1]]
+        if (length(parts) < 3) next
+
+        pathway_id   <- parts[1]
+        pathway_desc <- parts[2]
+        members      <- parts[3:length(parts)]
+        # Drop empty strings that can appear from trailing tabs
+        members      <- members[nzchar(members)]
+
+        if (length(members) > 0) {
+            gmt_list[[pathway_id]] <- members
+            if (nzchar(pathway_desc)) {
+                desc_map[[pathway_id]] <- pathway_desc
+            }
+        }
+    }
+
+    if (include_descriptions) {
+        return(list(sets = gmt_list, descriptions = desc_map))
+    }
+    gmt_list
+}
+
+
+#' Create "ID - Description" labels from pathway IDs and description map
+#'
+#' Concatenates each pathway ID with its human-readable description from
+#' desc_map. Falls back to the bare ID when no description exists.
+#'
+#' @param ids      Character vector of pathway IDs.
+#' @param desc_map Named character vector mapping IDs to descriptions.
+#' @return Character vector of formatted labels, same length as ids.
+make_pathway_labels <- function(ids, desc_map) {
+    vapply(ids, function(id) {
+        desc <- desc_map[[id]]
+        if (!is.null(desc) && nzchar(desc)) paste0(id, " - ", desc) else id
+    }, character(1), USE.NAMES = FALSE)
+}
+
+
+# ==== COMPOUND ID MAPPING ====================================================
+
+#' Map feature IDs to compound identifiers for enrichment
+#'
+#' Extracts compound names from row_data and optionally maps HMDB to KEGG.
+#'
+#' @param row_data     data.frame with feature annotations.
+#' @param expr_mat     Expression matrix (features x samples).
+#' @param mapping_file Optional path to HMDB-to-KEGG mapping TSV.
+#' @return list(expr_mapped, compound_names) with remapped rownames.
+map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL) {
+    # Extract compound names from row_data
+    if ("Name" %in% colnames(row_data)) {
+        compound_names <- as.character(row_data$Name)
+    } else if ("Molecule" %in% colnames(row_data)) {
+        compound_names <- as.character(row_data$Molecule)
+    } else {
+        compound_names <- rownames(expr_mat)
+    }
+
+    # HMDB-to-KEGG mapping: replace compound names with KEGG IDs when a
+    # mapping file is provided, so that IDs match KEGG-based GMT pathways.
+    if (!is.null(mapping_file) && file.exists(mapping_file)) {
+        mapping_df <- readr::read_delim(mapping_file, delim = "\t",
+                                        col_types = readr::cols(),
+                                        show_col_types = FALSE)
+
+        # Locate HMDB IDs — try dedicated column first, then parse feature_id
+        hmdb_ids <- NULL
+        if ("HMDB" %in% colnames(row_data)) {
+            hmdb_ids <- as.character(row_data$HMDB)
+        } else if ("feature_id" %in% colnames(row_data)) {
+            # Try extracting HMDB from feature_id (HMDB|Name format)
+            hmdb_ids <- sub("\\|.*$", "", as.character(row_data$feature_id))
+        }
+
+        # Vectorised lookup: build named vector HMDB->KEGG then index
+        if (!is.null(hmdb_ids) &&
+            "HMDB" %in% colnames(mapping_df) &&
+            "KEGG" %in% colnames(mapping_df)) {
+            map_vec <- stats::setNames(mapping_df$KEGG, mapping_df$HMDB)
+            mapped_kegg <- map_vec[hmdb_ids]
+            has_map <- !is.na(mapped_kegg) & mapped_kegg != ""
+            compound_names[has_map] <- mapped_kegg[has_map]
+            message("enrichment: mapped ", sum(has_map), " features to KEGG IDs")
+        }
+    }
+
+    # Filter valid compound names
+    valid <- !is.na(compound_names) & nzchar(compound_names) & compound_names != "NA"
+    mat_use   <- expr_mat[valid, , drop = FALSE]
+    names_use <- compound_names[valid]
+
+    # Deduplicate (keep first occurrence)
+    dup <- duplicated(names_use)
+    mat_use <- mat_use[!dup, , drop = FALSE]
+    rownames(mat_use) <- names_use[!dup]
+
+    list(
+        expr_mapped    = mat_use,
+        compound_names = names_use[!dup]
+    )
+}
+
+
+#' Translate HMDB IDs in a GMT list to KEGG using a mapping file
+#'
+#' Replaces HMDB compound identifiers within each pathway set with their
+#' corresponding KEGG IDs. Compounds without a mapping are kept as-is.
+#' Returns the original list unchanged if the mapping file is missing or
+#' does not contain the required HMDB/KEGG columns.
+#'
+#' @param gmt_list     Named list of character vectors (pathway -> compound IDs).
+#' @param mapping_file Path to a TSV with HMDB and KEGG columns (or NULL).
+#' @return Named list with the same structure, HMDB IDs replaced where possible.
+translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
+    # No-op when mapping is absent or file does not exist
+    if (is.null(mapping_file) || !file.exists(mapping_file)) return(gmt_list)
+
+    # Read the HMDB-to-KEGG lookup table
+    mapping_df <- readr::read_delim(mapping_file, delim = "\t",
+                                    col_types = readr::cols(),
+                                    show_col_types = FALSE)
+
+    # Skip if the required columns are missing
+    if (!("HMDB" %in% colnames(mapping_df) && "KEGG" %in% colnames(mapping_df))) {
+        return(gmt_list)
+    }
+
+    # Build named vector for vectorised replacement in each pathway set
+    hmdb2kegg <- stats::setNames(mapping_df$KEGG, mapping_df$HMDB)
+    lapply(gmt_list, function(cpds) {
+        mapped <- hmdb2kegg[cpds]
+        # Keep original ID when no KEGG mapping is found
+        ifelse(!is.na(mapped) & mapped != "", mapped, cpds)
+    })
+}
+
+
+# ==== QEA VIA GLOBALTEST =====================================================
+
+#' Run Quantitative Enrichment Analysis (QEA) using globaltest
+#'
+#' Orchestrates QEA across one or more pathway libraries provided as GMT files.
+#' Each GMT file basename becomes a library name. Libraries listed in config
+#' without a matching GMT file are warned about and skipped. Results from all
+#' libraries are combined into a single table with FDR correction across all
+#' pathways.
+#'
+#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
+#' @return list(table, per_library_tables, method) or NULL if disabled/unavailable.
+run_metabolomics_qea <- function(pre, config) {
+    cfg      <- config$modes$metabolomics
+    enr_cfg  <- cfg$enrichment %||% list()
+
+    # Guard: skip when enrichment is disabled in config
+    if (!isTRUE(enr_cfg$run_enrichment)) {
+        message("metabolomics QEA: disabled in config — skipping")
+        return(NULL)
+    }
+
+    # Guard: skip when globaltest is not installed
+    if (!requireNamespace("globaltest", quietly = TRUE)) {
+        message("metabolomics QEA: globaltest not available — skipping")
+        return(NULL)
+    }
+
+    # Resolve which metadata columns define condition and sample identity,
+    # cascading through enrichment > DE > effects > defaults.
+    condition_col <- enr_cfg$condition_column %||%
+                     cfg$de$condition_column %||%
+                     cfg$effects$color %||% "sample_type"
+    sample_col <- cfg$effects$samples %||% "sample_id"
+
+    # ---- Determine libraries to run ----
+    # Merge explicit library names from config with labels derived from GMT
+    # file basenames. The gmt_lookup maps each label to its file path.
+    libraries <- enr_cfg$libraries
+    if (is.null(libraries)) {
+        lib_single <- enr_cfg$library
+        libraries <- if (!is.null(lib_single)) list(lib_single) else list()
+    }
+
+    gmt_files <- enr_cfg$gmt_file
+    gmt_lookup <- character(0)
+    if (!is.null(gmt_files)) {
+        gmt_files <- unlist(gmt_files)
+        for (gf in gmt_files) {
+            if (file.exists(gf)) {
+                gmt_label <- tools::file_path_sans_ext(basename(gf))
+                libraries <- c(libraries, gmt_label)
+                gmt_lookup[[gmt_label]] <- gf
+            } else {
+                warning("GMT file not found: ", gf)
+            }
+        }
+    }
+
+    mapping_file <- enr_cfg$mapping_file
+
+    # ---- Prepare QEA data ----
+    # Map features to compound IDs and transpose into the samples-by-compounds
+    # layout expected by globaltest. The result is written to a temp TSV.
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
+                                            mapping_file)
+    if (nrow(mapped$expr_mapped) < 3) {
+        message("metabolomics QEA: too few compounds — skipping")
+        return(NULL)
+    }
+
+    # Build globaltest input format: rows=samples, cols=compounds.
+    # Prepend Sample and Group columns required by run_qea_gmt_internal().
+    meta <- pre$meta
+    mat_t <- as.data.frame(t(mapped$expr_mapped), check.names = FALSE)
+    conditions <- meta[[condition_col]][match(rownames(mat_t), meta[[sample_col]])]
+    df_t <- cbind(
+        data.frame(Sample = rownames(mat_t), Group = as.character(conditions),
+                   stringsAsFactors = FALSE),
+        mat_t
+    )
+
+    # Write to a temp directory so each library reads from the same file
+    tmp_dir  <- tempfile("metabo_qea_")
+    dir.create(tmp_dir, recursive = TRUE)
+    data_file <- file.path(tmp_dir, "combined_data.txt")
+    utils::write.table(df_t, data_file, sep = "\t", row.names = FALSE,
+                        quote = FALSE)
+
+    message("QEA data: ", nrow(df_t), " samples x ", ncol(df_t) - 2, " compounds")
+
+    # ---- Warn about library names with no GMT file ----
+    unresolved <- setdiff(libraries, names(gmt_lookup))
+    if (length(unresolved) > 0) {
+        warning("QEA: no GMT file for library name(s): ",
+                paste(unresolved, collapse = ", "), " — skipping these")
+        libraries <- intersect(libraries, names(gmt_lookup))
+    }
+
+    if (length(libraries) == 0) {
+        message("metabolomics QEA: no libraries with GMT files — skipping")
+        unlink(tmp_dir, recursive = TRUE)
+        return(NULL)
+    }
+
+    # ---- Run QEA for each library ----
+    # Dispatch globaltest independently per library; failures are caught so
+    # one bad GMT does not abort the entire enrichment step.
+    all_results <- list()
+
+    for (lib in libraries) {
+        result <- tryCatch(
+            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file),
+            error = function(e) {
+                warning("QEA failed for ", lib, ": ", e$message)
+                NULL
+            }
+        )
+        if (!is.null(result)) all_results[[lib]] <- result
+    }
+
+    # Clean up temp data file
+    unlink(tmp_dir, recursive = TRUE)
+
+    if (length(all_results) == 0) {
+        message("metabolomics QEA: no results from any library")
+        return(NULL)
+    }
+
+    # Combine per-library tables and apply global FDR correction
+    combined_df <- do.call(rbind, lapply(names(all_results), function(lib) {
+        df <- all_results[[lib]]
+        df$library <- lib
+        df
+    }))
+    combined_df$FDR <- stats::p.adjust(combined_df$raw_p, method = "fdr")
+    combined_df <- combined_df[order(combined_df$FDR), ]
+
+    n_sig <- sum(combined_df$FDR < 0.05, na.rm = TRUE)
+    message("QEA complete: ", nrow(combined_df), " pathways, ",
+            n_sig, " with FDR < 0.05")
+
+    list(
+        table              = combined_df,
+        per_library_tables = all_results,
+        method             = "globaltest_qea"
+    )
+}
+
+
+# ---- QEA internals ----------------------------------------------------------
+
+#' Run QEA via globaltest on a single GMT file
+#'
+#' Parses the GMT, optionally translates HMDB IDs to KEGG, filters to pathways
+#' with at least 2 matching compounds in the data, and runs globaltest::gt().
+#' Returns a data.frame of pathway-level p-values and hit counts.
+#'
+#' @param data_file    Path to the tab-delimited QEA data (Sample, Group, compounds).
+#' @param gmt_file     Path to GMT file defining pathway sets.
+#' @param mapping_file Path to HMDB-to-KEGG mapping TSV (or NULL).
+#' @return data.frame(pathway, raw_p, hits) or NULL if no testable pathways.
+run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
+    if (!requireNamespace("globaltest", quietly = TRUE)) {
+        stop("Package 'globaltest' required for GMT enrichment.")
+    }
+
+    # Parse pathway sets and their descriptions from the GMT file
+    gmt_parsed <- read_gmt_list(gmt_file, include_descriptions = TRUE)
+    gmt_list   <- gmt_parsed$sets
+    desc_map   <- gmt_parsed$descriptions
+
+    if (length(gmt_list) == 0) return(NULL)
+
+    # Harmonise compound IDs: translate HMDB to KEGG so GMT members match data
+    gmt_list <- translate_gmt_hmdb_to_kegg(gmt_list, mapping_file)
+
+    # Attach human-readable descriptions to pathway names for output tables
+    names(gmt_list) <- make_pathway_labels(names(gmt_list), desc_map)
+
+    # Read the samples-by-compounds data written by run_metabolomics_qea()
+    df <- utils::read.table(data_file, header = TRUE, sep = "\t",
+                             stringsAsFactors = FALSE, check.names = FALSE)
+    response <- factor(df$Group)
+    X <- as.matrix(df[, -c(1, 2), drop = FALSE])
+
+    # Keep only pathways where at least 2 members are present in the data
+    available <- colnames(X)
+    subsets <- lapply(gmt_list, function(cpds) cpds[cpds %in% available])
+    keep <- vapply(subsets, length, integer(1)) >= 2L
+    subsets <- subsets[keep]
+
+    if (length(subsets) == 0) {
+        message("QEA GMT: no pathways with >= 2 matching compounds")
+        return(NULL)
+    }
+
+    message("QEA GMT: ", length(subsets), " / ", length(gmt_list),
+            " pathways with >= 2 matching compounds")
+
+    # Run the global test: tests whether compound profiles in each pathway
+    # are collectively associated with the condition factor.
+    res_gt <- tryCatch(
+        globaltest::gt(response, X, subsets = subsets),
+        error = function(e) { warning("globaltest error: ", e$message); NULL }
+    )
+    if (is.null(res_gt)) return(NULL)
+
+    # Extract the result table and return as a tidy data.frame
+    res_tbl <- globaltest::result(res_gt)
+
+    data.frame(
+        pathway = rownames(res_tbl),
+        raw_p   = res_tbl[, "p-value"],
+        hits    = res_tbl[, "#Cov"],
+        stringsAsFactors = FALSE
+    )
+}
+
+
+# ==== ssGSEA VIA GSVA ========================================================
+
+#' Run ssGSEA pathway enrichment via GSVA + Wilcoxon
+#'
+#' Computes single-sample GSEA scores for each pathway and sample, then
+#' applies a Wilcoxon rank-sum test per pathway to compare two conditions.
+#' Requires exactly two condition levels for statistical testing; if more
+#' are present, scores are returned without p-values.
+#'
+#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
+#' @return list(table, scores, method) or NULL if disabled/unavailable.
+run_metabolomics_ssgsea <- function(pre, config) {
+    cfg     <- config$modes$metabolomics
+    enr_cfg <- cfg$enrichment %||% list()
+
+    # Guard: skip when enrichment is disabled in config
+    if (!isTRUE(enr_cfg$run_enrichment)) {
+        message("metabolomics ssGSEA: disabled — skipping")
+        return(NULL)
+    }
+
+    # Guard: skip when GSVA is not installed
+    if (!requireNamespace("GSVA", quietly = TRUE)) {
+        message("metabolomics ssGSEA: GSVA not available — skipping")
+        return(NULL)
+    }
+
+    # Resolve condition and sample columns (same cascade as QEA)
+    condition_col <- enr_cfg$condition_column %||%
+                     cfg$de$condition_column %||%
+                     cfg$effects$color %||% "sample_type"
+    sample_col <- cfg$effects$samples %||% "sample_id"
+    mapping_file <- enr_cfg$mapping_file
+
+    # ---- Build expression matrix with compound IDs ----
+    # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
+                                            mapping_file)
+    expr_mat <- as.matrix(mapped$expr_mapped)
+    if (nrow(expr_mat) < 2) {
+        message("metabolomics ssGSEA: too few features — skipping")
+        return(NULL)
+    }
+
+    # ---- Load gene sets from GMT files ----
+    # Parse each GMT, translate IDs, label pathways, and accumulate
+    gene_sets <- list()
+    gmt_files <- unlist(enr_cfg$gmt_file)
+    if (!is.null(gmt_files)) {
+        for (gf in gmt_files) {
+            if (!file.exists(gf)) next
+            gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+            gmt <- gmt_parsed$sets
+            desc_map <- gmt_parsed$descriptions
+            gmt <- translate_gmt_hmdb_to_kegg(gmt, mapping_file)
+            names(gmt) <- make_pathway_labels(names(gmt), desc_map)
+            gene_sets <- c(gene_sets, gmt)
+            message("ssGSEA: loaded ", length(gmt), " sets from ", basename(gf))
+        }
+    }
+
+    if (length(gene_sets) == 0) {
+        message("metabolomics ssGSEA: no gene sets available — skipping")
+        return(NULL)
+    }
+
+    # Discard pathway sets with fewer than 2 members present in the data
+    available <- rownames(expr_mat)
+    gene_sets <- lapply(gene_sets, function(cpds) cpds[cpds %in% available])
+    gene_sets <- gene_sets[vapply(gene_sets, length, integer(1)) >= 2L]
+
+    if (length(gene_sets) == 0) {
+        message("ssGSEA: no gene sets with >= 2 matching compounds")
+        return(NULL)
+    }
+    message("ssGSEA: ", length(gene_sets), " gene sets with >= 2 members")
+
+    # ---- Run ssGSEA ----
+    # Try the new ssgseaParam API first (GSVA >= 1.50); fall back to the
+    # legacy gsva() interface for older versions.
+    scores <- tryCatch({
+        param <- GSVA::ssgseaParam(expr_mat, gene_sets)
+        GSVA::gsva(param)
+    }, error = function(e1) {
+        tryCatch(
+            GSVA::gsva(expr_mat, gene_sets, method = "ssgsea", verbose = FALSE),
+            error = function(e2) { warning("ssGSEA failed: ", e2$message); NULL }
+        )
+    })
+
+    if (is.null(scores) || nrow(scores) == 0) {
+        message("ssGSEA: no results")
+        return(NULL)
+    }
+    message("ssGSEA: computed scores for ", nrow(scores), " pathways x ",
+            ncol(scores), " samples")
+
+    # ---- Wilcoxon test per pathway ----
+    # Align condition labels to score matrix columns via sample IDs
+    meta <- pre$meta
+    conditions <- factor(meta[[condition_col]][
+        match(colnames(scores), meta[[sample_col]])
+    ])
+    cond_levels <- levels(conditions)
+
+    # Wilcoxon rank-sum requires exactly two groups; return raw scores otherwise
+    if (length(cond_levels) != 2) {
+        message("ssGSEA: Wilcoxon test requires exactly 2 conditions, found ",
+                length(cond_levels))
+        return(list(table = NULL, scores = scores, method = "ssgsea"))
+    }
+
+    # Split sample indices by condition for the two-group comparison
+    grp1_idx <- which(conditions == cond_levels[1])
+    grp2_idx <- which(conditions == cond_levels[2])
+
+    # Test each pathway independently; NA on failure (e.g. tied ranks)
+    pvalues <- vapply(seq_len(nrow(scores)), function(i) {
+        tryCatch(
+            stats::wilcox.test(scores[i, grp1_idx], scores[i, grp2_idx])$p.value,
+            error = function(e) NA_real_
+        )
+    }, numeric(1))
+
+    # FDR correction across all pathways and per-group mean scores
+    fdr   <- stats::p.adjust(pvalues, method = "fdr")
+    mean1 <- rowMeans(scores[, grp1_idx, drop = FALSE], na.rm = TRUE)
+    mean2 <- rowMeans(scores[, grp2_idx, drop = FALSE], na.rm = TRUE)
+
+    # Assemble result table with significance flag and per-condition means
+    results_df <- data.frame(
+        pathway    = rownames(scores),
+        p_value    = pvalues,
+        FDR        = fdr,
+        score_diff = mean2 - mean1,
+        significant = !is.na(fdr) & fdr < 0.05,
+        stringsAsFactors = FALSE
+    )
+    colnames(results_df)[colnames(results_df) == "score_diff"] <- "score_diff"
+    results_df[[paste0("mean_", cond_levels[1])]] <- mean1
+    results_df[[paste0("mean_", cond_levels[2])]] <- mean2
+    results_df <- results_df[order(results_df$p_value), ]
+
+    n_sig <- sum(results_df$significant, na.rm = TRUE)
+    message("ssGSEA: ", nrow(results_df), " pathways, ", n_sig,
+            " significant (FDR < 0.05)")
+
+    list(
+        table  = results_df,
+        scores = scores,
+        method = "ssgsea_wilcoxon"
+    )
+}
+
+
+# ==== ORA VIA FISHER'S EXACT TEST =============================================
+
+#' Run Over-Representation Analysis (ORA) using Fisher's exact test
+#'
+#' Tests whether significant features from DE are over-represented in each
+#' pathway defined by GMT files.  The foreground is the set of significant
+#' features (adj.P.Val < p_cutoff AND |logFC| >= log2fc_cutoff); the
+#' background is the full set of measured features.
+#'
+#' @param pre     Preprocessing results (expr_raw, meta, row_data).
+#' @param de_res  DE results from run_metabolomics_de() (must contain de_tables).
+#' @param config  Full pipeline config.
+#' @return list(table, method) or NULL.
+run_metabolomics_ora <- function(pre, de_res, config) {
+    cfg     <- config$modes$metabolomics
+    enr_cfg <- cfg$enrichment %||% list()
+
+    if (!isTRUE(enr_cfg$run_enrichment)) {
+        message("metabolomics ORA: disabled — skipping")
+        return(NULL)
+    }
+
+    # ---- Determine significance thresholds ----
+    de_cfg       <- cfg$de %||% list()
+    p_cutoff     <- de_cfg$p_cutoff %||% 0.05
+    lfc_cutoff   <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
+    mapping_file <- enr_cfg$mapping_file
+
+    # ---- Build background (all measured features mapped to IDs) ----
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
+                                            mapping_file)
+    bg_ids <- mapped$compound_names
+    if (length(bg_ids) < 5) {
+        message("metabolomics ORA: too few background compounds — skipping")
+        return(NULL)
+    }
+
+    # ---- Build foreground (significant features) ----
+    if (is.null(de_res) || is.null(de_res$de_tables) ||
+        length(de_res$de_tables) == 0) {
+        message("metabolomics ORA: no DE results — skipping")
+        return(NULL)
+    }
+
+    contrast_name <- names(de_res$de_tables)[1]
+    de_tbl <- de_res$de_tables[[contrast_name]]
+
+    sig_mask <- !is.na(de_tbl$adj.P.Val) & de_tbl$adj.P.Val < p_cutoff &
+                !is.na(de_tbl$logFC) & abs(de_tbl$logFC) >= lfc_cutoff
+    sig_features <- de_tbl$feature_id[sig_mask]
+
+    if (length(sig_features) == 0) {
+        message("metabolomics ORA: no significant features at p<", p_cutoff,
+                " |logFC|>=", round(lfc_cutoff, 3), " — skipping")
+        return(NULL)
+    }
+
+    # Map significant feature IDs to the same compound namespace as bg_ids.
+    orig_names <- rownames(pre$expr_raw)
+    name_map   <- stats::setNames(bg_ids, orig_names[seq_along(bg_ids)])
+    fg_ids     <- unique(na.omit(name_map[sig_features]))
+    fg_ids     <- fg_ids[fg_ids %in% bg_ids]
+
+    message("ORA: ", length(fg_ids), " foreground / ", length(bg_ids),
+            " background compounds (contrast: ", contrast_name, ")")
+
+    if (length(fg_ids) < 2) {
+        message("metabolomics ORA: fewer than 2 mapped foreground compounds — skipping")
+        return(NULL)
+    }
+
+    # ---- Load GMT sets ----
+    gene_sets <- list()
+    gmt_files <- unlist(enr_cfg$gmt_file)
+    if (is.null(gmt_files)) {
+        message("metabolomics ORA: no GMT files — skipping")
+        return(NULL)
+    }
+    for (gf in gmt_files) {
+        if (!file.exists(gf)) next
+        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+        gmt <- gmt_parsed$sets
+        desc_map <- gmt_parsed$descriptions
+        gmt <- translate_gmt_hmdb_to_kegg(gmt, mapping_file)
+        names(gmt) <- make_pathway_labels(names(gmt), desc_map)
+        lib_label <- tools::file_path_sans_ext(basename(gf))
+        for (nm in names(gmt)) {
+            gene_sets[[nm]] <- gmt[[nm]]
+            attr(gene_sets[[nm]], "library") <- lib_label
+        }
+        message("ORA: loaded ", length(gmt), " sets from ", basename(gf))
+    }
+
+    if (length(gene_sets) == 0) {
+        message("metabolomics ORA: no gene sets — skipping")
+        return(NULL)
+    }
+
+    # Filter to sets with >= 2 members in background
+    gene_sets_filt <- lapply(gene_sets, function(cpds) cpds[cpds %in% bg_ids])
+    keep <- vapply(gene_sets_filt, length, integer(1)) >= 2L
+    gene_sets_filt <- gene_sets_filt[keep]
+    gene_sets      <- gene_sets[keep]
+
+    if (length(gene_sets_filt) == 0) {
+        message("ORA: no pathways with >= 2 matching background compounds")
+        return(NULL)
+    }
+    message("ORA: testing ", length(gene_sets_filt), " pathways")
+
+    # ---- Fisher's exact test per pathway ----
+    N <- length(bg_ids)   # total background
+    K <- length(fg_ids)   # total foreground (significant)
+
+    ora_rows <- lapply(names(gene_sets_filt), function(pw) {
+        pw_members <- gene_sets_filt[[pw]]
+        n  <- length(pw_members)                          # pathway size in bg
+        k  <- sum(fg_ids %in% pw_members)                 # overlap fg ∩ pathway
+
+        # 2x2 contingency: fg-in-pw, fg-not-in-pw, bg-in-pw-not-fg, bg-not-in-pw-not-fg
+        mat <- matrix(c(k, K - k, n - k, N - K - (n - k)), nrow = 2)
+        mat[mat < 0] <- 0  # safety
+
+        pval <- tryCatch(
+            stats::fisher.test(mat, alternative = "greater")$p.value,
+            error = function(e) NA_real_
+        )
+
+        lib <- attr(gene_sets[[pw]], "library") %||% NA_character_
+
+        data.frame(
+            pathway     = pw,
+            overlap     = k,
+            pathway_size = n,
+            fg_size     = K,
+            bg_size     = N,
+            fold_enrichment = (k / K) / (n / N),
+            raw_p       = pval,
+            library     = lib,
+            stringsAsFactors = FALSE
+        )
+    })
+
+    result_df <- do.call(rbind, ora_rows)
+    result_df$FDR <- stats::p.adjust(result_df$raw_p, method = "fdr")
+    result_df$overlap_genes <- vapply(names(gene_sets_filt), function(pw) {
+        paste(fg_ids[fg_ids %in% gene_sets_filt[[pw]]], collapse = ";")
+    }, character(1))
+    result_df <- result_df[order(result_df$FDR), ]
+
+    n_sig <- sum(result_df$FDR < 0.05, na.rm = TRUE)
+    message("ORA complete: ", nrow(result_df), " pathways, ",
+            n_sig, " with FDR < 0.05")
+
+    list(
+        table    = result_df,
+        contrast = contrast_name,
+        method   = "fisher_ora"
+    )
+}
+
+
+# ==== GSEA VIA FGSEA ==========================================================
+
+#' Run Gene-Set Enrichment Analysis (GSEA) using fgsea
+#'
+#' Ranks all features by log2 fold-change from DE results and tests pathway
+#' enrichment using the fgsea algorithm.
+#'
+#' @param pre     Preprocessing results.
+#' @param de_res  DE results from run_metabolomics_de().
+#' @param config  Full pipeline config.
+#' @return list(table, ranks, contrast, method) or NULL.
+run_metabolomics_gsea <- function(pre, de_res, config) {
+    cfg     <- config$modes$metabolomics
+    enr_cfg <- cfg$enrichment %||% list()
+
+    if (!isTRUE(enr_cfg$run_enrichment)) {
+        message("metabolomics GSEA: disabled — skipping")
+        return(NULL)
+    }
+
+    if (!requireNamespace("fgsea", quietly = TRUE)) {
+        message("metabolomics GSEA: fgsea not available — skipping")
+        return(NULL)
+    }
+
+    if (is.null(de_res) || is.null(de_res$de_tables) ||
+        length(de_res$de_tables) == 0) {
+        message("metabolomics GSEA: no DE results — skipping")
+        return(NULL)
+    }
+
+    mapping_file <- enr_cfg$mapping_file
+
+    # ---- Build ranked list from DE log2FC ----
+    contrast_name <- names(de_res$de_tables)[1]
+    de_tbl <- de_res$de_tables[[contrast_name]]
+
+    # Map feature IDs to compound namespace
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
+                                            mapping_file)
+    orig_names <- rownames(pre$expr_raw)
+    name_map   <- stats::setNames(mapped$compound_names,
+                                   orig_names[seq_along(mapped$compound_names)])
+
+    de_tbl$compound_id <- name_map[de_tbl$feature_id]
+    de_tbl <- de_tbl[!is.na(de_tbl$compound_id) & nzchar(de_tbl$compound_id), ]
+    de_tbl <- de_tbl[!is.na(de_tbl$logFC), ]
+
+    if (nrow(de_tbl) < 5) {
+        message("metabolomics GSEA: too few mapped compounds — skipping")
+        return(NULL)
+    }
+
+    # Ranking metric: log2 fold-change
+    ranks <- stats::setNames(de_tbl$logFC, de_tbl$compound_id)
+
+    # Deduplicate: keep entry with largest absolute logFC
+    if (any(duplicated(names(ranks)))) {
+        ord <- order(abs(ranks), decreasing = TRUE)
+        ranks <- ranks[ord]
+        ranks <- ranks[!duplicated(names(ranks))]
+    }
+
+    ranks <- sort(ranks, decreasing = TRUE)
+    message("GSEA: ranked list of ", length(ranks),
+            " compounds by log2FC (contrast: ", contrast_name, ")")
+
+    # ---- Load GMT sets ----
+    gene_sets <- list()
+    gmt_files <- unlist(enr_cfg$gmt_file)
+    if (is.null(gmt_files)) {
+        message("metabolomics GSEA: no GMT files — skipping")
+        return(NULL)
+    }
+    for (gf in gmt_files) {
+        if (!file.exists(gf)) next
+        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+        gmt <- gmt_parsed$sets
+        desc_map <- gmt_parsed$descriptions
+        gmt <- translate_gmt_hmdb_to_kegg(gmt, mapping_file)
+        names(gmt) <- make_pathway_labels(names(gmt), desc_map)
+        lib_label <- tools::file_path_sans_ext(basename(gf))
+        for (nm in names(gmt)) {
+            gene_sets[[nm]] <- gmt[[nm]]
+            attr(gene_sets[[nm]], "library") <- lib_label
+        }
+        message("GSEA: loaded ", length(gmt), " sets from ", basename(gf))
+    }
+
+    if (length(gene_sets) == 0) {
+        message("metabolomics GSEA: no gene sets — skipping")
+        return(NULL)
+    }
+
+    # Filter to sets with >= 2 members present in ranked list
+    available <- names(ranks)
+    gene_sets_filt <- lapply(gene_sets, function(cpds) cpds[cpds %in% available])
+    keep <- vapply(gene_sets_filt, length, integer(1)) >= 2L
+    gene_sets_filt <- gene_sets_filt[keep]
+    gene_sets      <- gene_sets[keep]
+
+    if (length(gene_sets_filt) == 0) {
+        message("GSEA: no pathways with >= 2 matching compounds in ranked list")
+        return(NULL)
+    }
+    message("GSEA: testing ", length(gene_sets_filt), " pathways")
+
+    # ---- Run fgsea ----
+    fgsea_res <- tryCatch(
+        fgsea::fgsea(pathways = gene_sets_filt, stats = ranks,
+                     minSize = 2, maxSize = 500, nPermSimple = 10000),
+        error = function(e) {
+            warning("fgsea failed: ", e$message)
+            NULL
+        }
+    )
+
+    if (is.null(fgsea_res) || nrow(fgsea_res) == 0) {
+        message("GSEA: no results from fgsea")
+        return(NULL)
+    }
+
+    result_df <- data.frame(
+        pathway        = fgsea_res$pathway,
+        pval           = fgsea_res$pval,
+        FDR            = fgsea_res$padj,
+        NES            = fgsea_res$NES,
+        ES             = fgsea_res$ES,
+        pathway_size   = fgsea_res$size,
+        stringsAsFactors = FALSE
+    )
+
+    result_df$library <- vapply(result_df$pathway, function(pw) {
+        attr(gene_sets[[pw]], "library") %||% NA_character_
+    }, character(1))
+
+    result_df$leading_edge <- vapply(seq_len(nrow(fgsea_res)), function(i) {
+        le <- fgsea_res$leadingEdge[[i]]
+        if (is.null(le)) return("")
+        paste(le, collapse = ";")
+    }, character(1))
+
+    result_df <- result_df[order(result_df$FDR), ]
+
+    n_sig <- sum(result_df$FDR < 0.05, na.rm = TRUE)
+    message("GSEA complete: ", nrow(result_df), " pathways, ",
+            n_sig, " with FDR < 0.05")
+
+    list(
+        table    = result_df,
+        ranks    = ranks,
+        contrast = contrast_name,
+        method   = "fgsea"
+    )
+}
+
+
+# ==== ENRICHMENT PLOTS ========================================================
+
+#' Enrichment barplot (for QEA or ssGSEA results)
+#'
+#' Plots the top pathways as horizontal bars of -log10(FDR). When a "library"
+#' column is present, bars are colored by database source; otherwise a
+#' continuous gradient is used. A dashed line marks FDR = 0.05.
+#'
+#' @param enrich_df data.frame with pathway, FDR columns (and optional library).
+#' @param top_n     Number of top pathways to show.
+#' @param title     Plot title.
+#' @return ggplot object or NULL if input is empty.
+plot_enrichment_barplot <- function(enrich_df, top_n = 20,
+                                    title = "Pathway Enrichment") {
+    if (is.null(enrich_df) || nrow(enrich_df) == 0) return(NULL)
+
+    # Select the top pathways and compute -log10(FDR) for the y-axis
+    top_df <- utils::head(enrich_df, top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+
+    # Truncate long pathway names and order for a horizontal bar layout
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    # Color by database source when a library column exists, else by FDR gradient
+    has_library <- "library" %in% colnames(top_df)
+
+    if (has_library) {
+        top_df$lib_label <- toupper(gsub("_pathway$", "", top_df$library))
+        p <- ggplot2::ggplot(top_df, ggplot2::aes(x = pathway_short,
+                                                    y = neg_log10_fdr,
+                                                    fill = lib_label)) +
+            ggplot2::geom_col() +
+            ggplot2::labs(fill = "Database")
+    } else {
+        p <- ggplot2::ggplot(top_df, ggplot2::aes(x = pathway_short,
+                                                    y = neg_log10_fdr,
+                                                    fill = neg_log10_fdr)) +
+            ggplot2::geom_col() +
+            ggplot2::scale_fill_gradient(low = "steelblue", high = "firebrick",
+                                          name = "-log10(FDR)")
+    }
+
+    # Add FDR = 0.05 threshold line and style the plot
+    p +
+        ggplot2::coord_flip() +
+        ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways"),
+                       x = NULL, y = "-log10(FDR)") +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' ssGSEA pathway boxplots for significant pathways
+#'
+#' Creates faceted boxplots comparing ssGSEA enrichment scores between
+#' conditions for the top significant pathways (FDR < 0.05). Individual
+#' sample points are overlaid with jitter.
+#'
+#' @param scores       Pathway scores matrix (pathways x samples).
+#' @param conditions   Factor of sample conditions (same order as score columns).
+#' @param results_df   ssGSEA results data.frame with a "significant" logical flag.
+#' @param max_pathways Maximum number of significant pathways to display.
+#' @return ggplot object or NULL if no pathways are significant.
+plot_ssgsea_boxplots <- function(scores, conditions, results_df,
+                                  max_pathways = 12) {
+    # Select the top significant pathways up to max_pathways
+    sig_pathways <- results_df$pathway[results_df$significant == TRUE]
+    if (length(sig_pathways) == 0) return(NULL)
+
+    sig_pathways <- utils::head(sig_pathways, max_pathways)
+    sig_scores   <- scores[sig_pathways, , drop = FALSE]
+
+    # Reshape score matrix into long format for ggplot2
+    plot_data <- do.call(rbind, lapply(sig_pathways, function(pw) {
+        data.frame(
+            pathway   = pw,
+            score     = sig_scores[pw, ],
+            condition = as.character(conditions),
+            stringsAsFactors = FALSE
+        )
+    }))
+
+    # Truncate long pathway names for facet labels
+    plot_data$pathway_short <- ifelse(
+        nchar(plot_data$pathway) > 40,
+        paste0(substr(plot_data$pathway, 1, 37), "..."),
+        plot_data$pathway
+    )
+
+    # Draw boxplots with jittered sample points, one facet per pathway
+    ggplot2::ggplot(plot_data, ggplot2::aes(x = condition, y = score,
+                                             fill = condition)) +
+        ggplot2::geom_boxplot(outlier.shape = 16, outlier.size = 1.5) +
+        ggplot2::geom_jitter(width = 0.15, size = 1, alpha = 0.5) +
+        ggplot2::facet_wrap(~pathway_short, scales = "free_y") +
+        ggplot2::labs(
+            title = "ssGSEA Pathway Scores by Condition",
+            subtitle = paste0("Top ", length(sig_pathways),
+                              " significant pathways (FDR < 0.05)"),
+            x = NULL, y = "ssGSEA Enrichment Score", fill = "Condition"
+        ) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            strip.text = ggplot2::element_text(size = 8),
+            plot.title = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' GSEA NES barplot
+#'
+#' Horizontal barplot of Normalized Enrichment Scores (NES) for top pathways,
+#' colored by direction (up/down) with FDR < 0.05 threshold marking.
+#'
+#' @param gsea_df  data.frame from run_metabolomics_gsea() with pathway, NES, FDR.
+#' @param top_n    Number of top pathways to display (by FDR).
+#' @param title    Plot title.
+#' @return ggplot object or NULL.
+plot_gsea_nes_barplot <- function(gsea_df, top_n = 20,
+                                   title = "GSEA — Normalized Enrichment Scores") {
+    if (is.null(gsea_df) || nrow(gsea_df) == 0) return(NULL)
+
+    top_df <- utils::head(gsea_df[order(gsea_df$FDR), ], top_n)
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+    top_df$direction <- ifelse(top_df$NES > 0, "Up", "Down")
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = pathway_short, y = NES,
+                                          fill = direction)) +
+        ggplot2::geom_col() +
+        ggplot2::coord_flip() +
+        ggplot2::scale_fill_manual(values = c(Up = "firebrick", Down = "steelblue"),
+                                    name = "Direction") +
+        ggplot2::geom_hline(yintercept = 0, color = "grey30") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df),
+                                         " pathways by FDR"),
+                       x = NULL, y = "NES") +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' ORA dot plot
+#'
+#' Dot plot showing fold-enrichment vs pathway, sized by overlap count and
+#' colored by −log10(FDR).
+#'
+#' @param ora_df  data.frame from run_metabolomics_ora().
+#' @param top_n   Number of top pathways to display (by FDR).
+#' @param title   Plot title.
+#' @return ggplot object or NULL.
+plot_ora_dotplot <- function(ora_df, top_n = 20,
+                              title = "ORA — Pathway Over-Representation") {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(NULL)
+
+    top_df <- utils::head(ora_df[order(ora_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = fold_enrichment,
+                                          y = pathway_short,
+                                          size = overlap,
+                                          color = neg_log10_fdr)) +
+        ggplot2::geom_point() +
+        ggplot2::scale_color_gradient(low = "steelblue", high = "firebrick",
+                                       name = "-log10(FDR)") +
+        ggplot2::scale_size_continuous(name = "Overlap", range = c(2, 8)) +
+        ggplot2::geom_vline(xintercept = 1, linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
+                       x = "Fold Enrichment", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' ORA lollipop plot
+#'
+#' Lollipop plot of −log10(FDR) per pathway, colored by fold-enrichment.
+#'
+#' @param ora_df  data.frame from run_metabolomics_ora().
+#' @param top_n   Number of top pathways to display.
+#' @param title   Plot title.
+#' @return ggplot object or NULL.
+plot_ora_lollipop <- function(ora_df, top_n = 20,
+                               title = "ORA — Pathway Enrichment") {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(NULL)
+
+    top_df <- utils::head(ora_df[order(ora_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = neg_log10_fdr,
+                                          y = pathway_short)) +
+        ggplot2::geom_segment(ggplot2::aes(x = 0, xend = neg_log10_fdr,
+                                            yend = pathway_short),
+                               color = "grey60") +
+        ggplot2::geom_point(ggplot2::aes(size = overlap,
+                                          color = fold_enrichment)) +
+        ggplot2::scale_color_gradient(low = "steelblue", high = "firebrick",
+                                       name = "Fold Enrichment") +
+        ggplot2::scale_size_continuous(name = "Overlap", range = c(2, 7)) +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
+                       x = "-log10(FDR)", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' GSEA lollipop plot
+#'
+#' Lollipop plot of NES per pathway, colored by direction and sized by
+#' −log10(FDR).
+#'
+#' @param gsea_df  data.frame from run_metabolomics_gsea().
+#' @param top_n    Number of top pathways to display.
+#' @param title    Plot title.
+#' @return ggplot object or NULL.
+plot_gsea_lollipop <- function(gsea_df, top_n = 20,
+                                title = "GSEA — Pathway Enrichment") {
+    if (is.null(gsea_df) || nrow(gsea_df) == 0) return(NULL)
+
+    top_df <- utils::head(gsea_df[order(gsea_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+    top_df$direction <- ifelse(top_df$NES > 0, "Up", "Down")
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = NES, y = pathway_short)) +
+        ggplot2::geom_segment(ggplot2::aes(x = 0, xend = NES,
+                                            yend = pathway_short),
+                               color = "grey60") +
+        ggplot2::geom_point(ggplot2::aes(size = neg_log10_fdr,
+                                          color = direction)) +
+        ggplot2::scale_color_manual(values = c(Up = "firebrick",
+                                                Down = "steelblue"),
+                                     name = "Direction") +
+        ggplot2::scale_size_continuous(name = "-log10(FDR)", range = c(2, 7)) +
+        ggplot2::geom_vline(xintercept = 0, color = "grey30") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
+                       x = "NES", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' QEA lollipop plot
+#'
+#' Lollipop plot of −log10(FDR) per pathway, sized by number of hits.
+#'
+#' @param qea_df  data.frame from run_metabolomics_qea() with pathway, FDR, hits.
+#' @param top_n   Number of top pathways to display.
+#' @param title   Plot title.
+#' @return ggplot object or NULL.
+plot_qea_lollipop <- function(qea_df, top_n = 20,
+                               title = "QEA — Pathway Enrichment") {
+    if (is.null(qea_df) || nrow(qea_df) == 0) return(NULL)
+
+    top_df <- utils::head(qea_df[order(qea_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    has_library <- "library" %in% colnames(top_df)
+
+    p <- ggplot2::ggplot(top_df, ggplot2::aes(x = neg_log10_fdr,
+                                                y = pathway_short)) +
+        ggplot2::geom_segment(ggplot2::aes(x = 0, xend = neg_log10_fdr,
+                                            yend = pathway_short),
+                               color = "grey60")
+
+    if (has_library) {
+        top_df$lib_label <- toupper(gsub("_pathway$", "", top_df$library))
+        p <- p +
+            ggplot2::geom_point(data = top_df,
+                                 ggplot2::aes(size = hits, color = lib_label)) +
+            ggplot2::labs(color = "Database")
+    } else {
+        p <- p +
+            ggplot2::geom_point(ggplot2::aes(size = hits),
+                                 color = "firebrick")
+    }
+
+    p +
+        ggplot2::scale_size_continuous(name = "Hits", range = c(2, 7)) +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
+                       x = "-log10(FDR)", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' ssGSEA lollipop plot
+#'
+#' Lollipop plot of −log10(FDR) per pathway, colored by enrichment direction
+#' (based on score_diff) and sized by absolute score difference.
+#'
+#' @param ssgsea_df data.frame from run_metabolomics_ssgsea().
+#' @param top_n     Number of top pathways to display.
+#' @param title     Plot title.
+#' @return ggplot object or NULL.
+plot_ssgsea_lollipop <- function(ssgsea_df, top_n = 20,
+                                  title = "ssGSEA — Pathway Enrichment") {
+    if (is.null(ssgsea_df) || nrow(ssgsea_df) == 0) return(NULL)
+    if (!"FDR" %in% colnames(ssgsea_df)) return(NULL)
+
+    top_df <- utils::head(ssgsea_df[order(ssgsea_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    if ("score_diff" %in% colnames(top_df)) {
+        top_df$direction <- ifelse(top_df$score_diff > 0, "Up", "Down")
+        top_df$abs_diff  <- abs(top_df$score_diff)
+    } else {
+        top_df$direction <- "N/A"
+        top_df$abs_diff  <- 1
+    }
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = neg_log10_fdr,
+                                          y = pathway_short)) +
+        ggplot2::geom_segment(ggplot2::aes(x = 0, xend = neg_log10_fdr,
+                                            yend = pathway_short),
+                               color = "grey60") +
+        ggplot2::geom_point(ggplot2::aes(size = abs_diff,
+                                          color = direction)) +
+        ggplot2::scale_color_manual(values = c(Up = "firebrick",
+                                                Down = "steelblue",
+                                                "N/A" = "grey50"),
+                                     name = "Direction") +
+        ggplot2::scale_size_continuous(name = "|Score Diff|", range = c(2, 7)) +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
+                       x = "-log10(FDR)", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}

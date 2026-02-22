@@ -54,13 +54,22 @@ invisible(lapply(pipeline_files, tar_source))
 # Global targets options
 # ------------------------------------------------------------------------------
 
-tar_option_set(
-  packages = c(
-    "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
-    "openxlsx", "readr", "readxl", "tidyr", "tibble",
-    "edgeR", "DESeq2", "SummarizedExperiment"
-  )
+required_pkgs <- c(
+  "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
+  "openxlsx", "readr", "readxl", "tidyr", "tibble",
+  "edgeR", "DESeq2", "SummarizedExperiment"
 )
+# Only require packages that are actually installed (allows running a
+# subset of pipelines when some omics-specific packages are absent).
+available_pkgs <- required_pkgs[vapply(required_pkgs, requireNamespace,
+                                       logical(1), quietly = TRUE)]
+
+tar_option_set(packages = available_pkgs)
+
+# Resolve config path once at plan-definition time so the literal path is
+# baked into the target command.  This ensures {targets} detects a change
+# when MULTIOMICS_CONFIG points to a different file between runs.
+config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
 
 # ------------------------------------------------------------------------------
 # Targets definition
@@ -68,17 +77,10 @@ tar_option_set(
 
 list(
   # Configuration file (tracked as a file dependency)
-  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
-  # Or defaults to config/rna_amir_sapir.yaml
+  # Override with: Sys.setenv(PIPELINE_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
-    {
-      cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-      if (cfg_path == "") {
-        cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
-      }
-      normalizePath(cfg_path, mustWork = TRUE)
-    },
+    !!config_path,
     format = "file"
   ),
 
@@ -109,7 +111,8 @@ list(
     write_execution_info(
       config = config,
       run_dir = run_dir,
-      config_path = config_file
+      config_path = config_file,
+      targets_file = "_targets.R"
     ),
     format = "file"
   ),
@@ -124,4 +127,12 @@ list(
     if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
     mode_targets
   }
+  # Proteomics pipeline (returns a list of targets)
+  # pipe_proteomics()
+
+  # RNA-seq pipeline
+  # pipe_rnaseq()
+
+  # Metabolomics pipeline (Stages 1 + 2)
+  pipe_metabolomics()
 )

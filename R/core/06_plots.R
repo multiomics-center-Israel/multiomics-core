@@ -28,8 +28,8 @@ plot_density_overlay <- function(expr_mat,
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.data.frame(expr_mat)
 
-  norm_expr_long <- expr_mat |>
-    tibble::rownames_to_column("feature") |>
+  norm_expr_long <- expr_mat %>%
+    tibble::rownames_to_column("feature") %>%
     tidyr::pivot_longer(
       cols = -feature,
       names_to = "SampleID",
@@ -65,7 +65,7 @@ plot_sample_distance_heatmap <- function(expr_mat,
                                          main = NULL,
                                          colors = NULL,
                                          fontsize = 12,
-                                         show_labels = FALSE,
+                                         show_labels = TRUE,
                                          cluster_rows = TRUE,
                                          cluster_cols = TRUE) {
   expr_mat <- as.matrix(expr_mat)
@@ -86,16 +86,16 @@ plot_sample_distance_heatmap <- function(expr_mat,
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols,
     annotation_col = annotation_col,
-    annotation_row = annotation_col,  # Issue 2 FIX: Mirror annotations for symmetry
+    annotation_row = annotation_col, # Issue 2 FIX: Mirror annotations for symmetry
     main = main,
     col = colors,
-    show_rownames = show_labels,  # Issue 1 FIX: Hide by default
-    show_colnames = show_labels,  # Issue 1 FIX: Hide by default
+    show_rownames = show_labels, # Issue 1 FIX: Hide by default
+    show_colnames = show_labels, # Issue 1 FIX: Hide by default
     fontsize_row = fontsize,
     fontsize_col = fontsize,
     annotation_legend = TRUE,
     legend = TRUE,
-    border_color = NA  # Issue 2 FIX: Remove grid lines for cleaner look
+    border_color = NA # Issue 2 FIX: Remove grid lines for cleaner look
   )
 }
 #' Sample–sample correlation heatmap
@@ -127,7 +127,7 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             main = NULL,
                                             colors = NULL,
                                             fontsize = 12,
-                                            show_labels = FALSE,
+                                            show_labels = TRUE,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
                                             adjust_scale = TRUE) {
@@ -156,8 +156,9 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     if ((cor_max - cor_min) < 0.3) {
       # Use quantile-based breaks for better visual separation
       q_breaks <- stats::quantile(cor_mat[lower.tri(cor_mat)],
-                                   probs = seq(0, 1, length.out = 256),
-                                   na.rm = TRUE)
+        probs = seq(0, 1, length.out = 256),
+        na.rm = TRUE
+      )
       breaks <- unique(q_breaks)
 
       # Regenerate colors to match breaks
@@ -171,19 +172,19 @@ plot_sample_correlation_heatmap <- function(expr_mat,
   pheatmap::pheatmap(
     cor_mat,
     annotation_col = annotation_col,
-    annotation_row = annotation_col,  # Mirror annotations for symmetry
+    annotation_row = annotation_col, # Mirror annotations for symmetry
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols,
     main = main,
     col = colors,
-    breaks = breaks,  # Issue 4 FIX: Adjusted scale
-    show_rownames = show_labels,  # Issue 1 FIX
-    show_colnames = show_labels,  # Issue 1 FIX
+    breaks = breaks, # Issue 4 FIX: Adjusted scale
+    show_rownames = show_labels, # Issue 1 FIX
+    show_colnames = show_labels, # Issue 1 FIX
     fontsize_row = fontsize,
     fontsize_col = fontsize,
     annotation_legend = TRUE,
     legend = TRUE,
-    border_color = NA  # Issue 2 FIX: Cleaner appearance
+    border_color = NA # Issue 2 FIX: Cleaner appearance
   )
 }
 
@@ -260,10 +261,11 @@ plot_imputation_summary <- function(expr_mat, imputed_flag, width = NULL, downsh
     ggplot2::facet_wrap(~sample, scales = "free_y") +
     ggplot2::scale_fill_manual(values = c("Imputed" = "#00BFC4", "Observed" = "#F8766D")) +
     ggplot2::labs(
-      title = if (!is.null(width) && !is.null(downshift))
+      title = if (!is.null(width) && !is.null(downshift)) {
         sprintf("Imputation QC: observed vs imputed (width = %s, shift = %s)", width, downshift)
-      else
-        "Imputation QC: observed vs imputed distributions (per sample)",
+      } else {
+        "Imputation QC: observed vs imputed distributions (per sample)"
+      },
       x = "Expression (log2)",
       y = "Count",
       fill = NULL
@@ -380,9 +382,9 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
     levels = unique(prof_df$facet_label[order(as.numeric(as.character(prof_df$cluster)))])
   )
 
-  p <- ggplot2::ggplot(prof_df, aes(x = group, y = mean, group = 1)) +
+  p <- ggplot2::ggplot(prof_df, ggplot2::aes(x = group, y = mean, group = 1)) +
     # Error bars (SD)
-    ggplot2::geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.1, color = "grey50") +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = mean - sd, ymax = mean + sd), width = 0.1, color = "grey50") +
     # Line and points
     ggplot2::geom_line(color = "blue") +
     ggplot2::geom_point(size = 2, color = "darkblue") +
@@ -393,7 +395,7 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
     # Styling
     ggplot2::labs(y = "Mean z-score (group means)", x = x_label) +
     ggplot2::theme_bw() +
-    ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
   return(p)
 }
@@ -467,18 +469,10 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ))
   }
 
-  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10padj)) +
-    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.5, na.rm = TRUE) +
-    ggplot2::scale_color_manual(
-      name = "Regulation",
-      values = c("NS" = "grey70", "Down" = "blue", "Up" = "red"),
-      labels = c(
-        "NS" = sprintf("NS (%d)", nrow(df) - n_total),
-        "Down" = sprintf("Down (%d)", n_down),
-        "Up" = sprintf("Up (%d)", n_up)
-      )
-    ) +
-    ggplot2::scale_alpha_manual(values = c("NS" = 0.25, "Down" = 0.8, "Up" = 0.8), guide = "none") +
+  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
+    ggplot2::geom_point(ggplot2::aes(color = .pass, alpha = .pass), size = 1.5, na.rm = TRUE) +
+    ggplot2::scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"), guide = "none") +
+    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.4, "TRUE" = 0.9), guide = "none") +
     ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "black") +
     ggplot2::geom_hline(yintercept = -log10(padj_cut), linetype = "dashed", color = "black") +
     ggplot2::labs(
@@ -635,71 +629,84 @@ get_heatmap_colors <- function(n = 255) {
 wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
                                     feature_ids,
                                     ordering = NULL,
-                                    annotation_row = NULL,
-                                    out_file = NULL) {
-  # 1) choose features present in matrix
+                                    annotation_row_builder = FALSE, # function(use_ids, context) -> df
+                                    annotation_row_context = NULL,
+                                    out_file = NULL,
+                                    title = NULL,
+                                    cluster_cols = TRUE,
+                                    cluster_rows_default = TRUE,
+                                    scale_rows = TRUE) {
+  
   use_ids <- intersect(feature_ids, rownames(expr_mat))
-
-  # preserve ordering if provided
+  
   if (!is.null(ordering)) {
     use_ids <- ordering[ordering %in% use_ids]
     cluster_rows_flag <- FALSE
   } else {
-    cluster_rows_flag <- TRUE
+    cluster_rows_flag <- cluster_rows_default
   }
-
+  
   mat2plot <- expr_mat[use_ids, , drop = FALSE]
-
-  # 2) annotation (aligned to matrix columns)
+  
   sample_col <- cfg$effects$samples
-  # Extract primary color (handle array config for multi-color PCA)
-  color_config <- cfg$effects$color
-  color_col <- if (!is.null(color_config)) as.character(color_config[[1]]) else NULL
-
+  color_col  <- get_color_config(cfg)
+  
   annot_col <- data.frame(
     Condition = meta[[color_col]],
     row.names = meta[[sample_col]]
   )
-
-  # align annotation to columns actually in the matrix
   annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
-
-  # 3) Align row annotations to the features being plotted
+  
   annot_row <- NULL
-  annot_colors <- NULL
-
-  if (!is.null(annotation_row)) {
-    # Filter to only features in the heatmap
-    common_features <- intersect(use_ids, rownames(annotation_row))
-    if (length(common_features) > 0) {
-      annot_row <- annotation_row[common_features, , drop = FALSE]
-
-      # Define colors for DE patterns (up = red, down = blue, ns = grey)
-      annot_colors <- list()
-      for (col_name in colnames(annot_row)) {
-        annot_colors[[col_name]] <- c(
-          "down" = "#2166AC",  # Blue
-          "ns"   = "#F7F7F7",  # Light grey
-          "up"   = "#B2182B"   # Red
-        )
-      }
-    }
+  if (annotation_row_builder) {
+    annot_row <- build_contrast_row_context(use_ids, annotation_row_context)
   }
-
-  # 4) plot
+  
+  if (is.null(title)) title <- sprintf("Heatmap (%d features)", nrow(mat2plot))
+  
   ph <- plot_heatmap_core(
-    expr_mat = mat2plot,
+    expr_mat       = mat2plot,
     annotation_col = annot_col,
     annotation_row = annot_row,
-    annotation_colors = annot_colors,
-    title = sprintf("Hierarchical Clustering (%d DE features)", nrow(mat2plot)),
-    scale_rows = TRUE,
-    cluster_rows = cluster_rows_flag,
-    cluster_cols = TRUE,
-    max_rows = NULL
+    title          = title,
+    scale_rows     = scale_rows,
+    cluster_rows   = cluster_rows_flag,
+    cluster_cols   = cluster_cols,
+    max_rows       = NULL
   )
-
-  # 5) save & return
+  
   if (!is.null(out_file)) save_heatmap_to_file(ph, out_file)
   ph
+}
+
+
+build_contrast_row_context <- function(use_ids, context) {
+  summary_df    <- context$summary_df
+  p_cutoff      <- context$p_cutoff %||% 0.05
+  log2fc_cutoff <- context$log2fc_cutoff %||% 0.585
+  id_col        <- context$id_col %||% "FeatureID"
+  
+  if (is.null(summary_df)) return(NULL)
+  
+  ar <- build_de_row_annotations(
+    summary_df    = summary_df,
+    feature_ids   = use_ids,
+    p_cutoff      = p_cutoff,
+    log2fc_cutoff = log2fc_cutoff,
+    id_col        = id_col
+  )
+  if (is.null(ar)) return(NULL)
+  
+  # Expand to full set of rows (avoid breaking when some ids missing)
+  full <- as.data.frame(
+    matrix(NA_character_, nrow = length(use_ids), ncol = ncol(ar)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  colnames(full) <- colnames(ar)
+  rownames(full) <- use_ids
+  
+  common <- intersect(use_ids, rownames(ar))
+  full[common, ] <- ar[common, , drop = FALSE]
+  full
 }

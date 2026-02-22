@@ -118,6 +118,18 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
     out
 }
 
+#' Build Final Results Table for Proteomics
+#' 
+#' This function aggregates differential expression results with expression data
+#' and annotations. It ensures Z-score calculation by passing the correct mode.
+#'
+#' @param pre List containing preprocessed data (including expr_filt and expr_imp_single).
+#' @param summary_df Dataframe containing DE summary statistics.
+#' @param contrasts_df Dataframe defining the experimental contrasts.
+#' @param row_data Optional annotation data (defaults to pre$row_data).
+#' @param feature_id_col The column name for unique identifiers (default "FeatureID").
+#'
+#' @return A consolidated dataframe with statistics, expression values, and Z-scores.
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL, feature_id_col = "FeatureID") {
     build_final_results_generic(
         summary_df = summary_df,

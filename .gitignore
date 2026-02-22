@@ -50,5 +50,8 @@ claude-scientific-skills/
 # Local scratch scripts
 scripts/*.R
 
+# User-specific environment variables
+.Renviron
+
 Rplots.pdf
 .lintr
