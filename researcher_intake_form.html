@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Researcher Intake Form — Multiomics Core</title>
+<style>
+:root {
+  --primary: #2c5282;
+  --primary-light: #ebf2fa;
+  --primary-hover: #1a365d;
+  --accent: #e53e3e;
+  --border: #cbd5e0;
+  --border-focus: #4299e1;
+  --bg: #f7fafc;
+  --card-bg: #ffffff;
+  --text: #1a202c;
+  --text-muted: #718096;
+  --success: #38a169;
+  --warning: #d69e2e;
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  padding: 0;
+}
+
+.header {
+  background: var(--primary);
+  color: white;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+.header h1 { font-size: 1.6rem; font-weight: 600; margin-bottom: 0.25rem; }
+.header p { font-size: 0.9rem; opacity: 0.85; max-width: 600px; margin: 0 auto; }
+
+.container {
+  max-width: 820px;
+  margin: 1.5rem auto;
+  padding: 0 1rem 3rem;
+}
+
+/* --- Sections --- */
+.form-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  cursor: pointer;
+  user-select: none;
+  background: var(--primary-light);
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.section-header:hover { background: #dbe8f5; }
+
+.section-header h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.section-number {
+  background: var(--primary);
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.collapse-icon {
+  font-size: 1.1rem;
+  color: var(--primary);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.form-section.collapsed .collapse-icon { transform: rotate(-90deg); }
+.form-section.collapsed .section-body { display: none; }
+
+.section-body { padding: 1.25rem; }
+
+/* --- Form Controls --- */
+.field { margin-bottom: 1rem; }
+.field:last-child { margin-bottom: 0; }
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  color: var(--text);
+}
+
+label .req {
+  color: var(--accent);
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+label .optional {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.78rem;
+  margin-left: 4px;
+}
+
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: help;
+  margin-left: 4px;
+  position: relative;
+  vertical-align: middle;
+}
+.tooltip-trigger:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 400;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  white-space: normal;
+  width: 220px;
+  z-index: 100;
+  line-height: 1.4;
+  box-shadow: var(--shadow-lg);
+}
+
+input[type="text"],
+input[type="email"],
+input[type="number"],
+input[type="date"],
+select,
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  font-family: inherit;
+  color: var(--text);
+  background: white;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(66,153,225,0.15);
+}
+textarea { resize: vertical; min-height: 60px; }
+
+input.invalid, select.invalid, textarea.invalid {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(229,62,62,0.12);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 600px) {
+  .field-row { grid-template-columns: 1fr; }
+}
+
+.field-row-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 700px) {
+  .field-row-3 { grid-template-columns: 1fr; }
+}
+
+/* --- Checkbox group --- */
+.checkbox-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 1rem;
+}
+@media (max-width: 500px) {
+  .checkbox-group { grid-template-columns: 1fr; }
+}
+.checkbox-group label {
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.checkbox-group input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+
+/* --- Radio group --- */
+.radio-group {
+  display: flex;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+}
+.radio-group label {
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.radio-group input[type="radio"] { width: auto; margin: 0; cursor: pointer; }
+
+/* --- Dynamic rows --- */
+.dynamic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+.dynamic-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.dynamic-table td {
+  padding: 0.35rem 0.35rem;
+  border-bottom: 1px solid #edf2f7;
+  vertical-align: middle;
+}
+.dynamic-table input, .dynamic-table select {
+  font-size: 0.83rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.btn-sm {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.btn-add {
+  background: var(--primary);
+  color: white;
+  margin-top: 0.5rem;
+}
+.btn-add:hover { background: var(--primary-hover); }
+.btn-remove {
+  background: #fed7d7;
+  color: var(--accent);
+}
+.btn-remove:hover { background: #feb2b2; }
+
+/* --- Action bar --- */
+.action-bar {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.btn {
+  padding: 0.65rem 1.5rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn:active { transform: scale(0.98); }
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-secondary {
+  background: white;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+.btn-secondary:hover { background: var(--primary-light); }
+
+.btn-outline {
+  background: white;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.btn-outline:hover { background: var(--bg); }
+
+/* --- Validation message --- */
+.validation-msg {
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
+  border-radius: var(--radius);
+  padding: 0.65rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+  display: none;
+}
+.validation-msg.visible { display: block; }
+
+/* --- Toast --- */
+.toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--text);
+  color: white;
+  padding: 0.7rem 1.4rem;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  opacity: 0;
+  transition: all 0.3s;
+  z-index: 1000;
+  box-shadow: var(--shadow-lg);
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* --- Proteomics-specific --- */
+.proteomics-field { display: none; }
+.proteomics-field.visible { display: block; }
+
+/* --- Print styles --- */
+@media print {
+  body { background: white; }
+  .header { background: var(--primary) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .action-bar, .btn-add, .btn-remove, .collapse-icon, .tooltip-trigger, .no-print { display: none !important; }
+  .form-section { break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
+  .form-section.collapsed .section-body { display: block !important; }
+  .section-header { cursor: default; }
+  .container { max-width: 100%; }
+  .print-summary { display: block !important; }
+  .form-content { display: none !important; }
+}
+
+.print-summary { display: none; }
+.print-summary h3 { font-size: 0.95rem; color: var(--primary); margin: 1rem 0 0.4rem; }
+.print-summary .summary-field { margin-bottom: 0.3rem; font-size: 0.85rem; }
+.print-summary .summary-label { font-weight: 600; }
+.print-summary table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.3rem 0 0.6rem;
+  font-size: 0.83rem;
+}
+.print-summary table th, .print-summary table td {
+  border: 1px solid #ddd;
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+}
+.print-summary table th { background: #f0f0f0; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Researcher Intake Form</h1>
+  <p>Provide biological context for your multiomics analysis. This information helps the bioinformatician and AI commentary system deliver more meaningful results.</p>
+</div>
+
+<div class="container">
+
+  <div id="validationMsg" class="validation-msg">
+    Please fill in all required fields (marked with <strong>*</strong>) before saving.
+  </div>
+
+  <!-- ===== FORM CONTENT ===== -->
+  <div class="form-content">
+
+  <!-- 1. Project Info -->
+  <div class="form-section" id="sec-project">
+    <div class="section-header" onclick="toggleSection('sec-project')">
+      <h2><span class="section-number">1</span> Project Info</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field-row">
+        <div class="field">
+          <label>Project Name <span class="req">*</span></label>
+          <input type="text" id="project_name" required placeholder="e.g., Giardia Heat Shock Response">
+        </div>
+        <div class="field">
+          <label>Date Submitted</label>
+          <input type="date" id="date_submitted">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>PI Name <span class="req">*</span></label>
+          <input type="text" id="pi_name" required placeholder="Principal Investigator">
+        </div>
+        <div class="field">
+          <label>PI Email <span class="req">*</span></label>
+          <input type="email" id="pi_email" required placeholder="pi@university.edu">
+        </div>
+      </div>
+      <div class="field">
+        <label>Brief Project Description <span class="req">*</span>
+          <span class="tooltip-trigger" data-tip="2-3 sentences summarizing the project goals. This helps frame all downstream analysis.">?</span>
+        </label>
+        <textarea id="project_description" rows="3" required placeholder="Briefly describe the overall goals and scope of this project..."></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Biological Question -->
+  <div class="form-section" id="sec-biology">
+    <div class="section-header" onclick="toggleSection('sec-biology')">
+      <h2><span class="section-number">2</span> Biological Question</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Primary Research Question / Hypothesis <span class="req">*</span>
+          <span class="tooltip-trigger" data-tip="State your hypothesis clearly. The AI commentary will use this to frame its interpretation of significant results.">?</span>
+        </label>
+        <textarea id="hypothesis" rows="3" required placeholder="e.g., We hypothesize that heat shock in Giardia upregulates encystation-related pathways..."></textarea>
+      </div>
+      <div class="field">
+        <label>Expected Outcomes
+          <span class="tooltip-trigger" data-tip="What do you expect to find? This helps the bioinformatician flag unexpected results.">?</span>
+        </label>
+        <textarea id="expected_outcomes" rows="2" placeholder="e.g., Upregulation of HSP70 family genes, downregulation of metabolic enzymes..."></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Disease / Condition <span class="optional">(if applicable)</span></label>
+          <input type="text" id="disease_condition" placeholder="e.g., Giardiasis, Breast Cancer">
+        </div>
+        <div class="field">
+          <label>Tissue / Cell Type / Organ <span class="req">*</span></label>
+          <input type="text" id="tissue_cell_type" required placeholder="e.g., Trophozoites, Liver tissue, PBMCs">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Organism & Samples -->
+  <div class="form-section" id="sec-organism">
+    <div class="section-header" onclick="toggleSection('sec-organism')">
+      <h2><span class="section-number">3</span> Organism &amp; Samples</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field-row">
+        <div class="field">
+          <label>Organism <span class="req">*</span></label>
+          <select id="organism_select" required onchange="handleOrganismChange()">
+            <option value="">— Select —</option>
+            <option value="Human">Human</option>
+            <option value="Mouse">Mouse</option>
+            <option value="Rat">Rat</option>
+            <option value="Zebrafish">Zebrafish</option>
+            <option value="C. elegans">C. elegans</option>
+            <option value="Drosophila">Drosophila</option>
+            <option value="Yeast">Yeast</option>
+            <option value="Arabidopsis">Arabidopsis</option>
+            <option value="Giardia">Giardia</option>
+            <option value="Other">Other (specify below)</option>
+          </select>
+        </div>
+        <div class="field" id="organism_other_field" style="display:none">
+          <label>Other Organism <span class="req">*</span></label>
+          <input type="text" id="organism_other" placeholder="Specify organism">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Life Stage / Developmental Stage <span class="optional">(optional)</span></label>
+          <input type="text" id="life_stage" placeholder="e.g., Adult, Embryonic day 14, Trophozoite">
+        </div>
+        <div class="field">
+          <label>Sex <span class="optional">(if applicable)</span></label>
+          <select id="sex">
+            <option value="">— Select —</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Mixed">Mixed</option>
+            <option value="N/A">N/A</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Genetic Background / Strain <span class="optional">(optional)</span></label>
+          <input type="text" id="strain_background" placeholder="e.g., C57BL/6, WB clone C6">
+        </div>
+        <div class="field">
+          <label>Total Number of Samples</label>
+          <input type="number" id="total_samples" min="1" placeholder="e.g., 12">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Experimental Design -->
+  <div class="form-section" id="sec-design">
+    <div class="section-header" onclick="toggleSection('sec-design')">
+      <h2><span class="section-number">4</span> Experimental Design</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Data Type <span class="req">*</span></label>
+        <div class="radio-group">
+          <label><input type="radio" name="data_type" value="rnaseq" onchange="handleDataTypeChange()"> RNA-seq</label>
+          <label><input type="radio" name="data_type" value="proteomics" onchange="handleDataTypeChange()"> Proteomics</label>
+          <label><input type="radio" name="data_type" value="both" onchange="handleDataTypeChange()"> Both</label>
+        </div>
+      </div>
+
+      <div class="proteomics-field" id="proteo-fields">
+        <div class="field-row">
+          <div class="field">
+            <label>Proteomics Platform <span class="optional">(optional)</span></label>
+            <input type="text" id="proteo_platform" placeholder="e.g., TMT, LFQ, DIA, SILAC">
+          </div>
+          <div class="field">
+            <label>Enrichment Strategy <span class="optional">(optional)</span></label>
+            <input type="text" id="proteo_enrichment" placeholder="e.g., Phospho-enrichment, Ubiquitin">
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Groups / Conditions <span class="req">*</span>
+          <span class="tooltip-trigger" data-tip="Define each experimental group. These names will be used for contrast definitions below.">?</span>
+        </label>
+        <table class="dynamic-table" id="groups-table">
+          <thead>
+            <tr>
+              <th style="width:25%">Group Name</th>
+              <th>Description</th>
+              <th style="width:80px">n (reps)</th>
+              <th style="width:50px"></th>
+            </tr>
+          </thead>
+          <tbody id="groups-body">
+            <tr>
+              <td><input type="text" placeholder="e.g., Control"></td>
+              <td><input type="text" placeholder="Untreated cells at 37°C"></td>
+              <td><input type="number" min="1" value="3" style="width:70px"></td>
+              <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="text" placeholder="e.g., Treatment"></td>
+              <td><input type="text" placeholder="Heat-shocked at 42°C for 2h"></td>
+              <td><input type="number" min="1" value="3" style="width:70px"></td>
+              <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="btn-sm btn-add" onclick="addGroupRow()">+ Add Group</button>
+      </div>
+
+      <div class="field">
+        <label>Paired or Unpaired Design <span class="req">*</span>
+          <span class="tooltip-trigger" data-tip="Paired: same subject measured under multiple conditions. Unpaired: independent samples in each group.">?</span>
+        </label>
+        <div class="radio-group">
+          <label><input type="radio" name="paired" value="false"> Unpaired</label>
+          <label><input type="radio" name="paired" value="true"> Paired</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Treatment / Manipulation Description
+          <span class="tooltip-trigger" data-tip="Describe what was done to create the experimental groups.">?</span>
+        </label>
+        <textarea id="treatment_description" rows="2" placeholder="e.g., Cells were incubated at 42°C for 2 hours; controls remained at 37°C..."></textarea>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Timeline
+            <span class="tooltip-trigger" data-tip="When were samples collected relative to treatment?">?</span>
+          </label>
+          <input type="text" id="timeline" placeholder="e.g., Harvested immediately after 2h treatment">
+        </div>
+        <div class="field">
+          <label>Known Batch Variables <span class="optional">(optional)</span>
+            <span class="tooltip-trigger" data-tip="Variables that may introduce batch effects (e.g., different sequencing lanes, collection dates, operators).">?</span>
+          </label>
+          <input type="text" id="batch_variables" placeholder="e.g., Sequencing lane, extraction date">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Desired Comparisons -->
+  <div class="form-section" id="sec-contrasts">
+    <div class="section-header" onclick="toggleSection('sec-contrasts')">
+      <h2><span class="section-number">5</span> Desired Comparisons (Contrasts)</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <p style="font-size:0.83rem;color:var(--text-muted);margin-bottom:0.6rem;">Define the comparisons you want. The numerator is the group of interest (e.g., Treatment); the denominator is the reference (e.g., Control). Positive fold-changes mean higher in numerator.</p>
+      <table class="dynamic-table" id="contrasts-table">
+        <thead>
+          <tr>
+            <th>Numerator (test)</th>
+            <th>Denominator (ref)</th>
+            <th>Rationale</th>
+            <th style="width:100px">Direction</th>
+            <th style="width:50px"></th>
+          </tr>
+        </thead>
+        <tbody id="contrasts-body">
+          <tr>
+            <td><input type="text" placeholder="Treatment"></td>
+            <td><input type="text" placeholder="Control"></td>
+            <td><input type="text" placeholder="Effect of heat shock"></td>
+            <td>
+              <select>
+                <option value="unknown">Unknown</option>
+                <option value="up">Up</option>
+                <option value="down">Down</option>
+                <option value="both">Both</option>
+              </select>
+            </td>
+            <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <button class="btn-sm btn-add" onclick="addContrastRow()">+ Add Comparison</button>
+    </div>
+  </div>
+
+  <!-- 6. Analysis Preferences -->
+  <div class="form-section" id="sec-analysis">
+    <div class="section-header" onclick="toggleSection('sec-analysis')">
+      <h2><span class="section-number">6</span> Analysis Preferences</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Analyses to Include</label>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="pref_pathway" checked> Pathway analysis</label>
+          <label><input type="checkbox" id="pref_ppi"> PPI networks</label>
+          <label><input type="checkbox" id="pref_clustering" checked> Clustering</label>
+          <label><input type="checkbox" id="pref_batch"> Batch correction</label>
+          <label><input type="checkbox" id="pref_deconv"> Cell-type deconvolution</label>
+          <label><input type="checkbox" id="pref_advstats"> Advanced statistics</label>
+        </div>
+      </div>
+      <div class="field">
+        <label>Genes / Proteins of Interest <span class="optional">(optional)</span>
+          <span class="tooltip-trigger" data-tip="Comma-separated list. These will be highlighted in results and used for targeted plots.">?</span>
+        </label>
+        <input type="text" id="genes_of_interest" placeholder="e.g., BRCA1, TP53, HSP70, ESR1">
+      </div>
+      <div class="field">
+        <label>Pathways of Interest <span class="optional">(optional)</span></label>
+        <textarea id="pathways_of_interest" rows="2" placeholder="e.g., MAPK signaling, Unfolded protein response, Encystation pathway"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Custom Gene Sets / GMT File?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="custom_gmt" value="false" checked> No</label>
+            <label><input type="radio" name="custom_gmt" value="true"> Yes</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Stringency Preference
+            <span class="tooltip-trigger" data-tip="Discovery (relaxed thresholds, more hits) vs Confirmatory (strict thresholds, fewer but high-confidence hits).">?</span>
+          </label>
+          <div class="radio-group">
+            <label><input type="radio" name="stringency" value="discovery" checked> Discovery (relaxed)</label>
+            <label><input type="radio" name="stringency" value="confirmatory"> Confirmatory (strict)</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. Known Issues & Caveats -->
+  <div class="form-section" id="sec-issues">
+    <div class="section-header" onclick="toggleSection('sec-issues')">
+      <h2><span class="section-number">7</span> Known Issues &amp; Caveats</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Samples to Flag or Exclude <span class="optional">(optional)</span>
+          <span class="tooltip-trigger" data-tip="List specific sample IDs or names that should be flagged for QC review or excluded entirely.">?</span>
+        </label>
+        <textarea id="samples_to_flag" rows="2" placeholder="e.g., Sample_07 had low RNA quality; consider excluding"></textarea>
+      </div>
+      <div class="field">
+        <label>Known Quality Issues <span class="optional">(optional)</span></label>
+        <textarea id="quality_issues" rows="2" placeholder="e.g., Batch 2 had lower overall read depth"></textarea>
+      </div>
+      <div class="field">
+        <label>Expected Batch Effects <span class="optional">(optional)</span></label>
+        <textarea id="batch_effects" rows="2" placeholder="e.g., Samples were processed on two different days"></textarea>
+      </div>
+      <div class="field">
+        <label>Prior Analysis Results to Compare Against <span class="optional">(optional)</span></label>
+        <textarea id="prior_results" rows="2" placeholder="e.g., Previous RNA-seq found 200 DEGs with FDR<0.05"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. Reporting Preferences -->
+  <div class="form-section" id="sec-reporting">
+    <div class="section-header" onclick="toggleSection('sec-reporting')">
+      <h2><span class="section-number">8</span> Reporting Preferences</h2>
+      <span class="collapse-icon">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="field-row">
+        <div class="field">
+          <label>Report Emphasis</label>
+          <div class="radio-group">
+            <label><input type="radio" name="emphasis" value="genes"> Individual genes</label>
+            <label><input type="radio" name="emphasis" value="pathways"> Pathways</label>
+            <label><input type="radio" name="emphasis" value="both" checked> Both</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>AI Commentary
+            <span class="tooltip-trigger" data-tip="Enable AI-generated biological interpretation of your results. Uses your hypothesis and context for richer commentary.">?</span>
+          </label>
+          <div class="radio-group">
+            <label><input type="radio" name="ai_commentary" value="true" checked> Yes</label>
+            <label><input type="radio" name="ai_commentary" value="false"> No</label>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Validation Plans <span class="optional">(optional)</span></label>
+        <textarea id="validation_plans" rows="2" placeholder="e.g., Top hits will be validated by qPCR and Western blot"></textarea>
+      </div>
+      <div class="field">
+        <label>Additional Notes for the Bioinformatician <span class="optional">(optional)</span></label>
+        <textarea id="additional_notes" rows="3" placeholder="Anything else we should know..."></textarea>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- end form-content -->
+
+  <!-- ===== PRINT SUMMARY (hidden, shown only for print) ===== -->
+  <div class="print-summary" id="printSummary"></div>
+
+  <!-- ===== ACTION BAR ===== -->
+  <div class="action-bar no-print">
+    <button class="btn btn-primary" onclick="saveBrief()">Save Brief (JSON)</button>
+    <button class="btn btn-secondary" onclick="printSummary()">Print Summary</button>
+    <button class="btn btn-outline" onclick="clearForm()">Clear Form</button>
+  </div>
+
+</div><!-- end container -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ========================================
+   Section Collapse
+   ======================================== */
+function toggleSection(id) {
+  document.getElementById(id).classList.toggle('collapsed');
+}
+
+/* ========================================
+   Organism "Other" toggle
+   ======================================== */
+function handleOrganismChange() {
+  const sel = document.getElementById('organism_select');
+  const otherField = document.getElementById('organism_other_field');
+  otherField.style.display = sel.value === 'Other' ? '' : 'none';
+  if (sel.value !== 'Other') document.getElementById('organism_other').value = '';
+}
+
+/* ========================================
+   Data type change — show/hide proteomics fields
+   ======================================== */
+function handleDataTypeChange() {
+  const dt = getRadioValue('data_type');
+  const proteoFields = document.getElementById('proteo-fields');
+  if (dt === 'proteomics' || dt === 'both') {
+    proteoFields.classList.add('visible');
+  } else {
+    proteoFields.classList.remove('visible');
+  }
+}
+
+/* ========================================
+   Dynamic Rows — Groups
+   ======================================== */
+function addGroupRow() {
+  const tbody = document.getElementById('groups-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" placeholder="Group name"></td>
+    <td><input type="text" placeholder="Description"></td>
+    <td><input type="number" min="1" value="3" style="width:70px"></td>
+    <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function addContrastRow() {
+  const tbody = document.getElementById('contrasts-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" placeholder="Numerator"></td>
+    <td><input type="text" placeholder="Denominator"></td>
+    <td><input type="text" placeholder="Rationale"></td>
+    <td>
+      <select>
+        <option value="unknown">Unknown</option>
+        <option value="up">Up</option>
+        <option value="down">Down</option>
+        <option value="both">Both</option>
+      </select>
+    </td>
+    <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function removeRow(btn) {
+  const tbody = btn.closest('tbody');
+  if (tbody.rows.length > 1) {
+    btn.closest('tr').remove();
+  } else {
+    showToast('At least one row is required.');
+  }
+}
+
+/* ========================================
+   Helpers
+   ======================================== */
+function getRadioValue(name) {
+  const el = document.querySelector(`input[name="${name}"]:checked`);
+  return el ? el.value : '';
+}
+
+function val(id) {
+  const el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function sanitizeFilename(s) {
+  return s.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').substring(0, 60);
+}
+
+/* ========================================
+   Validation
+   ======================================== */
+function validateForm() {
+  let valid = true;
+  const requiredFields = [
+    'project_name', 'pi_name', 'pi_email', 'project_description',
+    'hypothesis', 'tissue_cell_type', 'organism_select'
+  ];
+
+  // Clear previous invalid markers
+  document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
+
+  requiredFields.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el.value.trim()) {
+      el.classList.add('invalid');
+      valid = false;
+    }
+  });
+
+  // Organism "Other" requires the text field
+  if (val('organism_select') === 'Other' && !val('organism_other')) {
+    document.getElementById('organism_other').classList.add('invalid');
+    valid = false;
+  }
+
+  // Data type required
+  if (!getRadioValue('data_type')) {
+    valid = false;
+  }
+
+  // Paired required
+  if (!getRadioValue('paired')) {
+    valid = false;
+  }
+
+  // At least one group with a name
+  const groupRows = document.getElementById('groups-body').rows;
+  let hasGroup = false;
+  for (const row of groupRows) {
+    if (row.cells[0].querySelector('input').value.trim()) hasGroup = true;
+  }
+  if (!hasGroup) valid = false;
+
+  const msgEl = document.getElementById('validationMsg');
+  if (!valid) {
+    msgEl.classList.add('visible');
+    msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Expand collapsed sections that have invalid fields
+    document.querySelectorAll('.invalid').forEach(el => {
+      const sec = el.closest('.form-section');
+      if (sec && sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
+    });
+  } else {
+    msgEl.classList.remove('visible');
+  }
+
+  return valid;
+}
+
+/* ========================================
+   Collect Data
+   ======================================== */
+function collectData() {
+  const organism = val('organism_select') === 'Other' ? val('organism_other') : val('organism_select');
+
+  // Groups
+  const groups = [];
+  const groupRows = document.getElementById('groups-body').rows;
+  for (const row of groupRows) {
+    const inputs = row.querySelectorAll('input');
+    const name = inputs[0].value.trim();
+    if (name) {
+      groups.push({
+        name: name,
+        description: inputs[1].value.trim(),
+        n_replicates: parseInt(inputs[2].value) || 0
+      });
+    }
+  }
+
+  // Contrasts
+  const contrasts = [];
+  const contrastRows = document.getElementById('contrasts-body').rows;
+  for (const row of contrastRows) {
+    const inputs = row.querySelectorAll('input');
+    const sel = row.querySelector('select');
+    const num = inputs[0].value.trim();
+    if (num) {
+      contrasts.push({
+        numerator: num,
+        denominator: inputs[1].value.trim(),
+        rationale: inputs[2].value.trim(),
+        expected_direction: sel.value
+      });
+    }
+  }
+
+  // Genes of interest — split by comma
+  const genesRaw = val('genes_of_interest');
+  const genes = genesRaw ? genesRaw.split(',').map(g => g.trim()).filter(Boolean) : [];
+
+  const data = {
+    form_version: "1.0",
+    submitted_at: new Date().toISOString().replace(/\.\d{3}Z$/, ''),
+    project: {
+      name: val('project_name'),
+      pi_name: val('pi_name'),
+      pi_email: val('pi_email'),
+      description: val('project_description')
+    },
+    biology: {
+      hypothesis: val('hypothesis'),
+      expected_outcomes: val('expected_outcomes'),
+      disease_condition: val('disease_condition'),
+      tissue_cell_type: val('tissue_cell_type')
+    },
+    organism: {
+      species: organism,
+      life_stage: val('life_stage'),
+      sex: val('sex'),
+      strain_background: val('strain_background')
+    },
+    experimental_design: {
+      data_type: getRadioValue('data_type'),
+      paired: getRadioValue('paired') === 'true',
+      groups: groups,
+      batch_variables: val('batch_variables'),
+      treatment_description: val('treatment_description'),
+      timeline: val('timeline')
+    },
+    contrasts: contrasts,
+    analysis_preferences: {
+      pathway_analysis: document.getElementById('pref_pathway').checked,
+      ppi_networks: document.getElementById('pref_ppi').checked,
+      clustering: document.getElementById('pref_clustering').checked,
+      batch_correction: document.getElementById('pref_batch').checked,
+      deconvolution: document.getElementById('pref_deconv').checked,
+      advanced_stats: document.getElementById('pref_advstats').checked,
+      genes_of_interest: genes,
+      pathways_of_interest: val('pathways_of_interest'),
+      custom_gene_sets: getRadioValue('custom_gmt') === 'true',
+      stringency: getRadioValue('stringency')
+    },
+    known_issues: {
+      samples_to_flag: val('samples_to_flag'),
+      quality_issues: val('quality_issues'),
+      batch_effects: val('batch_effects'),
+      prior_results: val('prior_results')
+    },
+    reporting: {
+      emphasis: getRadioValue('emphasis'),
+      ai_commentary: getRadioValue('ai_commentary') === 'true',
+      validation_plans: val('validation_plans'),
+      additional_notes: val('additional_notes')
+    }
+  };
+
+  // Add proteomics-specific fields if applicable
+  if (data.experimental_design.data_type === 'proteomics' || data.experimental_design.data_type === 'both') {
+    data.experimental_design.proteomics_platform = val('proteo_platform');
+    data.experimental_design.enrichment_strategy = val('proteo_enrichment');
+  }
+
+  // Date submitted
+  if (val('date_submitted')) {
+    data.project.date_submitted = val('date_submitted');
+  }
+
+  // Total samples
+  if (val('total_samples')) {
+    data.organism.total_samples = parseInt(val('total_samples')) || null;
+  }
+
+  return data;
+}
+
+/* ========================================
+   Save JSON
+   ======================================== */
+function saveBrief() {
+  if (!validateForm()) return;
+
+  const data = collectData();
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+
+  const projectSlug = sanitizeFilename(data.project.name || 'unnamed');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const filename = `research_brief_${projectSlug}_${dateStr}.json`;
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+
+  showToast(`Saved: ${filename}`);
+}
+
+/* ========================================
+   Print Summary
+   ======================================== */
+function printSummary() {
+  const data = collectData();
+  const container = document.getElementById('printSummary');
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '—';
+    return d.innerHTML;
+  }
+
+  function field(label, value) {
+    return `<div class="summary-field"><span class="summary-label">${label}:</span> ${esc(value)}</div>`;
+  }
+
+  let html = '';
+
+  // Project
+  html += '<h3>1. Project Info</h3>';
+  html += field('Project Name', data.project.name);
+  html += field('PI', data.project.pi_name + (data.project.pi_email ? ` (${data.project.pi_email})` : ''));
+  if (data.project.date_submitted) html += field('Date Submitted', data.project.date_submitted);
+  html += field('Description', data.project.description);
+
+  // Biology
+  html += '<h3>2. Biological Question</h3>';
+  html += field('Hypothesis', data.biology.hypothesis);
+  if (data.biology.expected_outcomes) html += field('Expected Outcomes', data.biology.expected_outcomes);
+  if (data.biology.disease_condition) html += field('Disease/Condition', data.biology.disease_condition);
+  html += field('Tissue/Cell Type', data.biology.tissue_cell_type);
+
+  // Organism
+  html += '<h3>3. Organism &amp; Samples</h3>';
+  html += field('Species', data.organism.species);
+  if (data.organism.life_stage) html += field('Life Stage', data.organism.life_stage);
+  if (data.organism.sex) html += field('Sex', data.organism.sex);
+  if (data.organism.strain_background) html += field('Strain/Background', data.organism.strain_background);
+  if (data.organism.total_samples) html += field('Total Samples', data.organism.total_samples);
+
+  // Design
+  html += '<h3>4. Experimental Design</h3>';
+  html += field('Data Type', data.experimental_design.data_type);
+  html += field('Paired', data.experimental_design.paired ? 'Yes' : 'No');
+  if (data.experimental_design.proteomics_platform) html += field('Proteomics Platform', data.experimental_design.proteomics_platform);
+  if (data.experimental_design.enrichment_strategy) html += field('Enrichment Strategy', data.experimental_design.enrichment_strategy);
+  if (data.experimental_design.treatment_description) html += field('Treatment', data.experimental_design.treatment_description);
+  if (data.experimental_design.timeline) html += field('Timeline', data.experimental_design.timeline);
+  if (data.experimental_design.batch_variables) html += field('Batch Variables', data.experimental_design.batch_variables);
+
+  if (data.experimental_design.groups.length) {
+    html += '<table><thead><tr><th>Group</th><th>Description</th><th>n</th></tr></thead><tbody>';
+    data.experimental_design.groups.forEach(g => {
+      html += `<tr><td>${esc(g.name)}</td><td>${esc(g.description)}</td><td>${g.n_replicates}</td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+
+  // Contrasts
+  if (data.contrasts.length) {
+    html += '<h3>5. Contrasts</h3>';
+    html += '<table><thead><tr><th>Numerator</th><th>Denominator</th><th>Rationale</th><th>Direction</th></tr></thead><tbody>';
+    data.contrasts.forEach(c => {
+      html += `<tr><td>${esc(c.numerator)}</td><td>${esc(c.denominator)}</td><td>${esc(c.rationale)}</td><td>${esc(c.expected_direction)}</td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+
+  // Analysis prefs
+  html += '<h3>6. Analysis Preferences</h3>';
+  const analyses = [];
+  if (data.analysis_preferences.pathway_analysis) analyses.push('Pathway analysis');
+  if (data.analysis_preferences.ppi_networks) analyses.push('PPI networks');
+  if (data.analysis_preferences.clustering) analyses.push('Clustering');
+  if (data.analysis_preferences.batch_correction) analyses.push('Batch correction');
+  if (data.analysis_preferences.deconvolution) analyses.push('Cell-type deconvolution');
+  if (data.analysis_preferences.advanced_stats) analyses.push('Advanced statistics');
+  html += field('Analyses', analyses.join(', ') || 'None selected');
+  if (data.analysis_preferences.genes_of_interest.length) html += field('Genes of Interest', data.analysis_preferences.genes_of_interest.join(', '));
+  if (data.analysis_preferences.pathways_of_interest) html += field('Pathways of Interest', data.analysis_preferences.pathways_of_interest);
+  html += field('Custom Gene Sets', data.analysis_preferences.custom_gene_sets ? 'Yes' : 'No');
+  html += field('Stringency', data.analysis_preferences.stringency);
+
+  // Known issues
+  const hasIssues = data.known_issues.samples_to_flag || data.known_issues.quality_issues || data.known_issues.batch_effects || data.known_issues.prior_results;
+  if (hasIssues) {
+    html += '<h3>7. Known Issues &amp; Caveats</h3>';
+    if (data.known_issues.samples_to_flag) html += field('Samples to Flag', data.known_issues.samples_to_flag);
+    if (data.known_issues.quality_issues) html += field('Quality Issues', data.known_issues.quality_issues);
+    if (data.known_issues.batch_effects) html += field('Batch Effects', data.known_issues.batch_effects);
+    if (data.known_issues.prior_results) html += field('Prior Results', data.known_issues.prior_results);
+  }
+
+  // Reporting
+  html += '<h3>8. Reporting Preferences</h3>';
+  html += field('Emphasis', data.reporting.emphasis);
+  html += field('AI Commentary', data.reporting.ai_commentary ? 'Yes' : 'No');
+  if (data.reporting.validation_plans) html += field('Validation Plans', data.reporting.validation_plans);
+  if (data.reporting.additional_notes) html += field('Additional Notes', data.reporting.additional_notes);
+
+  container.innerHTML = html;
+
+  // Trigger print
+  window.print();
+}
+
+/* ========================================
+   Clear Form
+   ======================================== */
+function clearForm() {
+  if (!confirm('Clear all fields? This cannot be undone.')) return;
+
+  // Text inputs and textareas
+  document.querySelectorAll('.form-content input[type="text"], .form-content input[type="email"], .form-content input[type="number"], .form-content input[type="date"], .form-content textarea').forEach(el => {
+    el.value = '';
+    el.classList.remove('invalid');
+  });
+
+  // Selects
+  document.querySelectorAll('.form-content select').forEach(el => {
+    el.selectedIndex = 0;
+  });
+
+  // Radios
+  document.querySelectorAll('.form-content input[type="radio"]').forEach(el => {
+    el.checked = false;
+  });
+
+  // Restore defaults for some radios
+  const defaults = {
+    'stringency': 'discovery',
+    'emphasis': 'both',
+    'ai_commentary': 'true',
+    'custom_gmt': 'false'
+  };
+  for (const [name, value] of Object.entries(defaults)) {
+    const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
+    if (el) el.checked = true;
+  }
+
+  // Checkboxes
+  document.getElementById('pref_pathway').checked = true;
+  document.getElementById('pref_ppi').checked = false;
+  document.getElementById('pref_clustering').checked = true;
+  document.getElementById('pref_batch').checked = false;
+  document.getElementById('pref_deconv').checked = false;
+  document.getElementById('pref_advstats').checked = false;
+
+  // Reset groups table to 2 rows
+  const groupsBody = document.getElementById('groups-body');
+  groupsBody.innerHTML = `
+    <tr>
+      <td><input type="text" placeholder="e.g., Control"></td>
+      <td><input type="text" placeholder="Untreated cells at 37°C"></td>
+      <td><input type="number" min="1" value="3" style="width:70px"></td>
+      <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+    </tr>
+    <tr>
+      <td><input type="text" placeholder="e.g., Treatment"></td>
+      <td><input type="text" placeholder="Heat-shocked at 42°C for 2h"></td>
+      <td><input type="number" min="1" value="3" style="width:70px"></td>
+      <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+    </tr>
+  `;
+
+  // Reset contrasts table to 1 row
+  const contrastsBody = document.getElementById('contrasts-body');
+  contrastsBody.innerHTML = `
+    <tr>
+      <td><input type="text" placeholder="Treatment"></td>
+      <td><input type="text" placeholder="Control"></td>
+      <td><input type="text" placeholder="Effect of heat shock"></td>
+      <td>
+        <select>
+          <option value="unknown">Unknown</option>
+          <option value="up">Up</option>
+          <option value="down">Down</option>
+          <option value="both">Both</option>
+        </select>
+      </td>
+      <td><button class="btn-sm btn-remove" onclick="removeRow(this)" title="Remove row">&times;</button></td>
+    </tr>
+  `;
+
+  // Hide proteomics fields and organism other
+  document.getElementById('proteo-fields').classList.remove('visible');
+  document.getElementById('organism_other_field').style.display = 'none';
+
+  // Clear validation
+  document.getElementById('validationMsg').classList.remove('visible');
+
+  showToast('Form cleared.');
+}
+
+/* ========================================
+   Init — set today's date
+   ======================================== */
+document.addEventListener('DOMContentLoaded', function() {
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('date_submitted').value = today;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Copy this file to .Renviron and fill in your path:
+#   cp .Renviron.example .Renviron
+#
+# The pipeline reads this variable to locate your project config.
+# If unset, it defaults to "config.yaml" in the project root.
+MULTIOMICS_CONFIG=/path/to/your/config.yaml

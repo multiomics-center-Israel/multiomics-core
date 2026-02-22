@@ -135,13 +135,30 @@ renv::restore()
 
 ## Configuration
 
-Edit the central configuration file:
+The pipeline reads its config path from the **`MULTIOMICS_CONFIG`** environment variable.
+If the variable is not set, it defaults to `config.yaml` in the project root.
 
-```         
-config/config.yaml
+### Setting up your config path
+
+1.  Copy the example environment file:
+
+``` bash
+cp .Renviron.example .Renviron
 ```
 
-Or start from a template:
+2.  Edit `.Renviron` and set the path to your YAML config:
+
+```
+MULTIOMICS_CONFIG=/path/to/your/config.yaml
+```
+
+3.  Restart your R session (`.Renviron` is loaded on startup).
+
+> **Note:** `.Renviron` is git-ignored so each collaborator can point to their own config without modifying tracked files.
+
+### Creating a config file
+
+Start from an existing template:
 
 ``` bash
 cp config/templates/proteins_config.yaml config/<PROJECT>_<ROUND>.yaml

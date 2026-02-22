@@ -1,5 +1,5 @@
 # ==============================================================================
-# Metabolomics Stage 1 config template
+# Metabolomics config template (Stages 1 + 2)
 # ==============================================================================
 # Add this block under modes: in your project config.yaml
 
@@ -127,6 +127,70 @@ modes:
       thresholds:
         min_samples_for_pca3d: 10
         max_samples_for_heatmaps: 120
+
+    # ==================================================================
+    # Stage 2: Differential expression, feature selection, enrichment
+    # ==================================================================
+
+    # ---- Differential expression ----
+    de:
+      # Method: "limma" | "t_test" | "wilcoxon"
+      method: "limma"
+
+      # Column in metadata defining experimental groups
+      condition_column: "treatment"
+
+      # Contrasts: list of "numerator - denominator" strings
+      contrasts:
+        - "treated - control"
+
+      # Significance thresholds
+      p_cutoff: 0.05              # adjusted p-value cutoff
+      pval_cutoff: 0.05           # raw p-value for horizontal line on volcano
+      linear_fc_cutoff: 1.5       # linear FC cutoff (log2FC = log2(1.5) ~ 0.585)
+
+      # Set to true to skip DE entirely
+      # skip: false
+
+    # ---- Random forest feature importance (optional) ----
+    rf:
+      run_rf: true
+      n_trees: 500
+      importance: "permutation"    # "permutation" | "impurity"
+      top_n: 20                    # features to display in bar plot
+      seed: 1234
+      # condition_column: "treatment"  # defaults to de$condition_column
+
+    # ---- PLS-DA multivariate analysis (optional) ----
+    plsda:
+      run_plsda: true
+      vip_top_n: 15               # top VIP features to display
+      colors: null                # null = use default palette
+      # condition_column: "treatment"  # defaults to de$condition_column
+
+    # ---- Pathway enrichment (optional) ----
+    # Four methods are available (each runs independently):
+    #   QEA    — globaltest: quantitative enrichment on raw expression
+    #   ssGSEA — GSVA + Wilcoxon: single-sample enrichment scores
+    #   ORA    — Fisher's exact test: significant features (fg) vs all (bg)
+    #   GSEA   — fgsea: ranked by log2FC from DE results
+    # ORA and GSEA require DE results; QEA and ssGSEA do not.
+    enrichment:
+      run_enrichment: false        # set to true to enable
+
+      # Library names are derived from GMT file basenames.
+      # Leave empty to use only gmt_file entries below.
+      libraries: []
+
+      # GMT files (used by all four methods):
+      gmt_file: null
+        # - "path/to/custom_pathways.gmt"
+
+      # Optional HMDB-to-KEGG mapping file (TSV with HMDB and KEGG columns)
+      mapping_file: null
+
+      # Condition column for Wilcoxon test in ssGSEA
+      # condition_column: "treatment"  # defaults to de$condition_column
 
 
 # ==============================================================================

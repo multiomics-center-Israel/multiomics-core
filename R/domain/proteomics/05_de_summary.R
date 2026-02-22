@@ -83,7 +83,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         out[[paste0("sum.pass.", contrast_print)]] <- sum_pass
         out[[paste0("pass.imputs.", contrast_print)]] <- pass_imputs
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linearRatio_imputs
-        out[[paste0("linearFC.imputs.", contrast_print)]] <- signif(linearFC_imputs, 4)
+        out[[paste0("linearFC.imputs.", contrast_print)]] <- signif(linearFC_imputs, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]] <- pvalue_imputs
         out[[paste0("padj.imputs.", contrast_print)]] <- padj_imputs
     }

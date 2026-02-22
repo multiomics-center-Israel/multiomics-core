@@ -3,10 +3,8 @@
 # ============================================================
 # This file contains both:
 # 1. CANONICAL builder (v2.0): build_shiny_payload_rnaseq()
-# 2. LEGACY builder (deprecated): build_data_to_shiny_legacy_rna()
 #
 # New code should use build_shiny_payload_rnaseq().
-# Legacy builder is kept for backward compatibility during transition.
 # ============================================================
 
 
@@ -27,7 +25,6 @@
 #' @param clustering_res Optional: pre-computed clustering results
 #' @param annot Optional: external annotation data.frame
 #' @param trinotate_main Optional: Trinotate annotation data.frame (for legacy compatibility)
-#' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
 #'
 #' @return A named list with 26 canonical keys (+ legacy aliases if requested)
 #'
@@ -40,8 +37,7 @@ build_shiny_payload_rnaseq <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
-    trinotate_main = NULL,
-    include_legacy = TRUE
+    trinotate_main = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -104,6 +100,10 @@ build_shiny_payload_rnaseq <- function(
         # pca_scores: PCA scores data.frame with metadata
         pca_sc <- pca_res$pca_scores %||% pca_res$objects$pca_scores
         if (!is.null(pca_sc)) payload$pca_scores <- pca_sc
+
+        # pca_3d: 3D PCA plotly widget
+        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+
         # QC plot
         payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
 
@@ -160,6 +160,37 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(payload$de_stats)) {
             payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats)
         }
+
+        # de_final_table: DE-filtered final results table (richer than de_stats)
+        # Use payload$de_stats which was built above from de_res$tables
+        if (!is.null(payload$de_stats) && !is.null(inputs$contrasts)) {
+            final_results <- tryCatch(
+                build_final_results_rnaseq(pre, payload$de_stats, inputs$contrasts, pre$row_data),
+                error = function(e) {
+                    warning("[shiny_export] de_final_table: ", conditionMessage(e))
+                    NULL
+                }
+            )
+            if (!is.null(final_results) && "pass_any_contrast" %in% names(final_results)) {
+                is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
+                de_df <- final_results[is_de, , drop = FALSE]
+                de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
+                # Add order and z-score columns from clustering (same as Excel export)
+                id_col <- if ("Gene" %in% names(de_df)) "Gene" else "FeatureID"
+                excel_ord <- clustering_res$excel_order %||% NULL
+                if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+                    de_df$order <- match(de_df[[id_col]], excel_ord$ordered_ids)
+                    if (!is.null(excel_ord$zscore_mat)) {
+                        zmat <- excel_ord$zscore_mat
+                        idx <- match(de_df[[id_col]], rownames(zmat))
+                        de_df <- cbind(de_df, zmat[idx, , drop = FALSE])
+                    }
+                }
+
+                payload$de_final_table <- de_df
+            }
+        }
     }
 
     # ============================================================
@@ -173,21 +204,43 @@ build_shiny_payload_rnaseq <- function(
 
         val <- src$clusters %||% src$New_clusters
         if (!is.null(val)) payload$clust_partition <- val
-        if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
+        if (!is.null(src$patterns)) {
+          payload$clust_patterns <- src$patterns
+          payload$clust_patterns_list <- src$patterns_list}
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
+
+        # clust_heatmap_partition: Partition clustering heatmap (full pheatmap object)
+        if (!is.null(clustering_res$plots$partition_heatmap))
+            payload$clust_heatmap_partition <- clustering_res$plots$partition_heatmap
+
+        # clust_heatmap_partition_fig: The actual drawable gtable (print to see the plot)
+        if (!is.null(clustering_res$plots$partition_heatmap) && !is.null(clustering_res$plots$partition_heatmap$gtable))
+            payload$clust_heatmap_partition_fig <- clustering_res$plots$partition_heatmap$gtable
     }
 
     # clust_heatmap_hier: Hierarchical clustering (pheatmap + dendrogram)
-    if (!is.null(de_res)) {
-        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
-        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    # Priority: clustering_res$objects$hm_hier_de (full payload with tree_row, row_order, etc.)
+    val <- NULL
+    if (!is.null(clustering_res)) {
+        # First check objects (where the full payload is stored)
+        if (!is.null(clustering_res$objects)) {
+            val <- clustering_res$objects$hm_hier_de
+        }
+        # Fallback to plots if needed
+        if (is.null(val) && !is.null(clustering_res$plots)) {
+            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster
+        }
     }
-    if (is.null(payload$clust_heatmap_hier) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
-        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    # Legacy fallback: check de_res
+    if (is.null(val) && !is.null(de_res)) {
+        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
     }
+    if (!is.null(val)) payload$clust_heatmap_hier <- val
+
+    # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
+    if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
+        payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
     # CONFIGURATION (6 keys)
@@ -220,29 +273,6 @@ build_shiny_payload_rnaseq <- function(
     # ============================================================
 
     assert_shiny_payload_contract(payload, strict = FALSE, context = "rnaseq")
-
-    # ============================================================
-    # LEGACY ALIASES (optional)
-    # ============================================================
-
-    if (isTRUE(include_legacy)) {
-        payload <- attach_legacy_aliases(payload)
-
-        # Trinotate annotation (legacy key, passed through from pipeline)
-        payload$trinotate_main <- trinotate_main
-
-        if (!is.null(payload$stats_df) && "feature_id" %in% names(payload$stats_df)) {
-            if (!"Gene" %in% names(payload$stats_df)) {
-                payload$stats_df$Gene <- payload$stats_df$feature_id
-            }
-        }
-
-        if (!is.null(payload$DE_genes_stats) && "feature_id" %in% names(payload$DE_genes_stats)) {
-            if (!"Gene" %in% names(payload$DE_genes_stats)) {
-                payload$DE_genes_stats$Gene <- payload$DE_genes_stats$feature_id
-            }
-        }
-    }
 
     # ============================================================
     # SUMMARY

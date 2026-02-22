@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR #25 — Meeting Prep: Full Change Breakdown</title>
+<style>
+  @media print {
+    body { font-size: 11px; }
+    .no-break { page-break-inside: avoid; }
+    h2 { page-break-before: always; }
+    h2:first-of-type { page-break-before: avoid; }
+  }
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 30px 40px;
+    color: #1a1a2e;
+    line-height: 1.6;
+    background: #fff;
+  }
+  h1 {
+    text-align: center;
+    color: #0f3460;
+    border-bottom: 3px solid #0f3460;
+    padding-bottom: 12px;
+    margin-bottom: 5px;
+    font-size: 1.8em;
+  }
+  .subtitle {
+    text-align: center;
+    color: #555;
+    font-size: 0.95em;
+    margin-bottom: 30px;
+  }
+  .meta-box {
+    background: #eef2f7;
+    border-left: 4px solid #0f3460;
+    padding: 14px 18px;
+    margin-bottom: 25px;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.95em;
+  }
+  .meta-box strong { color: #0f3460; }
+  h2 {
+    color: #0f3460;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 6px;
+    margin-top: 35px;
+    font-size: 1.35em;
+  }
+  h3 {
+    color: #16537e;
+    margin-top: 22px;
+    font-size: 1.1em;
+  }
+  h4 {
+    color: #333;
+    margin-top: 15px;
+    font-size: 1em;
+  }
+  code {
+    background: #f4f4f8;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.92em;
+    font-family: 'Consolas', 'Courier New', monospace;
+  }
+  pre {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+  .kw { color: #82aaff; }
+  .str { color: #c3e88d; }
+  .cm { color: #676e95; font-style: italic; }
+  .fn { color: #c792ea; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 18px 0;
+    font-size: 0.9em;
+  }
+  th {
+    background: #0f3460;
+    color: white;
+    padding: 9px 12px;
+    text-align: left;
+    font-weight: 600;
+  }
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  tr:nth-child(even) td { background: #f8f9fb; }
+  .severity-critical { color: #c0392b; font-weight: 700; }
+  .severity-high { color: #e67e22; font-weight: 600; }
+  .severity-medium { color: #2980b9; }
+  .tag {
+    display: inline-block;
+    background: #e8f0fe;
+    color: #0f3460;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.82em;
+    margin: 2px 3px;
+    font-weight: 500;
+  }
+  .tag-new { background: #d4edda; color: #155724; }
+  .tag-fix { background: #f8d7da; color: #721c24; }
+  .tag-enhance { background: #fff3cd; color: #856404; }
+  .callout {
+    background: #fffde7;
+    border-left: 4px solid #f9a825;
+    padding: 10px 16px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.93em;
+  }
+  .callout-info {
+    background: #e8f4fd;
+    border-left-color: #2196f3;
+  }
+  .answer-box {
+    background: #f0f7f0;
+    border-left: 4px solid #27ae60;
+    padding: 10px 16px;
+    margin: 8px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 4px; }
+  .toc { background: #f8f9fb; padding: 18px 24px; border-radius: 8px; margin-bottom: 30px; }
+  .toc a { color: #0f3460; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 4px; font-size: 0.95em; }
+  .file-ref { color: #666; font-style: italic; font-size: 0.88em; }
+</style>
+</head>
+<body>
+
+<h1>PR #25 — Full Change Breakdown</h1>
+<p class="subtitle">Meeting Prep Document &mdash; Dor_branch &rarr; main</p>
+
+<div class="meta-box">
+  <strong>PR:</strong> "Extended pipeline with pathway, PPI, batch correction, reporting &amp; Docker"<br>
+  <strong>Author:</strong> DorShalev<br>
+  <strong>Stats:</strong> 69 files changed &nbsp;|&nbsp; +19,983 lines &nbsp;|&nbsp; -265 lines<br>
+  <strong>URL:</strong> <a href="https://github.com/multiomics-center-Israel/multiomics-core/pull/25">github.com/multiomics-center-Israel/multiomics-core/pull/25</a><br>
+  <strong>Key principle:</strong> All new features are <code>enabled: true/false</code> in config &mdash; existing pipelines are unaffected.
+</div>
+
+<div class="toc">
+  <strong>Table of Contents</strong>
+  <ol>
+    <li><a href="#bugfixes">Bug Fixes (10 fixes)</a></li>
+    <li><a href="#viz">Visualization Enhancements</a></li>
+    <li><a href="#pathway">Pathway Enrichment (fGSEA/ORA)</a></li>
+    <li><a href="#organism">Organism Auto-Detection &amp; Annotation</a></li>
+    <li><a href="#ppi">PPI Network Analysis (STRING)</a></li>
+    <li><a href="#advstats">Advanced Statistics</a></li>
+    <li><a href="#batch">Batch Correction (RNA-seq)</a></li>
+    <li><a href="#deconv">Cell-Type Deconvolution</a></li>
+    <li><a href="#reporting">Reporting &amp; AI Commentary</a></li>
+    <li><a href="#infra">Infrastructure (Docker, CLI, Config)</a></li>
+    <li><a href="#deps">New Dependencies (60 packages)</a></li>
+    <li><a href="#qa">Likely Questions &amp; Answers</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="bugfixes">1. Bug Fixes <span class="tag tag-fix">10 fixes</span></h2>
+<!-- ================================================================== -->
+
+<table>
+<tr><th>#</th><th>File</th><th>Bug</th><th>Severity</th></tr>
+<tr><td>1A</td><td><code>proteomics/00_inputs.R</code></td><td>Pipeline crash when <code>sample_map</code> is NULL</td><td class="severity-high">High</td></tr>
+<tr><td>1B</td><td><code>proteomics/00_inputs.R</code></td><td>Crash on NULL/empty file paths in loader</td><td class="severity-high">High</td></tr>
+<tr><td>2</td><td><code>proteomics/01_expression.R</code></td><td>Column renaming crash without sample_map</td><td class="severity-high">High</td></tr>
+<tr><td>3</td><td><code>proteomics/05_de_summary.R</code></td><td><code>makeContrasts</code> fails on special chars in group names</td><td class="severity-critical">Critical</td></tr>
+<tr><td>4</td><td><code>proteomics/04_preprocess.R</code></td><td>Hardcoded Perseus imputation ignoring config</td><td class="severity-medium">Medium</td></tr>
+<tr><td>5</td><td><code>rnaseq/00_inputs.R</code></td><td>Annotation columns treated as sample columns</td><td class="severity-high">High</td></tr>
+<tr><td>6A</td><td><code>rnaseq/03_preprocess.R</code></td><td>Same annotation column misidentification in preprocessing</td><td class="severity-high">High</td></tr>
+<tr><td>6B</td><td><code>rnaseq/03_preprocess.R</code></td><td>Duplicate gene IDs cause silent data corruption</td><td class="severity-high">High</td></tr>
+<tr><td>6C</td><td><code>rnaseq/03_preprocess.R</code></td><td>No alternative to adaptive filtering</td><td class="severity-medium">Medium</td></tr>
+<tr><td>7</td><td><code>rnaseq/06_shiny_export.R</code></td><td>EFFECTS is NULL when shape aesthetic missing</td><td class="severity-medium">Medium</td></tr>
+</table>
+
+<h3>Highlight: Optional sample_map (Bugs 1A, 1B, 2)</h3>
+<p>Many DIA-NN datasets already have sample IDs as column headers. The pipeline no longer requires a <code>sample_map</code> file.</p>
+<pre><code><span class="cm"># AFTER &mdash; graceful fallback</span>
+<span class="kw">if</span> (!is.null(sample_map)) {
+    check_has_cols(sample_map, c(id_cols$map_from, id_cols$map_to), ...)
+} <span class="kw">else</span> {
+    meta_samples &lt;- meta[[eff_cols$samples]]
+    matched &lt;- intersect(protein_sample_cols, meta_samples)
+    <span class="kw">if</span> (length(matched) == 0)
+        stop(<span class="str">"No sample map provided and columns do not match metadata."</span>)
+}</code></pre>
+
+<h3>Highlight: Special Characters in Group Names (Bug 3 &mdash; Critical)</h3>
+<p>Group names like <code>"Control (PBS)"</code> or <code>"Treated+Drug"</code> broke <code>limma::makeContrasts()</code>.</p>
+<pre><code><span class="cm"># AFTER &mdash; sanitize with make.names()</span>
+safe_levels &lt;- <span class="fn">make.names</span>(orig_levels)
+levels(meta_aligned[[group_col]]) &lt;- safe_levels
+colnames(design) &lt;- safe_levels
+safe_num &lt;- <span class="fn">make.names</span>(contrasts_df$Numerator)
+safe_den &lt;- <span class="fn">make.names</span>(contrasts_df$Denominator)</code></pre>
+
+<h3>Highlight: Duplicate Gene IDs (Bug 6B &mdash; Silent corruption)</h3>
+<pre><code><span class="cm"># Aggregate transcript-level to gene-level by summing counts</span>
+<span class="kw">if</span> (<span class="fn">anyDuplicated</span>(gene_ids)) {
+    counts &lt;- <span class="fn">rowsum</span>(counts, group = gene_ids, reorder = FALSE)
+    first_idx &lt;- !<span class="fn">duplicated</span>(gene_ids)
+    row_data &lt;- row_data[first_idx, , drop = FALSE]
+}</code></pre>
+
+<h3>Highlight: Non-numeric Columns as Samples (Bugs 5, 6A)</h3>
+<pre><code><span class="cm"># AFTER &mdash; only numeric columns are sample columns</span>
+is_numeric &lt;- <span class="fn">vapply</span>(inputs$counts[, non_id_cols, drop = FALSE],
+                     <span class="kw">function</span>(x) is.numeric(x) || is.integer(x), logical(1))
+sample_cols &lt;- non_id_cols[is_numeric]</code></pre>
+
+<!-- ================================================================== -->
+<h2 id="viz">2. Visualization Enhancements <span class="tag tag-enhance">8 files</span></h2>
+<!-- ================================================================== -->
+
+<h3>2.1 Three-Color Directional Volcano Plot</h3>
+<p class="file-ref">R/core/06_plots.R</p>
+<table>
+<tr><th>Before</th><th>After</th></tr>
+<tr><td>Binary grey/red</td><td>3-color: Up (red), Down (blue), NS (grey)</td></tr>
+<tr><td>Y-axis = raw P.Value</td><td>Y-axis = adjusted P.Value (FDR-consistent)</td></tr>
+<tr><td>Legend hidden</td><td>Legend shows counts: "Up (42)", "Down (17)"</td></tr>
+</table>
+<pre><code>df$.direction &lt;- <span class="fn">factor</span>(
+    <span class="fn">ifelse</span>(is_up, <span class="str">"Up"</span>, <span class="fn">ifelse</span>(is_down, <span class="str">"Down"</span>, <span class="str">"NS"</span>)),
+    levels = c(<span class="str">"NS"</span>, <span class="str">"Down"</span>, <span class="str">"Up"</span>)
+)
+<span class="fn">scale_color_manual</span>(
+    values = c(<span class="str">"NS"</span> = <span class="str">"grey70"</span>, <span class="str">"Down"</span> = <span class="str">"blue"</span>, <span class="str">"Up"</span> = <span class="str">"red"</span>),
+    labels = c(<span class="fn">sprintf</span>(<span class="str">"NS (%d)"</span>, ...), <span class="fn">sprintf</span>(<span class="str">"Down (%d)"</span>, ...), ...)
+)</code></pre>
+
+<h3>2.2 Three-Color MA Plot</h3>
+<p>Same directional coloring, plus differential alpha (0.4 NS / 0.8 significant) and y=0 baseline line.</p>
+
+<h3>2.3 Multi-Resolution PCA</h3>
+<p class="file-ref">R/modules/proteomics/01_mod_qc_pre.R, R/modules/rnaseq/01_mod_qc_pre.R</p>
+<ul>
+  <li><strong>Proteomics:</strong> top 100, 500, 1,000, 2,000 most variable proteins</li>
+  <li><strong>RNA-seq:</strong> top 500, 1,000, 2,000, 5,000 most variable genes</li>
+</ul>
+
+<h3>2.4 Pre/Post Normalization Boxplots</h3>
+<p>Paired boxplots: raw counts (log2+1) and normalized expression for visual verification.</p>
+
+<h3>2.5 New Advanced QC <span class="tag tag-new">New file</span></h3>
+<p class="file-ref">R/domain/proteomics/07_qc_advanced.R (263 lines)</p>
+<ul>
+  <li><strong>UMAP</strong> &mdash; non-linear dimensionality reduction (config: <code>qc$run_umap</code>)</li>
+  <li><strong>Outlier Detection</strong> &mdash; Mahalanobis distance + median correlation flagging</li>
+  <li><strong>Top-DE Heatmaps</strong> &mdash; Z-scored pheatmap at sizes 25/50/100 per contrast</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="pathway">3. Pathway Enrichment <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/core/09_enrichment.R, R/domain/*/07_pathway.R, R/domain/*/07b_pathway.R</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>pathway$enabled: true/false</code><br>
+  <strong>Methods:</strong> <code>"fgsea"</code> | <code>"ora"</code> | <code>"both"</code><br>
+  <strong>Databases:</strong> GO, KEGG, custom GMT files
+</div>
+
+<p><strong>Flow:</strong> Collect gene IDs &rarr; Auto-detect organism &rarr; Annotate genes (custom &rarr; biomaRt &rarr; OrgDb &rarr; KEGGREST) &rarr; Load gene sets &rarr; Run fGSEA/ORA per contrast &rarr; Save CSVs + dotplots</p>
+
+<pre><code><span class="cm"># fGSEA ranking: Wald stat (preferred) or sign(FC)*-log10(p)</span>
+ranks &lt;- <span class="kw">if</span> (<span class="str">"stat"</span> %in% colnames(res)) {
+    <span class="fn">setNames</span>(res$stat, res$FeatureID)
+} <span class="kw">else</span> {
+    <span class="fn">setNames</span>(sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300), res$FeatureID)
+}
+
+fgsea_res &lt;- fgsea::<span class="fn">fgsea</span>(pathways = gs, stats = ranks,
+                           minSize = 10, maxSize = 500, nPermSimple = 10000)</code></pre>
+
+<pre><code><span class="cm"># ORA: Fisher's exact test per gene set</span>
+mat &lt;- <span class="fn">matrix</span>(c(sig_in_gs, gs_not_sig, sig_not_gs, neither), nrow = 2)
+test &lt;- <span class="fn">fisher.test</span>(mat, alternative = <span class="str">"greater"</span>)
+results_df$padj &lt;- <span class="fn">p.adjust</span>(results_df$pvalue, method = <span class="str">"BH"</span>)</code></pre>
+
+<!-- ================================================================== -->
+<h2 id="organism">4. Organism Auto-Detection &amp; Annotation <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/core/10_organism_detection.R (434 lines), R/core/11_annotation.R (804 lines)</p>
+
+<h3>4.1 Organism Detection</h3>
+<p>Pattern-matches gene IDs: <code>ENSG</code>&rarr;human, <code>ENSMUSG</code>&rarr;mouse, <code>WBGene</code>&rarr;worm, <code>FBgn</code>&rarr;fly, etc. Returns confidence (high/medium/low). Supports 19+ organisms.</p>
+
+<h3>4.2 Annotation Fallback Chain</h3>
+<pre><code>fallback_chain = c(<span class="str">"custom"</span>, <span class="str">"biomart"</span>, <span class="str">"orgdb"</span>, <span class="str">"keggrest"</span>)
+<span class="cm"># Each method annotates remaining unannotated IDs</span>
+<span class="cm"># KEGGREST handles non-model organisms (e.g., Giardia)</span></code></pre>
+
+<!-- ================================================================== -->
+<h2 id="ppi">5. PPI Network Analysis <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/domain/proteomics/07c_ppi_networks.R (~836 lines)</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>ppi$enabled: true/false</code><br>
+  <strong>External API:</strong> STRING database (v12.0) + CORUM protein complexes
+</div>
+
+<ul>
+  <li>Queries STRING for interactions (STRINGdb R package with REST API fallback)</li>
+  <li>Network topology: degree, betweenness, closeness, eigenvector centrality</li>
+  <li>Community detection: Louvain, Walktrap, Fast-Greedy (igraph)</li>
+  <li>Active subnetwork identification (top 25th percentile by activity score)</li>
+  <li>CORUM protein complex enrichment (hypergeometric test)</li>
+  <li>Per-community GO enrichment</li>
+  <li>Auto-derives species taxonomy ID from organism config</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="advstats">6. Advanced Statistics <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/domain/proteomics/07d_advanced_stats.R (~500 lines)</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>advanced_stats$enabled: true/false</code>
+</div>
+
+<table>
+<tr><th>Method</th><th>Description</th></tr>
+<tr><td>Hedges' g + Bootstrap CI</td><td>Effect sizes with 1000-iteration bootstrap 95% CIs</td></tr>
+<tr><td>Mixed-effects models</td><td>Via <code>lme4::lmer()</code> for repeated measures/batch. Auto-detects random effect columns.</td></tr>
+<tr><td>Robust regression</td><td>M-estimation via <code>MASS::rlm()</code>, outlier-resistant</td></tr>
+<tr><td>Power analysis</td><td>Sample size curves for 80% power at observed effect sizes</td></tr>
+<tr><td>MTC comparison</td><td>All 7 <code>p.adjust</code> methods at FDR 0.01/0.05/0.10</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="batch">7. Batch Correction (RNA-seq) <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/domain/rnaseq/04_batch_correction.R (336 lines)</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>batch_correction$enabled: false</code> (default OFF)<br>
+  <strong>Methods:</strong> <code>"combat_seq"</code> (default) | <code>"sva"</code> | <code>"ruv"</code>
+</div>
+
+<p><strong>Three phases:</strong></p>
+<ol>
+  <li><strong>Detection:</strong> PCA + ANOVA on top 5 PCs, variance-weighted R&sup2; (threshold: 0.1)</li>
+  <li><strong>Correction:</strong> ComBat-Seq (neg binomial on raw counts), SVA (surrogate variables), or RUVg (empirical controls)</li>
+  <li><strong>Visualization:</strong> PCA colored by batch variables</li>
+</ol>
+
+<pre><code><span class="cm"># ComBat-Seq: operates on raw counts, preserves count nature</span>
+corrected &lt;- sva::<span class="fn">ComBat_seq</span>(
+    counts = as.matrix(counts),
+    batch  = as.factor(batch_var),
+    group  = as.factor(condition_var)  <span class="cm"># preserves biological signal</span>
+)</code></pre>
+
+<div class="callout">
+  <strong>Pipeline integration:</strong> <code>rna_batch_corr</code> sits between <code>rna_pre</code> and ALL downstream targets. When disabled, it's a passthrough &mdash; zero impact on existing pipelines.
+</div>
+
+<!-- ================================================================== -->
+<h2 id="deconv">8. Cell-Type Deconvolution <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+<p class="file-ref">R/domain/rnaseq/05_deconvolution.R (362 lines)</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>deconvolution$enabled: false</code> (default OFF)<br>
+  <strong>Supported:</strong> Human (xCell2 BlueprintEncode + xCell legacy fallback) and Mouse (xCell2 ImmGen) only
+</div>
+
+<ul>
+  <li>Converts raw counts to non-log CPM for xCell2 input</li>
+  <li>Differential composition: Wilcoxon (2-group) or Kruskal-Wallis (&gt;2 groups) + BH correction</li>
+  <li>Visualization: ComplexHeatmap + stacked bar plot</li>
+  <li>Non-human/mouse organisms get a clean skip</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="reporting">9. Reporting &amp; AI Commentary <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+
+<h3>9.1 Interactive HTML Reports</h3>
+<p class="file-ref">report_template.Rmd (~2,700 lines), report_template_proteomics.Rmd (~2,062 lines)</p>
+<ul>
+  <li>Self-contained HTML with floating TOC, code folding</li>
+  <li>Interactive DataTables with CSV/Excel export</li>
+  <li>Plotly interactive charts</li>
+  <li>Collapsible AI commentary blocks per figure</li>
+</ul>
+
+<h3>9.2 Executive Summary</h3>
+<p>Auto-generated <code>executive_summary.md</code> with sample/gene counts, per-contrast DE stats, top genes, top pathways, QC outlier flags.</p>
+
+<h3>9.3 Pipeline Summary</h3>
+<p>Dark-themed HTML workflow timeline (wet lab &rarr; upstream &rarr; downstream). Uses Claude CLI for polished HTML or R template fallback.</p>
+
+<h3>9.4 AI Figure Commentary</h3>
+<p class="file-ref">R/core/12_commentary.R (1,229 lines), scripts/figure_commentary_claude.py, scripts/figure_commentary_openai.py</p>
+
+<div class="callout callout-info">
+  <strong>Config gate:</strong> <code>commentary$enabled: true/false</code><br>
+  <strong>Backends:</strong> <code>"claude-code"</code> | <code>"claude"</code> (API) | <code>"openai"</code> (API) | <code>"none"</code>
+</div>
+
+<ul>
+  <li>Discovers figures &rarr; builds experiment context &rarr; generates figure-type-specific guidance &rarr; dispatches to backend</li>
+  <li>Structured JSON output: what_is_this, biological_interpretation, observations, statistical_assessment, next_steps</li>
+  <li><strong>Only figure images (PNGs) are sent</strong> to APIs &mdash; no raw data or metadata</li>
+  <li>Prompts informed by <a href="https://github.com/K-Dense-AI/claude-scientific-skills">K-Dense AI claude-scientific-skills</a> (MIT License)</li>
+</ul>
+
+<h4>Fallback chain:</h4>
+<table>
+<tr><th>Condition</th><th>Behavior</th></tr>
+<tr><td><code>enabled: false</code></td><td>No LLM calls. Pipeline summaries use R template.</td></tr>
+<tr><td><code>backend: "claude"</code> but no API key</td><td>Warning &rarr; falls back to data-driven commentary (no API call)</td></tr>
+<tr><td><code>backend: "openai"</code> but no API key</td><td>Warning &rarr; falls back to data-driven commentary</td></tr>
+<tr><td>API call fails after retries</td><td>Placeholder commentary with error message</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="infra">10. Infrastructure <span class="tag tag-new">New</span></h2>
+<!-- ================================================================== -->
+
+<h3>10.1 Dockerfile</h3>
+<p>R 4.5.2 + Bioconductor 3.22. Two-layer caching: Layer 1 caches <code>renv::restore()</code> (slow, changes rarely); Layer 2 copies code (fast rebuild).</p>
+
+<h3>10.2 CLI Wizard (<code>run.R</code>, 1,341 lines)</h3>
+<pre><code>Rscript run.R --new              <span class="cm"># Interactive wizard</span>
+Rscript run.R --config path.yaml <span class="cm"># Run with config</span>
+Rscript run.R --fresh            <span class="cm"># Full re-run (invalidate cache)</span></code></pre>
+<p>Walks through project setup, auto-detects column headers, supports organism selection (including non-model), optionally extracts technical metadata from lab reports via Claude CLI.</p>
+
+<h3>10.3 <code>_targets.R</code> Changes</h3>
+<ul>
+  <li>Config path now from <code>MULTIOMICS_CONFIG</code> env var (no hardcoded paths)</li>
+  <li>Auto-dispatches RNA-seq and/or proteomics based on which <code>modes:</code> are in config</li>
+</ul>
+
+<h3>10.4 Pipeline Growth</h3>
+<table>
+<tr><th>Pipeline</th><th>Before</th><th>After</th></tr>
+<tr><td>Proteomics</td><td>6 targets</td><td>13 targets</td></tr>
+<tr><td>RNA-seq</td><td>~10 targets</td><td>18 targets</td></tr>
+</table>
+
+<h3>10.5 Config Templates</h3>
+<p>Six new config sections added to <code>proteins_config.yaml</code>: <code>annotation</code>, <code>qc</code> (UMAP/outliers), <code>pathway</code>, <code>ppi</code>, <code>advanced_stats</code>, <code>commentary</code>.</p>
+<p>One minor rename: <code>partition.method</code> &rarr; <code>partition.algorithm</code> in clustering (both templates).</p>
+
+<!-- ================================================================== -->
+<h2 id="deps">11. New Dependencies <span class="tag">60 packages</span></h2>
+<!-- ================================================================== -->
+
+<table>
+<tr><th>Category</th><th>Packages</th></tr>
+<tr><td>Pathway enrichment</td><td><code>fgsea</code>, <code>clusterProfiler</code>, <code>enrichplot</code>, <code>DOSE</code>, <code>GO.db</code>, <code>GOSemSim</code>, <code>qvalue</code></td></tr>
+<tr><td>Annotation</td><td><code>AnnotationDbi</code>, <code>biomaRt</code>, <code>KEGGREST</code>, <code>BiocFileCache</code>, <code>Biostrings</code></td></tr>
+<tr><td>Reporting / Interactive</td><td><code>DT</code>, <code>ggiraph</code>, <code>patchwork</code>, <code>cowplot</code>, <code>ggVennDiagram</code>, <code>ggrepel</code></td></tr>
+<tr><td>Tree / Network viz</td><td><code>ggtree</code>, <code>ggtangle</code>, <code>treeio</code>, <code>tidytree</code>, <code>ape</code></td></tr>
+<tr><td>Database / SQL</td><td><code>DBI</code>, <code>RSQLite</code>, <code>dbplyr</code>, <code>blob</code></td></tr>
+<tr><td>Utility / Fonts</td><td><code>R.utils</code>, <code>xml2</code>, <code>httr2</code>, <code>MASS</code>, <code>nlme</code>, <code>systemfonts</code>, <code>gdtools</code></td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="qa">12. Likely Questions &amp; Answers</h2>
+<!-- ================================================================== -->
+
+<div class="answer-box">
+<strong>Q: "Will this break existing pipelines?"</strong><br>
+A: No. All new features default to <code>enabled: false</code>. The only config change affecting existing setups is <code>partition.method</code> &rarr; <code>partition.algorithm</code> (clustering).
+</div>
+
+<div class="answer-box">
+<strong>Q: "Why 60 new packages?"</strong><br>
+A: Pathway analysis (clusterProfiler ecosystem), annotation (biomaRt, AnnotationDbi), and interactive reporting (DT, plotly) each bring dependency trees. All versions are pinned in <code>renv.lock</code>.
+</div>
+
+<div class="answer-box">
+<strong>Q: "Is the AI commentary sending our data externally?"</strong><br>
+A: Only figure images (PNGs) are sent to Claude/OpenAI APIs when explicitly enabled with an API key. No raw expression data, sample metadata, or gene lists are sent. Fully optional.
+</div>
+
+<div class="answer-box">
+<strong>Q: "Why ComBat-Seq as default batch correction?"</strong><br>
+A: It operates on raw counts (preserves count nature for DESeq2), uses a negative binomial model, and is the most validated method for RNA-seq batch correction.
+</div>
+
+<div class="answer-box">
+<strong>Q: "Why is deconvolution limited to human/mouse?"</strong><br>
+A: xCell2 reference signatures only exist for these organisms. Other organisms get a clean skip rather than unreliable results.
+</div>
+
+<div class="answer-box">
+<strong>Q: "How does organism auto-detection work?"</strong><br>
+A: Regex pattern matching on gene IDs: <code>ENSG</code>&rarr;human, <code>ENSMUSG</code>&rarr;mouse, <code>WBGene</code>&rarr;worm, etc. Returns confidence level (high/medium/low) so the pipeline can decide.
+</div>
+
+<div class="answer-box">
+<strong>Q: "What if the STRING API is down or unavailable?"</strong><br>
+A: The PPI module first tries the <code>STRINGdb</code> R package, then falls back to the STRING REST API. If both fail, the module returns NULL and the pipeline continues.
+</div>
+
+<div class="answer-box">
+<strong>Q: "How do we test this?"</strong><br>
+A: Test plan from PR: (1) Run existing proteomics config with no new features &mdash; verify no regressions. (2) Enable pathway enrichment, verify output. (3) Enable AI commentary with API key &mdash; verify fallback without key. (4) RNA-seq end-to-end with batch correction enabled.
+</div>
+
+<hr style="margin-top: 40px;">
+<p style="text-align: center; color: #999; font-size: 0.85em;">
+  PR #25 Meeting Prep &mdash; Generated from Dor_branch analysis &mdash; February 2026
+</p>
+
+</body>
+</html>

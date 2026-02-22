@@ -26,8 +26,6 @@
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
 #' @param annot Optional: external annotation data.frame
-#' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
-#'
 #' @return A named list with 26 canonical keys (+ legacy aliases if requested)
 #'
 #' @export
@@ -39,8 +37,8 @@ build_shiny_payload_proteomics <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
-    include_legacy = TRUE
-) {
+    final_results = NULL) 
+  {
     # ============================================================
     # Initialize canonical payload structure
     # ============================================================
@@ -105,13 +103,15 @@ build_shiny_payload_proteomics <- function(
 
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
-        
+
+        # pca_3d: 3D PCA plotly widget
+        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+
         # QC plot
         payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
         payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
         payload$samples_hm_w_na <- pca_res$plots$dist_heatmap_na %||% NULL
-      
-        
+
     }
 
     # ============================================================
@@ -164,6 +164,13 @@ build_shiny_payload_proteomics <- function(
             summary_counts <- build_de_summary_counts_proteomics(payload$de_stats)
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
+
+        # de_final_table: DE-filtered final results table (richer than de_stats)
+        if (!is.null(final_results)){
+          message(sprintf("[shiny export] read %s file", final_results))
+          de_df = as.data.frame(readxl::read_excel(final_results, sheet = "Results"))
+          payload$de_final_table <- de_df
+        }
     }
 
     # ============================================================
@@ -179,22 +186,44 @@ build_shiny_payload_proteomics <- function(
         val <- src$clusters %||% src$New_clusters
         if (!is.null(val)) payload$clust_partition <- val
 
-        if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
+        if (!is.null(src$patterns)) {
+          payload$clust_patterns <- src$patterns
+          payload$clust_patterns_list <- src$patterns_list}
 
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
+
+        # clust_heatmap_partition: Partition clustering heatmap (full pheatmap object)
+        if (!is.null(clustering_res$plots$partition_heatmap))
+            payload$clust_heatmap_partition <- clustering_res$plots$partition_heatmap
+
+        # clust_heatmap_partition_fig: The actual drawable gtable (print to see the plot)
+        if (!is.null(clustering_res$plots$partition_heatmap) && !is.null(clustering_res$plots$partition_heatmap$gtable))
+            payload$clust_heatmap_partition_fig <- clustering_res$plots$partition_heatmap$gtable
     }
 
     # clust_heatmap_hier: Hierarchical clustering (pheatmap + dendrogram)
+    # Priority: clustering_res$objects$hm_hier_de (full payload with tree_row, row_order, etc.)
     val <- NULL
-    if (!is.null(de_res)) {
-        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
+    if (!is.null(clustering_res)) {
+        # First check objects (where the full payload is stored)
+        if (!is.null(clustering_res$objects)) {
+            val <- clustering_res$objects$hm_hier_de
+        }
+        # Fallback to plots if needed
+        if (is.null(val) && !is.null(clustering_res$plots)) {
+            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
+        }
     }
-    if (is.null(val) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
+    # Legacy fallback: check de_res
+    if (is.null(val) && !is.null(de_res)) {
+        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
+
+    # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
+    if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
+        payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
     # CONFIGURATION (6 keys)
@@ -227,33 +256,7 @@ build_shiny_payload_proteomics <- function(
     # ============================================================
 
     assert_shiny_payload_contract(payload, strict = FALSE, context = "proteomics")
-
-    # ============================================================
-    # LEGACY ALIASES (optional)
-    # ============================================================
-
-    if (isTRUE(include_legacy)) {
-        payload <- attach_legacy_aliases(payload)
-
-        # Proteomics-specific legacy keys
-        payload$prot_log2_raw <- pre$expr_filt %||% NULL
-        payload$prot_log2_imp1 <- pre$expr_imp_single %||% NULL
-
-        
-        # DE contrast summary (proteomics-specific)
-        if (!is.null(payload$de_stats)) {
-            payload$de_contrast_summary <- build_de_contrast_summary(payload$de_stats)
-            payload$de_summary_counts <- payload$de_summary
-        }
-
-        # Ensure Protein column exists in stats for legacy compatibility
-        if (!is.null(payload$stats_df) && "feature_id" %in% names(payload$stats_df)) {
-            if (!"Protein" %in% names(payload$stats_df)) {
-                payload$stats_df$Protein <- payload$stats_df$feature_id
-            }
-        }
-    }
-
+    
     # ============================================================
     # SUMMARY
     # ============================================================
@@ -367,222 +370,6 @@ save_shiny_payload_proteomics <- function(..., out_file = "shiny_payload_proteom
 
     saveRDS(payload, out_file)
     message("Saved proteomics payload to: ", out_file)
-
-    invisible(out_file)
-}
-
-
-# ============================================================
-# LEGACY BUILDER (DEPRECATED)
-# ============================================================
-
-#' Build legacy-compatible data structure for Shiny app (Proteomics)
-#'
-#' @description
-#' DEPRECATED: Use build_shiny_payload_proteomics() instead.
-#'
-#' This function is kept for backward compatibility only.
-#' It will be removed in a future version.
-#'
-#' @param pre Preprocessing results (from preprocess_proteomics)
-#' @param de_res DE results (from proteomics DE analysis)
-#' @param inputs Input list (contrasts, metadata, etc.)
-#' @param config Full config object
-#' @param pca_res Optional: pre-computed PCA results
-#' @param clustering_res Optional: pre-computed clustering results
-#' @param annot Optional: external annotation data.frame
-#'
-#' @return A flat named list with ALL legacy keys (even if NULL)
-#'
-#' @export
-build_data_to_shiny_legacy_proteomics <- function(
-    pre,
-    de_res,
-    inputs,
-    config,
-    pca_res = NULL,
-    clustering_res = NULL,
-    annot = NULL
-) {
-    .Deprecated("build_shiny_payload_proteomics")
-
-    legacy <- build_shiny_legacy_base(
-        legacy_source = "Proteomics pipeline",
-        pca_basename = "prot_pca_3d"
-    )
-
-    # Ensure color/shape keys exist
-    if (!("color" %in% names(legacy))) legacy["color"] <- list(NULL)
-    if (!("shape" %in% names(legacy))) legacy["shape"] <- list(NULL)
-
-    # Metadata
-    legacy$col_data <- pre$meta %||% NULL
-
-    prot_fx <- config$modes$proteomics[["effects"]] %||% list()
-    sample_col <- prot_fx$samples %||% NULL
-    if (!is.null(legacy$col_data) && !is.null(sample_col) && sample_col %in% colnames(legacy$col_data)) {
-        rownames(legacy$col_data) <- as.character(legacy$col_data[[sample_col]])
-    }
-
-    legacy$contrasts_data <- inputs$contrasts %||% NULL
-
-    # Expression matrices
-    legacy$norm_counts <- pre$expr_filt %||% NULL
-    legacy$norm_log_counts <- pre$expr_work %||% NULL
-
-    # PCA objects
-    if (!is.null(pca_res) && !is.null(pca_res$objects)) {
-        legacy$norm_log_counts_pca <- pca_res$objects$norm_log_counts_pca %||% NULL
-        legacy$color <- pca_res$objects$color %||% NULL
-        legacy$shape <- pca_res$objects$shape %||% NULL
-    }
-
-    # Fallback for color/shape
-    val_color <- legacy[["color"]] %||% prot_fx[["color"]]
-    val_shape <- legacy[["shape"]] %||% prot_fx[["shape"]]
-    legacy["color"] <- list(val_color)
-    legacy["shape"] <- list(val_shape)
-
-    # DE summary and stats
-    legacy$stats_df <- de_res$summary_df %||% NULL
-
-    legacy["DE_genes_stats"] <- list(NULL)
-    if (!is.null(legacy$stats_df) && "pass_any_contrast" %in% colnames(legacy$stats_df)) {
-        legacy$DE_genes_stats <- legacy$stats_df[
-            !is.na(legacy$stats_df$pass_any_contrast) & legacy$stats_df$pass_any_contrast == 1, ,
-            drop = FALSE
-        ]
-    }
-
-    # Heatmap data matrix
-    legacy["mat2plot"] <- list(NULL)
-    legacy["de_expr_norm"] <- list(NULL)
-    if (!is.null(legacy$norm_log_counts) && !is.null(legacy$DE_genes_stats) && nrow(legacy$DE_genes_stats) > 0) {
-        prot_cfg <- config$modes$proteomics %||% list()
-        de_table_cfg <- prot_cfg$de_table %||% list()
-        id_col <- de_table_cfg$id_col %||% "FeatureID"
-
-        possible_cols <- c(id_col, "Protein", "FeatureID", "Protein.Group")
-        id_col_found <- intersect(possible_cols, colnames(legacy$DE_genes_stats))[1]
-
-        if (!is.na(id_col_found)) {
-            sig_ids <- legacy$DE_genes_stats[[id_col_found]]
-            de_matrix <- legacy$norm_log_counts[rownames(legacy$norm_log_counts) %in% sig_ids, , drop = FALSE]
-            legacy$mat2plot <- assert_de_expr_matrix(de_matrix, context = "proteomics export")
-            legacy$de_expr_norm <- legacy$mat2plot
-        }
-    }
-
-    # DE Model
-    legacy$de_model <- de_res$de_model %||% NULL
-
-    # DE summaries
-    legacy["de_contrast_summary"] <- list(NULL)
-    legacy["de_summary_counts"] <- list(NULL)
-    if (!is.null(legacy$stats_df)) {
-        legacy$de_contrast_summary <- build_de_contrast_summary(legacy$stats_df)
-        legacy$de_summary_counts <- build_de_summary_counts_proteomics(legacy$stats_df)
-    }
-
-    # Heatmap data
-    de_heat <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data %||% NULL
-    clust_heat <- if (!is.null(clustering_res)) {
-        clustering_res$pheatmap_data_DE_genes %||% clustering_res$pheatmap_data %||% NULL
-    } else {
-        NULL
-    }
-    legacy$pheatmap_data_DE_genes <- de_heat %||% clust_heat %||% NULL
-
-    # Clustering results
-    if (!is.null(clustering_res)) {
-        legacy$patterns <- clustering_res$patterns %||% NULL
-        legacy$heatmaps_by_pattern <- clustering_res$heatmaps %||% NULL
-        legacy$New_clusters <- clustering_res$clusters %||% NULL
-    }
-
-    # Annotation
-    legacy$annot <- annot
-
-    # Config parameters
-    modes <- config$modes %||% list()
-    prot <- modes$proteomics %||% modes$prot %||% list()
-    de_cfg <- prot$de %||% list()
-    norm_cfg <- prot$normalization %||% list()
-
-    legacy$PADJ_CUTOFF <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
-    legacy$DESEQ_PADJ_CUTOFF <- legacy$PADJ_CUTOFF
-
-    linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
-    legacy$LINEAR_FC_CUTOFF <- linear_fc
-    legacy$LOG_FC_CUTOFF <- log2(linear_fc)
-
-    legacy$NORM_METHOD <- norm_cfg$method %||% "none"
-
-    prot_effects_cfg <- prot[["effects"]] %||% list()
-    legacy$GROUP <- prot_effects_cfg$color %||% NULL
-
-    # QC plot objects
-    if (!is.null(pca_res) && !is.null(pca_res$plots)) {
-        legacy$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
-        legacy$prot_hist <- pca_res$plots$density %||% NULL
-        legacy$imp_box <- pca_res$plots$boxplot %||% NULL
-        legacy$sample_hm <- pca_res$pplots$dist_heatmap_na %||% NULL
-        legacy$prot_hm_noNA <- pca_res$plots$dist_heatmap %||% NULL
-    } else {
-        legacy["imp_hist_samp"] <- list(NULL)
-        legacy["prot_hist"] <- list(NULL)
-        legacy["imp_box"] <- list(NULL)
-        legacy["prot_hm"] <- list(NULL)
-        legacy["prot_hm_noNA"] <- list(NULL)
-    }
-
-    # Expression matrices (proteomics-specific)
-    legacy$prot_log2_raw <- pre$expr_filt %||% NULL
-    legacy$prot_log2_imp1 <- pre$expr_imp_single %||% NULL
-
-    # Ensure expected keys exist
-    expected_keys <- c(
-        "legacy_version", "legacy_created_at", "legacy_source",
-        "col_data", "contrasts_data", "dds", "norm_counts", "norm_log_counts",
-        "de_model", "mat2plot", "de_expr_norm",
-        "PCA_3D_BASENAME",
-        "stats_df", "DE_genes_stats",
-        "trinotate_main",
-        "PADJ_CUTOFF", "DESEQ_PADJ_CUTOFF", "LOG_FC_CUTOFF",
-        "LINEAR_FC_CUTOFF", "NORM_METHOD", "GROUP",
-        "color", "shape"
-    )
-
-    for (k in expected_keys) {
-        if (!k %in% names(legacy)) {
-            legacy[k] <- list(NULL)
-        }
-    }
-
-    legacy
-}
-
-
-#' Save proteomics legacy data structure to RDS file
-#'
-#' @description DEPRECATED: Use save_shiny_payload_proteomics() instead.
-#'
-#' @param ... Arguments passed to build_data_to_shiny_legacy_proteomics()
-#' @param out_file Output file path
-#' @return Path to saved file (invisibly)
-#' @export
-save_data_to_shiny_legacy_proteomics <- function(..., out_file = "data_to_shiny_legacy_proteomics.rds") {
-    .Deprecated("save_shiny_payload_proteomics")
-
-    legacy <- build_data_to_shiny_legacy_proteomics(...)
-
-    out_dir <- dirname(out_file)
-    if (!dir.exists(out_dir)) {
-        dir.create(out_dir, recursive = TRUE)
-    }
-
-    saveRDS(legacy, out_file)
-    message("Saved proteomics legacy export to: ", out_file)
 
     invisible(out_file)
 }

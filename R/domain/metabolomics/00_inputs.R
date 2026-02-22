@@ -36,6 +36,34 @@ load_metabolomics_inputs <- function(config) {
         meta <- read_table_auto(abs_meta)
     }
 
+    # Handle group-row format: row 1 of data contains condition assignments
+    # for each sample column (annotation columns are empty/NA in that row).
+    if (isTRUE(cfg$input$has_group_row) && nrow(data_df) > 0) {
+        group_row <- data_df[1, , drop = FALSE]
+        data_df   <- data_df[-1, , drop = FALSE]
+        rownames(data_df) <- NULL
+
+        # Build metadata from group row if no external metadata provided
+        if (is.null(meta)) {
+            id_cfg     <- cfg$id_columns %||% list()
+            annot_cols <- id_cfg$annotation_cols %||% character(0)
+            sample_cols <- setdiff(colnames(data_df), annot_cols)
+
+            cond_col <- cfg$de$condition_column %||%
+                        cfg$effects$color %||% "condition"
+
+            meta <- data.frame(
+                sample_id = sample_cols,
+                stringsAsFactors = FALSE
+            )
+            meta[[cond_col]] <- as.character(unlist(group_row[1, sample_cols]))
+            message(sprintf(
+                "metabolomics: built metadata from group row (%d samples, condition='%s')",
+                length(sample_cols), cond_col
+            ))
+        }
+    }
+
     list(
         data     = data_df,
         metadata = meta,
@@ -62,10 +90,10 @@ validate_metabolomics_config <- function(cfg) {
                       c("none", "log2", "log10"),
                       allow_null = TRUE)
         assert_one_of(norm$scaling, "normalization$scaling",
-                      c("none", "auto", "pareto", "range"),
+                      c("none", "center", "auto", "pareto", "range"),
                       allow_null = TRUE)
         assert_one_of(norm$na_policy, "normalization$na_policy",
-                      c("keep", "zero"),
+                      c("keep", "zero", "min_half", "lod"),
                       allow_null = TRUE)
     }
     invisible(TRUE)

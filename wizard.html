@@ -1,0 +1,1894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>multiomics-core &mdash; Config Wizard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root, [data-theme="dark"] {
+  --bg: #0a0e17;
+  --surface: #111827;
+  --surface-hover: #1a2332;
+  --border: #1e2d45;
+  --border-focus: #38bdf8;
+  --text: #e2e8f0;
+  --text-dim: #64748b;
+  --accent-wet: #38bdf8;
+  --accent-green: #34d399;
+  --accent-violet: #a78bfa;
+  --accent-amber: #fbbf24;
+  --accent-red: #f87171;
+  --input-bg: #0d1320;
+  --rna-color: #38bdf8;
+  --rna-bg: rgba(56,189,248,0.06);
+  --rna-border: rgba(56,189,248,0.25);
+  --prot-color: #f59e0b;
+  --prot-bg: rgba(245,158,11,0.06);
+  --prot-border: rgba(245,158,11,0.25);
+  --theme-toggle-bg: var(--input-bg);
+}
+
+[data-theme="light"] {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-hover: #f8fafc;
+  --border: #cbd5e1;
+  --border-focus: #2563eb;
+  --text: #1e293b;
+  --text-dim: #64748b;
+  --accent-wet: #2563eb;
+  --accent-green: #059669;
+  --accent-violet: #7c3aed;
+  --accent-amber: #d97706;
+  --accent-red: #dc2626;
+  --input-bg: #f8fafc;
+  --rna-color: #2563eb;
+  --rna-bg: rgba(37,99,235,0.06);
+  --rna-border: rgba(37,99,235,0.25);
+  --prot-color: #d97706;
+  --prot-bg: rgba(217,119,6,0.06);
+  --prot-border: rgba(217,119,6,0.25);
+  --theme-toggle-bg: #e2e8f0;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: "DM Sans", sans-serif; min-height: 100vh; line-height: 1.6; }
+
+.container { max-width: 820px; margin: 0 auto; padding: 40px 24px 80px; }
+
+/* Header */
+.header { text-align: center; margin-bottom: 40px; }
+.header-badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2); border-radius: 100px; padding: 6px 18px; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent-wet); margin-bottom: 16px; }
+.header-badge .dot { width: 6px; height: 6px; background: var(--accent-green); border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(135deg, #e2e8f0, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
+.header-sub { color: var(--text-dim); font-size: 14px; }
+
+/* Sections */
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; margin-bottom: 20px; transition: border-color 0.2s; }
+.section:hover { border-color: rgba(56,189,248,0.3); }
+.section-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+.section-title .icon { font-size: 18px; }
+.section-title .num { font-family: "JetBrains Mono", monospace; font-size: 10px; background: rgba(56,189,248,0.1); color: var(--accent-wet); padding: 2px 8px; border-radius: 4px; }
+
+/* Form elements */
+.field { margin-bottom: 16px; }
+.field:last-child { margin-bottom: 0; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.field-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+label { display: block; font-size: 12px; font-weight: 500; color: var(--text-dim); margin-bottom: 5px; font-family: "JetBrains Mono", monospace; letter-spacing: 0.3px; }
+label .hint { font-weight: 400; color: var(--text-dim); opacity: 0.7; }
+input[type="text"], input[type="number"], select, textarea {
+  width: 100%; background: var(--input-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; color: var(--text); font-family: "DM Sans", sans-serif; font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s; outline: none;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56,189,248,0.1); }
+input::placeholder, textarea::placeholder { color: var(--text-dim); opacity: 0.5; }
+textarea { resize: vertical; min-height: 60px; }
+
+select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+
+/* Checkbox / Toggle */
+.toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.toggle-row input[type="checkbox"] { appearance: none; width: 40px; height: 22px; background: var(--border); border-radius: 11px; position: relative; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+.toggle-row input[type="checkbox"]::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; background: var(--text-dim); border-radius: 50%; transition: transform 0.2s, background 0.2s; }
+.toggle-row input[type="checkbox"]:checked { background: var(--accent-wet); }
+.toggle-row input[type="checkbox"]:checked::after { transform: translateX(18px); background: #fff; }
+.toggle-label { font-size: 13px; cursor: pointer; }
+
+/* File upload area */
+.file-detect { display: flex; gap: 10px; align-items: center; }
+.file-detect input[type="text"] { flex: 1; }
+.file-detect .btn-detect { flex-shrink: 0; position: relative; overflow: hidden; }
+.file-detect .btn-detect input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.detected-cols { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--accent-green); margin-top: 4px; padding: 6px 10px; background: rgba(52,211,153,0.06); border-radius: 6px; display: none; }
+.detected-cols.visible { display: block; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-family: "DM Sans", sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.btn:hover { border-color: var(--accent-wet); background: var(--surface-hover); }
+.btn-primary { background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.3); color: var(--accent-wet); }
+.btn-primary:hover { background: rgba(56,189,248,0.2); box-shadow: 0 0 20px rgba(56,189,248,0.1); }
+.btn-success { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.3); color: var(--accent-green); }
+.btn-success:hover { background: rgba(52,211,153,0.2); box-shadow: 0 0 20px rgba(52,211,153,0.1); }
+.btn-run { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.3); color: var(--accent-violet); }
+.btn-run:hover { background: rgba(167,139,250,0.2); box-shadow: 0 0 20px rgba(167,139,250,0.1); }
+.btn-lg { padding: 14px 32px; font-size: 15px; border-radius: 12px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Status toast */
+.toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 24px; border-radius: 12px; font-size: 13px; font-weight: 500; z-index: 999; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; }
+.toast.visible { transform: translateY(0); opacity: 1; }
+.toast-success { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3); color: var(--accent-green); }
+.toast-info { background: rgba(56,189,248,0.15); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-wet); }
+.toast-error { background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3); color: var(--accent-red); }
+
+/* Upload status */
+.upload-status { font-family: "JetBrains Mono", monospace; font-size: 11px; margin-top: 4px; padding: 6px 10px; border-radius: 6px; display: none; }
+.upload-status.visible { display: block; }
+.upload-status.success { background: rgba(52,211,153,0.06); color: var(--accent-green); }
+.upload-status.error { background: rgba(248,113,113,0.06); color: var(--accent-red); }
+
+/* Mode toggle */
+.mode-toggle { display: flex; gap: 0; background: var(--input-bg); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; margin-bottom: 4px; }
+.mode-toggle button { flex: 1; padding: 12px 20px; background: none; border: none; color: var(--text-dim); font-family: "DM Sans", sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.mode-toggle button.active { background: rgba(56,189,248,0.1); color: var(--accent-wet); }
+
+/* Mode section coloring */
+.section.mode-rna { border-left: 3px solid var(--rna-border); }
+.section.mode-rna:hover { border-color: var(--border); border-left-color: var(--rna-color); }
+.section.mode-prot { border-left: 3px solid var(--prot-border); }
+.section.mode-prot:hover { border-color: var(--border); border-left-color: var(--prot-color); }
+
+/* Mode badge tag */
+.mode-tag { display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; padding: 2px 10px; border-radius: 4px; margin-left: auto; }
+.mode-tag-rna { background: var(--rna-bg); color: var(--rna-color); border: 1px solid var(--rna-border); }
+.mode-tag-prot { background: var(--prot-bg); color: var(--prot-color); border: 1px solid var(--prot-border); }
+
+/* Theme toggle */
+.theme-toggle { position: fixed; top: 16px; right: 16px; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: 18px; line-height: 1; transition: all 0.2s; }
+.theme-toggle:hover { border-color: var(--accent-wet); }
+
+/* Light-theme adjustments */
+[data-theme="light"] h1 { background: linear-gradient(135deg, #1e293b, #2563eb); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+[data-theme="light"] select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5'/%3E%3C/svg%3E"); }
+[data-theme="light"] .toggle-row input[type="checkbox"]:checked { background: var(--accent-wet); }
+
+/* YAML preview */
+.yaml-preview { background: var(--input-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 500px; overflow-y: auto; color: var(--text-dim); display: none; }
+.yaml-preview.visible { display: block; }
+
+/* Action bar */
+.action-bar { display: flex; gap: 12px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
+
+/* Conditional sections */
+.mode-section { display: none; }
+.mode-section.active { display: block; }
+.conditional { display: none; }
+.conditional.visible { display: block; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+@media (max-width: 640px) {
+  .field-row, .field-row-3 { grid-template-columns: 1fr; }
+  .container { padding: 20px 12px 60px; }
+  h1 { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="theme_toggle">&#9790;</button>
+
+<div class="container">
+
+<!-- Header -->
+<div class="header">
+  <div class="header-badge"><span class="dot"></span> Config Wizard</div>
+  <h1>multiomics-core</h1>
+  <div class="header-sub">Generate a pipeline configuration file for your analysis</div>
+</div>
+
+<!-- 1. Project Info -->
+<div class="section">
+  <div class="section-title"><span class="num">01</span> Project Info</div>
+  <div class="field-row-3">
+    <div class="field">
+      <label>Project name <span class="hint">(no spaces)</span></label>
+      <input type="text" id="project_name" placeholder="MyProject">
+    </div>
+    <div class="field">
+      <label>Analyst</label>
+      <input type="text" id="analyst" value="Bioinformatics Core">
+    </div>
+    <div class="field">
+      <label>Analysis round</label>
+      <input type="text" id="round" value="A01">
+    </div>
+  </div>
+</div>
+
+<!-- 2. Analysis Type -->
+<div class="section">
+  <div class="section-title"><span class="num">02</span> Analysis Type</div>
+  <div class="mode-toggle">
+    <button id="btn_rna" class="active" onclick="setMode('rna')">RNA-seq</button>
+    <button id="btn_prot" onclick="setMode('proteomics')">Proteomics</button>
+    <button id="btn_both" onclick="setMode('both')">Both</button>
+  </div>
+</div>
+
+<!-- 3. Data Files — RNA -->
+<div class="section mode-section mode-rna active" id="sec_rna_files">
+  <div class="section-title"><span class="num">03</span> RNA-seq Data Files <span class="mode-tag mode-tag-rna">RNA</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">Enter absolute paths on your system. Optionally upload the file to auto-detect columns.</p>
+
+  <div class="field">
+    <label>Counts file <span class="hint">(genes x samples, CSV/TSV)</span></label>
+    <div class="file-detect">
+      <input type="text" id="rna_counts_path" placeholder="Upload or type path">
+      <div class="btn btn-primary" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'rna_counts', 'rna', 'counts')">
+      </div>
+    </div>
+    <div class="detected-cols" id="rna_counts_cols"></div>
+    <div class="upload-status" id="rna_counts_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Metadata file <span class="hint">(sample info, CSV/TSV)</span></label>
+    <div class="file-detect">
+      <input type="text" id="rna_metadata_path" placeholder="Upload or type path">
+      <div class="btn btn-primary" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'rna_metadata', 'rna', 'metadata')">
+      </div>
+    </div>
+    <div class="detected-cols" id="rna_metadata_cols"></div>
+    <div class="upload-status" id="rna_metadata_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Contrasts file <span class="hint">(optional — or pick from metadata in Column Mapping)</span></label>
+    <div class="file-detect">
+      <input type="text" id="rna_contrasts_path" placeholder="Upload, or pick comparisons in Column Mapping section" oninput="updateContrastBuilder('rna')">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'rna_contrasts', 'rna', 'contrasts')">
+      </div>
+    </div>
+    <div class="upload-status" id="rna_contrasts_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Sample map file <span class="hint">(optional)</span></label>
+    <div class="file-detect">
+      <input type="text" id="rna_sample_map_path" placeholder="Upload or leave empty">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'rna_sample_map', 'rna', 'sample_map')">
+      </div>
+    </div>
+    <div class="upload-status" id="rna_sample_map_status"></div>
+  </div>
+</div>
+
+<!-- 3. Data Files — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_files">
+  <div class="section-title"><span class="num">03</span> Proteomics Data Files <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">Enter absolute paths on your system. Optionally upload the file to auto-detect columns.</p>
+
+  <div class="field">
+    <label>Protein matrix file <span class="hint">(proteins x samples, CSV/TSV)</span></label>
+    <div class="file-detect">
+      <input type="text" id="prot_protein_path" placeholder="Upload or type path">
+      <div class="btn btn-primary" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'prot_protein', 'proteomics', 'protein')">
+      </div>
+    </div>
+    <div class="detected-cols" id="prot_protein_cols"></div>
+    <div class="upload-status" id="prot_protein_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Metadata file <span class="hint">(sample info, CSV/TSV)</span></label>
+    <div class="file-detect">
+      <input type="text" id="prot_metadata_path" placeholder="Upload or type path">
+      <div class="btn btn-primary" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'prot_metadata', 'proteomics', 'metadata')">
+      </div>
+    </div>
+    <div class="detected-cols" id="prot_metadata_cols"></div>
+    <div class="upload-status" id="prot_metadata_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Contrasts file <span class="hint">(optional — or pick from metadata in Column Mapping)</span></label>
+    <div class="file-detect">
+      <input type="text" id="prot_contrasts_path" placeholder="Upload, or pick comparisons in Column Mapping section" oninput="updateContrastBuilder('prot')">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'prot_contrasts', 'proteomics', 'contrasts')">
+      </div>
+    </div>
+    <div class="upload-status" id="prot_contrasts_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Sample map file <span class="hint">(optional)</span></label>
+    <div class="file-detect">
+      <input type="text" id="prot_sample_map_path" placeholder="Upload or leave empty">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'prot_sample_map', 'proteomics', 'sample_map')">
+      </div>
+    </div>
+    <div class="upload-status" id="prot_sample_map_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Peptide list <span class="hint">(optional — stub for future use)</span></label>
+    <div class="file-detect">
+      <input type="text" id="prot_peptides_path" placeholder="Upload or leave empty">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'prot_peptides', 'proteomics', 'peptides')">
+      </div>
+    </div>
+    <div class="upload-status" id="prot_peptides_status"></div>
+  </div>
+</div>
+
+<!-- 4. Column Mapping — RNA -->
+<div class="section mode-section mode-rna active" id="sec_rna_columns">
+  <div class="section-title"><span class="num">04</span> Column Mapping <span class="mode-tag mode-tag-rna">RNA</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Gene ID column <span class="hint">(in counts file)</span></label>
+      <select id="rna_gene_id_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+    <div class="field">
+      <label>Sample ID column <span class="hint">(in metadata)</span></label>
+      <select id="rna_sample_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Group / condition column <span class="hint">(for DE &amp; PCA coloring)</span></label>
+      <select id="rna_group_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+    <div class="field">
+      <label>Shape column <span class="hint">(optional, for PCA)</span></label>
+      <select id="rna_shape_col"><option value="null">None</option></select>
+    </div>
+  </div>
+  <div id="rna_contrast_picker" style="margin-top:8px;"></div>
+</div>
+
+<!-- 4. Column Mapping — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_columns">
+  <div class="section-title"><span class="num">04</span> Column Mapping <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Protein ID column <span class="hint">(in protein matrix)</span></label>
+      <select id="prot_protein_id_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+    <div class="field">
+      <label>Sample ID column <span class="hint">(in metadata)</span></label>
+      <select id="prot_sample_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Group / condition column <span class="hint">(for DE &amp; PCA)</span></label>
+      <select id="prot_group_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+    <div class="field">
+      <label>Search engine</label>
+      <select id="prot_engine">
+        <option value="DIANN">DIA-NN</option>
+        <option value="MaxQuant">MaxQuant</option>
+        <option value="FragPipe">FragPipe</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+  </div>
+  <div id="prot_contrast_picker" style="margin-top:8px;"></div>
+</div>
+
+<!-- 5. Methods — RNA -->
+<div class="section mode-section mode-rna active" id="sec_rna_methods">
+  <div class="section-title"><span class="num">05</span> Analysis Methods <span class="mode-tag mode-tag-rna">RNA</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Normalization</label>
+      <select id="rna_norm">
+        <option value="TMMlogCPM">TMMlogCPM (recommended)</option>
+        <option value="VST">VST (DESeq2)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Feature filtering</label>
+      <select id="rna_filter_mode" onchange="toggleFixedCPM()">
+        <option value="adaptive">Adaptive KDE (recommended)</option>
+        <option value="deseq2_only">DESeq2 built-in only</option>
+        <option value="fixed">Fixed CPM threshold</option>
+      </select>
+    </div>
+  </div>
+  <div class="field conditional" id="rna_fixed_cpm_field">
+    <label>CPM threshold</label>
+    <input type="number" id="rna_cpm_threshold" value="1.0" step="0.1">
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>DE method</label>
+      <select id="rna_de_method">
+        <option value="deseq2_default">DESeq2 - default (recommended)</option>
+        <option value="deseq2_legacy">DESeq2 - legacy (betaPrior=TRUE)</option>
+        <option value="limma_voom">limma-voom</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Pathway analysis</label>
+      <select id="rna_pathway">
+        <option value="fgsea">fGSEA (recommended)</option>
+        <option value="ora">ORA</option>
+        <option value="both">Both</option>
+        <option value="none">Skip</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Adj. p-value cutoff</label>
+      <input type="number" id="rna_p_cutoff" value="0.05" step="0.01" min="0" max="1">
+    </div>
+    <div class="field">
+      <label>Linear fold-change cutoff</label>
+      <input type="number" id="rna_fc_cutoff" value="1.5" step="0.1" min="1">
+    </div>
+  </div>
+  <div style="margin-top:14px;">
+    <div class="toggle-row"><input type="checkbox" id="rna_clustering"><label class="toggle-label" for="rna_clustering">Clustering</label></div>
+    <div class="toggle-row"><input type="checkbox" id="rna_batch_corr"><label class="toggle-label" for="rna_batch_corr">Batch correction</label></div>
+    <div class="toggle-row"><input type="checkbox" id="rna_deconv"><label class="toggle-label" for="rna_deconv">Cell type deconvolution (human/mouse)</label></div>
+  </div>
+</div>
+
+<!-- 5. Methods — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_methods">
+  <div class="section-title"><span class="num">05</span> Analysis Methods <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Normalization</label>
+      <select id="prot_norm">
+        <option value="none">None (already normalized)</option>
+        <option value="median">Median centering</option>
+        <option value="vsn">VSN (Variance Stabilizing)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Imputation</label>
+      <select id="prot_imp_method" onchange="toggleImpParams()">
+        <option value="perseus">Perseus-style (recommended)</option>
+        <option value="dep2">DEP2 / MinDet</option>
+        <option value="qrilc">QRILC (DEP workflow)</option>
+        <option value="minval">MinVal (floor of minimum)</option>
+        <option value="none">None (complete cases)</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Multi-imputation</label>
+      <input type="checkbox" id="prot_multi_imp" checked>
+      <span class="hint">Run 10 iterations, require 8/10 consensus for DE significance</span>
+    </div>
+  </div>
+  <div class="field-row conditional" id="prot_perseus_params">
+    <div class="field">
+      <label>Width <span class="hint">(SD scaling)</span></label>
+      <input type="number" id="prot_imp_width" value="0.2" step="0.1">
+    </div>
+    <div class="field">
+      <label>Downshift <span class="hint">(SDs below mean)</span></label>
+      <input type="number" id="prot_imp_downshift" value="1.6" step="0.1">
+    </div>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>DE method</label>
+      <select id="prot_de_method" onchange="togglePairedOption()">
+        <option value="limma">Limma (recommended)</option>
+        <option value="ttest">t-test (equal variance)</option>
+        <option value="welch">Welch test (unequal variance)</option>
+        <option value="anova">ANOVA + Tukey HSD (multi-group)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Correction method</label>
+      <select id="prot_p_adjust_method">
+        <option value="BH">BH / Benjamini-Hochberg (recommended)</option>
+        <option value="bonferroni">Bonferroni</option>
+        <option value="holm">Holm</option>
+        <option value="BY">BY / Benjamini-Yekutieli</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <div class="toggle-row">
+        <input type="checkbox" id="prot_fdrtool">
+        <label class="toggle-label" for="prot_fdrtool">fdrtool correction</label>
+      </div>
+      <span class="hint">Empirical null correction on t-statistics (DEP-style, more conservative)</span>
+    </div>
+  </div>
+  <div class="field-row conditional" id="prot_paired_field">
+    <div class="field">
+      <div class="toggle-row"><input type="checkbox" id="prot_paired"><label class="toggle-label" for="prot_paired">Paired test</label></div>
+    </div>
+    <div class="field">
+      <label>Pairing column <span class="hint">(e.g. Subject)</span></label>
+      <select id="prot_pairing_col"><option value="null">None</option></select>
+    </div>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Significance threshold</label>
+      <select id="prot_use_adj">
+        <option value="true">Adjusted p-value (BH)</option>
+        <option value="false">Raw p-value</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>P-value cutoff</label>
+      <input type="number" id="prot_p_cutoff" value="0.05" step="0.01" min="0" max="1">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Linear fold-change cutoff <span class="hint">(1 = no filter)</span></label>
+      <input type="number" id="prot_fc_cutoff" value="1.5" step="0.1" min="1">
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <div style="display:flex;gap:16px;padding-top:4px;"><!-- spacer --></div>
+    </div>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Pathway analysis</label>
+      <select id="prot_pathway" onchange="toggleGseaRanking()">
+        <option value="both">Both fGSEA + ORA (recommended)</option>
+        <option value="fgsea">fGSEA only</option>
+        <option value="ora">ORA only</option>
+        <option value="none">Skip</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>GSEA ranking</label>
+      <select id="prot_gsea_ranking">
+        <option value="stat">Signed statistic (recommended)</option>
+        <option value="abs_lfc">Absolute fold-change</option>
+        <option value="lfc">Log2 fold-change</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="margin-top:14px;">
+    <div class="toggle-row"><input type="checkbox" id="prot_pathway_volcano" checked><label class="toggle-label" for="prot_pathway_volcano">Pathway volcano plot</label></div>
+    <div class="toggle-row"><input type="checkbox" id="prot_clustering"><label class="toggle-label" for="prot_clustering">Clustering</label></div>
+    <div class="toggle-row"><input type="checkbox" id="prot_ppi" checked><label class="toggle-label" for="prot_ppi">PPI network analysis (STRING)</label></div>
+    <div class="toggle-row"><input type="checkbox" id="prot_adv_stats" checked><label class="toggle-label" for="prot_adv_stats">Advanced statistics (effect sizes, power)</label></div>
+  </div>
+</div>
+
+<!-- 5b. Filtering — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_filtering">
+  <div class="section-title"><span class="num">05b</span> Filtering <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <div class="field-row">
+    <div class="field">
+      <div class="toggle-row"><input type="checkbox" id="prot_remove_contaminants" checked><label class="toggle-label" for="prot_remove_contaminants">Remove contaminant proteins</label></div>
+    </div>
+    <div class="field">
+      <label>Contaminant prefix</label>
+      <input type="text" id="prot_contaminant_prefix" value="cRAP-">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Min. valid values per group</label>
+      <input type="number" id="prot_min_count" value="3" min="1" step="1">
+    </div>
+    <div class="field">
+      <label>Require passing in at least N groups</label>
+      <input type="number" id="prot_min_groups" value="1" min="1" step="1">
+    </div>
+  </div>
+</div>
+
+<!-- 6. Organism -->
+<div class="section">
+  <div class="section-title"><span class="num">06</span> Organism &amp; Annotation</div>
+  <div class="field-row">
+    <div class="field">
+      <label>Organism</label>
+      <select id="organism" onchange="toggleNonModel()">
+        <option value="auto" class="rna-only-opt">Auto-detect (RNA-seq)</option>
+        <option value="Homo sapiens">Human (Homo sapiens)</option>
+        <option value="Mus musculus">Mouse (Mus musculus)</option>
+        <option value="Caenorhabditis elegans" class="rna-only-opt">C. elegans</option>
+        <option value="Rattus norvegicus">Rat (Rattus norvegicus)</option>
+        <option value="Danio rerio">Zebrafish (Danio rerio)</option>
+        <option value="Giardia lamblia">Giardia lamblia</option>
+        <option value="other">Other (type below)</option>
+      </select>
+    </div>
+    <div class="field conditional" id="organism_other_field">
+      <label>Organism name <span class="hint">(Latin binomial)</span></label>
+      <input type="text" id="organism_other" placeholder="e.g. Saccharomyces cerevisiae">
+    </div>
+  </div>
+  <div class="conditional" id="non_model_fields">
+    <p style="font-size:12px;color:var(--accent-amber);margin-bottom:10px;">Non-model organism: standard databases may not be available. Provide custom files for best results.</p>
+    <div class="field">
+      <label>Custom annotation file <span class="hint">(CSV/TSV with gene_id + gene_name, optional)</span></label>
+      <input type="text" id="custom_mapping_file" placeholder="/path/to/annotation.csv or leave empty">
+    </div>
+    <div class="field">
+      <label>Custom GMT file <span class="hint">(for pathway analysis, optional)</span></label>
+      <input type="text" id="custom_gmt_file" placeholder="/path/to/pathways.gmt or leave empty">
+    </div>
+  </div>
+</div>
+
+<!-- 7. Commentary -->
+<div class="section">
+  <div class="section-title"><span class="num">07</span> AI Commentary</div>
+  <div class="field">
+    <label>Commentary backend</label>
+    <select id="commentary_backend">
+      <option value="none">None (data-driven fallback only)</option>
+      <option value="claude-code">Claude Code (uses subscription, no API key)</option>
+      <option value="claude">Claude API (requires ANTHROPIC_API_KEY)</option>
+      <option value="openai">OpenAI API (requires OPENAI_API_KEY)</option>
+    </select>
+  </div>
+</div>
+
+<!-- 8. User Notes -->
+<div class="section">
+  <div class="section-title"><span class="num">08</span> Project Notes &amp; Summary</div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
+    Describe your experiment, hypotheses, and any context. This text will appear in the "Project Overview" section of your final report.
+    If Claude CLI is available, it can blend your notes with technical report details into a polished summary.
+    Otherwise, your text is included as-is.
+  </p>
+  <div class="field">
+    <label>Your notes</label>
+    <textarea id="user_notes" rows="6" placeholder="e.g. This experiment examines the proteomic response of E. coli BW25113 to oxidative stress (H2O2) vs anaerobic growth. We expect upregulation of catalase (KatG, KatE) and SoxRS regulon members under oxidative stress..."></textarea>
+  </div>
+  <div class="field">
+    <label>Technical report / log file path <span class="hint">(optional, DOCX/PDF/log for AI summary)</span></label>
+    <input type="text" id="tech_report_file" placeholder="/path/to/facility_report.docx or leave empty">
+  </div>
+</div>
+
+<!-- 9. Technical Report Fields (manual) -->
+<div class="section">
+  <div class="section-title"><span class="num">09</span> Technical Report Details <span class="hint" style="font-size:11px;font-weight:400;">(optional, fill manually or leave for AI extraction)</span></div>
+  <div class="mode-section mode-rna active" style="border-left: 3px solid var(--rna-border); padding-left: 16px; margin-bottom: 12px;">
+    <div style="margin-bottom: 10px;"><span class="mode-tag mode-tag-rna">RNA</span></div>
+    <div class="field"><label>Facility</label><input type="text" id="tech_facility" placeholder="e.g. Genome Center"></div>
+    <div class="field"><label>Library prep</label><input type="text" id="tech_library_prep" placeholder="e.g. NEBNext Ultra II, 500ng input"></div>
+    <div class="field"><label>Sequencing</label><input type="text" id="tech_sequencing" placeholder="e.g. NovaSeq 6000, 2x150bp"></div>
+    <div class="field"><label>Upstream bioinformatics</label><input type="text" id="tech_upstream_bio" placeholder="e.g. STAR alignment, featureCounts"></div>
+  </div>
+  <div class="mode-section mode-prot" style="border-left: 3px solid var(--prot-border); padding-left: 16px;">
+    <div style="margin-bottom: 10px;"><span class="mode-tag mode-tag-prot">PROT</span></div>
+    <div class="field"><label>Facility</label><input type="text" id="tech_prot_facility" placeholder="e.g. Proteomics Center"></div>
+    <div class="field"><label>Sample prep</label><input type="text" id="tech_sample_prep" placeholder="e.g. Tryptic digestion, TMT labeling"></div>
+    <div class="field"><label>MS acquisition</label><input type="text" id="tech_ms_acquisition" placeholder="e.g. Exploris 480, DIA mode"></div>
+    <div class="field"><label>Search engine</label><input type="text" id="tech_search_engine" placeholder="e.g. DIA-NN 2.2.0"></div>
+    <div class="field"><label>Search parameters</label><input type="text" id="tech_search_params" placeholder="e.g. FDR 0.01, peptide 7-30aa, 1 missed cleavage"></div>
+  </div>
+</div>
+
+<!-- 9b. PCA Subsets — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_pca_subsets">
+  <div class="section-title"><span class="num">09b</span> PCA Subsets <span class="hint" style="font-size:11px;font-weight:400;">(optional)</span> <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
+    Run PCA on subsets of conditions. Default: all samples. Add entries to generate additional PCA plots for specific groups.
+    <br><span style="font-style:italic;">Upload metadata and select a group column above to populate condition checkboxes.</span>
+  </p>
+  <div id="pca_subsets_list">
+    <div class="pca-subset-entry" style="margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:6px;" data-pca-subset="0">
+      <div class="field" style="margin-bottom:6px;">
+        <label>Subset name</label>
+        <input type="text" class="pca_subset_name" value="All samples">
+      </div>
+      <div class="field">
+        <label>Conditions <span class="hint">(check groups to include, or leave all unchecked for all samples)</span></label>
+        <div class="pca_subset_conditions_box" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:4px;min-height:24px;color:var(--text-dim);font-size:12px;">
+          Upload metadata to see conditions.
+        </div>
+      </div>
+    </div>
+  </div>
+  <button class="btn" onclick="addPcaSubset()" style="margin-top:6px;">+ Add PCA Subset</button>
+</div>
+
+<!-- 10. Report Customization — Proteomics -->
+<div class="section mode-section mode-prot" id="sec_prot_report">
+  <div class="section-title"><span class="num">10</span> Report Customization <span class="hint" style="font-size:11px;font-weight:400;">(optional)</span> <span class="mode-tag mode-tag-prot">PROT</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+    Customize the HTML report. All fields are optional &mdash; leave empty to skip. You can also edit these later in the config YAML under <code style="font-size:11px;background:var(--input-bg);padding:2px 6px;border-radius:4px;">modes.proteomics.report</code>.
+  </p>
+  <div class="field-row">
+    <div class="field">
+      <label>Project ID <span class="hint">(shown in report title)</span></label>
+      <input type="text" id="report_project_id" placeholder="e.g. EP-2025-001">
+    </div>
+    <div class="field">
+      <label>Raw files location <span class="hint">(URL or path)</span></label>
+      <input type="text" id="report_raw_files" placeholder="e.g. https://drive.google.com/...">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Analysis files location <span class="hint">(URL or path)</span></label>
+      <input type="text" id="report_analysis_files" placeholder="e.g. /data/shared/project/results/">
+    </div>
+    <div class="field">
+      <label>Full results table link <span class="hint">(URL or path)</span></label>
+      <input type="text" id="report_full_results" placeholder="e.g. https://drive.google.com/...">
+    </div>
+  </div>
+  <div class="field">
+    <label>Introduction text <span class="hint">(appears in report introduction)</span></label>
+    <textarea id="report_intro_text" rows="3" placeholder="e.g. This study investigated..."></textarea>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Background <span class="hint">(optional subsection)</span></label>
+      <textarea id="report_intro_bg" rows="2" placeholder="Background context..."></textarea>
+    </div>
+    <div class="field">
+      <label>Aim <span class="hint">(optional subsection)</span></label>
+      <textarea id="report_intro_aim" rows="2" placeholder="The aim of this study..."></textarea>
+    </div>
+  </div>
+  <div class="field">
+    <label>Experimental design file <span class="hint">(URL or path to design document)</span></label>
+    <input type="text" id="report_design_file" placeholder="e.g. https://docs.google.com/...">
+  </div>
+  <div class="field">
+    <label>Expected proteins file <span class="hint">(CSV with label, count columns for bar chart)</span></label>
+    <input type="text" id="report_expected_proteins" placeholder="/path/to/expected_proteins.csv or leave empty">
+  </div>
+  <div class="field">
+    <label>Disclaimer text <span class="hint">(legal disclaimer, shown verbatim if provided)</span></label>
+    <textarea id="report_disclaimer" rows="2" placeholder="e.g. Results are provided for research purposes only..."></textarea>
+  </div>
+  <div style="margin-top:14px;">
+    <div class="toggle-row"><input type="checkbox" id="report_show_pca" checked><label class="toggle-label" for="report_show_pca">PCA plot</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_density" checked><label class="toggle-label" for="report_show_density">Density plot</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_distance"><label class="toggle-label" for="report_show_distance">Distance heatmap</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_correlation" checked><label class="toggle-label" for="report_show_correlation">Correlation plot</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_expr_heatmap" checked><label class="toggle-label" for="report_show_expr_heatmap">Expression heatmap</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_imputation_qc" checked><label class="toggle-label" for="report_show_imputation_qc">Imputation QC</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_venn"><label class="toggle-label" for="report_show_venn">Identified proteins Venn diagram</label></div>
+  </div>
+</div>
+
+<!-- Actions -->
+<div class="action-bar">
+  <button class="btn btn-primary btn-lg" onclick="generateAndPreview()">Preview YAML</button>
+  <button class="btn btn-lg" id="btn_download" onclick="downloadYAML()" style="display:none;">Download Config</button>
+  <button class="btn btn-success btn-lg" id="btn_save" onclick="saveConfig()">Save Config</button>
+  <button class="btn btn-run btn-lg" id="btn_run" onclick="runPipeline()">Run Pipeline</button>
+</div>
+
+<!-- YAML Preview -->
+<div class="yaml-preview" id="yaml_preview"></div>
+
+<div id="run_hint" style="text-align:center;margin-top:24px;font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;">
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast"></div>
+
+</div><!-- /container -->
+
+<script>
+// ============================================================
+// State
+// ============================================================
+var currentMode = 'rna';
+var detectedColumns = {};  // { 'rna_counts': ['col1','col2',...], ... }
+
+// ============================================================
+// Mode toggle
+// ============================================================
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn_rna').classList.toggle('active', mode === 'rna');
+  document.getElementById('btn_prot').classList.toggle('active', mode === 'proteomics');
+  document.getElementById('btn_both').classList.toggle('active', mode === 'both');
+
+  var showRna = mode === 'rna' || mode === 'both';
+  var showProt = mode === 'proteomics' || mode === 'both';
+
+  document.querySelectorAll('.mode-rna').forEach(function(el) {
+    el.classList.toggle('active', showRna);
+  });
+  document.querySelectorAll('.mode-prot').forEach(function(el) {
+    el.classList.toggle('active', showProt);
+  });
+
+  // Update organism options
+  document.querySelectorAll('.rna-only-opt').forEach(function(opt) {
+    opt.style.display = showRna && !showProt ? '' : 'none';
+  });
+  if (showProt) {
+    var org = document.getElementById('organism');
+    if (org.value === 'auto') org.value = 'Homo sapiens';
+  }
+  toggleImpParams();
+  toggleNonModel();
+}
+
+// ============================================================
+// Detect if running via httpuv backend
+// ============================================================
+var hasBackend = (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+                 && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+// ============================================================
+// Toast notifications
+// ============================================================
+function showToast(msg, type, duration) {
+  var toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'toast toast-' + (type || 'info') + ' visible';
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(function() { toast.classList.remove('visible'); }, duration || 4000);
+}
+
+// ============================================================
+// File upload (via backend) or local column detection (fallback)
+// ============================================================
+function uploadFile(fileInput, prefix, mode, fileRole) {
+  var file = fileInput.files[0];
+  if (!file) return;
+
+  var statusDiv = document.getElementById(prefix + '_status');
+
+  if (hasBackend) {
+    // Upload to R backend
+    var formData = new FormData();
+    formData.append('file', file);
+    formData.append('project_name', v('project_name') || 'project');
+    formData.append('mode', mode);
+    formData.append('file_role', fileRole);
+
+    if (statusDiv) { statusDiv.textContent = 'Uploading...'; statusDiv.className = 'upload-status visible success'; }
+
+    fetch('/api/upload-file', { method: 'POST', body: formData })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          if (statusDiv) { statusDiv.textContent = 'Error: ' + data.error; statusDiv.className = 'upload-status visible error'; }
+          return;
+        }
+        // Set path in text input (relative path for YAML)
+        document.getElementById(prefix + '_path').value = data.path;
+        // Populate column dropdowns
+        if (data.columns && data.columns.length > 0) {
+          detectedColumns[prefix] = data.columns;
+          var colsDiv = document.getElementById(prefix + '_cols');
+          if (colsDiv) {
+            colsDiv.textContent = 'Detected ' + data.columns.length + ' columns: ' + data.columns.slice(0, 8).join(', ') + (data.columns.length > 8 ? '...' : '');
+            colsDiv.classList.add('visible');
+          }
+          populateSelects(prefix, data.columns);
+        }
+        // Also parse full metadata for contrast builder (backend only returns columns, not rows)
+        if (prefix === 'rna_metadata' || prefix === 'prot_metadata') {
+          parseMetadataFull(file, prefix);
+        }
+        if (statusDiv) { statusDiv.textContent = 'Uploaded: ' + data.path; statusDiv.className = 'upload-status visible success'; }
+        showToast('File uploaded: ' + file.name, 'success');
+      })
+      .catch(function(err) {
+        if (statusDiv) { statusDiv.textContent = 'Upload failed'; statusDiv.className = 'upload-status visible error'; }
+        // Fallback to local detection
+        detectColsLocal(file, prefix);
+      });
+  } else {
+    // No backend — just detect columns locally
+    detectColsLocal(file, prefix);
+  }
+}
+
+function detectColsLocal(file, prefix) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var text = e.target.result;
+    var firstLine = text.split(/\r?\n/)[0];
+    var sep = firstLine.indexOf('\t') >= 0 ? '\t' : ',';
+    var cols = firstLine.split(sep).map(function(c) {
+      return c.replace(/^["']|["']$/g, '').trim();
+    }).filter(function(c) { return c.length > 0; });
+
+    detectedColumns[prefix] = cols;
+    var colsDiv = document.getElementById(prefix + '_cols');
+    if (colsDiv) {
+      colsDiv.textContent = 'Detected ' + cols.length + ' columns: ' + cols.slice(0, 8).join(', ') + (cols.length > 8 ? '...' : '');
+      colsDiv.classList.add('visible');
+    }
+    populateSelects(prefix, cols);
+  };
+  var blob = file.slice(0, 8192);
+  reader.readAsText(blob);
+
+  // Also parse full metadata for contrast builder
+  if (prefix === 'rna_metadata' || prefix === 'prot_metadata') {
+    parseMetadataFull(file, prefix);
+  }
+}
+
+function populateSelects(prefix, cols) {
+  var mappings = {
+    'rna_counts':   ['rna_gene_id_col'],
+    'rna_metadata': ['rna_sample_col', 'rna_group_col', 'rna_shape_col'],
+    'prot_protein':  ['prot_protein_id_col'],
+    'prot_metadata': ['prot_sample_col', 'prot_group_col', 'prot_pairing_col']
+  };
+
+  var targets = mappings[prefix];
+  if (!targets) return;
+
+  targets.forEach(function(selId) {
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+
+    var prevVal = sel.value;
+    sel.innerHTML = '';
+
+    // Add "None" option for shape and pairing_col
+    if (selId === 'rna_shape_col' || selId === 'prot_pairing_col') {
+      var noneOpt = document.createElement('option');
+      noneOpt.value = 'null';
+      noneOpt.textContent = 'None';
+      sel.appendChild(noneOpt);
+    }
+
+    cols.forEach(function(col) {
+      var opt = document.createElement('option');
+      opt.value = col;
+      opt.textContent = col;
+      sel.appendChild(opt);
+    });
+
+    // Restore previous selection if still valid
+    if (prevVal && cols.indexOf(prevVal) >= 0) {
+      sel.value = prevVal;
+    }
+
+    // Hook up contrast builder and PCA subset conditions when group column changes
+    if (selId === 'rna_group_col' || selId === 'prot_group_col') {
+      sel.onchange = function() {
+        updateContrastBuilder(selId.startsWith('rna') ? 'rna' : 'prot');
+        if (selId === 'prot_group_col') updatePcaSubsetConditions();
+      };
+      // Trigger initial update
+      updateContrastBuilder(selId.startsWith('rna') ? 'rna' : 'prot');
+      if (selId === 'prot_group_col') updatePcaSubsetConditions();
+    }
+  });
+}
+
+// ============================================================
+// Conditional visibility
+// ============================================================
+function toggleFixedCPM() {
+  var field = document.getElementById('rna_fixed_cpm_field');
+  field.classList.toggle('visible', document.getElementById('rna_filter_mode').value === 'fixed');
+}
+
+function toggleImpParams() {
+  var field = document.getElementById('prot_perseus_params');
+  if (field) field.classList.toggle('visible', document.getElementById('prot_imp_method').value === 'perseus');
+}
+
+function togglePairedOption() {
+  var field = document.getElementById('prot_paired_field');
+  if (field) {
+    var method = document.getElementById('prot_de_method').value;
+    field.classList.toggle('visible', method === 'ttest' || method === 'welch');
+  }
+}
+
+function toggleGseaRanking() {
+  // GSEA ranking is always visible but this hook exists for future use
+}
+
+function addPcaSubset() {
+  var list = document.getElementById('pca_subsets_list');
+  var idx = list.children.length;
+  var div = document.createElement('div');
+  div.className = 'pca-subset-entry';
+  div.style.cssText = 'margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:6px;';
+  div.setAttribute('data-pca-subset', idx);
+
+  var nameHtml = '<div class="field" style="margin-bottom:6px;"><label>Subset name</label>' +
+    '<input type="text" class="pca_subset_name" placeholder="e.g. Treatment groups"></div>';
+  var condHtml = '<div class="field"><label>Conditions <span class="hint">(check groups to include, or leave all unchecked for all)</span></label>' +
+    '<div class="pca_subset_conditions_box" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:4px;min-height:24px;"></div></div>';
+  var removeHtml = '<button type="button" onclick="this.parentElement.remove()" ' +
+    'style="background:none;border:1px solid var(--border);border-radius:4px;color:#e55;cursor:pointer;font-size:11px;padding:2px 8px;margin-top:6px;" title="Remove subset">Remove</button>';
+
+  div.innerHTML = nameHtml + condHtml + removeHtml;
+  list.appendChild(div);
+
+  // Populate checkboxes for this new entry
+  populatePcaConditionBox(div.querySelector('.pca_subset_conditions_box'));
+}
+
+function populatePcaConditionBox(box) {
+  if (!box) return;
+  var levels = getPcaConditionLevels();
+  if (levels.length === 0) {
+    box.innerHTML = '<span style="color:var(--text-dim);font-size:12px;">Upload metadata to see conditions.</span>';
+    return;
+  }
+  var html = '';
+  levels.forEach(function(lev, i) {
+    var uid = 'pcacb_' + box.closest('.pca-subset-entry').getAttribute('data-pca-subset') + '_' + i;
+    html += '<label style="display:inline-flex;align-items:center;gap:3px;font-size:13px;cursor:pointer;">' +
+      '<input type="checkbox" class="pca_cond_cb" value="' + lev.replace(/"/g, '&quot;') + '"> ' + lev + '</label>';
+  });
+  box.innerHTML = html;
+}
+
+function getPcaConditionLevels() {
+  var groupCol = v('prot_group_col');
+  var data = metadataRows['prot_metadata'];
+  if (!data || !groupCol) return [];
+  var levels = [];
+  data.rows.forEach(function(row) {
+    var val = row[groupCol];
+    if (val && levels.indexOf(val) < 0) levels.push(val);
+  });
+  levels.sort();
+  return levels;
+}
+
+function updatePcaSubsetConditions() {
+  var boxes = document.querySelectorAll('.pca_subset_conditions_box');
+  boxes.forEach(function(box) {
+    // Preserve current selections
+    var prevChecked = [];
+    box.querySelectorAll('.pca_cond_cb:checked').forEach(function(cb) {
+      prevChecked.push(cb.value);
+    });
+    populatePcaConditionBox(box);
+    // Restore selections that still exist
+    if (prevChecked.length > 0) {
+      box.querySelectorAll('.pca_cond_cb').forEach(function(cb) {
+        if (prevChecked.indexOf(cb.value) >= 0) cb.checked = true;
+      });
+    }
+  });
+}
+
+function getPcaSubsets() {
+  var entries = document.querySelectorAll('.pca-subset-entry');
+  var subsets = [];
+  entries.forEach(function(entry) {
+    var nameInput = entry.querySelector('.pca_subset_name');
+    var name = nameInput ? nameInput.value.trim() : '';
+    if (!name) return;
+    var checked = [];
+    entry.querySelectorAll('.pca_cond_cb:checked').forEach(function(cb) {
+      checked.push(cb.value);
+    });
+    var conditions = checked.length > 0 ? checked : null;
+    subsets.push({ name: name, conditions: conditions });
+  });
+  return subsets;
+}
+
+function toggleNonModel() {
+  var org = document.getElementById('organism').value;
+  var otherField = document.getElementById('organism_other_field');
+  var nonModelFields = document.getElementById('non_model_fields');
+
+  otherField.classList.toggle('visible', org === 'other');
+
+  var modelOrgs = ['auto', 'Homo sapiens', 'Mus musculus', 'Caenorhabditis elegans',
+                   'Rattus norvegicus', 'Danio rerio', 'Drosophila melanogaster',
+                   'Saccharomyces cerevisiae', 'Arabidopsis thaliana'];
+  var isNonModel = org === 'other' || (org !== 'auto' && modelOrgs.indexOf(org) < 0);
+  nonModelFields.classList.toggle('visible', isNonModel);
+}
+
+// ============================================================
+// Contrast Builder
+// ============================================================
+// Store parsed metadata rows per prefix
+var metadataRows = {};
+
+function parseMetadataFull(file, prefix) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var text = e.target.result;
+    var lines = text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+    if (lines.length < 2) return;
+    var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+    var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+    var rows = [];
+    for (var i = 1; i < lines.length; i++) {
+      var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+      var row = {};
+      for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+      rows.push(row);
+    }
+    metadataRows[prefix] = { header: header, rows: rows };
+    // prefix is 'rna_metadata' or 'prot_metadata' — extract short prefix for contrast builder
+    var shortPrefix = prefix.startsWith('prot') ? 'prot' : 'rna';
+    updateContrastBuilder(shortPrefix);
+  };
+  reader.readAsText(file);
+}
+
+function updateContrastBuilder(prefix) {
+  // prefix: 'rna' or 'prot'
+  var picker = document.getElementById(prefix + '_contrast_picker');
+  if (!picker) return;
+
+  // Hide picker if a contrasts file is provided
+  var contrastsPath = v(prefix + '_contrasts_path');
+  if (contrastsPath) {
+    picker.innerHTML = '';
+    return;
+  }
+
+  var groupSel = document.getElementById(prefix + '_group_col');
+  var groupCol = groupSel ? groupSel.value : '';
+  var data = metadataRows[prefix === 'prot' ? 'prot_metadata' : 'rna_metadata'];
+
+  if (!data || !groupCol || !data.header.length) {
+    picker.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Upload metadata above to choose comparisons.</span>';
+    return;
+  }
+
+  // Extract unique levels
+  var levels = [];
+  data.rows.forEach(function(row) {
+    var val = row[groupCol];
+    if (val && levels.indexOf(val) < 0) levels.push(val);
+  });
+  levels.sort();
+
+  if (levels.length < 2) {
+    picker.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Need at least 2 groups in "' + groupCol + '".</span>';
+    return;
+  }
+
+  // Build inline checkbox list with swap buttons
+  var html = '<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">Detected <b>' + levels.length + '</b> groups in <b>' + groupCol + '</b> — select comparisons (click ⇄ to swap direction):</div>';
+  for (var i = 0; i < levels.length; i++) {
+    for (var j = i + 1; j < levels.length; j++) {
+      var id = prefix + '_contrast_' + i + '_' + j;
+      html += '<div style="display:flex;align-items:center;margin-bottom:4px;gap:6px;">';
+      html += '<input type="checkbox" id="' + id + '" checked';
+      html += ' data-num="' + levels[i] + '" data-den="' + levels[j] + '" data-factor="' + groupCol + '"';
+      html += ' class="' + prefix + '_contrast_cb"';
+      html += ' style="margin-right:2px;">';
+      html += '<span id="' + id + '_label" style="font-size:13px;">' + levels[i] + ' vs ' + levels[j] + '</span>';
+      html += ' <button type="button" onclick="swapContrast(\'' + id + '\')" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--accent-wet);cursor:pointer;font-size:12px;padding:1px 6px;" title="Swap direction">⇄</button>';
+      html += '</div>';
+    }
+  }
+  picker.innerHTML = html;
+}
+
+function swapContrast(id) {
+  var cb = document.getElementById(id);
+  if (!cb) return;
+  var num = cb.getAttribute('data-num');
+  var den = cb.getAttribute('data-den');
+  cb.setAttribute('data-num', den);
+  cb.setAttribute('data-den', num);
+  var label = document.getElementById(id + '_label');
+  if (label) label.textContent = den + ' vs ' + num;
+}
+
+function getBuiltContrasts(prefix) {
+  // Returns array of {name, factor, num, den} from checked checkboxes
+  var contrasts = [];
+  var cbs = document.querySelectorAll('.' + prefix + '_contrast_cb:checked');
+  cbs.forEach(function(cb) {
+    contrasts.push({
+      name: cb.dataset.num + '_vs_' + cb.dataset.den,
+      factor: cb.dataset.factor,
+      num: cb.dataset.num,
+      den: cb.dataset.den
+    });
+  });
+  return contrasts;
+}
+
+function generateContrastsCSV(prefix) {
+  var contrasts = getBuiltContrasts(prefix);
+  if (contrasts.length === 0) return '';
+  var lines = ['Contrast_name,Factor,Numerator,Denominator'];
+  contrasts.forEach(function(c) {
+    lines.push('"' + c.name + '","' + c.factor + '","' + c.num + '","' + c.den + '"');
+  });
+  return lines.join('\n');
+}
+
+// ============================================================
+// Value helpers
+// ============================================================
+function v(id) { return (document.getElementById(id) || {}).value || ''; }
+function checked(id) { return (document.getElementById(id) || {}).checked || false; }
+function yamlStr(s) { return s.indexOf('"') >= 0 ? "'" + s + "'" : '"' + s + '"'; }
+function yamlBool(b) { return b ? 'true' : 'false'; }
+
+function getOrganism() {
+  var org = v('organism');
+  return org === 'other' ? v('organism_other') : org;
+}
+
+function getProjectName() {
+  return v('project_name').replace(/\s+/g, '_');
+}
+
+// ============================================================
+// YAML Generation — RNA-seq
+// ============================================================
+function generateRNAYaml() {
+  var name = getProjectName();
+  var nameLower = name.toLowerCase();
+
+  var deChoice = v('rna_de_method');
+  var deMethod = deChoice === 'limma_voom' ? 'limma_voom' : 'deseq2';
+  var deseqMode = deChoice === 'deseq2_legacy' ? 'legacy' : 'default';
+
+  var filterMode = v('rna_filter_mode');
+  var filterThreshold = filterMode === 'fixed' ? v('rna_cpm_threshold') : 'null';
+
+  var pathwayMethod = v('rna_pathway');
+  var pathwayEnabled = pathwayMethod !== 'none';
+
+  var organism = getOrganism();
+  var customMapping = v('custom_mapping_file') ? yamlStr(v('custom_mapping_file')) : 'null';
+  var customGmt = v('custom_gmt_file') ? yamlStr(v('custom_gmt_file')) : 'null';
+
+  var commentaryBackend = v('commentary_backend');
+  var commentaryEnabled = commentaryBackend !== 'none';
+
+  var groupCol = v('rna_group_col') || 'Condition';
+  var sampleCol = v('rna_sample_col') || 'SampleID';
+  var shapeCol = v('rna_shape_col');
+
+  // Counts / metadata file basenames for paths
+  var countsPath = v('rna_counts_path');
+  var metaPath = v('rna_metadata_path');
+  var contrastsPath = v('rna_contrasts_path');
+  var sampleMapPath = v('rna_sample_map_path');
+
+  var countsDest = countsPath ? 'rna/' + countsPath.split(/[/\\]/).pop() : '';
+  var metaDest = metaPath ? 'rna/' + metaPath.split(/[/\\]/).pop() : '';
+  var contrastsDest = contrastsPath ? 'rna/' + contrastsPath.split(/[/\\]/).pop() : '';
+  // Auto-generate contrasts file if built via contrast builder
+  var rnaContrastsCSV = '';
+  if (!contrastsDest) {
+    var builtContrasts = getBuiltContrasts('rna');
+    if (builtContrasts.length > 0) {
+      contrastsDest = 'rna/contrasts_auto.csv';
+      rnaContrastsCSV = generateContrastsCSV('rna');
+    }
+  }
+  var sampleMapDest = sampleMapPath ? 'rna/' + sampleMapPath.split(/[/\\]/).pop() : '';
+
+  // User notes
+  var userNotes = v('user_notes');
+  var techReportFile = v('tech_report_file');
+
+  // Tech report fields
+  var techFacility = v('tech_facility');
+  var techLibPrep = v('tech_library_prep');
+  var techSeq = v('tech_sequencing');
+  var techBio = v('tech_upstream_bio');
+
+  var yaml = '# Auto-generated by multiomics-core wizard\n';
+  yaml += '# Project: ' + name + '\n';
+  yaml += '# Date: ' + new Date().toISOString().slice(0, 10) + '\n\n';
+
+  yaml += 'project:\n';
+  yaml += '  dir: "."\n';
+  yaml += '  name: ' + yamlStr(name) + '\n';
+  yaml += '  analysis_round: ' + yamlStr(v('round')) + '\n';
+  yaml += '  analyst: ' + yamlStr(v('analyst')) + '\n';
+  if (userNotes) yaml += '  user_notes: |\n' + userNotes.split('\n').map(function(l) { return '    ' + l; }).join('\n') + '\n';
+  if (techReportFile) yaml += '  technical_report_file: ' + yamlStr(techReportFile) + '\n';
+
+  yaml += '\npaths:\n';
+  yaml += '  raw: "data/' + nameLower + '"\n';
+  yaml += '  out: "outputs/' + nameLower + '"\n';
+
+  yaml += '\nmodes:\n  rna:\n';
+  yaml += '    files:\n';
+  yaml += '      counts: ' + yamlStr(countsDest) + '\n';
+  yaml += '      sample_map: ' + yamlStr(sampleMapDest) + '\n';
+  yaml += '      metadata: ' + yamlStr(metaDest) + '\n';
+  yaml += '      contrasts: ' + yamlStr(contrastsDest) + '\n';
+
+  yaml += '\n    id_columns:\n';
+  yaml += '      gene_id_col: ' + yamlStr(v('rna_gene_id_col') || 'gene_id') + '\n';
+  yaml += '      sample_col: ' + yamlStr(sampleCol) + '\n';
+  yaml += '      map_from: "sample_original_name"\n';
+  yaml += '      map_to: ' + yamlStr(sampleCol) + '\n';
+
+  yaml += '\n    normalization:\n';
+  yaml += '      method: ' + yamlStr(v('rna_norm')) + '\n';
+  yaml += '      prior.count: 1\n';
+
+  yaml += '\n    filtering:\n';
+  yaml += '      group_col: ' + yamlStr(groupCol) + '\n';
+  yaml += '      mode: ' + yamlStr(filterMode) + '\n';
+  yaml += '      auto_filter:\n        min: 0.5\n        max: 2.0\n        fallback: 1.0\n';
+  yaml += '      fixed_threshold: ' + filterThreshold + '\n';
+
+  yaml += '\n    de:\n';
+  yaml += '      method: ' + yamlStr(deMethod) + '\n';
+  yaml += '      deseq_mode: ' + yamlStr(deseqMode) + '\n';
+  yaml += '      p_cutoff: ' + v('rna_p_cutoff') + '\n';
+  yaml += '      linear_fc_cutoff: ' + v('rna_fc_cutoff') + '\n';
+  yaml += '      use_adj: true\n';
+
+  yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
+
+  yaml += '\n    qc_post:\n      enabled: true\n      de_source: "summary"\n      max_top_de_features: 100\n';
+  yaml += '      plots:\n        volcano: true\n        ma: true\n';
+  yaml += '      outputs:\n        write_de_tables: true\n';
+
+  yaml += '\n    annotation:\n';
+  yaml += '      organism: ' + yamlStr(organism) + '\n';
+  yaml += '      id_type: "auto"\n';
+  yaml += '      skip_annotation: false\n';
+  yaml += '      custom_mapping_file: ' + customMapping + '\n';
+
+  yaml += '\n    pathway:\n';
+  yaml += '      enabled: ' + yamlBool(pathwayEnabled) + '\n';
+  yaml += '      method: ' + yamlStr(pathwayMethod) + '\n';
+  yaml += '      gmt_file: ' + customGmt + '\n';
+  yaml += '      databases:\n        - "GO"\n        - "KEGG"\n';
+  yaml += '      min_size: 10\n      max_size: 500\n';
+
+  yaml += '\n    commentary:\n';
+  yaml += '      enabled: ' + yamlBool(commentaryEnabled) + '\n';
+  yaml += '      backend: ' + yamlStr(commentaryBackend) + '\n';
+
+  yaml += '\n    clustering:\n';
+  yaml += '      enabled: ' + yamlBool(checked('rna_clustering')) + '\n';
+  yaml += '      de_source: "any_contrast"\n      min_groups: 2\n';
+  yaml += '      steps:\n        hierarchical:\n          enabled: true\n          distance: "euclidean"\n          linkage: "complete"\n';
+  yaml += '        partition:\n          enabled: true\n          algorithm: "hclust"\n          k_max: 20\n';
+  yaml += '        binary_patterns:\n          enabled: true\n          group_col: ' + yamlStr(groupCol) + '\n          corr_cutoff: 0.8\n';
+
+  yaml += '\n    batch_correction:\n      enabled: ' + yamlBool(checked('rna_batch_corr')) + '\n';
+  yaml += '\n    deconvolution:\n      enabled: ' + yamlBool(checked('rna_deconv')) + '\n';
+
+  yaml += '\n    effects:\n';
+  yaml += '      color: ' + yamlStr(groupCol) + '\n';
+  yaml += '      shape: ' + (shapeCol && shapeCol !== 'null' ? yamlStr(shapeCol) : 'null') + '\n';
+  yaml += '      samples: ' + yamlStr(sampleCol) + '\n';
+
+  yaml += '\n    qc:\n      adaptive_plots: true\n';
+  yaml += '      thresholds:\n        min_samples_for_pca3d: 10\n        max_samples_for_heatmaps: 120\n        max_samples_for_expr_heatmap: 60\n';
+
+  // Technical report
+  if (techFacility || techLibPrep || techSeq || techBio) {
+    yaml += '\n    technical_report:\n';
+    yaml += '      facility: ' + yamlStr(techFacility) + '\n';
+    yaml += '      library_prep: ' + yamlStr(techLibPrep) + '\n';
+    yaml += '      sequencing: ' + yamlStr(techSeq) + '\n';
+    yaml += '      upstream_bioinformatics: ' + yamlStr(techBio) + '\n';
+    yaml += '      upstream_de_note: ""\n';
+    yaml += '      acknowledgment: ""\n';
+  }
+
+  yaml += '\nparams:\n  seed: 1\n';
+  return yaml;
+}
+
+// ============================================================
+// YAML Generation — Proteomics
+// ============================================================
+function generateProtYaml() {
+  var name = getProjectName();
+  var nameLower = name.toLowerCase();
+
+  var impMethod = v('prot_imp_method');
+  var pathwayMethod = v('prot_pathway');
+  var pathwayEnabled = pathwayMethod !== 'none';
+  var organism = getOrganism();
+  var customMapping = v('custom_mapping_file') ? yamlStr(v('custom_mapping_file')) : 'null';
+  var customGmt = v('custom_gmt_file') ? yamlStr(v('custom_gmt_file')) : 'null';
+  var commentaryBackend = v('commentary_backend');
+  var commentaryEnabled = commentaryBackend !== 'none';
+  var groupCol = v('prot_group_col') || 'Condition';
+  var sampleCol = v('prot_sample_col') || 'SampleID';
+
+  var protPath = v('prot_protein_path');
+  var metaPath = v('prot_metadata_path');
+  var contrastsPath = v('prot_contrasts_path');
+  var sampleMapPath = v('prot_sample_map_path');
+
+  var protDest = protPath ? 'proteomics/' + protPath.split(/[/\\]/).pop() : '';
+  var metaDest = metaPath ? 'proteomics/' + metaPath.split(/[/\\]/).pop() : '';
+  var contrastsDest = contrastsPath ? 'proteomics/' + contrastsPath.split(/[/\\]/).pop() : '';
+  // Auto-generate contrasts file if built via contrast builder
+  var protContrastsCSV = '';
+  if (!contrastsDest) {
+    var builtContrasts = getBuiltContrasts('prot');
+    if (builtContrasts.length > 0) {
+      contrastsDest = 'proteomics/contrasts_auto.csv';
+      protContrastsCSV = generateContrastsCSV('prot');
+    }
+  }
+  var sampleMapDest = sampleMapPath ? 'proteomics/' + sampleMapPath.split(/[/\\]/).pop() : '';
+
+  var userNotes = v('user_notes');
+  var techReportFile = v('tech_report_file');
+
+  var techFacility = v('tech_prot_facility');
+  var techSamplePrep = v('tech_sample_prep');
+  var techMS = v('tech_ms_acquisition');
+  var techEngine = v('tech_search_engine');
+  var techParams = v('tech_search_params');
+
+  var yaml = '# Auto-generated by multiomics-core wizard\n';
+  yaml += '# Project: ' + name + '\n';
+  yaml += '# Date: ' + new Date().toISOString().slice(0, 10) + '\n\n';
+
+  yaml += 'project:\n';
+  yaml += '  dir: "."\n';
+  yaml += '  name: ' + yamlStr(name) + '\n';
+  yaml += '  analysis_round: ' + yamlStr(v('round')) + '\n';
+  yaml += '  analyst: ' + yamlStr(v('analyst')) + '\n';
+  if (userNotes) yaml += '  user_notes: |\n' + userNotes.split('\n').map(function(l) { return '    ' + l; }).join('\n') + '\n';
+  if (techReportFile) yaml += '  technical_report_file: ' + yamlStr(techReportFile) + '\n';
+
+  yaml += '\npaths:\n';
+  yaml += '  raw: "data/' + nameLower + '"\n';
+  yaml += '  out: "outputs/' + nameLower + '"\n';
+
+  yaml += '\nmodes:\n  proteomics:\n';
+  yaml += '    engine: ' + yamlStr(v('prot_engine')) + '\n';
+
+  var peptidesPath = v('prot_peptides_path');
+  var peptidesDest = peptidesPath ? 'proteomics/' + peptidesPath.split(/[/\\]/).pop() : '';
+
+  yaml += '\n    files:\n';
+  yaml += '      protein: ' + yamlStr(protDest) + '\n';
+  yaml += '      sample_map: ' + yamlStr(sampleMapDest) + '\n';
+  yaml += '      metadata: ' + yamlStr(metaDest) + '\n';
+  yaml += '      contrasts: ' + yamlStr(contrastsDest) + '\n';
+  yaml += '      peptides: ' + yamlStr(peptidesDest) + '\n';
+
+  yaml += '\n    id_columns:\n';
+  yaml += '      protein_id: ' + yamlStr(v('prot_protein_id_col') || 'Protein.Group') + '\n';
+  yaml += '      sample_col: ' + yamlStr(sampleCol) + '\n';
+  yaml += '      protein_annot:\n        - "Protein.Names"\n        - "Genes"\n        - "First.Protein.Description"\n';
+  yaml += '      map_from: "sample_orig_name"\n';
+  yaml += '      map_to: ' + yamlStr(sampleCol) + '\n';
+
+  yaml += '\n    filtering:\n';
+  yaml += '      remove_contaminants: ' + yamlBool(checked('prot_remove_contaminants')) + '\n';
+  yaml += '      contaminant_prefix: ' + yamlStr(v('prot_contaminant_prefix') || 'cRAP-') + '\n';
+  yaml += '      min_count:\n        default: ' + (v('prot_min_count') || '3') + '\n';
+  yaml += '      min_groups: ' + (v('prot_min_groups') || '1') + '\n';
+
+  yaml += '\n    normalization:\n      method: ' + yamlStr(v('prot_norm')) + '\n';
+
+  yaml += '\n    imputation:\n';
+  yaml += '      multi_imputation: ' + (checked('prot_multi_imp') ? 'true' : 'false') + '\n';
+  yaml += '      method: ' + yamlStr(impMethod) + '\n';
+  yaml += '      no_repetitions: 10\n      min_no_passed: 8\n';
+  yaml += '      width: ' + (v('prot_imp_width') || '0.2') + '\n';
+  yaml += '      downshift: ' + (v('prot_imp_downshift') || '1.6') + '\n';
+  yaml += '      dep2_method: "MinDet"\n      dep2_random_seed: 1\n';
+  yaml += '      qrilc_random_seed: 1\n';
+
+  var deMethod = v('prot_de_method') || 'limma';
+  var useAdj = v('prot_use_adj') || 'true';
+  var pAdjustMethod = v('prot_p_adjust_method') || 'BH';
+  var pairedOn = checked('prot_paired');
+  var pairingCol = v('prot_pairing_col');
+
+  yaml += '\n    de:\n';
+  yaml += '      method: ' + yamlStr(deMethod) + '\n';
+  yaml += '      use_adj_for_pass1: ' + useAdj + '\n';
+  yaml += '      p_cutoff: ' + v('prot_p_cutoff') + '\n';
+  yaml += '      linear_fc_cutoff: ' + v('prot_fc_cutoff') + '\n';
+  yaml += '      p_adjust_method: ' + yamlStr(pAdjustMethod) + '\n';
+  yaml += '      fdrtool_correction: ' + yamlBool(checked('prot_fdrtool')) + '\n';
+  yaml += '      paired: ' + yamlBool(pairedOn) + '\n';
+  yaml += '      pairing_col: ' + (pairingCol && pairingCol !== 'null' ? yamlStr(pairingCol) : 'null') + '\n';
+
+  yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
+
+  yaml += '\n    qc_post:\n      enabled: true\n      de_source: "summary"\n';
+  yaml += '      plots:\n        volcano: true\n        ma: true\n';
+  yaml += '      outputs:\n        write_de_tables: true\n';
+
+  yaml += '\n    clustering:\n';
+  yaml += '      enabled: ' + yamlBool(checked('prot_clustering')) + '\n';
+  yaml += '      de_source: "any_contrast"\n      min_groups: 2\n';
+  yaml += '      steps:\n        hierarchical:\n          enabled: true\n          distance: "euclidean"\n          linkage: "complete"\n';
+  yaml += '        partition:\n          enabled: true\n          algorithm: "hclust"\n          k_max: 20\n';
+  yaml += '        binary_patterns:\n          enabled: true\n          corr_cutoff: 0.8\n';
+
+  yaml += '\n    effects:\n';
+  yaml += '      color: ' + yamlStr(groupCol) + '\n';
+  yaml += '      shape: null\n';
+  yaml += '      samples: ' + yamlStr(sampleCol) + '\n';
+
+  // Report customization
+  yaml += '\n    report:\n';
+  yaml += '      project_id: ' + yamlStr(v('report_project_id')) + '\n';
+  var introText = v('report_intro_text');
+  if (introText) yaml += '      introduction_text: |\n' + introText.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
+  var introBg = v('report_intro_bg');
+  if (introBg) yaml += '      introduction_background: |\n' + introBg.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
+  var introAim = v('report_intro_aim');
+  if (introAim) yaml += '      introduction_aim: |\n' + introAim.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
+  var designFile = v('report_design_file');
+  if (designFile) yaml += '      experimental_design_file: ' + yamlStr(designFile) + '\n';
+  var rawFiles = v('report_raw_files');
+  if (rawFiles) yaml += '      raw_files_location: ' + yamlStr(rawFiles) + '\n';
+  var analysisFiles = v('report_analysis_files');
+  if (analysisFiles) yaml += '      analysis_files_location: ' + yamlStr(analysisFiles) + '\n';
+  var fullResults = v('report_full_results');
+  if (fullResults) yaml += '      full_results_table_link: ' + yamlStr(fullResults) + '\n';
+  var expectedProteins = v('report_expected_proteins');
+  if (expectedProteins) yaml += '      expected_proteins_file: ' + yamlStr(expectedProteins) + '\n';
+  yaml += '      show_pca: ' + yamlBool(checked('report_show_pca')) + '\n';
+  yaml += '      show_density: ' + yamlBool(checked('report_show_density')) + '\n';
+  yaml += '      show_distance: ' + yamlBool(checked('report_show_distance')) + '\n';
+  yaml += '      show_correlation: ' + yamlBool(checked('report_show_correlation')) + '\n';
+  yaml += '      show_expression_heatmap: ' + yamlBool(checked('report_show_expr_heatmap')) + '\n';
+  yaml += '      show_imputation_qc: ' + yamlBool(checked('report_show_imputation_qc')) + '\n';
+  yaml += '      show_identified_proteins_venn: ' + yamlBool(checked('report_show_venn')) + '\n';
+  yaml += '      force_pca: false\n';
+  var disclaimer = v('report_disclaimer');
+  if (disclaimer) yaml += '      disclaimer_text: |\n' + disclaimer.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
+
+  yaml += '\n    qc:\n      run_umap: true\n      umap_n_neighbors: 15\n      umap_min_dist: 0.1\n';
+  yaml += '      outlier_sd_threshold: 3\n      min_sample_correlation: 0.8\n      top_de_heatmap_sizes: [25, 50, 100]\n';
+
+  // PCA subsets
+  var pcaSubsets = getPcaSubsets();
+  if (pcaSubsets.length > 0) {
+    yaml += '      pca_subsets:\n';
+    pcaSubsets.forEach(function(sub) {
+      yaml += '        - name: ' + yamlStr(sub.name) + '\n';
+      if (sub.conditions) {
+        yaml += '          conditions: [' + sub.conditions.map(function(c) { return yamlStr(c); }).join(', ') + ']\n';
+      } else {
+        yaml += '          conditions: null\n';
+      }
+    });
+  }
+
+  yaml += '\n    annotation:\n';
+  yaml += '      organism: ' + yamlStr(organism) + '\n';
+  yaml += '      id_type: "auto"\n      skip_annotation: false\n';
+  yaml += '      custom_mapping_file: ' + customMapping + '\n';
+
+  var gseaRanking = v('prot_gsea_ranking') || 'stat';
+  var pathwayVolcano = checked('prot_pathway_volcano');
+
+  yaml += '\n    pathway:\n';
+  yaml += '      enabled: ' + yamlBool(pathwayEnabled) + '\n';
+  yaml += '      method: ' + yamlStr(pathwayMethod) + '\n';
+  yaml += '      databases: ["GO", "KEGG"]\n';
+  yaml += '      gmt_file: ' + customGmt + '\n';
+  yaml += '      min_size: 10\n      max_size: 500\n';
+  yaml += '      gsea_ranking: ' + yamlStr(gseaRanking) + '\n';
+  yaml += '      pathway_volcano: ' + yamlBool(pathwayVolcano) + '\n';
+
+  yaml += '\n    ppi:\n';
+  yaml += '      enabled: ' + yamlBool(checked('prot_ppi')) + '\n';
+  yaml += '      significance_threshold: 0.05\n      lfc_threshold: 0\n';
+  yaml += '      string_score_threshold: 400\n      active_subnetwork: true\n      complex_analysis: true\n';
+
+  yaml += '\n    advanced_stats:\n';
+  yaml += '      enabled: ' + yamlBool(checked('prot_adv_stats')) + '\n';
+  yaml += '      compute_effect_size_ci: true\n      bootstrap_n: 1000\n      ci_level: 0.95\n';
+  yaml += '      run_robust_regression: false\n      run_power_analysis: true\n      random_effects: null\n';
+
+  yaml += '\n    commentary:\n';
+  yaml += '      enabled: ' + yamlBool(commentaryEnabled) + '\n';
+  yaml += '      backend: ' + yamlStr(commentaryBackend) + '\n';
+  yaml += '      claude_code_model: "sonnet"\n      max_tokens: 1500\n      max_retries: 2\n';
+
+  // Technical report
+  if (techFacility || techSamplePrep || techMS || techEngine || techParams) {
+    yaml += '\n    technical_report:\n';
+    yaml += '      facility: ' + yamlStr(techFacility) + '\n';
+    yaml += '      sample_prep: ' + yamlStr(techSamplePrep) + '\n';
+    yaml += '      ms_acquisition: ' + yamlStr(techMS) + '\n';
+    yaml += '      search_engine: ' + yamlStr(techEngine) + '\n';
+    yaml += '      search_parameters: ' + yamlStr(techParams) + '\n';
+    yaml += '      acknowledgment: ""\n';
+  }
+
+  yaml += '\nparams:\n  seed: 1\n';
+  return yaml;
+}
+
+// ============================================================
+// YAML Generation — Both (merged)
+// ============================================================
+function generateBothYaml() {
+  var rnaYaml = generateRNAYaml();
+  var protYaml = generateProtYaml();
+
+  // Extract the proteomics modes section from protYaml:
+  // everything between "\nmodes:\n  proteomics:\n" and "\nparams:\n"
+  var protModesStart = protYaml.indexOf('\nmodes:\n  proteomics:\n');
+  var protParamsStart = protYaml.indexOf('\nparams:\n');
+  if (protModesStart < 0 || protParamsStart < 0) return rnaYaml; // fallback
+  // Get "  proteomics:\n..." portion (skip the "\nmodes:\n" prefix)
+  var protModesContent = protYaml.substring(protModesStart + '\nmodes:\n'.length, protParamsStart);
+
+  // Insert proteomics modes into the RNA yaml before "\nparams:\n"
+  var rnaParamsStart = rnaYaml.indexOf('\nparams:\n');
+  if (rnaParamsStart < 0) return rnaYaml; // fallback
+
+  var merged = rnaYaml.substring(0, rnaParamsStart) + '\n' + protModesContent + rnaYaml.substring(rnaParamsStart);
+
+  // Update header comment
+  merged = merged.replace('# Auto-generated by multiomics-core wizard', '# Auto-generated by multiomics-core wizard (dual-mode: RNA-seq + Proteomics)');
+
+  return merged;
+}
+
+// ============================================================
+// Generate & Preview
+// ============================================================
+function getCurrentYaml() {
+  if (currentMode === 'both') return generateBothYaml();
+  return currentMode === 'rna' ? generateRNAYaml() : generateProtYaml();
+}
+
+function getConfigFilename() {
+  var name = getProjectName().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  var prefix = currentMode === 'both' ? 'multi_' : (currentMode === 'rna' ? 'rna_' : 'prot_');
+  return prefix + name + '.yaml';
+}
+
+function generateAndPreview() {
+  var yaml = getCurrentYaml();
+  var preview = document.getElementById('yaml_preview');
+  preview.textContent = yaml;
+  preview.classList.add('visible');
+  document.getElementById('btn_download').style.display = '';
+
+  // Show contrasts CSV note if auto-generated
+  var contrastsCSV = getAutoContrastsCSV();
+  var hint = '';
+  if (hasBackend) {
+    hint = '<span style="color:var(--accent-green);">Save Config</span> saves to the config/ folder. <span style="color:var(--accent-violet);">Run Pipeline</span> saves and starts the pipeline in your terminal.';
+  } else {
+    hint = 'After downloading, run: <span style="color:var(--accent-wet);">Rscript run.R --config your_config.yaml</span>';
+  }
+  if (contrastsCSV) {
+    hint += '<br><span style="color:var(--accent-green);">Contrasts auto-generated</span> — will be saved alongside config.';
+  }
+  document.getElementById('run_hint').innerHTML = hint;
+  preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function getAutoContrastsCSV() {
+  if (currentMode === 'rna') {
+    return v('rna_contrasts_path') ? '' : generateContrastsCSV('rna');
+  } else if (currentMode === 'proteomics') {
+    return v('prot_contrasts_path') ? '' : generateContrastsCSV('prot');
+  } else {
+    // both mode — return RNA contrasts (prot handled separately in save/download)
+    return v('rna_contrasts_path') ? '' : generateContrastsCSV('rna');
+  }
+}
+
+function getAutoContrastsCSV_prot() {
+  return v('prot_contrasts_path') ? '' : generateContrastsCSV('prot');
+}
+
+// ============================================================
+// Download (browser-only, always works)
+// ============================================================
+function downloadYAML() {
+  var yaml = getCurrentYaml();
+  var filename = getConfigFilename();
+  var blob = new Blob([yaml], { type: 'text/yaml' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  // Also download auto-generated contrasts CSV if applicable
+  var contrastsCSV = getAutoContrastsCSV();
+  if (contrastsCSV) {
+    setTimeout(function() {
+      var csvBlob = new Blob([contrastsCSV], { type: 'text/csv' });
+      var csvA = document.createElement('a');
+      csvA.href = URL.createObjectURL(csvBlob);
+      csvA.download = currentMode === 'both' ? 'rna_contrasts_auto.csv' : 'contrasts_auto.csv';
+      csvA.click();
+      URL.revokeObjectURL(csvA.href);
+    }, 500);
+  }
+
+  // In both mode, also download proteomics contrasts if auto-generated
+  if (currentMode === 'both') {
+    var protContrastsCSV = getAutoContrastsCSV_prot();
+    if (protContrastsCSV) {
+      setTimeout(function() {
+        var csvBlob = new Blob([protContrastsCSV], { type: 'text/csv' });
+        var csvA = document.createElement('a');
+        csvA.href = URL.createObjectURL(csvBlob);
+        csvA.download = 'prot_contrasts_auto.csv';
+        csvA.click();
+        URL.revokeObjectURL(csvA.href);
+      }, 1000);
+    }
+  }
+}
+
+// ============================================================
+// Save Config (via backend)
+// ============================================================
+function saveConfig() {
+  var yaml = getCurrentYaml();
+  var filename = getConfigFilename();
+
+  document.getElementById('btn_save').disabled = true;
+  document.getElementById('btn_save').textContent = 'Saving...';
+
+  // Save auto-generated contrasts CSV alongside config if applicable
+  var contrastsCSV = getAutoContrastsCSV();
+  if (contrastsCSV) {
+    var subdir = (currentMode === 'rna' || currentMode === 'both') ? 'rna' : 'proteomics';
+    fetch('/api/save-contrasts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv: contrastsCSV, subdir: subdir })
+    }).catch(function() {}); // best-effort; config save is the critical path
+  }
+
+  // In both mode, also save proteomics contrasts
+  if (currentMode === 'both') {
+    var protContrastsCSV = getAutoContrastsCSV_prot();
+    if (protContrastsCSV) {
+      fetch('/api/save-contrasts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: protContrastsCSV, subdir: 'proteomics' })
+      }).catch(function() {});
+    }
+  }
+
+  fetch('/api/save-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ yaml: yaml, filename: filename })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var msg = 'Config saved: ' + data.path;
+    if (contrastsCSV) msg += ' (+ contrasts_auto.csv)';
+    showToast(msg, 'success', 5000);
+    document.getElementById('btn_save').disabled = false;
+    document.getElementById('btn_save').textContent = 'Save Config';
+  })
+  .catch(function(err) {
+    showToast('Save failed: ' + err.message, 'error');
+    document.getElementById('btn_save').disabled = false;
+    document.getElementById('btn_save').textContent = 'Save Config';
+  });
+}
+
+// ============================================================
+// Run Pipeline (via backend — saves config, closes wizard, runs in terminal)
+// ============================================================
+function runPipeline() {
+  if (!confirm('This will save the config and start the pipeline.\nThe wizard will close and progress will show in your terminal.\n\nContinue?')) return;
+
+  var yaml = getCurrentYaml();
+  var filename = getConfigFilename();
+
+  document.getElementById('btn_run').disabled = true;
+  document.getElementById('btn_run').textContent = 'Starting...';
+  showToast('Sending to pipeline...', 'info', 10000);
+
+  fetch('/api/run-pipeline', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ yaml: yaml, filename: filename, fresh: true })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    document.getElementById('btn_run').textContent = 'Pipeline Running...';
+    showToast('Pipeline started! Check your terminal for progress.', 'success', 30000);
+    document.getElementById('run_hint').innerHTML = '<span style="color:var(--accent-green);font-size:14px;">Pipeline is running in your terminal. You can close this tab.</span>';
+  })
+  .catch(function(err) {
+    // Connection will drop because the server shuts down — that's expected
+    document.getElementById('btn_run').textContent = 'Pipeline Running...';
+    document.getElementById('run_hint').innerHTML = '<span style="color:var(--accent-green);font-size:14px;">Pipeline is running in your terminal. You can close this tab.</span>';
+  });
+}
+
+// ============================================================
+// Theme toggle
+// ============================================================
+function toggleTheme() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme') || 'dark';
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  document.getElementById('theme_toggle').textContent = next === 'dark' ? '\u263E' : '\u2600';
+  try { localStorage.setItem('wizard-theme', next); } catch(e) {}
+}
+
+// Restore saved theme
+(function() {
+  try {
+    var saved = localStorage.getItem('wizard-theme');
+    if (saved === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      document.getElementById('theme_toggle').textContent = '\u2600';
+    }
+  } catch(e) {}
+})();
+
+// ============================================================
+// Init
+// ============================================================
+toggleImpParams();
+toggleNonModel();
+togglePairedOption();
+
+// Show/hide backend-dependent buttons
+if (!hasBackend) {
+  document.getElementById('btn_save').style.display = 'none';
+  document.getElementById('btn_run').style.display = 'none';
+}
+</script>
+
+</body>
+</html>

@@ -110,6 +110,8 @@ validate_clustering_config <- function(clust_cfg) {
             assert_scalar_bool(b$enabled, "clustering$steps$binary_patterns$enabled", allow_null = TRUE)
             assert_scalar_num(b$corr_cutoff, "clustering$steps$binary_patterns$corr_cutoff", allow_null = TRUE, min_val = -1, max_val = 1)
             assert_scalar_num(b$counts_cutoff, "clustering$steps$binary_patterns$counts_cutoff", allow_null = TRUE)
+            assert_scalar_num(b$counts_cutoff_high, "clustering$steps$binary_patterns$counts_cutoff_high", allow_null = TRUE)
+            assert_scalar_num(b$counts_cutoff_low, "clustering$steps$binary_patterns$counts_cutoff_low", allow_null = TRUE)
         }
 
         if (!is.null(clust_cfg$heatmap)) {

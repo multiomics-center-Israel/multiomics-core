@@ -131,15 +131,27 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         tag   <- s$tag       # "" or "_noQC"
         label <- s$label     # "" or " [excl. QC]"
 
-        # -- Density: raw --
+        # -- Density: raw (log2-transformed for visualization) --
         f_dens_raw <- file.path(out_qc, paste0("intensity_density_raw", tag, ".png"))
+        expr_filt_log2 <- log2(s$expr_filt + 1)
         p_dens_raw <- qc_omic_density(
-            s$expr_filt, s$meta, cfg_primary,
+            expr_filt_log2, s$meta, cfg_primary,
             out_file = f_dens_raw,
-            title = paste0("Density: raw intensities (before normalization)", label)
+            title = paste0("Density: log2(raw intensities) (before normalization)", label)
         )
         files <- c(files, f_dens_raw)
         plots[[paste0("density_raw", tag)]] <- p_dens_raw
+
+        # -- Density: log2(raw) --
+        expr_log2_raw <- log2(pmax(s$expr_filt, 1))
+        f_dens_log2 <- file.path(out_qc, paste0("intensity_density_log2raw", tag, ".png"))
+        p_dens_log2 <- qc_omic_density(
+            expr_log2_raw, s$meta, cfg_primary,
+            out_file = f_dens_log2,
+            title = paste0("Density: log2(raw intensities)", label)
+        )
+        files <- c(files, f_dens_log2)
+        plots[[paste0("density_log2raw", tag)]] <- p_dens_log2
 
         # -- Density: normalized --
         f_dens_norm <- file.path(out_qc, paste0("intensity_density_normalized", tag, ".png"))

@@ -24,8 +24,10 @@
 #' @param config Full config object
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
+#' @param rf_res Optional: random forest results (from feature_sel_res$rf)
+#' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
+#' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
-#' @param include_legacy Logical. If TRUE (default), attach legacy aliases.
 #'
 #' @return A named list with 26 canonical keys (+ legacy aliases if requested)
 #'
@@ -37,6 +39,9 @@ build_shiny_payload_metabolomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
+    rf_res = NULL,
+    plsda_res = NULL,
+    enrichment_res = NULL,
     annot = NULL,
     include_legacy = TRUE
 ) {
@@ -126,20 +131,11 @@ build_shiny_payload_metabolomics <- function(
 
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
+
+        # pca_3d: 3D PCA plotly widget
+        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
     }
 
-    # qc_plots: Named list of QC plots
-    if (!is.null(pca_res) && !is.null(pca_res$plots)) {
-        payload$qc_plots <- list(
-            density = pca_res$plots$density %||% NULL,
-            boxplot = pca_res$plots$boxplot %||% NULL,
-            pca_2d = pca_res$plots$pca_2d %||% NULL,
-            missing_heatmap = pca_res$plots$missing_heatmap %||% NULL,
-            correlation = pca_res$plots$correlation %||% NULL
-        )
-    } else {
-        payload$qc_plots <- list()
-    }
 
     # ============================================================
     # DE RESULTS (5 keys)
@@ -209,18 +205,38 @@ build_shiny_payload_metabolomics <- function(
         if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
+
+        # clust_heatmap_partition: Partition clustering heatmap (full pheatmap object)
+        if (!is.null(clustering_res$plots$partition_heatmap))
+            payload$clust_heatmap_partition <- clustering_res$plots$partition_heatmap
+
+        # clust_heatmap_partition_fig: The actual drawable gtable (print to see the plot)
+        if (!is.null(clustering_res$plots$partition_heatmap) && !is.null(clustering_res$plots$partition_heatmap$gtable))
+            payload$clust_heatmap_partition_fig <- clustering_res$plots$partition_heatmap$gtable
     }
 
     # clust_heatmap_hier: Hierarchical clustering (pheatmap + dendrogram)
-    if (!is.null(de_res)) {
-        val <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data
-        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    # Priority: clustering_res$objects$hm_hier_de (full payload with tree_row, row_order, etc.)
+    val <- NULL
+    if (!is.null(clustering_res)) {
+        # First check objects (where the full payload is stored)
+        if (!is.null(clustering_res$objects)) {
+            val <- clustering_res$objects$hm_hier_de
+        }
+        # Fallback to plots if needed
+        if (is.null(val) && !is.null(clustering_res$plots)) {
+            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
+        }
     }
-    if (is.null(payload$clust_heatmap_hier) && !is.null(clustering_res)) {
-        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
-        val <- src$pheatmap_data_DE_genes %||% src$pheatmap_data
-        if (!is.null(val)) payload$clust_heatmap_hier <- val
+    # Legacy fallback: check de_res
+    if (is.null(val) && !is.null(de_res)) {
+        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
     }
+    if (!is.null(val)) payload$clust_heatmap_hier <- val
+
+    # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
+    if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
+        payload$clust_heatmap_hier_fig <- grid::grid.draw(val$pheatmap$gtable)
 
     # ============================================================
     # CONFIGURATION (6 keys)
@@ -255,7 +271,7 @@ build_shiny_payload_metabolomics <- function(
     }
 
     if (!is.null(effects_cfg$shape)) {
-        payload$config_shape_var <- as.character(effects_cfg$shape)
+        payload$shape <- as.character(effects_cfg$shape)
     }
 
     # ============================================================
@@ -293,6 +309,35 @@ build_shiny_payload_metabolomics <- function(
 
         # Row data (feature annotations) for compatibility
         payload$row_data <- pre$row_data %||% NULL
+
+        # Random forest results
+        if (!is.null(rf_res)) {
+            payload$rf_importance <- rf_res$importance_df %||% NULL
+            payload$rf_method     <- rf_res$method %||% NULL
+        }
+
+        # PLS-DA results
+        if (!is.null(plsda_res)) {
+            payload$plsda_vip_df           <- plsda_res$vip_df %||% NULL
+            payload$plsda_explained_variance <- plsda_res$explained_variance %||% NULL
+        }
+
+        # Enrichment results
+        if (!is.null(enrichment_res)) {
+            if (!is.null(enrichment_res$qea)) {
+                payload$enrichment_qea <- enrichment_res$qea$table %||% NULL
+            }
+            if (!is.null(enrichment_res$ssgsea)) {
+                payload$enrichment_ssgsea       <- enrichment_res$ssgsea$table %||% NULL
+                payload$enrichment_ssgsea_scores <- enrichment_res$ssgsea$scores %||% NULL
+            }
+            if (!is.null(enrichment_res$ora)) {
+                payload$enrichment_ora <- enrichment_res$ora$table %||% NULL
+            }
+            if (!is.null(enrichment_res$gsea)) {
+                payload$enrichment_gsea <- enrichment_res$gsea$table %||% NULL
+            }
+        }
     }
 
     # ============================================================
@@ -399,9 +444,9 @@ load_shiny_payload_metabolomics <- function(file, verbose = TRUE) {
 
     if (verbose) {
         message("Loaded metabolomics payload from: ", file)
-        message("  Version: ", payload$payload_version %||% payload$legacy_version %||% "unknown")
-        message("  Created: ", payload$payload_created_at %||% payload$legacy_created_at %||% "unknown")
-        message("  Source: ", payload$payload_source %||% payload$legacy_source %||% "unknown")
+        message("  Version: ", payload$payload_version  %||% "unknown")
+        message("  Created: ", payload$payload_created_at  %||% "unknown")
+        message("  Source: ", payload$payload_source  %||% "unknown")
         message("  Total keys: ", length(payload))
         message("  NULL keys: ", sum(sapply(payload, is.null)))
         message("  Non-NULL keys: ", sum(!sapply(payload, is.null)))
