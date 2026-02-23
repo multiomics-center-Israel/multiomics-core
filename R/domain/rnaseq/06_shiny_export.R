@@ -229,18 +229,15 @@ build_shiny_payload_rnaseq <- function(
         }
         # Fallback to plots if needed
         if (is.null(val) && !is.null(clustering_res$plots)) {
-            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster
+            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
         }
     }
-    # Legacy fallback: check de_res
-    if (is.null(val) && !is.null(de_res)) {
-        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
-    }
+
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 
     # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
-    if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
-        payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
+    if (!is.null(val) && !is.null(val$p_cluster_hier) && !is.null(val$p_cluster_hier$gtable))
+        payload$clust_heatmap_hier_fig <- val$p_cluster_hier$gtable
 
     # ============================================================
     # CONFIGURATION (6 keys)

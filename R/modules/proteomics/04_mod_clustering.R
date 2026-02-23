@@ -29,6 +29,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     heatmaps_by_pattern <- NULL
     clusters_vec <- NULL
     excel_order <- NULL
+    
     written <- character(0)
     plots <- list()
 
@@ -131,6 +132,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             annotation_row_builder = TRUE,
             annotation_row_context = annot_context,
             out_file = f_hm,
+            cluster_cols = FALSE,
             title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
         written <- c(written, f_hm)

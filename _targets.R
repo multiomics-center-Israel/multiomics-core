@@ -118,21 +118,21 @@ list(
   ),
 
   # Mode-specific pipelines (only run if mode is present in config)
-  {
-    cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-    if (cfg_path == "") cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
-    cfg_raw <- yaml::read_yaml(cfg_path)
-    mode_targets <- list()
-    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
-    mode_targets
-  }
+  # {
+  #   cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+  #   if (cfg_path == "") cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
+  #   cfg_raw <- yaml::read_yaml(cfg_path)
+  #   mode_targets <- list()
+  #   if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
+  #   if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
+  #   mode_targets
+  # }
   # Proteomics pipeline (returns a list of targets)
   # pipe_proteomics()
 
   # RNA-seq pipeline
-  # pipe_rnaseq()
+  pipe_rnaseq()
 
   # Metabolomics pipeline (Stages 1 + 2)
-  pipe_metabolomics()
+  # pipe_metabolomics()
 )

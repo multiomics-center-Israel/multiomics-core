@@ -1,6 +1,5 @@
 #' Writes intermediate RNA matrices (legacy-like)
-write_rnaseq_datasets_legacy <- function(pre, config, out_dir) {
-    dirs <- create_legacy_output_dirs(out_dir)
+write_rnaseq_datasets_legacy <- function(pre, config, dirs ) {
     files <- character(0)
 
     # FIX 3: Add 'gene' column as first column (convert rownames to explicit column)
@@ -24,7 +23,7 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
     dirs <- create_legacy_output_dirs(out_dir)
 
     # 1) datasets
-    files <- c(files, write_rnaseq_datasets_legacy(pre, config, out_dir))
+    files <- c(files, write_rnaseq_datasets_legacy(pre, config, dirs))
 
     # 2) summary_df
     summary_df <- build_rnaseq_summary_df(de_res$tables, config$modes$rna$de)

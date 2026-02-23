@@ -415,73 +415,65 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
 #' @param ... Ignored
 #' @return ggplot object
 plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
-  stopifnot(is.data.frame(de_tbl))
-
-  # Required columns
-  req_cols <- c("logFC", "P.Value", "adj.P.Val")
-  missing <- setdiff(req_cols, colnames(de_tbl))
-  if (length(missing) > 0) {
-    stop("plot_volcano: de_tbl missing columns: ", paste(missing, collapse = ", "))
+  # 1. Flexible Column Mapping
+  # Try to find the logFC column
+  lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
+  # Try to find the Adjusted P-value column
+  padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
+  # Try to find the raw P-value column
+  pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
+  
+  # Validation check
+  if (is.na(lfc_col) || is.na(padj_col)) {
+    stop(paste0(
+      "plot_volcano: Could not find required columns. ",
+      "Available: ", paste(colnames(de_tbl), collapse = ", ")
+    ))
   }
-
-  # Thresholds
-  padj_cut <- cfg$de$p_cutoff %||% 0.05 # Significance threshold (Y-axis line and coloring)
+  
+  # 2. Thresholds from config
+  p_cut <- cfg$de$p_cutoff %||% 0.05
   lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
   log2fc_cut <- log2(lin_fc_cut)
-
-  df <- de_tbl
-
-  # Prepare plotting data
-  df$.logFC <- as.numeric(df[["logFC"]])
-
-  # Y-axis uses ADJUSTED P-value (FDR)
-  df$.padj <- as.numeric(df[["adj.P.Val"]])
-  df$.padj_plot <- ifelse(is.na(df$.padj), 1, df$.padj)
-  df$.neglog10padj <- -log10(pmax(df$.padj_plot, 1e-300))
-
-  # Categorize: Up, Down, NS (not significant)
-  is_sig <- !is.na(df$.logFC) & (df$.padj_plot <= padj_cut) & (abs(df$.logFC) >= log2fc_cut)
-  is_up <- is_sig & (df$.logFC > 0)
-  is_down <- is_sig & (df$.logFC < 0)
-
-  df$.direction <- factor(
-    ifelse(is_up, "Up", ifelse(is_down, "Down", "NS")),
+  
+  # 3. Prepare Data
+  # We create a local 'plot_df' so we don't mess with the original de_tbl
+  plot_df <- as.data.frame(de_tbl)
+  plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
+  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
+  
+  # Handle NAs (important for DESeq2)
+  plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
+  plot_df$.neglog10p <- -log10(pmax(plot_df$.padj_plot, 1e-300))
+  
+  # 4. Define Significance & Direction
+  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.padj_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
+  
+  plot_df$.direction <- factor(
+    ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
     levels = c("NS", "Down", "Up")
   )
-
-  # Count stats
-  n_up <- sum(is_up, na.rm = TRUE)
-  n_down <- sum(is_down, na.rm = TRUE)
-  n_total <- n_up + n_down
-
-  if (n_total == 0) {
-    if (is.null(title)) title <- "Volcano (0 sig)"
-    message(sprintf(
-      "[plot_volcano] '%s': 0 genes passed (padj<=%.2g, |logFC|>=%.2g). Total rows: %d",
-      title, padj_cut, log2fc_cut, nrow(df)
-    ))
-  } else {
-    # Sort so significant points are plotted last (on top)
-    df <- df[order(df$.direction), ]
-    message(sprintf(
-      "[plot_volcano] '%s': %d up, %d down (padj<=%.2g, |logFC|>=%.2g)",
-      title, n_up, n_down, padj_cut, log2fc_cut
-    ))
-  }
-
-  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
-    ggplot2::geom_point(ggplot2::aes(color = .pass, alpha = .pass), size = 1.5, na.rm = TRUE) +
-    ggplot2::scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"), guide = "none") +
-    ggplot2::scale_alpha_manual(values = c("FALSE" = 0.4, "TRUE" = 0.9), guide = "none") +
-    ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "black") +
-    ggplot2::geom_hline(yintercept = -log10(padj_cut), linetype = "dashed", color = "black") +
-    ggplot2::labs(
-      title = title %||% "Volcano plot",
-      x = "log2 Fold Change",
-      y = "-log10(adj.P.Val)"
+  
+  # 5. Sorting (Significant points on top)
+  plot_df <- plot_df[order(plot_df$.direction), ]
+  
+  # 6. Plotting
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
+    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
+    ggplot2::scale_color_manual(
+      values = c("NS" = "grey80", "Down" = "#377eb8", "Up" = "#e41a1c"),
+      drop = FALSE # Keep all levels in legend even if 0 counts
     ) +
-    ggplot2::theme_minimal() +
-    ggplot2::theme(legend.position = "right")
+    ggplot2::scale_alpha_manual(values = c("NS" = 0.3, "Down" = 0.8, "Up" = 0.8), guide = "none") +
+    ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "grey50") +
+    ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
+    ggplot2::labs(
+      title = title %||% "Volcano Plot",
+      subtitle = paste("Using:", padj_col, "and", lfc_col),
+      x = "log2 Fold Change",
+      y = paste0("-log10(", padj_col, ")")
+    ) +
+    ggplot2::theme_minimal()
 }
 
 #' MA plot for a single DE table (one contrast)

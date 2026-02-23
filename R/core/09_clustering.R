@@ -224,10 +224,10 @@ run_binary_patterns <- function(expr_mat_corr,
     if (nrow(mat_z) >= 2) {
       row_dists <- stats::dist(mat_z, method = "euclidean")
       row_hc <- stats::hclust(row_dists, method = "complete")
-      mat_ordered <- mat2plot[row_hc$order, , drop = FALSE]
+      mat_ordered <- mat_z[row_hc$order, , drop = FALSE]
     } else {
       row_hc <- NULL
-      mat_ordered <- mat2plot
+      mat_ordered <- mat_z
     }
     
     # Build DE pattern row annotations (up/down per contrast)

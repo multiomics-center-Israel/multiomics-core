@@ -21,6 +21,10 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     eff_color <- get_color_config(cfg)
 
     # Initialize Objects for legacy Shiny export (MUST exist)
+    # Objects for legacy Shiny export
+    
+    written <- character(0)
+    plots <- list()
     objects <- list(
         patterns = NULL,
         heatmaps = NULL,
@@ -156,7 +160,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         )
 
         written <- c(written, f_hm)
-        plots$partition_heatmap <- p_cluster
+        plots$p_cluster_hier <- p_cluster
 
         # Capture pheatmap payload for Shiny (Professional pre-compute approach)
         # Store matrix in clustered order so Shiny doesn't need to extract from pheatmap
@@ -260,9 +264,11 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             title            = sprintf("Partition clustering (k=%d)", part_res$k),
             scale_rows       = TRUE,
             cluster_rows     = FALSE,
-            cluster_cols     = TRUE,
+            cluster_cols     = FALSE,
             max_rows         = NULL
         )
+        
+        plots$partition_heatmap <- p_part
         save_heatmap_to_file(p_part, f_hm)
         written <- c(written, f_hm)
 
@@ -310,7 +316,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         # Populate Shiny Objects
         objects$patterns <- bp_res$best %||% NULL
         objects$patterns_list <- bp_res$bp_pat %||% NULL
-        objects$heatmaps <- bp_res$plots %||% NULL
+        objects$heatmaps_by_pattern <- bp_res$plots %||% NULL
     }
 
     return(list(
