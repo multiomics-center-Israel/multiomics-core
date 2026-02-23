@@ -5,18 +5,18 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
 
     # 1) datasets
     runs_for_datasets <- if (isTRUE(write_runs)) de_res$runs else NULL
-    files <- c(files, write_proteomics_datasets_legacy(pre, runs_for_datasets, config, out_dir))
+    files <- c(files, write_proteomics_datasets_legacy(pre, runs_for_datasets, config, dirs))
 
     # 2) summary
     if (!is.null(de_res$summary_df)) {
-        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, out_dir))
+        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, dirs))
     }
 
     # 3) wide limma per contrast
     if (!is.null(de_res$runs_de_tables) && length(de_res$runs_de_tables) > 0) {
         contrast_names <- names(de_res$runs_de_tables[[1]])
         for (cn in contrast_names) {
-            files <- c(files, write_limma_results_multimp_legacy(de_res = de_res, contrast_name = cn, config = config, out_dir = out_dir))
+            files <- c(files, write_limma_results_multimp_legacy(de_res = de_res, contrast_name = cn, config = config, dirs = dirs))
         }
     }
 
@@ -45,8 +45,7 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
     unique(files)
 }
 
-write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) {
-    dirs <- create_legacy_output_dirs(out_dir)
+write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, dirs) {
     cfg <- config$modes$proteomics
     id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
 
@@ -77,13 +76,12 @@ write_proteomics_datasets_legacy <- function(pre, runs = NULL, config, out_dir) 
     unique(files)
 }
 
-write_limma_multimp_summary_legacy <- function(summary_df, config, out_dir) {
-    dirs <- create_legacy_output_dirs(out_dir)
-    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv", p_tag_generic(config, "proteomics")))
+write_limma_multimp_summary_legacy <- function(summary_df, config, dirs) {
+    save_tsv(summary_df, dirs$datasets, sprintf("limma_multimp_summary_p%s.tsv",
+                                                p_tag_generic(config, "proteomics")))
 }
 
-write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, out_dir) {
-    dirs <- create_legacy_output_dirs(out_dir)
+write_limma_results_multimp_legacy <- function(de_res, contrast_name, config, dirs) {
     feature_id_col <- config$modes$proteomics$de_table$id_col %||% "FeatureID"
     wide_df <- build_limma_results_multimp_wide(
         runs_de_tables = de_res$runs_de_tables,

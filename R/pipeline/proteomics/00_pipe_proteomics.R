@@ -101,104 +101,104 @@ pipe_proteomics <- function() {
                 clustering_res = prot_clustering_obj,
                 out_dir        = prot_out_dir
             )
-        ),
+        )
 
-        # ---- Pathway enrichment ----
-        tar_target(
-            prot_pathway_res,
-            mod_proteomics_pathway(
-                de_res  = prot_de_res,
-                pre     = prot_pre,
-                config  = config,
-                out_dir = prot_out_dir
-            )
-        ),
+        # # ---- Pathway enrichment ----
+        # tar_target(
+        #     prot_pathway_res,
+        #     mod_proteomics_pathway(
+        #         de_res  = prot_de_res,
+        #         pre     = prot_pre,
+        #         config  = config,
+        #         out_dir = prot_out_dir
+        #     )
+        # ),
+        # 
+        # # ---- PPI network analysis ----
+        # tar_target(
+        #     prot_ppi_res,
+        #     mod_proteomics_ppi(
+        #         de_res  = prot_de_res,
+        #         pre     = prot_pre,
+        #         config  = config,
+        #         out_dir = prot_out_dir
+        #     )
+        # ),
 
-        # ---- PPI network analysis ----
-        tar_target(
-            prot_ppi_res,
-            mod_proteomics_ppi(
-                de_res  = prot_de_res,
-                pre     = prot_pre,
-                config  = config,
-                out_dir = prot_out_dir
-            )
-        ),
+        # # ---- Advanced statistics ----
+        # tar_target(
+        #     prot_adv_stats,
+        #     mod_proteomics_advanced_stats(
+        #         de_res  = prot_de_res,
+        #         pre     = prot_pre,
+        #         inputs  = prot_inputs,
+        #         config  = config,
+        #         out_dir = prot_out_dir
+        #     )
+        # ),
 
-        # ---- Advanced statistics ----
-        tar_target(
-            prot_adv_stats,
-            mod_proteomics_advanced_stats(
-                de_res  = prot_de_res,
-                pre     = prot_pre,
-                inputs  = prot_inputs,
-                config  = config,
-                out_dir = prot_out_dir
-            )
-        ),
+        # # ---- Executive summary ----
+        # tar_target(
+        #     prot_exec_summary,
+        #     mod_proteomics_executive_summary(
+        #         de_res      = prot_de_res,
+        #         pathway_res = prot_pathway_res,
+        #         qc_pre_obj  = prot_qc_pre_obj,
+        #         pre         = prot_pre,
+        #         config      = config,
+        #         out_dir     = prot_out_dir,
+        #         ppi_res     = prot_ppi_res,
+        #         adv_stats   = prot_adv_stats
+        #     )
+        # ),
+        # 
+        # # ---- AI commentary ----
+        # tar_target(
+        #     prot_commentary_file,
+        #     {
+        #         force(prot_qc_post_obj)
+        #         force(prot_pathway_res)
+        #         force(prot_ppi_res)
+        #         force(prot_adv_stats)
+        #         force(prot_exec_summary)
+        #         mod_proteomics_commentary(prot_de_res, prot_qc_pre_obj, config, prot_out_dir)
+        #     },
+        #     format = "file"
+        # ),
 
-        # ---- Executive summary ----
-        tar_target(
-            prot_exec_summary,
-            mod_proteomics_executive_summary(
-                de_res      = prot_de_res,
-                pathway_res = prot_pathway_res,
-                qc_pre_obj  = prot_qc_pre_obj,
-                pre         = prot_pre,
-                config      = config,
-                out_dir     = prot_out_dir,
-                ppi_res     = prot_ppi_res,
-                adv_stats   = prot_adv_stats
-            )
-        ),
-
-        # ---- AI commentary ----
-        tar_target(
-            prot_commentary_file,
-            {
-                force(prot_qc_post_obj)
-                force(prot_pathway_res)
-                force(prot_ppi_res)
-                force(prot_adv_stats)
-                force(prot_exec_summary)
-                mod_proteomics_commentary(prot_de_res, prot_qc_pre_obj, config, prot_out_dir)
-            },
-            format = "file"
-        ),
-
-        # Proteomics HTML report
-        tar_target(
-            prot_report,
-            {
-                force(prot_pathway_res)
-                force(prot_ppi_res)
-                force(prot_adv_stats)
-                force(prot_commentary_file)
-                force(prot_exec_summary)
-                force(prot_exports)
-                render_proteomics_report(
-                    run_dir     = run_dir,
-                    config      = config,
-                    config_file = config_file
-                )
-            },
-            format = "file"
-        ),
+        # # Proteomics HTML report
+        # tar_target(
+        #     prot_report,
+        #     {
+        #         force(prot_pathway_res)
+        #         force(prot_ppi_res)
+        #         force(prot_adv_stats)
+        #         force(prot_commentary_file)
+        #         force(prot_exec_summary)
+        #         force(prot_exports)
+        #         render_proteomics_report(
+        #             run_dir     = run_dir,
+        #             config      = config,
+        #             config_file = config_file
+        #         )
+        #     },
+        #     format = "file"
+        # ),
 
         # Pipeline summary — dark-themed workflow overview HTML
-        tar_target(
-            prot_pipeline_summary,
-            {
-                force(prot_report)
-                mod_proteomics_pipeline_summary(
-                    config      = config,
-                    pre         = prot_pre,
-                    de_res      = prot_de_res,
-                    pathway_res = prot_pathway_res,
-                    run_dir     = run_dir
-                )
-            },
-            format = "file"
-        )
+        # tar_target(
+        #     prot_pipeline_summary,
+        #     {
+        #         force(prot_report)
+        #         mod_proteomics_pipeline_summary(
+        #             config      = config,
+        #             pre         = prot_pre,
+        #             de_res      = prot_de_res,
+        #             pathway_res = prot_pathway_res,
+        #             run_dir     = run_dir
+        #         )
+        #     },
+        #     format = "file"
+        # )
     )
 }

@@ -406,7 +406,12 @@ subset_tximport <- function(txi, samples) {
     txi$counts <- txi$counts[, samples, drop = FALSE]
     txi$abundance <- txi$abundance[, samples, drop = FALSE]
     txi$length <- txi$length[, samples, drop = FALSE]
-
+    
+    # Subset inferential replicates if they exist
+    if (!is.null(txi$infReps)) {
+      txi$infReps <- lapply(txi$infReps, function(m) m[, samples, drop = FALSE])
+    }
+    
     # Preserve other attributes
     txi
 }
@@ -421,34 +426,39 @@ subset_tximport <- function(txi, samples) {
 #' @return Subsetted tximport object
 #' @keywords internal
 subset_tximport_genes <- function(txi, genes) {
-    if (is.logical(genes)) {
-        # genes is a keep_vec
-        if (length(genes) != nrow(txi$counts)) {
-            stop(
-                sprintf("[tximport] keep_vec length (%d) != number of genes (%d)",
-                        length(genes), nrow(txi$counts)),
-                call. = FALSE
-            )
-        }
-        keep_idx <- genes
-    } else {
-        # genes is a character vector of gene IDs
-        available_genes <- rownames(txi$counts)
-        missing <- setdiff(genes, available_genes)
-        if (length(missing) > 0) {
-            warning(
-                sprintf("[tximport] %d genes not found in tximport object (ignored)", length(missing))
-            )
-        }
-        keep_idx <- available_genes %in% genes
+  if (is.logical(genes)) {
+    # genes is a keep_vec
+    if (length(genes) != nrow(txi$counts)) {
+      stop(
+        sprintf("[tximport] keep_vec length (%d) != number of genes (%d)",
+                length(genes), nrow(txi$counts)),
+        call. = FALSE
+      )
     }
-
-    # Subset all three matrices together (invariant: always subset together)
-    txi$counts <- txi$counts[keep_idx, , drop = FALSE]
-    txi$abundance <- txi$abundance[keep_idx, , drop = FALSE]
-    txi$length <- txi$length[keep_idx, , drop = FALSE]
-
-    txi
+    keep_idx <- genes
+  } else {
+    # genes is a character vector of gene IDs
+    available_genes <- rownames(txi$counts)
+    missing <- setdiff(genes, available_genes)
+    if (length(missing) > 0) {
+      warning(
+        sprintf("[tximport] %d genes not found in tximport object (ignored)", length(missing))
+      )
+    }
+    keep_idx <- available_genes %in% genes
+  }
+  
+  # Subset the three core matrices
+  txi$counts    <- txi$counts[keep_idx, , drop = FALSE]
+  txi$abundance <- txi$abundance[keep_idx, , drop = FALSE]
+  txi$length    <- txi$length[keep_idx, , drop = FALSE]
+  
+  # Handle inferential replicates if they exist
+  if (!is.null(txi$infReps)) {
+    txi$infReps <- lapply(txi$infReps, function(m) m[keep_idx, , drop = FALSE])
+  }
+  
+  txi
 }
 
 # =============================================================================

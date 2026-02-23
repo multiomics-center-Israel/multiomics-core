@@ -50,7 +50,7 @@ pipe_rnaseq <- function() {
                 de_res = rna_de_res,
                 inputs = rna_inputs,
                 config = config,
-                out_dir = file.path(run_dir, "rna"),
+                out_dir = rna_out_dir,
                 clustering_res = rna_clustering_obj
             ),
             format = "file"
@@ -79,91 +79,91 @@ pipe_rnaseq <- function() {
                 out_file = file.path(rna_out_dir, "shiny_payload_rnaseq.rds")
             ),
             format = "file"
-        ),
-        # Cell type deconvolution (skips for non-human/mouse)
-        tar_target(
-            rna_deconv,
-            mod_rnaseq_deconvolution(
-                pre     = rna_batch_corr,
-                de_res  = rna_de_res,
-                config  = config,
-                out_dir = rna_out_dir
-            )
-        ),
-        # Pathway / enrichment analysis
-        tar_target(
-            rna_pathway_res,
-            mod_rnaseq_pathway(
-                de_res  = rna_de_res,
-                pre     = rna_batch_corr,
-                config  = config,
-                out_dir = rna_out_dir
-            )
-        ),
-        # Executive summary
-        tar_target(
-            rna_exec_summary,
-            mod_rnaseq_executive_summary(
-                de_res      = rna_de_res,
-                pathway_res = rna_pathway_res,
-                qc_pre_obj  = rna_qc_pre_obj,
-                pre         = rna_batch_corr,
-                config      = config,
-                out_dir     = rna_out_dir
-            ),
-            format = "file"
-        ),
-        # AI commentary (runs after all plots are generated)
-        tar_target(
-            rna_commentary_file,
-            {
-                force(rna_qc_post_obj)
-                force(rna_pathway_res)
-                force(rna_deconv)
-                force(rna_exec_summary)
-                mod_rnaseq_commentary(
-                    de_res     = rna_de_res,
-                    qc_pre_obj = rna_qc_pre_obj,
-                    config     = config,
-                    out_dir    = rna_out_dir
-                )
-            },
-            format = "file"
-        ),
-        # Auto-report (final target — must wait for all analysis)
-        tar_target(
-            rna_report,
-            {
-                # Force dependencies so report renders AFTER all results are ready
-                force(rna_pathway_res)
-                force(rna_qc_post_obj)
-                force(rna_outputs_legacy)
-                force(rna_commentary_file)
-                force(rna_deconv)
-                force(rna_exec_summary)
-                render_rnaseq_report(
-                    run_dir     = run_dir,
-                    config      = config,
-                    config_file = config_file
-                )
-            },
-            format = "file"
-        ),
-        # Pipeline summary — dark-themed workflow overview HTML
-        # Runs after report; uses Claude Code CLI for polished descriptions
-        tar_target(
-            rna_pipeline_summary,
-            {
-                force(rna_report)
-                mod_rnaseq_pipeline_summary(
-                    config      = config,
-                    pre         = rna_batch_corr,
-                    de_res      = rna_de_res,
-                    pathway_res = rna_pathway_res,
-                    run_dir     = run_dir
-                )
-            },
-            format = "file"
         )
+        # # Cell type deconvolution (skips for non-human/mouse)
+        # tar_target(
+        #     rna_deconv,
+        #     mod_rnaseq_deconvolution(
+        #         pre     = rna_batch_corr,
+        #         de_res  = rna_de_res,
+        #         config  = config,
+        #         out_dir = rna_out_dir
+        #     )
+        # ),
+        # # Pathway / enrichment analysis
+        # tar_target(
+        #     rna_pathway_res,
+        #     mod_rnaseq_pathway(
+        #         de_res  = rna_de_res,
+        #         pre     = rna_batch_corr,
+        #         config  = config,
+        #         out_dir = rna_out_dir
+        #     )
+        # ),
+        # # Executive summary
+        # tar_target(
+        #     rna_exec_summary,
+        #     mod_rnaseq_executive_summary(
+        #         de_res      = rna_de_res,
+        #         pathway_res = rna_pathway_res,
+        #         qc_pre_obj  = rna_qc_pre_obj,
+        #         pre         = rna_batch_corr,
+        #         config      = config,
+        #         out_dir     = rna_out_dir
+        #     ),
+        #     format = "file"
+        # ),
+        # # AI commentary (runs after all plots are generated)
+        # tar_target(
+        #     rna_commentary_file,
+        #     {
+        #         force(rna_qc_post_obj)
+        #         force(rna_pathway_res)
+        #         force(rna_deconv)
+        #         force(rna_exec_summary)
+        #         mod_rnaseq_commentary(
+        #             de_res     = rna_de_res,
+        #             qc_pre_obj = rna_qc_pre_obj,
+        #             config     = config,
+        #             out_dir    = rna_out_dir
+        #         )
+        #     },
+        #     format = "file"
+        # ),
+        # # Auto-report (final target — must wait for all analysis)
+        # tar_target(
+        #     rna_report,
+        #     {
+        #         # Force dependencies so report renders AFTER all results are ready
+        #         force(rna_pathway_res)
+        #         force(rna_qc_post_obj)
+        #         force(rna_outputs_legacy)
+        #         force(rna_commentary_file)
+        #         force(rna_deconv)
+        #         force(rna_exec_summary)
+        #         render_rnaseq_report(
+        #             run_dir     = run_dir,
+        #             config      = config,
+        #             config_file = config_file
+        #         )
+        #     },
+        #     format = "file"
+        # ),
+        # # Pipeline summary — dark-themed workflow overview HTML
+        # # Runs after report; uses Claude Code CLI for polished descriptions
+        # tar_target(
+        #     rna_pipeline_summary,
+        #     {
+        #         force(rna_report)
+        #         mod_rnaseq_pipeline_summary(
+        #             config      = config,
+        #             pre         = rna_batch_corr,
+        #             de_res      = rna_de_res,
+        #             pathway_res = rna_pathway_res,
+        #             run_dir     = run_dir
+        #         )
+        #     },
+        #     format = "file"
+        # )
     )
 }
