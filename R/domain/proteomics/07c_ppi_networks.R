@@ -204,46 +204,51 @@ build_string_network <- function(proteins, species = 9606,
     })
 }
 
-build_string_network_api <- function(proteins, species, score_threshold) {
+build_string_network_api <- function(proteins, species, score_threshold,
+                                      chunk_size = 500) {
     message("  Using STRING API fallback...")
 
-    if (length(proteins) > 500) {
-        message("WARNING: Limiting to first 500 proteins for API query")
-        proteins <- proteins[1:500]
-    }
-
-    base_url <- "https://string-db.org/api/tsv/network"
     # Clean protein IDs: remove any containing "|" (empty gene symbols) and whitespace
     proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
     if (length(proteins) == 0) {
         message("WARNING: No valid protein IDs for STRING API query")
         return(NULL)
     }
-    protein_list <- paste(proteins, collapse = "%0a")
 
-    url <- paste0(base_url, "?identifiers=", protein_list,
-                  "&species=", species,
-                  "&required_score=", score_threshold,
-                  "&caller_identity=multiomics_pipeline")
+    # Query in chunks so no proteins are silently discarded
+    chunks <- split(proteins, ceiling(seq_along(proteins) / chunk_size))
+    if (length(chunks) > 1)
+        message("  Querying STRING API in ", length(chunks),
+                " batches of up to ", chunk_size, " proteins")
 
-    tryCatch({
-        response <- utils::read.delim(url(url), stringsAsFactors = FALSE)
-        if (nrow(response) == 0) return(NULL)
-
-        graph <- igraph::graph_from_data_frame(
-            response[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
+    base_url <- "https://string-db.org/api/tsv/network"
+    all_edges <- lapply(chunks, function(chunk) {
+        url <- paste0(base_url,
+                      "?identifiers=", paste(chunk, collapse = "%0a"),
+                      "&species=", species,
+                      "&required_score=", score_threshold,
+                      "&caller_identity=multiomics_pipeline")
+        tryCatch(
+            utils::read.delim(url(url), stringsAsFactors = FALSE),
+            error = function(e) {
+                message("WARNING: STRING API chunk failed: ", e$message)
+                NULL
+            }
         )
-        graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
-
-        message("  API returned ", igraph::ecount(graph), " edges")
-
-        list(graph = graph, edges = response, mapping = NULL,
-             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
-
-    }, error = function(e) {
-        message("ERROR: STRING API failed: ", e$message)
-        NULL
     })
+
+    combined <- do.call(rbind, Filter(Negate(is.null), all_edges))
+    if (is.null(combined) || nrow(combined) == 0) return(NULL)
+
+    graph <- igraph::graph_from_data_frame(
+        combined[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
+    )
+    graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
+
+    message("  API returned ", igraph::ecount(graph), " unique edges")
+
+    list(graph = graph, edges = combined, mapping = NULL,
+         n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
 }
 
 get_species_name <- function(taxid) {
@@ -611,13 +616,24 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
     community_df <- community_results$membership
     communities_ids <- unique(community_df$community)
 
+    # Batch all symbol → Entrez lookups in a single OrgDb call before the loop
+    all_comm_symbols <- unique(community_df$protein_name)
+    entrez_batch <- tryCatch(
+        AnnotationDbi::mapIds(org_db, keys = all_comm_symbols,
+                              keytype = "SYMBOL", column = "ENTREZID",
+                              multiVals = "first"),
+        error = function(e) {
+            message("  mapIds batch failed: ", e$message)
+            setNames(rep(NA_character_, length(all_comm_symbols)), all_comm_symbols)
+        }
+    )
+
     for (comm in communities_ids) {
         comm_proteins <- community_df$protein_name[community_df$community == comm]
         if (length(comm_proteins) < 3) next
 
         tryCatch({
-            entrez <- AnnotationDbi::mapIds(org_db,
-                keys = comm_proteins, keytype = "SYMBOL", column = "ENTREZID")
+            entrez <- entrez_batch[comm_proteins]
             entrez <- entrez[!is.na(entrez)]
             if (length(entrez) < 3) next
 
