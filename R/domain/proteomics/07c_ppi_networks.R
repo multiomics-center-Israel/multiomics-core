@@ -8,6 +8,61 @@
 #   DA data bridged via extract_de_table_for_pathway() + map_proteins_to_gene_symbols()
 
 # -----------------------------------------------------------------------------
+# Species Resolution
+# -----------------------------------------------------------------------------
+
+SPECIES_MAP <- c(
+    "Homo sapiens" = 9606, "Mus musculus" = 10090,
+    "Rattus norvegicus" = 10116, "Danio rerio" = 7955,
+    "Drosophila melanogaster" = 7227, "Caenorhabditis elegans" = 6239,
+    "Saccharomyces cerevisiae" = 4932, "Arabidopsis thaliana" = 3702,
+    "Giardia lamblia" = 5741, "Giardia intestinalis" = 5741,
+    "Gallus gallus" = 9031, "Sus scrofa" = 9823, "Bos taurus" = 9913
+)
+
+resolve_species_id <- function(config) {
+    cfg <- config$modes$proteomics
+    ppi_cfg <- cfg$ppi %||% list()
+
+    # 1. Explicit species in PPI config
+    if (!is.null(ppi_cfg$species)) {
+        message("  PPI species from config: ", ppi_cfg$species)
+        return(as.integer(ppi_cfg$species))
+    }
+
+    # 2. Look up annotation$organism in built-in map
+    organism <- cfg$annotation$organism
+    if (!is.null(organism) && organism %in% names(SPECIES_MAP)) {
+        taxid <- unname(SPECIES_MAP[organism])
+        message("  PPI species resolved from organism '", organism, "': ", taxid)
+        return(as.integer(taxid))
+    }
+
+    # 3. Try STRING API species search
+    if (!is.null(organism)) {
+        taxid <- tryCatch({
+            url <- sprintf("https://string-db.org/api/json/get_string_ids?identifiers=%s&species=0&limit=1",
+                           utils::URLencode(organism))
+            resp <- jsonlite::fromJSON(url, simplifyVector = TRUE)
+            if (nrow(resp) > 0 && "taxonId" %in% colnames(resp)) {
+                as.integer(resp$taxonId[1])
+            } else NULL
+        }, error = function(e) NULL)
+
+        if (!is.null(taxid)) {
+            message("  PPI species resolved via STRING API for '", organism, "': ", taxid)
+            return(taxid)
+        }
+    }
+
+    # 4. Not found — warn and return NULL (caller should skip PPI)
+    warning("Could not resolve species for PPI analysis. ",
+            "Set ppi$species in config or annotation$organism to a supported organism. ",
+            "Skipping PPI network analysis.")
+    return(NULL)
+}
+
+# -----------------------------------------------------------------------------
 # Main Orchestrator
 # -----------------------------------------------------------------------------
 
@@ -25,9 +80,6 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
 
     cfg <- config$modes$proteomics
     ppi_cfg <- cfg$ppi %||% list()
-
-    # Resolve organism name for OrgDb dispatch (used by subcellular + enrichment)
-    organism <- normalize_organism_name(cfg$annotation$organism %||% "Homo sapiens")
 
     # Set up output directories
     output_dir <- file.path(out_dir, "ppi_networks")
@@ -81,10 +133,14 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
         return(NULL)
     }
 
+    # Resolve species for STRING queries
+    species_id <- resolve_species_id(config)
+    if (is.null(species_id)) return(NULL)
+
     # Build PPI network from STRING
     ppi_network <- build_string_network(
         proteins        = sig_proteins,
-        species         = ppi_cfg$species %||% 9606,
+        species         = species_id,
         score_threshold = ppi_cfg$string_score_threshold %||% 400,
         config          = config
     )
@@ -93,6 +149,16 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
         message("WARNING: No PPI edges found. Skipping network analysis.")
         return(NULL)
     }
+
+    # Save STRING info for report (species + protein list for URL building)
+    protein_names_net <- igraph::V(ppi_network$graph)$protein_name
+    if (is.null(protein_names_net)) protein_names_net <- igraph::V(ppi_network$graph)$name
+    string_info <- data.frame(
+        protein = protein_names_net,
+        species_id = species_id,
+        stringsAsFactors = FALSE
+    )
+    write.csv(string_info, file.path(output_dir, "string_info.csv"), row.names = FALSE)
 
     # Network topology analysis
     topology_results <- analyze_network_topology(
@@ -117,12 +183,12 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     complex_results <- NULL
     if (isTRUE(ppi_cfg$complex_analysis)) {
         complex_results <- analyze_protein_complexes(
-            sig_proteins, da_df, ppi_cfg$species %||% 9606, output_dir
+            sig_proteins, da_df, species_id, output_dir
         )
     }
 
     # Subcellular localization
-    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, output_dir, organism = organism)
+    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, config, output_dir)
 
     # Network-based enrichment
     network_enrichment <- run_network_enrichment(
@@ -160,8 +226,16 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
 build_string_network <- function(proteins, species = 9606,
                                   score_threshold = 400, config = NULL) {
     message("Building STRING PPI network...")
+
+    # Translate to STRING-specific taxid (handles strain-level overrides)
+    species <- resolve_string_taxid(species)
+
     message("  Species: ", species, " (", get_species_name(species), ")")
     message("  Score threshold: ", score_threshold)
+
+    # Normalize Giardia GL50803_* IDs: strip leading zeros from numeric suffix
+    # (GiardiaDB uses GL50803_0094525 but STRING expects GL50803_94525)
+    proteins <- sub("^(GL50803_)0+(?=[1-9])", "\\1", proteins, perl = TRUE)
 
     if (!requireNamespace("STRINGdb", quietly = TRUE)) {
         message("WARNING: STRINGdb not available. Attempting API fallback...")
@@ -204,70 +278,77 @@ build_string_network <- function(proteins, species = 9606,
     })
 }
 
-build_string_network_api <- function(proteins, species, score_threshold,
-                                      chunk_size = 500) {
+build_string_network_api <- function(proteins, species, score_threshold) {
     message("  Using STRING API fallback...")
 
+    if (length(proteins) > 500) {
+        message("WARNING: Limiting to first 500 proteins for API query")
+        proteins <- proteins[1:500]
+    }
+
+    base_url <- "https://string-db.org/api/tsv/network"
     # Clean protein IDs: remove any containing "|" (empty gene symbols) and whitespace
     proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
     if (length(proteins) == 0) {
         message("WARNING: No valid protein IDs for STRING API query")
         return(NULL)
     }
+    protein_list <- paste(proteins, collapse = "%0a")
 
-    # Do NOT chunk: the /network endpoint returns edges only among submitted identifiers,
-    # so independent per-chunk queries silently drop all inter-chunk edges.
-    # Cap explicitly instead so truncation is visible and the user can install STRINGdb.
-    if (length(proteins) > chunk_size) {
-        message("WARNING: ", length(proteins), " proteins exceed the STRING API fallback ",
-                "limit (", chunk_size, "). Capping to ", chunk_size, " proteins. ",
-                "Install STRINGdb for complete cross-protein results.")
-        proteins <- proteins[seq_len(chunk_size)]
-    }
-
-    base_url <- "https://string-db.org/api/tsv/network"
-    url <- paste0(base_url,
-                  "?identifiers=", paste(proteins, collapse = "%0a"),
+    url <- paste0(base_url, "?identifiers=", protein_list,
                   "&species=", species,
                   "&required_score=", score_threshold,
                   "&caller_identity=multiomics_pipeline")
-    combined <- tryCatch(
-        utils::read.delim(url(url), stringsAsFactors = FALSE),
-        error = function(e) {
-            message("WARNING: STRING API request failed: ", e$message)
-            NULL
-        }
-    )
-    if (is.null(combined) || nrow(combined) == 0) return(NULL)
 
-    required_cols <- c("preferredName_A", "preferredName_B", "score")
-    missing_cols  <- setdiff(required_cols, colnames(combined))
-    if (length(missing_cols) > 0) {
-        message("WARNING: STRING API response is missing expected network columns (",
-                paste(missing_cols, collapse = ", "), "). ",
-                "Got: ", paste(colnames(combined), collapse = ", "), ". ",
-                "Response may be a non-network payload (e.g. error text). Skipping.")
-        return(NULL)
-    }
+    tryCatch({
+        response <- utils::read.delim(url(url), stringsAsFactors = FALSE)
+        if (nrow(response) == 0) return(NULL)
 
-    graph <- igraph::graph_from_data_frame(
-        combined[, required_cols], directed = FALSE
-    )
-    graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
+        graph <- igraph::graph_from_data_frame(
+            response[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
+        )
+        graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
 
-    message("  API returned ", igraph::ecount(graph), " unique edges")
+        message("  API returned ", igraph::ecount(graph), " edges")
 
-    list(graph = graph, edges = combined, mapping = NULL,
-         n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
+        list(graph = graph, edges = response, mapping = NULL,
+             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
+
+    }, error = function(e) {
+        message("ERROR: STRING API failed: ", e$message)
+        NULL
+    })
 }
 
 get_species_name <- function(taxid) {
     species_map <- c(
         "9606" = "Homo sapiens", "10090" = "Mus musculus",
         "10116" = "Rattus norvegicus", "7955" = "Danio rerio",
-        "6239" = "Caenorhabditis elegans", "7227" = "Drosophila melanogaster"
+        "6239" = "Caenorhabditis elegans", "7227" = "Drosophila melanogaster",
+        "184922" = "Giardia lamblia ATCC 50803", "5741" = "Giardia lamblia",
+        "4932" = "Saccharomyces cerevisiae", "9823" = "Sus scrofa",
+        "9913" = "Bos taurus", "9031" = "Gallus gallus"
     )
     species_map[as.character(taxid)] %||% paste0("Species ", taxid)
+}
+
+#' Translate NCBI taxonomy ID to the taxid that STRING DB uses
+#'
+#' STRING indexes some organisms by strain-level taxid rather than the
+#' species-level NCBI taxid.  For most model organisms the two are identical;
+#' this function handles known exceptions.
+#'
+#' @param taxid Integer, NCBI species-level taxonomy ID
+#' @return Integer, STRING-compatible taxonomy ID
+resolve_string_taxid <- function(taxid) {
+    # Map species-level taxid -> STRING strain-level taxid where they differ
+    string_overrides <- c(
+        "5741"  = 184922L,   # Giardia lamblia -> ATCC 50803
+        "4932"  = 559292L    # S. cerevisiae   -> S288C
+    )
+    override <- string_overrides[as.character(taxid)]
+    if (!is.na(override)) return(as.integer(override))
+    as.integer(taxid)
 }
 
 #' Map organism name to NCBI taxonomy ID
@@ -303,6 +384,58 @@ organism_to_taxid <- function(organism) {
 }
 
 # -----------------------------------------------------------------------------
+# Multi-key Fallback Merge for DA Results
+# -----------------------------------------------------------------------------
+
+#' Merge DA results into node data frame with multi-key fallback
+#'
+#' Tries multiple join strategies (direct protein_id, Genes column, substring match)
+#' to maximize the number of nodes with log2FoldChange and padj values.
+#'
+#' @param node_df Data frame with at least a node_col column
+#' @param da_results DA results data frame with protein_id, log2FoldChange, padj
+#' @param node_col Column name in node_df to join on (default "protein_name")
+#' @return node_df with log2FoldChange and padj columns merged in
+merge_da_to_nodes <- function(node_df, da_results, node_col = "protein_name") {
+    da_cols <- intersect(c("protein_id", "log2FoldChange", "padj"), colnames(da_results))
+    if (length(da_cols) < 2) return(node_df)
+
+    da_sub <- da_results[, da_cols, drop = FALSE]
+
+    # Strategy 1: Direct match on protein_id
+    merged <- merge(node_df, da_sub, by.x = node_col, by.y = "protein_id", all.x = TRUE)
+    n_matched <- sum(!is.na(merged$log2FoldChange))
+
+    # Strategy 2: Try Genes column if available and strategy 1 got < 50% match
+    if (n_matched < nrow(node_df) * 0.5 && "Genes" %in% colnames(da_results)) {
+        da_sub2 <- da_results[, intersect(c("Genes", "log2FoldChange", "padj"), colnames(da_results)), drop = FALSE]
+        merged2 <- merge(node_df, da_sub2, by.x = node_col, by.y = "Genes", all.x = TRUE)
+        n_matched2 <- sum(!is.na(merged2$log2FoldChange))
+        if (n_matched2 > n_matched) {
+            merged <- merged2
+            n_matched <- n_matched2
+        }
+    }
+
+    # Strategy 3: Fuzzy match — node_col value appears as substring of protein_id
+    if (n_matched < nrow(node_df) * 0.5) {
+        for (i in which(is.na(merged$log2FoldChange))) {
+            node_name <- merged[[node_col]][i]
+            idx <- which(grepl(node_name, da_results$protein_id, fixed = TRUE))
+            if (length(idx) == 0 && "Genes" %in% colnames(da_results)) {
+                idx <- which(grepl(node_name, da_results$Genes, fixed = TRUE))
+            }
+            if (length(idx) >= 1) {
+                merged$log2FoldChange[i] <- da_results$log2FoldChange[idx[1]]
+                merged$padj[i] <- da_results$padj[idx[1]]
+            }
+        }
+    }
+
+    merged
+}
+
+# -----------------------------------------------------------------------------
 # Network Topology
 # -----------------------------------------------------------------------------
 
@@ -334,11 +467,7 @@ analyze_network_topology <- function(graph, da_results, output_dir) {
     )
 
     if (!is.null(da_results) && "protein_id" %in% colnames(da_results)) {
-        node_metrics <- merge(
-            node_metrics,
-            da_results[, intersect(c("protein_id", "log2FoldChange", "padj"), colnames(da_results))],
-            by.x = "protein_name", by.y = "protein_id", all.x = TRUE
-        )
+        node_metrics <- merge_da_to_nodes(node_metrics, da_results, node_col = "protein_name")
     }
 
     degree_threshold <- quantile(degree, 0.9)
@@ -404,11 +533,7 @@ detect_network_communities <- function(graph, da_results, output_dir) {
     )
 
     if (!is.null(da_results) && "protein_id" %in% colnames(da_results)) {
-        community_df <- merge(
-            community_df,
-            da_results[, intersect(c("protein_id", "log2FoldChange", "padj"), colnames(da_results))],
-            by.x = "protein_name", by.y = "protein_id", all.x = TRUE
-        )
+        community_df <- merge_da_to_nodes(community_df, da_results, node_col = "protein_name")
     }
 
     write.csv(community_df, file.path(output_dir, "community_membership.csv"), row.names = FALSE)
@@ -559,19 +684,23 @@ get_corum_database <- function(species) {
 # Subcellular Localization
 # -----------------------------------------------------------------------------
 
-analyze_subcellular_localization <- function(proteins, da_results, output_dir,
-                                             organism = "Homo sapiens") {
+analyze_subcellular_localization <- function(proteins, da_results, config, output_dir) {
     message("Analyzing subcellular localization...")
 
+    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  OrgDb package for '", organism, "' not available. Skipping subcellular localization.")
+    if (is.null(orgdb_pkg)) {
+        message("  No OrgDb available for organism '", organism, "'. Skipping subcellular localization.")
         return(NULL)
     }
-    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  ", orgdb_pkg, " not installed. Skipping subcellular localization.")
+        return(NULL)
+    }
+    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     tryCatch({
-        go_cc <- AnnotationDbi::select(org_db,
+        go_cc <- AnnotationDbi::select(orgdb,
             keys = proteins, keytype = "SYMBOL", columns = c("GOALL", "ONTOLOGYALL"))
         go_cc <- go_cc[go_cc$ONTOLOGYALL == "CC" & !is.na(go_cc$GOALL), ]
         if (nrow(go_cc) == 0) return(NULL)
@@ -613,42 +742,34 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         return(NULL)
     }
 
-    cfg_prot <- config$modes$proteomics
-    organism <- normalize_organism_name(cfg_prot$annotation$organism %||% "Homo sapiens")
+    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  OrgDb package for '", organism, "' not available. Skipping network enrichment.")
+    if (is.null(orgdb_pkg)) {
+        message("  No OrgDb available for organism '", organism, "'. Skipping network enrichment.")
         return(NULL)
     }
-    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  ", orgdb_pkg, " not installed. Skipping network enrichment.")
+        return(NULL)
+    }
+    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     enrichment_results <- list()
     community_df <- community_results$membership
     communities_ids <- unique(community_df$community)
-
-    # Batch all symbol → Entrez lookups in a single OrgDb call before the loop
-    all_comm_symbols <- unique(community_df$protein_name)
-    entrez_batch <- tryCatch(
-        AnnotationDbi::mapIds(org_db, keys = all_comm_symbols,
-                              keytype = "SYMBOL", column = "ENTREZID",
-                              multiVals = "first"),
-        error = function(e) {
-            message("  mapIds batch failed: ", e$message)
-            setNames(rep(NA_character_, length(all_comm_symbols)), all_comm_symbols)
-        }
-    )
 
     for (comm in communities_ids) {
         comm_proteins <- community_df$protein_name[community_df$community == comm]
         if (length(comm_proteins) < 3) next
 
         tryCatch({
-            entrez <- entrez_batch[comm_proteins]
+            entrez <- AnnotationDbi::mapIds(orgdb,
+                keys = comm_proteins, keytype = "SYMBOL", column = "ENTREZID")
             entrez <- entrez[!is.na(entrez)]
             if (length(entrez) < 3) next
 
             go_result <- clusterProfiler::enrichGO(
-                gene = entrez, OrgDb = org_db,
+                gene = entrez, OrgDb = orgdb,
                 ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.1
             )
 
