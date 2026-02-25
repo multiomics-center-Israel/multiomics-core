@@ -215,29 +215,29 @@ build_string_network_api <- function(proteins, species, score_threshold,
         return(NULL)
     }
 
-    # Query in chunks so no proteins are silently discarded
-    chunks <- split(proteins, ceiling(seq_along(proteins) / chunk_size))
-    if (length(chunks) > 1)
-        message("  Querying STRING API in ", length(chunks),
-                " batches of up to ", chunk_size, " proteins")
+    # Do NOT chunk: the /network endpoint returns edges only among submitted identifiers,
+    # so independent per-chunk queries silently drop all inter-chunk edges.
+    # Cap explicitly instead so truncation is visible and the user can install STRINGdb.
+    if (length(proteins) > chunk_size) {
+        message("WARNING: ", length(proteins), " proteins exceed the STRING API fallback ",
+                "limit (", chunk_size, "). Capping to ", chunk_size, " proteins. ",
+                "Install STRINGdb for complete cross-protein results.")
+        proteins <- proteins[seq_len(chunk_size)]
+    }
 
     base_url <- "https://string-db.org/api/tsv/network"
-    all_edges <- lapply(chunks, function(chunk) {
-        url <- paste0(base_url,
-                      "?identifiers=", paste(chunk, collapse = "%0a"),
-                      "&species=", species,
-                      "&required_score=", score_threshold,
-                      "&caller_identity=multiomics_pipeline")
-        tryCatch(
-            utils::read.delim(url(url), stringsAsFactors = FALSE),
-            error = function(e) {
-                message("WARNING: STRING API chunk failed: ", e$message)
-                NULL
-            }
-        )
-    })
-
-    combined <- do.call(rbind, Filter(Negate(is.null), all_edges))
+    url <- paste0(base_url,
+                  "?identifiers=", paste(proteins, collapse = "%0a"),
+                  "&species=", species,
+                  "&required_score=", score_threshold,
+                  "&caller_identity=multiomics_pipeline")
+    combined <- tryCatch(
+        utils::read.delim(url(url), stringsAsFactors = FALSE),
+        error = function(e) {
+            message("WARNING: STRING API request failed: ", e$message)
+            NULL
+        }
+    )
     if (is.null(combined) || nrow(combined) == 0) return(NULL)
 
     graph <- igraph::graph_from_data_frame(
