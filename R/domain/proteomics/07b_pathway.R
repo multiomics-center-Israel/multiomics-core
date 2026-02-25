@@ -35,8 +35,16 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     pval_vals <- as.numeric(summary_df[[pval_col]])
     lfc_vals  <- signed_fc_to_log2(as.numeric(summary_df[[fc_col]]))
 
-    # stat = sign(log2FC) * -log10(pvalue)
-    stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+    # Compute stat based on configured GSEA ranking method
+    ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "stat"
+    if (identical(ranking, "abs_lfc")) {
+        stat_vals <- abs(lfc_vals)
+    } else if (identical(ranking, "lfc")) {
+        stat_vals <- lfc_vals
+    } else {
+        # Default "stat": sign(log2FC) * -log10(pvalue)
+        stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+    }
 
     de_tbl <- data.frame(
         FeatureID       = summary_df[[src_id_col]],
@@ -228,6 +236,109 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         message("Saved gene annotation to: ", anno_file)
     }
 
+    # Build pathway-colored volcano data if enabled
+    if (isTRUE(pw_cfg$pathway_volcano)) {
+        message("Building pathway-colored volcano data...")
+        for (cn in contrasts) {
+            volcano_data <- build_pathway_volcano_data(de_tables[[cn]], pathway_results)
+            if (!is.null(volcano_data)) {
+                volcano_file <- file.path(enrich_dir, sprintf("pathway_volcano_data_%s.csv", cn))
+                write.csv(volcano_data, volcano_file, row.names = FALSE)
+                message("  Saved: ", volcano_file)
+            }
+        }
+    }
+
     message("Proteomics pathway analysis complete.")
     pathway_results
+}
+
+#' Build pathway-colored volcano data
+#'
+#' For each enriched pathway, tags member proteins in the DE table.
+#' Returns a data.frame suitable for plotting an interactive volcano
+#' where proteins are colored by pathway membership.
+#'
+#' @param de_table DE table with FeatureID, log2FoldChange, pvalue, padj columns
+#' @param pathway_results Pathway results from run_pathway_analysis()
+#' @return data.frame: FeatureID, log2FC, neg_log10_pvalue, pathway memberships
+build_pathway_volcano_data <- function(de_table, pathway_results) {
+    if (is.null(de_table) || nrow(de_table) == 0) return(NULL)
+    if (is.null(pathway_results)) return(NULL)
+
+    # Cap -log10(p) at the 99.5th percentile to remove extreme outliers
+    # that would compress the bulk of the data to the bottom of the plot
+    neg_log10_p <- -log10(de_table$pvalue + 1e-300)
+    cap <- quantile(neg_log10_p[is.finite(neg_log10_p)], 0.995, na.rm = TRUE)
+    cap <- max(cap, 10)  # minimum cap of 10 so small datasets aren't over-truncated
+    neg_log10_p <- pmin(neg_log10_p, cap)
+
+    volcano_df <- data.frame(
+        FeatureID = de_table$FeatureID,
+        log2FC = de_table$log2FoldChange,
+        neg_log10_pvalue = neg_log10_p,
+        padj = de_table$padj,
+        stringsAsFactors = FALSE
+    )
+
+    # Collect enriched pathways and their member genes
+    pathway_memberships <- character(nrow(volcano_df))
+
+    # Try to extract enriched terms from ORA and/or fGSEA results
+    # pathway_results is doubly-nested: [[contrast]][[db_method]] = data.frame
+    enriched_sets <- list()
+
+    # Flatten: collect all data.frames from the nested structure
+    all_result_dfs <- list()
+    for (top_name in names(pathway_results)) {
+        top_elem <- pathway_results[[top_name]]
+        if (is.data.frame(top_elem)) {
+            all_result_dfs <- c(all_result_dfs, list(top_elem))
+        } else if (is.list(top_elem)) {
+            for (sub_name in names(top_elem)) {
+                sub_elem <- top_elem[[sub_name]]
+                if (is.data.frame(sub_elem)) {
+                    all_result_dfs <- c(all_result_dfs, list(sub_elem))
+                }
+            }
+        }
+    }
+
+    for (res in all_result_dfs) {
+        if ("leadingEdge" %in% colnames(res)) {
+            # fGSEA result — leadingEdge is a comma-separated string
+            sig <- res[!is.na(res$padj) & res$padj < 0.05, , drop = FALSE]
+            for (r in seq_len(nrow(sig))) {
+                # Prefer human-readable pathway_name over GO ID
+                pw_label <- if ("pathway_name" %in% colnames(sig) && nzchar(sig$pathway_name[r] %||% "")) {
+                    sig$pathway_name[r]
+                } else {
+                    sig$pathway[r]
+                }
+                genes <- trimws(strsplit(as.character(sig$leadingEdge[[r]]), ",")[[1]])
+                if (length(genes) > 0) enriched_sets[[pw_label]] <- genes
+            }
+        } else if ("geneID" %in% colnames(res)) {
+            # ORA result
+            sig <- res[!is.na(res$p.adjust) & res$p.adjust < 0.05, , drop = FALSE]
+            for (r in seq_len(nrow(sig))) {
+                pw_label <- sig$Description[r] %||% sig$ID[r]
+                genes <- unlist(strsplit(as.character(sig$geneID[r]), "/"))
+                if (length(genes) > 0) enriched_sets[[pw_label]] <- genes
+            }
+        }
+    }
+
+    if (length(enriched_sets) == 0) return(volcano_df)
+
+    # Tag each protein with its pathway memberships (top 5 per protein)
+    for (i in seq_len(nrow(volcano_df))) {
+        fid <- volcano_df$FeatureID[i]
+        member_of <- names(enriched_sets)[vapply(enriched_sets, function(gs) fid %in% gs, logical(1))]
+        if (length(member_of) > 5) member_of <- member_of[1:5]
+        pathway_memberships[i] <- paste(member_of, collapse = "; ")
+    }
+
+    volcano_df$pathways <- pathway_memberships
+    volcano_df
 }
