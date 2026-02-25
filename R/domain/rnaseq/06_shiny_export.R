@@ -236,8 +236,8 @@ build_shiny_payload_rnaseq <- function(
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 
     # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
-    if (!is.null(val) && !is.null(val$p_cluster_hier) && !is.null(val$p_cluster_hier$gtable))
-        payload$clust_heatmap_hier_fig <- val$p_cluster_hier$gtable
+    if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
+        payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
     # CONFIGURATION (6 keys)

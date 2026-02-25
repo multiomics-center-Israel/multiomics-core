@@ -370,36 +370,76 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
 
   p
 }
+
+plot_cluster_profiles_legacy_style <- function(group_means, clusters, x_label = "Group") {
+  gm <- as.matrix(group_means)
+  clv <- clusters[rownames(gm)]
+  
+  nfeat_df <- data.frame(
+    cluster = as.integer(names(table(clv))),
+    n_features = as.integer(table(clv))
+  )
+  
+  df <- as.data.frame(gm)
+  df$gene <- rownames(gm)
+  df$cluster <- unname(clv)
+  
+  long <- tidyr::pivot_longer(
+    df,
+    cols = setdiff(colnames(df), c("gene", "cluster")),
+    names_to = "group",
+    values_to = "EXP"
+  )
+  
+
+  long$group <- factor(long$group, levels = unique(long$group))
+  
+  # facet labels with n genes
+  long <- merge(long, nfeat_df, by = "cluster")
+  
+  long$facet_label <- sprintf("Cluster %s (n=%d)", long$cluster, long$n_features)
+  
+  long$facet_label <- factor(
+    long$facet_label,
+    levels = unique(long$facet_label[order(as.numeric(as.character(long$cluster)))])
+  )
+  
+  ggplot2::ggplot(long, ggplot2::aes(x = group, y = EXP, group = 1)) +
+    ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+    ggplot2::stat_summary(fun.data = ggplot2::mean_se, geom = "errorbar", width = 0.3) +
+    ggplot2::facet_wrap(~facet_label, scales = "fixed", ncol = 2) +
+    ggplot2::labs(y = "Expression (group means)", x = x_label) +
+    ggplot2::theme_bw() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+}
+
 #' Plot cluster profiles using ggplot2
 #' Replaces the manual base-R loop for cluster visualization.
 #' @param prof_df Data frame containing: cluster, group, mean, sd, n_features
 plot_cluster_profiles <- function(prof_df, x_label = "Group") {
-  # Create a clean label for facets
-  prof_df$facet_label <- sprintf("Cluster %s (n=%d)", prof_df$cluster, prof_df$n_features)
+  
 
-  # Ensure order matches cluster number
-  prof_df$facet_label <- factor(prof_df$facet_label,
+  prof_df$group <- factor(prof_df$group, levels = unique(prof_df$group))
+  
+  
+  prof_df$facet_label <- sprintf("Cluster %s (n=%d)", prof_df$cluster, prof_df$n_features)
+  prof_df$facet_label <- factor(
+    prof_df$facet_label,
     levels = unique(prof_df$facet_label[order(as.numeric(as.character(prof_df$cluster)))])
   )
 
-  p <- ggplot2::ggplot(prof_df, ggplot2::aes(x = group, y = mean, group = 1)) +
-    # Error bars (SD)
-    ggplot2::geom_errorbar(ggplot2::aes(ymin = mean - sd, ymax = mean + sd), width = 0.1, color = "grey50") +
-    # Line and points
-    ggplot2::geom_line(color = "blue") +
-    ggplot2::geom_point(size = 2, color = "darkblue") +
-    # Zero line
+  
+  ggplot2::ggplot(prof_df, ggplot2::aes(x = group, y = mean, group = 1)) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = mean - sd, ymax = mean + sd),
+                           width = 0.1, color = "grey50") +
+    ggplot2::geom_line() +
+    ggplot2::geom_point(size = 2) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
-    # Faceting
     ggplot2::facet_wrap(~facet_label, scales = "fixed", ncol = 2) +
-    # Styling
-    ggplot2::labs(y = "Mean z-score (group means)", x = x_label) +
+    ggplot2::labs(y = "Mean (group means)", x = x_label) +
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-
-  return(p)
 }
-
 # R/plots/plot_de.R
 
 #' Volcano plot for a single DE table (one contrast)

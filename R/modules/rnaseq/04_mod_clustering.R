@@ -273,14 +273,18 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
-
+        prof <- build_cluster_profiles(part_res$group_means, part_res$clusters, part_res$k)
+        
         if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
             eff_col_name <- eff_color %||% "Group"
 
-            p_prof <- plot_cluster_profiles(prof, x_label = eff_col_name)
-
+            p_prof <- plot_cluster_profiles_legacy_style(
+              group_means = part_res$group_means,
+              clusters = part_res$clusters,
+              x_label = eff_col_name
+            )
+            
             n_clusters <- length(unique(prof$cluster))
             calc_height <- max(6, ceiling(n_clusters / 2) * 3)
 

@@ -45,13 +45,13 @@ mod_proteomics_exports <- function(
     # =========================================================================
     # 1. Write dataset TSVs (raw, imputed matrices)
     # =========================================================================
-    files <- c(files, write_proteomics_datasets_legacy(pre, runs = NULL, config, out_dir))
+    files <- c(files, write_proteomics_datasets_legacy(pre, runs = NULL, config, dirs))
 
     # =========================================================================
     # 2. Write limma summary TSV
     # =========================================================================
     if (!is.null(de_res$summary_df)) {
-        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, out_dir))
+        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, dirs))
     }
 
     # =========================================================================
@@ -64,7 +64,7 @@ mod_proteomics_exports <- function(
                 de_res = de_res,
                 contrast_name = cn,
                 config = config,
-                out_dir = out_dir
+                dirs = dirs
             ))
         }
     }
