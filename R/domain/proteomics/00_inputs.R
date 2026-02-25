@@ -55,7 +55,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
 
     # Validate required files are specified in config
     required_files <- switch(mode,
-        proteomics = c("protein", "sample_map", "metadata", "contrasts"),
+        proteomics = c("protein", "metadata"),
         rna = c("counts", "metadata", "contrasts"),
         character(0)
     )

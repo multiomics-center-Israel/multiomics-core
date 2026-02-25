@@ -65,7 +65,8 @@ get_proteomics_expression_matrix <- function(inputs, config) {
             meta       = inputs$metadata,
             cfg        = cfg
         )
-        assay_linear <- NULL
+        assay_linear <- attr(assay_log2, "linear")
+        attr(assay_log2, "linear") <- NULL
 
         # Feature annotations (row_data)
         row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
@@ -125,13 +126,23 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
     }
 
     df_m <- protein[, sample_cols, drop = FALSE]
-    if (any(df_m <= 0, na.rm = TRUE)) warning("Non-positive values found before log2; will produce -Inf/NaN")
 
     # 2) Coerce to numeric (DIA-NN often has blanks)
     df_m <- as.data.frame(
         suppressWarnings(sapply(df_m, function(x) as.numeric(as.character(x)))),
         check.names = FALSE
     )
+
+    # 2a) Convert exact zeros to NA (matching DEP::make_se behavior)
+    # Some search engines report 0 for truly missing values; log2(0) = -Inf
+    n_zeros <- sum(df_m == 0, na.rm = TRUE)
+    if (n_zeros > 0) {
+        message(sprintf("Converted %d zero values to NA before log2 transformation.", n_zeros))
+        df_m[df_m == 0] <- NA
+    }
+
+    # 2b) Keep a linear-scale copy (needed for VSN normalization)
+    df_m_linear <- df_m
 
     # 3) Log2 transformation
     df_m <- as.data.frame(
@@ -155,6 +166,7 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
         }
 
         colnames(df_m) <- ifelse(unmatched, raw_names, new_names)
+        colnames(df_m_linear) <- colnames(df_m)
     }
     # else: no sample_map — column names are already the sample IDs
 
@@ -170,7 +182,11 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
 
     ordered_cols <- intersect(meta_sample_ids, colnames(df_m))
     df_m_ordered <- df_m[, ordered_cols, drop = FALSE]
+    df_m_linear_ordered <- df_m_linear[, ordered_cols, drop = FALSE]
 
-    # 6) Return as numeric matrix with proper rownames
-    coerce_df_to_numeric_matrix(df_m_ordered, rownames_vec = feat_ids, name = "diann_measurements")
+    # 6) Return as numeric matrix with proper rownames (log2 + linear)
+    mat_log2 <- coerce_df_to_numeric_matrix(df_m_ordered, rownames_vec = feat_ids, name = "diann_measurements")
+    mat_linear <- coerce_df_to_numeric_matrix(df_m_linear_ordered, rownames_vec = feat_ids, name = "diann_measurements_linear")
+    attr(mat_log2, "linear") <- mat_linear
+    mat_log2
 }

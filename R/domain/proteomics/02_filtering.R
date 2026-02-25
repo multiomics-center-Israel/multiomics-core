@@ -32,8 +32,9 @@ filter_proteomics_by_min_count <- function(expr_mat, row_data, meta, cfg, group_
     group <- meta[[group_col]]
     min_cfg <- cfg$filtering$min_count
     min_per_group <- extract_min_count(min_cfg, group)
+    min_groups <- as.integer(cfg$filtering$min_groups %||% 1)
 
-    keep <- pass_filter(expr_mat = expr_mat, group = group, min_per_group = min_per_group)
+    keep <- pass_filter(expr_mat = expr_mat, group = group, min_per_group = min_per_group, min_groups = min_groups)
 
     expr_mat_filt <- expr_mat[keep, , drop = FALSE]
     row_data_filt <- row_data[keep, , drop = FALSE]
@@ -105,7 +106,7 @@ filter_features_dynamic <- function(norm_mat, meta, sample_col, group_col, thres
 # --- Generic helpers (duplicated from 01_preprocessing.R to ensure domain independence or assume loaded) ---
 # Since these are pure logic, keeping them here or in core is fine. I'll include them here for safety.
 
-pass_filter <- function(expr_mat, group, min_per_group) {
+pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
     expr_mat <- as.matrix(expr_mat)
     group <- as.character(group)
     groups <- unique(group)
@@ -123,7 +124,9 @@ pass_filter <- function(expr_mat, group, min_per_group) {
         sums >= min_per_group[[g]]
     })
 
-    apply(passes_per_group, 1, any)
+    # Count how many groups each feature passes in, compare to min_groups
+    n_groups_passed <- rowSums(passes_per_group)
+    n_groups_passed >= min_groups
 }
 
 extract_min_count <- function(min_cfg, groups) {
