@@ -94,83 +94,47 @@ discover_figures <- function(out_dir, config = NULL) {
                   "Expression patterns of top variable genes across samples with hierarchical clustering",
                   "Samples", "Genes")
 
-    # --- Volcano, MA, and DE heatmap plots (per contrast) ---
-    if (dir.exists(qc_post)) {
-        volcano_files <- list.files(qc_post, pattern = "^volcano_.*\\.png$", full.names = TRUE)
-        for (vf in volcano_files) {
-            cn <- gsub("^volcano_|\\.png$", "", basename(vf))
-            fid <- paste0("volcano_", cn)
-            figures[[fid]] <- data.frame(
-                figure_id   = fid,
-                filepath    = vf,
-                plot_type   = "volcano",
-                section     = "Differential Expression",
-                title       = paste("Volcano Plot:", gsub("_", " ", cn)),
-                description = "Statistical significance vs fold change for all genes in this contrast",
-                x_axis      = "log2 Fold Change",
-                y_axis      = "-log10(adjusted p-value)",
-                contrast    = cn,
-                stringsAsFactors = FALSE
-            )
-        }
-
-        ma_files <- list.files(qc_post, pattern = "^ma_.*\\.png$", full.names = TRUE)
-        for (mf in ma_files) {
-            cn <- gsub("^ma_|\\.png$", "", basename(mf))
-            fid <- paste0("ma_", cn)
-            figures[[fid]] <- data.frame(
-                figure_id   = fid,
-                filepath    = mf,
-                plot_type   = "ma_plot",
-                section     = "Differential Expression",
-                title       = paste("MA Plot:", gsub("_", " ", cn)),
-                description = "Mean-difference plot: fold change vs average expression for all genes",
-                x_axis      = "log10(Mean Expression)",
-                y_axis      = "log2 Fold Change",
-                contrast    = cn,
-                stringsAsFactors = FALSE
-            )
-        }
-
-        heatmap_files <- list.files(qc_post, pattern = "^heatmap_top_.*\\.png$", full.names = TRUE)
-        for (hf in heatmap_files) {
-            cn <- gsub("^heatmap_top_|\\.png$", "", basename(hf))
-            fid <- paste0("heatmap_top_", cn)
-            figures[[fid]] <- data.frame(
-                figure_id   = fid,
-                filepath    = hf,
-                plot_type   = "heatmap",
-                section     = "Differential Expression",
-                title       = paste("Top DE Genes Heatmap:", gsub("_", " ", cn)),
-                description = "Expression patterns of top differentially expressed genes across all samples",
-                x_axis      = "Samples",
-                y_axis      = "Genes",
-                contrast    = cn,
-                stringsAsFactors = FALSE
-            )
-        }
+    # Helper: build a list of figure-row data.frames from a directory scan.
+    # fid_prefix is used for the figure_id; type is the plot_type field.
+    # cn_fn extracts the contrast/label from the basename.
+    make_contrast_rows <- function(dir, pattern, fid_prefix, type, section,
+                                    title_pfx, desc, x_axis, y_axis, cn_fn) {
+        if (!dir.exists(dir)) return(list())
+        files <- list.files(dir, pattern = pattern, full.names = TRUE)
+        lapply(files, function(f) {
+            cn  <- cn_fn(basename(f))
+            fid <- paste0(fid_prefix, "_", cn)
+            data.frame(figure_id = fid, filepath = f, plot_type = type,
+                       section = section, title = paste0(title_pfx, gsub("_", " ", cn)),
+                       description = desc, x_axis = x_axis, y_axis = y_axis,
+                       contrast = cn, stringsAsFactors = FALSE)
+        })
     }
 
-    # --- Pathway dotplots ---
-    if (dir.exists(enrich_plt)) {
-        pw_files <- list.files(enrich_plt, pattern = "\\.png$", full.names = TRUE)
-        for (pf in pw_files) {
-            label <- gsub("^pathway_|\\.png$", "", basename(pf))
-            fid <- paste0("pathway_", label)
-            figures[[fid]] <- data.frame(
-                figure_id   = fid,
-                filepath    = pf,
-                plot_type   = "dotplot",
-                section     = "Pathway Analysis",
-                title       = paste("Pathway Enrichment:", gsub("_", " ", label)),
-                description = "Enriched pathways from gene set enrichment analysis",
-                x_axis      = "Enrichment Score",
-                y_axis      = "Pathway",
-                contrast    = label,
-                stringsAsFactors = FALSE
-            )
-        }
-    }
+    # --- Volcano, MA, DE heatmap (per contrast) + Pathway dotplots ---
+    contrast_rows <- c(
+        make_contrast_rows(qc_post, "^volcano_.*\\.png$", "volcano", "volcano",
+            "Differential Expression", "Volcano Plot: ",
+            "Statistical significance vs fold change for all genes in this contrast",
+            "log2 Fold Change", "-log10(adjusted p-value)",
+            function(f) gsub("^volcano_|\\.png$", "", f)),
+        make_contrast_rows(qc_post, "^ma_.*\\.png$", "ma", "ma_plot",
+            "Differential Expression", "MA Plot: ",
+            "Mean-difference plot: fold change vs average expression for all genes",
+            "log10(Mean Expression)", "log2 Fold Change",
+            function(f) gsub("^ma_|\\.png$", "", f)),
+        make_contrast_rows(qc_post, "^heatmap_top_.*\\.png$", "heatmap_top", "heatmap",
+            "Differential Expression", "Top DE Genes Heatmap: ",
+            "Expression patterns of top differentially expressed genes across all samples",
+            "Samples", "Genes",
+            function(f) gsub("^heatmap_top_|\\.png$", "", f)),
+        make_contrast_rows(enrich_plt, "\\.png$", "pathway", "dotplot",
+            "Pathway Analysis", "Pathway Enrichment: ",
+            "Enriched pathways from gene set enrichment analysis",
+            "Enrichment Score", "Pathway",
+            function(f) gsub("^pathway_|\\.png$", "", f))
+    )
+    for (row in contrast_rows) figures[[row$figure_id]] <- row
 
     if (length(figures) == 0) {
         message("No figures discovered for commentary")

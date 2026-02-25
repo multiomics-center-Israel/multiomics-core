@@ -73,7 +73,9 @@ run_batch_analysis <- function(pre, cfg, out_dir) {
             pre$batch_corrected <- TRUE
             pre$batch_method <- bc$method
 
-            # Save corrected counts
+            # Diagnostic side effect: writes batch-corrected matrix for manual inspection.
+            # Not tracked as a targets output — downstream targets consume the in-memory
+            # `pre` object returned by this function, not this file.
             corrected_df <- as.data.frame(corrected)
             corrected_df <- cbind(gene_id = rownames(corrected_df), corrected_df)
             utils::write.csv(corrected_df, file.path(batch_dir, "batch_corrected_counts.csv"),
