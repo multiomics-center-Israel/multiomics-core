@@ -11,6 +11,9 @@ project:
   dir: "/full-path/to/project_dir"   # REQUIRED: absolute path to the project folder (outside the repo)
   name: "<PROJECT_NAME>"             # REQUIRED: short project identifier
   analysis_round: "A01"              # REQUIRED: analysis iteration / round (e.g., A01, A02...)
+  analyst: "Bioinformatics Core"     # Name of the analyst (shown in report header)
+  user_notes: ""                     # Optional: free-text project description (appears in report as Project Overview)
+  technical_report_file: ""          # Optional: path to facility report (DOCX/PDF/log) for AI-enhanced summary
 
 # Paths are RELATIVE to project.dir
 paths:
@@ -38,6 +41,7 @@ modes:
       sample_map: "proteomics/sample_map.csv"
       metadata:   "proteomics/meta_prot.csv"
       contrasts:  "proteomics/contrasts_prot.csv"
+      peptides:   ""              # optional peptide-level data (stub for future use)
 
     # --------------------------------------------------------
     # Column naming conventions (REQUIRED)
@@ -58,23 +62,27 @@ modes:
     # Filtering
     # --------------------------------------------------------
     filtering:
+      remove_contaminants: true
+      contaminant_prefix: "cRAP-"
       min_count:
         default: 3
         # Optional per-condition override:
         # Control: 3
         # Treatment: 2
+      min_groups: 1             # require passing in at least N group(s)
 
     # --------------------------------------------------------
     # Normalization
     # --------------------------------------------------------
     normalization:
-      method: "none"      # "none" or "median"
+      method: "none"      # "none" | "median" | "vsn"
 
     # --------------------------------------------------------
     # Multiple imputation
     # --------------------------------------------------------
     imputation:
-      method: "perseus"    # "none" | "perseus" | "dep2"
+      multi_imputation: true  # false = single imputation (no consensus filter)
+      method: "perseus"    # "none" | "perseus" | "dep2" | "qrilc" | "minval"
 
       no_repetitions: 10
       min_no_passed: 8
@@ -87,14 +95,21 @@ modes:
       dep2_method: "MinDet"
       dep2_random_seed: 1
 
+      # QRILC parameters (truncated normal, single imputation)
+      qrilc_random_seed: 1
+
     # --------------------------------------------------------
     # Differential expression
     # --------------------------------------------------------
     de:
-      method: "limma"
+      method: "limma"           # "limma" | "ttest" | "welch" | "anova"
       use_adj_for_pass1: true
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
+      p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
+      fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
+      paired: false
+      pairing_col: null          # metadata column for paired test (e.g. "Subject")
 
     # --------------------------------------------------------
     # How to interpret DE summary tables (used by get_de_features, QC_post, etc.)
@@ -161,6 +176,35 @@ modes:
       samples: "SampleID"
 
     # --------------------------------------------------------
+    # Report customization
+    # --------------------------------------------------------
+    report:
+      project_id: ""                       # Shown in report title (e.g. "EP-2025-001")
+      introduction_text: ""                # Main introduction paragraph
+      introduction_background: ""          # Optional: Background subsection
+      introduction_aim: ""                 # Optional: Aim subsection
+      experimental_design_file: ""         # Path or URL to experimental design (shown in intro)
+      raw_files_location: ""               # URL or path to raw data files
+      analysis_files_location: ""          # URL or path to analysis output files
+      full_results_table_link: ""          # URL or path to full DE results table
+      expected_proteins_file: ""           # CSV with columns: label, count (bar chart of expected proteins)
+
+      # QC plot visibility (all true by default except distance heatmap)
+      show_pca: true
+      show_density: true
+      show_distance: false
+      show_correlation: true
+      show_expression_heatmap: true
+      show_imputation_qc: true
+      show_identified_proteins_venn: false  # Pre-imputation identified proteins Venn diagram
+      force_pca: false                     # Force PCA even with <2 replicates per group
+
+      # Text overrides (leave empty for auto-generated text)
+      stats_methods_text: ""               # Custom DE statistics description in Results section
+      stats_section_text: ""               # Custom statistical analysis text in Methods section
+      disclaimer_text: ""                  # Legal disclaimer (shown verbatim if non-empty)
+
+    # --------------------------------------------------------
     # Annotation / Organism
     # --------------------------------------------------------
     annotation:
@@ -179,6 +223,11 @@ modes:
       outlier_sd_threshold: 3
       min_sample_correlation: 0.8
       top_de_heatmap_sizes: [25, 50, 100]
+      pca_subsets:
+        - name: "All samples"
+          conditions: null    # null = all conditions
+        # - name: "Custom subset"
+        #   conditions: ["Group1", "Group2"]
 
     # --------------------------------------------------------
     # Pathway enrichment
@@ -191,6 +240,8 @@ modes:
       gmt_file: null          # Custom GMT file for non-model organisms
       min_size: 10
       max_size: 500
+      gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
+      pathway_volcano: true   # produce pathway-colored volcano data for report
 
     # --------------------------------------------------------
     # PPI network analysis
