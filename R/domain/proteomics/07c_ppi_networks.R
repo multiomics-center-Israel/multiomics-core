@@ -240,8 +240,18 @@ build_string_network_api <- function(proteins, species, score_threshold,
     )
     if (is.null(combined) || nrow(combined) == 0) return(NULL)
 
+    required_cols <- c("preferredName_A", "preferredName_B", "score")
+    missing_cols  <- setdiff(required_cols, colnames(combined))
+    if (length(missing_cols) > 0) {
+        message("WARNING: STRING API response is missing expected network columns (",
+                paste(missing_cols, collapse = ", "), "). ",
+                "Got: ", paste(colnames(combined), collapse = ", "), ". ",
+                "Response may be a non-network payload (e.g. error text). Skipping.")
+        return(NULL)
+    }
+
     graph <- igraph::graph_from_data_frame(
-        combined[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
+        combined[, required_cols], directed = FALSE
     )
     graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
 
