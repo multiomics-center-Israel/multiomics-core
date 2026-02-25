@@ -25,13 +25,16 @@ validate_proteomics_config <- function(cfg) {
 
     # 3. Imputation Settings
     if (!is.null(cfg$imputation) && !is.null(cfg$imputation$method)) {
-        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "dep2"))
+        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "dep2", "qrilc", "minval"))
 
-        assert_scalar_num(cfg$imputation$no_repetitions, "imputation$no_repetitions", min_val = 1)
-        assert_scalar_num(cfg$imputation$min_no_passed, "imputation$min_no_passed", min_val = 1)
+        # Only validate repetition/consensus params when multi_imputation is not explicitly FALSE
+        if (!identical(cfg$imputation$multi_imputation, FALSE)) {
+            assert_scalar_num(cfg$imputation$no_repetitions, "imputation$no_repetitions", min_val = 1)
+            assert_scalar_num(cfg$imputation$min_no_passed, "imputation$min_no_passed", min_val = 1)
 
-        if (cfg$imputation$min_no_passed > cfg$imputation$no_repetitions) {
-            stop("imputation$min_no_passed cannot be greater than imputation$no_repetitions")
+            if (cfg$imputation$min_no_passed > cfg$imputation$no_repetitions) {
+                stop("imputation$min_no_passed cannot be greater than imputation$no_repetitions")
+            }
         }
 
         # Method-specific validations
@@ -44,17 +47,83 @@ validate_proteomics_config <- function(cfg) {
             assert_scalar_chr(cfg$imputation$dep2_method, "imputation$dep2_method")
             assert_scalar_num(cfg$imputation$dep2_random_seed, "imputation$dep2_random_seed")
         }
+
+        if (identical(cfg$imputation$method, "qrilc")) {
+            assert_scalar_num(cfg$imputation$qrilc_random_seed, "imputation$qrilc_random_seed", allow_null = TRUE)
+        }
+    }
+
+    # 3b. Filtering Settings
+    if (!is.null(cfg$filtering)) {
+        if (!is.null(cfg$filtering$remove_contaminants)) {
+            assert_scalar_bool(cfg$filtering$remove_contaminants, "filtering$remove_contaminants", allow_null = TRUE)
+        }
+        if (!is.null(cfg$filtering$contaminant_prefix)) {
+            assert_scalar_chr(cfg$filtering$contaminant_prefix, "filtering$contaminant_prefix", allow_null = TRUE)
+        }
+        if (!is.null(cfg$filtering$min_groups)) {
+            assert_scalar_num(cfg$filtering$min_groups, "filtering$min_groups", allow_null = TRUE, min_val = 1)
+        }
     }
 
     # 4. de Settings
     if (!is.null(cfg$de)) {
+        if (!is.null(cfg$de$method)) {
+            assert_one_of(cfg$de$method, "de$method", c("limma", "ttest", "welch", "anova"), allow_null = TRUE)
+        }
         assert_scalar_num(cfg$de$p_cutoff, "de$p_cutoff",
             allow_null = TRUE, min_val = .Machine$double.eps, max_val = 1
         )
         assert_scalar_num(cfg$de$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
+        if (!is.null(cfg$de$p_adjust_method)) {
+            assert_one_of(cfg$de$p_adjust_method, "de$p_adjust_method",
+                          c("BH", "bonferroni", "holm", "BY", "fdr", "none"), allow_null = TRUE)
+        }
+        if (!is.null(cfg$de$paired)) {
+            assert_scalar_bool(cfg$de$paired, "de$paired", allow_null = TRUE)
+        }
+        if (!is.null(cfg$de$pairing_col)) {
+            assert_scalar_chr(cfg$de$pairing_col, "de$pairing_col", allow_null = TRUE)
+        }
     }
 
-    # 5. Clustering Settings (optional)
+    # 4b. Pathway Settings
+    if (!is.null(cfg$pathway)) {
+        if (!is.null(cfg$pathway$gsea_ranking)) {
+            assert_one_of(cfg$pathway$gsea_ranking, "pathway$gsea_ranking",
+                          c("stat", "abs_lfc", "lfc"), allow_null = TRUE)
+        }
+        if (!is.null(cfg$pathway$pathway_volcano)) {
+            assert_scalar_bool(cfg$pathway$pathway_volcano, "pathway$pathway_volcano", allow_null = TRUE)
+        }
+    }
+
+    # 5. PPI validation
+    ppi <- cfg$ppi
+    if (!is.null(ppi)) {
+        assert_scalar_bool(ppi$enabled, "ppi$enabled", allow_null = TRUE)
+        assert_scalar_num(ppi$significance_threshold, "ppi$significance_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(ppi$string_score_threshold, "ppi$string_score_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1000)
+        assert_scalar_num(ppi$lfc_threshold, "ppi$lfc_threshold", allow_null = TRUE, min_val = 0)
+        assert_scalar_bool(ppi$active_subnetwork, "ppi$active_subnetwork", allow_null = TRUE)
+        assert_scalar_bool(ppi$complex_analysis, "ppi$complex_analysis", allow_null = TRUE)
+    }
+
+    # 6. Advanced stats validation
+    adv <- cfg$advanced_stats
+    if (!is.null(adv)) {
+        assert_scalar_bool(adv$enabled, "advanced_stats$enabled", allow_null = TRUE)
+        assert_scalar_num(adv$bootstrap_n, "advanced_stats$bootstrap_n",
+                          allow_null = TRUE, min_val = 100)
+        assert_scalar_num(adv$ci_level, "advanced_stats$ci_level",
+                          allow_null = TRUE, min_val = 0.5, max_val = 0.999)
+        assert_scalar_bool(adv$run_robust_regression, "advanced_stats$run_robust_regression", allow_null = TRUE)
+        assert_scalar_bool(adv$run_power_analysis, "advanced_stats$run_power_analysis", allow_null = TRUE)
+    }
+
+    # 7. Clustering Settings (optional)
     if (!is.null(cfg$clustering)) {
         validate_clustering_config(cfg$clustering)
     }
