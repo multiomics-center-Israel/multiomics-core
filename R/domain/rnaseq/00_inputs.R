@@ -24,11 +24,6 @@ load_rna_inputs <- function(config) {
     } else if (!is.null(inputs$counts)) {
         message("[load_rna_inputs] Loaded raw count matrix")
         inputs$source_type <- "matrix"
-    } else if (!is.null(inputs$preprocessed_counts)) {
-        # Fallback: preprocessed_counts provided instead of raw counts
-        message("[load_rna_inputs] Using preprocessed_counts as count matrix")
-        inputs$counts <- inputs$preprocessed_counts
-        inputs$source_type <- "matrix"
     }
 
     inputs
@@ -86,4 +81,131 @@ validate_rna_inputs <- function(inputs, cfg) {
     invisible(TRUE)
 }
 
-# load_omics_inputs and validate_contrasts_content live in R/core/01_io.R
+#' Generic loader helper
+#'
+#' Loads files specified in config. Supports:
+#' - CSV/TSV files (loaded via read_table_auto)
+#' - RDS files (loaded via readRDS, used for tximport objects)
+#'
+#' @param config Configuration list
+#' @param mode One of "proteomics" or "rna"
+#' @return List of loaded objects
+load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
+    mode <- match.arg(mode)
+    cfg <- config$modes[[mode]]
+    if (is.null(cfg)) stop("No config for mode ", mode)
+
+    files <- cfg$files
+
+    # Validate required files are specified in config
+    # Note: RNA 'counts' is not strictly required here because tximport uses 'txi' key;
+    # counts-vs-txi validation is handled separately in load_rna_inputs / preprocess_rna
+    required_files <- switch(mode,
+        proteomics = c("protein", "metadata"),
+        rna = c("metadata", "contrasts"),
+        character(0)
+    )
+
+    # Check 1: key completely missing from config
+    missing_keys <- setdiff(required_files, names(files))
+    if (length(missing_keys) > 0) {
+        stop(
+            sprintf(
+                "[%s] Missing required file key(s) in config$modes$%s$files: %s",
+                mode, mode, paste(missing_keys, collapse = ", ")
+            ),
+            call. = FALSE
+        )
+    }
+
+    # Check 2: key present but set to null or empty string
+    for (nm in required_files) {
+        if (is.null(files[[nm]]) || !nzchar(files[[nm]])) {
+            stop(
+                sprintf(
+                    "[%s] File '%s' is required but has null or empty path in config$modes$%s$files",
+                    mode, nm, mode
+                ),
+                call. = FALSE
+            )
+        }
+    }
+
+    inputs <- list()
+
+    for (nm in names(files)) {
+        rel <- files[[nm]]
+        # Skip NULL or empty file paths (only for optional files — required already validated above)
+        if (is.null(rel) || !nzchar(rel)) {
+            next
+        }
+        abs <- resolve_raw_path(config, rel)
+        # Check 3: path present but file doesn't exist
+        if (!file.exists(abs)) stop("File not found: ", abs)
+
+        # Detect file type and load appropriately
+        ext <- tolower(tools::file_ext(abs))
+
+        if (ext == "rds") {
+            # RDS file - use readRDS (for tximport objects, etc.)
+            message(sprintf("[load_omics_inputs] Loading RDS file: %s", nm))
+            nm <- "txi"
+            inputs[[nm]] <- readRDS(abs)
+        } else {
+            # Tabular file - use standard reader
+            inputs[[nm]] <- read_table_auto(abs)
+        }
+    }
+
+    if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
+
+    # Check 4: validate contrasts file content (at least 1 row + expected columns)
+    if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
+        validate_contrasts_content(inputs$contrasts, mode)
+    }
+
+    inputs
+}
+
+#' Validate contrasts file content
+#'
+#' Ensures the loaded contrasts data frame has at least one row and contains
+#' all required columns: Contrast_name, Factor, Numerator, Denominator.
+#'
+#' @param contrasts_df Data frame loaded from the contrasts file
+#' @param mode Character string identifying the omics mode (for error messages)
+#' @return invisible(TRUE) on success, stops with error on failure
+validate_contrasts_content <- function(contrasts_df, mode = "omics") {
+    if (!is.data.frame(contrasts_df)) {
+        stop(
+            sprintf("[%s] Contrasts file did not load as a data frame.", mode),
+            call. = FALSE
+        )
+    }
+
+    if (nrow(contrasts_df) == 0) {
+        stop(
+            sprintf(
+                "[%s] Contrasts file is empty (0 rows). At least one contrast is required.",
+                mode
+            ),
+            call. = FALSE
+        )
+    }
+
+    required_cols <- c("Contrast_name", "Factor", "Numerator", "Denominator")
+    missing_cols <- setdiff(required_cols, colnames(contrasts_df))
+    if (length(missing_cols) > 0) {
+        stop(
+            sprintf(
+                "[%s] Contrasts file is missing required column(s): %s. Expected: %s",
+                mode,
+                paste(missing_cols, collapse = ", "),
+                paste(required_cols, collapse = ", ")
+            ),
+            call. = FALSE
+        )
+    }
+
+    invisible(TRUE)
+}
