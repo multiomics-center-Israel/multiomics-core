@@ -101,7 +101,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     # Note: RNA 'counts' is not strictly required here because tximport uses 'txi' key;
     # counts-vs-txi validation is handled separately in load_rna_inputs / preprocess_rna
     required_files <- switch(mode,
-        proteomics = c("protein", "sample_map", "metadata", "contrasts"),
+        proteomics = c("protein", "metadata"),
         rna = c("metadata", "contrasts"),
         character(0)
     )

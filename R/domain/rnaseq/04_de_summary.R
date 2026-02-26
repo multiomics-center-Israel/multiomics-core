@@ -139,58 +139,71 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
 #' @return Data frame with summary statistics and pass flags
 #' @export
 build_rnaseq_summary_df <- function(de_tables, de_cfg) {
-  if (length(de_tables) == 0) {
-    warning("No DE tables provided to build_rnaseq_summary_df")
-    return(data.frame())
-  }
-  
-  padj_cutoff <- de_cfg$p_cutoff %||% de_cfg$padj_cutoff %||% 0.05
-  linear_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
-  
-  all_genes <- unique(unlist(lapply(de_tables, function(x) x$FeatureID)))
-  
-  summary_df <- data.frame(
-    FeatureID = all_genes,
-    stringsAsFactors = FALSE
-  )
-  
-  for (cn in names(de_tables)) {
-    tab <- de_tables[[cn]]
-    idx <- match(summary_df$FeatureID, tab$FeatureID)
-    
-    
-    lfc <- tab$log2FoldChange[idx]
-    raw_fc <- ifelse(lfc >= 0, 2^lfc, -1 * (2^-lfc))
-    rounded_fc <- signif(raw_fc, 3) 
-    
-    fc_col <- paste0("linearFC.", cn)
-    summary_df[[fc_col]] <- rounded_fc
-    
-    summary_df[[paste0("pvalue.", cn)]] <- tab$pvalue[idx]
-    summary_df[[paste0("padj.", cn)]] <- tab$padj[idx]
-    
-    pass_col <- paste0(cn, "_pass")
-    
-    is_sig <- !is.na(tab$padj[idx]) & 
-      tab$padj[idx] <= padj_cutoff & 
-      abs(as.numeric(rounded_fc)) >= linear_fc_cutoff
-    
-    summary_df[[pass_col]] <- ifelse(is_sig, 1, NA)
-                                    
-  }
-  
-  # 4. Pass Any 
-  pass_cols <- grep("_pass$", colnames(summary_df), value = TRUE)
-  if (length(pass_cols) > 0) {
-    summary_df$pass_any_contrast <- apply(summary_df[, pass_cols, drop = FALSE], 1, function(x) {
-      val <- any(x != "" & !is.na(x))
-      if(val) return(1) else return("")
-    })
-  } else {
-    summary_df$pass_any_contrast <- ""
-  }
-  
-  return(summary_df)
+    if (length(de_tables) == 0) {
+        warning("No DE tables provided to build_rnaseq_summary_df")
+        return(data.frame())
+    }
+
+    # Extract thresholds from config
+    padj_cutoff <- de_cfg$p_cutoff %||% de_cfg$padj_cutoff %||% 0.05
+    linear_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
+
+    # Debug logging
+    message(sprintf(
+        "[build_rnaseq_summary_df] Using padj_cutoff=%.2f, linear_fc_cutoff=%.2f",
+        padj_cutoff, linear_fc_cutoff
+    ))
+
+    # Get all genes
+    all_genes <- unique(unlist(lapply(de_tables, function(x) x$FeatureID)))
+
+    # Initialize summary data frame
+    summary_df <- data.frame(
+        FeatureID = all_genes,
+        stringsAsFactors = FALSE
+    )
+
+    # Add columns for each contrast
+    for (cn in names(de_tables)) {
+        tab <- de_tables[[cn]]
+
+        # Match genes
+        idx <- match(summary_df$FeatureID, tab$FeatureID)
+
+        # Add log2FoldChange (used by clustering, executive summary, pipeline summary)
+        lfc <- tab$log2FoldChange[idx]
+        summary_df[[paste0("log2FoldChange.", cn)]] <- lfc
+
+        # Add linearFC (signed: positive for upregulation, negative for downregulation)
+        fc_col <- paste0("linearFC.", cn)
+        summary_df[[fc_col]] <- ifelse(lfc >= 0, 2^lfc, -1 * 2^(-lfc))
+
+        # Add pvalue
+        pval_col <- paste0("pvalue.", cn)
+        summary_df[[pval_col]] <- tab$pvalue[idx]
+
+        # Add padj
+        padj_col <- paste0("padj.", cn)
+        summary_df[[padj_col]] <- tab$padj[idx]
+
+        # Add pass flag
+        pass_col <- paste0(cn, "_pass")
+        summary_df[[pass_col]] <- (
+            !is.na(tab$padj[idx]) &
+                tab$padj[idx] <= padj_cutoff &
+                abs(tab$log2FoldChange[idx]) >= log2(linear_fc_cutoff)
+        )
+    }
+
+    # Add pass_any_contrast column
+    pass_cols <- grep("_pass$", colnames(summary_df), value = TRUE)
+    if (length(pass_cols) > 0) {
+        summary_df$pass_any_contrast <- apply(summary_df[, pass_cols, drop = FALSE], 1, any, na.rm = TRUE)
+    } else {
+        summary_df$pass_any_contrast <- FALSE
+    }
+
+    return(summary_df)
 }
 #' Build DE summary counts table
 #'

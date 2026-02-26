@@ -151,6 +151,23 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     }
 
     # =========================================================================
+    # Exclude specific samples (if configured)
+    # =========================================================================
+    excl <- cfg$exclude_samples
+    if (!is.null(excl) && length(excl) > 0) {
+        excl <- as.character(unlist(excl))
+        n_before <- nrow(meta2)
+        meta2 <- meta2[!meta2[[sample_col]] %in% excl, , drop = FALSE]
+        message(sprintf("[preprocess_rna] Excluded %d sample(s): %s",
+                        n_before - nrow(meta2), paste(excl, collapse = ", ")))
+        counts <- counts[, meta2[[sample_col]], drop = FALSE]
+        if (!is.null(txi)) {
+            txi <- subset_tximport(txi, samples = meta2[[sample_col]])
+            abundance <- txi$abundance
+        }
+    }
+
+    # =========================================================================
     # Sample filtering (rule-based, if configured)
     # =========================================================================
     rules <- get_sample_filter_rules(config, mode = "rna")

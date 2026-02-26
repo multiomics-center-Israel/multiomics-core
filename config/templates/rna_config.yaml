@@ -8,6 +8,9 @@ project:
   dir: "/full-path/to/project_dir"   # REQUIRED
   name: "<PROJECT_NAME>"             # REQUIRED
   analysis_round: "A01"              # REQUIRED
+  analyst: "Bioinformatics Core"     # Name of the analyst (shown in report header)
+  user_notes: ""                     # Optional: free-text project description (appears in report as Project Overview)
+  technical_report_file: ""          # Optional: path to facility report (DOCX/PDF/log) for AI-enhanced summary
 
 paths:
   raw: "data"
