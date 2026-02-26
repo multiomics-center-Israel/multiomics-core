@@ -22,11 +22,13 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
         src_dir <- system.file("R", "domain", "proteomics",
                                 package = "multiomics.core",
                                 mustWork = FALSE)
-        if (!nzchar(src_dir)) {
-            # When running via targets::tar_source(), try the working directory first,
-            # then fall back to the project root from config
-            src_dir <- file.path("R", "domain", "proteomics")
-            if (!file.exists(file.path(src_dir, "report_template_proteomics.Rmd"))) {
+        if (!nzchar(src_dir) || !file.exists(file.path(src_dir, "report_template_proteomics.Rmd"))) {
+            # When running via targets::tar_source(), try the working directory first
+            cwd_path <- file.path("R", "domain", "proteomics")
+            if (file.exists(file.path(cwd_path, "report_template_proteomics.Rmd"))) {
+                src_dir <- cwd_path
+            } else {
+                # Fallback to project root from config
                 proj_dir <- config$project$dir %||% "."
                 src_dir <- file.path(proj_dir, "R", "domain", "proteomics")
             }
@@ -62,13 +64,19 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
 
     message("Rendering proteomics report to: ", out_html)
 
-    rmarkdown::render(
-        input       = dest_rmd,
-        output_file = out_html,
-        output_dir  = run_dir,
-        quiet       = TRUE,
-        envir       = new.env(parent = globalenv())
-    )
+    tryCatch({
+        rmarkdown::render(
+            input       = dest_rmd,
+            output_file = out_html,
+            output_dir  = run_dir,
+            quiet       = TRUE,
+            envir       = new.env(parent = globalenv())
+        )
+    }, error = function(e) {
+        warning("Proteomics report rendering failed: ", e$message,
+                "\nTemplate: ", dest_rmd,
+                "\nCheck the Rmd for errors.")
+    })
 
     if (file.exists(out_html)) {
         message("Proteomics report rendered successfully: ", out_html)
