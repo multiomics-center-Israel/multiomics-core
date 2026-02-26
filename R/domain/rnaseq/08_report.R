@@ -59,13 +59,19 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     message("Rendering RNA-seq report to: ", out_html)
 
-    rmarkdown::render(
-        input       = dest_rmd,
-        output_file = out_html,
-        output_dir  = run_dir,
-        quiet       = TRUE,
-        envir       = new.env(parent = globalenv())
-    )
+    tryCatch({
+        rmarkdown::render(
+            input       = dest_rmd,
+            output_file = out_html,
+            output_dir  = run_dir,
+            quiet       = TRUE,
+            envir       = new.env(parent = globalenv())
+        )
+    }, error = function(e) {
+        warning("RNA-seq report rendering failed: ", e$message,
+                "\nTemplate: ", dest_rmd,
+                "\nCheck the Rmd for errors.")
+    })
 
     if (file.exists(out_html)) {
         message("Report rendered successfully: ", out_html)

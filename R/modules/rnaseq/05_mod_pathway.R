@@ -132,6 +132,20 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
         message("Saved gene annotation to: ", anno_file)
     }
 
+    # Build pathway-colored volcano data
+    pw_volcano_enabled <- isTRUE(pw_cfg$pathway_volcano) || is.null(pw_cfg$pathway_volcano)
+    if (pw_volcano_enabled && length(pathway_results) > 0) {
+        message("Building pathway-colored volcano data for RNA-seq...")
+        for (cn in names(de_tables)) {
+            volcano_data <- build_pathway_volcano_data(de_tables[[cn]], pathway_results)
+            if (!is.null(volcano_data)) {
+                volcano_file <- file.path(enrich_dir, sprintf("pathway_volcano_data_%s.csv", cn))
+                write.csv(volcano_data, volcano_file, row.names = FALSE)
+                message("  Saved pathway volcano data: ", volcano_file)
+            }
+        }
+    }
+
     list(
         annotation      = annotation_result,
         pathway_results = pathway_results,
