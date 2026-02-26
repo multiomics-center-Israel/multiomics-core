@@ -166,6 +166,22 @@ pipe_proteomics <- function() {
             format = "file"
         ),
 
+        # User project summary (from user_notes + optional tech report)
+        tar_target(
+            prot_user_summary,
+            {
+                summary_html <- generate_project_summary(config)
+                out_file <- file.path(get_mode_out_dir(run_dir, "proteomics"),
+                                       "project_summary.html")
+                if (!is.null(summary_html)) {
+                    writeLines(summary_html, out_file)
+                    out_file
+                } else {
+                    NA_character_
+                }
+            }
+        ),
+
         # Proteomics HTML report
         tar_target(
             prot_report,
@@ -176,6 +192,7 @@ pipe_proteomics <- function() {
                 force(prot_commentary_file)
                 force(prot_exec_summary)
                 force(prot_exports)
+                force(prot_user_summary)
                 render_proteomics_report(
                     run_dir     = run_dir,
                     config      = config,
