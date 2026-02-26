@@ -130,6 +130,22 @@ pipe_rnaseq <- function() {
             },
             format = "file"
         ),
+        # User project summary (from user_notes + optional tech report)
+        tar_target(
+            rna_user_summary,
+            {
+                summary_html <- generate_project_summary(config)
+                out_file <- file.path(get_mode_out_dir(run_dir, "rna"),
+                                       "project_summary.html")
+                if (!is.null(summary_html)) {
+                    writeLines(summary_html, out_file)
+                    out_file
+                } else {
+                    NA_character_
+                }
+            }
+        ),
+
         # Auto-report (final target — must wait for all analysis)
         tar_target(
             rna_report,
@@ -141,6 +157,7 @@ pipe_rnaseq <- function() {
                 force(rna_commentary_file)
                 force(rna_deconv)
                 force(rna_exec_summary)
+                force(rna_user_summary)
                 render_rnaseq_report(
                     run_dir     = rna_out_dir,
                     config      = config,
@@ -161,6 +178,25 @@ pipe_rnaseq <- function() {
                     de_res      = rna_de_res,
                     pathway_res = rna_pathway_res,
                     run_dir     = run_dir
+                )
+            },
+            format = "file"
+        ),
+
+        # PowerPoint summary presentation
+        tar_target(
+            rna_pptx,
+            {
+                force(rna_qc_post_obj)
+                force(rna_pathway_res)
+                mod_rnaseq_powerpoint(
+                    pre            = rna_batch_corr,
+                    qc_pre_obj     = rna_qc_pre_obj,
+                    de_res         = rna_de_res,
+                    clustering_obj = rna_clustering_obj,
+                    pathway_res    = rna_pathway_res,
+                    config         = config,
+                    out_dir        = rna_out_dir
                 )
             },
             format = "file"
