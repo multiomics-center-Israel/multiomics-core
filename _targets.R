@@ -57,7 +57,8 @@ invisible(lapply(pipeline_files, tar_source))
 required_pkgs <- c(
   "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
   "openxlsx", "readr", "readxl", "tidyr", "tibble",
-  "edgeR", "DESeq2", "SummarizedExperiment"
+  "edgeR", "DESeq2", "SummarizedExperiment",
+  "impute"   # Bioconductor: KNN imputation for metabolomics MAR features
 )
 # Only require packages that are actually installed (allows running a
 # subset of pipelines when some omics-specific packages are absent).
@@ -77,7 +78,7 @@ config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
 
 list(
   # Configuration file (tracked as a file dependency)
-  # Override with: Sys.setenv(PIPELINE_CONFIG = "/path/to/config.yaml")
+  # Override with: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
     !!config_path,
@@ -109,30 +110,22 @@ list(
   tar_target(
     execution_info_files,
     write_execution_info(
-      config = config,
-      run_dir = run_dir,
-      config_path = config_file,
+      config       = config,
+      run_dir      = run_dir,
+      config_path  = config_file,
       targets_file = "_targets.R"
     ),
     format = "file"
   ),
 
-  # Mode-specific pipelines (only run if mode is present in config)
-  # {
-  #   cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-  #   if (cfg_path == "") cfg_path <- file.path(getwd(), "config", "rna_amir_sapir.yaml")
-  #   cfg_raw <- yaml::read_yaml(cfg_path)
-  #   mode_targets <- list()
-  #   if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
-  #   if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
-  #   mode_targets
-  # }
-  # Proteomics pipeline (returns a list of targets)
-  # pipe_proteomics()
-
-  # RNA-seq pipeline
-  pipe_rnaseq()
-
-  # Metabolomics pipeline (Stages 1 + 2)
-  # pipe_metabolomics()
+  # Mode-specific pipelines — only included when the mode is present in config.
+  # Read config at plan-definition time so {targets} can detect mode changes.
+  {
+    cfg_raw      <- yaml::read_yaml(config_path)
+    mode_targets <- list()
+    if (!is.null(cfg_raw$modes$rna))          mode_targets <- c(mode_targets, pipe_rnaseq())
+    if (!is.null(cfg_raw$modes$proteomics))   mode_targets <- c(mode_targets, pipe_proteomics())
+    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics())
+    mode_targets
+  }
 )

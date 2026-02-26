@@ -54,6 +54,38 @@ modes:
         # - "RT [min]"
         # - "KEGG ID"
 
+    # ---- Preprocessing (missingness, imputation, normalization selection) ----
+    # Applied BEFORE normalization. All fields have safe defaults and are consumed
+    # by the new met_* targets pipeline. See pipeline DAG documentation for details.
+    preprocessing:
+      # Missingness filtering thresholds
+      feat_missing_threshold: 0.20     # drop features missing in > 20% of samples
+      sample_missing_threshold: 0.30   # drop samples missing in > 30% of features
+      mnar_threshold: 0.3              # |Spearman corr| threshold for MNAR vs MAR
+                                       # (negative corr → MNAR = missing in low-intensity
+                                       #  samples → min/2 imputation; else KNN)
+
+      # Imputation
+      knn_k: 10                        # k for KNN imputation of MAR features
+      epsilon: 1.0e-8                  # near-zero guard for imputed values
+
+      # Normalization selection — TSS, Median, and PQN are ALWAYS computed in
+      # parallel (met_norm_tss / met_norm_median / met_norm_pqn targets).
+      # chosen_norm selects which feeds into drift correction and all downstream
+      # analysis targets (metab_de_res, metab_qc_pre_obj, etc.).
+      chosen_norm: "pqn"              # "tss" | "median" | "pqn"
+
+      # LOESS drift correction — only activates when BOTH metadata columns exist
+      # AND there are >= 4 QC samples (is_QC == TRUE) with no NA injection_order.
+      # If preconditions are absent, met_corrected silently returns chosen_norm
+      # unchanged (no error, no NULL target).
+      drift_correction:
+        enabled: true
+        injection_order_col: "injection_order"  # numeric column in sample metadata
+        qc_flag_col: "is_QC"                    # logical column in sample metadata
+        loess_span: 0.75
+        epsilon: 1.0e-8
+
     # ---- Normalization ----
     normalization:
       # Set to true if the input file is already biologically normalized.
@@ -61,31 +93,45 @@ modes:
       # Transformation and scaling are still applied if configured.
       input_already_normalized: false
 
-      # 1. Sample normalization: "none" | "sum" | "median" | "pqn" | "is"
+      # 1. Sample normalization (LEGACY single-step pipeline only).
+      # In the new preprocessing pipeline, normalization method is selected via
+      # preprocessing.chosen_norm; TSS / Median / PQN targets always run in parallel.
+      # "none" | "sum" | "median" | "pqn" | "is"
       sample_norm: "pqn"
 
       # 2. Transformation: "none" | "log2" | "log10"
+      # Used by the met_log target (new pipeline) and the legacy path.
       transform: "log2"
 
       # 3. Scaling: "none" | "auto" | "pareto" | "range"
+      # NOTE: Not applied in the new preprocessing pipeline. Sample normalization
+      # (TSS / Median / PQN) replaces the scaling step for expr_work.
+      # Still consumed by the legacy preprocess_metabolomics() code path.
       scaling: "none"
 
-      # Pseudocount added before log transform (default 1)
+      # Pseudocount added before log transform (default 1).
+      # Consumed by the met_log target in the new pipeline.
       pseudocount: 1
 
-      # How to handle NA values before normalization:
-      #   "keep"  (default) — pass NAs through; norm functions use na.rm=TRUE
-      #   "zero"  — replace NA with 0 (treat as below-detection)
-      # expr_filt is never modified; only the working copy (expr_for_norm) is affected.
+      # How to handle NA values before normalization (LEGACY path only).
+      # With the new preprocessing block active, MNAR/MAR imputation handles
+      # missingness upstream — keep "keep" here to avoid double-imputation.
+      #   "keep"     (default) — pass NAs through; norm functions use na.rm=TRUE
+      #   "zero"     — replace NA with 0 (treat as below-detection)
+      #   "min_half" — replace NA with per-feature min/2
+      #   "lod"      — replace NA with fraction of per-feature minimum
       na_policy: "keep"
 
       # Column in row_data marking internal standard (only if sample_norm = "is")
       is_ref_col: null
 
-      # ---- Method evaluation (optional) ----
+      # ---- Method evaluation (LEGACY path only) ----
+      # In the new preprocessing pipeline, TSS / Median / PQN are always benchmarked
+      # via the met_norm_comparison target (saved as datasets/normalization_comparison.tsv).
+      # This evaluate_methods list is only consumed by the legacy
+      # preprocess_metabolomics() single-step path.
       # List of method combos to compare. Each entry must have:
       #   sample_norm, transform, scaling
-      # Pipeline will produce a comparison table with QC metrics.
       evaluate_methods:
         - sample_norm: "none"
           transform: "log2"
