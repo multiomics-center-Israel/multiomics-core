@@ -61,6 +61,12 @@ mod_met_raw <- function(config) {
     }
   }
 
+  # Normalise row_data rownames to feature_id so all downstream subsetting
+  # (mod_met_filtered, etc.) can safely use rownames(row_data).
+  if (!is.null(row_data) && !is.null(row_data$feature_id)) {
+    rownames(row_data) <- row_data$feature_id
+  }
+
   list(
     expr_raw   = expr_raw,
     meta       = meta,
@@ -154,10 +160,13 @@ mod_met_filtered <- function(raw, config) {
     sample_threshold = pre_cfg$sample_missing_threshold %||% 0.30
   )
 
-  # Align row_data to retained features
+  # Align row_data to retained features.
+  # mod_met_raw already sets rownames(row_data) = feature_id; use intersect to
+  # retain only the features that survived missingness filtering.
   row_data <- raw$row_data
   if (!is.null(row_data)) {
-    row_data <- row_data[rownames(filt$mat), , drop = FALSE]
+    keep     <- intersect(rownames(filt$mat), rownames(row_data))
+    row_data <- row_data[keep, , drop = FALSE]
   }
 
   list(
