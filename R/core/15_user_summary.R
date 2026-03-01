@@ -72,10 +72,9 @@ generate_project_summary <- function(config) {
   ), user_notes, substr(doc_text, 1, 6000))
 
   blended <- tryCatch({
-    raw <- system2("claude",
-      args = c("--print", "--model", "sonnet", "--no-session-persistence",
-               shQuote(prompt)),
-      stdout = TRUE, stderr = FALSE, timeout = 120)
+    cmd <- sprintf("unset CLAUDECODE; claude --print --model sonnet --no-session-persistence %s",
+                    shQuote(prompt))
+    raw <- system(cmd, intern = TRUE, timeout = 120)
     paste(raw, collapse = "\n")
   }, error = function(e) {
     message(sprintf("[user_summary] Claude blending failed: %s", e$message))

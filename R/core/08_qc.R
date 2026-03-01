@@ -323,7 +323,9 @@ to_long_format <- function(prep_data) {
 #' @param cfg Mode config with effects$color, effects$samples
 #' @param out_file Optional output file path
 #' @param title Optional custom title (default: "Normalized expression boxplots")
-norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
+#' @param y_label Optional y-axis label (default: "log2(normalized intensity)")
+norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL,
+                         y_label = "log2(normalized intensity)") {
   d <- prepare_qc_data(expr_norm, meta, cfg)
   norm_expr_long <- to_long_format(d)
 
@@ -339,7 +341,7 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
     ggplot2::labs(
       title  = plot_title,
       x      = "Sample",
-      y      = "log2(normalized intensity)",
+      y      = y_label,
       colour = d$color_col
     ) +
     ggplot2::theme_bw() +

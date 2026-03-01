@@ -162,25 +162,30 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
 
+    # Strip spaces to match summarize_limma_mult_imputation() convention
+    # (proteomics convention; RNA preserves original contrast names)
+    contrast_safe <- gsub(" ", "", contrast)
+
     # FIX 2: RNA doesn't use ".imputs." in column names
+    # RNA also preserves spaces in contrast names (from build_rnaseq_summary_df)
     if (mode == "rna") {
         list(
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
-            pass   = paste0("pass.", contrast),
+            pass   = paste0(contrast, "_pass"),
             updown = paste0("upDown.", contrast),
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else {
         # Proteomics (uses imputation naming)
         list(
-            fc     = paste0("linearFC.imputs.", contrast),
-            p      = paste0("pvalue.imputs.", contrast),
-            padj   = paste0("padj.imputs.", contrast),
-            pass   = paste0("pass.imputs.", contrast),
-            updown = paste0("upDown.imputs.", contrast),
-            manual = paste0("manual_cutoffs.", contrast)
+            fc     = paste0("linearFC.imputs.", contrast_safe),
+            p      = paste0("pvalue.imputs.", contrast_safe),
+            padj   = paste0("padj.imputs.", contrast_safe),
+            pass   = paste0("pass.imputs.", contrast_safe),
+            updown = paste0("upDown.imputs.", contrast_safe),
+            manual = paste0("manual_cutoffs.", contrast_safe)
         )
     }
 }
