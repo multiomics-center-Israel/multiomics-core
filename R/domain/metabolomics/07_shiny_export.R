@@ -95,9 +95,6 @@ build_shiny_payload_metabolomics <- function(
     # Check for NA policy - if na_policy="zero", NAs were replaced
     payload$expr_norm <- pre$expr_work
 
-    # expr_long: Long-format expression with metadata
-    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
-
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
         na_count <- sum(is.na(payload$expr_norm))
@@ -135,14 +132,11 @@ build_shiny_payload_metabolomics <- function(
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
 
-        # pca_3d: 3D PCA plotly widget
-        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
-        
-        # QC plot
-        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
-        payload$samples_hm_w_qc <- pca_res$plots$dist_heatmap %||% NULL
-        payload$samples_hm <- pca_res$plots$dist_heatmap_noQC %||% NULL
+        # pca_3d: 3D PCA plotly widget (may be NULL if too few samples)
+        pca_3d_val <- pca_res$plots$pca_3d
+        if (!is.null(pca_3d_val)) payload$pca_3d <- pca_3d_val
     }
+
 
     # ============================================================
     # DE RESULTS (5 keys)
@@ -196,11 +190,6 @@ build_shiny_payload_metabolomics <- function(
         if (!is.null(payload$de_stats)) {
             payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats)
         }
-
-        # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
-        if (!is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
-            payload$de_final_table <- payload$de_sig_stats
-        }
     }
 
     # ============================================================
@@ -231,30 +220,33 @@ build_shiny_payload_metabolomics <- function(
     # Priority: clustering_res$objects$hm_hier_de (full payload with tree_row, row_order, etc.)
     val <- NULL
     if (!is.null(clustering_res)) {
-      # First check objects (where the full payload is stored)
-      if (!is.null(clustering_res$objects)) {
-        val <- clustering_res$objects$hm_hier_de
-      }
-      # Fallback to plots if needed
-      if (is.null(val) && !is.null(clustering_res$plots)) {
-        val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
-      }
+        # First check objects (where the full payload is stored)
+        if (!is.null(clustering_res$objects)) {
+            val <- clustering_res$objects$hm_hier_de
+        }
+        # Fallback to plots if needed
+        if (is.null(val) && !is.null(clustering_res$plots)) {
+            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
+        }
+    }
+    # Legacy fallback: check de_res
+    if (is.null(val) && !is.null(de_res)) {
+        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
-    
+
     # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
     if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
-      payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
+        payload$clust_heatmap_hier_fig <- grid::grid.draw(val$pheatmap$gtable)
 
     # ============================================================
     # CONFIGURATION (6 keys)
     # ============================================================
 
-    # Canonical key names (overwrite init_shiny_payload defaults)
-    payload$padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
+    payload$config_padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
 
     linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
-    payload$log_fc_cutoff <- log2(linear_fc)
+    payload$config_log_fc_cutoff <- log2(linear_fc)
 
     # Build normalization method description
     norm_method <- paste0(
@@ -264,19 +256,19 @@ build_shiny_payload_metabolomics <- function(
         "/",
         norm_cfg$scaling %||% "none"
     )
-    payload$norm_method <- norm_method
+    payload$config_norm_method <- norm_method
 
-    # Group and aesthetic variables (canonical: group, color)
+    # Group and aesthetic variables
     if (!is.null(effects_cfg$color)) {
-        payload$group <- as.character(effects_cfg$color[[1]])
+        payload$config_group_var <- as.character(effects_cfg$color[[1]])
     } else if (!is.null(effects_cfg$group)) {
-        payload$group <- as.character(effects_cfg$group[[1]])
+        payload$config_group_var <- as.character(effects_cfg$group[[1]])
     } else {
-        payload$group <- "sample_type"
+        payload$config_group_var <- "sample_type"
     }
 
     if (!is.null(effects_cfg$color)) {
-        payload$color <- as.character(effects_cfg$color)
+        payload$config_color_var <- as.character(effects_cfg$color)
     }
 
     if (!is.null(effects_cfg$shape)) {
@@ -304,6 +296,11 @@ build_shiny_payload_metabolomics <- function(
         # Missingness info (useful for metabolomics QC)
         if (!is.null(pre$info) && !is.null(pre$info$missingness)) {
             payload$missingness <- pre$info$missingness
+        }
+
+        # Normalization evaluation results (if any)
+        if (!is.null(pre$normalization_eval)) {
+            payload$normalization_eval <- pre$normalization_eval
         }
 
         # Sample map (CD column to sample_id mapping)
@@ -360,23 +357,55 @@ build_shiny_payload_metabolomics <- function(
 
 #' Build DE summary counts for Metabolomics
 #'
-#' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
-#' metabolomics naming conventions: \code{pass.<contrast>} pass columns and
-#' \code{linearFC.<contrast>} fold-change columns.
-#'
 #' @param de_stats DE statistics data.frame with pass columns
 #' @return data.frame with columns: contrast, up, down, total
 #' @keywords internal
 build_de_summary_counts_metabolomics <- function(de_stats) {
-    build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "^pass\\.",
-        extract_contrast = function(col) sub("^pass\\.", "", col),
-        find_fc_col      = function(cn, cols) {
-            fc <- paste0("linearFC.", cn)
-            if (fc %in% cols) fc else NULL
+    if (is.null(de_stats)) return(NULL)
+
+    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+
+    if (length(pass_cols) == 0) return(NULL)
+
+    summaries <- lapply(pass_cols, function(col) {
+        contrast_name <- sub("^pass_", "", col)
+
+        # Try multiple FC column name patterns
+        fc_patterns <- c(
+            paste0("logFC_", contrast_name),
+            paste0("log2FoldChange_", contrast_name),
+            paste0("logFC.", contrast_name),
+            paste0("FC_", contrast_name)
+        )
+        fc_col <- NULL
+        for (pat in fc_patterns) {
+            if (pat %in% names(de_stats)) {
+                fc_col <- pat
+                break
+            }
         }
-    )
+
+        sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1
+
+        if (!is.null(fc_col)) {
+            up <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
+            down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
+        } else {
+            up <- NA
+            down <- NA
+        }
+
+        data.frame(
+            contrast = contrast_name,
+            up = up,
+            down = down,
+            total = sum(sig_rows, na.rm = TRUE),
+            stringsAsFactors = FALSE
+        )
+    })
+
+    do.call(rbind, summaries)
 }
 
 
