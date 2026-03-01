@@ -1,7 +1,7 @@
 # R/domain/metabolomics/03_differential.R
 #
 # Differential expression analysis for metabolomics data.
-# Supports limma, Welch t-test, and Wilcoxon rank-sum methods.
+# Supports limma, Welch t-test, equal-variance t-test, and Wilcoxon rank-sum methods.
 #
 # Operates on the standard pre-processing contract (expr_work, meta).
 # Returns a wide-format summary_df compatible with the DE contract.
@@ -22,7 +22,7 @@ run_metabolomics_de <- function(pre, config) {
     de_cfg <- cfg$de %||% list()
 
     method <- tolower(de_cfg$method %||% "limma")
-    assert_one_of(method, "de$method", c("limma", "t_test", "wilcoxon"))
+    assert_one_of(method, "de$method", c("limma", "t_test", "t_test_equal", "wilcoxon"))
 
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
@@ -48,8 +48,19 @@ run_metabolomics_de <- function(pre, config) {
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
-    linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
-    log2fc_cut  <- log2(linear_fc)
+
+    # logfc_cutoff: applied directly to |logFC| in whatever scale the DE matrix uses.
+    # linear_fc_cutoff: convenience alias — converted via log2() for backwards compat.
+    if (!is.null(de_cfg$logfc_cutoff)) {
+        log2fc_cut <- de_cfg$logfc_cutoff
+    } else {
+        linear_fc  <- de_cfg$linear_fc_cutoff %||% 1.5
+        log2fc_cut <- log2(linear_fc)
+    }
+
+    # Raw filtered matrix for computing log2(FC) from intensity ratios
+    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale)
+    mat_raw <- pre$expr_filt
 
     # Run DE for each contrast
     de_tables <- list()
@@ -60,9 +71,10 @@ run_metabolomics_de <- function(pre, config) {
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma    = de_limma(mat_for_test, condition, ctr),
-            t_test   = de_t_test(mat_for_test, condition, ctr),
-            wilcoxon = de_wilcoxon(mat_for_test, condition, ctr)
+            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
         )
 
         # Capture limma model from first contrast
@@ -129,14 +141,17 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
         stringsAsFactors = FALSE
     )
 
-    # Override logFC from pre-scaling matrix if provided
+    # Override logFC with log2(FC) from raw intensities if provided
     if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
         groups <- parse_metab_contrast(contrast_str)
         idx_A <- which(condition == groups$denominator)
         idx_B <- which(condition == groups$numerator)
         for (i in seq_len(nrow(mat_for_fc))) {
-            res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
-                            mean(mat_for_fc[i, idx_A], na.rm = TRUE)
+            mean_A <- mean(mat_for_fc[i, idx_A], na.rm = TRUE)
+            mean_B <- mean(mat_for_fc[i, idx_B], na.rm = TRUE)
+            if (is.na(mean_A) || mean_A <= 0) mean_A <- 1e-10
+            if (is.na(mean_B) || mean_B <= 0) mean_B <- 1e-10
+            res$logFC[i] <- log2(mean_B / mean_A)
         }
     }
 
@@ -164,8 +179,6 @@ de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_f
         stop("No samples for one of the groups in contrast: ", contrast_str)
     }
 
-    fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
-
     res <- data.frame(
         feature_id = rownames(mat),
         logFC      = NA_real_,
@@ -176,11 +189,27 @@ de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_f
     )
 
     for (i in seq_len(nrow(mat))) {
-        fc_A <- fc_mat[i, idx_A]
-        fc_B <- fc_mat[i, idx_B]
-        res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
-        res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
+        # Compute log2(FC) from raw intensities if available
+        # (MetaboAnalyst-compatible: FC = mean_B / mean_A, then log2)
+        if (!is.null(mat_for_fc)) {
+            raw_A <- mat_for_fc[i, idx_A]
+            raw_B <- mat_for_fc[i, idx_B]
+            mean_A <- mean(raw_A, na.rm = TRUE)
+            mean_B <- mean(raw_B, na.rm = TRUE)
+            # Avoid division by zero; use small pseudocount
+            if (is.na(mean_A) || mean_A <= 0) mean_A <- 1e-10
+            if (is.na(mean_B) || mean_B <= 0) mean_B <- 1e-10
+            res$logFC[i]   <- log2(mean_B / mean_A)
+            res$AveExpr[i] <- log2((mean_A + mean_B) / 2)
+        } else {
+            # Fallback: difference on the transformed scale
+            fc_A <- mat[i, idx_A]
+            fc_B <- mat[i, idx_B]
+            res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
+            res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
+        }
 
+        # P-value always from transformed (glog10) data
         tt <- tryCatch(
             test_fn(mat[i, idx_B], mat[i, idx_A]),
             error = function(e) NULL
@@ -202,6 +231,16 @@ de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_f
 de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     de_two_group(mat, condition, contrast_str, mat_for_fc,
                  test_fn = function(b, a) stats::t.test(b, a, var.equal = FALSE))
+}
+
+
+# ---- equal-variance t-test -------------------------------------------------
+
+#' Run equal-variance (Student's) t-tests per feature on a single contrast
+#' (MetaboAnalyst default)
+de_t_test_equal <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
+                 test_fn = function(b, a) stats::t.test(b, a, var.equal = TRUE))
 }
 
 
@@ -265,10 +304,10 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
         summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value
         summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val
 
-        # Significance flag
+        # Significance flag (uses raw P.Value, not adjusted)
         pass <- as.integer(
-            !is.na(tbl$adj.P.Val) &
-            tbl$adj.P.Val < padj_cutoff &
+            !is.na(tbl$P.Value) &
+            tbl$P.Value < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
         summary_df[[paste0("pass_", ctr)]] <- pass

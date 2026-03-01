@@ -55,22 +55,50 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
         }
     }
 
+    render_params <- list(
+        pre            = pre,
+        qc_res         = qc_res,
+        de_res         = de_res,
+        rf_res         = rf_res_out,
+        plsda_res      = plsda_res_out,
+        enrichment_res = enrichment_res,
+        config         = config
+    )
+
     rmarkdown::render(
         input       = template,
         output_file = basename(out_file),
         output_dir  = dirname(out_file),
-        params = list(
-            pre            = pre,
-            qc_res         = qc_res,
-            de_res         = de_res,
-            rf_res         = rf_res_out,
-            plsda_res      = plsda_res_out,
-            enrichment_res = enrichment_res,
-            config         = config
-        ),
-        envir  = new.env(parent = globalenv()),
-        quiet  = TRUE
+        params      = render_params,
+        envir       = new.env(parent = globalenv()),
+        quiet       = TRUE
     )
+
+    # Also render the styled report (matching RNA/proteomics look)
+    # Place it at the Results root (parent of mode dir), with Rmd alongside
+    styled_template <- file.path("R", "pipeline", "metabolomics", "templates",
+                                  "report_metabolomics.Rmd")
+    if (file.exists(styled_template)) {
+        results_root <- dirname(out_dir)  # e.g. Results_project_A01/
+        # Copy Rmd to results root (like RNA/proteomics do)
+        dest_rmd <- file.path(results_root, "report_metabolomics.Rmd")
+        file.copy(styled_template, dest_rmd, overwrite = TRUE)
+        message("Rendering styled metabolomics report -> ",
+                file.path(results_root, "report_metabolomics.html"))
+        tryCatch({
+            rmarkdown::render(
+                input       = dest_rmd,
+                output_file = "report_metabolomics.html",
+                output_dir  = results_root,
+                params      = render_params,
+                envir       = new.env(parent = globalenv()),
+                quiet       = TRUE
+            )
+        }, error = function(e) {
+            warning("Styled report rendering failed: ", e$message,
+                    "\nOriginal report was generated successfully.")
+        })
+    }
 
     out_file
 }

@@ -68,6 +68,9 @@ preprocess_metabolomics <- function(inputs, config) {
     expr_filt <- expr_raw[row_valid, , drop = FALSE]
     row_data <- row_data[row_valid, , drop = FALSE]
 
+    # ---- 4b. Annotate feature names from HMDB lookup (if missing) ----
+    row_data <- annotate_hmdb_names(row_data, config)
+
     norm_cfg_raw <- cfg$normalization %||% list()
 
     # ---- 5. Handle missing values ----
@@ -222,4 +225,53 @@ apply_sample_filter_metab <- function(sample_ids, meta, rules, sample_col) {
     }
 
     sample_ids[keep]
+}
+
+
+#' Annotate row_data with metabolite names from HMDB lookup table
+#'
+#' If row_data already has a populated Name column, this is a no-op.
+#' Otherwise, looks up feature IDs in the bundled HMDB compound names table
+#' at {project$dir}/data/hmdb_compound_names.tsv.
+#' For non-HMDB feature IDs (already human-readable names), uses the ID itself.
+#'
+#' @param row_data  data.frame with at least a feature_id column.
+#' @param config    Full pipeline config (for project$dir path).
+#' @return row_data with a Name column populated.
+annotate_hmdb_names <- function(row_data, config) {
+    # Skip if Name column already exists and is mostly populated
+    if ("Name" %in% colnames(row_data)) {
+        n_populated <- sum(!is.na(row_data$Name) & nzchar(trimws(row_data$Name)))
+        if (n_populated > nrow(row_data) * 0.5) return(row_data)
+    }
+
+    feat_ids <- as.character(row_data$feature_id)
+    is_hmdb <- grepl("^HMDB[0-9]+$", feat_ids)
+
+    # For non-HMDB IDs, the feature ID is itself a name
+    names_out <- ifelse(is_hmdb, NA_character_, feat_ids)
+
+    # Look for bundled lookup table
+    proj_dir <- config$project$dir %||% "."
+    lookup_path <- file.path(proj_dir, "data", "hmdb_compound_names.tsv")
+
+    if (file.exists(lookup_path)) {
+        lookup <- utils::read.delim(lookup_path, stringsAsFactors = FALSE)
+        if (all(c("HMDB", "Name") %in% colnames(lookup))) {
+            lut <- stats::setNames(lookup$Name, lookup$HMDB)
+            hmdb_ids <- feat_ids[is_hmdb]
+            matched <- lut[hmdb_ids]
+            names_out[is_hmdb] <- ifelse(is.na(matched), hmdb_ids, matched)
+            n_annotated <- sum(!is.na(matched))
+            n_hmdb <- sum(is_hmdb)
+            message(sprintf("metabolomics: annotated %d/%d HMDB features with compound names.",
+                            n_annotated, n_hmdb))
+        }
+    } else {
+        # No lookup available — use HMDB IDs as-is
+        names_out[is_hmdb] <- feat_ids[is_hmdb]
+    }
+
+    row_data$Name <- names_out
+    row_data
 }
