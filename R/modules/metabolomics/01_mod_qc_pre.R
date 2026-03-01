@@ -75,7 +75,8 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
 
     # ---- Build sample subsets: "all" and "noQC" ----
     sample_col <- cfg$effects$samples %||% "sample_id"
-    subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col)
+    subsets <- build_qc_subsets(expr_qc, pre$expr_filt, pre$meta, sample_col,
+                                 expr_log = pre$expr_log)
 
     # ---- PCA plots ----
     color_config <- cfg$effects$color
@@ -142,18 +143,33 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_raw)
         plots[[paste0("density_raw", tag)]] <- p_dens_raw
 
-        # -- Density: log2(raw) --
-        expr_log2_raw <- log2(pmax(s$expr_filt, 1))
-        f_dens_log2 <- file.path(out_qc, paste0("intensity_density_log2raw", tag, ".png"))
-        p_dens_log2 <- qc_omic_density(
-            expr_log2_raw, s$meta, cfg_primary,
-            out_file = f_dens_log2,
-            title = paste0("Density: log2(raw intensities)", label)
-        )
-        files <- c(files, f_dens_log2)
-        plots[[paste0("density_log2raw", tag)]] <- p_dens_log2
+        # -- Density: after transform only (before scaling) --
+        # Show the effect of the transform step (e.g. glog10, log2) before
+        # scaling is applied, so the density curves are directly comparable
+        # across samples.
+        norm_cfg_d <- cfg$normalization %||% list()
+        transform_d <- norm_cfg_d$transform %||% "none"
+        scaling_d   <- norm_cfg_d$scaling   %||% "none"
 
-        # -- Density: normalized --
+        if (tolower(scaling_d) != "none" && tolower(transform_d) != "none") {
+            # Re-apply only the transform (without scaling) for visualization
+            expr_transformed <- tryCatch({
+                transform_metab(s$expr_filt, method = transform_d)
+            }, error = function(e) NULL)
+
+            if (!is.null(expr_transformed)) {
+                f_dens_trans <- file.path(out_qc, paste0("intensity_density_transformed", tag, ".png"))
+                p_dens_trans <- qc_omic_density(
+                    expr_transformed, s$meta, cfg_primary,
+                    out_file = f_dens_trans,
+                    title = paste0("Density: after ", transform_d, " (before scaling)", label)
+                )
+                files <- c(files, f_dens_trans)
+                plots[[paste0("density_transformed", tag)]] <- p_dens_trans
+            }
+        }
+
+        # -- Density: normalized (full pipeline: transform + scaling) --
         f_dens_norm <- file.path(out_qc, paste0("intensity_density_normalized", tag, ".png"))
         p_dens_norm <- qc_omic_density(
             s$expr_work, s$meta, cfg_primary,
@@ -168,17 +184,61 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         p_box_raw <- norm_boxplot(
             s$expr_filt, s$meta, cfg_primary,
             out_file = f_box_raw,
-            title = paste0("Boxplot: raw intensities", label)
+            title = paste0("Boxplot: raw intensities", label),
+            y_label = "Raw intensity"
         )
         files <- c(files, f_box_raw)
         plots[[paste0("boxplot_raw", tag)]] <- p_box_raw
 
-        # -- Boxplot: normalized --
+        # -- Boxplot: after transform (before scaling) = DE input --
+        # Only generate when scaling is applied, otherwise it's identical to the
+        # full normalized boxplot.
+        norm_cfg_i <- cfg$normalization %||% list()
+        scaling_method <- tolower(norm_cfg_i$scaling %||% "none")
+        transform_method <- tolower(norm_cfg_i$transform %||% "none")
+
+        if (scaling_method != "none" && !is.null(s$expr_log)) {
+            trans_parts <- character(0)
+            if (transform_method != "none") trans_parts <- c(trans_parts, norm_cfg_i$transform)
+            sn <- norm_cfg_i$sample_norm
+            if (!is.null(sn) && tolower(sn) != "none") trans_parts <- c(trans_parts, toupper(sn))
+            trans_y_label <- if (length(trans_parts) > 0) {
+                paste0("Intensity (", paste(trans_parts, collapse = " + "), ")")
+            } else {
+                "Transformed intensity"
+            }
+
+            f_box_trans <- file.path(out_qc, paste0("intensity_boxplot_transformed", tag, ".png"))
+            p_box_trans <- norm_boxplot(
+                s$expr_log, s$meta, cfg_primary,
+                out_file = f_box_trans,
+                title = paste0("Boxplot: after transform (DE input)", label),
+                y_label = trans_y_label
+            )
+            files <- c(files, f_box_trans)
+            plots[[paste0("boxplot_transformed", tag)]] <- p_box_trans
+        }
+
+        # -- Boxplot: fully normalized (transform + scaling) --
+        norm_parts <- character(0)
+        if (transform_method != "none")
+            norm_parts <- c(norm_parts, norm_cfg_i$transform)
+        if (!is.null(norm_cfg_i$sample_norm) && tolower(norm_cfg_i$sample_norm) != "none")
+            norm_parts <- c(norm_parts, toupper(norm_cfg_i$sample_norm))
+        if (scaling_method != "none")
+            norm_parts <- c(norm_parts, norm_cfg_i$scaling)
+        norm_y_label <- if (length(norm_parts) > 0) {
+            paste0("Normalized intensity (", paste(norm_parts, collapse = " + "), ")")
+        } else {
+            "Normalized intensity"
+        }
+
         f_box <- file.path(out_qc, paste0("intensity_boxplot_normalized", tag, ".png"))
         p_box <- norm_boxplot(
             s$expr_work, s$meta, cfg_primary,
             out_file = f_box,
-            title = paste0("Boxplot: ", norm_label, label)
+            title = paste0("Boxplot: ", norm_label, label),
+            y_label = norm_y_label
         )
         files <- c(files, f_box)
         plots[[paste0("boxplot", tag)]] <- p_box
@@ -280,19 +340,21 @@ build_norm_label <- function(norm_applied) {
 #'
 #' QC samples are identified by treatment == "QC" (case-insensitive) in metadata.
 #' Returns a list of subset descriptors, each with: tag, label, expr_work,
-#' expr_filt, meta.
+#' expr_filt, expr_log, meta.
 #'
-#' @param expr_work  Normalized expression matrix.
+#' @param expr_work  Normalized expression matrix (transform + scaling).
 #' @param expr_filt  Filtered (raw) expression matrix.
 #' @param meta       Metadata data.frame.
 #' @param sample_col Column name for sample IDs.
+#' @param expr_log   Transform-only matrix (no scaling), used for DE. NULL if no scaling applied.
 #' @return list of subset descriptors.
-build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col) {
+build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = NULL) {
     all_subset <- list(
         tag       = "",
         label     = "",
         expr_work = expr_work,
         expr_filt = expr_filt,
+        expr_log  = expr_log,
         meta      = meta
     )
 
@@ -308,6 +370,7 @@ build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col) {
                 label     = " [excl. QC]",
                 expr_work = expr_work[, keep_ids, drop = FALSE],
                 expr_filt = expr_filt[, keep_ids, drop = FALSE],
+                expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
                 meta      = meta[!is_qc, , drop = FALSE]
             )
         }

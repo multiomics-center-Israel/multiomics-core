@@ -1,173 +1,12 @@
 # R/domain/metabolomics/03_differential.R
 #
 # Differential expression analysis for metabolomics data.
-# Supports limma, Welch t-test, and Wilcoxon rank-sum methods.
+# Supports limma, Welch t-test, equal-variance t-test, and Wilcoxon rank-sum methods.
 #
 # Operates on the standard pre-processing contract (expr_work, meta).
 # Returns a wide-format summary_df compatible with the DE contract.
 #
-# Contrast loading follows the RNA/proteomics standard: structured table from
-# files$contrasts (CSV/TSV with Contrast_name, Factor, Numerator, Denominator)
-# loaded via load_omics_inputs(config, mode = "metabolomics").
-#
-# Reuses: assert_numeric_matrix, assert_one_of, normalize_contrast_name, %||%
-
-
-# ---- local helpers -----------------------------------------------------------
-
-#' Vectorised logical coercion (NA -> FALSE)
-#' @keywords internal
-isTRUE_vec <- function(x) {
-    out <- as.logical(x)
-    out[is.na(out)] <- FALSE
-    out
-}
-
-
-#' Filter a matrix + metadata to biological samples only (exclude QC/blanks)
-#'
-#' Removes samples whose \code{condition_col} value matches "qc" or "blank"
-#' (case-insensitive), plus any rows flagged by \code{is_QC} or \code{is_blank}
-#' metadata columns.
-#'
-#' @param mat           Numeric matrix (features x samples).
-#' @param meta          data.frame with at least \code{sample_col} and
-#'                      \code{condition_col}.
-#' @param condition_col Column in meta identifying experimental groups.
-#' @param sample_col    Column in meta identifying sample IDs.
-#' @param label         Character label for log messages.
-#' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
-#' @keywords internal
-filter_to_biological <- function(mat, meta, condition_col, sample_col,
-                                 label = "metabolomics") {
-    condition_vals <- as.character(meta[[condition_col]])
-    is_bio <- !grepl("^(qc|blank)$", condition_vals, ignore.case = TRUE)
-
-    if ("is_QC" %in% colnames(meta))
-        is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
-    if ("is_blank" %in% colnames(meta))
-        is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
-
-    n_excluded <- sum(!is_bio)
-    if (n_excluded > 0L) {
-        message(sprintf(
-            "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
-            label, n_excluded, sum(is_bio)
-        ))
-        keep_ids <- meta[[sample_col]][is_bio]
-        mat  <- mat[, keep_ids, drop = FALSE]
-        meta <- meta[is_bio, , drop = FALSE]
-    }
-
-    list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
-}
-
-
-# ---- pre-computed DE loader --------------------------------------------------
-
-#' Load pre-computed metabolomics DE tables from config$files$de_table
-#'
-#' Reads CSV files with columns: FC, log2(FC), raw.pval, -log10(p).
-#' Builds a summary_df conforming to the DE contract.
-#'
-#' @param config Full pipeline config.
-#' @return list conforming to the DE contract: summary_df, method, de_tables
-load_precomputed_metabolomics_de <- function(config) {
-    cfg <- config$modes$metabolomics
-    de_cfg <- cfg$de %||% list()
-
-    de_files <- cfg$files$de_table
-    if (is.list(de_files)) de_files <- unlist(de_files)
-
-    padj_cutoff <- de_cfg$p_cutoff %||% 0.05
-    linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
-    log2fc_cut  <- log2(linear_fc)
-
-    # Derive contrast labels from file names
-    contrast_labels <- vapply(de_files, function(f) {
-        bn <- tools::file_path_sans_ext(basename(f))
-        sub("^de_", "", bn)
-    }, character(1), USE.NAMES = FALSE)
-
-    de_tables <- list()
-    for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
-        if (!file.exists(abs_path)) {
-            stop("Pre-computed DE table not found: ", abs_path)
-        }
-
-        raw <- read_table_auto(abs_path)
-
-        # Map columns to standard names
-        cn <- colnames(raw)
-
-        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
-        id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
-        feat_ids <- if (!is.na(id_col_idx)) {
-            as.character(raw[[id_col_idx]])
-        } else {
-            rownames(raw)
-        }
-
-        # logFC: try common column name variants
-        logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
-        logfc_vals <- if (!is.na(logfc_col)) as.numeric(raw[[logfc_col]]) else NA_real_
-
-        # P-value: try common column name variants
-        pval_col <- cn[cn %in% c("raw.pval", "P.Value", "pvalue", "PValue", "p.value")][1]
-        pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
-
-        tbl <- data.frame(
-            feature_id = feat_ids,
-            logFC      = logfc_vals,
-            P.Value    = pval_vals,
-            stringsAsFactors = FALSE
-        )
-        tbl$AveExpr <- NA_real_
-        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
-
-        de_tables[[contrast_labels[i]]] <- tbl
-        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
-                " (label: ", contrast_labels[i], ")")
-    }
-
-    # Build summary_df with full outer join (tables may have different features)
-    all_features <- unique(unlist(lapply(de_tables, function(t) t$feature_id)))
-    summary_df <- data.frame(feature_id = all_features, stringsAsFactors = FALSE)
-
-    for (ctr in names(de_tables)) {
-        tbl <- de_tables[[ctr]]
-        idx <- match(summary_df$feature_id, tbl$feature_id)
-
-        # Signed linear FC from logFC (same transform as build_de_summary)
-        lfc <- tbl$logFC[idx]
-        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
-
-        summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
-        summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr[idx]
-        summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
-        summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
-
-        pass <- as.integer(
-            !is.na(tbl$adj.P.Val[idx]) &
-            tbl$adj.P.Val[idx] < padj_cutoff &
-            abs(tbl$logFC[idx]) >= log2fc_cut
-        )
-        summary_df[[paste0("pass.", ctr)]] <- pass
-    }
-
-    summary_df <- add_pass_any_contrast(summary_df, pass_prefix = "^pass\\.")
-
-    message("metabolomics precomputed DE: ", nrow(summary_df), " features, ",
-            sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
-
-    list(
-        summary_df = summary_df,
-        method     = "precomputed",
-        de_tables  = de_tables,
-        de_model   = NULL
-    )
-}
+# Reuses: assert_numeric_matrix, assert_one_of, %||%
 
 
 # ---- public entry point -----------------------------------------------------
@@ -183,10 +22,22 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     de_cfg <- cfg$de %||% list()
 
     method <- tolower(de_cfg$method %||% "limma")
-    assert_one_of(method, "de$method", c("limma", "t_test", "wilcoxon"))
+    assert_one_of(method, "de$method", c("limma", "t_test", "t_test_equal", "wilcoxon"))
 
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
+
+    # Contrast loading: prefer explicit contrast_table argument (from pipeline),
+    # fall back to config$de$contrasts for backwards compatibility
+    if (!missing(contrast_table) && !is.null(contrast_table)) {
+        contrasts <- contrast_table
+    } else {
+        contrasts <- de_cfg$contrasts
+    }
+    if (is.null(contrasts) || length(contrasts) == 0) {
+        stop("metabolomics DE: contrasts are required (via contrast_table argument or config$de$contrasts).")
+    }
+    if (is.list(contrasts)) contrasts <- unlist(contrasts)
 
     mat  <- pre$expr_work
     # Use pre-scaling (log-transformed) matrix for DE statistical tests.
@@ -199,45 +50,37 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
     # Align metadata to matrix columns
     meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
-
-    # ---- Filter to biological samples only (exclude QC/blanks) ----
-    bio <- filter_to_biological(mat_for_test, meta, condition_col, sample_col,
-                                label = "metabolomics DE")
-    mat_for_test <- bio$mat
-    meta         <- bio$meta
-    condition    <- bio$condition
-    mat          <- mat[, colnames(mat_for_test), drop = FALSE]
+    condition <- factor(meta[[condition_col]])
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
-    linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
-    log2fc_cut  <- log2(linear_fc)
 
-    # limma::treat() parameters — derived from user config
-    lfc_threshold <- log2(as.numeric(de_cfg$linear_fc_cutoff %||% 1.5))
-    robust_ebayes <- isTRUE(de_cfg$robust_ebayes)
+    # logfc_cutoff: applied directly to |logFC| in whatever scale the DE matrix uses.
+    # linear_fc_cutoff: convenience alias — converted via log2() for backwards compat.
+    if (!is.null(de_cfg$logfc_cutoff)) {
+        log2fc_cut <- de_cfg$logfc_cutoff
+    } else {
+        linear_fc  <- de_cfg$linear_fc_cutoff %||% 1.5
+        log2fc_cut <- log2(linear_fc)
+    }
 
-    # Run DE for each row of the contrast table
+    # Raw filtered matrix for computing log2(FC) from intensity ratios
+    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale)
+    mat_raw <- pre$expr_filt
+
+    # Run DE for each contrast
     de_tables <- list()
     de_model  <- NULL
 
-    for (i in seq_len(nrow(contrast_table))) {
-        ctr_name    <- normalize_contrast_name(contrast_table$Contrast_name[i])
-        numerator   <- as.character(contrast_table$Numerator[i])
-        denominator <- as.character(contrast_table$Denominator[i])
-
-        message("metabolomics DE [", method, "]: ", ctr_name,
-                " (", numerator, " vs ", denominator, ")")
-
-        # Build safe contrast string for limma (makeContrasts needs R-safe names)
-        contrast_str <- paste(make.names(numerator), "-", make.names(denominator))
+    for (ctr in contrasts) {
+        ctr_label <- make_contrast_label(ctr)
+        message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma    = de_limma(mat_for_test, condition, contrast_str,
-                                lfc_threshold = lfc_threshold,
-                                robust = robust_ebayes),
-            t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
-            wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
+            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
         )
 
         # Capture limma model from first contrast
@@ -245,7 +88,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
             de_model <- attr(tbl, "fit")
         }
 
-        de_tables[[ctr_name]] <- tbl
+        de_tables[[ctr_label]] <- tbl
     }
 
     # Build wide summary_df
@@ -267,22 +110,16 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
 #' Run limma on a single contrast
 #'
-#' @param mat           Numeric matrix (features x samples).
-#' @param condition     Factor of conditions.
-#' @param contrast_str  Character: safe contrast formula (e.g. "TreatmentA - Control").
-#' @param mat_for_fc    Optional pre-scaling matrix for logFC override.
-#' @param lfc_threshold Numeric: minimum log2-FC for \code{limma::treat()}
-#'   (default 0 = no threshold, equivalent to eBayes).
-#' @param robust        Logical: use robust empirical Bayes in \code{treat()}.
+#' @param mat       Numeric matrix (features x samples).
+#' @param condition Factor of conditions.
+#' @param contrast_str  Character, e.g. "B - A".
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val
-de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
-                     lfc_threshold = 0, robust = FALSE) {
+de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for limma DE.")
     }
 
-    # Defensive NA guard — input is normally NA-free after met_* imputation,
-    # but protects against edge cases (external matrices, future formats).
+    # Impute NAs with row means (limma cannot handle NA)
     mat_imp <- mat
     for (i in seq_len(nrow(mat_imp))) {
         nas <- is.na(mat_imp[i, ])
@@ -290,17 +127,15 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
     }
 
     design <- stats::model.matrix(~ 0 + condition)
-    raw_levels <- levels(condition)
-    safe_levels <- make.names(raw_levels)
-    colnames(design) <- safe_levels
+    colnames(design) <- levels(condition)
 
     fit <- limma::lmFit(mat_imp, design)
     contrast_matrix <- limma::makeContrasts(contrasts = contrast_str,
                                              levels = design)
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
-    fit2 <- limma::treat(fit2, lfc = lfc_threshold, robust = robust)
+    fit2 <- limma::eBayes(fit2)
 
-    tt <- limma::topTreat(fit2, number = Inf, sort.by = "none")
+    tt <- limma::topTable(fit2, number = Inf, sort.by = "none")
 
     res <- data.frame(
         feature_id = rownames(tt),
@@ -312,14 +147,17 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
         stringsAsFactors = FALSE
     )
 
-    # Override logFC from pre-scaling matrix if provided
+    # Override logFC with log2(FC) from raw intensities if provided
     if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
-        parts <- trimws(strsplit(contrast_str, "-")[[1]])
-        idx_B <- which(condition == raw_levels[match(parts[1], safe_levels)])
-        idx_A <- which(condition == raw_levels[match(parts[2], safe_levels)])
+        groups <- parse_metab_contrast(contrast_str)
+        idx_A <- which(condition == groups$denominator)
+        idx_B <- which(condition == groups$numerator)
         for (i in seq_len(nrow(mat_for_fc))) {
-            res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
-                            mean(mat_for_fc[i, idx_A], na.rm = TRUE)
+            mean_A <- mean(mat_for_fc[i, idx_A], na.rm = TRUE)
+            mean_B <- mean(mat_for_fc[i, idx_B], na.rm = TRUE)
+            if (is.na(mean_A) || mean_A <= 0) mean_A <- 1e-10
+            if (is.na(mean_B) || mean_B <= 0) mean_B <- 1e-10
+            res$logFC[i] <- log2(mean_B / mean_A)
         }
     }
 
@@ -334,21 +172,18 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
 #'
 #' @param mat          Numeric matrix (features x samples) for statistical test.
 #' @param condition    Factor of conditions.
-#' @param numerator    Character: numerator group level.
-#' @param denominator  Character: denominator group level.
+#' @param contrast_str Character, e.g. "B - A".
 #' @param mat_for_fc   Optional pre-scaling matrix for logFC computation.
 #' @param test_fn      Function(vals_B, vals_A) returning list(statistic, p.value).
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val.
-de_two_group <- function(mat, condition, numerator, denominator, mat_for_fc = NULL, test_fn) {
-    idx_A <- which(condition == denominator)
-    idx_B <- which(condition == numerator)
+de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_fn) {
+    groups <- parse_metab_contrast(contrast_str)
+    idx_A <- which(condition == groups$denominator)
+    idx_B <- which(condition == groups$numerator)
 
     if (length(idx_A) == 0 || length(idx_B) == 0) {
-        stop("No samples for one of the groups in contrast: ",
-             numerator, " vs ", denominator)
+        stop("No samples for one of the groups in contrast: ", contrast_str)
     }
-
-    fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
 
     res <- data.frame(
         feature_id = rownames(mat),
@@ -360,11 +195,27 @@ de_two_group <- function(mat, condition, numerator, denominator, mat_for_fc = NU
     )
 
     for (i in seq_len(nrow(mat))) {
-        fc_A <- fc_mat[i, idx_A]
-        fc_B <- fc_mat[i, idx_B]
-        res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
-        res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
+        # Compute log2(FC) from raw intensities if available
+        # (MetaboAnalyst-compatible: FC = mean_B / mean_A, then log2)
+        if (!is.null(mat_for_fc)) {
+            raw_A <- mat_for_fc[i, idx_A]
+            raw_B <- mat_for_fc[i, idx_B]
+            mean_A <- mean(raw_A, na.rm = TRUE)
+            mean_B <- mean(raw_B, na.rm = TRUE)
+            # Avoid division by zero; use small pseudocount
+            if (is.na(mean_A) || mean_A <= 0) mean_A <- 1e-10
+            if (is.na(mean_B) || mean_B <= 0) mean_B <- 1e-10
+            res$logFC[i]   <- log2(mean_B / mean_A)
+            res$AveExpr[i] <- log2((mean_A + mean_B) / 2)
+        } else {
+            # Fallback: difference on the transformed scale
+            fc_A <- mat[i, idx_A]
+            fc_B <- mat[i, idx_B]
+            res$logFC[i]   <- mean(fc_B, na.rm = TRUE) - mean(fc_A, na.rm = TRUE)
+            res$AveExpr[i] <- mean(c(fc_A, fc_B), na.rm = TRUE)
+        }
 
+        # P-value always from transformed (glog10) data
         tt <- tryCatch(
             test_fn(mat[i, idx_B], mat[i, idx_A]),
             error = function(e) NULL
@@ -383,39 +234,60 @@ de_two_group <- function(mat, condition, numerator, denominator, mat_for_fc = NU
 # ---- t-test ----------------------------------------------------------------
 
 #' Run Welch t-tests per feature on a single contrast
-#'
-#' @param mat         Numeric matrix (features x samples).
-#' @param condition   Factor of conditions.
-#' @param numerator   Character: numerator group level.
-#' @param denominator Character: denominator group level.
-#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
-de_t_test <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
-    de_two_group(mat, condition, numerator, denominator, mat_for_fc,
+de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
                  test_fn = function(b, a) stats::t.test(b, a, var.equal = FALSE))
+}
+
+
+# ---- equal-variance t-test -------------------------------------------------
+
+#' Run equal-variance (Student's) t-tests per feature on a single contrast
+#' (MetaboAnalyst default)
+de_t_test_equal <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
+                 test_fn = function(b, a) stats::t.test(b, a, var.equal = TRUE))
 }
 
 
 # ---- wilcoxon --------------------------------------------------------------
 
 #' Run Wilcoxon rank-sum tests per feature on a single contrast
-#'
-#' @param mat         Numeric matrix (features x samples).
-#' @param condition   Factor of conditions.
-#' @param numerator   Character: numerator group level.
-#' @param denominator Character: denominator group level.
-#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
-de_wilcoxon <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
-    de_two_group(mat, condition, numerator, denominator, mat_for_fc,
+de_wilcoxon <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
                  test_fn = function(b, a) stats::wilcox.test(b, a, exact = FALSE))
 }
 
 
-# ---- summary builder -------------------------------------------------------
+# ---- helpers ----------------------------------------------------------------
+
+#' Parse a metabolomics contrast string "B - A" into numerator/denominator
+#'
+#' Splits on " - " (space-dash-space) so that group names containing hyphens
+#' (e.g. "pre-treatment - post-treatment") are handled correctly.
+#'
+#' @param contrast_str Character, e.g. "post-treatment - pre-treatment".
+#' @return list(numerator, denominator)
+parse_metab_contrast <- function(contrast_str) {
+    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+    if (length(parts) != 2) {
+        stop("Cannot parse contrast: '", contrast_str,
+             "'. Expected format: 'groupB - groupA'")
+    }
+    list(numerator = trimws(parts[1]), denominator = trimws(parts[2]))
+}
+
+
+#' Create a clean label from a contrast string
+#'
+#' Converts "post-treatment - pre-treatment" to "post-treatment_vs_pre-treatment".
+make_contrast_label <- function(contrast_str) {
+    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+    paste(trimws(parts), collapse = "_vs_")
+}
+
 
 #' Build wide summary_df from per-contrast DE tables
-#'
-#' Column naming follows the RNA-style contract (no `.imputs.` infix):
-#'   linearFC.<cn>, pvalue.<cn>, padj.<cn>, pass.<cn>, AveExpr.<cn>
 #'
 #' @param de_tables Named list of per-contrast data.frames.
 #' @param padj_cutoff Numeric, adjusted p-value threshold.
@@ -433,26 +305,25 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
     for (ctr in contrast_names) {
         tbl <- de_tables[[ctr]]
 
-        # Signed linear FC: preserves directionality from limma logFC
-        lfc <- tbl$logFC
-        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
+        summary_df[[paste0("logFC_", ctr)]]     <- tbl$logFC
+        summary_df[[paste0("AveExpr_", ctr)]]   <- tbl$AveExpr
+        summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value
+        summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val
 
-        summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
-        summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr
-        summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value
-        summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val
-
-        # Significance flag (logic unchanged — same thresholds, same test)
+        # Significance flag (uses raw P.Value, not adjusted)
         pass <- as.integer(
-            !is.na(tbl$adj.P.Val) &
-            tbl$adj.P.Val < padj_cutoff &
+            !is.na(tbl$P.Value) &
+            tbl$P.Value < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
-        summary_df[[paste0("pass.", ctr)]] <- pass
+        summary_df[[paste0("pass_", ctr)]] <- pass
     }
 
-    # Aggregate pass flag across contrasts (reuse shared helper)
-    summary_df <- add_pass_any_contrast(summary_df, pass_prefix = "^pass\\.")
+    # Aggregate pass flag across contrasts
+    pass_cols <- grep("^pass_", colnames(summary_df), value = TRUE)
+    summary_df$pass_any_contrast <- as.integer(
+        rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE) > 0
+    )
 
     summary_df
 }
@@ -460,23 +331,19 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
 
 #' Extract a per-contrast DE table from summary_df for plotting
 #'
-#' Reads aligned column names (linearFC., pvalue., padj.) from summary_df
-#' and returns logFC (back-computed) for plot_volcano / plot_ma compatibility.
+#' Returns a data.frame with columns logFC, P.Value, adj.P.Val, AveExpr
+#' matching the core plot_volcano / plot_ma signature.
 #'
 #' @param summary_df Wide DE summary.
 #' @param contrast   Contrast label (e.g. "2024_vs_2013").
 #' @return data.frame suitable for plot_volcano / plot_ma.
 extract_contrast_table <- function(summary_df, contrast) {
-    linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
-    # Back-compute logFC from signed linearFC for plotting
-    logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
-
     data.frame(
         feature_id = summary_df$feature_id,
-        logFC      = logfc,
-        AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
-        P.Value    = summary_df[[paste0("pvalue.", contrast)]],
-        adj.P.Val  = summary_df[[paste0("padj.", contrast)]],
+        logFC      = summary_df[[paste0("logFC_", contrast)]],
+        AveExpr    = summary_df[[paste0("AveExpr_", contrast)]],
+        P.Value    = summary_df[[paste0("P.Value_", contrast)]],
+        adj.P.Val  = summary_df[[paste0("adj.P.Val_", contrast)]],
         stringsAsFactors = FALSE
     )
 }

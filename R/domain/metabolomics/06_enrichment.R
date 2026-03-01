@@ -573,7 +573,11 @@ run_metabolomics_ora <- function(pre, de_res, config) {
     # ---- Determine significance thresholds ----
     de_cfg       <- cfg$de %||% list()
     p_cutoff     <- de_cfg$p_cutoff %||% 0.05
-    lfc_cutoff   <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
+    if (!is.null(de_cfg$logfc_cutoff)) {
+        lfc_cutoff <- de_cfg$logfc_cutoff
+    } else {
+        lfc_cutoff <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
+    }
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build background (all measured features mapped to IDs) ----
@@ -595,7 +599,7 @@ run_metabolomics_ora <- function(pre, de_res, config) {
     contrast_name <- names(de_res$de_tables)[1]
     de_tbl <- de_res$de_tables[[contrast_name]]
 
-    sig_mask <- !is.na(de_tbl$adj.P.Val) & de_tbl$adj.P.Val < p_cutoff &
+    sig_mask <- !is.na(de_tbl$P.Value) & de_tbl$P.Value < p_cutoff &
                 !is.na(de_tbl$logFC) & abs(de_tbl$logFC) >= lfc_cutoff
     sig_features <- de_tbl$feature_id[sig_mask]
 
