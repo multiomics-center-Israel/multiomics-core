@@ -654,7 +654,7 @@ run_claude_code_commentary <- function(image_path, figure_id, context,
 
     # Allow MCP tools (K-Dense, etc.) if available, plus Read for images
     cmd <- sprintf(
-        "claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
+        "unset CLAUDECODE; claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
         model,
         json_schema,
         shQuote(prompt)
