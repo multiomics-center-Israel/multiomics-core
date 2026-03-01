@@ -28,8 +28,8 @@ plot_density_overlay <- function(expr_mat,
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.data.frame(expr_mat)
 
-  norm_expr_long <- expr_mat|>
-    tibble::rownames_to_column("feature")|>
+  norm_expr_long <- expr_mat %>%
+    tibble::rownames_to_column("feature") %>%
     tidyr::pivot_longer(
       cols = -feature,
       names_to = "SampleID",
@@ -370,150 +370,130 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
 
   p
 }
-
-plot_cluster_profiles_legacy_style <- function(group_means, clusters, x_label = "Group") {
-  gm <- as.matrix(group_means)
-  clv <- clusters[rownames(gm)]
-  
-  nfeat_df <- data.frame(
-    cluster = as.integer(names(table(clv))),
-    n_features = as.integer(table(clv))
-  )
-  
-  df <- as.data.frame(gm)
-  df$gene <- rownames(gm)
-  df$cluster <- unname(clv)
-  
-  long <- tidyr::pivot_longer(
-    df,
-    cols = setdiff(colnames(df), c("gene", "cluster")),
-    names_to = "group",
-    values_to = "EXP"
-  )
-  
-
-  long$group <- factor(long$group, levels = unique(long$group))
-  
-  # facet labels with n genes
-  long <- merge(long, nfeat_df, by = "cluster")
-  
-  long$facet_label <- sprintf("Cluster %s (n=%d)", long$cluster, long$n_features)
-  
-  long$facet_label <- factor(
-    long$facet_label,
-    levels = unique(long$facet_label[order(as.numeric(as.character(long$cluster)))])
-  )
-  
-  ggplot2::ggplot(long, ggplot2::aes(x = group, y = EXP, group = 1)) +
-    ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
-    ggplot2::stat_summary(fun.data = ggplot2::mean_se, geom = "errorbar", width = 0.3) +
-    ggplot2::facet_wrap(~facet_label, scales = "fixed", ncol = 2) +
-    ggplot2::labs(y = "Expression (group means)", x = x_label) +
-    ggplot2::theme_bw() +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-}
-
 #' Plot cluster profiles using ggplot2
 #' Replaces the manual base-R loop for cluster visualization.
 #' @param prof_df Data frame containing: cluster, group, mean, sd, n_features
 plot_cluster_profiles <- function(prof_df, x_label = "Group") {
-  
-
-  prof_df$group <- factor(prof_df$group, levels = unique(prof_df$group))
-  
-  
+  # Create a clean label for facets
   prof_df$facet_label <- sprintf("Cluster %s (n=%d)", prof_df$cluster, prof_df$n_features)
-  prof_df$facet_label <- factor(
-    prof_df$facet_label,
+
+  # Ensure order matches cluster number
+  prof_df$facet_label <- factor(prof_df$facet_label,
     levels = unique(prof_df$facet_label[order(as.numeric(as.character(prof_df$cluster)))])
   )
 
-  
-  ggplot2::ggplot(prof_df, ggplot2::aes(x = group, y = mean, group = 1)) +
-    ggplot2::geom_errorbar(ggplot2::aes(ymin = mean - sd, ymax = mean + sd),
-                           width = 0.1, color = "grey50") +
-    ggplot2::geom_line() +
-    ggplot2::geom_point(size = 2) +
+  p <- ggplot2::ggplot(prof_df, ggplot2::aes(x = group, y = mean, group = 1)) +
+    # Error bars (SD)
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = mean - sd, ymax = mean + sd), width = 0.1, color = "grey50") +
+    # Line and points
+    ggplot2::geom_line(color = "blue") +
+    ggplot2::geom_point(size = 2, color = "darkblue") +
+    # Zero line
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    # Faceting
     ggplot2::facet_wrap(~facet_label, scales = "fixed", ncol = 2) +
-    ggplot2::labs(y = "Mean (group means)", x = x_label) +
+    # Styling
+    ggplot2::labs(y = "Mean z-score (group means)", x = x_label) +
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+  return(p)
 }
+
 # R/plots/plot_de.R
 
 #' Volcano plot for a single DE table (one contrast)
 #'
 #' Consistent logic:
-#' Y-axis: -log10(adj.P.Val)  [Adjusted p-value / FDR]
-#' Color:  Up (red), Down (blue), NS (grey) based on padj and logFC thresholds
-#' H-line: padj_cutoff (matches the Y-axis and coloring threshold)
+#' Y-axis: -log10(P.Value)  [Raw p-value]
+#' Color:  Up (red), Down (blue), NS (grey) based on p-value and logFC thresholds
+#' H-line: p_cutoff (matches the Y-axis and coloring threshold)
 #'
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
-#' @param cfg Config list (sections de$p_cutoff, de$linear_fc_cutoff)
+#' @param cfg Config list (sections de$p_cutoff, de$logfc_cutoff or de$linear_fc_cutoff)
 #' @param title Plot title
 #' @param ... Ignored
 #' @return ggplot object
 plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
-  # 1. Flexible Column Mapping
-  # Try to find the logFC column
-  lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
-  # Try to find the Adjusted P-value column
-  padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
-  # Try to find the raw P-value column
-  pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
-  
-  # Validation check
-  if (is.na(lfc_col) || is.na(padj_col)) {
-    stop(paste0(
-      "plot_volcano: Could not find required columns. ",
-      "Available: ", paste(colnames(de_tbl), collapse = ", ")
-    ))
+  stopifnot(is.data.frame(de_tbl))
+
+  # Required columns
+  req_cols <- c("logFC", "P.Value")
+  missing <- setdiff(req_cols, colnames(de_tbl))
+  if (length(missing) > 0) {
+    stop("plot_volcano: de_tbl missing columns: ", paste(missing, collapse = ", "))
   }
-  
-  # 2. Thresholds from config
+
+  # Thresholds
   p_cut <- cfg$de$p_cutoff %||% 0.05
-  lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
-  log2fc_cut <- log2(lin_fc_cut)
-  
-  # 3. Prepare Data
-  # We create a local 'plot_df' so we don't mess with the original de_tbl
-  plot_df <- as.data.frame(de_tbl)
-  plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
-  
-  # Handle NAs (important for DESeq2)
-  plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
-  plot_df$.neglog10p <- -log10(pmax(plot_df$.padj_plot, 1e-300))
-  
-  # 4. Define Significance & Direction
-  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.padj_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
-  
-  plot_df$.direction <- factor(
-    ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
+  if (!is.null(cfg$de$logfc_cutoff)) {
+    log2fc_cut <- cfg$de$logfc_cutoff
+  } else {
+    lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
+    log2fc_cut <- log2(lin_fc_cut)
+  }
+
+  df <- de_tbl
+
+  # Prepare plotting data
+  df$.logFC <- as.numeric(df[["logFC"]])
+
+  # Y-axis uses raw P-value
+  df$.pval <- as.numeric(df[["P.Value"]])
+  df$.pval_plot <- ifelse(is.na(df$.pval), 1, df$.pval)
+  df$.neglog10p <- -log10(pmax(df$.pval_plot, 1e-300))
+
+  # Categorize: Up, Down, NS (not significant)
+  is_sig <- !is.na(df$.logFC) & (df$.pval_plot <= p_cut) & (abs(df$.logFC) >= log2fc_cut)
+  is_up <- is_sig & (df$.logFC > 0)
+  is_down <- is_sig & (df$.logFC < 0)
+
+  df$.direction <- factor(
+    ifelse(is_up, "Up", ifelse(is_down, "Down", "NS")),
     levels = c("NS", "Down", "Up")
   )
-  
-  # 5. Sorting (Significant points on top)
-  plot_df <- plot_df[order(plot_df$.direction), ]
-  
-  # 6. Plotting
-  ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
-    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
+
+  # Count stats
+  n_up <- sum(is_up, na.rm = TRUE)
+  n_down <- sum(is_down, na.rm = TRUE)
+  n_total <- n_up + n_down
+
+  if (n_total == 0) {
+    if (is.null(title)) title <- "Volcano (0 sig)"
+    message(sprintf(
+      "[plot_volcano] '%s': 0 genes passed (p<=%.2g, |logFC|>=%.2g). Total rows: %d",
+      title, p_cut, log2fc_cut, nrow(df)
+    ))
+  } else {
+    # Sort so significant points are plotted last (on top)
+    df <- df[order(df$.direction), ]
+    message(sprintf(
+      "[plot_volcano] '%s': %d up, %d down (p<=%.2g, |logFC|>=%.2g)",
+      title, n_up, n_down, p_cut, log2fc_cut
+    ))
+  }
+
+  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
+    ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.5, na.rm = TRUE) +
     ggplot2::scale_color_manual(
-      values = c("NS" = "grey80", "Down" = "#377eb8", "Up" = "#e41a1c"),
-      drop = FALSE # Keep all levels in legend even if 0 counts
+      name = "Regulation",
+      values = c("NS" = "grey70", "Down" = "blue", "Up" = "red"),
+      labels = c(
+        "NS" = sprintf("NS (%d)", nrow(df) - n_total),
+        "Down" = sprintf("Down (%d)", n_down),
+        "Up" = sprintf("Up (%d)", n_up)
+      )
     ) +
-    ggplot2::scale_alpha_manual(values = c("NS" = 0.3, "Down" = 0.8, "Up" = 0.8), guide = "none") +
-    ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "grey50") +
-    ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
+    ggplot2::scale_alpha_manual(values = c("NS" = 0.25, "Down" = 0.8, "Up" = 0.8), guide = "none") +
+    ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "black") +
+    ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "black") +
     ggplot2::labs(
-      title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", padj_col, "and", lfc_col),
-      x = "log2 Fold Change",
-      y = paste0("-log10(", padj_col, ")")
+      title = title %||% "Volcano plot",
+      x = "log2(FC)",
+      y = "-log10(P.Value)"
     ) +
-    ggplot2::theme_minimal()
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "right")
 }
 
 #' MA plot for a single DE table (one contrast)
@@ -535,9 +515,9 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   stopifnot(is.data.frame(de_tbl))
   if (!("logFC" %in% colnames(de_tbl))) stop("plot_ma: de_tbl missing 'logFC' column.")
 
-  # p column
-  p_col <- if (isTRUE(use_adj) && "adj.P.Val" %in% colnames(de_tbl)) "adj.P.Val" else "P.Value"
-  if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' or 'adj.P.Val'.")
+  # Always use raw P.Value for significance coloring
+  p_col <- "P.Value"
+  if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' column.")
 
   # A column (already log2 scale from DESeq2/edgeR normalization)
   if ("AveExpr" %in% colnames(de_tbl)) {
@@ -550,8 +530,12 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
 
   # thresholds
   p_cut <- cfg$de$p_cutoff %||% 0.1
-  lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
-  log2fc_cut <- log2(lin_fc_cut)
+  if (!is.null(cfg$de$logfc_cutoff)) {
+    log2fc_cut <- cfg$de$logfc_cutoff
+  } else {
+    lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
+    log2fc_cut <- log2(lin_fc_cut)
+  }
 
   df <- de_tbl
   df$.A <- A
@@ -613,97 +597,6 @@ add_A_from_expr <- function(de_tbl, expr_mat, id_col = "FeatureID") {
 
   de_tbl$.A <- A
   de_tbl
-}
-
-#' Binary missingness heatmap for MNAR/MAR diagnostics
-#'
-#' Visualises a binary (missing/observed) matrix with columns sorted by ascending
-#' sample intensity (revealing MNAR patterns on the left) and rows colour-annotated
-#' by MNAR/MAR class.
-#'
-#' PURE function: no config access, no file I/O, no side effects.
-#'
-#' @param mat Numeric matrix (features x samples). NAs denote missing values.
-#' @param mnar_class Named logical or character vector, one element per feature.
-#'   Logical: TRUE = MNAR, FALSE = MAR/observed.
-#'   Character: "MNAR", "MAR", "all_missing", or "all_observed".
-#'   Names must correspond to rownames(mat).
-#' @param sample_order Optional character vector of column names specifying column
-#'   order. If NULL, columns are sorted by ascending \code{colMeans(mat, na.rm=TRUE)}
-#'   (low-intensity first).
-#' @param feat_order Optional character vector of row names specifying row order.
-#'   If NULL, rows are sorted by descending missingness fraction.
-#'
-#' @return pheatmap object.
-#'
-plot_missingness_heatmap <- function(mat, mnar_class,
-                                     sample_order = NULL,
-                                     feat_order = NULL) {
-  mat <- as.matrix(mat)
-
-  # Normalise mnar_class to character
-  if (is.logical(mnar_class)) {
-    class_vec <- ifelse(mnar_class, "MNAR", "MAR")
-  } else {
-    class_vec <- as.character(mnar_class)
-  }
-  if (is.null(names(class_vec))) names(class_vec) <- rownames(mat)
-
-  # Binary missingness matrix (1 = missing, 0 = observed)
-  miss_bin <- matrix(
-    as.integer(is.na(mat)),
-    nrow = nrow(mat), ncol = ncol(mat),
-    dimnames = dimnames(mat)
-  )
-
-  # Column order: ascending colMeans → low-intensity samples on the left
-  if (is.null(sample_order)) {
-    col_means    <- colMeans(mat, na.rm = TRUE)
-    sample_order <- names(sort(col_means, decreasing = FALSE))
-  }
-  sample_order <- intersect(sample_order, colnames(miss_bin))
-  miss_bin     <- miss_bin[, sample_order, drop = FALSE]
-
-  # Row order: descending missingness fraction → most-missing features at top
-  if (is.null(feat_order)) {
-    row_miss_pct <- rowMeans(is.na(mat[, sample_order, drop = FALSE]))
-    feat_order   <- names(sort(row_miss_pct, decreasing = TRUE))
-  }
-  feat_order <- intersect(feat_order, rownames(miss_bin))
-  miss_bin   <- miss_bin[feat_order, , drop = FALSE]
-
-  # Row annotation aligned to the (possibly reordered) features
-  class_aligned <- class_vec[feat_order]
-  annot_row     <- data.frame(Class = class_aligned, row.names = feat_order)
-
-  class_colors <- c(
-    "MNAR"         = "#d73027",  # red
-    "MAR"          = "#4575b4",  # blue
-    "all_missing"  = "#313695",  # dark blue
-    "all_observed" = "#91cf60"   # green
-  )
-  present <- intersect(names(class_colors), unique(class_aligned))
-  annot_colors <- list(Class = class_colors[present])
-
-  show_rownames <- nrow(miss_bin) <= 80
-  show_colnames <- ncol(miss_bin) <= 40
-
-  pheatmap::pheatmap(
-    miss_bin,
-    color              = c("#f7f7f7", "#252525"),  # white = observed, dark = missing
-    breaks             = c(-0.5, 0.5, 1.5),
-    cluster_rows       = FALSE,
-    cluster_cols       = FALSE,
-    annotation_row     = annot_row,
-    annotation_colors  = annot_colors,
-    main               = "Missingness pattern (dark = missing, sorted by sample intensity)",
-    show_rownames      = show_rownames,
-    show_colnames      = show_colnames,
-    border_color       = NA,
-    legend             = TRUE,
-    legend_breaks      = c(0, 1),
-    legend_labels      = c("Observed", "Missing")
-  )
 }
 
 #' Save a pheatmap object to file
@@ -774,13 +667,12 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
   sample_col <- cfg$effects$samples
   color_col  <- get_color_config(cfg)
   
-  annot_col <- build_heatmap_annotation_col(meta, cfg)
-  # annot_col <- data.frame(
-  #   Condition = meta[[color_col]],
-  #   row.names = meta[[sample_col]]
-  # )
-  # annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
-  # 
+  annot_col <- data.frame(
+    Condition = meta[[color_col]],
+    row.names = meta[[sample_col]]
+  )
+  annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
+  
   annot_row <- NULL
   if (annotation_row_builder) {
     annot_row <- build_contrast_row_context(use_ids, annotation_row_context)
@@ -833,21 +725,4 @@ build_contrast_row_context <- function(use_ids, context) {
   common <- intersect(use_ids, rownames(ar))
   full[common, ] <- ar[common, , drop = FALSE]
   full
-}
-
-build_heatmap_annotation_col <- function(meta, cfg) {
-  sample_col <- cfg$effects$samples %||% "sample_id"
-  color_col  <- cfg$effects$color %||% NULL
-  shape_col  <- cfg$effects$shape %||% NULL
-  
-  annot_cols <- c(
-    if (!is.null(color_col) && color_col %in% colnames(meta)) color_col,
-    if (!is.null(shape_col) && shape_col %in% colnames(meta) && shape_col != color_col) shape_col
-  )
-  
-  if (length(annot_cols) == 0) return(NULL)
-  
-  annot <- meta[, annot_cols, drop = FALSE]
-  rownames(annot) <- meta[[sample_col]]
-  annot
 }
