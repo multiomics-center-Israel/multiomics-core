@@ -131,8 +131,8 @@ list(
   # pipe_proteomics()
 
   # RNA-seq pipeline
-  pipe_rnaseq()
+  # pipe_rnaseq()
 
   # Metabolomics pipeline (Stages 1 + 2)
-  # pipe_metabolomics()
+  pipe_metabolomics()
 )
