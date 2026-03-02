@@ -167,12 +167,34 @@ modes:
         # - "Treatment"
         # - "TimePoint"
 
-    # ---- QC plot settings ----
+    # ---- QC suite settings ----
+    # Controls the intermediate QC diagnostic targets:
+    #   met_log_qc, met_norm_tss_qc, met_norm_median_qc, met_norm_pqn_qc,
+    #   met_qc_comparison
+    # These are leaf nodes — a failure here never blocks analysis targets.
     qc:
-      adaptive_plots: true
+      enabled: true
+
+      # Column in sample metadata used to identify QC samples.
+      # If the column holds logical values (TRUE/FALSE), boolean detection is used.
+      # If the column holds character values, set qc_flag_value to the QC label.
+      qc_flag_column: "treatment"
+      qc_flag_value: "qc"   # case-insensitive; also matches "TRUE" / "1" columns
+
+      # Per-plot toggles (set any to false to skip that plot type at every stage)
+      plots:
+        pca: true
+        density: true
+        boxplot: true
+        histogram: true           # skipped automatically when groups < 2 or > 8
+        heatmap_expression: true
+        heatmap_correlation: true
+        heatmap_distance: true
+
       thresholds:
-        min_samples_for_pca3d: 10
-        max_samples_for_heatmaps: 120
+        min_samples_for_pca: 3         # minimum samples required to run PCA
+        max_samples_for_heatmaps: 120  # skip all heatmaps above this sample count
+        top_variable_features: 100     # features selected by row-variance for expression heatmap
 
     # ==================================================================
     # Stage 2: Differential expression, feature selection, enrichment

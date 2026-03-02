@@ -1,21 +1,37 @@
 # R/pipeline/metabolomics/00_pipe_metabolomics.R
 #
-# {targets} assembly for metabolomics:
+# {targets} assembly for metabolomics.
 #
-#   Stage 0 (new): met_* preprocessing DAG
-#     met_raw → met_missingness_stats → met_missingness_plot
-#             → met_filtered → met_imputed → met_log
-#                                              ├─ met_norm_tss    → met_norm_tss_qc
-#                                              ├─ met_norm_median → met_norm_median_qc
-#                                              ├─ met_norm_pqn    → met_norm_pqn_qc
-#                                              └─ met_norm_comparison
-#                                           [chosen via config] → met_corrected
+# ── Scale Contract ────────────────────────────────────────────────────────────
 #
-#   metab_pre adapter (bridges new → existing contract)
+#   met_raw      (Linear)
+#     └─ met_filtered   (Linear)
+#          └─ met_imputed (Linear) ─────────────────────────────┐
+#               └─ met_log (Log2)                               │ (linear feed)
+#                    ├─ met_norm_median  (Log2, log-shift)      │
+#                    │                                          │
+#                    │    ┌─ met_norm_tss  (Log2) ←─────────────┤
+#                    │    ├─ met_norm_pqn  (Log2) ←─────────────┘
+#                    │    │
+#                    │    ├─ met_norm_comparison  (file: datasets/)
+#                    │    │
+#                    └────┴──── [chosen_norm] ──→ met_corrected
+#                                                      └─ metab_pre (adapter)
 #
-#   Stage 1: metab_qc_pre_obj (QC diagnostics)
-#   Stage 2: metab_de_res, metab_feature_sel_res, metab_enrichment_res,
-#            metab_standard_outputs, metab_shiny_payload, metab_report
+# ── QC Layer (leaf nodes — never block analysis targets) ─────────────────────
+#
+#   met_qc_cfg  (derived: config$modes$metabolomics$qc)
+#     ├─ met_log_qc          (file: qc/log/)
+#     ├─ met_norm_tss_qc     (file: qc/norm_tss/)
+#     ├─ met_norm_median_qc  (file: qc/norm_median/)
+#     ├─ met_norm_pqn_qc     (file: qc/norm_pqn/)
+#     └─ met_qc_comparison   (file: qc/comparison/)
+#
+# ── Downstream (unchanged) ───────────────────────────────────────────────────
+#
+#   metab_qc_pre_obj, metab_de_res, metab_feature_sel_res,
+#   metab_enrichment_res, metab_standard_outputs,
+#   metab_shiny_payload, metab_report
 
 
 pipe_metabolomics <- function() {
@@ -62,10 +78,11 @@ pipe_metabolomics <- function() {
         ),
 
         # ==================================================================
-        # met_* PREPROCESSING DAG (new)
+        # met_* PREPROCESSING DAG
         # ==================================================================
 
         # met_raw: parse + sample filter + align metadata
+        # Scale: Linear
         tar_target(
             met_raw,
             {
@@ -89,74 +106,54 @@ pipe_metabolomics <- function() {
         ),
 
         # met_filtered: threshold-based feature + sample removal
+        # Scale: Linear
         tar_target(
             met_filtered,
             mod_met_filtered(met_raw, config)
         ),
 
         # met_imputed: MNAR → min/2, MAR → KNN
+        # Scale: Linear  ← canonical pre-log linear target for TSS / PQN
         tar_target(
             met_imputed,
             mod_met_imputed(met_filtered, config)
         ),
 
         # met_log: log2 transform (pseudocount from config)
+        # Scale: Log2  ← canonical pre-norm log target for Median
         tar_target(
             met_log,
             mod_met_log(met_imputed, config)
         ),
 
-        # ---- Three parallel normalization targets ----
+        # ── Normalization targets ─────────────────────────────────────────
+        #
+        # Scale Contract enforcement:
+        #   TSS and PQN are multiplicative operations → must receive Linear input.
+        #   Both are wired from met_imputed (Linear); mod_met_normalize_linear()
+        #   applies normalization first, then log2-transforms the result.
+        #
+        #   Median normalization on Log2 data is a log-shift (subtraction), not
+        #   a multiplication → wired from met_log (Log2); mod_met_normalize_log()
+        #   performs sweep(mat, 2, col_medians - global_median, "-").
 
         tar_target(
             met_norm_tss,
-            mod_met_normalize(met_log, method = "tss",
-                              out_dir = metab_out_dir, config = config)
+            mod_met_normalize_linear(met_imputed, method = "tss", config = config)
         ),
 
         tar_target(
             met_norm_median,
-            mod_met_normalize(met_log, method = "median",
-                              out_dir = metab_out_dir, config = config)
+            mod_met_normalize_log(met_log, config = config)
         ),
 
         tar_target(
             met_norm_pqn,
-            mod_met_normalize(met_log, method = "pqn",
-                              out_dir = metab_out_dir, config = config)
-        ),
-
-        # ---- QC file targets (boxplot + PCA already saved inside mod_met_normalize;
-        #      these targets track the saved PNG paths for {targets} caching) ----
-
-        tar_target(
-            met_norm_tss_qc,
-            {
-                files <- c(met_norm_tss$boxplot_file, met_norm_tss$pca_file)
-                files[!sapply(files, is.null)]
-            },
-            format = "file"
-        ),
-
-        tar_target(
-            met_norm_median_qc,
-            {
-                files <- c(met_norm_median$boxplot_file, met_norm_median$pca_file)
-                files[!sapply(files, is.null)]
-            },
-            format = "file"
-        ),
-
-        tar_target(
-            met_norm_pqn_qc,
-            {
-                files <- c(met_norm_pqn$boxplot_file, met_norm_pqn$pca_file)
-                files[!sapply(files, is.null)]
-            },
-            format = "file"
+            mod_met_normalize_linear(met_imputed, method = "pqn", config = config)
         ),
 
         # met_norm_comparison: TSV of RSD + PC1 variance for all three methods
+        # RSD is computed on back-transformed linear values (2^val - pseudocount).
         tar_target(
             met_norm_comparison,
             mod_met_norm_comparison(
@@ -182,6 +179,82 @@ pipe_metabolomics <- function() {
                 out_dir     = metab_out_dir,
                 config      = config
             )
+        ),
+
+        # ==================================================================
+        # QC LAYER — leaf nodes (never depended on by analysis targets)
+        # ==================================================================
+
+        # met_qc_cfg: derived config target.
+        # Invalidated only when config$modes$metabolomics$qc changes.
+        # Changes to QC config do NOT propagate to data targets (met_raw → metab_pre).
+        tar_target(
+            met_qc_cfg,
+            config$modes$metabolomics$qc %||% list()
+        ),
+
+        # met_log_qc: QC suite on the post-log pre-normalization matrix.
+        # Writes to: {metab_out_dir}/qc/log/with_qc/ and /no_qc/
+        tar_target(
+            met_log_qc,
+            {
+                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
+                mod_met_qc_suite(met_log, stage = "log",
+                                 out_dir = metab_out_dir, config = config)
+            },
+            format = "file"
+        ),
+
+        # met_norm_tss_qc: QC suite on the TSS-normalized matrix.
+        # Writes to: {metab_out_dir}/qc/norm_tss/with_qc/ and /no_qc/
+        tar_target(
+            met_norm_tss_qc,
+            {
+                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
+                mod_met_qc_suite(met_norm_tss, stage = "norm_tss",
+                                 out_dir = metab_out_dir, config = config)
+            },
+            format = "file"
+        ),
+
+        # met_norm_median_qc: QC suite on the median-normalized matrix.
+        # Writes to: {metab_out_dir}/qc/norm_median/with_qc/ and /no_qc/
+        tar_target(
+            met_norm_median_qc,
+            {
+                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
+                mod_met_qc_suite(met_norm_median, stage = "norm_median",
+                                 out_dir = metab_out_dir, config = config)
+            },
+            format = "file"
+        ),
+
+        # met_norm_pqn_qc: QC suite on the PQN-normalized matrix.
+        # Writes to: {metab_out_dir}/qc/norm_pqn/with_qc/ and /no_qc/
+        tar_target(
+            met_norm_pqn_qc,
+            {
+                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
+                mod_met_qc_suite(met_norm_pqn, stage = "norm_pqn",
+                                 out_dir = metab_out_dir, config = config)
+            },
+            format = "file"
+        ),
+
+        # met_qc_comparison: aggregate benchmark TSV across all four QC stages.
+        # Reads with_qc/metrics_summary.tsv from each stage; adds pca_pc1_delta.
+        # Writes to: {metab_out_dir}/qc/comparison/normalization_qc_benchmark.tsv
+        tar_target(
+            met_qc_comparison,
+            mod_met_qc_comparison_table(
+                log_qc_files    = met_log_qc,
+                tss_qc_files    = met_norm_tss_qc,
+                median_qc_files = met_norm_median_qc,
+                pqn_qc_files    = met_norm_pqn_qc,
+                out_dir         = metab_out_dir,
+                config          = config
+            ),
+            format = "file"
         ),
 
         # ==================================================================

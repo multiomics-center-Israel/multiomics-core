@@ -350,12 +350,27 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
       return(c(files, tsv))
     }
 
-    flag_vals <- meta_sub[[qc_flag_col]]
+    flag_vals     <- meta_sub[[qc_flag_col]]
+    qc_flag_value <- cfg$qc_flag_value %||% "qc"
+
     if (is.logical(flag_vals)) {
+      # Boolean column (e.g. is_QC = TRUE / FALSE).
       qc_mask <- !is.na(flag_vals) & flag_vals
     } else {
-      qc_mask <- as.character(flag_vals) %in% c("TRUE", "true", "True", "1")
+      char_vals <- tolower(trimws(as.character(flag_vals)))
+      char_vals[is.na(flag_vals)] <- NA_character_
+
+      # Two acceptance criteria, OR-combined:
+      #   1. Backward-compat boolean-string columns: "TRUE" / "1"
+      #      (e.g. a metadata column exported as character from Excel)
+      #   2. Value-match: case-insensitive compare to qc_flag_value
+      #      (e.g. treatment == "qc", treatment == "QC", treatment == "Qc")
+      bool_match  <- char_vals %in% c("true", "1")
+      value_match <- !is.na(char_vals) &
+                     char_vals == tolower(trimws(qc_flag_value))
+      qc_mask <- bool_match | value_match
     }
+    qc_mask[is.na(qc_mask)] <- FALSE
 
     if (!any(qc_mask)) {
       message(sprintf(
