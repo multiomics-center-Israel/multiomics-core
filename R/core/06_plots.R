@@ -449,6 +449,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     levels = c("NS", "Down", "Up")
   )
 
+  # Add pass indicator for plotting
+  df$.pass <- is_sig
+
   # Count stats
   n_up <- sum(is_up, na.rm = TRUE)
   n_down <- sum(is_down, na.rm = TRUE)
@@ -469,7 +472,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ))
   }
 
-  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
+  ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10padj)) +
     ggplot2::geom_point(ggplot2::aes(color = .pass, alpha = .pass), size = 1.5, na.rm = TRUE) +
     ggplot2::scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"), guide = "none") +
     ggplot2::scale_alpha_manual(values = c("FALSE" = 0.4, "TRUE" = 0.9), guide = "none") +

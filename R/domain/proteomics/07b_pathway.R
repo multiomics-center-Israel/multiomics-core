@@ -24,9 +24,10 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 
     stopifnot(src_id_col %in% colnames(summary_df))
 
-    padj_col <- paste0("padj.imputs.", contrast_name)
-    pval_col <- paste0("pvalue.imputs.", contrast_name)
-    fc_col   <- paste0("linearFC.imputs.", contrast_name)
+    cn <- normalize_contrast_name(contrast_name)
+    padj_col <- paste0("padj.imputs.", cn)
+    pval_col <- paste0("pvalue.imputs.", cn)
+    fc_col   <- paste0("linearFC.imputs.", cn)
 
     stopifnot(padj_col %in% colnames(summary_df))
     stopifnot(fc_col   %in% colnames(summary_df))

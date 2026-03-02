@@ -74,8 +74,9 @@ load_metabolomics_inputs <- function(config) {
 
 #' Validate metabolomics config (called by validate_config dispatch)
 validate_metabolomics_config <- function(cfg) {
+    # input$format is optional — defaults to "cd_raw" in load_metabolomics_inputs()
     assert_one_of(cfg$input$format, "input$format",
-                  c("cd_raw", "processed_wide", "long"))
+                  c("cd_raw", "processed_wide", "long"), allow_null = TRUE)
 
     if (is.null(cfg$files$data) || !nzchar(cfg$files$data)) {
         stop("metabolomics: files$data is required")

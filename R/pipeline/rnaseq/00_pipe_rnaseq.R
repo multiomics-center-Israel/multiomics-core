@@ -142,7 +142,7 @@ pipe_rnaseq <- function() {
                 force(rna_deconv)
                 force(rna_exec_summary)
                 render_rnaseq_report(
-                    run_dir     = run_dir,
+                    run_dir     = rna_out_dir,
                     config      = config,
                     config_file = config_file
                 )

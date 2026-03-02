@@ -74,6 +74,7 @@ preflight_rnaseq <- function(config, result, verbose) {
     base_path <- file.path(config$project$dir, config$paths$raw)
 
     # --- Counts file ---
+    counts <- NULL
     counts_rel <- rna_cfg$files$counts
     if (!is.null(counts_rel) && nzchar(counts_rel)) {
         counts_file <- file.path(base_path, counts_rel)
@@ -94,7 +95,14 @@ preflight_rnaseq <- function(config, result, verbose) {
             }
         }
     } else {
-        result$errors <- c(result$errors, "No counts file specified in modes.rna.files.counts")
+        # Preprocessed data may be provided instead of raw counts
+        has_preprocessed <- !is.null(rna_cfg$files$preprocessed_counts) &&
+                            nzchar(rna_cfg$files$preprocessed_counts %||% "")
+        if (has_preprocessed) {
+            result$info <- c(result$info, "No raw counts file; using preprocessed_counts instead")
+        } else {
+            result$errors <- c(result$errors, "No counts file specified in modes.rna.files.counts")
+        }
     }
 
     # --- Metadata file ---

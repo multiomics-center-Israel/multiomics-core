@@ -386,12 +386,12 @@ settings <- data.frame(
     "Clustering Enabled"
   ),
   Value = c(
-    rna_cfg$normalization$method,
+    rna_cfg$normalization$method %||% "N/A",
     prior_count,
-    rna_cfg$filtering$group_col,
-    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline selects optimal within this range)"),
-    rna_cfg$de$method, rna_cfg$de$deseq_mode,
-    rna_cfg$de$p_cutoff, rna_cfg$de$linear_fc_cutoff,
+    rna_cfg$filtering$group_col %||% "N/A",
+    paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
+    rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
+    rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
   ),
   stringsAsFactors = FALSE
