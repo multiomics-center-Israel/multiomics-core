@@ -1,0 +1,85 @@
+---
+title: "Metabolomics — Normalization QC Review"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+    df_print: paged
+params:
+  qc_comparison_file: NULL
+  qc_suite_files: NULL
+  config: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center"
+)
+library(DT)
+
+# Null-coalescing operator (mirrors pipeline convention)
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# embed_png and render_dt: duplicated from metabolomics_report.Rmd so this
+# template is fully self-contained and renderable without the full pipeline env.
+embed_png <- function(files, pattern, fig_width = "100%") {
+  if (is.null(files) || length(files) == 0) return(invisible(NULL))
+  hits <- files[grepl(pattern, basename(files), ignore.case = TRUE)]
+  hits <- hits[file.exists(hits)]
+  if (length(hits) == 0) return(invisible(NULL))
+  knitr::include_graphics(hits[1])
+}
+
+render_dt <- function(df, caption = NULL, pageLength = 10) {
+  if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
+  htmltools::tagList(
+    DT::datatable(df, caption = caption,
+                  rownames = FALSE,
+                  extensions = "Buttons",
+                  options = list(pageLength = pageLength,
+                                 scrollX = TRUE,
+                                 dom = "Bfrtip",
+                                 buttons = list("csv", "excel")),
+                  class = "compact stripe hover")
+  )
+}
+
+# qc_files is referenced by _qc_normalization_section.Rmd via parent environment.
+qc_files <- params$qc_suite_files %||% character(0)
+```
+
+> **Purpose:** Review normalization method performance before interpreting
+> differential expression and enrichment results.  The **Benchmark** tab shows
+> RSD and PC1 variance for every normalization stage, starting from the raw
+> linear baseline (`met_imputed`).  Choose the method with the lowest
+> `median_rsd_overall` and the highest `pca_pc1_delta`.
+
+# Normalization QC {.tabset}
+
+```{r qc-section, child='_qc_normalization_section.Rmd', eval=!is.null(params$qc_comparison_file) && length(params$qc_comparison_file) > 0}
+```
+
+```{r no-data-msg, results='asis', echo=FALSE, eval=is.null(params$qc_comparison_file) || length(params$qc_comparison_file) == 0}
+cat("\n> **No QC data available.**  Run the pipeline with `qc.enabled: true`",
+    "to generate the normalization QC outputs before rendering this report.\n")
+```
+
+---
+
+# Session Info
+
+<details>
+<summary>Click to expand</summary>
+
+```{r session-info}
+sessionInfo()
+```
+
+</details>

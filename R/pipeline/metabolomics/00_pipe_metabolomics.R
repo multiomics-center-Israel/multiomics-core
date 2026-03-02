@@ -243,6 +243,7 @@ pipe_metabolomics <- function() {
 
         # met_qc_comparison: aggregate benchmark TSV across all four QC stages.
         # Reads with_qc/metrics_summary.tsv from each stage; adds pca_pc1_delta.
+        # Includes raw_linear row from met_imputed as the "Before" baseline.
         # Writes to: {metab_out_dir}/qc/comparison/normalization_qc_benchmark.tsv
         tar_target(
             met_qc_comparison,
@@ -254,6 +255,24 @@ pipe_metabolomics <- function() {
                 imputed_data    = met_imputed,
                 out_dir         = metab_out_dir,
                 config          = config
+            ),
+            format = "file"
+        ),
+
+        # met_qc_summary_report: standalone intermediate normalization review.
+        # Available as soon as the QC layer completes; intended for review before
+        # interpreting DE/enrichment results.
+        # Writes to: {metab_out_dir}/qc/normalization_review_report.html
+        tar_target(
+            met_qc_summary_report,
+            mod_met_qc_summary_report(
+                qc_comparison_file = met_qc_comparison,
+                qc_suite_files     = c(met_log_qc,
+                                       met_norm_tss_qc,
+                                       met_norm_median_qc,
+                                       met_norm_pqn_qc),
+                config  = config,
+                out_dir = metab_out_dir
             ),
             format = "file"
         ),
@@ -384,20 +403,26 @@ pipe_metabolomics <- function() {
 
         tar_target(
             metab_report,
-            mod_metabolomics_report(
-                pre                = metab_pre,
-                qc_res             = metab_qc_pre_obj,
-                de_res             = metab_de_res,
-                feature_sel_res    = metab_feature_sel_res,
-                enrichment_res     = metab_enrichment_res,
-                config             = config,
-                out_dir            = metab_out_dir,
-                qc_comparison_file = met_qc_comparison,
-                qc_suite_files     = c(met_log_qc,
-                                       met_norm_tss_qc,
-                                       met_norm_median_qc,
-                                       met_norm_pqn_qc)
-            ),
+            {
+                # Depend on met_qc_summary_report to guarantee the intermediate
+                # review report is generated before the full analysis report.
+                # This ensures consistency: both reports use the same QC outputs.
+                .qc_done <- met_qc_summary_report
+                mod_metabolomics_report(
+                    pre                = metab_pre,
+                    qc_res             = metab_qc_pre_obj,
+                    de_res             = metab_de_res,
+                    feature_sel_res    = metab_feature_sel_res,
+                    enrichment_res     = metab_enrichment_res,
+                    config             = config,
+                    out_dir            = metab_out_dir,
+                    qc_comparison_file = met_qc_comparison,
+                    qc_suite_files     = c(met_log_qc,
+                                           met_norm_tss_qc,
+                                           met_norm_median_qc,
+                                           met_norm_pqn_qc)
+                )
+            },
             format = "file"
         )
     )
