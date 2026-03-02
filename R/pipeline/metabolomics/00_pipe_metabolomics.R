@@ -251,6 +251,7 @@ pipe_metabolomics <- function() {
                 tss_qc_files    = met_norm_tss_qc,
                 median_qc_files = met_norm_median_qc,
                 pqn_qc_files    = met_norm_pqn_qc,
+                imputed_data    = met_imputed,
                 out_dir         = metab_out_dir,
                 config          = config
             ),
@@ -384,13 +385,18 @@ pipe_metabolomics <- function() {
         tar_target(
             metab_report,
             mod_metabolomics_report(
-                pre             = metab_pre,
-                qc_res          = metab_qc_pre_obj,
-                de_res          = metab_de_res,
-                feature_sel_res = metab_feature_sel_res,
-                enrichment_res  = metab_enrichment_res,
-                config          = config,
-                out_dir         = metab_out_dir
+                pre                = metab_pre,
+                qc_res             = metab_qc_pre_obj,
+                de_res             = metab_de_res,
+                feature_sel_res    = metab_feature_sel_res,
+                enrichment_res     = metab_enrichment_res,
+                config             = config,
+                out_dir            = metab_out_dir,
+                qc_comparison_file = met_qc_comparison,
+                qc_suite_files     = c(met_log_qc,
+                                       met_norm_tss_qc,
+                                       met_norm_median_qc,
+                                       met_norm_pqn_qc)
             ),
             format = "file"
         )

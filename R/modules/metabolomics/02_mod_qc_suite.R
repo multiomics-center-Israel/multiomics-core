@@ -742,7 +742,8 @@ mod_met_qc_suite <- function(data, stage, out_dir, config) {
 #' technical variation).
 mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
                                         median_qc_files, pqn_qc_files,
-                                        out_dir, config) {
+                                        out_dir, config,
+                                        imputed_data = NULL) {
   all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files)
 
   # Locate with_qc/metrics_summary.tsv in each file vector.
@@ -756,12 +757,42 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
   dir.create(comp_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(comp_dir, "normalization_qc_benchmark.tsv")
 
+  # ---- raw_linear row: RSD on met_imputed (linear scale; no back-transform) --
+  # The data is already on linear scale, so SD/|mean| is computed directly.
+  # rsd_backtransform_exact = TRUE because no back-transformation is needed.
+  # pseudocount_used = 0 because the matrix has not been log-transformed.
+  # PCA columns are NA because PCA is not computed on linear-scale matrices.
+  raw_row <- NULL
+  if (!is.null(imputed_data) && !is.null(imputed_data$mat)) {
+    mat_lin       <- as.matrix(imputed_data$mat)
+    feat_sds      <- apply(mat_lin, 1, stats::sd, na.rm = TRUE)
+    feat_means_ab <- abs(rowMeans(mat_lin, na.rm = TRUE))
+    feat_means_ab[feat_means_ab == 0 | !is.finite(feat_means_ab)] <- NA_real_
+    rsd_vals      <- feat_sds / feat_means_ab
+    rsd_vals[!is.finite(rsd_vals)] <- NA_real_
+
+    raw_row <- data.frame(
+      stage                   = "raw_linear",
+      subset_mode             = "all",
+      n_samples               = ncol(mat_lin),
+      n_features              = nrow(mat_lin),
+      pca_pc1_var_expl        = NA_real_,
+      pca_pc2_var_expl        = NA_real_,
+      pca_pc3_var_expl        = NA_real_,
+      median_rsd_overall      = stats::median(rsd_vals, na.rm = TRUE),
+      median_rsd_per_group    = NA_character_,
+      rsd_backtransform_exact = TRUE,
+      pseudocount_used        = 0,
+      plots_skipped           = "",
+      status                  = "ok",
+      stringsAsFactors        = FALSE
+    )
+  }
+
   if (length(metrics_paths) == 0L) {
     warning("mod_met_qc_comparison_table: no with_qc/metrics_summary.tsv files found; writing empty benchmark.")
-    utils::write.table(
-      data.frame(stringsAsFactors = FALSE), out_file,
-      sep = "\t", row.names = FALSE, quote = FALSE
-    )
+    empty <- if (!is.null(raw_row)) raw_row else data.frame(stringsAsFactors = FALSE)
+    utils::write.table(empty, out_file, sep = "\t", row.names = FALSE, quote = FALSE)
     return(out_file)
   }
 
@@ -781,16 +812,19 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
 
   if (length(rows) == 0L) {
     warning("mod_met_qc_comparison_table: all metrics files failed to parse; writing empty benchmark.")
-    utils::write.table(
-      data.frame(stringsAsFactors = FALSE), out_file,
-      sep = "\t", row.names = FALSE, quote = FALSE
-    )
+    empty <- if (!is.null(raw_row)) raw_row else data.frame(stringsAsFactors = FALSE)
+    utils::write.table(empty, out_file, sep = "\t", row.names = FALSE, quote = FALSE)
     return(out_file)
   }
 
   combined <- do.call(rbind, rows)
 
+  # Prepend raw_linear row so it appears first in the benchmark table.
+  if (!is.null(raw_row)) combined <- rbind(raw_row, combined)
+
   # ---- pca_pc1_delta: PC1 variance relative to log stage --------------------
+  # Reference is the "log" stage (first log2-scale checkpoint).
+  # raw_linear gets NA automatically (NA - ref = NA).
   if ("stage" %in% names(combined) && "pca_pc1_var_expl" %in% names(combined)) {
     log_idx <- which(combined$stage == "log")
     ref_pc1 <- if (length(log_idx) == 1L &&

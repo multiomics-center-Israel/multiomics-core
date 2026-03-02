@@ -20,7 +20,9 @@
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
                                     enrichment_res,
-                                    config, out_dir) {
+                                    config, out_dir,
+                                    qc_comparison_file = NULL,
+                                    qc_suite_files     = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -60,13 +62,15 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
         output_file = basename(out_file),
         output_dir  = dirname(out_file),
         params = list(
-            pre            = pre,
-            qc_res         = qc_res,
-            de_res         = de_res,
-            rf_res         = rf_res_out,
-            plsda_res      = plsda_res_out,
-            enrichment_res = enrichment_res,
-            config         = config
+            pre                = pre,
+            qc_res             = qc_res,
+            de_res             = de_res,
+            rf_res             = rf_res_out,
+            plsda_res          = plsda_res_out,
+            enrichment_res     = enrichment_res,
+            config             = config,
+            qc_comparison_file = qc_comparison_file,
+            qc_suite_files     = qc_suite_files
         ),
         envir  = new.env(parent = globalenv()),
         quiet  = TRUE
