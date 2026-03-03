@@ -207,12 +207,11 @@ run_bootstrap_feature_stability <- function(feature_data, integration_results,
 bootstrap_mofa_features <- function(feature_data, mofa_results, n_bootstrap, config) {
     message("  Bootstrapping MOFA features...")
 
-    if (is.null(mofa_results$results)) return(NULL)
-
-    # Get original top features
-    original_weights <- tryCatch({
-        MOFA2::get_weights(mofa_results$results)
-    }, error = function(e) NULL)
+    # Use pre-extracted weights (survives targets serialization)
+    original_weights <- mofa_results$weights
+    if (is.null(original_weights) && !is.null(mofa_results$model)) {
+        original_weights <- tryCatch(MOFA2::get_weights(mofa_results$model), error = function(e) NULL)
+    }
 
     if (is.null(original_weights)) return(NULL)
 
@@ -279,12 +278,8 @@ bootstrap_mofa_features <- function(feature_data, mofa_results, n_bootstrap, con
 bootstrap_diablo_features <- function(feature_data, diablo_results, n_bootstrap, config) {
     message("  Bootstrapping DIABLO features...")
 
-    if (is.null(diablo_results$results)) return(NULL)
-
-    # Get original selected features
-    original_loadings <- tryCatch({
-        diablo_results$results$loadings
-    }, error = function(e) NULL)
+    # Use pre-extracted loadings (survives targets serialization)
+    original_loadings <- diablo_results$loadings %||% diablo_results$model$loadings
 
     if (is.null(original_loadings)) return(NULL)
 
@@ -657,9 +652,11 @@ compute_loading_confidence_intervals <- function(feature_data, integration_resul
     }
 
     # Get original loadings
-    original_weights <- tryCatch({
-        MOFA2::get_weights(integration_results$mofa$results)
-    }, error = function(e) NULL)
+    # Use pre-extracted weights
+    original_weights <- integration_results$mofa$weights
+    if (is.null(original_weights) && !is.null(integration_results$mofa$model)) {
+        original_weights <- tryCatch(MOFA2::get_weights(integration_results$mofa$model), error = function(e) NULL)
+    }
 
     if (is.null(original_weights)) return(NULL)
 
@@ -787,12 +784,31 @@ assess_cluster_stability <- function(feature_data, integration_results,
     # Get original clusters
     original_clusters <- NULL
 
-    if (!is.null(integration_results$mofa$results)) {
+    if (!is.null(integration_results$mofa)) {
         tryCatch({
-            factors <- MOFA2::get_factors(integration_results$mofa$results)[[1]]
-            k <- 2
-            original_clusters <- kmeans(factors, centers = k, nstart = 25)$cluster
-            names(original_clusters) <- rownames(factors)
+            # Use pre-extracted factors
+            fdf <- integration_results$mofa$factors
+            factors <- NULL
+            if (!is.null(fdf)) {
+                if (is.data.frame(fdf) && "sample_id" %in% colnames(fdf)) {
+                    rn <- fdf$sample_id
+                    factor_cols <- grep("^Factor|^V\\d", colnames(fdf), value = TRUE)
+                    if (length(factor_cols) == 0) factor_cols <- setdiff(colnames(fdf), c("sample_id", "condition", "group"))
+                    factors <- as.matrix(fdf[, factor_cols, drop = FALSE])
+                    rownames(factors) <- rn
+                } else if (is.matrix(fdf)) {
+                    factors <- fdf
+                }
+            }
+            # Fallback to model
+            if (is.null(factors) && !is.null(integration_results$mofa$model)) {
+                factors <- MOFA2::get_factors(integration_results$mofa$model)[[1]]
+            }
+            if (!is.null(factors) && nrow(factors) >= 5) {
+                k <- 2
+                original_clusters <- kmeans(factors, centers = k, nstart = 25)$cluster
+                names(original_clusters) <- rownames(factors)
+            }
         }, error = function(e) NULL)
     }
 

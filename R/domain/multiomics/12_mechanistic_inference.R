@@ -192,17 +192,19 @@ analyze_rna_protein_regulation <- function(harmonized, gene_mapping, mc, config,
 
 #' Map RNA and protein features to common identifiers
 map_rna_protein_features <- function(rna_mat, prot_mat, gene_mapping) {
-    if (is.null(gene_mapping)) {
-        # Try direct matching
-        common <- intersect(rownames(rna_mat), rownames(prot_mat))
-        if (length(common) < 50) return(NULL)
-
+    # Always try direct row-name matching first — works when MAE was
+    # pre-harmonized (features renamed to GENE_1, GENE_2, ...)
+    common <- intersect(rownames(rna_mat), rownames(prot_mat))
+    if (length(common) >= 50) {
+        message("  Direct row-name matching: ", length(common), " common features")
         return(list(
             rna = rna_mat[common, , drop = FALSE],
             protein = prot_mat[common, , drop = FALSE],
             gene_symbols = common
         ))
     }
+
+    if (is.null(gene_mapping)) return(NULL)
 
     # Use gene mapping
     rna_map <- gene_mapping[gene_mapping$omics == "transcriptomics", ]

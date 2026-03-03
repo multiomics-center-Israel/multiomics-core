@@ -53,7 +53,7 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
     dir.create(plots_dir, showWarnings = FALSE)
 
     # Convert MAE to legacy format for compatibility
-    mae_data <- .mae_to_legacy_consensus(mae)
+    mae_data <- .mae_to_legacy_consensus(mae, config)
 
     # 1. Sample clustering comparison
     sample_comparison <- compare_sample_clustering(
@@ -131,15 +131,17 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
 #' Convert MAE to legacy format for consensus analysis
 #' @param mae MultiAssayExperiment object
 #' @return Legacy-format list
-.mae_to_legacy_consensus <- function(mae) {
-    metadata <- as.data.frame(SummarizedExperiment::colData(mae))
+.mae_to_legacy_consensus <- function(mae, config = NULL) {
+    metadata <- as.data.frame(MultiAssayExperiment::colData(mae))
     common_samples <- colnames(mae)
+
+    condition_col <- config$design$condition_column %||% "condition"
 
     list(
         mae = mae,
         metadata = metadata,
         common_samples = common_samples,
-        config = list(design = list(condition_column = "condition"))
+        config = list(design = list(condition_column = condition_col))
     )
 }
 
@@ -271,17 +273,33 @@ compare_sample_clustering <- function(integration_results, mae_data, output_dir)
 
 #' Get MOFA Clusters
 get_mofa_clusters <- function(mofa_results) {
-    if (is.null(mofa_results$results)) return(NULL)
-
     tryCatch({
-        # Get factor scores
-        factors <- MOFA2::get_factors(mofa_results$results)[[1]]
+        # Use pre-extracted factors (survives targets serialization)
+        factors <- NULL
+        if (!is.null(mofa_results$factors)) {
+            fdf <- mofa_results$factors
+            if (is.data.frame(fdf) && "sample_id" %in% colnames(fdf)) {
+                rn <- fdf$sample_id
+                factor_cols <- grep("^Factor|^V\\d", colnames(fdf), value = TRUE)
+                if (length(factor_cols) == 0) factor_cols <- setdiff(colnames(fdf), c("sample_id", "condition", "group"))
+                factors <- as.matrix(fdf[, factor_cols, drop = FALSE])
+                rownames(factors) <- rn
+            } else if (is.matrix(fdf)) {
+                factors <- fdf
+            }
+        }
+
+        # Fallback: try extracting from model
+        if (is.null(factors) && !is.null(mofa_results$model)) {
+            factors <- MOFA2::get_factors(mofa_results$model)[[1]]
+        }
+
+        if (is.null(factors) || nrow(factors) < 5) return(NULL)
 
         # Cluster based on first few factors
         n_factors <- min(5, ncol(factors))
         factor_mat <- factors[, 1:n_factors, drop = FALSE]
 
-        # K-means clustering (choose k based on silhouette)
         best_k <- choose_optimal_k(factor_mat)
         clusters <- kmeans(factor_mat, centers = best_k, nstart = 25)$cluster
 
@@ -294,11 +312,14 @@ get_mofa_clusters <- function(mofa_results) {
 
 #' Get DIABLO Clusters
 get_diablo_clusters <- function(diablo_results) {
-    if (is.null(diablo_results$results)) return(NULL)
-
     tryCatch({
-        # Get variates (component scores)
-        variates <- diablo_results$results$variates
+        # Use pre-extracted sample_scores (survives targets serialization)
+        variates <- diablo_results$sample_scores %||% diablo_results$model$variates
+        if (is.null(variates)) return(NULL)
+
+        # Exclude Y component if present
+        variates <- variates[setdiff(names(variates), "Y")]
+        if (length(variates) == 0) return(NULL)
 
         # Combine across views
         combined <- do.call(cbind, variates)
@@ -319,7 +340,7 @@ get_diablo_clusters <- function(diablo_results) {
 
 #' Get SNF Clusters
 get_snf_clusters <- function(snf_results) {
-    if (is.null(snf_results$results)) return(NULL)
+    if (is.null(snf_results)) return(NULL)
 
     tryCatch({
         # SNF already provides clusters
@@ -328,7 +349,7 @@ get_snf_clusters <- function(snf_results) {
         }
 
         # Otherwise cluster from affinity matrix
-        W <- snf_results$results$fused_network
+        W <- snf_results$fused_network
 
         # Spectral clustering
         best_k <- snf_results$optimal_k %||% choose_optimal_k_spectral(W)
@@ -572,11 +593,13 @@ compare_feature_importance <- function(integration_results, output_dir) {
 
 #' Get MOFA Feature Importance
 get_mofa_feature_importance <- function(mofa_results) {
-    if (is.null(mofa_results$results)) return(NULL)
-
     tryCatch({
-        # Get weights for all factors
-        weights <- MOFA2::get_weights(mofa_results$results)
+        # Use pre-extracted weights (survives targets serialization)
+        weights <- mofa_results$weights
+        if (is.null(weights) && !is.null(mofa_results$model)) {
+            weights <- MOFA2::get_weights(mofa_results$model)
+        }
+        if (is.null(weights)) return(NULL)
 
         # Combine across views and factors
         all_weights <- lapply(names(weights), function(view) {
@@ -595,10 +618,7 @@ get_mofa_feature_importance <- function(mofa_results) {
         combined <- do.call(rbind, all_weights)
 
         # Take max across views for features in multiple views
-        combined %>%
-            dplyr::group_by(feature) %>%
-            dplyr::summarise(importance = max(importance), .groups = "drop") %>%
-            as.data.frame()
+        aggregate(importance ~ feature, data = combined, FUN = max)
 
     }, error = function(e) {
         message("  Could not extract MOFA feature importance: ", e$message)
@@ -608,11 +628,14 @@ get_mofa_feature_importance <- function(mofa_results) {
 
 #' Get DIABLO Feature Importance
 get_diablo_feature_importance <- function(diablo_results) {
-    if (is.null(diablo_results$results)) return(NULL)
-
     tryCatch({
-        # Get loadings
-        loadings <- diablo_results$results$loadings
+        # Use pre-extracted loadings (survives targets serialization)
+        loadings <- diablo_results$loadings %||% diablo_results$model$loadings
+        if (is.null(loadings)) return(NULL)
+
+        # Remove Y component (response variable, not an omics view)
+        loadings <- loadings[setdiff(names(loadings), "Y")]
+        if (length(loadings) == 0) return(NULL)
 
         # Combine across views and components
         all_loadings <- lapply(names(loadings), function(view) {
@@ -630,10 +653,7 @@ get_diablo_feature_importance <- function(diablo_results) {
 
         combined <- do.call(rbind, all_loadings)
 
-        combined %>%
-            dplyr::group_by(feature) %>%
-            dplyr::summarise(importance = max(importance), .groups = "drop") %>%
-            as.data.frame()
+        aggregate(importance ~ feature, data = combined, FUN = max)
 
     }, error = function(e) {
         message("  Could not extract DIABLO feature importance: ", e$message)
@@ -664,10 +684,9 @@ identify_robust_patterns <- function(sample_comparison, feature_comparison, conf
         n_methods <- ncol(feature_comparison$importance_matrix)
         min_methods <- ceiling(n_methods * robust_threshold)
 
-        robust_features <- feature_comparison$combined %>%
-            dplyr::filter(n_methods >= min_methods) %>%
-            dplyr::filter(combined_rank <= 0.2) %>%
-            dplyr::arrange(combined_rank)
+        fc <- feature_comparison$combined
+        robust_features <- fc[fc$n_methods >= min_methods & fc$combined_rank <= 0.2, ]
+        robust_features <- robust_features[order(robust_features$combined_rank), ]
 
         message("  Robust features (top 20% in >=",
                 round(robust_threshold * 100), "% of methods): ", nrow(robust_features))
@@ -776,20 +795,37 @@ run_meta_integration <- function(integration_results, mae_data, config, output_d
     # Combine latent factors from all methods
     latent_factors <- list()
 
-    # MOFA factors
-    if (!is.null(integration_results$mofa$results)) {
+    # MOFA factors (use pre-extracted data)
+    if (!is.null(integration_results$mofa)) {
         tryCatch({
-            factors <- MOFA2::get_factors(integration_results$mofa$results)[[1]]
-            latent_factors$mofa <- factors
+            fdf <- integration_results$mofa$factors
+            if (!is.null(fdf)) {
+                if (is.data.frame(fdf) && "sample_id" %in% colnames(fdf)) {
+                    rn <- fdf$sample_id
+                    factor_cols <- grep("^Factor|^V\\d", colnames(fdf), value = TRUE)
+                    if (length(factor_cols) == 0) factor_cols <- setdiff(colnames(fdf), c("sample_id", "condition", "group"))
+                    factors <- as.matrix(fdf[, factor_cols, drop = FALSE])
+                    rownames(factors) <- rn
+                } else if (is.matrix(fdf)) {
+                    factors <- fdf
+                } else {
+                    factors <- NULL
+                }
+                if (!is.null(factors)) latent_factors$mofa <- factors
+            }
         }, error = function(e) NULL)
     }
 
-    # DIABLO variates
-    if (!is.null(integration_results$diablo$results)) {
+    # DIABLO variates (use pre-extracted data)
+    if (!is.null(integration_results$diablo)) {
         tryCatch({
-            variates <- integration_results$diablo$results$variates
-            combined <- do.call(cbind, variates)
-            latent_factors$diablo <- combined
+            variates <- integration_results$diablo$sample_scores %||%
+                         integration_results$diablo$model$variates
+            if (!is.null(variates)) {
+                variates <- variates[setdiff(names(variates), "Y")]
+                combined <- do.call(cbind, variates)
+                latent_factors$diablo <- combined
+            }
         }, error = function(e) NULL)
     }
 

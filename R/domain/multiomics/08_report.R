@@ -23,9 +23,13 @@ render_multiomics_report <- function(run_dir, config, config_file = NULL) {
                                 package = "multiomics.core",
                                 mustWork = FALSE)
         if (!nzchar(src_dir)) {
-            # When running via targets::tar_source(), use the project root from config
-            proj_dir <- config$project$dir %||% "."
-            src_dir <- file.path(proj_dir, "R", "domain", "multiomics")
+            # When running via targets::tar_source(), try the working directory first,
+            # then fall back to the project root from config
+            src_dir <- file.path("R", "domain", "multiomics")
+            if (!file.exists(file.path(src_dir, "report_template_multiomics.Rmd"))) {
+                proj_dir <- config$project$dir %||% "."
+                src_dir <- file.path(proj_dir, "R", "domain", "multiomics")
+            }
         }
         template_path <- file.path(src_dir, "report_template_multiomics.Rmd")
     }

@@ -237,11 +237,11 @@ compute_crossomics_feature_correlations <- function(harmonized, gene_mapping, fc
 
 #' Map features from two omics to common identifiers
 map_features_to_common_ids <- function(mat1, mat2, omics1, omics2, gene_mapping) {
-    if (is.null(gene_mapping)) {
-        # Try direct matching by rownames
-        common_ids <- intersect(rownames(mat1), rownames(mat2))
-        if (length(common_ids) == 0) return(NULL)
-
+    # Always try direct matching by rownames first — works when MAE was
+    # pre-harmonized (features renamed to GENE_1, GENE_2, ...)
+    common_ids <- intersect(rownames(mat1), rownames(mat2))
+    if (length(common_ids) > 0) {
+        message("  Direct row-name matching: ", length(common_ids), " common features")
         return(list(
             mat1_matched = mat1[common_ids, , drop = FALSE],
             mat2_matched = mat2[common_ids, , drop = FALSE],
@@ -249,6 +249,9 @@ map_features_to_common_ids <- function(mat1, mat2, omics1, omics2, gene_mapping)
             n_common = length(common_ids)
         ))
     }
+
+    # Fall back to gene mapping if no direct matches
+    if (is.null(gene_mapping)) return(NULL)
 
     # Use gene mapping
     map1 <- gene_mapping[gene_mapping$omics == omics1, ]
@@ -624,39 +627,65 @@ compute_sample_concordance <- function(harmonized, metadata, fc, config, out_dir
             length(omics_names), " omics")
 
     # 1. Per-sample rank correlation across omics
-    results$sample_rank_cors <- compute_sample_rank_correlations(
-        harmonized, common_samples, fc
+    results$sample_rank_cors <- tryCatch(
+        compute_sample_rank_correlations(harmonized, common_samples, fc),
+        error = function(e) {
+            message("  WARNING: Sample rank correlation failed: ", conditionMessage(e))
+            NULL
+        }
     )
 
     # 2. Sample clustering consistency (NMI, ARI)
-    results$clustering_consistency <- compute_clustering_consistency(
-        harmonized, common_samples, metadata, fc, config
+    results$clustering_consistency <- tryCatch(
+        compute_clustering_consistency(harmonized, common_samples, metadata, fc, config),
+        error = function(e) {
+            message("  WARNING: Clustering consistency failed: ", conditionMessage(e))
+            NULL
+        }
     )
 
     # 3. Within-condition vs between-condition similarity
     if (!is.null(metadata)) {
         condition_col <- config$design$condition_column %||% "condition"
         if (condition_col %in% colnames(metadata)) {
-            results$condition_similarity <- compute_condition_similarity(
-                harmonized, common_samples, metadata, condition_col, fc
+            results$condition_similarity <- tryCatch(
+                compute_condition_similarity(harmonized, common_samples, metadata, condition_col, fc),
+                error = function(e) {
+                    message("  WARNING: Condition similarity failed: ", conditionMessage(e))
+                    NULL
+                }
             )
         }
     }
 
     # 4. Consensus sample clustering
-    results$consensus_clustering <- compute_consensus_clustering(
-        harmonized, common_samples, fc
+    results$consensus_clustering <- tryCatch(
+        compute_foundational_consensus_clustering(harmonized, common_samples, fc),
+        error = function(e) {
+            message("  WARNING: Consensus clustering failed: ", conditionMessage(e))
+            NULL
+        }
     )
 
     # 5. Identify discordant samples
-    results$discordant_samples <- identify_discordant_samples(
-        results, common_samples, fc
+    results$discordant_samples <- tryCatch(
+        identify_discordant_samples(results, common_samples, fc),
+        error = function(e) {
+            message("  WARNING: Discordant sample identification failed: ", conditionMessage(e))
+            NULL
+        }
     )
 
     # Save and visualize
     if (!is.null(out_dir)) {
-        save_sample_concordance_results(results, out_dir)
-        plot_sample_concordance(results, metadata, out_dir)
+        tryCatch(
+            save_sample_concordance_results(results, out_dir),
+            error = function(e) message("  WARNING: Saving concordance results failed: ", conditionMessage(e))
+        )
+        tryCatch(
+            plot_sample_concordance(results, metadata, out_dir),
+            error = function(e) message("  WARNING: Plotting concordance failed: ", conditionMessage(e))
+        )
     }
 
     return(results)
@@ -905,7 +934,7 @@ compute_condition_similarity <- function(harmonized, common_samples, metadata,
 }
 
 #' Compute consensus clustering across omics
-compute_consensus_clustering <- function(harmonized, common_samples, fc) {
+compute_foundational_consensus_clustering <- function(harmonized, common_samples, fc) {
     message("  Computing consensus clustering...")
 
     # Check if ConsensusClusterPlus is available
@@ -1054,9 +1083,9 @@ save_sample_concordance_results <- function(results, out_dir) {
     summary_df <- data.frame(
         metric = c("mantel_correlation", "mean_ari", "mean_nmi", "n_discordant"),
         value = c(
-            mean(results$sample_rank_cors$mantel_correlations, na.rm = TRUE),
-            mean(results$clustering_consistency$ari, na.rm = TRUE),
-            mean(results$clustering_consistency$nmi, na.rm = TRUE),
+            if (!is.null(results$sample_rank_cors)) mean(results$sample_rank_cors$mantel_correlations, na.rm = TRUE) else NA,
+            if (!is.null(results$clustering_consistency)) mean(results$clustering_consistency$ari, na.rm = TRUE) else NA,
+            if (!is.null(results$clustering_consistency)) mean(results$clustering_consistency$nmi, na.rm = TRUE) else NA,
             results$discordant_samples$n_discordant %||% NA
         ),
         stringsAsFactors = FALSE
@@ -1788,8 +1817,8 @@ summarize_foundational_results <- function(results, out_dir = NULL) {
     if (!is.null(results$sample_concordance)) {
         sc <- results$sample_concordance
         summary_list$sample_concordance <- list(
-            mean_ari = mean(sc$clustering_consistency$ari, na.rm = TRUE),
-            mean_nmi = mean(sc$clustering_consistency$nmi, na.rm = TRUE),
+            mean_ari = if (!is.null(sc$clustering_consistency)) mean(sc$clustering_consistency$ari, na.rm = TRUE) else NA,
+            mean_nmi = if (!is.null(sc$clustering_consistency)) mean(sc$clustering_consistency$nmi, na.rm = TRUE) else NA,
             n_discordant = sc$discordant_samples$n_discordant %||% NA
         )
     }
@@ -1869,11 +1898,38 @@ summarize_foundational_results <- function(results, out_dir = NULL) {
     })
     names(harmonized_omics) <- names(mae@ExperimentList)
 
+    # Convert gene_protein_mapping (gene_id, protein_id) to the format expected
+    # by foundational analysis (omics, feature_id, gene_symbol)
+    gene_mapping <- NULL
+    if (!is.null(gene_protein_mapping) && nrow(gene_protein_mapping) > 0) {
+        rna_rows <- data.frame(
+            omics = "transcriptomics",
+            feature_id = gene_protein_mapping$gene_id,
+            gene_symbol = if ("gene_symbol" %in% colnames(gene_protein_mapping)) {
+                gene_protein_mapping$gene_symbol
+            } else {
+                gene_protein_mapping$gene_id
+            },
+            stringsAsFactors = FALSE
+        )
+        prot_rows <- data.frame(
+            omics = "proteomics",
+            feature_id = gene_protein_mapping$protein_id,
+            gene_symbol = if ("gene_symbol" %in% colnames(gene_protein_mapping)) {
+                gene_protein_mapping$gene_symbol
+            } else {
+                gene_protein_mapping$protein_id
+            },
+            stringsAsFactors = FALSE
+        )
+        gene_mapping <- rbind(rna_rows, prot_rows)
+    }
+
     list(
         mae = mae,
         harmonized_omics = harmonized_omics,
         metadata = as.data.frame(SummarizedExperiment::colData(mae)),
         common_samples = colnames(mae),
-        gene_mapping = gene_protein_mapping
+        gene_mapping = gene_mapping
     )
 }

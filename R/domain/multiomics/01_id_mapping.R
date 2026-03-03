@@ -16,11 +16,18 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
     gene_ids <- rownames(rna_data$expr_work)
     protein_ids <- rownames(prot_data$expr_work)
 
-    # Check for custom mapping file first
+    # Check for custom mapping file: modes > multiomics, then global
     custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
+    if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
+        # Fallback: global.gene_protein_mapping (relative to data dir)
+        gpm <- config$global$gene_protein_mapping
+        if (!is.null(gpm) && nzchar(gpm)) {
+            custom_map_file <- file.path(config$project$dir, config$paths$raw, gpm)
+        }
+    }
 
     if (!is.null(custom_map_file) && file.exists(custom_map_file)) {
-        message("Using custom gene-protein mapping file: ", basename(custom_map_file))
+        message("Using gene-protein mapping file: ", basename(custom_map_file))
         return(load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids))
     }
 
@@ -46,8 +53,16 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
 
 
 #' Load custom gene-protein mapping from file
+#'
+#' Accepts files with gene_id + protein_id columns, or gene_id + uniprot_id.
+#' Also stores gene_symbol if present for downstream correlation analysis.
 load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
     df <- read.csv(file_path, stringsAsFactors = FALSE)
+
+    # Normalize: accept uniprot_id as protein_id alias
+    if (!"protein_id" %in% colnames(df) && "uniprot_id" %in% colnames(df)) {
+        df$protein_id <- df$uniprot_id
+    }
 
     required_cols <- c("gene_id", "protein_id")
     missing_cols <- setdiff(required_cols, colnames(df))
@@ -55,6 +70,7 @@ load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
         stop(
             "Custom mapping file must contain columns: ",
             paste(required_cols, collapse = ", "),
+            " (or uniprot_id instead of protein_id)",
             "\nMissing: ", paste(missing_cols, collapse = ", ")
         )
     }
@@ -63,7 +79,11 @@ load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
     df <- df[df$gene_id %in% gene_ids & df$protein_id %in% protein_ids, ]
     df$mapping_source <- "custom_file"
 
-    df[, c("gene_id", "protein_id", "mapping_source")]
+    keep_cols <- c("gene_id", "protein_id", "mapping_source")
+    if ("gene_symbol" %in% colnames(df)) keep_cols <- c(keep_cols, "gene_symbol")
+
+    message(sprintf("  Loaded %d gene-protein pairs from mapping file", nrow(df)))
+    df[, keep_cols, drop = FALSE]
 }
 
 

@@ -133,14 +133,10 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_cross_enrichment,
             {
-                if (is.null(multiomics_enrichment_results) ||
-                    length(multiomics_enrichment_results) < 2) {
-                    message("Skipping cross-omics enrichment: insufficient enrichment results")
-                    return(NULL)
-                }
-
                 mod_multiomics_enrichment(
                     enrichment_results = multiomics_enrichment_results,
+                    de_results = multiomics_de_results,
+                    harmonization_res = multiomics_harmonization,
                     config = config,
                     out_dir = file.path(multiomics_out_dir, "cross_enrichment")
                 )

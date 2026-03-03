@@ -470,19 +470,57 @@ if (length(conc_csvs) > 0) {
 # Cross-Omics Enrichment
 
 ```{r enrichment-note, eval=!has_enrichment, results='asis'}
-cat("*No cross-omics enrichment results found. Enrichment analysis requires pathway results from at least 2 omics layers.*\n")
+cat("*No cross-omics enrichment results found. Enrichment analysis requires pathway results from at least 1 omics layer.*\n")
+```
+
+```{r enrichment-per-omics, eval=has_enrichment, results='asis'}
+# Show per-omics enrichment barplots
+omics_barplots <- list.files(enrichment_dir, pattern = "_top_pathways\\.png$", full.names = TRUE)
+if (length(omics_barplots) > 0) {
+    cat("\n## Per-Omics Pathway Enrichment {.unnumbered}\n\n")
+    for (bp in omics_barplots) {
+        omics_name <- gsub("_top_pathways\\.png$", "", basename(bp))
+        cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
+        cat(knitr::include_graphics(bp))
+        cat("\n\n")
+    }
+}
+```
+
+```{r enrichment-per-omics-legend, eval=has_enrichment, results='asis'}
+figure_legend("Per-omics KEGG pathway enrichment. Bar length represents -log10(p-value). Red dashed line indicates p = 0.05 significance threshold.")
+```
+
+```{r enrichment-per-omics-table, eval=has_enrichment}
+# Show enrichment tables for each omics
+csv_files <- list.files(enrichment_dir, pattern = "_enriched_pathways\\.csv$", full.names = TRUE)
+for (cf in csv_files) {
+    omics_name <- gsub("_enriched_pathways\\.csv$", "", basename(cf))
+    tbl <- read.csv(cf, stringsAsFactors = FALSE)
+    if (nrow(tbl) > 0) {
+        print(make_dt(
+            head(tbl, 200),
+            caption = paste0(tools::toTitleCase(omics_name), " Enriched KEGG Pathways"),
+            pageLength = 15
+        ))
+    }
+}
 ```
 
 ```{r enrichment-heatmap, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    knitr::include_graphics(p)
+    cat("\n## Cross-Omics Pathway Comparison {.unnumbered}\n\n")
+    cat(knitr::include_graphics(p))
 }
 ```
 
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
-figure_legend("Cross-omics pathway enrichment heatmap. Color intensity represents -log10(p-value) for each pathway across omics layers. Pathways are hierarchically clustered to reveal shared biological themes.")
-render_commentary("cross_omics_pathway_heatmap")
+p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
+if (file.exists(p)) {
+    figure_legend("Cross-omics pathway enrichment heatmap. Color intensity represents -log10(p-value) for each pathway across omics layers. Pathways are hierarchically clustered to reveal shared biological themes.")
+    render_commentary("cross_omics_pathway_heatmap")
+}
 ```
 
 ```{r enrichment-table, eval=has_enrichment}
@@ -498,8 +536,11 @@ if (file.exists(meta_file)) {
 ```
 
 ```{r enrichment-table-legend, eval=has_enrichment, results='asis'}
-figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Pathways significant in multiple omics are most informative.")
-render_commentary("cross_omics_meta_analysis")
+meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
+if (file.exists(meta_file)) {
+    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Pathways significant in multiple omics are most informative.")
+    render_commentary("cross_omics_meta_analysis")
+}
 ```
 
 ---
@@ -543,7 +584,7 @@ figure_legend("Distribution of per-gene RNA-protein Pearson correlations across 
 render_commentary("rna_protein_concordance")
 ```
 
-## DE Scatter
+## DE Scatter (All Contrasts)
 
 ```{r rna-prot-de-scatter, eval=has_rna_prot, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")
@@ -553,11 +594,60 @@ if (file.exists(p)) {
 ```
 
 ```{r rna-prot-de-legend, eval=has_rna_prot, results='asis'}
-figure_legend("RNA vs protein differential expression scatter plot. Each point is a gene/protein pair. Diagonal concordance indicates matching fold-change direction; off-diagonal points suggest post-transcriptional regulation.")
+figure_legend("RNA vs protein differential expression scatter plot per contrast. Each point is a gene/protein pair. Diagonal concordance indicates matching fold-change direction; off-diagonal points suggest post-transcriptional regulation.")
 render_commentary("rna_protein_de_scatter")
 ```
 
-## Translation Efficiency
+## Per-Contrast DE Details {.tabset}
+
+```{r rna-prot-per-contrast, eval=has_rna_prot, results='asis'}
+per_contrast_dir <- file.path(rna_prot_dir, "per_contrast")
+if (dir.exists(per_contrast_dir)) {
+    contrast_dirs <- list.dirs(per_contrast_dir, full.names = TRUE, recursive = FALSE)
+    for (cdir in contrast_dirs) {
+        cname <- basename(cdir)
+        cat(sprintf("\n### %s\n\n", gsub("_", " ", cname)))
+
+        de_scatter <- file.path(cdir, "plots", "rna_protein_de_scatter.png")
+        if (file.exists(de_scatter)) {
+            cat(knitr::knit_child(text = sprintf(
+                '```{r rna-prot-scatter-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                gsub("[^a-zA-Z0-9]", "", cname), de_scatter
+            ), quiet = TRUE))
+        }
+
+        te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
+        if (file.exists(te_hist)) {
+            cat(knitr::knit_child(text = sprintf(
+                '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                gsub("[^a-zA-Z0-9]", "", cname), te_hist
+            ), quiet = TRUE))
+        }
+
+        te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
+        if (file.exists(te_scatter)) {
+            cat(knitr::knit_child(text = sprintf(
+                '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                gsub("[^a-zA-Z0-9]", "", cname), te_scatter
+            ), quiet = TRUE))
+        }
+
+        # Summary table
+        de_csv <- file.path(cdir, "tables", "rna_protein_de_concordance.csv")
+        if (file.exists(de_csv)) {
+            de_df <- read.csv(de_csv, stringsAsFactors = FALSE)
+            n_total <- nrow(de_df)
+            n_conc <- sum(de_df$concordant, na.rm = TRUE)
+            r_val <- cor(de_df$rna_log2FC, de_df$protein_log2FC, use = "complete.obs")
+            cat(sprintf("\n**%s:** %d gene-protein pairs, r = %.3f, %d/%d (%.0f%%) concordant\n\n",
+                        gsub("_", " ", cname), n_total, r_val,
+                        n_conc, n_total, 100 * n_conc / n_total))
+        }
+    }
+}
+```
+
+## Translation Efficiency (All Contrasts)
 
 ```{r rna-prot-te-hist, eval=has_rna_prot, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
@@ -567,7 +657,7 @@ if (file.exists(p)) {
 ```
 
 ```{r rna-prot-te-hist-legend, eval=has_rna_prot, results='asis'}
-figure_legend("Distribution of translation efficiency changes (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
+figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
 render_commentary("translation_efficiency_hist")
 ```
 
@@ -579,7 +669,7 @@ if (file.exists(p)) {
 ```
 
 ```{r rna-prot-te-scatter-legend, eval=has_rna_prot, results='asis'}
-figure_legend("Translation efficiency scatter plot comparing RNA and protein fold-changes.")
+figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
 render_commentary("translation_efficiency_scatter")
 ```
 
