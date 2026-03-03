@@ -17,6 +17,8 @@ params:
   plsda_res: NULL
   enrichment_res: NULL
   config: NULL
+  qc_comparison_file: NULL
+  qc_suite_files: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -119,6 +121,21 @@ module_status <- data.frame(
 ```{r summary-table}
 knitr::kable(module_status, align = "ll")
 ```
+
+---
+
+`r if (is.null(params$qc_comparison_file) || length(params$qc_comparison_file) == 0) "<!--"`
+
+# Normalization QC {.tabset}
+
+```{r nqc-setup, include=FALSE}
+qc_files <- params$qc_suite_files %||% character(0)
+```
+
+```{r qc-norm-section, child='_qc_normalization_section.Rmd'}
+```
+
+`r if (is.null(params$qc_comparison_file) || length(params$qc_comparison_file) == 0) "-->"`
 
 ---
 

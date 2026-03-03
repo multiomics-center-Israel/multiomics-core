@@ -1,0 +1,174 @@
+<!-- _qc_normalization_section.Rmd — shared child document -->
+<!-- Included by both metabolomics_report.Rmd and qc_summary_report.Rmd.      -->
+<!-- Expects the parent to have defined qc_files and the rendering helpers     -->
+<!-- (embed_png, render_dt, %||%).  params$qc_comparison_file must be set.    -->
+
+```{r nqc-child-setup, include=FALSE}
+# stage_files(): filter flat qc_suite_files paths by /qc/<stage>/<subset>/ segment.
+# qc_files is defined in the parent environment; referenced directly below.
+stage_files <- function(files, stage, subset = "with_qc") {
+  pat <- paste0("/qc/", stage, "/", subset, "/")
+  files[grepl(pat, files, fixed = TRUE)]
+}
+```
+
+## Benchmark
+
+```{r nqc-benchmark}
+if (!is.null(params$qc_comparison_file) &&
+    length(params$qc_comparison_file) > 0 &&
+    file.exists(params$qc_comparison_file[1])) {
+  bench    <- utils::read.table(params$qc_comparison_file[1], sep = "\t",
+                                header = TRUE, stringsAsFactors = FALSE,
+                                check.names = FALSE)
+  num_cols <- vapply(bench, is.numeric, logical(1L))
+  bench[num_cols] <- lapply(bench[num_cols], round, 4)
+  render_dt(bench,
+            caption = paste0("Normalization QC Benchmark \u2014 ",
+                             "raw_linear (met_imputed) \u2192 log \u2192 norm_*. ",
+                             "Median RSD on linear scale; lower is better. ",
+                             "pca_pc1_delta = PC1 gain vs log stage."),
+            pageLength = 10)
+}
+```
+
+## Density {.tabset}
+
+*Log2-scale intensity distributions per sample. Tighter, more overlapping curves indicate better between-sample normalization.*
+
+### Log
+
+```{r nqc-density-log, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "log")
+img_html <- embed_png(path, "density")
+cat(img_html)
+```
+
+### TSS
+
+```{r nqc-density-tss, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_tss")
+img_html <- embed_png(path, "density")
+cat(img_html)
+```
+
+### Median
+
+```{r nqc-density-median, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_median")
+img_html <- embed_png(path, "density")
+cat(img_html)
+```
+
+### PQN
+
+```{r nqc-density-pqn, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_pqn")
+img_html <- embed_png(path, "density")
+cat(img_html)
+```
+
+## PCA (PC1/2) {.tabset}
+
+*PCA on Log2 values. Greater separation between biological groups and tighter within-group clustering indicates better normalization.*
+
+### Log
+
+```{r nqc-pca-log, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "log"), "pca_pc1_pc2")
+cat(res)
+
+```
+
+### TSS
+
+```{r nqc-pca-tss, echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_tss"), "pca_pc1_pc2")
+cat(res)
+```
+
+### Median
+
+```{r nqc-pca-median, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_median"), "pca_pc1_pc2")
+cat(res)
+```
+
+### PQN
+
+```{r nqc-pca-pqn, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_pqn"), "pca_pc1_pc2")
+cat(res)
+```
+
+## Boxplots {.tabset}
+
+*Per-sample median and spread. Well-normalized data shows aligned medians and comparable IQRs across samples.*
+### Log
+
+```{r nqc-boxplot-log, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "log")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
+```
+
+### TSS
+
+```{r nqc-boxplot-tss, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_tss")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
+```
+
+### Median
+
+```{r nqc-boxplot-median, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_median")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
+```
+
+### PQN
+
+```{r nqc-boxplot-pqn, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_pqn")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
+```
+
+## QC Noise Reduction {.tabset}
+
+*Each pair compares PCA **with** injected QC samples (all samples) vs **without** them (biological samples only).
+A marked reduction in PC1 variance or tighter clustering in the no-QC panel confirms that the QC
+injections inflate technical variance and were successfully identified.*
+
+### TSS — with QC
+
+```{r nqc-noise-tss-wq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_tss", "with_qc"), "pca_pc1_pc2")
+cat(img_html)
+```
+
+### TSS — without QC
+
+```{r nqc-noise-tss-nq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_tss", "no_qc"), "pca_pc1_pc2")
+cat(img_html)
+
+```
+
+### PQN — with QC
+
+```{r nqc-noise-pqn-wq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_pqn", "with_qc"), "pca_pc1_pc2")
+cat(img_html)
+
+```
+
+### PQN — without QC
+
+```{r nqc-noise-pqn-nq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_pqn", "no_qc"), "pca_pc1_pc2")
+cat(img_html)
+
+```
