@@ -226,3 +226,146 @@ write_diablo_results <- function(diablo_results, out_dir) {
 
     invisible(NULL)
 }
+
+
+#' Generate multi-omics feature heatmap from DIABLO results
+#'
+#' Reads DIABLO top_features CSVs and extracts expression data from the MAE
+#' to create a cross-omics heatmap of the most important features.
+#'
+#' @param mae MultiAssayExperiment object (feature-selected subset)
+#' @param diablo_dir Directory containing diablo_top_features_*.csv files
+#' @param config Full pipeline config
+#' @param top_n Number of top features per omics to include
+#' @return Path to the saved PNG, or NULL on failure
+plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
+
+    if (!requireNamespace("pheatmap", quietly = TRUE)) {
+        warning("pheatmap not available — skipping DIABLO feature heatmap")
+        return(NULL)
+    }
+
+    # Read top_features CSVs (skip _Y.csv — that's the outcome)
+    csv_files <- list.files(diablo_dir, "^diablo_top_features_.*\\.csv$",
+                            full.names = TRUE)
+    csv_files <- csv_files[!grepl("_Y\\.csv$", csv_files)]
+
+    if (length(csv_files) == 0) {
+        message("No DIABLO top_features CSVs found — skipping heatmap")
+        return(NULL)
+    }
+
+    # Extract condition column name
+    condition_col <- config$modes$multiomics$condition_column %||%
+                     config$design$condition_column %||%
+                     "condition"
+
+    # Collect top features per omics and build expression matrix
+    all_expr <- list()
+    omics_labels <- character(0)
+    gap_positions <- integer(0)
+    running_count <- 0
+
+    for (csv_f in csv_files) {
+        # Derive omics name from filename: diablo_top_features_<omics>.csv
+        omics_name <- sub("^diablo_top_features_(.*)\\.csv$", "\\1", basename(csv_f))
+
+        feat_df <- read.csv(csv_f, stringsAsFactors = FALSE)
+
+        # Filter to comp1 and take top_n
+        comp1 <- feat_df[feat_df$component == "comp1", ]
+        comp1 <- comp1[order(comp1$abs_loading, decreasing = TRUE), ]
+        n_take <- min(top_n, nrow(comp1))
+        if (n_take == 0) next
+        top_feat <- comp1$feature[seq_len(n_take)]
+
+        # Extract expression from MAE
+        if (!omics_name %in% names(mae)) {
+            message("  Omics '", omics_name, "' not in MAE — skipping")
+            next
+        }
+
+        expr_mat <- SummarizedExperiment::assay(mae[[omics_name]], "expr")
+        avail <- intersect(top_feat, rownames(expr_mat))
+        if (length(avail) == 0) next
+
+        sub_mat <- expr_mat[avail, , drop = FALSE]
+        # Prefix row names with omics to avoid duplicates across layers
+        rownames(sub_mat) <- paste0("[", omics_name, "] ", rownames(sub_mat))
+        all_expr[[omics_name]] <- sub_mat
+        omics_labels <- c(omics_labels, rep(omics_name, nrow(sub_mat)))
+        running_count <- running_count + nrow(sub_mat)
+        gap_positions <- c(gap_positions, running_count)
+    }
+
+    if (length(all_expr) == 0) {
+        message("No features matched MAE — skipping DIABLO heatmap")
+        return(NULL)
+    }
+
+    # Combine into single matrix
+    combined <- do.call(rbind, all_expr)
+
+    # Z-score per feature (row-wise)
+    combined_z <- t(apply(combined, 1, function(x) {
+        s <- sd(x, na.rm = TRUE)
+        if (is.na(s) || s == 0) return(rep(0, length(x)))
+        (x - mean(x, na.rm = TRUE)) / s
+    }))
+    colnames(combined_z) <- colnames(combined)
+
+    # Annotations
+    coldata <- as.data.frame(SummarizedExperiment::colData(mae))
+
+    annotation_col <- data.frame(
+        Condition = coldata[[condition_col]],
+        row.names = rownames(coldata)
+    )
+
+    annotation_row <- data.frame(
+        Omics = omics_labels,
+        row.names = rownames(combined_z)
+    )
+
+    # Remove last gap position (no gap after last block)
+    if (length(gap_positions) > 0) {
+        gap_positions <- gap_positions[-length(gap_positions)]
+    }
+
+    # Color palette
+    colors <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
+
+    # Shorten long feature names for display
+    display_names <- rownames(combined_z)
+    display_names <- ifelse(nchar(display_names) > 40,
+                            paste0(substr(display_names, 1, 37), "..."),
+                            display_names)
+    rownames(combined_z) <- display_names
+    rownames(annotation_row) <- display_names
+
+    # Save heatmap
+    out_png <- file.path(diablo_dir, "diablo_feature_heatmap.png")
+    png(out_png, width = 10, height = 8, units = "in", res = 150)
+    tryCatch({
+        pheatmap::pheatmap(
+            combined_z,
+            color = colors,
+            cluster_rows = TRUE,
+            cluster_cols = TRUE,
+            gaps_row = gap_positions,
+            annotation_row = annotation_row,
+            annotation_col = annotation_col,
+            show_colnames = FALSE,
+            fontsize_row = 7,
+            fontsize = 9,
+            main = "Top DIABLO Features Across Omics (Z-scored)"
+        )
+    }, error = function(e) {
+        plot.new()
+        text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
+    })
+    dev.off()
+
+    message("DIABLO feature heatmap saved: ", out_png)
+    out_png
+}

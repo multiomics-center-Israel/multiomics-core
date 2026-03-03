@@ -48,6 +48,12 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
         padj_cols <- grep("^(padj\\.imputs\\.|padj\\.|adj\\.P\\.Val\\.)", names(df), value = TRUE)
 
         if (length(lfc_cols) == 0) {
+            # Try metabolomics naming: logFC_contrast
+            lfc_cols <- grep("^logFC_", names(df), value = TRUE)
+            padj_cols <- grep("^adj\\.P\\.Val_", names(df), value = TRUE)
+        }
+
+        if (length(lfc_cols) == 0) {
             stop("Cannot find logFC columns in ", omics_type, " summary_df. Available: ",
                  paste(head(names(df), 20), collapse = ", "))
         }
@@ -79,15 +85,17 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
 #' Analyze concordance between omics layers
 #'
 #' Compares differential expression/abundance patterns across omics to identify
-#' concordant and discordant changes. Useful for validating multi-omics findings.
+#' concordant and discordant changes. Falls back to MAE-based concordance when
+#' DE-based approach finds no matching features.
 #'
 #' @param de_results Named list of DE results per omics (must have logFC, padj)
 #' @param gene_protein_mapping Mapping between gene and protein IDs
+#' @param mae MultiAssayExperiment with harmonized features (fallback)
 #' @param config Full config object
 #' @param out_dir Output directory for plots
-#' @return List with: concordance_table, plots, stats
+#' @return List with: concordance (named list of per-pair results), plots
 analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NULL,
-                                            config, out_dir = NULL) {
+                                            mae = NULL, config, out_dir = NULL) {
 
     if (length(de_results) < 2) {
         stop("Concordance analysis requires at least 2 omics layers with DE results")
@@ -109,71 +117,221 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
     de_flat <- Filter(Negate(is.null), de_flat)
 
     if (length(de_flat) < 2) {
-        stop("Concordance analysis requires at least 2 normalized omics DE results")
+        warning("Concordance analysis requires at least 2 normalized omics DE results")
+        return(NULL)
     }
 
-    # For RNA + Proteomics, use gene-protein mapping
+    concordance_list <- list()
+    plots <- list()
+
+    # Try RNA-protein concordance via gene-protein mapping
     if ("transcriptomics" %in% names(de_flat) &&
         "proteomics" %in% names(de_flat) &&
         !is.null(gene_protein_mapping)) {
 
-        conc <- analyze_rna_protein_concordance(
-            rna_de = de_flat$transcriptomics,
-            prot_de = de_flat$proteomics,
-            mapping = gene_protein_mapping,
-            config = config,
-            out_dir = out_dir
-        )
+        rna_prot <- tryCatch({
+            analyze_rna_protein_concordance(
+                rna_de = de_flat$transcriptomics,
+                prot_de = de_flat$proteomics,
+                mapping = gene_protein_mapping,
+                config = config,
+                out_dir = out_dir
+            )
+        }, error = function(e) {
+            warning("RNA-protein concordance failed: ", e$message)
+            NULL
+        })
 
-        return(conc)
+        if (!is.null(rna_prot) && !is.null(rna_prot$concordance_table) &&
+            nrow(rna_prot$concordance_table) > 0) {
+            concordance_list[["transcriptomics_vs_proteomics"]] <- rna_prot
+            plots <- c(plots, rna_prot$plots)
+            message("  DE-based RNA-protein concordance: ",
+                    nrow(rna_prot$concordance_table), " matched features")
+        }
     }
 
-    # General pairwise concordance for any omics combination
-    omics_pairs <- combn(names(de_flat), 2, simplify = FALSE)
-    concordance_list <- list()
-
-    for (pair in omics_pairs) {
-        om1 <- pair[1]
-        om2 <- pair[2]
-
-        conc <- compute_pairwise_concordance(
-            de1 = de_flat[[om1]],
-            de2 = de_flat[[om2]],
-            name1 = om1,
-            name2 = om2,
-            config = config
-        )
-
-        concordance_list[[paste(om1, om2, sep = "_vs_")]] <- conc
-    }
-
-    # Generate summary plots
-    plots <- list()
-    if (!is.null(out_dir)) {
-        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-        for (pair_name in names(concordance_list)) {
-            conc <- concordance_list[[pair_name]]
-
-            # Scatter plot of logFC values
-            plot_file <- file.path(out_dir, paste0("concordance_", pair_name, ".png"))
-            plots[[pair_name]] <- plot_file
-
-            png(plot_file, width = 800, height = 800, res = 120)
-            tryCatch({
-                plot_concordance_scatter(conc, pair_name)
-            }, error = function(e) {
-                plot.new()
-                text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
-            })
-            dev.off()
+    # Fallback: MAE-based concordance for pairs without DE-based results
+    if (!is.null(mae)) {
+        omics_in_mae <- names(mae@ExperimentList)
+        if (length(omics_in_mae) < 2) omics_in_mae <- character(0)
+        omics_pairs <- if (length(omics_in_mae) >= 2) {
+            combn(omics_in_mae, 2, simplify = FALSE)
+        } else {
+            list()
         }
 
-        message("  Concordance plots saved to: ", out_dir)
+        for (pair in omics_pairs) {
+            pair_name <- paste(pair[1], pair[2], sep = "_vs_")
+
+            # Skip if already handled by DE-based approach
+            if (pair_name %in% names(concordance_list)) next
+
+            mae_conc <- tryCatch({
+                compute_mae_concordance(mae, pair[1], pair[2], config, out_dir)
+            }, error = function(e) {
+                warning("MAE concordance for ", pair_name, " failed: ", e$message)
+                NULL
+            })
+
+            if (!is.null(mae_conc)) {
+                concordance_list[[pair_name]] <- mae_conc
+                plots <- c(plots, mae_conc$plots)
+            }
+        }
+    }
+
+    if (length(concordance_list) == 0) {
+        message("  No concordance results produced")
+        return(NULL)
     }
 
     list(
         concordance = concordance_list,
+        plots = plots
+    )
+}
+
+
+#' Compute concordance from MAE expression data
+#'
+#' For omics pairs sharing harmonized feature IDs (e.g., GENE_*), computes
+#' per-group mean expression and log-fold-change, then correlates across omics.
+#'
+#' @param mae MultiAssayExperiment
+#' @param om1 First omics name
+#' @param om2 Second omics name
+#' @param config Pipeline config
+#' @param out_dir Output directory
+#' @return List with merged, correlation, plots, or NULL if no shared features
+compute_mae_concordance <- function(mae, om1, om2, config, out_dir = NULL) {
+
+    expr1 <- SummarizedExperiment::assay(mae@ExperimentList[[om1]], "expr")
+    expr2 <- SummarizedExperiment::assay(mae@ExperimentList[[om2]], "expr")
+
+    shared <- intersect(rownames(expr1), rownames(expr2))
+    if (length(shared) < 3) return(NULL)
+
+    message(sprintf("  MAE-based concordance: %s vs %s (%d shared features)",
+                    om1, om2, length(shared)))
+
+    # Get condition grouping
+    condition_col <- config$design$condition_column %||%
+                     config$modes$multiomics$condition_column %||%
+                     "condition"
+    coldata <- SummarizedExperiment::colData(mae)
+    conditions <- coldata[[condition_col]]
+
+    if (is.null(conditions) || length(unique(conditions)) < 2) {
+        warning("Cannot compute fold-changes: need >= 2 condition levels")
+        return(NULL)
+    }
+
+    groups <- unique(conditions)
+    ref <- config$design$reference_level
+    if (is.null(ref) || !ref %in% groups) ref <- groups[1]
+    treat_groups <- setdiff(groups, ref)
+
+    # Compute logFC for first non-reference contrast
+    treat <- treat_groups[1]
+    ref_idx <- which(conditions == ref)
+    treat_idx <- which(conditions == treat)
+
+    e1 <- expr1[shared, , drop = FALSE]
+    e2 <- expr2[shared, , drop = FALSE]
+
+    # Compute mean expression per group, then logFC
+    mean_ref1 <- rowMeans(e1[, ref_idx, drop = FALSE], na.rm = TRUE)
+    mean_treat1 <- rowMeans(e1[, treat_idx, drop = FALSE], na.rm = TRUE)
+    mean_ref2 <- rowMeans(e2[, ref_idx, drop = FALSE], na.rm = TRUE)
+    mean_treat2 <- rowMeans(e2[, treat_idx, drop = FALSE], na.rm = TRUE)
+
+    logfc1 <- mean_treat1 - mean_ref1
+    logfc2 <- mean_treat2 - mean_ref2
+
+    # Remove NA/Inf
+    valid <- is.finite(logfc1) & is.finite(logfc2)
+    if (sum(valid) < 3) return(NULL)
+
+    logfc1 <- logfc1[valid]
+    logfc2 <- logfc2[valid]
+    feat_ids <- shared[valid]
+
+    # Correlation
+    cor_test <- cor.test(logfc1, logfc2, method = "pearson")
+
+    # Build merged table
+    merged <- data.frame(
+        feature_id = feat_ids,
+        logFC_1 = logfc1,
+        logFC_2 = logfc2,
+        stringsAsFactors = FALSE
+    )
+
+    pair_name <- paste(om1, om2, sep = "_vs_")
+
+    message(sprintf("  %s: n=%d, r=%.3f (p=%.2e), contrast=%s vs %s",
+                    pair_name, length(feat_ids),
+                    cor_test$estimate, cor_test$p.value, treat, ref))
+
+    # Generate plot
+    plots <- list()
+    if (!is.null(out_dir)) {
+        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+        plot_file <- file.path(out_dir, paste0("concordance_", pair_name, ".png"))
+        plots[[pair_name]] <- plot_file
+
+        png(plot_file, width = 900, height = 800, res = 120)
+        tryCatch({
+            par(mar = c(5, 5, 4, 2))
+
+            # Color by significance (both |logFC| > threshold)
+            lfc_thresh <- 0.5
+            sig1 <- abs(logfc1) > lfc_thresh
+            sig2 <- abs(logfc2) > lfc_thresh
+            same_dir <- sign(logfc1) == sign(logfc2)
+
+            colors <- rep("#CCCCCC", length(logfc1))
+            colors[sig1 & sig2 & same_dir] <- "#377EB8"   # concordant
+            colors[sig1 & sig2 & !same_dir] <- "#E41A1C"  # discordant
+            colors[sig1 & !sig2] <- "#FFA500"              # om1 only
+            colors[!sig1 & sig2] <- "#984EA3"              # om2 only
+
+            plot(logfc1, logfc2, col = colors, pch = 16, cex = 0.8,
+                 xlab = paste0(om1, " log2FC (", treat, " vs ", ref, ")"),
+                 ylab = paste0(om2, " log2FC (", treat, " vs ", ref, ")"),
+                 main = sprintf("%s vs %s Concordance\nr=%.3f (p=%.2e), n=%d features",
+                                om1, om2, cor_test$estimate, cor_test$p.value, length(feat_ids)))
+
+            abline(h = 0, v = 0, lty = 2, col = "gray")
+            abline(a = 0, b = 1, lty = 2, col = "black")
+
+            n_conc <- sum(sig1 & sig2 & same_dir)
+            n_disc <- sum(sig1 & sig2 & !same_dir)
+
+            legend("topleft",
+                   legend = c(sprintf("Concordant (%d)", n_conc),
+                              sprintf("Discordant (%d)", n_disc),
+                              paste(om1, "only"),
+                              paste(om2, "only"),
+                              "Not significant"),
+                   col = c("#377EB8", "#E41A1C", "#FFA500", "#984EA3", "#CCCCCC"),
+                   pch = 16, cex = 0.8, bty = "n")
+
+        }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
+        })
+        dev.off()
+    }
+
+    list(
+        merged = merged,
+        correlation = cor_test$estimate,
+        correlation_pval = cor_test$p.value,
+        n_features = nrow(merged),
+        contrast = paste(treat, "vs", ref),
         plots = plots
     )
 }
@@ -194,7 +352,7 @@ analyze_rna_protein_concordance <- function(rna_de, prot_de, mapping, config, ou
                     suffixes = c("_rna", "_prot"))
 
     if (nrow(merged) == 0) {
-        warning("No overlapping features found between RNA and protein DE results")
+        message("  No overlapping features found between RNA and protein DE results via mapping")
         return(list(concordance_table = data.frame(), stats = NULL))
     }
 

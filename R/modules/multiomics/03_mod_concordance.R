@@ -16,25 +16,27 @@ mod_multiomics_concordance <- function(de_results, harmonization_res, config, ou
 
     # Skip if no DE results provided
     if (is.null(de_results) || length(de_results) < 2) {
-        message("  Skipping concordance: need ≥2 omics with DE results")
+        message("  Skipping concordance: need \u22652 omics with DE results")
         return(NULL)
     }
 
     concordance_res <- analyze_multiomics_concordance(
         de_results = de_results,
         gene_protein_mapping = harmonization_res$gene_protein_mapping,
+        mae = harmonization_res$mae,
         config = config,
         out_dir = out_dir
     )
 
     # Write concordance tables
-    if (!is.null(concordance_res)) {
+    if (!is.null(concordance_res) && !is.null(concordance_res$concordance)) {
         for (om_pair in names(concordance_res$concordance)) {
             conc <- concordance_res$concordance[[om_pair]]
 
-            if (!is.null(conc) && !is.null(conc$concordance_table)) {
+            tbl <- conc$concordance_table %||% conc$merged
+            if (!is.null(tbl) && nrow(tbl) > 0) {
                 write.csv(
-                    conc$concordance_table,
+                    tbl,
                     file.path(out_dir, paste0("concordance_", om_pair, ".csv")),
                     row.names = FALSE
                 )

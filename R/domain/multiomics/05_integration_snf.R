@@ -23,6 +23,13 @@ run_snf_integration <- function(mae, config, out_dir = NULL) {
     T <- cfg$T %||% 20              # Number of iterations
     n_clusters <- cfg$n_clusters %||% 2
 
+    # Cap K at n_samples - 1 (SNFtool requires K < n_samples)
+    n_samples <- ncol(mae[[1]])
+    if (K >= n_samples) {
+        K <- max(2, n_samples - 1)
+        message(sprintf("  SNF: K reduced to %d (n_samples = %d)", K, n_samples))
+    }
+
     message("Running SNF integration...")
 
     # Extract data from MAE (transpose to samples x features)
@@ -72,6 +79,7 @@ run_snf_integration <- function(mae, config, out_dir = NULL) {
 
     # Spectral clustering on fused network
     clusters <- SNFtool::spectralClustering(fused_network, K = n_clusters)
+    names(clusters) <- rownames(data_list[[1]])
 
     # Compute silhouette score for cluster quality
     fused_dist <- as.dist(1 - fused_network)

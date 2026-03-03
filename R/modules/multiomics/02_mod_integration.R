@@ -98,6 +98,15 @@ mod_multiomics_integration <- function(harmonization_res, de_results = NULL,
         }
     }
 
+    # Post-processing: DIABLO feature heatmap (works from existing CSVs)
+    diablo_dir <- file.path(out_dir, "diablo")
+    diablo_csvs <- list.files(diablo_dir, "^diablo_top_features_.*\\.csv$")
+    if (length(diablo_csvs) > 0) {
+        tryCatch({
+            plot_diablo_feature_heatmap(mae_subset, diablo_dir, config)
+        }, error = function(e) warning("DIABLO feature heatmap failed: ", e$message))
+    }
+
     message("\nIntegration analysis complete")
 
     list(
