@@ -262,6 +262,46 @@ modes:
 
 
 # ==============================================================================
+# Example: "multi_level" batch input (one xlsx per detection level in a dir)
+# ==============================================================================
+# Use this when your experiment produces one Compound Discoverer export per
+# detection level (e.g., Level_1.xlsx, Level_2.xlsx, Level_3.xlsx) all placed
+# in a single directory.  The pipeline merges them into a single expr_raw matrix
+# (features × samples) whose structure is identical to the single-file path.
+#
+# Key constraints:
+#   - files$data must NOT be set (mutually exclusive with files$data_dir)
+#   - All level files must contain the same sample set (error otherwise)
+#   - Source_File column is injected into row_data automatically
+#   - Feature IDs are prefixed: "Level_1__Glucose_mz180.0634_rt1.23"
+#   - feature_id_orig retains the pre-prefix ID for traceability
+#
+# modes:
+#   metabolomics:
+#     input:
+#       format: "multi_level"
+#       level_format: "cd_raw"          # per-file parser: "cd_raw" | "processed_wide"
+#       level_pattern: "\\.xlsx$"       # regex to select files in data_dir
+#       sheet: null                     # Excel sheet (shared across all level files)
+#     files:
+#       data_dir: "metabolomics/levels/"    # directory; replaces files$data
+#       metadata: "metabolomics/meta.csv"   # same optional metadata as single-file path
+#     parsing:
+#       cd_area_prefix: "Area:"             # shared across all level files
+#       cd_sample_regex: null
+#     id_columns:
+#       feature_id_col: null
+#       name_col: "Name"
+#       mz_col: "m/z"                   # rounded to 4 d.p. in feature ID construction
+#       rt_col: "RT [min]"              # rounded to 2 d.p. in feature ID construction
+#     preprocessing:
+#       chosen_norm: "pqn"
+#     effects:
+#       samples: "sample_id"
+#       color: "treatment"
+
+
+# ==============================================================================
 # Example: "processed" input (already normalized)
 # ==============================================================================
 # modes:
