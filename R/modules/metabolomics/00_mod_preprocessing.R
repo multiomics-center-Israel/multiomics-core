@@ -464,3 +464,151 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
     )
   )
 }
+
+
+# ==============================================================================
+# mod_met_normalize_linear — TSS / PQN on linear scale, then log2 transform
+# ==============================================================================
+
+#' Normalize a linear-scale matrix, then apply log2 transformation
+#'
+#' Implements the Scale Contract for TSS and PQN: normalization is performed
+#' on raw linear intensities (from \code{met_imputed}), and the log2
+#' transformation is applied only after the normalization operation is
+#' complete.  This is the mathematically correct order: TSS divides each
+#' sample by its total ion count, and PQN computes quotients relative to a
+#' reference spectrum — both operations are multiplicative and require linear
+#' intensities to be meaningful.
+#'
+#' @param data      List returned by \code{mod_met_imputed()}.  \code{data$mat}
+#'   must be on the \strong{Linear} scale (raw peak areas, no log transform).
+#' @param method    Character scalar, one of \code{"tss"} or \code{"pqn"}.
+#'   Median normalization is not supported here; use
+#'   \code{mod_met_normalize_log()} instead.
+#' @param config    Full pipeline config list.  The pseudocount is read from
+#'   \code{config$modes$metabolomics$normalization$pseudocount} (default 1).
+#'
+#' @return Named list with:
+#'   \describe{
+#'     \item{\code{mat}}{Numeric matrix on \strong{Log2} scale:
+#'       \eqn{\log_2(\text{norm}(x) + \text{pseudocount})}.}
+#'     \item{\code{meta}}{Passed through from \code{data$meta}.}
+#'     \item{\code{row_data}}{Passed through from \code{data$row_data}.}
+#'   }
+#'
+#' @details
+#' \strong{Math:}
+#' \enumerate{
+#'   \item Apply \code{norm_total_sum()} or \code{norm_pqn()} to
+#'     \code{data$mat} (linear scale).  Both functions use column-wise
+#'     multiplication (\code{sweep(..., "*")}), which is valid only on linear
+#'     intensities.
+#'   \item Apply \code{transform_metab(mat_norm, method = "log2",
+#'     pseudocount = p)}, which computes \eqn{\log_2(x + p)}.
+#' }
+#' The pseudocount \eqn{p} is the same value used by \code{mod_met_log()},
+#' ensuring a consistent back-transformation formula
+#' (\eqn{2^{\text{val}} - p}) across all Log2-output targets.
+mod_met_normalize_linear <- function(data, method, config) {
+  method      <- tolower(method)
+  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  pseudocount <- norm_cfg$pseudocount %||% 1
+
+  mat_linear <- data$mat   # Linear scale — assertion enforced by Scale Contract
+
+  mat_norm <- switch(method,
+    tss = norm_total_sum(mat_linear),
+    pqn = norm_pqn(mat_linear),
+    stop(
+      "mod_met_normalize_linear: 'method' must be \"tss\" or \"pqn\"; got \"",
+      method, "\".  Use mod_met_normalize_log() for median normalization."
+    )
+  )
+
+  # Log2 transform applied AFTER linear normalization (Scale Contract §1.1)
+  mat_log <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
+
+  list(
+    mat      = mat_log,
+    meta     = data$meta,
+    row_data = data$row_data
+  )
+}
+
+
+# ==============================================================================
+# mod_met_normalize_log — Median normalization as a log-shift (subtraction)
+# ==============================================================================
+
+#' Apply median normalization as a log-shift on a Log2-scale matrix
+#'
+#' Median normalization on log2 data is correctly implemented as a
+#' \emph{subtraction} (additive shift), not a multiplication.  Subtracting
+#' the per-sample log2-median and adding the global target median is
+#' algebraically equivalent to dividing each sample's linear intensities by
+#' its median and multiplying by the global median — which is the standard
+#' definition of median normalization — under the approximation that the
+#' pseudocount is small relative to the signal.
+#'
+#' @param data   List returned by \code{mod_met_log()}.  \code{data$mat}
+#'   must be on the \strong{Log2} scale.
+#' @param config Full pipeline config list (not used for computation; included
+#'   for interface consistency with sibling functions).
+#'
+#' @return Named list with:
+#'   \describe{
+#'     \item{\code{mat}}{Numeric matrix on \strong{Log2} scale after median
+#'       shift.}
+#'     \item{\code{meta}}{Passed through from \code{data$meta}.}
+#'     \item{\code{row_data}}{Passed through from \code{data$row_data}.}
+#'   }
+#'
+#' @details
+#' \strong{Math:}
+#' Let \eqn{L_{ij}} be the log2-transformed intensity of feature \eqn{i} in
+#' sample \eqn{j}, \eqn{m_j = \mathrm{median}_i(L_{ij})} the per-sample
+#' log2-median, and \eqn{m^* = \mathrm{median}_j(m_j)} the global target.
+#' The shift applied to sample \eqn{j} is:
+#' \deqn{L'_{ij} = L_{ij} - m_j + m^* = L_{ij} - (m_j - m^*)}
+#' This ensures every sample has the same log2-median (\eqn{m^*}) after
+#' normalization.  Samples with non-finite or zero log2-medians receive no
+#' shift (shift set to 0).
+mod_met_normalize_log <- function(data, config) {
+  mat_log <- data$mat   # Log2 scale — assertion enforced by Scale Contract
+
+  col_medians <- apply(mat_log, 2, stats::median, na.rm = TRUE)
+
+  # Identify samples with usable medians
+  valid <- is.finite(col_medians) & col_medians != 0
+  if (!any(valid)) {
+    warning(
+      "mod_met_normalize_log: no samples have finite/non-zero log2-medians; ",
+      "returning matrix unchanged."
+    )
+    return(list(mat = mat_log, meta = data$meta, row_data = data$row_data))
+  }
+  if (!all(valid)) {
+    n_invalid <- sum(!valid)
+    warning(sprintf(
+      "mod_met_normalize_log: %d sample(s) have non-finite or zero log2-median; ",
+      "they will not be shifted.", n_invalid
+    ))
+  }
+
+  # Global target: median of valid per-sample log2-medians
+  target_median <- stats::median(col_medians[valid])
+
+  # Shift vector: positive shift pulls a sample's median up; negative pulls it down.
+  # For invalid samples, shift = 0 (no adjustment).
+  shifts           <- col_medians - target_median
+  shifts[!valid]   <- 0
+
+  # Apply: L'[i,j] = L[i,j] - shifts[j]
+  mat_shifted <- sweep(mat_log, 2, shifts, FUN = "-")
+
+  list(
+    mat      = mat_shifted,
+    meta     = data$meta,
+    row_data = data$row_data
+  )
+}
