@@ -6,7 +6,7 @@ output:
     self_contained: true
     toc: true
     toc_float: true
-    theme: united
+    theme: lumen
     code_folding: hide
     df_print: paged
 params:
@@ -23,18 +23,23 @@ knitr::opts_chunk$set(
   fig.align = "center"
 )
 library(DT)
+library(base64enc)
 
 # Null-coalescing operator (mirrors pipeline convention)
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-# embed_png and render_dt: duplicated from metabolomics_report.Rmd so this
-# template is fully self-contained and renderable without the full pipeline env.
 embed_png <- function(files, pattern, fig_width = "100%") {
-  if (is.null(files) || length(files) == 0) return(invisible(NULL))
-  hits <- files[grepl(pattern, basename(files), ignore.case = TRUE)]
+  if (is.null(files) || length(files) == 0) return("")
+  hits <- files[grepl(pattern, basename(files), fixed = TRUE, ignore.case = TRUE)]
   hits <- hits[file.exists(hits)]
-  if (length(hits) == 0) return(invisible(NULL))
-  knitr::include_graphics(hits[1])
+
+  if (length(hits) == 0) return("")
+  
+  img_64 <- base64enc::dataURI(file = hits[1], mime = "image/png")
+  
+  return(sprintf('<img src="%s" style="width:%s; display:block; margin:auto;" />', 
+                 img_64, fig_width))
+
 }
 
 render_dt <- function(df, caption = NULL, pageLength = 10) {

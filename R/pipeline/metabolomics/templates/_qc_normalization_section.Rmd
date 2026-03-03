@@ -38,26 +38,34 @@ if (!is.null(params$qc_comparison_file) &&
 
 ### Log
 
-```{r nqc-density-log, out.width="100%"}
-embed_png(stage_files(qc_files, "log"), "density\\.png")
+```{r nqc-density-log, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "log")
+img_html <- embed_png(path, "density")
+cat(img_html)
 ```
 
 ### TSS
 
-```{r nqc-density-tss, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_tss"), "density\\.png")
+```{r nqc-density-tss, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_tss")
+img_html <- embed_png(path, "density")
+cat(img_html)
 ```
 
 ### Median
 
-```{r nqc-density-median, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_median"), "density\\.png")
+```{r nqc-density-median, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_median")
+img_html <- embed_png(path, "density")
+cat(img_html)
 ```
 
 ### PQN
 
-```{r nqc-density-pqn, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_pqn"), "density\\.png")
+```{r nqc-density-pqn, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_pqn")
+img_html <- embed_png(path, "density")
+cat(img_html)
 ```
 
 ## PCA (PC1/2) {.tabset}
@@ -66,54 +74,66 @@ embed_png(stage_files(qc_files, "norm_pqn"), "density\\.png")
 
 ### Log
 
-```{r nqc-pca-log, out.width="100%"}
-embed_png(stage_files(qc_files, "log"), "pca_pc1_pc2\\.png")
+```{r nqc-pca-log, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "log"), "pca_pc1_pc2")
+cat(res)
+
 ```
 
 ### TSS
 
-```{r nqc-pca-tss, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_tss"), "pca_pc1_pc2\\.png")
+```{r nqc-pca-tss, echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_tss"), "pca_pc1_pc2")
+cat(res)
 ```
 
 ### Median
 
-```{r nqc-pca-median, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_median"), "pca_pc1_pc2\\.png")
+```{r nqc-pca-median, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_median"), "pca_pc1_pc2")
+cat(res)
 ```
 
 ### PQN
 
-```{r nqc-pca-pqn, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_pqn"), "pca_pc1_pc2\\.png")
+```{r nqc-pca-pqn, out.width="100%", echo=FALSE, results='asis'}
+res <- embed_png(stage_files(qc_files, "norm_pqn"), "pca_pc1_pc2")
+cat(res)
 ```
 
 ## Boxplots {.tabset}
 
 *Per-sample median and spread. Well-normalized data shows aligned medians and comparable IQRs across samples.*
-
 ### Log
 
-```{r nqc-box-log, out.width="100%"}
-embed_png(stage_files(qc_files, "log"), "boxplot\\.png")
+```{r nqc-boxplot-log, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "log")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
 ```
 
 ### TSS
 
-```{r nqc-box-tss, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_tss"), "boxplot\\.png")
+```{r nqc-boxplot-tss, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_tss")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
 ```
 
 ### Median
 
-```{r nqc-box-median, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_median"), "boxplot\\.png")
+```{r nqc-boxplot-median, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_median")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
 ```
 
 ### PQN
 
-```{r nqc-box-pqn, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_pqn"), "boxplot\\.png")
+```{r nqc-boxplot-pqn, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_pqn")
+img_html <- embed_png(path, "boxplot")
+cat(img_html)
 ```
 
 ## QC Noise Reduction {.tabset}
@@ -124,24 +144,31 @@ injections inflate technical variance and were successfully identified.*
 
 ### TSS — with QC
 
-```{r nqc-noise-tss-wq, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_tss", "with_qc"), "pca_pc1_pc2\\.png")
+```{r nqc-noise-tss-wq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_tss", "with_qc"), "pca_pc1_pc2")
+cat(img_html)
 ```
 
 ### TSS — without QC
 
-```{r nqc-noise-tss-nq, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_tss", "no_qc"), "pca_pc1_pc2\\.png")
+```{r nqc-noise-tss-nq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_tss", "no_qc"), "pca_pc1_pc2")
+cat(img_html)
+
 ```
 
 ### PQN — with QC
 
-```{r nqc-noise-pqn-wq, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_pqn", "with_qc"), "pca_pc1_pc2\\.png")
+```{r nqc-noise-pqn-wq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_pqn", "with_qc"), "pca_pc1_pc2")
+cat(img_html)
+
 ```
 
 ### PQN — without QC
 
-```{r nqc-noise-pqn-nq, out.width="100%"}
-embed_png(stage_files(qc_files, "norm_pqn", "no_qc"), "pca_pc1_pc2\\.png")
+```{r nqc-noise-pqn-nq, out.width="100%", echo=FALSE, results='asis'}
+img_html <- embed_png(stage_files(qc_files, "norm_pqn", "no_qc"), "pca_pc1_pc2")
+cat(img_html)
+
 ```

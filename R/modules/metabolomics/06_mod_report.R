@@ -39,7 +39,8 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 
     qc_dir   <- file.path(out_dir, "qc")
     ensure_dir(qc_dir)
-    out_file <- file.path(qc_dir, "normalization_review_report.html")
+    proj_name <- config$project$analysis_round
+    out_file <- file.path(qc_dir, paste0("normalization_review_report_", proj_name, ".html"))
 
     message("Rendering normalization QC summary report -> ", out_file)
 

@@ -426,34 +426,37 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
                       stage, subset_mode, conditionMessage(e)))
       FALSE
     })
-
+    
     if (pca_ok) {
       # PC1 vs PC2
       pca12_file <- file.path(out_dir, "pca_pc1_pc2.png")
-      tryCatch({
-        qc_pca_scatter(mat_sub, meta_sub, cfg_mode, pcs = c(1L, 2L),
-                       out_file = pca12_file)
-        files <<- c(files, pca12_file)
-      }, error = function(e) {
+      pca12_success <- tryCatch({
+        qc_pca_scatter(mat_sub, meta_sub, cfg_mode, pcs = c(1L, 2L), out_file = pca12_file)
+        TRUE
+        }, error = function(e) {
         skipped <<- c(skipped, sprintf("pca_pc1_pc2: %s", conditionMessage(e)))
         status  <<- "partial"
         message(sprintf("[QC][%s][%s] Skipped pca_pc1_pc2: %s",
                         stage, subset_mode, conditionMessage(e)))
+        FALSE
       })
+      if (isTRUE(pca12_success)) files <- c(files, pca12_file)
 
       # PC1 vs PC3 (only when at least 3 PCs are computable)
       if (n_pcs_possible >= 3L) {
         pca13_file <- file.path(out_dir, "pca_pc1_pc3.png")
-        tryCatch({
-          qc_pca_scatter(mat_sub, meta_sub, cfg_mode, pcs = c(1L, 3L),
-                         out_file = pca13_file)
-          files <<- c(files, pca13_file)
+        pca13_success <- tryCatch({
+          qc_pca_scatter(mat_sub, meta_sub, cfg_mode, pcs = c(1L, 3L), out_file = pca13_file)
+          TRUE
         }, error = function(e) {
           skipped <<- c(skipped, sprintf("pca_pc1_pc3: %s", conditionMessage(e)))
           status  <<- "partial"
           message(sprintf("[QC][%s][%s] Skipped pca_pc1_pc3: %s",
                           stage, subset_mode, conditionMessage(e)))
+          FALSE
         })
+        
+        if (pca13_success) files <- c(files, pca13_file)
       } else {
         skipped <- c(skipped,
           sprintf("pca_pc1_pc3: only %d PC(s) computable (need 3)", n_pcs_possible))
