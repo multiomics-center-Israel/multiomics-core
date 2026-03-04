@@ -16,18 +16,13 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
     gene_ids <- rownames(rna_data$expr_work)
     protein_ids <- rownames(prot_data$expr_work)
 
-    # Check for custom mapping file: modes > multiomics, then global.
-    # Resolve relative paths via resolve_raw_path() before calling file.exists(),
-    # consistent with how all other raw input paths are handled in load_omics_inputs().
+    # Check for custom mapping file: modes > multiomics, then global
     custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
-    if (!is.null(custom_map_file) && nzchar(custom_map_file %||% "")) {
-        custom_map_file <- resolve_raw_path(config, custom_map_file)
-    }
     if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
         # Fallback: global.gene_protein_mapping (relative to data dir)
         gpm <- config$global$gene_protein_mapping
         if (!is.null(gpm) && nzchar(gpm)) {
-            custom_map_file <- resolve_raw_path(config, gpm)
+            custom_map_file <- file.path(config$project$dir, config$paths$raw, gpm)
         }
     }
 
@@ -62,7 +57,7 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
 #' Accepts files with gene_id + protein_id columns, or gene_id + uniprot_id.
 #' Also stores gene_symbol if present for downstream correlation analysis.
 load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
-    df <- read_table_auto(file_path)
+    df <- read.csv(file_path, stringsAsFactors = FALSE)
 
     # Normalize: accept uniprot_id as protein_id alias
     if (!"protein_id" %in% colnames(df) && "uniprot_id" %in% colnames(df)) {

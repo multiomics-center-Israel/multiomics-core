@@ -1,7 +1,7 @@
 #' Build MultiAssayExperiment from preprocessed omics data
 #'
 #' Creates a unified MAE object with:
-#' - Aligned expression matrices (features in rows, samples in columns)
+#' - Aligned expression matrices (samples in rows, features in columns)
 #' - Sample metadata (colData)
 #' - Feature metadata per assay (rowRanges/rowData)
 #'
