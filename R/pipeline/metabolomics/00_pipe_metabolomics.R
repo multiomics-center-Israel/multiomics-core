@@ -52,14 +52,33 @@ pipe_metabolomics <- function() {
 
         # ------------------------------------------------------------------
         # Declare input files as a file target (invalidates on file change)
+        #
+        # For "multi_level": returns a vector of all level file paths in the
+        # directory.  {targets} hashes each path and its contents, so adding,
+        # removing, or modifying any level file invalidates this target and
+        # every downstream met_* node.
+        #
+        # Strict [[ ]] indexing is used for "data" and "data_dir" to prevent
+        # R partial-matching from resolving one key to the other.
         # ------------------------------------------------------------------
         tar_target(
             metab_input_files,
             {
-                cfg   <- config$modes$metabolomics
-                paths <- resolve_raw_path(config, cfg$files$data)
-                if (!is.null(cfg$files$metadata) && nzchar(cfg$files$metadata)) {
-                    paths <- c(paths, resolve_raw_path(config, cfg$files$metadata))
+                cfg <- config$modes$metabolomics
+                fmt <- cfg$input[["format"]] %||% "cd_raw"
+
+                paths <- if (fmt == "multi_level") {
+                    dir_path <- resolve_raw_path(config, cfg$files[["data_dir"]])
+                    pattern  <- cfg$input[["level_pattern"]] %||% "\\.xlsx$"
+                    sort(list.files(dir_path, pattern = pattern,
+                                    full.names = TRUE, recursive = FALSE))
+                } else {
+                    resolve_raw_path(config, cfg$files[["data"]])
+                }
+
+                meta_path <- cfg$files[["metadata"]]
+                if (!is.null(meta_path) && nzchar(meta_path)) {
+                    paths <- c(paths, resolve_raw_path(config, meta_path))
                 }
                 paths
             },

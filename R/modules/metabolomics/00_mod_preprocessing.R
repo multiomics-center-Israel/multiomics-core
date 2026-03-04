@@ -36,6 +36,7 @@ mod_met_raw <- function(config) {
   parsed <- switch(fmt,
     cd_raw         = parse_cd_raw(inp$data, cfg),
     processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
+    multi_level    = parse_multi_level(inp$data, cfg, inp$metadata),
     stop("mod_met_raw: unsupported format: '", fmt, "'")
   )
 
