@@ -29,6 +29,18 @@ library(ggplot2)
 library(htmltools)
 library(jsonlite)
 
+# Source interactive cutoff panel helpers
+tryCatch({
+  .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+  .cp_found <- FALSE
+  for (.cp_i in 1:6) {
+    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
+    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
+    .cp_dir <- dirname(.cp_dir)
+  }
+  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
+}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
+
 # Load ggVennDiagram if available
 has_ggVennDiagram <- FALSE
 tryCatch({
@@ -910,6 +922,14 @@ if (file.exists(outlier_file)) {
 
 # Differential Expression Analysis
 
+```{r cutoff-panel, results='asis'}
+if (exists("cutoff_panel_html")) {
+    .lfc_default <- log2(prot_cfg$de$linear_fc_cutoff %||% 1.5)
+    .p_default   <- prot_cfg$de$p_cutoff %||% 0.05
+    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "padj"))
+}
+```
+
 ```{r de-stats-description, results='asis'}
 de_method_name <- prot_cfg$de$method %||% "limma"
 padj_cut_de <- prot_cfg$de$p_cutoff %||% 0.05
@@ -976,6 +996,17 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
     if (length(de_counts_list) > 0) {
         de_counts_df <- do.call(rbind, de_counts_list)
         cat(sprintf("**Total proteins quantified:** %s\n\n", format(total_proteins, big.mark = ",")))
+        if (exists("cutoff_summary_span")) {
+            cat("<div class='cutoff-de-summary' style='margin-bottom:12px;'>\n")
+            for (row_i in seq_len(nrow(de_counts_df))) {
+                cat(sprintf("<div style='margin:3px 0;'><strong>%s:</strong> %s</div>\n",
+                    de_counts_df$Contrast[row_i],
+                    cutoff_summary_span(de_counts_df$Contrast[row_i],
+                                        de_counts_df$Up[row_i],
+                                        de_counts_df$Down[row_i], "proteins")))
+            }
+            cat("</div>\n")
+        }
         make_dt(de_counts_df, "DE Protein Counts per Contrast")
     }
 } else {
@@ -1281,7 +1312,17 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
         geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
         labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
         theme_minimal()
-    ggplotly(p, tooltip = "text")
+    widget <- ggplotly(p, tooltip = "text")
+    # Return widget + registration data for cutoff panel
+    # Include both raw p-value and adjusted p-value if available
+    pval_col <- paste0("pvalue.imputs.", contrast)
+    raw_pval <- if (pval_col %in% names(df)) as.numeric(df[[pval_col]]) else plot_df$padj
+    reg_df <- data.frame(name = as.character(plot_df$protein),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval,
+                         adjPval = plot_df$padj,
+                         stringsAsFactors = FALSE)
+    list(widget = widget, plot_df = reg_df)
 }
 ```
 
@@ -1313,11 +1354,18 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        p <- make_volcano_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
+        vol_res <- make_volcano_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
                                       log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
+        if (!is.null(vol_res)) {
+            p <- vol_res$widget
             p$elementId <- paste0("volcano_plot_", clean_id)
             print(htmltools::tagList(p))
+            if (exists("cutoff_register_plot")) {
+                cat(cutoff_register_plot(
+                    paste0("volcano_plot_", clean_id),
+                    vol_res$plot_df, "volcano", "Protein", cn
+                ))
+            }
 
             cat(sprintf('
 <script>
@@ -1508,7 +1556,18 @@ make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
         geom_hline(yintercept = 0, color = "black", linewidth = 0.3) +
         labs(title = title, x = "log10(Mean Intensity)", y = "log2 Fold Change") +
         theme_minimal()
-    ggplotly(p, tooltip = "text")
+    widget <- ggplotly(p, tooltip = "text")
+    pval_col <- paste0("pvalue.imputs.", contrast)
+    raw_pval <- if (pval_col %in% names(df)) as.numeric(df[[pval_col]]) else plot_df$padj
+    # Match raw_pval to filtered plot_df rows
+    raw_pval_filt <- raw_pval[!is.na(baseMean) & baseMean > 0]
+    reg_df <- data.frame(name = as.character(plot_df$protein),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval_filt,
+                         adjPval = plot_df$padj,
+                         avgExpr = plot_df$log10baseMean,
+                         stringsAsFactors = FALSE)
+    list(widget = widget, plot_df = reg_df)
 }
 ```
 
@@ -1521,11 +1580,18 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 
         cat(sprintf("\n#### %s\n\n", contrast_clean))
 
-        p <- make_ma_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
+        ma_res <- make_ma_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
                                   log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
+        if (!is.null(ma_res)) {
+            p <- ma_res$widget
             p$elementId <- paste0("ma_plot_", clean_id)
             print(htmltools::tagList(p))
+            if (exists("cutoff_register_plot")) {
+                cat(cutoff_register_plot(
+                    paste0("ma_plot_", clean_id),
+                    ma_res$plot_df, "ma", "Protein", cn
+                ))
+            }
         }
         cat("\n\n")
     }

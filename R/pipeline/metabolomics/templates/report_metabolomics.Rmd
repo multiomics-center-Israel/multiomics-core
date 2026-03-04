@@ -40,6 +40,19 @@ library(htmltools)
 
 if (requireNamespace("plotly", quietly = TRUE))   library(plotly)
 if (requireNamespace("crosstalk", quietly = TRUE)) library(crosstalk)
+if (requireNamespace("jsonlite", quietly = TRUE))  library(jsonlite)
+
+# Source interactive cutoff panel helpers
+tryCatch({
+  .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+  .cp_found <- FALSE
+  for (.cp_i in 1:6) {
+    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
+    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
+    .cp_dir <- dirname(.cp_dir)
+  }
+  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
+}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
 
 # ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
@@ -219,8 +232,13 @@ if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summar
                !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc
       n_up   <- sum(sig & ctr_tbl$logFC > 0, na.rm = TRUE)
       n_down <- sum(sig & ctr_tbl$logFC < 0, na.rm = TRUE)
-      cat(sprintf("<li><strong>%s</strong>: %d DE metabolites (%d up, %d down)</li>\n",
-                  ctr, n_up + n_down, n_up, n_down))
+      if (exists("cutoff_summary_span")) {
+        cat(sprintf("<li><strong>%s</strong>: %s</li>\n",
+                    ctr, cutoff_summary_span(ctr, n_up, n_down, "metabolites")))
+      } else {
+        cat(sprintf("<li><strong>%s</strong>: %d DE metabolites (%d up, %d down)</li>\n",
+                    ctr, n_up + n_down, n_up, n_down))
+      }
     }
   }
   cat("</ul>\n</div>\n")
@@ -441,6 +459,18 @@ if (!is.null(qc_res$files)) {
 
 # Differential Expression
 
+```{r cutoff-panel, results='asis'}
+if (exists("cutoff_panel_html")) {
+    .lfc_default <- if (!is.null(metab_cfg$de$logfc_cutoff)) {
+        metab_cfg$de$logfc_cutoff
+    } else {
+        log2(metab_cfg$de$linear_fc_cutoff %||% 1.5)
+    }
+    .p_default <- metab_cfg$de$p_cutoff %||% 0.05
+    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "pval"))
+}
+```
+
 ```{r de-prep, include=FALSE}
 # Prepare shared data used across DE sub-sections
 padj_cut_de <- metab_cfg$de$p_cutoff %||% 0.05
@@ -580,6 +610,22 @@ if (!is.null(de_contrasts)) {
       cat(sprintf('<div id="volcano_plot_%s">\n', vol_cid))
       print(htmltools::tagList(vol_plotly))
       cat('</div>\n')
+
+      # Register volcano plot for cutoff panel
+      if (exists("cutoff_register_plot")) {
+        vol_reg_df <- data.frame(
+          name = as.character(ctr_tbl$Name),
+          logFC = ctr_tbl$logFC,
+          pval = ctr_tbl$P.Value,
+          adjPval = ctr_tbl$adj.P.Val,
+          stringsAsFactors = FALSE
+        )
+        # The plotly widget is inside the wrapper div; JS uses querySelector fallback
+        cat(cutoff_register_plot(
+          paste0("volcano_plot_", vol_cid),
+          vol_reg_df, "volcano", "Metabolite", ctr
+        ))
+      }
 
       # JS for autocomplete + highlight
       cat(sprintf('<script>
@@ -736,6 +782,22 @@ if (!is.null(de_contrasts)) {
         cat(sprintf('<div id="ma_plot_%s">\n', ma_cid))
         print(htmltools::tagList(ma_plotly))
         cat('</div>\n')
+
+        # Register MA plot for cutoff panel
+        if (exists("cutoff_register_plot")) {
+          ma_reg_df <- data.frame(
+            name = as.character(ctr_tbl$Name),
+            logFC = ctr_tbl$logFC,
+            pval = ctr_tbl$P.Value,
+            avgExpr = ctr_tbl$AveExpr,
+            adjPval = ctr_tbl$adj.P.Val,
+            stringsAsFactors = FALSE
+          )
+          cat(cutoff_register_plot(
+            paste0("ma_plot_", ma_cid),
+            ma_reg_df, "ma", "Metabolite", ctr
+          ))
+        }
 
         cat(sprintf('<script>
 (function() {
