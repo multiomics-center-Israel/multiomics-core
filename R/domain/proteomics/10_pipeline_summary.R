@@ -287,7 +287,7 @@ generate_proteomics_summary_with_claude <- function(stats, comment_cfg) {
     )
 
     cmd <- sprintf(
-        "claude --print --model %s --no-session-persistence %s",
+        "unset CLAUDECODE; claude --print --model %s --no-session-persistence %s",
         model, shQuote(prompt)
     )
 

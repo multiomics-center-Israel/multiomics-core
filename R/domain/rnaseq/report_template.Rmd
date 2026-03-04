@@ -30,6 +30,18 @@ library(ggplot2)
 library(htmltools)
 library(jsonlite)
 
+# Source interactive cutoff panel helpers
+tryCatch({
+  .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+  .cp_found <- FALSE
+  for (.cp_i in 1:6) {
+    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
+    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
+    .cp_dir <- dirname(.cp_dir)
+  }
+  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
+}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
+
 # Load ggVennDiagram if available
 has_ggVennDiagram <- FALSE
 tryCatch({
@@ -954,6 +966,14 @@ figure_legend("Expression heatmap with hierarchical row clustering but without c
 
 # Differential Expression Analysis
 
+```{r cutoff-panel, results='asis', echo=FALSE}
+if (exists("cutoff_panel_html")) {
+    .lfc_default <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
+    .p_default   <- rna_cfg$de$p_cutoff %||% 0.05
+    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "padj"))
+}
+```
+
 Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode` mode).
 Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
 and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
@@ -962,10 +982,27 @@ and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
 
 Differential expression analysis identifies features with statistically significant abundance changes between experimental conditions. Results are corrected for multiple testing to control the false discovery rate.
 
-```{r de-summary}
+```{r de-summary, results='asis'}
 de_counts_file <- file.path(datasets_dir, "de_summary_counts.tsv")
 if (file.exists(de_counts_file)) {
     de_counts <- read.delim(de_counts_file, stringsAsFactors = FALSE)
+    if (exists("cutoff_summary_span") && nrow(de_counts) > 0) {
+        # Detect column names for Up/Down counts
+        up_col   <- intersect(c("Up", "up", "n_up"), names(de_counts))[1]
+        down_col <- intersect(c("Down", "down", "n_down"), names(de_counts))[1]
+        ctr_col  <- intersect(c("Contrast", "contrast"), names(de_counts))[1]
+        if (!is.na(up_col) && !is.na(down_col) && !is.na(ctr_col)) {
+            cat("<div class='cutoff-de-summary' style='margin-bottom:12px;'>\n")
+            for (row_i in seq_len(nrow(de_counts))) {
+                cat(sprintf("<div style='margin:3px 0;'><strong>%s:</strong> %s</div>\n",
+                    de_counts[[ctr_col]][row_i],
+                    cutoff_summary_span(de_counts[[ctr_col]][row_i],
+                                        de_counts[[up_col]][row_i],
+                                        de_counts[[down_col]][row_i], "genes")))
+            }
+            cat("</div>\n")
+        }
+    }
     make_dt(de_counts, "DE Gene Counts per Contrast")
 } else {
     cat("DE summary counts file not found.")
@@ -1201,7 +1238,16 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
         geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
         labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
         theme_minimal()
-    ggplotly(p, tooltip = "text")
+    widget <- ggplotly(p, tooltip = "text")
+    # Include both raw and adjusted p-values for cutoff panel
+    pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
+    raw_pval <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else plot_df$padj
+    reg_df <- data.frame(name = as.character(plot_df$gene),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval,
+                         adjPval = plot_df$padj,
+                         stringsAsFactors = FALSE)
+    list(widget = widget, plot_df = reg_df, ycap = ycap_v)
 }
 
 volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
@@ -1257,11 +1303,19 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        p <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        vol_res <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                                   log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
+        if (!is.null(vol_res)) {
+            p <- vol_res$widget
             p$elementId <- paste0("volcano_plot_", clean_id)
             print(htmltools::tagList(p))
+            if (exists("cutoff_register_plot")) {
+                cat(cutoff_register_plot(
+                    paste0("volcano_plot_", clean_id),
+                    vol_res$plot_df, "volcano", "Gene", cn,
+                    ycap = vol_res$ycap
+                ))
+            }
 
             # Add JavaScript for autocomplete + gene highlighting
             cat(sprintf('
@@ -1523,7 +1577,19 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
         labs(title = title, x = "log10(baseMean)", y = "log2 Fold Change") +
         theme_minimal()
 
-    ggplotly(p, tooltip = "text")
+    widget <- ggplotly(p, tooltip = "text")
+    pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
+    raw_pval_all <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else as.numeric(df[[padj_col]])
+    # Filter to same rows as plot_df
+    valid_rows <- !is.na(baseMean) & baseMean > 0
+    raw_pval_filt <- raw_pval_all[valid_rows]
+    reg_df <- data.frame(name = as.character(plot_df$gene),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval_filt,
+                         adjPval = plot_df$padj,
+                         avgExpr = plot_df$log10baseMean,
+                         stringsAsFactors = FALSE)
+    list(widget = widget, plot_df = reg_df)
 }
 ```
 
@@ -1552,12 +1618,18 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        p <- make_ma_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        ma_res <- make_ma_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                             log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
-            # Assign unique div ID
+        if (!is.null(ma_res)) {
+            p <- ma_res$widget
             p$elementId <- paste0("ma_plot_", clean_id)
             print(htmltools::tagList(p))
+            if (exists("cutoff_register_plot")) {
+                cat(cutoff_register_plot(
+                    paste0("ma_plot_", clean_id),
+                    ma_res$plot_df, "ma", "Gene", cn
+                ))
+            }
 
             # Add JavaScript for autocomplete + gene highlighting (MA)
             cat(sprintf('
