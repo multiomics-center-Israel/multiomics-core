@@ -3,7 +3,8 @@
 # multiomics-core Pipeline Runner
 #
 # Usage:
-#   Rscript run.R --new              # Interactive wizard for new project
+#   Rscript run.R --wizard           # Open HTML wizard in browser (GUI)
+#   Rscript run.R --new              # Interactive wizard for new project (CLI)
 #   Rscript run.R --config path.yaml # Run with existing config
 #   Rscript run.R                    # Re-run last config (with caching)
 #   Rscript run.R --fresh            # Full re-run (invalidate cache)
@@ -104,6 +105,126 @@ detect_columns <- function(path) {
   as.character(header[1, ])
 }
 
+#' Read unique levels from a column in a metadata file
+detect_group_levels <- function(metadata_path, group_col) {
+  sep <- detect_separator(metadata_path)
+  meta <- read.table(metadata_path, sep = sep, header = TRUE,
+                     stringsAsFactors = FALSE, check.names = FALSE)
+  if (!group_col %in% colnames(meta)) {
+    cat(sprintf("  WARNING: Column '%s' not found in metadata.\n", group_col))
+    return(NULL)
+  }
+  levels <- unique(as.character(meta[[group_col]]))
+  levels <- levels[!is.na(levels) & nzchar(levels)]
+  sort(levels)
+}
+
+#' Generate all pairwise contrasts from a set of group levels
+make_pairwise_contrasts <- function(levels, factor_col) {
+  pairs <- combn(levels, 2)
+  data.frame(
+    Contrast_name = apply(pairs, 2, function(p) paste0(p[1], "_vs_", p[2])),
+    Factor        = factor_col,
+    Numerator     = pairs[1, ],
+    Denominator   = pairs[2, ],
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Interactive contrast builder — called when no contrasts file is provided
+#' Returns a contrasts data.frame, or NULL if skipped
+wizard_build_contrasts <- function(metadata_path, group_col) {
+  cat("\n--- Contrast Builder ---\n")
+  cat(sprintf("No contrasts file provided. Detecting groups from '%s' column...\n", group_col))
+
+  levels <- detect_group_levels(metadata_path, group_col)
+  if (is.null(levels) || length(levels) < 2) {
+    cat("  Could not detect enough groups (need at least 2). Skipping contrast generation.\n")
+    return(NULL)
+  }
+
+  cat(sprintf("  Detected %d groups: %s\n", length(levels), paste(levels, collapse = ", ")))
+
+  all_pairs <- make_pairwise_contrasts(levels, group_col)
+  n_pairs <- nrow(all_pairs)
+
+  action_idx <- ask_choice("\nHow would you like to define contrasts?",
+    c(sprintf("All pairwise comparisons (%d contrasts) (recommended)", n_pairs),
+      "Pick specific comparisons from the list",
+      "Build custom contrasts (choose numerator & denominator)",
+      "Skip — no contrasts (DE will auto-generate all pairwise at runtime)"),
+    default = 1)
+
+  if (action_idx == 4) {
+    cat("  Skipping. Pipeline will auto-generate all pairwise contrasts at runtime.\n")
+    return(NULL)
+  }
+
+  contrasts_df <- NULL
+
+  if (action_idx == 1) {
+    # Auto-generate all pairwise
+    contrasts_df <- all_pairs
+    cat("  Generated contrasts:\n")
+    for (i in seq_len(nrow(contrasts_df))) {
+      cat(sprintf("    %d) %s vs %s\n", i, contrasts_df$Numerator[i], contrasts_df$Denominator[i]))
+    }
+
+  } else if (action_idx == 2) {
+    # Let user pick from all pairwise options
+    cat("\nAvailable pairwise comparisons:\n")
+    for (i in seq_len(n_pairs)) {
+      cat(sprintf("  %d) %s vs %s\n", i, all_pairs$Numerator[i], all_pairs$Denominator[i]))
+    }
+    selection <- ask("Enter contrast numbers to include (comma-separated, e.g. 1,3)", "all")
+    if (tolower(selection) == "all") {
+      contrasts_df <- all_pairs
+    } else {
+      idx <- suppressWarnings(as.integer(trimws(unlist(strsplit(selection, ",")))))
+      idx <- idx[!is.na(idx) & idx >= 1 & idx <= n_pairs]
+      if (length(idx) == 0) {
+        cat("  No valid selections. Using all contrasts.\n")
+        contrasts_df <- all_pairs
+      } else {
+        contrasts_df <- all_pairs[idx, , drop = FALSE]
+      }
+    }
+    cat(sprintf("  Selected %d contrast(s).\n", nrow(contrasts_df)))
+
+  } else if (action_idx == 3) {
+    # Build one-at-a-time by selecting numerator & denominator from menus
+    cat("\nBuild contrasts by choosing numerator and denominator.\n")
+    cat("Groups:\n")
+    for (i in seq_along(levels)) cat(sprintf("  %d) %s\n", i, levels[i]))
+    rows <- list()
+    repeat {
+      cat(sprintf("\n  Contrast %d:\n", length(rows) + 1))
+      num_idx <- as.integer(ask("    Numerator  (number, or 'done' to finish)"))
+      if (is.na(num_idx)) break
+      den_idx <- as.integer(ask("    Denominator (number)"))
+      if (is.na(den_idx)) break
+      if (num_idx < 1 || num_idx > length(levels)) { cat("    Invalid numerator.\n"); next }
+      if (den_idx < 1 || den_idx > length(levels)) { cat("    Invalid denominator.\n"); next }
+      if (num_idx == den_idx) { cat("    Numerator and denominator must differ.\n"); next }
+      num <- levels[num_idx]; den <- levels[den_idx]
+      cat(sprintf("    -> %s vs %s\n", num, den))
+      rows[[length(rows) + 1]] <- data.frame(
+        Contrast_name = paste0(num, "_vs_", den), Factor = group_col,
+        Numerator = num, Denominator = den, stringsAsFactors = FALSE
+      )
+      if (!ask_yn("    Add another contrast?", TRUE)) break
+    }
+    if (length(rows) == 0) {
+      cat("  No contrasts defined. Skipping.\n")
+      return(NULL)
+    }
+    contrasts_df <- do.call(rbind, rows)
+  }
+
+  cat(sprintf("  %d contrast(s) defined.\n", nrow(contrasts_df)))
+  contrasts_df
+}
+
 # --- Interactive Wizard -------------------------------------------------------
 
 wizard_new_project <- function(project_dir) {
@@ -119,14 +240,57 @@ wizard_new_project <- function(project_dir) {
   cat("\n--- Analysis Type ---\n")
   mode_idx <- ask_choice("What type of analysis?",
     c("RNA-seq",
-      "Proteomics"),
+      "Proteomics",
+      "Metabolomics",
+      "RNA-seq + Proteomics",
+      "RNA-seq + Metabolomics",
+      "All (RNA + Proteomics + Metabolomics)"),
     default = 1)
-  analysis_mode <- c("rna", "proteomics")[mode_idx]
+  analysis_mode <- c("rna", "proteomics", "metabolomics",
+                      "rna_prot", "rna_metab", "all")[mode_idx]
 
   if (analysis_mode == "rna") {
     wizard_rna(project_dir, project_name, analyst, round)
-  } else {
+  } else if (analysis_mode == "proteomics") {
     wizard_proteomics(project_dir, project_name, analyst, round)
+  } else if (analysis_mode == "metabolomics") {
+    wizard_metabolomics(project_dir, project_name, analyst, round)
+  } else {
+    # Multi-mode: run each wizard, merge configs
+    configs <- list()
+
+    if (analysis_mode %in% c("rna_prot", "rna_metab", "all")) {
+      cat("\n=== RNA-seq Setup ===\n")
+      configs$rna <- wizard_rna(project_dir, project_name, analyst, round)
+    }
+
+    if (analysis_mode %in% c("rna_prot", "all")) {
+      cat("\n=== Proteomics Setup ===\n")
+      configs$prot <- wizard_proteomics(project_dir, project_name, analyst, round)
+    }
+
+    if (analysis_mode %in% c("rna_metab", "all")) {
+      cat("\n=== Metabolomics Setup ===\n")
+      configs$metab <- wizard_metabolomics(project_dir, project_name, analyst, round)
+    }
+
+    # Merge configs: start with the first one, add modes from others
+    first_path <- configs[[1]]
+    merged <- yaml::read_yaml(first_path)
+
+    for (cfg_path in configs[-1]) {
+      other_cfg <- yaml::read_yaml(cfg_path)
+      for (mode_name in names(other_cfg$modes)) {
+        merged$modes[[mode_name]] <- other_cfg$modes[[mode_name]]
+      }
+    }
+
+    merged_name <- paste0("multi_", tolower(gsub("[^a-zA-Z0-9]", "_", project_name)), ".yaml")
+    merged_path <- file.path(project_dir, "config", merged_name)
+    yaml::write_yaml(merged, merged_path)
+
+    cat(sprintf("\n  Merged config saved: %s\n", merged_path))
+    merged_path
   }
 }
 
@@ -135,7 +299,7 @@ wizard_new_project <- function(project_dir) {
 wizard_rna <- function(project_dir, project_name, analyst, round) {
 
   # Data directory
-  cat("\n--- RNA-seq Data Files ---\n")
+  cat("\n--- [RNA] Data Files ---\n")
   cat("Provide ABSOLUTE paths to your input files.\n\n")
 
   counts_path <- ask("Path to counts file (genes x samples, CSV/TSV)")
@@ -163,7 +327,7 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   }
 
   # Auto-detect columns from counts and metadata
-  cat("\n--- Column Detection ---\n")
+  cat("\n--- [RNA] Column Detection ---\n")
   if (!is.null(counts_path)) {
     counts_cols <- detect_columns(counts_path)
     cat("Counts file columns: ", paste(head(counts_cols, 5), collapse = ", "),
@@ -187,8 +351,52 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
     group_col <- ask("Group/condition column in metadata")
   }
 
+  # --- Sample Exclusion ---
+  excluded_samples <- character(0)
+  if (!is.null(metadata_path)) {
+    sep <- detect_separator(metadata_path)
+    meta_preview <- read.table(metadata_path, sep = sep, header = TRUE,
+                               stringsAsFactors = FALSE, check.names = FALSE)
+    all_samples <- as.character(meta_preview[[sample_col]])
+
+    cat("\n--- [RNA] Sample Exclusion (optional) ---\n")
+    cat("Samples found in metadata:\n")
+    for (i in seq_along(all_samples)) {
+      cat(sprintf("  %d) %s\n", i, all_samples[i]))
+    }
+    repeat {
+      remaining <- setdiff(all_samples, excluded_samples)
+      if (length(remaining) == 0) break
+      cat("\nCurrently excluded: ",
+          if (length(excluded_samples) == 0) "(none)" else paste(excluded_samples, collapse = ", "), "\n")
+      ans <- prompt_read("Enter sample number to exclude (or press Enter to continue): ")
+      if (ans == "") break
+      idx <- suppressWarnings(as.integer(ans))
+      if (!is.na(idx) && idx >= 1 && idx <= length(all_samples)) {
+        s <- all_samples[idx]
+        if (s %in% excluded_samples) {
+          cat(sprintf("  '%s' is already excluded.\n", s))
+        } else {
+          excluded_samples <- c(excluded_samples, s)
+          cat(sprintf("  Excluded: %s (%d remaining)\n", s, length(all_samples) - length(excluded_samples)))
+        }
+      } else {
+        cat("  Invalid selection.\n")
+      }
+    }
+    if (length(excluded_samples) > 0) {
+      cat(sprintf("Final excluded samples: %s\n", paste(excluded_samples, collapse = ", ")))
+    }
+  }
+
+  # Build contrasts if none provided
+  generated_contrasts_df <- NULL
+  if (is.null(contrasts_path) && !is.null(metadata_path)) {
+    generated_contrasts_df <- wizard_build_contrasts(metadata_path, group_col)
+  }
+
   # Methods
-  cat("\n--- Analysis Methods ---\n")
+  cat("\n--- [RNA] Analysis Methods ---\n")
 
   norm_idx <- ask_choice("Normalization method:",
     c("TMMlogCPM — TMM scaling + log2 CPM (recommended for most RNA-seq)",
@@ -232,7 +440,7 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   deconv_on <- ask_yn("Enable cell type deconvolution? (human/mouse only, uses xCell2)", FALSE)
 
   # Organism & Annotation
-  cat("\n--- Organism & Annotation ---\n")
+  cat("\n--- [RNA] Organism & Annotation ---\n")
   org_idx <- ask_choice("Which organism does your data come from?",
     c("Auto-detect (recommended)",
       "Human (Homo sapiens)",
@@ -281,7 +489,7 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   }
 
   # --- AI Commentary ---
-  cat("\n--- AI Commentary ---\n")
+  cat("\n--- [RNA] AI Commentary ---\n")
   cat("Generate AI-powered interpretation for each figure in the report?\n")
   cat("Requires an API key (ANTHROPIC_API_KEY or OPENAI_API_KEY).\n")
   commentary_idx <- ask_choice("Commentary backend",
@@ -294,10 +502,13 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   commentary_backend <- commentary_backends[commentary_idx]
   commentary_enabled <- commentary_backend != "none"
 
+  # --- PowerPoint ---
+  generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
+
   # --- Technical Report (Optional) ---
   nna <- function(x, default = "") if (is.null(x) || !nzchar(x)) default else x
 
-  cat("\n--- Technical Report (Optional) ---\n")
+  cat("\n--- [RNA] Technical Report (Optional) ---\n")
   cat("Provide a facility technical report (DOCX/PDF) to auto-extract\n")
   cat("library prep, sequencing, and bioinformatics details.\n")
   tech_report_path <- ask("Path to technical report file (or 'none')", "none")
@@ -314,13 +525,18 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
         cat("  Claude Code CLI not found — cannot auto-extract fields.\n")
         cat("  You can manually add a 'technical_report:' block to the config later.\n")
       } else {
-        # Extract text via pandoc (guaranteed available via rmarkdown)
+        # Extract text: PDF via pdftotext, everything else via pandoc
         cat("  Extracting text from report...\n")
-        doc_text <- tryCatch(
-          paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_path)),
-                        stdout = TRUE, stderr = FALSE), collapse = "\n"),
-          error = function(e) NULL
-        )
+        ext <- tolower(tools::file_ext(tech_report_path))
+        doc_text <- tryCatch({
+          if (ext == "pdf") {
+            paste(system2("pdftotext", c("-layout", shQuote(tech_report_path), "-"),
+                          stdout = TRUE, stderr = FALSE), collapse = "\n")
+          } else {
+            paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_path)),
+                          stdout = TRUE, stderr = FALSE), collapse = "\n")
+          }
+        }, error = function(e) NULL)
 
         if (is.null(doc_text) || nchar(doc_text) < 50) {
           cat("  WARNING: Could not extract sufficient text from the file.\n")
@@ -402,7 +618,7 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   }
 
   # Copy data into project structure
-  cat("\n--- Setting Up Project ---\n")
+  cat("\n--- [RNA] Setting Up Project ---\n")
 
   # Create data directory
   data_dir <- file.path(project_dir, "data", tolower(project_name), "rna")
@@ -425,6 +641,12 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
     file.copy(contrasts_path, file.path(project_dir, "data", tolower(project_name), contrasts_dest),
               overwrite = TRUE)
     cat(sprintf("  Copied contrasts -> data/%s/%s\n", tolower(project_name), contrasts_dest))
+  } else if (!is.null(generated_contrasts_df)) {
+    contrasts_dest <- file.path("rna", "contrasts_auto.csv")
+    write.csv(generated_contrasts_df,
+              file.path(project_dir, "data", tolower(project_name), contrasts_dest),
+              row.names = FALSE)
+    cat(sprintf("  Generated contrasts -> data/%s/%s\n", tolower(project_name), contrasts_dest))
   }
 
   sample_map_dest <- ""
@@ -463,6 +685,15 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
         shape_col <- paste0('"', shape_ans, '"')
       }
     }
+  }
+
+  # Build exclude_samples YAML fragment
+  exclude_yaml <- ""
+  if (length(excluded_samples) > 0) {
+    exclude_yaml <- paste0("\n    exclude_samples:\n",
+        paste0("      - \"", excluded_samples, "\"", collapse = "\n"), "\n")
+  } else {
+    exclude_yaml <- "\n    exclude_samples: null\n"
   }
 
   config_yaml <- sprintf('# Auto-generated by run.R wizard
@@ -505,7 +736,7 @@ modes:
         max: 2.0
         fallback: 1.0
       fixed_threshold: %s
-
+%s
     de:
       method: "%s"
       deseq_mode: "%s"
@@ -546,6 +777,9 @@ modes:
     commentary:
       enabled: %s
       backend: "%s"
+
+    outputs:
+      generate_pptx: %s
 
     clustering:
       enabled: %s
@@ -592,10 +826,12 @@ params:
     gene_id_col, sample_col, map_from, map_to,
     norm_method, group_col, filter_mode,
     if (nzchar(filter_cpm_threshold)) filter_cpm_threshold else "null",
+    exclude_yaml,
     de_method, deseq_mode, p_cutoff, fc_cutoff,
     selected_organism, custom_mapping_file,
     tolower(pathway_enabled), pathway_method, custom_gmt_file,
     tolower(commentary_enabled), commentary_backend,
+    tolower(generate_pptx),
     tolower(clustering_on), group_col,
     tolower(batch_corr_on),
     tolower(deconv_on),
@@ -628,7 +864,7 @@ params:
 wizard_proteomics <- function(project_dir, project_name, analyst, round) {
 
   # Data files
-  cat("\n--- Proteomics Data Files ---\n")
+  cat("\n--- [PROT] Data Files ---\n")
   cat("Provide ABSOLUTE paths to your input files.\n\n")
 
   protein_path <- ask("Path to protein matrix file (proteins x samples, CSV/TSV)")
@@ -656,7 +892,7 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   }
 
   # Column detection
-  cat("\n--- Column Detection ---\n")
+  cat("\n--- [PROT] Column Detection ---\n")
   protein_id_col <- "Protein.Group"
   if (!is.null(protein_path)) {
     prot_cols <- detect_columns(protein_path)
@@ -676,8 +912,52 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
     group_col <- ask("Group column", meta_cols[min(2, length(meta_cols))])
   }
 
+  # --- Sample Exclusion ---
+  excluded_samples <- character(0)
+  if (!is.null(metadata_path)) {
+    sep <- detect_separator(metadata_path)
+    meta_preview <- read.table(metadata_path, sep = sep, header = TRUE,
+                               stringsAsFactors = FALSE, check.names = FALSE)
+    all_samples <- as.character(meta_preview[[sample_col]])
+
+    cat("\n--- [PROT] Sample Exclusion (optional) ---\n")
+    cat("Samples found in metadata:\n")
+    for (i in seq_along(all_samples)) {
+      cat(sprintf("  %d) %s\n", i, all_samples[i]))
+    }
+    repeat {
+      remaining <- setdiff(all_samples, excluded_samples)
+      if (length(remaining) == 0) break
+      cat("\nCurrently excluded: ",
+          if (length(excluded_samples) == 0) "(none)" else paste(excluded_samples, collapse = ", "), "\n")
+      ans <- prompt_read("Enter sample number to exclude (or press Enter to continue): ")
+      if (ans == "") break
+      idx <- suppressWarnings(as.integer(ans))
+      if (!is.na(idx) && idx >= 1 && idx <= length(all_samples)) {
+        s <- all_samples[idx]
+        if (s %in% excluded_samples) {
+          cat(sprintf("  '%s' is already excluded.\n", s))
+        } else {
+          excluded_samples <- c(excluded_samples, s)
+          cat(sprintf("  Excluded: %s (%d remaining)\n", s, length(all_samples) - length(excluded_samples)))
+        }
+      } else {
+        cat("  Invalid selection.\n")
+      }
+    }
+    if (length(excluded_samples) > 0) {
+      cat(sprintf("Final excluded samples: %s\n", paste(excluded_samples, collapse = ", ")))
+    }
+  }
+
+  # Build contrasts if none provided
+  generated_contrasts_df <- NULL
+  if (is.null(contrasts_path) && !is.null(metadata_path)) {
+    generated_contrasts_df <- wizard_build_contrasts(metadata_path, group_col)
+  }
+
   # Engine
-  cat("\n--- Proteomics Settings ---\n")
+  cat("\n--- [PROT] Settings ---\n")
   engine_idx <- ask_choice("Search engine used:",
     c("DIA-NN (default)", "MaxQuant", "FragPipe", "Other"),
     default = 1)
@@ -686,17 +966,20 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   # Normalization
   norm_idx <- ask_choice("Normalization method:",
     c("None (data already normalized, e.g. DIA-NN output)",
-      "Median centering"),
+      "Median centering",
+      "VSN (variance stabilizing — requires Bioconductor 'vsn' package)"),
     default = 1)
-  norm_method <- c("none", "median")[norm_idx]
+  norm_method <- c("none", "median", "vsn")[norm_idx]
 
   # Imputation
   imp_idx <- ask_choice("Imputation method:",
     c("Perseus-style — downshifted normal (recommended for MNAR data)",
       "DEP2 / MinDet — deterministic minimum (experimental)",
+      "QRILC — truncated normal, single imputation (DEP workflow)",
+      "MinVal — floor of minimum observed value (deterministic LOD)",
       "None (complete cases only)"),
     default = 1)
-  imp_method <- c("perseus", "dep2", "none")[imp_idx]
+  imp_method <- c("perseus", "dep2", "qrilc", "minval", "none")[imp_idx]
 
   imp_width <- "0.2"
   imp_downshift <- "1.6"
@@ -709,23 +992,78 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
     dep2_method <- ask("  DEP2 method", "MinDet")
   }
 
-  # DE cutoffs
-  cat("\n--- Differential Expression ---\n")
-  p_cutoff <- as.numeric(ask("Adjusted p-value cutoff", "0.05"))
-  fc_cutoff <- as.numeric(ask("Linear fold-change cutoff", "1.5"))
+  multi_imp <- TRUE
+  if (imp_method != "none") {
+    multi_imp <- ask_yn("Use multiple imputation with consensus filter (10 rounds, 8/10 must pass)?", TRUE)
+  }
+
+  # Filtering options
+  cat("\n--- [PROT] Filtering ---\n")
+  remove_contaminants <- ask_yn("Remove contaminant proteins (e.g. cRAP)?", TRUE)
+  min_valid <- ask("Minimum valid values per group", "3")
+  min_groups <- ask("Require passing in at least N groups", "1")
+
+  # Peptide file (stub)
+  cat("\n--- [PROT] Optional Files ---\n")
+  peptide_path <- ask("Path to peptide-level data file (optional, or 'none')", "none")
+  peptide_dest <- ""
+  if (tolower(peptide_path) != "none") {
+    peptide_path <- validate_file(peptide_path, "Peptide data file")
+    if (!is.null(peptide_path)) peptide_dest <- file.path("proteomics", basename(peptide_path))
+  }
+
+  # DE method & cutoffs
+  cat("\n--- [PROT] Differential Expression ---\n")
+  de_method_idx <- ask_choice("DE method:",
+    c("Limma (recommended)",
+      "t-test (equal variance)",
+      "Welch test (unequal variance)",
+      "ANOVA + Tukey HSD (multi-group)"),
+    default = 1)
+  de_method <- c("limma", "ttest", "welch", "anova")[de_method_idx]
+
+  paired <- FALSE
+  pairing_col <- "null"
+  if (de_method %in% c("ttest", "welch")) {
+    paired <- ask_yn("Use paired test?", FALSE)
+    if (paired && !is.null(metadata_path)) {
+      meta_cols_all <- detect_columns(metadata_path)
+      cat("  Metadata columns: ", paste(meta_cols_all, collapse = ", "), "\n")
+      pairing_col_ans <- ask("Pairing column (e.g. Subject)", "null")
+      if (tolower(pairing_col_ans) != "null") {
+        pairing_col <- paste0('"', pairing_col_ans, '"')
+      }
+    }
+  }
+
+  p_cutoff <- as.numeric(ask("P-value cutoff", "0.05"))
+  use_adj <- ask_yn("Use adjusted p-value (BH) for significance?", TRUE)
+
+  p_adjust_idx <- ask_choice("Multiple testing correction method:",
+    c("BH / Benjamini-Hochberg (recommended)",
+      "Bonferroni",
+      "Holm",
+      "BY / Benjamini-Yekutieli"),
+    default = 1)
+  p_adjust_method <- c("BH", "bonferroni", "holm", "BY")[p_adjust_idx]
+
+  fdrtool_corr <- ask_yn("Apply fdrtool empirical null correction (DEP-style, more conservative)?", FALSE)
+
+  fc_cutoff <- as.numeric(ask("Linear fold-change cutoff (1 = no FC filter)", "1.5"))
 
   clustering_on <- ask_yn("Enable clustering?", FALSE)
 
   # Organism & Annotation
-  cat("\n--- Organism & Annotation ---\n")
+  cat("\n--- [PROT] Organism & Annotation ---\n")
   org_idx <- ask_choice("Which organism does your data come from?",
     c("Human (Homo sapiens)",
       "Mouse (Mus musculus)",
       "Rat (Rattus norvegicus)",
       "Zebrafish (Danio rerio)",
+      "C. elegans (Caenorhabditis elegans)",
       "Other (type name)"),
     default = 1)
-  organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus", "Danio rerio", "other")
+  organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus", "Danio rerio", "Caenorhabditis elegans", "other")
   selected_organism <- organism_names[org_idx]
   if (selected_organism == "other") {
     selected_organism <- ask("Organism name (Latin binomial, e.g. 'Giardia lamblia')")
@@ -771,7 +1109,7 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   }
 
   # Pathway enrichment
-  cat("\n--- Pathway Enrichment ---\n")
+  cat("\n--- [PROT] Pathway Enrichment ---\n")
   pathway_idx <- ask_choice("Pathway analysis:",
     c("Both fGSEA + ORA (recommended)",
       "fGSEA only",
@@ -781,13 +1119,26 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   pathway_method <- c("both", "fgsea", "ora", "none")[pathway_idx]
   pathway_enabled <- pathway_idx != 4
 
+  gsea_ranking <- "stat"
+  pathway_volcano <- TRUE
+  if (pathway_enabled) {
+    ranking_idx <- ask_choice("GSEA ranking method:",
+      c("Signed statistic — sign(log2FC) * -log10(p) (recommended)",
+        "Absolute fold-change — |log2FC|",
+        "Log2 fold-change — signed, directional"),
+      default = 1)
+    gsea_ranking <- c("stat", "abs_lfc", "lfc")[ranking_idx]
+
+    pathway_volcano <- ask_yn("Generate pathway-colored volcano data?", TRUE)
+  }
+
   # PPI network analysis
-  cat("\n--- Network & Advanced Analysis ---\n")
+  cat("\n--- [PROT] Network & Advanced Analysis ---\n")
   ppi_on <- ask_yn("Enable PPI network analysis (STRING)?", TRUE)
   adv_stats_on <- ask_yn("Enable advanced statistics (effect sizes, power analysis)?", TRUE)
 
   # AI Commentary
-  cat("\n--- AI Commentary ---\n")
+  cat("\n--- [PROT] AI Commentary ---\n")
   cat("Generate AI-powered interpretation for each figure in the report?\n")
   commentary_idx <- ask_choice("Commentary backend:",
     c("None (data-driven fallback only)",
@@ -799,10 +1150,25 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   commentary_backend <- commentary_backends[commentary_idx]
   commentary_enabled <- commentary_backend != "none"
 
+  # --- PowerPoint ---
+  generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
+
+  # --- Report Customization (Optional) ---
+  cat("\n--- [PROT] Report Customization (Optional) ---\n")
+  cat("These settings control the HTML report appearance. All are optional.\n")
+  cat("You can also edit them later in the config YAML under modes.proteomics.report.\n\n")
+
+  report_project_id <- ask("Project ID for report title (or leave empty)", "")
+  report_intro <- ask("Introduction text for the report (or leave empty)", "")
+  report_disclaimer <- ask("Legal disclaimer text (or leave empty)", "")
+
+  show_distance_heatmap <- ask_yn("Show distance heatmap in QC section?", FALSE)
+  show_venn <- ask_yn("Show identified-proteins Venn diagram?", FALSE)
+
   # --- Technical / Instrument Report (Optional) ---
   nna <- function(x, default = "") if (is.null(x) || !nzchar(x)) default else x
 
-  cat("\n--- Technical / Instrument Report (Optional) ---\n")
+  cat("\n--- [PROT] Technical / Instrument Report (Optional) ---\n")
   cat("Provide a search engine log file (e.g. DIA-NN .log) or facility report\n")
   cat("(DOCX/PDF) to auto-extract instrument, software, and parameter details.\n")
   tech_report_path <- ask("Path to log file or technical report (or 'none')", "none")
@@ -818,13 +1184,16 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
         cat("  Claude Code CLI not found — cannot auto-extract fields.\n")
         cat("  You can manually add a 'technical_report:' block to the config later.\n")
       } else {
-        # Extract text: for log/txt files read directly, for DOCX/PDF use pandoc
+        # Extract text: plain text via readLines, PDF via pdftotext, DOCX via pandoc
         cat("  Extracting text from file...\n")
         ext <- tolower(tools::file_ext(tech_report_path))
 
         doc_text <- tryCatch({
           if (ext %in% c("log", "txt", "tsv", "csv")) {
             paste(readLines(tech_report_path, warn = FALSE), collapse = "\n")
+          } else if (ext == "pdf") {
+            paste(system2("pdftotext", c("-layout", shQuote(tech_report_path), "-"),
+                          stdout = TRUE, stderr = FALSE), collapse = "\n")
           } else {
             paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_path)),
                           stdout = TRUE, stderr = FALSE), collapse = "\n")
@@ -917,7 +1286,7 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   }
 
   # Copy data into project structure
-  cat("\n--- Setting Up Project ---\n")
+  cat("\n--- [PROT] Setting Up Project ---\n")
 
   data_dir <- file.path(project_dir, "data", tolower(project_name), "proteomics")
   dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
@@ -938,6 +1307,12 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
     file.copy(contrasts_path, file.path(project_dir, "data", tolower(project_name), contrasts_dest),
               overwrite = TRUE)
     cat(sprintf("  Copied contrasts -> data/%s/%s\n", tolower(project_name), contrasts_dest))
+  } else if (!is.null(generated_contrasts_df)) {
+    contrasts_dest <- file.path("proteomics", "contrasts_auto.csv")
+    write.csv(generated_contrasts_df,
+              file.path(project_dir, "data", tolower(project_name), contrasts_dest),
+              row.names = FALSE)
+    cat(sprintf("  Generated contrasts -> data/%s/%s\n", tolower(project_name), contrasts_dest))
   }
 
   sample_map_dest <- ""
@@ -946,6 +1321,13 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
     file.copy(sample_map_path, file.path(project_dir, "data", tolower(project_name), sample_map_dest),
               overwrite = TRUE)
     cat(sprintf("  Copied sample map -> data/%s/%s\n", tolower(project_name), sample_map_dest))
+  }
+
+  # Copy peptide file if provided
+  if (nzchar(peptide_dest) && !is.null(peptide_path)) {
+    file.copy(peptide_path, file.path(project_dir, "data", tolower(project_name), peptide_dest),
+              overwrite = TRUE)
+    cat(sprintf("  Copied peptides -> data/%s/%s\n", tolower(project_name), peptide_dest))
   }
 
   # Sample map columns
@@ -962,6 +1344,15 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
   config_name <- paste0("prot_", tolower(gsub("[^a-zA-Z0-9]", "_", project_name)), ".yaml")
   config_path <- file.path(project_dir, "config", config_name)
   dir.create(file.path(project_dir, "config"), showWarnings = FALSE)
+
+  # Build exclude_samples YAML fragment
+  exclude_yaml <- ""
+  if (length(excluded_samples) > 0) {
+    exclude_yaml <- paste0("\n    exclude_samples:\n",
+        paste0("      - \"", excluded_samples, "\"", collapse = "\n"), "\n")
+  } else {
+    exclude_yaml <- "\n    exclude_samples: null\n"
+  }
 
   config_yaml <- sprintf('# Auto-generated by run.R wizard
 # Project: %s
@@ -986,6 +1377,7 @@ modes:
       sample_map: "%s"
       metadata: "%s"
       contrasts: "%s"
+      peptides: "%s"
 
     id_columns:
       protein_id: "%s"
@@ -998,13 +1390,17 @@ modes:
       map_to: "%s"
 
     filtering:
+      remove_contaminants: %s
+      contaminant_prefix: "cRAP-"
       min_count:
-        default: 3
-
+        default: %s
+      min_groups: %s
+%s
     normalization:
       method: "%s"
 
     imputation:
+      multi_imputation: %s
       method: "%s"
       no_repetitions: 10
       min_no_passed: 8
@@ -1012,12 +1408,17 @@ modes:
       downshift: %s
       dep2_method: "%s"
       dep2_random_seed: 1
+      qrilc_random_seed: 1
 
     de:
-      method: "limma"
-      use_adj_for_pass1: true
+      method: "%s"
+      use_adj_for_pass1: %s
       p_cutoff: %s
       linear_fc_cutoff: %s
+      p_adjust_method: "%s"
+      fdrtool_correction: %s
+      paired: %s
+      pairing_col: %s
 
     de_table:
       id_col: "FeatureID"
@@ -1054,6 +1455,19 @@ modes:
       shape: null
       samples: "%s"
 
+    report:
+      project_id: "%s"
+      introduction_text: "%s"
+      disclaimer_text: "%s"
+      show_pca: true
+      show_density: true
+      show_distance: %s
+      show_correlation: true
+      show_expression_heatmap: true
+      show_imputation_qc: true
+      show_identified_proteins_venn: %s
+      force_pca: false
+
     qc:
       run_umap: true
       umap_n_neighbors: 15
@@ -1075,6 +1489,8 @@ modes:
       gmt_file: %s
       min_size: 10
       max_size: 500
+      gsea_ranking: "%s"
+      pathway_volcano: %s
 
     ppi:
       enabled: %s
@@ -1100,25 +1516,38 @@ modes:
       max_tokens: 1500
       max_retries: 2
 
+    outputs:
+      generate_pptx: %s
+
 params:
   seed: 1
 ',
     project_name, Sys.Date(), project_dir, project_name, round, analyst,
     tolower(project_name), tolower(project_name),
     engine,
-    protein_dest, sample_map_dest, meta_dest, contrasts_dest,
+    protein_dest, sample_map_dest, meta_dest, contrasts_dest, peptide_dest,
     protein_id_col, sample_col,
     map_from, map_to,
+    tolower(remove_contaminants), min_valid, min_groups,
+    exclude_yaml,
     norm_method,
-    imp_method, imp_width, imp_downshift, dep2_method,
-    p_cutoff, fc_cutoff,
+    tolower(multi_imp), imp_method, imp_width, imp_downshift, dep2_method,
+    de_method, tolower(use_adj), p_cutoff, fc_cutoff, p_adjust_method,
+    tolower(fdrtool_corr),
+    tolower(paired), pairing_col,
     tolower(clustering_on),
     group_col, sample_col,
+    report_project_id,
+    gsub('"', '\\"', report_intro, fixed = TRUE),
+    gsub('"', '\\"', report_disclaimer, fixed = TRUE),
+    tolower(show_distance_heatmap), tolower(show_venn),
     selected_organism, custom_mapping_file,
     tolower(pathway_enabled), pathway_method, custom_gmt_file,
+    gsea_ranking, tolower(pathway_volcano),
     tolower(ppi_on),
     tolower(adv_stats_on),
-    tolower(commentary_enabled), commentary_backend
+    tolower(commentary_enabled), commentary_backend,
+    tolower(generate_pptx)
   )
 
   # Inject technical_report block if extracted
@@ -1142,6 +1571,311 @@ params:
   config_path
 }
 
+# --- Metabolomics Wizard ------------------------------------------------------
+
+wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
+
+  # Data files
+  cat("\n--- [METAB] Data Files ---\n")
+  cat("Provide ABSOLUTE paths to your input files.\n\n")
+
+  data_path <- ask("Path to metabolomics data file (CD export or processed table, CSV/TSV/XLSX)")
+  data_path <- validate_file(data_path, "Metabolomics data file")
+  if (is.null(data_path)) {
+    data_path <- ask("Please re-enter the metabolomics data file path")
+    data_path <- validate_file(data_path, "Metabolomics data file")
+  }
+
+  metadata_path <- ask("Path to metadata file (sample info, CSV/TSV — or 'none')", "none")
+  if (tolower(metadata_path) == "none") {
+    metadata_path <- NULL
+  } else {
+    metadata_path <- validate_file(metadata_path, "Metadata file")
+  }
+
+  # Input format
+  cat("\n--- [METAB] Input Format ---\n")
+  format_idx <- ask_choice("What format is your data file?",
+    c("Compound Discoverer raw export (Area: columns)",
+      "Already-processed wide table (clean sample columns)"),
+    default = 1)
+  input_format <- c("cd_raw", "processed_wide")[format_idx]
+
+  # Column detection & mapping
+  cat("\n--- [METAB] Column Detection ---\n")
+  feature_id_col <- "null"
+  name_col <- "Name"
+  mz_col <- "m/z"
+  rt_col <- "RT [min]"
+
+  if (!is.null(data_path)) {
+    data_cols <- detect_columns(data_path)
+    cat("Data file columns: ", paste(head(data_cols, 8), collapse = ", "),
+        if (length(data_cols) > 8) "..." else "", "\n")
+
+    if (input_format == "processed_wide") {
+      cat("\nFor processed_wide format, specify the feature ID column.\n")
+      feature_id_col <- ask("Feature ID column (or 'null' to construct from Name/mz/RT)", data_cols[1])
+      if (tolower(feature_id_col) == "null") feature_id_col <- "null"
+    } else {
+      cat("\nFor Compound Discoverer format, specify the annotation columns.\n")
+      name_col <- ask("Name column", "Name")
+      mz_col <- ask("m/z column", "m/z")
+      rt_col <- ask("RT column", "RT [min]")
+    }
+  }
+
+  sample_col <- "sample_id"
+  group_col <- "sample_type"
+  if (!is.null(metadata_path)) {
+    meta_cols <- detect_columns(metadata_path)
+    cat("Metadata columns: ", paste(meta_cols, collapse = ", "), "\n")
+    sample_col <- ask("Sample ID column in metadata", meta_cols[1])
+    cat("\nWhich column defines your biological groups/conditions?\n")
+    cat("(Used for PCA coloring and DE contrasts)\n")
+    group_col <- ask("Group/condition column", meta_cols[min(2, length(meta_cols))])
+  }
+
+  # Build contrasts
+  generated_contrasts <- NULL
+  if (!is.null(metadata_path)) {
+    generated_contrasts <- wizard_build_contrasts(metadata_path, group_col)
+  }
+
+  # Normalization
+  cat("\n--- [METAB] Normalization ---\n")
+  norm_idx <- ask_choice("Sample normalization method:",
+    c("PQN — Probabilistic Quotient Normalization (recommended)",
+      "Median centering",
+      "Sum normalization",
+      "None (data already normalized)"),
+    default = 1)
+  sample_norm <- c("pqn", "median", "sum", "none")[norm_idx]
+
+  transform_idx <- ask_choice("Transformation:",
+    c("log2 (recommended)",
+      "log10",
+      "Generalized log10 (MetaboAnalyst default — handles zeros smoothly)",
+      "None"),
+    default = 1)
+  transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+
+  scaling_idx <- ask_choice("Scaling:",
+    c("None (recommended for most workflows)",
+      "Auto-scaling (unit variance)",
+      "Pareto scaling (square root of SD)",
+      "Range scaling (min-max)"),
+    default = 1)
+  scaling <- c("none", "auto", "pareto", "range")[scaling_idx]
+
+  # DE method & cutoffs
+  cat("\n--- [METAB] Differential Expression ---\n")
+  de_method_idx <- ask_choice("DE method:",
+    c("Limma — moderated t-test (recommended)",
+      "Welch t-test (unequal variance)",
+      "Student t-test (equal variance, MetaboAnalyst default)",
+      "Wilcoxon rank-sum test (non-parametric)"),
+    default = 1)
+  de_method <- c("limma", "t_test", "t_test_equal", "wilcoxon")[de_method_idx]
+
+  p_cutoff <- as.numeric(ask("Adjusted p-value cutoff", "0.05"))
+  fc_cutoff <- as.numeric(ask("Linear fold-change cutoff", "1.5"))
+
+  # Feature selection
+  cat("\n--- [METAB] Feature Selection ---\n")
+  run_rf <- ask_yn("Run Random Forest feature importance?", TRUE)
+  run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
+
+  # Enrichment
+  cat("\n--- [METAB] Pathway Enrichment ---\n")
+  run_enrichment <- ask_yn("Enable pathway enrichment analysis?", FALSE)
+  gmt_file <- "null"
+  if (run_enrichment) {
+    gmt_ans <- ask("Path to GMT file for pathway analysis (or 'none')", "none")
+    if (tolower(gmt_ans) != "none") {
+      gmt_path <- validate_file(gmt_ans, "GMT file")
+      if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
+    }
+  }
+
+  # AI Commentary
+  cat("\n--- [METAB] AI Commentary ---\n")
+  cat("Generate AI-powered interpretation for each figure in the report?\n")
+  commentary_idx <- ask_choice("Commentary backend:",
+    c("None (data-driven fallback only)",
+      "Claude Code (uses your subscription, no API key needed)",
+      "Claude API (requires ANTHROPIC_API_KEY)",
+      "OpenAI API (requires OPENAI_API_KEY)"),
+    default = 1)
+  commentary_backends <- c("none", "claude-code", "claude", "openai")
+  commentary_backend <- commentary_backends[commentary_idx]
+  commentary_enabled <- commentary_backend != "none"
+
+  # --- PowerPoint ---
+  generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
+
+  # Copy data into project structure
+  cat("\n--- [METAB] Setting Up Project ---\n")
+
+  data_dir <- file.path(project_dir, "data", tolower(project_name), "metabolomics")
+  dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+
+  data_dest <- file.path("metabolomics", basename(data_path))
+  file.copy(data_path, file.path(project_dir, "data", tolower(project_name), data_dest),
+            overwrite = TRUE)
+  cat(sprintf("  Copied data file -> data/%s/%s\n", tolower(project_name), data_dest))
+
+  meta_dest <- ""
+  if (!is.null(metadata_path)) {
+    meta_dest <- file.path("metabolomics", basename(metadata_path))
+    file.copy(metadata_path, file.path(project_dir, "data", tolower(project_name), meta_dest),
+              overwrite = TRUE)
+    cat(sprintf("  Copied metadata -> data/%s/%s\n", tolower(project_name), meta_dest))
+  }
+
+  # Write auto-generated contrasts if built
+  contrasts_yaml <- ""
+  if (!is.null(generated_contrasts) && nrow(generated_contrasts) > 0) {
+    contrast_strings <- paste0(generated_contrasts$Numerator, " - ", generated_contrasts$Denominator)
+    contrasts_yaml <- paste0("      contrasts:\n",
+      paste(sprintf('        - "%s"', contrast_strings), collapse = "\n"), "\n")
+  } else {
+    contrasts_yaml <- '      contrasts:\n        - "treated - control"\n'
+  }
+
+  # Generate config YAML
+  config_name <- paste0("metab_", tolower(gsub("[^a-zA-Z0-9]", "_", project_name)), ".yaml")
+  config_path <- file.path(project_dir, "config", config_name)
+  dir.create(file.path(project_dir, "config"), showWarnings = FALSE)
+
+  feature_id_yaml <- if (feature_id_col == "null") "null" else paste0('"', feature_id_col, '"')
+
+  config_yaml <- sprintf('# Auto-generated by run.R wizard
+# Project: %s
+# Date: %s
+
+project:
+  dir: "%s"
+  name: "%s"
+  analysis_round: "%s"
+  analyst: "%s"
+
+paths:
+  raw: "data/%s"
+  out: "outputs/%s"
+
+modes:
+  metabolomics:
+
+    input:
+      format: "%s"
+      sheet: null
+
+    files:
+      data: "%s"
+      metadata: "%s"
+
+    parsing:
+      cd_area_prefix: "Area:"
+      cd_sample_regex: null
+
+    id_columns:
+      feature_id_col: %s
+      name_col: "%s"
+      mz_col: "%s"
+      rt_col: "%s"
+      annotation_cols: null
+
+    normalization:
+      input_already_normalized: %s
+      sample_norm: "%s"
+      transform: "%s"
+      scaling: "%s"
+      pseudocount: 1
+      na_policy: "keep"
+      is_ref_col: null
+
+    sample_filter:
+      enabled: false
+      rules:
+        exclude_blanks: true
+        exclude_qc: false
+        exclude_samples: null
+
+    effects:
+      samples: "%s"
+      color: "%s"
+      shape: null
+      heatmap_annotations: null
+
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+    de:
+      method: "%s"
+      condition_column: "%s"
+%s      p_cutoff: %s
+      pval_cutoff: %s
+      linear_fc_cutoff: %s
+
+    rf:
+      run_rf: %s
+      n_trees: 500
+      importance: "permutation"
+      top_n: 20
+      seed: 1234
+
+    plsda:
+      run_plsda: %s
+      vip_top_n: 15
+      colors: null
+
+    enrichment:
+      run_enrichment: %s
+      libraries: []
+      gmt_file: %s
+      mapping_file: null
+
+    commentary:
+      enabled: %s
+      backend: "%s"
+      claude_code_model: "sonnet"
+      max_tokens: 1500
+      max_retries: 2
+
+    outputs:
+      generate_pptx: %s
+
+params:
+  seed: 1
+',
+    project_name, Sys.Date(), project_dir, project_name, round, analyst,
+    tolower(project_name), tolower(project_name),
+    input_format,
+    data_dest, meta_dest,
+    feature_id_yaml, name_col, mz_col, rt_col,
+    tolower(sample_norm == "none"),
+    sample_norm, transform, scaling,
+    sample_col, group_col,
+    de_method, group_col,
+    contrasts_yaml,
+    p_cutoff, p_cutoff, fc_cutoff,
+    tolower(run_rf),
+    tolower(run_plsda),
+    tolower(run_enrichment), gmt_file,
+    tolower(commentary_enabled), commentary_backend,
+    tolower(generate_pptx)
+  )
+
+  writeLines(config_yaml, config_path)
+  cat(sprintf("\n  Config saved: %s\n", config_path))
+
+  config_path
+}
+
 # --- Pipeline Runner ----------------------------------------------------------
 
 run_pipeline <- function(config_path, fresh = FALSE) {
@@ -1153,7 +1887,7 @@ run_pipeline <- function(config_path, fresh = FALSE) {
 
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
-    targets::tar_invalidate(everything())
+    targets::tar_destroy(ask = FALSE)
   }
 
   # Quick pre-flight: verify input files exist before starting pipeline
@@ -1203,6 +1937,29 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     }
   }
 
+  # Pre-flight: metabolomics input files
+  if (!is.null(cfg$modes$metabolomics)) {
+    metab <- cfg$modes$metabolomics
+    base_dir <- file.path(cfg$project$dir, cfg$paths$raw)
+    missing_metab <- character(0)
+    for (fname in c("data", "metadata")) {
+      fpath <- metab$files[[fname]]
+      if (!is.null(fpath) && nzchar(fpath) && !file.exists(file.path(base_dir, fpath))) {
+        missing_metab <- c(missing_metab, sprintf("  [x] metabolomics/%s: %s", fname, fpath))
+      }
+    }
+    if (length(missing_metab) > 0) {
+      cat("\n  PRE-FLIGHT: Missing metabolomics input files:\n")
+      cat(paste(missing_metab, collapse = "\n"), "\n")
+      if (interactive()) {
+        proceed <- ask_yn("Continue anyway?", FALSE)
+        if (!proceed) return(invisible(NULL))
+      } else {
+        stop("Pre-flight check failed: missing metabolomics input files")
+      }
+    }
+  }
+
   cat("  Starting pipeline...\n\n")
   targets::tar_make()
 
@@ -1229,6 +1986,24 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     cat("  Open in browser to view results.\n")
   }
 
+  metab_report_path <- file.path(run_dir_path, "metabolomics_report.html")
+  if (file.exists(metab_report_path)) {
+    cat(sprintf("\n  Metabolomics Report: %s\n", metab_report_path))
+    cat("  Open in browser to view results.\n")
+  }
+
+  metab_summary_path <- file.path(run_dir_path, "metabolomics_pipeline_summary.html")
+  if (file.exists(metab_summary_path)) {
+    cat(sprintf("  Metabolomics Summary: %s\n", metab_summary_path))
+  }
+
+  # PowerPoint presentations
+  pptx_files <- list.files(run_dir_path, pattern = "_summary\\.pptx$", full.names = TRUE)
+  if (length(pptx_files) > 0) {
+    cat("\n  PowerPoint Presentations:\n")
+    for (pf in pptx_files) cat(sprintf("    %s\n", pf))
+  }
+
   cat("\n  Pipeline complete.\n")
 }
 
@@ -1238,7 +2013,229 @@ main <- function() {
   args <- commandArgs(trailingOnly = TRUE)
   project_dir <- getwd()
 
-  if ("--new" %in% args) {
+  if ("--wizard" %in% args) {
+    # Serve HTML wizard via httpuv with API backend
+    wizard_path <- file.path(project_dir, "wizard.html")
+    if (!file.exists(wizard_path)) stop("wizard.html not found in ", project_dir)
+
+    if (!requireNamespace("httpuv", quietly = TRUE))
+      stop("httpuv package required for --wizard. Install with: renv::install('httpuv')")
+
+    cli_header()
+    cat("--- Config Wizard (browser) ---\n\n")
+
+    # State: will be set by /api/run-pipeline to trigger pipeline after server stops
+    .wizard_state <- new.env(parent = emptyenv())
+    .wizard_state$run_config <- NULL
+
+    # Find available port
+    port <- 8080L
+    for (p in 8080:8099) {
+      tryCatch({
+        srv_test <- httpuv::startServer("127.0.0.1", p, list(call = function(req) {
+          list(status = 200L, headers = list(), body = "")
+        }))
+        httpuv::stopServer(srv_test)
+        port <- as.integer(p)
+        break
+      }, error = function(e) NULL)
+    }
+
+    # Parse multipart form data (minimal implementation)
+    parse_multipart <- function(body_raw, content_type) {
+      boundary <- sub(".*boundary=", "", content_type)
+      body_str <- rawToChar(body_raw)
+      parts <- strsplit(body_str, paste0("--", boundary))[[1]]
+      parts <- parts[nchar(trimws(parts)) > 4]  # skip empty/closing
+      result <- list()
+      for (part in parts) {
+        if (!grepl("Content-Disposition", part)) next
+        name_match <- regmatches(part, regexpr('name="([^"]+)"', part))
+        if (length(name_match) == 0) next
+        name <- sub('name="', '', sub('"$', '', name_match))
+        fname_match <- regmatches(part, regexpr('filename="([^"]*)"', part))
+        # Extract body after double newline
+        body_part <- sub("^.*?\r?\n\r?\n", "", part)
+        body_part <- sub("\r?\n--$", "", sub("\r?\n$", "", body_part))
+        if (length(fname_match) > 0) {
+          fname <- sub('filename="', '', sub('"$', '', fname_match))
+          result[[name]] <- list(filename = fname, data = body_part)
+        } else {
+          result[[name]] <- body_part
+        }
+      }
+      result
+    }
+
+    # HTTP handler
+    app <- list(
+      call = function(req) {
+        path <- req$PATH_INFO
+        method <- req$REQUEST_METHOD
+
+        # CORS headers for all responses
+        cors <- list(
+          "Access-Control-Allow-Origin" = "*",
+          "Access-Control-Allow-Methods" = "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers" = "Content-Type"
+        )
+
+        if (method == "OPTIONS") {
+          return(list(status = 200L, headers = cors, body = ""))
+        }
+
+        # Serve wizard.html
+        if (path == "/" && method == "GET") {
+          html <- paste(readLines(wizard_path, warn = FALSE), collapse = "\n")
+          return(list(
+            status = 200L,
+            headers = c(cors, list("Content-Type" = "text/html; charset=utf-8")),
+            body = html
+          ))
+        }
+
+        # API: upload file (save to data dir, return path + detected columns)
+        if (path == "/api/upload-file" && method == "POST") {
+          ct <- req$CONTENT_TYPE %||% ""
+          body_raw <- req$rook.input$read()
+          parts <- parse_multipart(body_raw, ct)
+
+          proj_name <- trimws(parts[["project_name"]] %||% "project")
+          mode <- trimws(parts[["mode"]] %||% "proteomics")
+          file_role <- trimws(parts[["file_role"]] %||% "data")
+
+          file_part <- parts[["file"]]
+          if (is.null(file_part)) {
+            return(list(status = 400L, headers = cors,
+                        body = '{"error":"No file uploaded"}'))
+          }
+
+          # Save file
+          sub_dir <- file.path(project_dir, "data", tolower(proj_name), mode)
+          dir.create(sub_dir, recursive = TRUE, showWarnings = FALSE)
+          dest <- file.path(sub_dir, file_part$filename)
+          writeLines(file_part$data, dest)
+
+          # Detect columns from first line
+          first_line <- strsplit(file_part$data, "\r?\n")[[1]][1]
+          sep <- if (grepl("\t", first_line)) "\t" else ","
+          cols <- trimws(gsub('["\']', '', strsplit(first_line, sep)[[1]]))
+
+          # Return the relative path (for YAML) and columns
+          rel_path <- file.path(mode, file_part$filename)
+          resp <- jsonlite::toJSON(list(
+            path = rel_path,
+            full_path = dest,
+            columns = cols
+          ), auto_unbox = TRUE)
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # API: save config (write YAML to config/)
+        if (path == "/api/save-config" && method == "POST") {
+          body_raw <- req$rook.input$read()
+          body <- jsonlite::fromJSON(rawToChar(body_raw))
+
+          yaml_content <- body$yaml
+          filename <- body$filename %||% "config.yaml"
+
+          config_dir <- file.path(project_dir, "config")
+          dir.create(config_dir, showWarnings = FALSE)
+          config_path <- file.path(config_dir, filename)
+          writeLines(yaml_content, config_path)
+
+          cat(sprintf("  Config saved: %s\n", config_path))
+
+          resp <- jsonlite::toJSON(list(
+            path = config_path,
+            message = paste("Config saved to", config_path)
+          ), auto_unbox = TRUE)
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # API: run pipeline (save config, signal server to stop, then run)
+        if (path == "/api/run-pipeline" && method == "POST") {
+          body_raw <- req$rook.input$read()
+          body <- jsonlite::fromJSON(rawToChar(body_raw))
+
+          yaml_content <- body$yaml
+          filename <- body$filename %||% "config.yaml"
+          fresh <- isTRUE(body$fresh)
+
+          config_dir <- file.path(project_dir, "config")
+          dir.create(config_dir, showWarnings = FALSE)
+          config_path <- file.path(config_dir, filename)
+          writeLines(yaml_content, config_path)
+
+          cat(sprintf("  Config saved: %s\n", config_path))
+          cat("  Pipeline will start after wizard closes...\n")
+
+          # Signal to run after server stops
+          .wizard_state$run_config <- config_path
+          .wizard_state$run_fresh <- fresh
+
+          # Schedule server stop (after response is sent)
+          later::later(function() { httpuv::stopAllServers() }, 0.5)
+
+          resp <- jsonlite::toJSON(list(
+            message = "Pipeline starting... check your terminal."
+          ), auto_unbox = TRUE)
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # 404 for anything else
+        list(status = 404L, headers = cors, body = "Not found")
+      }
+    )
+
+    # Start server
+    server <- httpuv::startServer("127.0.0.1", port, app)
+    url <- sprintf("http://localhost:%d", port)
+    cat(sprintf("  Wizard running at: %s\n", url))
+    cat("  Press Ctrl+C to stop.\n\n")
+
+    # Try to open browser
+    opened <- FALSE
+    if (nzchar(Sys.which("wslview"))) {
+      tryCatch({ system2("wslview", url, wait = FALSE); opened <- TRUE },
+               error = function(e) NULL)
+    }
+    if (!opened) {
+      tryCatch({ browseURL(url); opened <- TRUE },
+               error = function(e) NULL)
+    }
+    if (!opened) {
+      cat(sprintf("  Open in your browser: %s\n\n", url))
+    }
+
+    # Serve until stopped
+    tryCatch(
+      httpuv::service(Inf),
+      interrupt = function(e) {
+        cat("\n  Wizard stopped.\n")
+      }
+    )
+    httpuv::stopAllServers()
+
+    # If run was requested, execute pipeline
+    if (!is.null(.wizard_state$run_config)) {
+      cat("\n")
+      run_pipeline(.wizard_state$run_config,
+                   fresh = isTRUE(.wizard_state$run_fresh))
+    }
+
+    return(invisible(NULL))
+
+  } else if ("--new" %in% args) {
     # Interactive wizard
     config_path <- wizard_new_project(project_dir)
     cat("\n")
