@@ -222,6 +222,25 @@ pipe_proteomics <- function() {
                 )
             },
             format = "file"
+        ),
+
+        # PowerPoint summary presentation
+        tar_target(
+            prot_pptx,
+            {
+                force(prot_qc_post_obj)
+                force(prot_pathway_res)
+                mod_proteomics_powerpoint(
+                    pre         = prot_pre,
+                    qc_res      = prot_qc_pre_obj,
+                    de_res      = prot_de_res,
+                    pathway_res = prot_pathway_res,
+                    ppi_res     = prot_ppi_res,
+                    config      = config,
+                    out_dir     = prot_out_dir
+                )
+            },
+            format = "file"
         )
     )
 }
