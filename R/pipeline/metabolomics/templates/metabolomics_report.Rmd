@@ -64,6 +64,53 @@ render_dt <- function(df, caption = NULL, pageLength = 10) {
   )
 }
 
+# Helper: interactive PCA from pca_scores.tsv written by the QC suite.
+# Falls back to static PNG via knitr::asis_output() if plotly is absent.
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+render_interactive_pca <- function(pcs = c(1, 2), png_files = NULL) {
+  if (!is.null(png_files) && requireNamespace("plotly", quietly = TRUE)) {
+    scores_hits <- png_files[grepl("pca_scores\\.tsv$", png_files)]
+    scores_hits <- scores_hits[file.exists(scores_hits)]
+    if (length(scores_hits) > 0L) {
+      scores <- tryCatch(
+        utils::read.table(scores_hits[1L], sep = "\t", header = TRUE,
+                          stringsAsFactors = FALSE, check.names = FALSE),
+        error = function(e) NULL
+      )
+      if (!is.null(scores)) {
+        pc_x <- paste0("PC", pcs[1]); pc_y <- paste0("PC", pcs[2])
+        vx   <- scores[[paste0("var_PC", pcs[1])]][1L] %||% NA_real_
+        vy   <- scores[[paste0("var_PC", pcs[2])]][1L] %||% NA_real_
+        reserved        <- c("sample", grep("^PC|^var_PC", colnames(scores), value = TRUE))
+        color_candidates <- setdiff(colnames(scores), reserved)
+        color_col       <- if (length(color_candidates) > 0L) color_candidates[1L] else "sample"
+        if (all(c(pc_x, pc_y) %in% colnames(scores))) {
+          tt    <- paste0("sample: ", scores[["sample"]])
+          if (color_col %in% colnames(scores) && color_col != "sample")
+            tt  <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
+          x_lab <- if (!is.na(vx)) sprintf("%s: %.1f%% variance", pc_x, 100*vx) else pc_x
+          y_lab <- if (!is.na(vy)) sprintf("%s: %.1f%% variance", pc_y, 100*vy) else pc_y
+          p <- plotly::plot_ly(data=scores,
+            x=stats::as.formula(paste0("~`",pc_x,"`")),
+            y=stats::as.formula(paste0("~`",pc_y,"`")),
+            color=if(color_col %in% colnames(scores))
+                    stats::as.formula(paste0("~factor(`",color_col,"`)")) else NULL,
+            text=tt, hoverinfo="text", type="scatter", mode="markers",
+            marker=list(size=9))
+          return(plotly::layout(p,
+            xaxis=list(title=x_lab), yaxis=list(title=y_lab),
+            legend=list(title=list(text=color_col))))
+        }
+      }
+    }
+  }
+  if (!is.null(png_files)) {
+    html <- embed_png(png_files, "pca_pc1_pc2")
+    if (nzchar(html)) return(knitr::asis_output(html))
+  }
+  invisible(NULL)
+}
+
 cfg <- params$config
 metab_cfg <- cfg$modes$metabolomics
 ```

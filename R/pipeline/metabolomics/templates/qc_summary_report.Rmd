@@ -57,13 +57,14 @@ embed_png <- function(files, pattern, fig_width = "100%") {
 #
 # Final fallback (plotly absent or no scores file found):
 #   Embeds the pre-rendered pca_pc1_pc2.png via embed_png().
+#   Uses knitr::asis_output() so raw HTML renders without results='asis'.
 #
-# @param mat       features × samples numeric matrix  (or NULL)
+# @param mat       features x samples numeric matrix  (or NULL)
 # @param meta      sample metadata data.frame          (or NULL)
 # @param cfg_mode  config$modes$metabolomics           (or NULL)
 # @param pcs       length-2 integer vector of PCs, e.g. c(1, 2)
 # @param png_files character vector of file paths — used for scores + PNG fallback
-# @return plotly widget, htmltools::HTML, or NULL (silent)
+# @return plotly widget, knitr::asis_output (PNG), or NULL (silent)
 # ---------------------------------------------------------------------------
 render_interactive_pca <- function(mat      = NULL,
                                    meta     = NULL,
@@ -133,33 +134,31 @@ render_interactive_pca <- function(mat      = NULL,
 
         if (!all(c(pc_x, pc_y) %in% colnames(scores))) {
           message("render_interactive_pca: expected columns ", pc_x, "/", pc_y,
-                  " not found in pca_scores.tsv")
+                  " not found in pca_scores.tsv; falling back to static PNG.")
         } else {
-          # Build tooltip
-          tt <- paste0("sample: ", scores[["sample"]])
-          if (color_col %in% colnames(scores))
-            tt <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
-
+          tt    <- paste0("sample: ", scores[["sample"]])
+          if (color_col %in% colnames(scores) && color_col != "sample")
+            tt  <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
           x_lab <- if (!is.na(vx)) sprintf("%s: %.1f%% variance", pc_x, 100 * vx) else pc_x
           y_lab <- if (!is.na(vy)) sprintf("%s: %.1f%% variance", pc_y, 100 * vy) else pc_y
 
           p <- plotly::plot_ly(
-            data   = scores,
-            x      = stats::as.formula(paste0("~`", pc_x, "`")),
-            y      = stats::as.formula(paste0("~`", pc_y, "`")),
-            color  = if (color_col %in% colnames(scores))
-                       stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL,
-            text   = tt,
+            data      = scores,
+            x         = stats::as.formula(paste0("~`", pc_x, "`")),
+            y         = stats::as.formula(paste0("~`", pc_y, "`")),
+            color     = if (color_col %in% colnames(scores))
+                          stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL,
+            text      = tt,
             hoverinfo = "text",
-            type   = "scatter",
-            mode   = "markers",
-            marker = list(size = 9)
-          ) |>
-            plotly::layout(
-              xaxis = list(title = x_lab),
-              yaxis = list(title = y_lab),
-              legend = list(title = list(text = color_col))
-            )
+            type      = "scatter",
+            mode      = "markers",
+            marker    = list(size = 9)
+          )
+          p <- plotly::layout(p,
+            xaxis  = list(title = x_lab),
+            yaxis  = list(title = y_lab),
+            legend = list(title = list(text = color_col))
+          )
           return(p)
         }
       }
@@ -169,7 +168,7 @@ render_interactive_pca <- function(mat      = NULL,
   # ---- Final fallback: embed pre-rendered PNG ----------------------------
   if (!is.null(png_files)) {
     html <- embed_png(png_files, "pca_pc1_pc2")
-    if (nzchar(html)) return(htmltools::HTML(html))
+    if (nzchar(html)) return(knitr::asis_output(html))
   }
 
   invisible(NULL)
