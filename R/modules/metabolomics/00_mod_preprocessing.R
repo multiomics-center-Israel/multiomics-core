@@ -31,11 +31,21 @@ mod_met_raw <- function(inp, config) {
   # Get relevant metabolomics configuration
   cfg        <- config$modes$metabolomics
   
+<<<<<<< HEAD
   # Use the pre-loaded 'inp' object passed from the metab_inputs target
   fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
   sample_col <- cfg$effects$samples %||% "sample_id"
   
   # Step 1: Parse the raw data based on format
+=======
+  # Use the pre-loaded 'inp' object provided by the previous target.
+  # This avoids redundant I/O and ensures data consistency.
+  fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
+  sample_col <- cfg$effects$samples %||% "sample_id"
+  
+  # Dispatch to the appropriate parser based on the defined format.
+  # Note: 'inp$data' now contains the processed/merged data from load_metabolomics_inputs.
+>>>>>>> ec4b53ac7b259917565bd6a4f39e2d65303bec6d
   parsed <- switch(fmt,
                    cd_raw         = parse_cd_raw(inp$data, cfg),
                    processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
@@ -45,6 +55,7 @@ mod_met_raw <- function(inp, config) {
   
   expr_raw <- parsed$expr_raw
   row_data <- parsed$row_data
+<<<<<<< HEAD
   meta     <- inp$metadata
   
   # Step 2: Apply Sample Mapping (Fix 1: Explicit Map Columns)
@@ -80,10 +91,13 @@ mod_met_raw <- function(inp, config) {
   }
   
   # Normalize row_data rownames for downstream feature-wise subsetting
+
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
   
+
+  # Return a structured list containing all components for the downstream DAG.
   list(
     expr_raw   = expr_raw,
     meta       = meta,
