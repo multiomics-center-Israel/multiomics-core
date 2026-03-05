@@ -28,18 +28,87 @@ library(base64enc)
 # Null-coalescing operator (mirrors pipeline convention)
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
+# ---------------------------------------------------------------------------
+# embed_png — Base64-encode a PNG file for self-contained HTML output.
+# API is unchanged; only called when interactive PCA is unavailable.
+# ---------------------------------------------------------------------------
 embed_png <- function(files, pattern, fig_width = "100%") {
   if (is.null(files) || length(files) == 0) return("")
   hits <- files[grepl(pattern, basename(files), fixed = TRUE, ignore.case = TRUE)]
   hits <- hits[file.exists(hits)]
-
   if (length(hits) == 0) return("")
-  
   img_64 <- base64enc::dataURI(file = hits[1], mime = "image/png")
-  
-  return(sprintf('<img src="%s" style="width:%s; display:block; margin:auto;" />', 
-                 img_64, fig_width))
+  sprintf('<img src="%s" style="width:%s; display:block; margin:auto;" />',
+          img_64, fig_width)
+}
 
+# ---------------------------------------------------------------------------
+# render_interactive_pca — interactive plotly PCA scatter.
+#
+# Primary path  (mat + meta + cfg_mode supplied):
+#   Calls qc_pca_scatter() without file I/O to obtain a ggplot, enriches
+#   it with a text aesthetic (sample_id + group), then wraps in
+#   plotly::ggplotly().  Requires the 'plotly' package.
+#
+# Fallback path (mat / meta absent, or plotly not installed):
+#   Embeds the pre-rendered PNG via embed_png() and returns
+#   htmltools::HTML().  Uses 'png_files' to locate the right file.
+#
+# @param mat       features × samples numeric matrix  (or NULL)
+# @param meta      sample metadata data.frame          (or NULL)
+# @param cfg_mode  config$modes$metabolomics           (or NULL)
+# @param pcs       length-2 integer vector of PCs, e.g. c(1, 2)
+# @param png_files character vector of file paths — used for PNG fallback
+# @return plotly widget, htmltools::HTML, or NULL (silent)
+# ---------------------------------------------------------------------------
+render_interactive_pca <- function(mat      = NULL,
+                                   meta     = NULL,
+                                   cfg_mode = NULL,
+                                   pcs      = c(1, 2),
+                                   png_files = NULL) {
+
+  # ---- Primary: live data path -------------------------------------------
+  if (!is.null(mat) && !is.null(meta) && !is.null(cfg_mode)) {
+    if (!requireNamespace("plotly", quietly = TRUE)) {
+      message("render_interactive_pca: 'plotly' not installed; using static PNG.")
+    } else {
+      p <- tryCatch(
+        qc_pca_scatter(mat, meta, cfg_mode, pcs = pcs, out_file = NULL),
+        error = function(e) {
+          message("render_interactive_pca: qc_pca_scatter failed: ", e$message)
+          NULL
+        }
+      )
+
+      if (!is.null(p)) {
+        sample_col <- cfg_mode$effects$samples %||% "sample_id"
+        color_col  <- cfg_mode$effects$color   %||% sample_col
+        scores     <- p$data   # plot_pca_scatter uses scores as ggplot data
+
+        if (!is.null(scores) && is.data.frame(scores)) {
+          # Build explicit tooltip text so ggplotly shows human-readable labels
+          id_vals  <- if ("sample" %in% colnames(scores)) scores[["sample"]] else
+                          seq_len(nrow(scores))
+          grp_col  <- intersect(color_col, colnames(scores))
+          tt <- paste0(sample_col, ": ", id_vals)
+          if (length(grp_col) == 1 && grp_col != "sample")
+            tt <- paste0(tt, "<br>", grp_col, ": ", scores[[grp_col]])
+          p$data[[".tooltip"]] <- tt
+          p <- p + ggplot2::aes(text = .data[[".tooltip"]])
+        }
+
+        return(plotly::ggplotly(p, tooltip = "text"))
+      }
+    }
+  }
+
+  # ---- Fallback: embed pre-rendered PNG ----------------------------------
+  if (!is.null(png_files)) {
+    html <- embed_png(png_files, "pca_pc1_pc2")
+    if (nzchar(html)) return(htmltools::HTML(html))
+  }
+
+  invisible(NULL)
 }
 
 render_dt <- function(df, caption = NULL, pageLength = 10) {
