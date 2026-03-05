@@ -28,6 +28,8 @@ modes:
     files:
       data: "metabolomics/cd_export.xlsx"          # REQUIRED
       metadata: "metabolomics/sample_metadata.csv"  # Optional (pipeline infers minimal meta if absent)
+      sample_map: null  # Optional: path to CSV/TSV mapping raw column names → unified sample IDs
+                        # Columns must match id_columns$map_from and id_columns$map_to below
 
     # ---- Parsing rules (for cd_raw format) ----
     parsing:
@@ -37,7 +39,7 @@ modes:
       # Group 1 = sample_id
       cd_sample_regex: null  # null = use default
 
-    # ---- Feature ID construction ----
+    # ---- Feature ID construction & sample mapping ----
     id_columns:
       # If set and exists in data, use this column directly as feature_id
       feature_id_col: null
@@ -48,6 +50,9 @@ modes:
       # For processed_wide: list annotation columns so sample columns can be
       # identified by exclusion. Not needed if metadata is provided.
       annotation_cols: null
+      # Required when files$sample_map is set: column names in the sample_map file
+      map_from: null  # e.g. "sample_orig_name"  (raw column name in the data)
+      map_to:   null  # e.g. "SampleID"           (unified ID matching metadata)
         # - "Name"
         # - "Formula"
         # - "m/z"

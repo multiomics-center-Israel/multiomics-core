@@ -63,26 +63,16 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   # Optional sample name mapping (applies to both input types)
   # =========================================================================
   map_from <- cfg$id_columns$map_from
-  map_to <- cfg$id_columns$map_to
-  if (!is.null(inputs$sample_map) && !is.null(map_from) && !is.null(map_to) &&
-      all(c(map_from, map_to) %in% names(inputs$sample_map))) {
-    m <- setNames(inputs$sample_map[[map_to]], inputs$sample_map[[map_from]])
-    mapped <- m[colnames(counts)]
-    if (sum(!is.na(mapped)) > 0) {
-      old_names <- colnames(counts)
-      colnames(counts)[!is.na(mapped)] <- unname(mapped[!is.na(mapped)])
-      message(sprintf(
-        "[preprocess_rna] Mapped %d sample names",
-        sum(!is.na(mapped))
-      ))
-      
-      # Also update txi matrices if present
-      if (!is.null(txi)) {
-        colnames(txi$counts) <- colnames(counts)
-        colnames(txi$abundance) <- colnames(counts)
-        colnames(txi$length) <- colnames(counts)
-        abundance <- txi$abundance
-      }
+  map_to   <- cfg$id_columns$map_to
+  if (!is.null(inputs$sample_map) && !is.null(map_from) && !is.null(map_to)) {
+    counts <- apply_sample_map_to_colnames(counts, inputs$sample_map, map_from, map_to)
+
+    # Also update txi matrices if present
+    if (!is.null(txi)) {
+      colnames(txi$counts)    <- colnames(counts)
+      colnames(txi$abundance) <- colnames(counts)
+      colnames(txi$length)    <- colnames(counts)
+      abundance <- txi$abundance
     }
   }
   
