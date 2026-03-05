@@ -29,29 +29,35 @@
 #'
 mod_met_raw <- function(inp, config) {
   cfg        <- config$modes$metabolomics
-
-  # Use the pre-loaded 'inp' object provided by the previous target.
-  # This avoids redundant I/O and ensures data consistency.
-  fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
-  sample_col <- cfg$effects$samples %||% "sample_id"
-  
-  # Dispatch to the appropriate parser based on the defined format.
-  # Note: 'inp$data' now contains the processed/merged data from load_metabolomics_inputs.
-
   fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
   sample_col <- cfg$effects$samples %||% "sample_id"
   map_from   <- cfg$id_columns$map_from
   map_to     <- cfg$id_columns$map_to
 
-  # For processed_wide the data columns ARE the sample identifiers:
-  # parse_processed_wide matches them against metadata IDs, so the rename
-  # must happen before the parser sees the data.
+  # Effective per-file format: for multi_level each level is parsed with
+  # level_format; for single-file modes level_format == fmt.
+  level_format <- if (fmt == "multi_level")
+    cfg$input[["level_format"]] %||% "cd_raw"
+  else
+    fmt
+
+  # processed_wide: columns in the raw data ARE the sample identifiers;
+  # parse_processed_wide matches them against metadata IDs -> rename BEFORE
+  # parsing.  For multi_level we rename each level's data_df individually.
   inp_data <- inp$data
-  if (!is.null(inp$sample_map) && fmt == "processed_wide") {
+  if (!is.null(inp$sample_map) && level_format == "processed_wide") {
     if (is.null(map_from) || is.null(map_to))
       stop("mod_met_raw: id_columns$map_from and id_columns$map_to are required ",
            "when files$sample_map is set")
-    inp_data <- apply_sample_map_to_colnames(inp_data, inp$sample_map, map_from, map_to)
+    if (fmt == "multi_level") {
+      inp_data <- lapply(inp_data, function(item) {
+        item$data_df <- apply_sample_map_to_colnames(
+          item$data_df, inp$sample_map, map_from, map_to)
+        item
+      })
+    } else {
+      inp_data <- apply_sample_map_to_colnames(inp_data, inp$sample_map, map_from, map_to)
+    }
   }
 
   parsed <- switch(fmt,
@@ -64,27 +70,22 @@ mod_met_raw <- function(inp, config) {
   expr_raw <- parsed$expr_raw
   row_data <- parsed$row_data
 
-  meta     <- inp$metadata
-  
-  # Step 2: Apply Sample Mapping (Fix 1: Explicit Map Columns)
-  if (!is.null(inp$sample_map)) {
-    map_from <- cfg$id_columns$map_from
-    map_to   <- cfg$id_columns$map_to
-    
-    if (is.null(map_from) || is.null(map_to)) {
-      stop("mod_met_raw: sample_map is provided but 'map_from' or 'map_to' are missing in config.")
-    }
-    
+  # cd_raw: parse_cd_raw extracts sample IDs from Area: column names via regex;
+  # the external sample_map remaps those extracted IDs -> rename AFTER parsing.
+  # Applies to both single-file cd_raw and multi_level with level_format cd_raw.
+  if (!is.null(inp$sample_map) && level_format == "cd_raw") {
+    if (is.null(map_from) || is.null(map_to))
+      stop("mod_met_raw: id_columns$map_from and id_columns$map_to are required ",
+           "when files$sample_map is set")
     message("mod_met_raw: applying sample map to expression matrix column names.")
     expr_raw <- apply_sample_map_to_colnames(expr_raw, inp$sample_map, map_from, map_to)
   }
-  
-  # Step 3: Align Metadata
-  # Now colnames(expr_raw) are the mapped/final IDs
-  meta <- meta %||% build_minimal_meta(colnames(expr_raw))
+
+  # Align metadata; build minimal stub if none provided
+  meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
-  
-  # Step 4: Apply optional sample filters (QC/Blank exclusion)
+
+  # Apply optional sample filter (QC/blank exclusion)
   rules <- get_sample_filter_rules_metab(cfg)
   if (!is.null(rules)) {
     keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
@@ -98,14 +99,12 @@ mod_met_raw <- function(inp, config) {
     }
   }
 
-  # Normalize row_data rownames for downstream feature-wise subsetting
-
+  # Normalise row_data rownames to feature_id so all downstream subsetting
+  # (mod_met_filtered, etc.) can safely use rownames(row_data).
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
-  
 
-  # Return a structured list containing all components for the downstream DAG.
   list(
     expr_raw   = expr_raw,
     meta       = meta,
@@ -114,4 +113,3 @@ mod_met_raw <- function(inp, config) {
     format     = fmt
   )
 }
-
