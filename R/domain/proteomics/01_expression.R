@@ -140,21 +140,8 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
     )
 
     # 4) Rename columns: raw sample names -> SampleID using sample_map
-    raw_names <- colnames(df_m)
-
     if (!is.null(sample_map)) {
-        map_from <- id_cols$map_from
-        map_to <- id_cols$map_to
-
-        check_has_cols(sample_map, c(map_from, map_to), df_name = "sample_map")
-        new_names <- sample_map[[map_to]][match(raw_names, sample_map[[map_from]])]
-
-        unmatched <- is.na(new_names)
-        if (any(unmatched)) {
-            warning("These DIA-NN columns did not match any row in sample_map$", map_from, ": ", paste(raw_names[unmatched], collapse = ", "))
-        }
-
-        colnames(df_m) <- ifelse(unmatched, raw_names, new_names)
+        df_m <- apply_sample_map_to_colnames(df_m, sample_map, id_cols$map_from, id_cols$map_to)
     }
     # else: no sample_map — column names are already the sample IDs
 

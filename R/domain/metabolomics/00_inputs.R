@@ -54,12 +54,14 @@ load_metabolomics_inputs <- function(config) {
         data_list <- read_multi_level_dir(abs_dir, pattern = pattern,
                                           sheet = cfg$input[["sheet"]])
 
-        meta <- .load_optional_metadata(config, files)
+        meta       <- .load_optional_metadata(config, files)
+        sample_map <- .load_optional_sample_map(config, files)
 
         return(list(
-            data     = data_list,   # named list: level_name -> data.frame
-            metadata = meta,
-            format   = fmt
+            data       = data_list,   # named list: level_name -> data.frame
+            metadata   = meta,
+            sample_map = sample_map,
+            format     = fmt
         ))
     }
 
@@ -73,7 +75,8 @@ load_metabolomics_inputs <- function(config) {
 
     data_df <- read_metab_file(abs_data, sheet = cfg$input[["sheet"]])
 
-    meta <- .load_optional_metadata(config, files)
+    meta       <- .load_optional_metadata(config, files)
+    sample_map <- .load_optional_sample_map(config, files)
 
     # Handle group-row format: row 1 of data contains condition assignments
     # for each sample column (annotation columns are empty/NA in that row).
@@ -104,9 +107,10 @@ load_metabolomics_inputs <- function(config) {
     }
 
     list(
-        data     = data_df,
-        metadata = meta,
-        format   = fmt
+        data       = data_df,
+        metadata   = meta,
+        sample_map = sample_map,
+        format     = fmt
     )
 }
 
@@ -117,6 +121,15 @@ load_metabolomics_inputs <- function(config) {
     abs_meta <- resolve_raw_path(config, meta_path)
     if (!file.exists(abs_meta)) stop("Metadata file not found: ", abs_meta)
     read_table_auto(abs_meta)
+}
+
+# Internal: read optional sample_map file (shared by single-file and multi_level paths)
+.load_optional_sample_map <- function(config, files) {
+    sm_path <- files[["sample_map"]]
+    if (is.null(sm_path) || !nzchar(sm_path)) return(NULL)
+    abs_sm <- resolve_raw_path(config, sm_path)
+    if (!file.exists(abs_sm)) stop("Sample map file not found: ", abs_sm)
+    read_table_auto(abs_sm)
 }
 
 
@@ -151,6 +164,13 @@ validate_metabolomics_config <- function(cfg) {
     } else {
         if (!has_data)
             stop("metabolomics: files$data is required")
+    }
+
+    # If sample_map is provided, map_from and map_to must also be set
+    if (!is.null(cfg$files[["sample_map"]]) && nzchar(cfg$files[["sample_map"]] %||% "")) {
+        if (is.null(cfg$id_columns$map_from) || is.null(cfg$id_columns$map_to))
+            stop("metabolomics: id_columns$map_from and id_columns$map_to are required ",
+                 "when files$sample_map is set")
     }
 
     norm <- cfg$normalization

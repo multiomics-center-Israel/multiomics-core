@@ -77,9 +77,13 @@ pipe_metabolomics <- function() {
                 }
 
                 meta_path <- cfg$files[["metadata"]]
-                if (!is.null(meta_path) && nzchar(meta_path)) {
+                if (!is.null(meta_path) && nzchar(meta_path))
                     paths <- c(paths, resolve_raw_path(config, meta_path))
-                }
+
+                sm_path <- cfg$files[["sample_map"]]
+                if (!is.null(sm_path) && nzchar(sm_path))
+                    paths <- c(paths, resolve_raw_path(config, sm_path))
+
                 paths
             },
             format = "file"

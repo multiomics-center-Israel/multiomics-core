@@ -22,13 +22,24 @@ preprocess_metabolomics <- function(inputs, config) {
 
     # ---- 1. Parse input into expr_raw / row_data / sample_ids ----
     parsed <- switch(format,
-        cd_raw = parse_cd_raw(inputs$data, cfg),
+        cd_raw         = parse_cd_raw(inputs$data, cfg),
         processed_wide = parse_processed_wide(inputs$data, cfg, inputs$metadata),
         stop("Unsupported metabolomics input format: ", format)
     )
 
     expr_raw <- parsed$expr_raw
     row_data <- parsed$row_data
+
+    # ---- 1b. Apply external sample_map if provided ----
+    if (!is.null(inputs$sample_map)) {
+        map_from <- cfg$id_columns$map_from
+        map_to   <- cfg$id_columns$map_to
+        if (is.null(map_from) || is.null(map_to))
+            stop("metabolomics: id_columns$map_from and id_columns$map_to are required ",
+                 "when files$sample_map is set")
+        expr_raw <- apply_sample_map_to_colnames(expr_raw, inputs$sample_map, map_from, map_to)
+    }
+
     sample_ids <- colnames(expr_raw)
 
     assert_numeric_matrix(expr_raw, "metab_expr_raw")
