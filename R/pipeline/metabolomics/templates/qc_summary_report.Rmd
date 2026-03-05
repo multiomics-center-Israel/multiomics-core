@@ -107,7 +107,7 @@ render_interactive_pca <- function(mat      = NULL,
 
   # ---- Scores-file path: read pca_scores.tsv written by the QC suite ----
   if (!is.null(png_files) && requireNamespace("plotly", quietly = TRUE)) {
-    scores_hits <- png_files[grepl("pca_scores\.tsv$", png_files)]
+    scores_hits <- png_files[grepl("pca_scores.tsv$", png_files)]
     scores_hits <- scores_hits[file.exists(scores_hits)]
 
     if (length(scores_hits) > 0) {
