@@ -50,15 +50,19 @@ embed_png <- function(files, pattern, fig_width = "100%") {
 #   it with a text aesthetic (sample_id + group), then wraps in
 #   plotly::ggplotly().  Requires the 'plotly' package.
 #
-# Fallback path (mat / meta absent, or plotly not installed):
-#   Embeds the pre-rendered PNG via embed_png() and returns
-#   htmltools::HTML().  Uses 'png_files' to locate the right file.
+# Scores-file path (png_files supplied, pca_scores.tsv present alongside PNG):
+#   Reads the TSV saved by qc_full_metabolomics_suite() — columns:
+#   sample, PC1, PC2[, PC3], <color_col>, var_PC1, var_PC2[, var_PC3].
+#   Builds a plotly scatter with hover labels directly from the file.
+#
+# Final fallback (plotly absent or no scores file found):
+#   Embeds the pre-rendered pca_pc1_pc2.png via embed_png().
 #
 # @param mat       features × samples numeric matrix  (or NULL)
 # @param meta      sample metadata data.frame          (or NULL)
 # @param cfg_mode  config$modes$metabolomics           (or NULL)
 # @param pcs       length-2 integer vector of PCs, e.g. c(1, 2)
-# @param png_files character vector of file paths — used for PNG fallback
+# @param png_files character vector of file paths — used for scores + PNG fallback
 # @return plotly widget, htmltools::HTML, or NULL (silent)
 # ---------------------------------------------------------------------------
 render_interactive_pca <- function(mat      = NULL,
@@ -86,10 +90,9 @@ render_interactive_pca <- function(mat      = NULL,
         scores     <- p$data   # plot_pca_scatter uses scores as ggplot data
 
         if (!is.null(scores) && is.data.frame(scores)) {
-          # Build explicit tooltip text so ggplotly shows human-readable labels
-          id_vals  <- if ("sample" %in% colnames(scores)) scores[["sample"]] else
-                          seq_len(nrow(scores))
-          grp_col  <- intersect(color_col, colnames(scores))
+          id_vals <- if ("sample" %in% colnames(scores)) scores[["sample"]] else
+                         seq_len(nrow(scores))
+          grp_col <- intersect(color_col, colnames(scores))
           tt <- paste0(sample_col, ": ", id_vals)
           if (length(grp_col) == 1 && grp_col != "sample")
             tt <- paste0(tt, "<br>", grp_col, ": ", scores[[grp_col]])
@@ -102,7 +105,68 @@ render_interactive_pca <- function(mat      = NULL,
     }
   }
 
-  # ---- Fallback: embed pre-rendered PNG ----------------------------------
+  # ---- Scores-file path: read pca_scores.tsv written by the QC suite ----
+  if (!is.null(png_files) && requireNamespace("plotly", quietly = TRUE)) {
+    scores_hits <- png_files[grepl("pca_scores\.tsv$", png_files)]
+    scores_hits <- scores_hits[file.exists(scores_hits)]
+
+    if (length(scores_hits) > 0) {
+      scores <- tryCatch(
+        utils::read.table(scores_hits[1], sep = "\t", header = TRUE,
+                          stringsAsFactors = FALSE, check.names = FALSE),
+        error = function(e) {
+          message("render_interactive_pca: could not read pca_scores.tsv: ", e$message)
+          NULL
+        }
+      )
+
+      if (!is.null(scores)) {
+        pc_x  <- paste0("PC", pcs[1])
+        pc_y  <- paste0("PC", pcs[2])
+        vx    <- scores[[paste0("var_PC", pcs[1])]][1] %||% NA_real_
+        vy    <- scores[[paste0("var_PC", pcs[2])]][1] %||% NA_real_
+
+        # Identify color column: first non-PC, non-var, non-sample column
+        reserved <- c("sample", grep("^PC|^var_PC", colnames(scores), value = TRUE))
+        color_candidates <- setdiff(colnames(scores), reserved)
+        color_col <- if (length(color_candidates) > 0) color_candidates[1] else "sample"
+
+        if (!all(c(pc_x, pc_y) %in% colnames(scores))) {
+          message("render_interactive_pca: expected columns ", pc_x, "/", pc_y,
+                  " not found in pca_scores.tsv")
+        } else {
+          # Build tooltip
+          tt <- paste0("sample: ", scores[["sample"]])
+          if (color_col %in% colnames(scores))
+            tt <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
+
+          x_lab <- if (!is.na(vx)) sprintf("%s: %.1f%% variance", pc_x, 100 * vx) else pc_x
+          y_lab <- if (!is.na(vy)) sprintf("%s: %.1f%% variance", pc_y, 100 * vy) else pc_y
+
+          p <- plotly::plot_ly(
+            data   = scores,
+            x      = stats::as.formula(paste0("~`", pc_x, "`")),
+            y      = stats::as.formula(paste0("~`", pc_y, "`")),
+            color  = if (color_col %in% colnames(scores))
+                       stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL,
+            text   = tt,
+            hoverinfo = "text",
+            type   = "scatter",
+            mode   = "markers",
+            marker = list(size = 9)
+          ) |>
+            plotly::layout(
+              xaxis = list(title = x_lab),
+              yaxis = list(title = y_lab),
+              legend = list(title = list(text = color_col))
+            )
+          return(p)
+        }
+      }
+    }
+  }
+
+  # ---- Final fallback: embed pre-rendered PNG ----------------------------
   if (!is.null(png_files)) {
     html <- embed_png(png_files, "pca_pc1_pc2")
     if (nzchar(html)) return(htmltools::HTML(html))

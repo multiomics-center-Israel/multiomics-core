@@ -428,6 +428,27 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
     })
     
     if (pca_ok) {
+      # Save scores + color column as TSV so the HTML report can render
+      # interactive PCA without needing the original matrices.
+      tryCatch({
+        scores_df <- pca_res$scores   # has PC1..PCn + sample columns
+        if (color_col %in% colnames(meta_sub)) {
+          scores_df[[color_col]] <- meta_sub[[color_col]][
+            match(scores_df$sample, as.character(meta_sub[[sample_col]]))]
+        }
+        # Embed variance explained as extra columns so the report has axis labels
+        for (k in seq_along(pca_var)) {
+          scores_df[[paste0("var_PC", k)]] <- pca_var[[k]]
+        }
+        scores_file <- file.path(out_dir, "pca_scores.tsv")
+        utils::write.table(scores_df, scores_file,
+                           sep = "\t", row.names = FALSE, quote = FALSE)
+        files <<- c(files, scores_file)
+      }, error = function(e) {
+        message(sprintf("[QC][%s][%s] pca_scores.tsv skipped: %s",
+                        stage, subset_mode, conditionMessage(e)))
+      })
+
       # PC1 vs PC2
       pca12_file <- file.path(out_dir, "pca_pc1_pc2.png")
       pca12_success <- tryCatch({
