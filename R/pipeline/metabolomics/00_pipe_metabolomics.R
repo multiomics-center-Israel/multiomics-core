@@ -110,7 +110,7 @@ pipe_metabolomics <- function() {
             met_raw,
             {
                 metab_input_files  # declare file dependency
-                mod_met_raw(config)
+                mod_met_raw(metab_inputs, config)
             }
         ),
 
@@ -298,155 +298,155 @@ pipe_metabolomics <- function() {
                 out_dir = metab_out_dir
             ),
             format = "file"
+        ),
+
+        # ==================================================================
+        # metab_pre ADAPTER — bridges new met_* targets → existing contract
+        #
+        # Downstream metab_* targets (qc, de, enrichment, report, shiny)
+        # depend on metab_pre and remain unchanged.
+        # ==================================================================
+        tar_target(
+            metab_pre,
+            {
+                pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
+                norm_cfg <- config$modes$metabolomics$normalization  %||% list()
+
+                # Missingness stats for info (pre-filter, on raw matrix)
+                miss_stats <- met_missingness_stats$stats_df
+                miss_samp  <- met_missingness_stats$samp_miss_df
+
+                info <- list(
+                    mode            = "metabolomics",
+                    n_features_raw  = nrow(met_raw$expr_raw),
+                    n_features_filt = nrow(met_filtered$mat),
+                    n_samples       = ncol(met_corrected$mat),
+                    missingness     = list(
+                        per_sample  = stats::setNames(
+                            miss_samp$pct_missing,
+                            miss_samp[[met_raw$sample_col]]
+                        ),
+                        per_feature = stats::setNames(
+                            miss_stats$pct_missing,
+                            miss_stats$feature_id
+                        )
+                    ),
+                    normalization   = met_corrected$info$normalization,
+                    norm_comparison_file = met_norm_comparison,
+                    drift           = met_corrected$info[c("drift_applied", "drift_info")]
+                )
+
+                list(
+                    expr_raw         = met_raw$expr_raw,
+                    expr_filt        = met_filtered$mat,
+                    expr_log         = met_log$mat,
+                    expr_work        = met_corrected$mat,
+                    meta             = met_corrected$meta,
+                    row_data         = met_corrected$row_data,
+                    info             = info,
+                    normalization_eval = NULL  # superseded by met_norm_comparison
+                )
+            }
+        ),
+
+        # ==================================================================
+        # Stage 1: QC diagnostics
+        # ==================================================================
+        tar_target(
+            metab_qc_pre_obj,
+            mod_metabolomics_qc_pre(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ==================================================================
+        # Stage 2: Differential expression, feature selection, enrichment
+        # ==================================================================
+        tar_target(
+            metab_de_res,
+            mod_metabolomics_de(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        tar_target(
+            metab_feature_sel_res,
+            mod_metabolomics_feature_selection(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        tar_target(
+            metab_enrichment_res,
+            mod_metabolomics_enrichment(
+                pre     = metab_pre,
+                de_res  = metab_de_res,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
+        # ==================================================================
+        # Standardized outputs, Shiny payload, HTML report
+        # ==================================================================
+        tar_target(
+            metab_standard_outputs,
+            write_metabolomics_outputs(
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            ),
+            format = "file"
+        ),
+
+        tar_target(
+            metab_shiny_payload,
+            save_shiny_payload_metabolomics(
+                pre            = metab_pre,
+                de_res         = metab_de_res,
+                inputs         = metab_inputs,
+                config         = config,
+                pca_res        = metab_qc_pre_obj,
+                clustering_res = NULL,
+                rf_res         = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$rf else NULL,
+                plsda_res      = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$plsda else NULL,
+                enrichment_res = metab_enrichment_res,
+                include_legacy = TRUE,
+                out_file       = file.path(metab_out_dir,
+                                           "shiny_payload_metabolomics.rds")
+            ),
+            format = "file"
+        ),
+
+        tar_target(
+            metab_report,
+            {
+                # Depend on met_qc_summary_report to guarantee the intermediate
+                # review report is generated before the full analysis report.
+                # This ensures consistency: both reports use the same QC outputs.
+                .qc_done <- met_qc_summary_report
+                mod_metabolomics_report(
+                    pre                = metab_pre,
+                    qc_res             = metab_qc_pre_obj,
+                    de_res             = metab_de_res,
+                    feature_sel_res    = metab_feature_sel_res,
+                    enrichment_res     = metab_enrichment_res,
+                    config             = config,
+                    out_dir            = metab_out_dir,
+                    qc_comparison_file = met_qc_comparison,
+                    qc_suite_files     = c(met_log_qc,
+                                           met_norm_tss_qc,
+                                           met_norm_median_qc,
+                                           met_norm_pqn_qc)
+                )
+            },
+            format = "file"
         )
-        # 
-        # # ==================================================================
-        # # metab_pre ADAPTER — bridges new met_* targets → existing contract
-        # #
-        # # Downstream metab_* targets (qc, de, enrichment, report, shiny)
-        # # depend on metab_pre and remain unchanged.
-        # # ==================================================================
-        # tar_target(
-        #     metab_pre,
-        #     {
-        #         pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-        #         norm_cfg <- config$modes$metabolomics$normalization  %||% list()
-        # 
-        #         # Missingness stats for info (pre-filter, on raw matrix)
-        #         miss_stats <- met_missingness_stats$stats_df
-        #         miss_samp  <- met_missingness_stats$samp_miss_df
-        # 
-        #         info <- list(
-        #             mode            = "metabolomics",
-        #             n_features_raw  = nrow(met_raw$expr_raw),
-        #             n_features_filt = nrow(met_filtered$mat),
-        #             n_samples       = ncol(met_corrected$mat),
-        #             missingness     = list(
-        #                 per_sample  = stats::setNames(
-        #                     miss_samp$pct_missing,
-        #                     miss_samp[[met_raw$sample_col]]
-        #                 ),
-        #                 per_feature = stats::setNames(
-        #                     miss_stats$pct_missing,
-        #                     miss_stats$feature_id
-        #                 )
-        #             ),
-        #             normalization   = met_corrected$info$normalization,
-        #             norm_comparison_file = met_norm_comparison,
-        #             drift           = met_corrected$info[c("drift_applied", "drift_info")]
-        #         )
-        # 
-        #         list(
-        #             expr_raw         = met_raw$expr_raw,
-        #             expr_filt        = met_filtered$mat,
-        #             expr_log         = met_log$mat,
-        #             expr_work        = met_corrected$mat,
-        #             meta             = met_corrected$meta,
-        #             row_data         = met_corrected$row_data,
-        #             info             = info,
-        #             normalization_eval = NULL  # superseded by met_norm_comparison
-        #         )
-        #     }
-        # ),
-        # 
-        # # ==================================================================
-        # # Stage 1: QC diagnostics
-        # # ==================================================================
-        # tar_target(
-        #     metab_qc_pre_obj,
-        #     mod_metabolomics_qc_pre(
-        #         pre     = metab_pre,
-        #         config  = config,
-        #         out_dir = metab_out_dir
-        #     )
-        # ),
-        # 
-        # # ==================================================================
-        # # Stage 2: Differential expression, feature selection, enrichment
-        # # ==================================================================
-        # tar_target(
-        #     metab_de_res,
-        #     mod_metabolomics_de(
-        #         pre     = metab_pre,
-        #         config  = config,
-        #         out_dir = metab_out_dir
-        #     )
-        # ),
-        # 
-        # tar_target(
-        #     metab_feature_sel_res,
-        #     mod_metabolomics_feature_selection(
-        #         pre     = metab_pre,
-        #         config  = config,
-        #         out_dir = metab_out_dir
-        #     )
-        # ),
-        # 
-        # tar_target(
-        #     metab_enrichment_res,
-        #     mod_metabolomics_enrichment(
-        #         pre     = metab_pre,
-        #         de_res  = metab_de_res,
-        #         config  = config,
-        #         out_dir = metab_out_dir
-        #     )
-        # ),
-        # 
-        # # ==================================================================
-        # # Standardized outputs, Shiny payload, HTML report
-        # # ==================================================================
-        # tar_target(
-        #     metab_standard_outputs,
-        #     write_metabolomics_outputs(
-        #         pre     = metab_pre,
-        #         config  = config,
-        #         out_dir = metab_out_dir
-        #     ),
-        #     format = "file"
-        # ),
-        # 
-        # tar_target(
-        #     metab_shiny_payload,
-        #     save_shiny_payload_metabolomics(
-        #         pre            = metab_pre,
-        #         de_res         = metab_de_res,
-        #         inputs         = metab_inputs,
-        #         config         = config,
-        #         pca_res        = metab_qc_pre_obj,
-        #         clustering_res = NULL,
-        #         rf_res         = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$rf else NULL,
-        #         plsda_res      = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$plsda else NULL,
-        #         enrichment_res = metab_enrichment_res,
-        #         include_legacy = TRUE,
-        #         out_file       = file.path(metab_out_dir,
-        #                                    "shiny_payload_metabolomics.rds")
-        #     ),
-        #     format = "file"
-        # ),
-        # 
-        # tar_target(
-        #     metab_report,
-        #     {
-        #         # Depend on met_qc_summary_report to guarantee the intermediate
-        #         # review report is generated before the full analysis report.
-        #         # This ensures consistency: both reports use the same QC outputs.
-        #         .qc_done <- met_qc_summary_report
-        #         mod_metabolomics_report(
-        #             pre                = metab_pre,
-        #             qc_res             = metab_qc_pre_obj,
-        #             de_res             = metab_de_res,
-        #             feature_sel_res    = metab_feature_sel_res,
-        #             enrichment_res     = metab_enrichment_res,
-        #             config             = config,
-        #             out_dir            = metab_out_dir,
-        #             qc_comparison_file = met_qc_comparison,
-        #             qc_suite_files     = c(met_log_qc,
-        #                                    met_norm_tss_qc,
-        #                                    met_norm_median_qc,
-        #                                    met_norm_pqn_qc)
-        #         )
-        #     },
-        #     format = "file"
-        # )
     )
 }

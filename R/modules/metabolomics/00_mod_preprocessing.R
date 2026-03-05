@@ -27,28 +27,45 @@
 #' @return list with: \code{expr_raw}, \code{meta}, \code{row_data},
 #'   \code{sample_col}, \code{format}.
 #'
-mod_met_raw <- function(config) {
+mod_met_raw <- function(inp, config) {
+  # Get relevant metabolomics configuration
   cfg        <- config$modes$metabolomics
-  inp        <- load_metabolomics_inputs(config)
+  
+  # Use the pre-loaded 'inp' object passed from the metab_inputs target
   fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
   sample_col <- cfg$effects$samples %||% "sample_id"
-
+  
+  # Step 1: Parse the raw data based on format
   parsed <- switch(fmt,
-    cd_raw         = parse_cd_raw(inp$data, cfg),
-    processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
-    multi_level    = parse_multi_level(inp$data, cfg, inp$metadata),
-    stop("mod_met_raw: unsupported format: '", fmt, "'")
+                   cd_raw         = parse_cd_raw(inp$data, cfg),
+                   processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
+                   multi_level    = parse_multi_level(inp$data, cfg, inp$metadata),
+                   stop("mod_met_raw: unsupported format: '", fmt, "'")
   )
-
+  
   expr_raw <- parsed$expr_raw
   row_data <- parsed$row_data
-
-  # Build/align metadata
-  meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
+  meta     <- inp$metadata
+  
+  # Step 2: Apply Sample Mapping (Fix 1: Explicit Map Columns)
+  if (!is.null(inp$sample_map)) {
+    map_from <- cfg$id_columns$map_from
+    map_to   <- cfg$id_columns$map_to
+    
+    if (is.null(map_from) || is.null(map_to)) {
+      stop("mod_met_raw: sample_map is provided but 'map_from' or 'map_to' are missing in config.")
+    }
+    
+    message("mod_met_raw: applying sample map to expression matrix column names.")
+    expr_raw <- apply_sample_map_to_colnames(expr_raw, inp$sample_map, map_from, map_to)
+  }
+  
+  # Step 3: Align Metadata
+  # Now colnames(expr_raw) are the mapped/final IDs
+  meta <- meta %||% build_minimal_meta(colnames(expr_raw))
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
-
-  # Apply optional sample filter (QC/blank exclusion) — reuse helpers from
-  # 02_preprocess.R which are available in the function environment via sourcing.
+  
+  # Step 4: Apply optional sample filters (QC/Blank exclusion)
   rules <- get_sample_filter_rules_metab(cfg)
   if (!is.null(rules)) {
     keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
@@ -61,13 +78,12 @@ mod_met_raw <- function(config) {
       meta     <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
     }
   }
-
-  # Normalise row_data rownames to feature_id so all downstream subsetting
-  # (mod_met_filtered, etc.) can safely use rownames(row_data).
+  
+  # Normalize row_data rownames for downstream feature-wise subsetting
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
-
+  
   list(
     expr_raw   = expr_raw,
     meta       = meta,
