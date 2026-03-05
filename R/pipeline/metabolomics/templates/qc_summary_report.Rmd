@@ -202,12 +202,32 @@ render_dt <- function(df, caption = NULL, pageLength = 10) {
 # qc_files is referenced by _qc_normalization_section.Rmd via parent environment.
 qc_files <- params$qc_suite_files %||% character(0)
 ```
-
 > **Purpose:** Review normalization method performance before interpreting
-> differential expression and enrichment results.  The **Benchmark** tab shows
-> RSD and PC1 variance for every normalization stage, starting from the raw
-> linear baseline (`met_imputed`).  Choose the method with the lowest
-> `median_rsd_overall` and the highest `pca_pc1_delta`.
+> differential expression and enrichment results. The **Benchmark** tab summarizes
+> **RSD (Relative Standard Deviation)** per group and **PC1 variance** across
+> normalization stages, starting from the raw linear baseline (`met_imputed`).
+> RSD reflects the relative variability of feature intensities within a group and
+> is used here as a measure of technical stability. In particular, **QC samples**
+> are expected to show low variability; therefore, effective normalization should
+> reduce RSD within the QC group while preserving meaningful biological variation
+> between experimental groups. In practice, the preferred normalization method is
+> the one that **minimizes RSD within the QC group** while ensuring that **PC1
+> continues to capture meaningful structure** across samples.
+>
+> **Normalization methods compared:**
+>
+> **PQN (Probabilistic Quotient Normalization)** – Estimates a dilution factor for
+> each sample based on metabolite ratios relative to a reference spectrum. This
+> method is widely used in metabolomics because it effectively corrects dilution
+> effects while remaining robust to global intensity differences.
+>
+> **TSS (Total Sum Scaling)** – Scales each sample by its total signal intensity to
+> correct for global abundance differences. While simple and intuitive, it can be
+> influenced by a small number of highly abundant metabolites.
+>
+> **Median normalization** – Aligns the median intensity across samples. This
+> approach is relatively robust to extreme values and works well when most
+> metabolites are expected to remain stable between samples.
 
 # Normalization QC {.tabset}
 
