@@ -6,19 +6,23 @@
 #   - "processed_wide"  : Already-processed wide table (clean sample columns)
 #   - "multi_level"     : Batch-load multiple Level_*.xlsx from a directory;
 #                         each file is parsed with a shared per-file format
-#                         (cfg$input$level_format: "cd_raw" | "processed_wide")
+#                         (cfg$input[["level_format"]]: "cd_raw" | "processed_wide")
 #                         and merged into a single expr_raw / row_data contract.
 #
 # Reuses: resolve_raw_path, read_table_auto, check_has_cols, check_all_in,
 #         coerce_df_to_numeric_matrix, assert_numeric_matrix, assert_meta_contract
+# NOTE on strict indexing:
+#   All config key accesses that could be subject to R's partial-matching rules
+#   (e.g. files[["data"]] vs files[["data_dir"]]) use [[ ]] with an explicit
+#   is.null() guard.  Never use $ for these keys.
 
 
 # ---- public entry point -----------------------------------------------------
 
 #' Load metabolomics inputs from config
 #'
-#' For single-file formats ("cd_raw", "processed_wide", "long"), \code{inp$data}
-#' is a single data.frame, identical to the previous behaviour.
+#' For single-file formats ("cd_raw", "processed_wide", "long"),
+#' \code{inp$data} is a single data.frame — identical to the previous behaviour.
 #'
 #' For the "multi_level" format, \code{inp$data} is a named list of data.frames,
 #' one per level file (e.g., \code{list(Level_1 = df, Level_2 = df, ...)}).
@@ -33,20 +37,21 @@ load_metabolomics_inputs <- function(config) {
     if (is.null(cfg)) stop("No config for mode metabolomics")
 
     files <- cfg$files
-    fmt   <- cfg$input$format %||% "cd_raw"
+    fmt   <- cfg$input[["format"]] %||% "cd_raw"
 
     # ── multi_level: read directory of level files ───────────────────────────
     if (fmt == "multi_level") {
-        if (is.null(files$data_dir) || !nzchar(files$data_dir %||% ""))
+        data_dir <- files[["data_dir"]]
+        if (is.null(data_dir) || !nzchar(data_dir))
             stop("metabolomics: files$data_dir is required when format = 'multi_level'")
 
-        abs_dir <- resolve_raw_path(config, files$data_dir)
+        abs_dir <- resolve_raw_path(config, data_dir)
         if (!dir.exists(abs_dir))
             stop("Metabolomics data directory not found: ", abs_dir)
 
-        pattern   <- cfg$input$level_pattern %||% "\\.xlsx$"
+        pattern   <- cfg$input[["level_pattern"]] %||% "\\.xlsx$"
         data_list <- read_multi_level_dir(abs_dir, pattern = pattern,
-                                          sheet = cfg$input$sheet)
+                                          sheet = cfg$input[["sheet"]])
 
         meta <- .load_optional_metadata(config, files)
 
@@ -58,13 +63,14 @@ load_metabolomics_inputs <- function(config) {
     }
 
     # ── single-file path (cd_raw / processed_wide / long) ───────────────────
-    if (is.null(files$data) || !nzchar(files$data %||% ""))
+    data_path <- files[["data"]]
+    if (is.null(data_path) || !nzchar(data_path))
         stop("metabolomics config$files$data is required")
 
-    abs_data <- resolve_raw_path(config, files$data)
+    abs_data <- resolve_raw_path(config, data_path)
     if (!file.exists(abs_data)) stop("Metabolomics data file not found: ", abs_data)
 
-    data_df <- read_metab_file(abs_data, sheet = cfg$input$sheet)
+    data_df <- read_metab_file(abs_data, sheet = cfg$input[["sheet"]])
 
     meta <- .load_optional_metadata(config, files)
 
@@ -105,23 +111,29 @@ load_metabolomics_inputs <- function(config) {
 
 # Internal: read optional metadata file (shared by single-file and multi_level paths)
 .load_optional_metadata <- function(config, files) {
-    if (is.null(files$metadata) || !nzchar(files$metadata %||% "")) return(NULL)
-    abs_meta <- resolve_raw_path(config, files$metadata)
+    meta_path <- files[["metadata"]]
+    if (is.null(meta_path) || !nzchar(meta_path)) return(NULL)
+    abs_meta <- resolve_raw_path(config, meta_path)
     if (!file.exists(abs_meta)) stop("Metadata file not found: ", abs_meta)
     read_table_auto(abs_meta)
 }
 
 
 #' Validate metabolomics config (called by validate_config dispatch)
+#' Uses [[ ]] strict indexing throughout to prevent R's partial-matching from
+#' resolving files[["data"]] to files[["data_dir"]] (or vice versa) when only
+#' one of the two keys is present.
 validate_metabolomics_config <- function(cfg) {
-    assert_one_of(cfg$input$format, "input$format",
+    assert_one_of(cfg$input[["format"]], "input$format",
                   c("cd_raw", "processed_wide", "long", "multi_level"))
 
-    fmt          <- cfg$input$format %||% "cd_raw"
-    has_data     <- !is.null(cfg$files$data)     && nzchar(cfg$files$data     %||% "")
-    has_data_dir <- !is.null(cfg$files$data_dir) && nzchar(cfg$files$data_dir %||% "")
+    fmt          <- cfg$input[["format"]] %||% "cd_raw"
+    data_val     <- cfg$files[["data"]]
+    data_dir_val <- cfg$files[["data_dir"]]
 
-    # Mutual exclusivity: exactly one source must be set
+    has_data     <- !is.null(data_val)     && nzchar(data_val)
+    has_data_dir <- !is.null(data_dir_val) && nzchar(data_dir_val)
+    # Mutual exclusivity: files$data and files$data_dir cannot both be set
     if (has_data && has_data_dir) {
         stop("metabolomics: files$data and files$data_dir are mutually exclusive; ",
              "set only one depending on format ('multi_level' uses data_dir, ",
@@ -131,7 +143,7 @@ validate_metabolomics_config <- function(cfg) {
     if (fmt == "multi_level") {
         if (!has_data_dir)
             stop("metabolomics: files$data_dir is required when format = 'multi_level'")
-        assert_one_of(cfg$input$level_format, "input$level_format",
+        assert_one_of(cfg$input[["level_format"]], "input$level_format",
                       c("cd_raw", "processed_wide"))
     } else {
         if (!has_data)
@@ -283,65 +295,65 @@ parse_cd_raw <- function(data_df, cfg) {
 #' @return list(expr_raw, row_data, sample_ids)
 #' Parse processed wide table → expr_raw + row_data (META-ONLY, minimal)
 parse_processed_wide <- function(data_df, cfg, meta) {
-  
-  if (is.null(meta)) {
-    stop("processed_wide: metadata is required (meta = NULL).")
-  }
-  
-  sample_col <- cfg$effects$samples %||% "sample_id"
-  if (!sample_col %in% colnames(meta)) {
-    stop("processed_wide: metadata is missing column '", sample_col, "'.")
-  }
-  
-  sample_ids <- as.character(meta[[sample_col]])
-  sample_ids <- sample_ids[nzchar(sample_ids)]
-  
-  if (anyDuplicated(sample_ids)) {
-    stop(
-      "processed_wide: duplicated sample IDs in metadata: ",
-      paste(unique(sample_ids[duplicated(sample_ids)]), collapse = ", ")
+
+    if (is.null(meta)) {
+        stop("processed_wide: metadata is required (meta = NULL).")
+    }
+
+    sample_col <- cfg$effects$samples %||% "sample_id"
+    if (!sample_col %in% colnames(meta)) {
+        stop("processed_wide: metadata is missing column '", sample_col, "'.")
+    }
+
+    sample_ids <- as.character(meta[[sample_col]])
+    sample_ids <- sample_ids[nzchar(sample_ids)]
+
+    if (anyDuplicated(sample_ids)) {
+        stop(
+            "processed_wide: duplicated sample IDs in metadata: ",
+            paste(unique(sample_ids[duplicated(sample_ids)]), collapse = ", ")
+        )
+    }
+
+    df_cols     <- colnames(data_df)
+    sample_cols <- intersect(df_cols, sample_ids)
+
+    missing <- setdiff(sample_ids, df_cols)
+    extra   <- setdiff(sample_cols, sample_ids)
+
+    if (length(sample_cols) == 0) {
+        stop(
+            "processed_wide: none of the metadata sample IDs were found in data columns.\n",
+            "Example metadata IDs: ", paste(head(sample_ids, 5), collapse = ", ")
+        )
+    }
+
+    if (length(missing) > 0) {
+        stop(
+            "processed_wide: samples in metadata missing from data: ",
+            paste(missing, collapse = ", ")
+        )
+    }
+
+    # Build feature IDs
+    feat_ids <- build_feature_ids(data_df, cfg$id_columns)
+
+    expr_df  <- data_df[, sample_cols, drop = FALSE]
+    expr_raw <- coerce_df_to_numeric_matrix(
+        expr_df,
+        rownames_vec = feat_ids,
+        name = "processed_wide_expr"
     )
-  }
-  
-  df_cols <- colnames(data_df)
-  sample_cols <- intersect(df_cols, sample_ids)
-  
-  missing <- setdiff(sample_ids, df_cols)
-  extra   <- setdiff(sample_cols, sample_ids)
-  
-  if (length(sample_cols) == 0) {
-    stop(
-      "processed_wide: none of the metadata sample IDs were found in data columns.\n",
-      "Example metadata IDs: ", paste(head(sample_ids, 5), collapse = ", ")
+
+    # Everything else = annotation
+    row_data <- data_df[, setdiff(df_cols, sample_cols), drop = FALSE]
+    row_data$feature_id <- feat_ids
+
+    list(
+        expr_raw   = expr_raw,
+        row_data   = row_data,
+        sample_ids = sample_cols
     )
-  }
-  
-  if (length(missing) > 0) {
-    stop(
-      "processed_wide: samples in metadata missing from data: ",
-      paste(missing, collapse = ", ")
-    )
-  }
-  
-  # Build feature IDs
-  feat_ids <- build_feature_ids(data_df, cfg$id_columns)
-  
-  expr_df <- data_df[, sample_cols, drop = FALSE]
-  expr_raw <- coerce_df_to_numeric_matrix(
-    expr_df,
-    rownames_vec = feat_ids,
-    name = "processed_wide_expr"
-  )
-  
-  # Everything else = annotation
-  row_data <- data_df[, setdiff(df_cols, sample_cols), drop = FALSE]
-  row_data$feature_id <- feat_ids
-  
-  list(
-    expr_raw   = expr_raw,
-    row_data   = row_data,
-    sample_ids = sample_cols
-  )
 }
 
 
@@ -380,7 +392,7 @@ read_multi_level_dir <- function(dir_path, pattern = "\\.xlsx$", sheet = NULL) {
 #' Parse a multi-level directory input into the canonical contract
 #'
 #' Dispatches each per-level data frame to \code{parse_cd_raw()} or
-#' \code{parse_processed_wide()} (controlled by \code{cfg$input$level_format}),
+#' \code{parse_processed_wide()} (controlled by \code{cfg$input[["level_format"]]}),
 #' validates that all levels share the same sample set, then calls
 #' \code{merge_level_parsed()} to produce a single merged output whose structure
 #' is identical to a single-file parse result.
@@ -392,8 +404,9 @@ read_multi_level_dir <- function(dir_path, pattern = "\\.xlsx$", sheet = NULL) {
 #' @return \code{list(expr_raw, row_data, sample_ids, sample_map)} — identical
 #'         contract to \code{parse_cd_raw()}.
 parse_multi_level <- function(level_data_list, cfg, meta) {
-    level_format <- cfg$input$level_format
-    if (is.null(level_format) || !nzchar(level_format %||% ""))
+
+    level_format <- cfg$input[["level_format"]]
+    if (is.null(level_format) || !nzchar(level_format))
         stop("parse_multi_level: cfg$input$level_format is required")
 
     level_names <- names(level_data_list)
@@ -456,11 +469,11 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     ref_ids <- parsed_levels[[1]]$sample_ids   # canonical column order (level 1)
 
     # Collect all annotation column names across all levels.
-    # "feature_id" is included here (it exists in every p$row_data); the fixed_cols
+    # "feature_id" is included (it exists in every p$row_data); the fixed_cols
     # block below re-positions it at the front alongside the two new columns.
     all_annot_cols <- Reduce(union, lapply(parsed_levels, function(p) colnames(p$row_data)))
 
-    # Deterministic column ordering (refinement §2):
+    # Deterministic column ordering:
     #   1. feature_id (prefixed)
     #   2. Source_File (level label)
     #   3. feature_id_orig (pre-prefix original ID)
@@ -487,8 +500,8 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         # ── row_data ─────────────────────────────────────────────────────────
         rd <- p$row_data
 
-        # Mandatory traceability column (refinement §2)
-        rd$feature_id_orig <- rd$feature_id               # preserve original ID
+        # Mandatory traceability column: preserve original ID before prefixing
+        rd$feature_id_orig <- rd$feature_id
         rd$feature_id      <- paste0(lv, "__", rd$feature_id)
         rd$Source_File     <- lv
 
@@ -526,7 +539,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 #' Build feature IDs from config rules
 #'
 #' If feature_id_col is specified and exists, use it directly.
-#' Otherwise construct from Name + mz + RT.
+#' Otherwise construct from Name + mz (4 d.p.) + RT (2 d.p.).
 build_feature_ids <- function(data_df, id_cfg) {
     fid_col <- id_cfg$feature_id_col
 
