@@ -108,10 +108,7 @@ pipe_metabolomics <- function() {
         # Scale: Linear
         tar_target(
             met_raw,
-            {
-                metab_input_files  # declare file dependency
-                mod_met_raw(metab_inputs, config)
-            }
+            mod_met_raw(metab_inputs, config)
         ),
 
         # met_missingness_stats: MNAR/MAR classification on pre-filter matrix
