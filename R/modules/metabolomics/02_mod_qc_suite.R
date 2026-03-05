@@ -418,7 +418,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
     # Compute PCA once for metrics; var_expl covers all n_pcs_possible PCs.
     pca_ok <- tryCatch({
       pca_res <- compute_pca_scores(mat_sub, pcs = seq_len(n_pcs_possible))
-      pca_var <<- pca_res$var_expl   # full variance-explained vector
+      pca_var <- pca_res$var_expl   # full variance-explained vector
       TRUE
     }, error = function(e) {
       skipped  <<- c(skipped, sprintf("pca (compute): %s", conditionMessage(e)))
