@@ -69,7 +69,13 @@ render_dt <- function(df, caption = NULL, pageLength = 10) {
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 render_interactive_pca <- function(pcs = c(1, 2), png_files = NULL) {
   if (!is.null(png_files) && requireNamespace("plotly", quietly = TRUE)) {
-    scores_hits <- png_files[grepl("pca_scores\\.tsv$", png_files)]
+    # Primary: explicit .tsv path in file vector
+    scores_hits <- png_files[grepl("pca_scores\\.tsv$", png_files, perl = TRUE)]
+    # Fallback: derive from pca_pc1_pc2.png (same directory) in case the .tsv
+    # was not tracked in the file vector due to a superassignment bug or caching.
+    pca_pngs <- png_files[grepl("pca_pc1_pc2\\.png$", png_files, perl = TRUE)]
+    if (length(pca_pngs) > 0L)
+      scores_hits <- unique(c(scores_hits, file.path(dirname(pca_pngs), "pca_scores.tsv")))
     scores_hits <- scores_hits[file.exists(scores_hits)]
     if (length(scores_hits) > 0L) {
       scores <- tryCatch(

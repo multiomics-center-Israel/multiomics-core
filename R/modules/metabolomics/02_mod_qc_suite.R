@@ -443,7 +443,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
         scores_file <- file.path(out_dir, "pca_scores.tsv")
         utils::write.table(scores_df, scores_file,
                            sep = "\t", row.names = FALSE, quote = FALSE)
-        files <<- c(files, scores_file)
+        files <- c(files, scores_file)
       }, error = function(e) {
         message(sprintf("[QC][%s][%s] pca_scores.tsv skipped: %s",
                         stage, subset_mode, conditionMessage(e)))
