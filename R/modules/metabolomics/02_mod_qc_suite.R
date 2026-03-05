@@ -335,6 +335,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
 
   sample_col <- cfg_mode$effects$samples %||% "sample_id"
   color_col  <- cfg_mode$effects$color   %||% "sample_id"
+  shape_col  <- cfg_mode$effects$shape
 
   # ---- Subsetting ------------------------------------------------------------
   if (subset_mode == "no_qc") {
@@ -432,10 +433,11 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
       # interactive PCA without needing the original matrices.
       tryCatch({
         scores_df <- pca_res$scores   # has PC1..PCn + sample columns
-        if (color_col %in% colnames(meta_sub)) {
-          scores_df[[color_col]] <- meta_sub[[color_col]][
-            match(scores_df$sample, as.character(meta_sub[[sample_col]]))]
-        }
+        idx <- match(scores_df$sample, as.character(meta_sub[[sample_col]]))
+        if (color_col %in% colnames(meta_sub))
+          scores_df[[color_col]] <- meta_sub[[color_col]][idx]
+        if (!is.null(shape_col) && shape_col %in% colnames(meta_sub))
+          scores_df[[shape_col]] <- meta_sub[[shape_col]][idx]
         # Embed variance explained as extra columns so the report has axis labels
         for (k in seq_along(pca_var)) {
           scores_df[[paste0("var_PC", k)]] <- pca_var[[k]]

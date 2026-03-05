@@ -133,10 +133,11 @@ render_interactive_pca <- function(mat      = NULL,
         vx    <- scores[[paste0("var_PC", pcs[1])]][1] %||% NA_real_
         vy    <- scores[[paste0("var_PC", pcs[2])]][1] %||% NA_real_
 
-        # Identify color column: first non-PC, non-var, non-sample column
+        # Identify color and shape columns from non-PC, non-var, non-sample columns
         reserved <- c("sample", grep("^PC|^var_PC", colnames(scores), value = TRUE))
-        color_candidates <- setdiff(colnames(scores), reserved)
-        color_col <- if (length(color_candidates) > 0) color_candidates[1] else "sample"
+        extra_cols <- setdiff(colnames(scores), reserved)
+        color_col <- if (length(extra_cols) > 0) extra_cols[1] else "sample"
+        shape_col <- if (length(extra_cols) > 1) extra_cols[2] else NULL
 
         if (!all(c(pc_x, pc_y) %in% colnames(scores))) {
           message("render_interactive_pca: expected columns ", pc_x, "/", pc_y,
@@ -145,6 +146,8 @@ render_interactive_pca <- function(mat      = NULL,
           tt    <- paste0("sample: ", scores[["sample"]])
           if (color_col %in% colnames(scores) && color_col != "sample")
             tt  <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
+          if (!is.null(shape_col) && shape_col %in% colnames(scores))
+            tt  <- paste0(tt, "<br>", shape_col, ": ", scores[[shape_col]])
           x_lab <- if (!is.na(vx)) sprintf("%s: %.1f%% variance", pc_x, 100 * vx) else pc_x
           y_lab <- if (!is.na(vy)) sprintf("%s: %.1f%% variance", pc_y, 100 * vy) else pc_y
 
@@ -154,6 +157,8 @@ render_interactive_pca <- function(mat      = NULL,
             y         = stats::as.formula(paste0("~`", pc_y, "`")),
             color     = if (color_col %in% colnames(scores))
                           stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL,
+            symbol    = if (!is.null(shape_col) && shape_col %in% colnames(scores))
+                          stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL,
             text      = tt,
             hoverinfo = "text",
             type      = "scatter",
