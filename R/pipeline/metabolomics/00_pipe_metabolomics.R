@@ -110,7 +110,7 @@ pipe_metabolomics <- function() {
             met_raw,
             {
                 metab_input_files  # declare file dependency
-                mod_met_raw(config)
+                mod_met_raw(metab_inputs, config)
             }
         ),
 

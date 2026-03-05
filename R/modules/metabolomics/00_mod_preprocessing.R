@@ -27,28 +27,34 @@
 #' @return list with: \code{expr_raw}, \code{meta}, \code{row_data},
 #'   \code{sample_col}, \code{format}.
 #'
-mod_met_raw <- function(config) {
+mod_met_raw <- function(inp, config) {
+  # Get relevant metabolomics configuration
   cfg        <- config$modes$metabolomics
-  inp        <- load_metabolomics_inputs(config)
+  
+  # Use the pre-loaded 'inp' object provided by the previous target.
+  # This avoids redundant I/O and ensures data consistency.
   fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
   sample_col <- cfg$effects$samples %||% "sample_id"
-
+  
+  # Dispatch to the appropriate parser based on the defined format.
+  # Note: 'inp$data' now contains the processed/merged data from load_metabolomics_inputs.
   parsed <- switch(fmt,
-    cd_raw         = parse_cd_raw(inp$data, cfg),
-    processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
-    multi_level    = parse_multi_level(inp$data, cfg, inp$metadata),
-    stop("mod_met_raw: unsupported format: '", fmt, "'")
+                   cd_raw         = parse_cd_raw(inp$data, cfg),
+                   processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
+                   multi_level    = parse_multi_level(inp$data, cfg, inp$metadata),
+                   stop("mod_met_raw: unsupported format: '", fmt, "'")
   )
-
+  
   expr_raw <- parsed$expr_raw
   row_data <- parsed$row_data
-
-  # Build/align metadata
+  
+  # Build and align metadata. 
+  # Uses metadata that has already passed through load_metabolomics_inputs (including optional sample maps).
   meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
-
-  # Apply optional sample filter (QC/blank exclusion) — reuse helpers from
-  # 02_preprocess.R which are available in the function environment via sourcing.
+  
+  # Apply optional sample filters (e.g., QC or Blank exclusion) 
+  # using helpers typically defined in 02_preprocess.R.
   rules <- get_sample_filter_rules_metab(cfg)
   if (!is.null(rules)) {
     keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
@@ -61,13 +67,14 @@ mod_met_raw <- function(config) {
       meta     <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
     }
   }
-
-  # Normalise row_data rownames to feature_id so all downstream subsetting
-  # (mod_met_filtered, etc.) can safely use rownames(row_data).
+  
+  # Normalize row_data rownames to feature_id to ensure downstream compatibility.
+  # This allows subsequent targets (filtering, normalization) to safely use rownames(row_data).
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
-
+  
+  # Return a structured list containing all components for the downstream DAG.
   list(
     expr_raw   = expr_raw,
     meta       = meta,
