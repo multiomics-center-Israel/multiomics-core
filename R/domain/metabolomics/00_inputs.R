@@ -355,8 +355,10 @@ parse_processed_wide <- function(data_df, cfg, meta) {
         )
     }
 
-    # Build feature IDs
-    feat_ids <- build_feature_ids(data_df, cfg$id_columns)
+    # Build feature IDs and extract attached metadata
+    feat_ids             <- build_feature_ids(data_df, cfg$id_columns)
+    id_level             <- attr(feat_ids, "identification_level")
+    orig_id              <- attr(feat_ids, "original_id")
 
     expr_df  <- data_df[, sample_cols, drop = FALSE]
     expr_raw <- coerce_df_to_numeric_matrix(
@@ -367,7 +369,9 @@ parse_processed_wide <- function(data_df, cfg, meta) {
 
     # Everything else = annotation
     row_data <- data_df[, setdiff(df_cols, sample_cols), drop = FALSE]
-    row_data$feature_id <- feat_ids
+    row_data$feature_id           <- feat_ids
+    row_data$identification_level <- id_level
+    row_data$original_id          <- orig_id
 
     list(
         expr_raw   = expr_raw,
@@ -466,9 +470,9 @@ parse_multi_level <- function(level_data_list, cfg, meta) {
 #' Data-contract guarantees:
 #' \enumerate{
 #'   \item \code{expr_raw} rows are prefixed with \code{"<Level>__"} to ensure
-#'         cross-level uniqueness (e.g., \code{"Level_1__Glucose_mz180.0634_rt1.23"}).
-#'         RT is rounded to 2 d.p. and m/z to 4 d.p. by \code{build_feature_ids()}
-#'         before any ID is constructed; no additional rounding is applied here.
+#'         cross-level uniqueness.  IDs are in \code{RT[rt]_MZ[mz]} format using
+#'         the raw (unrounded) coordinates from \code{build_feature_ids()};
+#'         no rounding is applied here.
 #'   \item \code{row_data} column order is always:
 #'         \code{c("feature_id", "Source_File", "feature_id_orig", <remaining annotation cols>)}.
 #'         Remaining columns are the deterministic union of annotation columns
@@ -558,48 +562,74 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 
 #' Build feature IDs from config rules
 #'
-#' If feature_id_col is specified and exists, use it directly.
-#' Otherwise construct from Name + mz (4 d.p.) + RT (2 d.p.).
+#' Constructs IDs in the form \code{RT[rt]_MZ[mz]} using the raw (unrounded)
+#' numeric values from \code{rt_col} and \code{mz_col}.  Per-row fallback to
+#' \code{name_col} or a generic index when either coordinate is missing.
+#'
+#' When \code{feature_id_col} is present the integer identification level is
+#' extracted from the \code{Level_X__} prefix and attached—along with the
+#' unmodified source string—as attributes on the returned vector:
+#' \describe{
+#'   \item{\code{identification_level}}{Integer vector (NA where no prefix).}
+#'   \item{\code{original_id}}{Character vector of the raw source strings.}
+#' }
 build_feature_ids <- function(data_df, id_cfg) {
-    fid_col <- id_cfg$feature_id_col
-
-    if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
-        ids <- as.character(data_df[[fid_col]])
-        if (anyDuplicated(ids) > 0) {
-            warning("Duplicate feature IDs in column '", fid_col, "'; appending row index.")
-            ids <- make.unique(ids, sep = "_")
-        }
-        return(ids)
-    }
-
-    # Construct from Name / mz / RT
     name_col <- id_cfg$name_col %||% "Name"
     mz_col   <- id_cfg$mz_col   %||% "m/z"
     rt_col   <- id_cfg$rt_col   %||% "RT [min]"
+    fid_col  <- id_cfg$feature_id_col
 
-    parts <- character(nrow(data_df))
+    nr     <- nrow(data_df)
+    has_mz <- mz_col %in% colnames(data_df)
+    has_rt <- rt_col %in% colnames(data_df)
+    has_nm <- name_col %in% colnames(data_df)
 
-    if (name_col %in% colnames(data_df)) {
+    # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
+    make_rt_mz_ids <- function() {
+        mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
+        rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
+        both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
+
+        fallback <- if (has_nm) {
+            nm <- as.character(data_df[[name_col]])
+            ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
+        } else {
+            paste0("feature_", seq_len(nr))
+        }
+
+        ifelse(both_ok,
+               paste0("RT", as.character(rt_vals), "_MZ", as.character(mz_vals)),
+               fallback)
+    }
+
+    if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
+        original_id <- as.character(data_df[[fid_col]])
+
+        # Extract integer X from "Level_X__..." prefix
+        has_level <- grepl("^Level_\\d+__", original_id, perl = TRUE)
+        identification_level <- rep(NA_integer_, nr)
+        identification_level[has_level] <- as.integer(
+            sub("^Level_(\\d+)__.*$", "\\1", original_id[has_level], perl = TRUE)
+        )
+
+        ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
+        attr(ids, "identification_level") <- identification_level
+        attr(ids, "original_id")          <- original_id
+        return(ids)
+    }
+
+    # Constructed path: no level info
+    original_id <- if (has_nm) {
         nm <- as.character(data_df[[name_col]])
-        nm[is.na(nm) | nm == ""] <- "Unknown"
-        parts <- nm
+        ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
+    } else {
+        paste0("feature_", seq_len(nr))
     }
 
-    if (mz_col %in% colnames(data_df)) {
-        mz <- round(as.numeric(data_df[[mz_col]]), 4)
-        parts <- paste0(parts, "_mz", mz)
-    }
-
-    if (rt_col %in% colnames(data_df)) {
-        rt <- round(as.numeric(data_df[[rt_col]]), 2)
-        parts <- paste0(parts, "_rt", rt)
-    }
-
-    if (all(parts == "" | parts == "Unknown")) {
-        parts <- paste0("feature_", seq_len(nrow(data_df)))
-    }
-
-    make.unique(parts, sep = "_")
+    ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
+    attr(ids, "identification_level") <- rep(NA_integer_, nr)
+    attr(ids, "original_id")          <- original_id
+    ids
 }
 
 
