@@ -87,7 +87,7 @@ get_proteomics_expression_matrix <- function(inputs, config) {
         info = list(
             mode         = "proteomics",
             engine       = cfg$engine,
-            scale_in     = cfg$scale_in %||% "log2",
+            scale_in     = cfg$scale_in %||% "linear",
             target_scale = cfg$transform$target_scale %||% "log2"
         )
     )
@@ -141,14 +141,18 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
         df_m[df_m == 0] <- NA
     }
 
-    # 2b) Keep a linear-scale copy (needed for VSN normalization)
-    df_m_linear <- df_m
+    # 2b) Determine input scale from config (default: "linear" for backward compat)
+    scale_in <- cfg$scale_in %||% "linear"
 
-    # 3) Log2 transformation
-    df_m <- as.data.frame(
-        log2(df_m),
-        check.names = FALSE
-    )
+    if (scale_in == "log2") {
+        # Data is already log2-transformed (e.g. DIA-NN output) — skip log2
+        # Back-transform to get the linear copy for VSN normalization
+        df_m_linear <- as.data.frame(2^df_m, check.names = FALSE)
+    } else {
+        # Data is in linear scale — keep linear copy, then log2-transform
+        df_m_linear <- df_m
+        df_m <- as.data.frame(log2(df_m), check.names = FALSE)
+    }
 
     # 4) Rename columns: raw sample names -> SampleID using sample_map
     raw_names <- colnames(df_m)

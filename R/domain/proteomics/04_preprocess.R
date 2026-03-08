@@ -101,6 +101,15 @@ preprocess_proteomics <- function(inputs, config) {
         if (is.null(expr_linear)) {
             stop("VSN normalization requires linear-scale data but assay_linear is NULL.")
         }
+        scale_in <- cfg$scale_in %||% "linear"
+        if (scale_in == "log2") {
+            warning(
+                "VSN normalization with scale_in='log2': linear intensities were ",
+                "back-transformed from log2 data. VSN is designed for raw intensities; ",
+                "consider using normalization: 'median' or 'none' when input is pre-transformed.",
+                call. = FALSE
+            )
+        }
         expr_linear_filt <- expr_linear[rownames(expr_filt), colnames(expr_filt), drop = FALSE]
         expr_filt <- normalize_proteomics_vsn(expr_linear_filt)
         message("Normalization: VSN (variance stabilizing) applied to linear intensities.")
