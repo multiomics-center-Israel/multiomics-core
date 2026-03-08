@@ -106,11 +106,12 @@ mod_met_raw <- function(inp, config) {
   }
 
   list(
-    expr_raw   = expr_raw,
-    meta       = meta,
-    row_data   = row_data,
-    sample_col = sample_col,
-    format     = fmt
+    expr_raw      = expr_raw,
+    meta          = meta,
+    row_data      = row_data,
+    sample_col    = sample_col,
+    format        = fmt,
+    duplicate_log = parsed$duplicate_log
   )
 }
 

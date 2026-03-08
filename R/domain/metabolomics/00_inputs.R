@@ -542,16 +542,83 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     row_data <- do.call(rbind, rd_list)
     rownames(row_data) <- paste0(row_data$level_id, "__", row_data$feature_id)
 
+    # ── Deduplication: one representative per feature_id ─────────────────────
+    # Sort: lowest identification_level first (NA treated as Inf = worst),
+    # then by original row position for deterministic tie-breaking.
+    # After sorting, the first occurrence of each feature_id is "best".
+    row_data$.sort_level <- ifelse(
+        is.na(row_data$identification_level),
+        Inf,
+        as.numeric(row_data$identification_level)
+    )
+    row_data$.row_idx <- seq_len(nrow(row_data))
+
+    o          <- order(row_data$feature_id,
+                        row_data$.sort_level,
+                        row_data$.row_idx)
+    rd_sorted  <- row_data[o, , drop = FALSE]
+    is_dup     <- duplicated(rd_sorted$feature_id)
+    kept_rows  <- rd_sorted[!is_dup, , drop = FALSE]
+    dropped    <- rd_sorted[ is_dup, , drop = FALSE]
+
+    # ── Audit log with provenance columns ────────────────────────────────────
+    dup_log <- NULL
+    if (nrow(dropped) > 0) {
+        kept_lookup <- data.frame(
+            feature_id                = kept_rows$feature_id,
+            kept_level_id             = kept_rows$level_id,
+            kept_identification_level = kept_rows$identification_level,
+            stringsAsFactors          = FALSE
+        )
+        dup_log <- merge(dropped, kept_lookup, by = "feature_id", all.x = TRUE)
+
+        dup_log$drop_reason <- ifelse(
+            is.na(dup_log$identification_level) &
+                !is.na(dup_log$kept_identification_level),
+            "missing_level_lost_to_numeric",
+            ifelse(
+                !is.na(dup_log$identification_level) &
+                    !is.na(dup_log$kept_identification_level) &
+                    dup_log$identification_level == dup_log$kept_identification_level,
+                "tie_same_level_kept_first",
+                "higher_identification_level"
+            )
+        )
+
+        # Lead columns first, then remaining annotation columns, drop helpers
+        log_lead <- c("feature_id", "identification_level", "original_id", "Name",
+                      "drop_reason", "kept_level_id", "kept_identification_level")
+        log_lead    <- intersect(log_lead, colnames(dup_log))
+        log_rest    <- setdiff(colnames(dup_log),
+                               c(log_lead, ".sort_level", ".row_idx"))
+        dup_log     <- dup_log[, c(log_lead, log_rest), drop = FALSE]
+    }
+
+    # Strip helper columns; rebuild row_data and filter expr_raw
+    kept_rows$.sort_level <- NULL
+    kept_rows$.row_idx    <- NULL
+    row_data              <- kept_rows
+    rownames(row_data)    <- paste0(row_data$level_id, "__", row_data$feature_id)
+    expr_raw              <- expr_raw[rownames(row_data), , drop = FALSE]
+
+    n_kept    <- nrow(row_data)
+    n_dropped <- if (is.null(dup_log)) 0L else nrow(dup_log)
+    message("Deduplication complete: Kept ", n_kept, " unique features, removed ",
+            n_dropped, " duplicates (see duplicate_log attribute for details).")
+
     # Deduplicated sample_map (identical across levels for cd_raw)
     non_null_maps <- Filter(Negate(is.null), sm_list)
     sample_map    <- if (length(non_null_maps) > 0) unique(do.call(rbind, non_null_maps)) else NULL
 
-    list(
-        expr_raw   = expr_raw,
-        row_data   = row_data,
-        sample_ids = ref_ids,
-        sample_map = sample_map
+    out <- list(
+        expr_raw        = expr_raw,
+        row_data        = row_data,
+        sample_ids      = ref_ids,
+        sample_map      = sample_map,
+        duplicate_log   = dup_log
     )
+    attr(out, "duplicate_log") <- dup_log
+    out
 }
 
 

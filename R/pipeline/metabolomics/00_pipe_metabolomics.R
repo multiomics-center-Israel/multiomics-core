@@ -111,6 +111,14 @@ pipe_metabolomics <- function() {
             mod_met_raw(metab_inputs, config)
         ),
 
+        # met_dedup_log: audit table of features dropped during cross-level
+        # deduplication. NULL for single-level inputs. Can be written to CSV or
+        # included in the HTML report via met_raw$duplicate_log.
+        tar_target(
+            met_dedup_log,
+            met_raw$duplicate_log
+        ),
+
         # met_missingness_stats: MNAR/MAR classification on pre-filter matrix
         tar_target(
             met_missingness_stats,
