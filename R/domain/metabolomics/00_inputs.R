@@ -355,10 +355,9 @@ parse_processed_wide <- function(data_df, cfg, meta) {
         )
     }
 
-    # Build feature IDs and extract attached metadata
-    feat_ids             <- build_feature_ids(data_df, cfg$id_columns)
-    id_level             <- attr(feat_ids, "identification_level")
-    orig_id              <- attr(feat_ids, "original_id")
+    # Build feature IDs
+    feat_ids <- build_feature_ids(data_df, cfg$id_columns)
+    orig_id  <- attr(feat_ids, "original_id")
 
     expr_df  <- data_df[, sample_cols, drop = FALSE]
     expr_raw <- coerce_df_to_numeric_matrix(
@@ -369,9 +368,8 @@ parse_processed_wide <- function(data_df, cfg, meta) {
 
     # Everything else = annotation
     row_data <- data_df[, setdiff(df_cols, sample_cols), drop = FALSE]
-    row_data$feature_id           <- feat_ids
-    row_data$identification_level <- id_level
-    row_data$original_id          <- orig_id
+    row_data$feature_id  <- feat_ids
+    row_data$original_id <- orig_id
 
     list(
         expr_raw   = expr_raw,
@@ -500,7 +498,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     # Deterministic column ordering:
     #   1. feature_id  (RT[rt]_MZ[mz], no prefix)
     #   2. level_id    (lowercase level label, e.g. "level_1")
-    #   3. identification_level / original_id (from build_feature_ids attributes)
+    #   3. identification_level (integer parsed from file/level name) / original_id
     #   4. remaining annotation columns in union order
     fixed_cols      <- c("feature_id", "level_id", "identification_level", "original_id")
     remaining_cols  <- setdiff(all_annot_cols, fixed_cols)
@@ -521,8 +519,11 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         expr_list[[i]] <- expr_mat
 
         # ── row_data ─────────────────────────────────────────────────────────
-        rd           <- p$row_data
-        rd$level_id  <- tolower(lv)   # e.g. "level_1"
+        rd                      <- p$row_data
+        rd$level_id             <- tolower(lv)   # e.g. "level_1"
+        rd$identification_level <- suppressWarnings(
+            as.integer(sub("^Level_(\\d+)$", "\\1", lv, perl = TRUE))
+        )
 
         # Fill annotation columns absent in this level
         for (col in setdiff(all_annot_cols, colnames(rd))) {
@@ -561,11 +562,9 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 #' numeric values from \code{rt_col} and \code{mz_col}.  Per-row fallback to
 #' \code{name_col} or a generic index when either coordinate is missing.
 #'
-#' When \code{feature_id_col} is present the integer identification level is
-#' extracted from the \code{Level_X__} prefix and attached—along with the
-#' unmodified source string—as attributes on the returned vector:
+#' When \code{feature_id_col} is present the unmodified source string is
+#' attached as an attribute on the returned vector:
 #' \describe{
-#'   \item{\code{identification_level}}{Integer vector (NA where no prefix).}
 #'   \item{\code{original_id}}{Character vector of the raw source strings.}
 #' }
 build_feature_ids <- function(data_df, id_cfg) {
@@ -599,21 +598,12 @@ build_feature_ids <- function(data_df, id_cfg) {
 
     if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
         original_id <- as.character(data_df[[fid_col]])
-
-        # Extract integer X from "Level_X__..." prefix
-        has_level <- grepl("^Level_\\d+__", original_id, perl = TRUE)
-        identification_level <- rep(NA_integer_, nr)
-        identification_level[has_level] <- as.integer(
-            sub("^Level_(\\d+)__.*$", "\\1", original_id[has_level], perl = TRUE)
-        )
-
         ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
-        attr(ids, "identification_level") <- identification_level
-        attr(ids, "original_id")          <- original_id
+        attr(ids, "original_id") <- original_id
         return(ids)
     }
 
-    # Constructed path: no level info
+    # Constructed path
     original_id <- if (has_nm) {
         nm <- as.character(data_df[[name_col]])
         ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
@@ -622,8 +612,7 @@ build_feature_ids <- function(data_df, id_cfg) {
     }
 
     ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
-    attr(ids, "identification_level") <- rep(NA_integer_, nr)
-    attr(ids, "original_id")          <- original_id
+    attr(ids, "original_id") <- original_id
     ids
 }
 
