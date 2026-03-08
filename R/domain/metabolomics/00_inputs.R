@@ -513,10 +513,11 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         lv <- level_names[i]
 
         # ── Expression matrix ────────────────────────────────────────────────
-        # Reorder columns to canonical ref_ids order before stacking; keep
-        # clean RT[rt]_MZ[mz] rownames without any level prefix.
-        expr_mat       <- p$expr_raw[, ref_ids, drop = FALSE]
-        expr_list[[i]] <- expr_mat
+        # Reorder columns to canonical ref_ids order; prefix rownames with the
+        # level label to guarantee cross-level uniqueness after rbind.
+        expr_mat                <- p$expr_raw[, ref_ids, drop = FALSE]
+        rownames(expr_mat)      <- paste0(tolower(lv), "__", rownames(expr_mat))
+        expr_list[[i]]          <- expr_mat
 
         # ── row_data ─────────────────────────────────────────────────────────
         rd                      <- p$row_data
@@ -539,7 +540,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 
     expr_raw <- do.call(rbind, expr_list)
     row_data <- do.call(rbind, rd_list)
-    rownames(row_data) <- row_data$feature_id
+    rownames(row_data) <- paste0(row_data$level_id, "__", row_data$feature_id)
 
     # Deduplicated sample_map (identical across levels for cd_raw)
     non_null_maps <- Filter(Negate(is.null), sm_list)
