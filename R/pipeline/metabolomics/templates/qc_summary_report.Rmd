@@ -28,18 +28,161 @@ library(base64enc)
 # Null-coalescing operator (mirrors pipeline convention)
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
+# ---------------------------------------------------------------------------
+# embed_png — Base64-encode a PNG file for self-contained HTML output.
+# API is unchanged; only called when interactive PCA is unavailable.
+# ---------------------------------------------------------------------------
 embed_png <- function(files, pattern, fig_width = "100%") {
   if (is.null(files) || length(files) == 0) return("")
   hits <- files[grepl(pattern, basename(files), fixed = TRUE, ignore.case = TRUE)]
   hits <- hits[file.exists(hits)]
-
   if (length(hits) == 0) return("")
-  
   img_64 <- base64enc::dataURI(file = hits[1], mime = "image/png")
-  
-  return(sprintf('<img src="%s" style="width:%s; display:block; margin:auto;" />', 
-                 img_64, fig_width))
+  sprintf('<img src="%s" style="width:%s; display:block; margin:auto;" />',
+          img_64, fig_width)
+}
 
+# ---------------------------------------------------------------------------
+# render_interactive_pca — interactive plotly PCA scatter.
+#
+# Primary path  (mat + meta + cfg_mode supplied):
+#   Calls qc_pca_scatter() without file I/O to obtain a ggplot, enriches
+#   it with a text aesthetic (sample_id + group), then wraps in
+#   plotly::ggplotly().  Requires the 'plotly' package.
+#
+# Scores-file path (png_files supplied, pca_scores.tsv present alongside PNG):
+#   Reads the TSV saved by qc_full_metabolomics_suite() — columns:
+#   sample, PC1, PC2[, PC3], <color_col>, var_PC1, var_PC2[, var_PC3].
+#   Builds a plotly scatter with hover labels directly from the file.
+#
+# Final fallback (plotly absent or no scores file found):
+#   Embeds the pre-rendered pca_pc1_pc2.png via embed_png().
+#   Uses knitr::asis_output() so raw HTML renders without results='asis'.
+#
+# @param mat       features x samples numeric matrix  (or NULL)
+# @param meta      sample metadata data.frame          (or NULL)
+# @param cfg_mode  config$modes$metabolomics           (or NULL)
+# @param pcs       length-2 integer vector of PCs, e.g. c(1, 2)
+# @param png_files character vector of file paths — used for scores + PNG fallback
+# @return plotly widget, knitr::asis_output (PNG), or NULL (silent)
+# ---------------------------------------------------------------------------
+render_interactive_pca <- function(mat      = NULL,
+                                   meta     = NULL,
+                                   cfg_mode = NULL,
+                                   pcs      = c(1, 2),
+                                   png_files = NULL) {
+
+  # ---- Primary: live data path -------------------------------------------
+  if (!is.null(mat) && !is.null(meta) && !is.null(cfg_mode)) {
+    if (!requireNamespace("plotly", quietly = TRUE)) {
+      message("render_interactive_pca: 'plotly' not installed; using static PNG.")
+    } else {
+      p <- tryCatch(
+        qc_pca_scatter(mat, meta, cfg_mode, pcs = pcs, out_file = NULL),
+        error = function(e) {
+          message("render_interactive_pca: qc_pca_scatter failed: ", e$message)
+          NULL
+        }
+      )
+
+      if (!is.null(p)) {
+        sample_col <- cfg_mode$effects$samples %||% "sample_id"
+        color_col  <- cfg_mode$effects$color   %||% sample_col
+        scores     <- p$data   # plot_pca_scatter uses scores as ggplot data
+
+        if (!is.null(scores) && is.data.frame(scores)) {
+          id_vals <- if ("sample" %in% colnames(scores)) scores[["sample"]] else
+                         seq_len(nrow(scores))
+          grp_col <- intersect(color_col, colnames(scores))
+          tt <- paste0(sample_col, ": ", id_vals)
+          if (length(grp_col) == 1 && grp_col != "sample")
+            tt <- paste0(tt, "<br>", grp_col, ": ", scores[[grp_col]])
+          p$data[[".tooltip"]] <- tt
+          p <- p + ggplot2::aes(text = .data[[".tooltip"]])
+        }
+
+        return(plotly::ggplotly(p, tooltip = "text"))
+      }
+    }
+  }
+
+  # ---- Scores-file path: read pca_scores.tsv written by the QC suite ----
+  if (!is.null(png_files) && requireNamespace("plotly", quietly = TRUE)) {
+    # Primary: explicit .tsv path in file vector
+    scores_hits <- png_files[grepl("pca_scores\\.tsv$", png_files, perl = TRUE)]
+    # Fallback: derive from pca_pc1_pc2.png (same directory) in case the .tsv
+    # was not tracked in the file vector due to a superassignment bug or caching.
+    pca_pngs <- png_files[grepl("pca_pc1_pc2\\.png$", png_files, perl = TRUE)]
+    if (length(pca_pngs) > 0)
+      scores_hits <- unique(c(scores_hits, file.path(dirname(pca_pngs), "pca_scores.tsv")))
+    scores_hits <- scores_hits[file.exists(scores_hits)]
+
+    if (length(scores_hits) > 0) {
+      scores <- tryCatch(
+        utils::read.table(scores_hits[1], sep = "\t", header = TRUE,
+                          stringsAsFactors = FALSE, check.names = FALSE),
+        error = function(e) {
+          message("render_interactive_pca: could not read pca_scores.tsv: ", e$message)
+          NULL
+        }
+      )
+
+      if (!is.null(scores)) {
+        pc_x  <- paste0("PC", pcs[1])
+        pc_y  <- paste0("PC", pcs[2])
+        vx    <- scores[[paste0("var_PC", pcs[1])]][1] %||% NA_real_
+        vy    <- scores[[paste0("var_PC", pcs[2])]][1] %||% NA_real_
+
+        # Identify color and shape columns from non-PC, non-var, non-sample columns
+        reserved <- c("sample", grep("^PC|^var_PC", colnames(scores), value = TRUE))
+        extra_cols <- setdiff(colnames(scores), reserved)
+        color_col <- if (length(extra_cols) > 0) extra_cols[1] else "sample"
+        shape_col <- if (length(extra_cols) > 1) extra_cols[2] else NULL
+
+        if (!all(c(pc_x, pc_y) %in% colnames(scores))) {
+          message("render_interactive_pca: expected columns ", pc_x, "/", pc_y,
+                  " not found in pca_scores.tsv; falling back to static PNG.")
+        } else {
+          tt    <- paste0("sample: ", scores[["sample"]])
+          if (color_col %in% colnames(scores) && color_col != "sample")
+            tt  <- paste0(tt, "<br>", color_col, ": ", scores[[color_col]])
+          if (!is.null(shape_col) && shape_col %in% colnames(scores))
+            tt  <- paste0(tt, "<br>", shape_col, ": ", scores[[shape_col]])
+          x_lab <- if (!is.na(vx)) sprintf("%s: %.1f%% variance", pc_x, 100 * vx) else pc_x
+          y_lab <- if (!is.na(vy)) sprintf("%s: %.1f%% variance", pc_y, 100 * vy) else pc_y
+
+          p <- plotly::plot_ly(
+            data      = scores,
+            x         = stats::as.formula(paste0("~`", pc_x, "`")),
+            y         = stats::as.formula(paste0("~`", pc_y, "`")),
+            color     = if (color_col %in% colnames(scores))
+                          stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL,
+            symbol    = if (!is.null(shape_col) && shape_col %in% colnames(scores))
+                          stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL,
+            text      = tt,
+            hoverinfo = "text",
+            type      = "scatter",
+            mode      = "markers",
+            marker    = list(size = 9)
+          )
+          p <- plotly::layout(p,
+            xaxis  = list(title = x_lab),
+            yaxis  = list(title = y_lab),
+            legend = list(title = list(text = color_col))
+          )
+          return(p)
+        }
+      }
+    }
+  }
+
+  # ---- Final fallback: embed pre-rendered PNG ----------------------------
+  if (!is.null(png_files)) {
+    html <- embed_png(png_files, "pca_pc1_pc2")
+    if (nzchar(html)) return(knitr::asis_output(html))
+  }
+
+  invisible(NULL)
 }
 
 render_dt <- function(df, caption = NULL, pageLength = 10) {
@@ -59,12 +202,32 @@ render_dt <- function(df, caption = NULL, pageLength = 10) {
 # qc_files is referenced by _qc_normalization_section.Rmd via parent environment.
 qc_files <- params$qc_suite_files %||% character(0)
 ```
-
 > **Purpose:** Review normalization method performance before interpreting
-> differential expression and enrichment results.  The **Benchmark** tab shows
-> RSD and PC1 variance for every normalization stage, starting from the raw
-> linear baseline (`met_imputed`).  Choose the method with the lowest
-> `median_rsd_overall` and the highest `pca_pc1_delta`.
+> differential expression and enrichment results. The **Benchmark** tab summarizes
+> **RSD (Relative Standard Deviation)** per group and **PC1 variance** across
+> normalization stages, starting from the raw linear baseline (`met_imputed`).
+> RSD reflects the relative variability of feature intensities within a group and
+> is used here as a measure of technical stability. In particular, **QC samples**
+> are expected to show low variability; therefore, effective normalization should
+> reduce RSD within the QC group while preserving meaningful biological variation
+> between experimental groups. In practice, the preferred normalization method is
+> the one that **minimizes RSD within the QC group** while ensuring that **PC1
+> continues to capture meaningful structure** across samples.
+>
+> **Normalization methods compared:**
+>
+> **PQN (Probabilistic Quotient Normalization)** – Estimates a dilution factor for
+> each sample based on metabolite ratios relative to a reference spectrum. This
+> method is widely used in metabolomics because it effectively corrects dilution
+> effects while remaining robust to global intensity differences.
+>
+> **TSS (Total Sum Scaling)** – Scales each sample by its total signal intensity to
+> correct for global abundance differences. While simple and intuitive, it can be
+> influenced by a small number of highly abundant metabolites.
+>
+> **Median normalization** – Aligns the median intensity across samples. This
+> approach is relatively robust to extreme values and works well when most
+> metabolites are expected to remain stable between samples.
 
 # Normalization QC {.tabset}
 

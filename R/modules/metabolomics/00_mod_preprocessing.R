@@ -19,35 +19,73 @@
 
 #' Load and parse raw metabolomics inputs
 #'
-#' Calls \code{load_metabolomics_inputs()}, dispatches to the appropriate
-#' format parser, applies optional sample filter (QC/blank exclusion), and
-#' aligns metadata to the expression matrix.
+#' Dispatches to the appropriate format parser, applies optional sample filter
+#' (QC/blank exclusion), and aligns metadata to the expression matrix.
 #'
+#' @param inp    Pre-loaded inputs list from \code{load_metabolomics_inputs()}.
 #' @param config Full pipeline config list.
 #' @return list with: \code{expr_raw}, \code{meta}, \code{row_data},
 #'   \code{sample_col}, \code{format}.
 #'
-mod_met_raw <- function(config) {
+mod_met_raw <- function(inp, config) {
   cfg        <- config$modes$metabolomics
-  inp        <- load_metabolomics_inputs(config)
   fmt        <- inp$format %||% cfg$input$format %||% "cd_raw"
   sample_col <- cfg$effects$samples %||% "sample_id"
+  map_from   <- cfg$id_columns$map_from
+  map_to     <- cfg$id_columns$map_to
+
+  # Effective per-file format: for multi_level each level is parsed with
+  # level_format; for single-file modes level_format == fmt.
+  level_format <- if (fmt == "multi_level")
+    cfg$input[["level_format"]] %||% "cd_raw"
+  else
+    fmt
+
+  # processed_wide: columns in the raw data ARE the sample identifiers;
+  # parse_processed_wide matches them against metadata IDs -> rename BEFORE
+  # parsing.  For multi_level we rename each level's data_df individually.
+  inp_data <- inp$data
+  if (!is.null(inp$sample_map) && level_format == "processed_wide") {
+    if (is.null(map_from) || is.null(map_to))
+      stop("mod_met_raw: id_columns$map_from and id_columns$map_to are required ",
+           "when files$sample_map is set")
+    if (fmt == "multi_level") {
+      inp_data <- lapply(inp_data, function(item) {
+        item$data_df <- apply_sample_map_to_colnames(
+          item$data_df, inp$sample_map, map_from, map_to)
+        item
+      })
+    } else {
+      inp_data <- apply_sample_map_to_colnames(inp_data, inp$sample_map, map_from, map_to)
+    }
+  }
 
   parsed <- switch(fmt,
-    cd_raw         = parse_cd_raw(inp$data, cfg),
-    processed_wide = parse_processed_wide(inp$data, cfg, inp$metadata),
+    cd_raw         = parse_cd_raw(inp_data, cfg),
+    processed_wide = parse_processed_wide(inp_data, cfg, inp$metadata),
+    multi_level    = parse_multi_level(inp_data, cfg, inp$metadata),
     stop("mod_met_raw: unsupported format: '", fmt, "'")
   )
 
   expr_raw <- parsed$expr_raw
   row_data <- parsed$row_data
 
-  # Build/align metadata
+  # cd_raw: parse_cd_raw extracts sample IDs from Area: column names via regex;
+  # the external sample_map remaps those extracted IDs -> rename AFTER parsing.
+  # Applies to both single-file cd_raw and multi_level with level_format cd_raw.
+  if (!is.null(inp$sample_map) && level_format == "cd_raw") {
+    if (is.null(map_from) || is.null(map_to))
+      stop("mod_met_raw: id_columns$map_from and id_columns$map_to are required ",
+           "when files$sample_map is set")
+    message("mod_met_raw: applying sample map to expression matrix column names.")
+    expr_raw <- apply_sample_map_to_colnames(expr_raw, inp$sample_map, map_from, map_to)
+  }
+
+  # Align metadata; build minimal stub if none provided
   meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
 
-  # Apply optional sample filter (QC/blank exclusion) — reuse helpers from
-  # 02_preprocess.R which are available in the function environment via sourcing.
+  # Apply optional sample filter (QC/blank exclusion)
   rules <- get_sample_filter_rules_metab(cfg)
   if (!is.null(rules)) {
     keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
@@ -68,25 +106,25 @@ mod_met_raw <- function(config) {
   }
 
   list(
-    expr_raw   = expr_raw,
-    meta       = meta,
-    row_data   = row_data,
-    sample_col = sample_col,
-    format     = fmt
+    expr_raw      = expr_raw,
+    meta          = meta,
+    row_data      = row_data,
+    sample_col    = sample_col,
+    format        = fmt,
+    duplicate_log = parsed$duplicate_log
   )
 }
 
 
 # ==============================================================================
-# mod_met_missingness_stats — compute stats + MNAR/MAR classification
+# mod_met_missingness_stats — classify MNAR / MAR per feature
 # ==============================================================================
 
-#' Compute missingness statistics on the raw (pre-filter) matrix
+#' Classify features as MNAR or MAR based on missingness vs. intensity correlation
 #'
-#' @param raw List returned by \code{mod_met_raw()}.
+#' @param raw    List returned by \code{mod_met_raw()}.
 #' @param config Full pipeline config list.
-#' @return list with: \code{stats_df}, \code{samp_miss_df}, \code{feat_pass},
-#'   \code{samp_pass}, \code{n_feat_removed}, \code{n_samp_removed},
+#' @return List from \code{compute_missingness_stats()} plus
 #'   \code{mnar_mask} (named logical: TRUE = MNAR),
 #'   \code{mar_mask}  (named logical: TRUE = MAR).
 #'
@@ -131,7 +169,6 @@ mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
   dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(diag_dir, "missingness_heatmap.png")
 
-  # miss_stats$stats_df has feature_id + mnar_class columns
   qc_missingness_heatmap(raw$expr_raw, miss_stats$stats_df, out_file)
 
   out_file
@@ -160,9 +197,6 @@ mod_met_filtered <- function(raw, config) {
     sample_threshold = pre_cfg$sample_missing_threshold %||% 0.30
   )
 
-  # Align row_data to retained features.
-  # mod_met_raw already sets rownames(row_data) = feature_id; use intersect to
-  # retain only the features that survived missingness filtering.
   row_data <- raw$row_data
   if (!is.null(row_data)) {
     keep     <- intersect(rownames(filt$mat), rownames(row_data))
@@ -170,7 +204,7 @@ mod_met_filtered <- function(raw, config) {
   }
 
   list(
-    mat              = filt$mat,          # named expr_filt for pre-contract
+    mat              = filt$mat,
     meta             = filt$meta,
     row_data         = row_data,
     dropped_features = filt$dropped_features,
@@ -183,15 +217,12 @@ mod_met_filtered <- function(raw, config) {
 # mod_met_imputed — MNAR (min/2) + MAR (KNN) imputation
 # ==============================================================================
 
-#' Impute missing values (MNAR → min/2, MAR → KNN)
-#'
-#' Re-classifies missingness on the filtered matrix (features may have changed)
-#' before imputation.
+#' Impute missing values (MNAR -> min/2, MAR -> KNN)
 #'
 #' @param filtered   List returned by \code{mod_met_filtered()}.
 #' @param config     Full pipeline config list.
-#' @return list with: \code{mat} (imputed, no NAs), \code{imputed_flag},
-#'   \code{meta}, \code{row_data}, \code{info} (imputation statistics).
+#' @return list with: \code{mat}, \code{imputed_flag}, \code{meta},
+#'   \code{row_data}, \code{info}.
 #'
 mod_met_imputed <- function(filtered, config) {
   pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
@@ -199,7 +230,6 @@ mod_met_imputed <- function(filtered, config) {
   knn_k    <- as.integer(pre_cfg$knn_k  %||% 10L)
   epsilon  <- pre_cfg$epsilon %||% 1e-8
 
-  # Re-classify on filtered matrix
   miss_stats_filt <- classify_missingness(
     filtered$mat,
     mnar_cor_threshold = -abs(mnar_thr)
@@ -236,7 +266,7 @@ mod_met_imputed <- function(filtered, config) {
 #'
 #' @param imputed List returned by \code{mod_met_imputed()}.
 #' @param config  Full pipeline config list.
-#' @return list with: \code{mat} (expr_log), \code{meta}, \code{row_data}.
+#' @return list with: \code{mat}, \code{meta}, \code{row_data}.
 #'
 mod_met_log <- function(imputed, config) {
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
@@ -255,86 +285,25 @@ mod_met_log <- function(imputed, config) {
 
 
 # ==============================================================================
-# mod_met_normalize — apply one normalization method, save QC plots, return list
-# ==============================================================================
-
-#' Apply a single normalization method and save QC plots
-#'
-#' Calls the appropriate \code{norm_*()} function from
-#' \code{R/domain/metabolomics/01_normalization.R}, saves a boxplot and PCA
-#' to disk BEFORE returning (not lazy).
-#'
-#' @param logged  List returned by \code{mod_met_log()}.
-#' @param method  Character: \code{"tss"}, \code{"median"}, or \code{"pqn"}.
-#' @param out_dir Mode output directory.
-#' @param config  Full pipeline config list.
-#' @return list with: \code{mat}, \code{boxplot_file}, \code{pca_file}.
-#'
-mod_met_normalize <- function(logged, method, out_dir, config) {
-  method <- tolower(method)
-  mat_log <- logged$mat
-  meta    <- logged$meta
-  cfg_mode <- config$modes$metabolomics
-
-  mat_norm <- switch(method,
-    tss    = norm_total_sum(mat_log),
-    median = norm_median(mat_log),
-    pqn    = norm_pqn(mat_log),
-    stop("mod_met_normalize: unknown method '", method, "'")
-  )
-
-  diag_dir <- file.path(out_dir, "diagnostic_plots")
-  dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
-
-  # Boxplot
-  box_file <- file.path(diag_dir, paste0("norm_", method, "_boxplot.png"))
-  norm_boxplot(mat_norm, meta, cfg_mode, out_file = box_file,
-               title = sprintf("Normalization: %s", toupper(method)))
-
-  # PCA (only if >= 3 samples)
-  pca_file <- NULL
-  if (ncol(mat_norm) >= 3) {
-    pca_file <- file.path(diag_dir, paste0("norm_", method, "_pca.png"))
-    tryCatch(
-      qc_pca_scatter(mat_norm, meta, cfg_mode, pcs = c(1, 2), out_file = pca_file),
-      error = function(e) {
-        warning(sprintf("mod_met_normalize: PCA plot for '%s' failed: %s", method, e$message))
-        pca_file <<- NULL
-      }
-    )
-  }
-
-  list(
-    mat          = mat_norm,
-    boxplot_file = box_file,
-    pca_file     = pca_file
-  )
-}
-
-
-# ==============================================================================
 # mod_met_norm_comparison — compute RSD + PCA metrics, save TSV
 # ==============================================================================
 
 #' Compute normalization QC metrics for all three methods and save TSV
 #'
-#' Metrics computed per method: median relative standard deviation (RSD) across
-#' samples and variance explained by PC1.
-#'
-#' @param norm_tss    List returned by \code{mod_met_normalize(method="tss")}.
-#' @param norm_median List returned by \code{mod_met_normalize(method="median")}.
-#' @param norm_pqn    List returned by \code{mod_met_normalize(method="pqn")}.
+#' @param norm_tss    List returned by \code{mod_met_normalize_linear(method="tss")}.
+#' @param norm_median List returned by \code{mod_met_normalize_log()}.
+#' @param norm_pqn    List returned by \code{mod_met_normalize_linear(method="pqn")}.
 #' @param logged      List returned by \code{mod_met_log()}.
 #' @param out_dir     Mode output directory.
 #' @param config      Full pipeline config list.
-#' @return Character scalar: path to saved TSV (for \code{format = "file"} target).
+#' @return Character scalar: path to saved TSV.
 #'
 mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
                                     logged, out_dir, config) {
   methods <- list(
-    list(label = "tss",    obj = norm_tss),
-    list(label = "median", obj = norm_median),
-    list(label = "pqn",    obj = norm_pqn),
+    list(label = "tss",      obj = norm_tss),
+    list(label = "median",   obj = norm_median),
+    list(label = "pqn",      obj = norm_pqn),
     list(label = "log_only", obj = list(mat = logged$mat))
   )
 
@@ -345,13 +314,11 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
                         pc1_var = NA_real_, stringsAsFactors = FALSE))
     }
 
-    # Median RSD across features
     feat_means <- rowMeans(mat, na.rm = TRUE)
     feat_sds   <- apply(mat, 1, stats::sd, na.rm = TRUE)
     rsd        <- feat_sds / abs(feat_means)
     median_rsd <- stats::median(rsd[is.finite(rsd)], na.rm = TRUE)
 
-    # PC1 variance explained
     pc1_var <- tryCatch({
       res <- compute_pca_scores(mat, pcs = 1L, center = TRUE, scale = FALSE)
       res$var_expl[1]
@@ -361,9 +328,8 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
                pc1_var = round(pc1_var, 4), stringsAsFactors = FALSE)
   })
 
-  comp_df <- do.call(rbind, rows)
-
-  ds_dir <- file.path(out_dir, "datasets")
+  comp_df  <- do.call(rbind, rows)
+  ds_dir   <- file.path(out_dir, "datasets")
   dir.create(ds_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(ds_dir, "normalization_comparison.tsv")
   save_tsv(comp_df, ds_dir, "normalization_comparison.tsv")
@@ -378,26 +344,20 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 
 #' Select normalization method, apply optional LOESS drift correction
 #'
-#' Picks the normalization matrix selected by
-#' \code{config$modes$metabolomics$preprocessing$chosen_norm}, then optionally
-#' applies LOESS drift correction.  Always returns a non-NULL list.
-#'
-#' @param norm_tss    List returned by \code{mod_met_normalize(method="tss")}.
-#' @param norm_median List returned by \code{mod_met_normalize(method="median")}.
-#' @param norm_pqn    List returned by \code{mod_met_normalize(method="pqn")}.
+#' @param norm_tss    List returned by \code{mod_met_normalize_linear(method="tss")}.
+#' @param norm_median List returned by \code{mod_met_normalize_log()}.
+#' @param norm_pqn    List returned by \code{mod_met_normalize_linear(method="pqn")}.
 #' @param logged      List returned by \code{mod_met_log()}.
-#' @param meta        data.frame of sample metadata (same as \code{logged$meta}).
+#' @param meta        data.frame of sample metadata.
 #' @param out_dir     Mode output directory.
 #' @param config      Full pipeline config list.
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}, \code{info}.
-#'   \code{info} contains \code{chosen_norm}, \code{drift_applied},
-#'   \code{drift_info}, \code{normalization}.
 #'
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               logged, meta, out_dir, config) {
-  cfg_mode  <- config$modes$metabolomics
-  pre_cfg   <- cfg_mode$preprocessing %||% list()
-  norm_cfg  <- cfg_mode$normalization %||% list()
+  cfg_mode <- config$modes$metabolomics
+  pre_cfg  <- cfg_mode$preprocessing %||% list()
+  norm_cfg <- cfg_mode$normalization  %||% list()
 
   chosen_norm <- tolower(pre_cfg$chosen_norm %||% "pqn")
 
@@ -414,17 +374,15 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
     }
   )
 
-  # LOESS drift correction
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)
   final_mat    <- drift_result$mat
 
-  # Save before/after PCA comparison if drift was applied
   if (drift_result$applied) {
     diag_dir <- file.path(out_dir, "diagnostic_plots")
     dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
 
-    dc_cfg   <- pre_cfg$drift_correction %||% list()
-    inj_col  <- dc_cfg$injection_order_col %||% "injection_order"
+    dc_cfg  <- pre_cfg$drift_correction %||% list()
+    inj_col <- dc_cfg$injection_order_col %||% "injection_order"
 
     if (inj_col %in% colnames(meta)) {
       p_drift <- tryCatch(
@@ -436,19 +394,17 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
         }
       )
       if (!is.null(p_drift)) {
-        drift_pca_file <- file.path(diag_dir, "drift_correction_pca.png")
-        ggplot2::ggsave(drift_pca_file, plot = p_drift,
-                        width = 12, height = 6, dpi = 150)
+        ggplot2::ggsave(file.path(diag_dir, "drift_correction_pca.png"),
+                        plot = p_drift, width = 12, height = 6, dpi = 150)
       }
     }
   }
 
-  # Normalization info structured for build_norm_label() compatibility
   norm_info <- list(
-    sample_norm = chosen_norm,        # consumed by build_norm_label()
-    transform   = norm_cfg$transform %||% "log2",
-    scaling     = "none",             # intentionally not applied in new pipeline
-    chosen_norm = chosen_norm,
+    sample_norm   = chosen_norm,
+    transform     = norm_cfg$transform %||% "log2",
+    scaling       = "none",
+    chosen_norm   = chosen_norm,
     drift_applied = drift_result$applied
   )
 
@@ -470,62 +426,27 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 # mod_met_normalize_linear — TSS / PQN on linear scale, then log2 transform
 # ==============================================================================
 
-#' Normalize a linear-scale matrix, then apply log2 transformation
+#' Normalize a linear-scale matrix then apply log2 transformation
 #'
-#' Implements the Scale Contract for TSS and PQN: normalization is performed
-#' on raw linear intensities (from \code{met_imputed}), and the log2
-#' transformation is applied only after the normalization operation is
-#' complete.  This is the mathematically correct order: TSS divides each
-#' sample by its total ion count, and PQN computes quotients relative to a
-#' reference spectrum — both operations are multiplicative and require linear
-#' intensities to be meaningful.
+#' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
+#' @param method Character: \code{"tss"} or \code{"pqn"}.
+#' @param config Full pipeline config list.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
 #'
-#' @param data      List returned by \code{mod_met_imputed()}.  \code{data$mat}
-#'   must be on the \strong{Linear} scale (raw peak areas, no log transform).
-#' @param method    Character scalar, one of \code{"tss"} or \code{"pqn"}.
-#'   Median normalization is not supported here; use
-#'   \code{mod_met_normalize_log()} instead.
-#' @param config    Full pipeline config list.  The pseudocount is read from
-#'   \code{config$modes$metabolomics$normalization$pseudocount} (default 1).
-#'
-#' @return Named list with:
-#'   \describe{
-#'     \item{\code{mat}}{Numeric matrix on \strong{Log2} scale:
-#'       \eqn{\log_2(\text{norm}(x) + \text{pseudocount})}.}
-#'     \item{\code{meta}}{Passed through from \code{data$meta}.}
-#'     \item{\code{row_data}}{Passed through from \code{data$row_data}.}
-#'   }
-#'
-#' @details
-#' \strong{Math:}
-#' \enumerate{
-#'   \item Apply \code{norm_total_sum()} or \code{norm_pqn()} to
-#'     \code{data$mat} (linear scale).  Both functions use column-wise
-#'     multiplication (\code{sweep(..., "*")}), which is valid only on linear
-#'     intensities.
-#'   \item Apply \code{transform_metab(mat_norm, method = "log2",
-#'     pseudocount = p)}, which computes \eqn{\log_2(x + p)}.
-#' }
-#' The pseudocount \eqn{p} is the same value used by \code{mod_met_log()},
-#' ensuring a consistent back-transformation formula
-#' (\eqn{2^{\text{val}} - p}) across all Log2-output targets.
 mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
 
-  mat_linear <- data$mat   # Linear scale — assertion enforced by Scale Contract
-
   mat_norm <- switch(method,
-    tss = norm_total_sum(mat_linear),
-    pqn = norm_pqn(mat_linear),
+    tss = norm_total_sum(data$mat),
+    pqn = norm_pqn(data$mat),
     stop(
       "mod_met_normalize_linear: 'method' must be \"tss\" or \"pqn\"; got \"",
       method, "\".  Use mod_met_normalize_log() for median normalization."
     )
   )
 
-  # Log2 transform applied AFTER linear normalization (Scale Contract §1.1)
   mat_log <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
 
   list(
@@ -542,43 +463,15 @@ mod_met_normalize_linear <- function(data, method, config) {
 
 #' Apply median normalization as a log-shift on a Log2-scale matrix
 #'
-#' Median normalization on log2 data is correctly implemented as a
-#' \emph{subtraction} (additive shift), not a multiplication.  Subtracting
-#' the per-sample log2-median and adding the global target median is
-#' algebraically equivalent to dividing each sample's linear intensities by
-#' its median and multiplying by the global median — which is the standard
-#' definition of median normalization — under the approximation that the
-#' pseudocount is small relative to the signal.
+#' @param data   List returned by \code{mod_met_log()} (Log2 scale).
+#' @param config Full pipeline config list.
+#' @return list with: \code{mat} (Log2 scale after shift), \code{meta},
+#'   \code{row_data}.
 #'
-#' @param data   List returned by \code{mod_met_log()}.  \code{data$mat}
-#'   must be on the \strong{Log2} scale.
-#' @param config Full pipeline config list (not used for computation; included
-#'   for interface consistency with sibling functions).
-#'
-#' @return Named list with:
-#'   \describe{
-#'     \item{\code{mat}}{Numeric matrix on \strong{Log2} scale after median
-#'       shift.}
-#'     \item{\code{meta}}{Passed through from \code{data$meta}.}
-#'     \item{\code{row_data}}{Passed through from \code{data$row_data}.}
-#'   }
-#'
-#' @details
-#' \strong{Math:}
-#' Let \eqn{L_{ij}} be the log2-transformed intensity of feature \eqn{i} in
-#' sample \eqn{j}, \eqn{m_j = \mathrm{median}_i(L_{ij})} the per-sample
-#' log2-median, and \eqn{m^* = \mathrm{median}_j(m_j)} the global target.
-#' The shift applied to sample \eqn{j} is:
-#' \deqn{L'_{ij} = L_{ij} - m_j + m^* = L_{ij} - (m_j - m^*)}
-#' This ensures every sample has the same log2-median (\eqn{m^*}) after
-#' normalization.  Samples with non-finite or zero log2-medians receive no
-#' shift (shift set to 0).
 mod_met_normalize_log <- function(data, config) {
-  mat_log <- data$mat   # Log2 scale — assertion enforced by Scale Contract
-
+  mat_log     <- data$mat
   col_medians <- apply(mat_log, 2, stats::median, na.rm = TRUE)
 
-  # Identify samples with usable medians
   valid <- is.finite(col_medians) & col_medians != 0
   if (!any(valid)) {
     warning(
@@ -588,23 +481,16 @@ mod_met_normalize_log <- function(data, config) {
     return(list(mat = mat_log, meta = data$meta, row_data = data$row_data))
   }
   if (!all(valid)) {
-    n_invalid <- sum(!valid)
     warning(sprintf(
       "mod_met_normalize_log: %d sample(s) have non-finite or zero log2-median; ",
-      "they will not be shifted.", n_invalid
+      "they will not be shifted.", sum(!valid)
     ))
   }
 
-  # Global target: median of valid per-sample log2-medians
-  target_median <- stats::median(col_medians[valid])
-
-  # Shift vector: positive shift pulls a sample's median up; negative pulls it down.
-  # For invalid samples, shift = 0 (no adjustment).
-  shifts           <- col_medians - target_median
-  shifts[!valid]   <- 0
-
-  # Apply: L'[i,j] = L[i,j] - shifts[j]
-  mat_shifted <- sweep(mat_log, 2, shifts, FUN = "-")
+  target_median      <- stats::median(col_medians[valid])
+  shifts             <- col_medians - target_median
+  shifts[!valid]     <- 0
+  mat_shifted        <- sweep(mat_log, 2, shifts, FUN = "-")
 
   list(
     mat      = mat_shifted,
