@@ -498,11 +498,11 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     all_annot_cols <- Reduce(union, lapply(parsed_levels, function(p) colnames(p$row_data)))
 
     # Deterministic column ordering:
-    #   1. feature_id (prefixed)
-    #   2. Source_File (level label)
-    #   3. feature_id_orig (pre-prefix original ID)
+    #   1. feature_id  (RT[rt]_MZ[mz], no prefix)
+    #   2. level_id    (lowercase level label, e.g. "level_1")
+    #   3. identification_level / original_id (from build_feature_ids attributes)
     #   4. remaining annotation columns in union order
-    fixed_cols      <- c("feature_id", "Source_File", "feature_id_orig")
+    fixed_cols      <- c("feature_id", "level_id", "identification_level", "original_id")
     remaining_cols  <- setdiff(all_annot_cols, fixed_cols)
     final_col_order <- c(fixed_cols, remaining_cols)
 
@@ -515,19 +515,14 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         lv <- level_names[i]
 
         # ── Expression matrix ────────────────────────────────────────────────
-        # Reorder columns to canonical ref_ids order before stacking
-        expr_mat           <- p$expr_raw[, ref_ids, drop = FALSE]
-        orig_ids           <- rownames(expr_mat)
-        rownames(expr_mat) <- paste0(lv, "__", orig_ids)
-        expr_list[[i]]     <- expr_mat
+        # Reorder columns to canonical ref_ids order before stacking; keep
+        # clean RT[rt]_MZ[mz] rownames without any level prefix.
+        expr_mat       <- p$expr_raw[, ref_ids, drop = FALSE]
+        expr_list[[i]] <- expr_mat
 
         # ── row_data ─────────────────────────────────────────────────────────
-        rd <- p$row_data
-
-        # Mandatory traceability column: preserve original ID before prefixing
-        rd$feature_id_orig <- rd$feature_id
-        rd$feature_id      <- paste0(lv, "__", rd$feature_id)
-        rd$Source_File     <- lv
+        rd           <- p$row_data
+        rd$level_id  <- tolower(lv)   # e.g. "level_1"
 
         # Fill annotation columns absent in this level
         for (col in setdiff(all_annot_cols, colnames(rd))) {
