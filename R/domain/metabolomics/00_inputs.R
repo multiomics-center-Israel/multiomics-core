@@ -594,12 +594,15 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         dup_log     <- dup_log[, c(log_lead, log_rest), drop = FALSE]
     }
 
-    # Strip helper columns; rebuild row_data and filter expr_raw
+    # Strip helper columns; rebuild row_data and filter expr_raw.
+    # After deduplication feature_id is unique — use it as the sole rowname
+    # for both objects (no level prefix needed).
     kept_rows$.sort_level <- NULL
     kept_rows$.row_idx    <- NULL
     row_data              <- kept_rows
-    rownames(row_data)    <- paste0(row_data$level_id, "__", row_data$feature_id)
-    expr_raw              <- expr_raw[rownames(row_data), , drop = FALSE]
+    expr_raw              <- expr_raw[paste0(row_data$level_id, "__", row_data$feature_id), , drop = FALSE]
+    rownames(expr_raw)    <- row_data$feature_id
+    rownames(row_data)    <- row_data$feature_id
 
     n_kept    <- nrow(row_data)
     n_dropped <- if (is.null(dup_log)) 0L else nrow(dup_log)
