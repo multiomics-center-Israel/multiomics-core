@@ -64,8 +64,14 @@ figure_legend <- function(text) {
 
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
-prot_dir <- file.path(run_dir, "proteomics")
+# Detect if we are already inside the proteomics output dir
+if (basename(run_dir) == "proteomics") {
+    prot_dir <- run_dir
+    config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
+} else {
+    prot_dir <- file.path(run_dir, "proteomics")
+    config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+}
 diag_dir <- file.path(prot_dir, "Diagnostic_plots")
 qc_post_dir <- file.path(diag_dir, "QC_post")
 datasets_dir <- file.path(prot_dir, "Datasets")

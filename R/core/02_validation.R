@@ -74,11 +74,12 @@ assert_expr_meta_alignment <- function(expr_mat, meta, cfg, strict = TRUE) {
 
     missing_in_expr <- setdiff(meta_ids, expr_ids)
     if (length(missing_in_expr) > 0) {
-        stop(
+        msg <- paste0(
             "expr_mat is missing samples from meta (sample_col='", sample_col, "'): ",
             paste(head(missing_in_expr, 10), collapse = ", "),
             if (length(missing_in_expr) > 10) sprintf(" ... (+%d more)", length(missing_in_expr) - 10) else ""
         )
+        if (isTRUE(strict)) stop(msg) else warning(msg)
     }
 
     if (isTRUE(strict)) {

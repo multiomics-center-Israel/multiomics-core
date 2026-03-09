@@ -453,6 +453,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     levels = c("NS", "Down", "Up")
   )
 
+  # Add pass indicator for plotting
+  df$.pass <- is_sig
+
   # Count stats
   n_up <- sum(is_up, na.rm = TRUE)
   n_down <- sum(is_down, na.rm = TRUE)

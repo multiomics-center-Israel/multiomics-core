@@ -63,7 +63,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     }
 
     for (cn in contrasts) {
-        contrast_print <- gsub(" ", "", cn)
+        contrast_print <- normalize_contrast_name(cn)
 
         logfc_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["logFC"]])
         p_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
@@ -346,4 +346,158 @@ get_de_features <- function(de_res, cfg) {
         warning("pass_any_col '", pass_any_col, "' not found. Returning empty feature set.")
         return(character(0))
     }
+}
+
+
+#' Load pre-computed proteomics DE tables from config$modes$proteomics$files$de_table
+#'
+#' Reads CSV files and builds a summary_df + runs_de_tables structure
+#' compatible with the proteomics DE contract used by downstream modules.
+#'
+#' @param config Full pipeline config.
+#' @param contrasts_df Optional contrasts data frame (with Contrast_name column).
+#'   When provided, contrast names from this table are used instead of filenames.
+#' @return List matching mod_proteomics_de() output: method, summary_df,
+#'   runs_de_tables, de_model, imputations, runs.
+load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
+    cfg <- config$modes$proteomics
+    de_cfg <- cfg$de %||% list()
+
+    de_files <- cfg$files$de_table
+    if (is.list(de_files)) de_files <- unlist(de_files)
+
+    padj_cutoff <- as.numeric(de_cfg$p_cutoff %||% 0.05)
+    linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff %||% 1.5)
+    lfc_cutoff <- log2(linear_fc_cutoff)
+
+    de_table_cfg <- cfg$de_table %||% list()
+    id_col <- de_table_cfg$id_col %||% "FeatureID"
+
+    # Use contrast names from contrasts_df when available (must match file count)
+    if (!is.null(contrasts_df) && "Contrast_name" %in% colnames(contrasts_df) &&
+        nrow(contrasts_df) == length(de_files)) {
+        contrast_labels <- as.character(contrasts_df$Contrast_name)
+    } else {
+        contrast_labels <- vapply(de_files, function(f) {
+            bn <- tools::file_path_sans_ext(basename(f))
+            sub("^de_", "", bn)
+        }, character(1), USE.NAMES = FALSE)
+    }
+
+    # Load per-contrast tables
+    per_contrast <- list()
+    for (i in seq_along(de_files)) {
+        abs_path <- resolve_raw_path(config, de_files[i])
+        if (!file.exists(abs_path)) {
+            stop("Pre-computed proteomics DE table not found: ", abs_path)
+        }
+
+        raw <- read_table_auto(abs_path)
+        cn <- colnames(raw)
+
+        # Feature IDs
+        feat_col <- cn[cn %in% c(id_col, "FeatureID", "Protein.Group",
+                                  "protein_id", "feature_id")][1]
+        if (is.na(feat_col)) {
+            unnamed_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
+            feat_ids <- if (!is.na(unnamed_idx)) as.character(raw[[unnamed_idx]]) else rownames(raw)
+        } else {
+            feat_ids <- as.character(raw[[feat_col]])
+        }
+
+        # logFC
+        lfc_col <- cn[cn %in% c("logFC", "log2FoldChange", "log2FC",
+                                 "log2(FC)", "log2.FC.")][1]
+        lfc_vals <- if (!is.na(lfc_col)) as.numeric(raw[[lfc_col]]) else NA_real_
+
+        # P.Value
+        pval_col <- cn[cn %in% c("P.Value", "pvalue", "PValue", "p.value",
+                                  "raw.pval")][1]
+        pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
+
+        # adj.P.Val
+        padj_col_name <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "q.value",
+                                       "p.adjust", "qvalue")][1]
+        padj_vals <- if (!is.na(padj_col_name)) {
+            as.numeric(raw[[padj_col_name]])
+        } else {
+            stats::p.adjust(pval_vals, method = "BH")
+        }
+
+        # AveExpr
+        ave_col <- cn[cn %in% c("AveExpr", "baseMean", "logCPM")][1]
+        ave_vals <- if (!is.na(ave_col)) as.numeric(raw[[ave_col]]) else NA_real_
+
+        tbl <- data.frame(
+            logFC     = lfc_vals,
+            AveExpr   = ave_vals,
+            t         = NA_real_,
+            P.Value   = pval_vals,
+            adj.P.Val = padj_vals,
+            B         = NA_real_,
+            stringsAsFactors = FALSE
+        )
+        tbl[[id_col]] <- feat_ids
+
+        # Carry annotation columns if present
+        for (a in c("Protein.Names", "Genes", "First.Protein.Description")) {
+            if (a %in% cn) tbl[[a]] <- as.character(raw[[a]])
+        }
+
+        per_contrast[[contrast_labels[i]]] <- tbl
+        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
+                " (label: ", contrast_labels[i], ")")
+    }
+
+    # Build summary_df matching the imputation-based naming convention
+    all_features <- unique(unlist(lapply(per_contrast, function(t) t[[id_col]])))
+    out <- data.frame(x__ = all_features, stringsAsFactors = FALSE)
+    names(out)[1] <- id_col
+
+    # Carry annotation columns from first table
+    ref <- per_contrast[[1]]
+    for (a in intersect(c("Protein.Names", "Genes", "First.Protein.Description"),
+                        colnames(ref))) {
+        idx <- match(all_features, ref[[id_col]])
+        out[[a]] <- ref[[a]][idx]
+    }
+
+    for (ctr in names(per_contrast)) {
+        tbl <- per_contrast[[ctr]]
+        idx <- match(all_features, tbl[[id_col]])
+        contrast_print <- normalize_contrast_name(ctr)
+
+        lfc <- tbl$logFC[idx]
+        linear_ratio <- 2^abs(lfc)
+        linear_fc <- ifelse(lfc >= 0, linear_ratio, -linear_ratio)
+
+        is_sig <- !is.na(tbl$adj.P.Val[idx]) &
+                  tbl$adj.P.Val[idx] < padj_cutoff &
+                  abs(lfc) >= lfc_cutoff
+        pass <- ifelse(is_sig, 1, NA)
+
+        out[[paste0("sum.pass.", contrast_print)]]          <- as.integer(!is.na(pass) & pass == 1)
+        out[[paste0("pass.imputs.", contrast_print)]]       <- pass
+        out[[paste0("linearRatio.imputs.", contrast_print)]] <- linear_ratio
+        out[[paste0("linearFC.imputs.", contrast_print)]]   <- signif(linear_fc, 3)
+        out[[paste0("pvalue.imputs.", contrast_print)]]     <- tbl$P.Value[idx]
+        out[[paste0("padj.imputs.", contrast_print)]]       <- tbl$adj.P.Val[idx]
+    }
+
+    out <- add_pass_any_contrast(out)
+
+    # Build runs_de_tables (single "imputation" with our loaded tables)
+    runs_de_tables <- list(per_contrast)
+
+    message("Proteomics DE: loaded ", length(per_contrast), " pre-computed contrast(s), ",
+            sum(out$pass_any_contrast == 1, na.rm = TRUE), " significant features")
+
+    list(
+        method         = "precomputed",
+        imputations    = NULL,
+        runs           = NULL,
+        runs_de_tables = runs_de_tables,
+        summary_df     = out,
+        de_model       = NULL
+    )
 }

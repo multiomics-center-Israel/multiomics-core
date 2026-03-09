@@ -131,6 +131,10 @@ pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
 
 extract_min_count <- function(min_cfg, groups) {
     groups <- unique(as.character(groups))
+    # Default: require at least 1 non-NA value per group (keep nearly everything)
+    if (is.null(min_cfg)) {
+        return(setNames(rep(1L, length(groups)), groups))
+    }
     if (is.numeric(min_cfg) && length(min_cfg) == 1 && is.null(names(min_cfg))) {
         return(setNames(rep(min_cfg, length(groups)), groups))
     }

@@ -162,12 +162,13 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
 
-    # Strip spaces to match summarize_limma_mult_imputation() convention
-    # (proteomics convention; RNA preserves original contrast names)
-    contrast_safe <- gsub(" ", "", contrast)
+    # Proteomics DE summary strips spaces from contrast names;
+    # RNA-seq keeps them as-is.  Only normalize for proteomics.
+    if (mode != "rna") {
+        contrast <- normalize_contrast_name(contrast)
+    }
 
-    # FIX 2: RNA doesn't use ".imputs." in column names
-    # RNA also preserves spaces in contrast names (from build_rnaseq_summary_df)
+    # RNA doesn't use ".imputs." in column names
     if (mode == "rna") {
         list(
             fc     = paste0("linearFC.", contrast),
@@ -209,7 +210,7 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
 
     for (mcol in manual_cols) {
         contrast <- sub("^manual_cutoffs\\.", "", mcol)
-        cols <- get_contrast_cols(contrast)
+        cols <- get_contrast_cols(contrast, mode = mode)
         if (!all(c(cols$fc, cols$p, cols$padj) %in% names(final_results))) next
 
         fc_L <- openxlsx::int2col(match(cols$fc, names(final_results)))

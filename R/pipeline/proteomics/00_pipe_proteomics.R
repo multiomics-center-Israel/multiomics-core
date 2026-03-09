@@ -18,13 +18,19 @@ pipe_proteomics <- function() {
             prot_input_files,
             {
                 cfg <- config$modes$proteomics
+                is_preprocessed <- identical(cfg$input$format, "preprocessed")
                 paths <- c(
-                    resolve_raw_path(config, cfg$files$protein),
                     resolve_raw_path(config, cfg$files$metadata),
                     resolve_raw_path(config, cfg$files$contrasts)
                 )
-                if (nzchar(cfg$files$sample_map %||% ""))
-                    paths <- c(paths, resolve_raw_path(config, cfg$files$sample_map))
+                if (is_preprocessed) {
+                    pp <- cfg$files$preprocessed_protein %||% ""
+                    if (nzchar(pp)) paths <- c(paths, resolve_raw_path(config, pp))
+                } else {
+                    paths <- c(paths, resolve_raw_path(config, cfg$files$protein))
+                    if (nzchar(cfg$files$sample_map %||% ""))
+                        paths <- c(paths, resolve_raw_path(config, cfg$files$sample_map))
+                }
                 paths
             },
             format = "file"
@@ -194,7 +200,7 @@ pipe_proteomics <- function() {
                 force(prot_exports)
                 force(prot_user_summary)
                 render_proteomics_report(
-                    run_dir     = run_dir,
+                    run_dir     = prot_out_dir,
                     config      = config,
                     config_file = config_file
                 )

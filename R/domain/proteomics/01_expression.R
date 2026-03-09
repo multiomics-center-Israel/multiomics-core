@@ -56,9 +56,56 @@ apply_custom_annotation <- function(row_data, cfg) {
 #' @return List with fields: assay_log2, assay_linear, row_data, col_data, info.
 get_proteomics_expression_matrix <- function(inputs, config) {
     cfg <- config$modes$proteomics
+    is_preprocessed <- identical(inputs$source_type, "preprocessed") ||
+                       identical(cfg$input$format, "preprocessed")
 
-    # Build matrix depending on engine
-    if (cfg$engine == "DIANN") {
+    if (is_preprocessed) {
+        # ---- Preprocessed path: protein table is already an expression matrix ----
+        protein_id_col <- cfg$id_columns$protein_id
+        protein <- inputs$protein
+
+        if (!protein_id_col %in% colnames(protein)) {
+            stop(sprintf(
+                "[proteomics preprocessed] Protein ID column '%s' not found. Available: %s",
+                protein_id_col, paste(colnames(protein), collapse = ", ")
+            ))
+        }
+
+        feat_ids <- as.character(protein[[protein_id_col]])
+
+        # Identify numeric (sample) columns
+        non_id_cols <- setdiff(colnames(protein), protein_id_col)
+        is_numeric <- vapply(protein[, non_id_cols, drop = FALSE],
+                             function(x) is.numeric(x) || is.integer(x),
+                             logical(1))
+        anno_cols <- non_id_cols[!is_numeric]
+        sample_cols <- non_id_cols[is_numeric]
+
+        if (length(sample_cols) == 0) {
+            stop("[proteomics preprocessed] No numeric sample columns found in protein table.")
+        }
+
+        # Build row_data from ID + annotation columns
+        row_data <- protein[, c(protein_id_col, anno_cols), drop = FALSE]
+
+        # Build expression matrix
+        assay_log2 <- as.matrix(protein[, sample_cols, drop = FALSE])
+        storage.mode(assay_log2) <- "numeric"
+        rownames(assay_log2) <- feat_ids
+
+        # Log2-transform if not already
+        is_log <- isTRUE(cfg$files$is_logtransformed)
+        if (!is_log) {
+            message("[proteomics preprocessed] Applying log2(x + 1) transform")
+            assay_log2[is.na(assay_log2)] <- 0
+            assay_log2 <- log2(assay_log2 + 1)
+        }
+
+        assay_linear <- NULL
+        message(sprintf("[proteomics preprocessed] %d features x %d samples", nrow(assay_log2), ncol(assay_log2)))
+
+    } else if (cfg$engine == "DIANN") {
+        # ---- DIANN engine path ----
         assay_log2 <- get_measurements_per_sample_diann(
             protein    = inputs$protein,
             sample_map = inputs$sample_map,

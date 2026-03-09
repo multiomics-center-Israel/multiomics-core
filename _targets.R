@@ -130,9 +130,22 @@ list(
     if (cfg_path == "") cfg_path <- file.path(getwd(), "config.yaml")
     cfg_raw <- yaml::read_yaml(cfg_path)
     mode_targets <- list()
-    if (!is.null(cfg_raw$modes$rna))           mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics))    mode_targets <- c(mode_targets, pipe_proteomics())
-    if (!is.null(cfg_raw$modes$metabolomics))  mode_targets <- c(mode_targets, pipe_metabolomics())
+
+    # Single-omics pipelines
+    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
+    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
+    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics())
+
+    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
+    # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
+    n_omics <- sum(!is.null(cfg_raw$modes$rna),
+                   !is.null(cfg_raw$modes$proteomics),
+                   !is.null(cfg_raw$modes$metabolomics))
+
+    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
+      mode_targets <- c(mode_targets, pipe_multiomics())
+    }
+
     mode_targets
   }
 )

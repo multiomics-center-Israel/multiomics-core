@@ -19,6 +19,7 @@ validate_config <- function(config) {
     if (!is.null(config$modes$proteomics)) validate_proteomics_config(config$modes$proteomics)
     if (!is.null(config$modes$rna)) validate_rna_config(config$modes$rna)
     if (!is.null(config$modes$metabolomics)) validate_metabolomics_config(config$modes$metabolomics)
+    if (!is.null(config$modes$multiomics)) validate_multiomics_config(config$modes$multiomics)
 
     invisible(TRUE)
 }

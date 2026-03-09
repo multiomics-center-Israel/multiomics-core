@@ -2,28 +2,38 @@
 validate_rna_config <- function(cfg) {
     assert_named_list(cfg, "modes$rna")
 
-    # Detect if tximport is being used (txi file configured instead of counts)
+    # Detect input format
     uses_tximport <- !is.null(cfg$files$txi) && nzchar(cfg$files$txi %||% "")
+    is_preprocessed <- identical(cfg$input$format, "preprocessed")
+
+    # Validate input$format if provided
+    if (!is.null(cfg$input$format)) {
+        assert_one_of(cfg$input$format, "input$format", c("preprocessed"), allow_null = TRUE)
+    }
 
     # 1. ID Columns
     assert_named_list(cfg$id_columns, "rna$id_columns")
 
-    # gene_id is required for raw counts, but optional for tximport
-    # (tximport uses rownames for gene IDs)
+    # gene_id is required for raw counts and preprocessed, but optional for tximport
     if (!uses_tximport) {
         assert_scalar_chr(cfg$id_columns$gene_id, "id_columns$gene_id", allow_null = TRUE)
     }
-    # sample_col is optional (defaults to SampleID), map_from/map_to optional too
 
-    # 2. Files — counts and metadata are required
+    # 2. Files — counts OR txi required; metadata always required
     if (!is.null(cfg$files)) {
-        assert_scalar_chr(cfg$files$counts, "files$counts")
+        has_counts <- !is.null(cfg$files$counts) && nzchar(cfg$files$counts %||% "")
+        has_txi <- uses_tximport
+        has_preprocessed <- !is.null(cfg$files$preprocessed_counts) &&
+                            nzchar(cfg$files$preprocessed_counts %||% "")
+        if (!has_counts && !has_txi && !has_preprocessed) {
+            stop("One of 'files$counts', 'files$txi', or 'files$preprocessed_counts' must be specified",
+                 call. = FALSE)
+        }
         assert_scalar_chr(cfg$files$metadata, "files$metadata")
-        # sample_map and contrasts are optional
     }
 
-    # 3. Normalization
-    if (!is.null(cfg$normalization)) {
+    # 3. Normalization (not required for preprocessed)
+    if (!is.null(cfg$normalization) && !is_preprocessed) {
         n <- cfg$normalization
         assert_one_of(n$method, "normalization$method", c("TMMlogCPM", "VST"), allow_null = TRUE)
         assert_scalar_num(n$prior.count, "normalization$prior.count", allow_null = TRUE, min_val = 0)
