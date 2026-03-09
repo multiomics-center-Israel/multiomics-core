@@ -114,31 +114,22 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
             list(total = nrow(sig_pw), up = n_up, down = n_dn)
         }
 
-        for (pr_name in names(pathway_res$pathway_results)) {
-            pr <- pathway_res$pathway_results[[pr_name]]
+        pathway_counts <- Filter(Negate(is.null), lapply(pathway_res$pathway_results, function(pr) {
             if (is.data.frame(pr)) {
                 # Direct data frame (flat structure)
-                res <- count_from_df(pr)
+                count_from_df(pr)
             } else if (is.list(pr)) {
                 # Nested: list of database results per contrast
-                res <- list(total = 0, up = 0, down = 0)
-                for (sub_name in names(pr)) {
-                    sub_res <- count_from_df(pr[[sub_name]])
-                    if (!is.null(sub_res)) {
-                        res$total <- res$total + sub_res$total
-                        res$up    <- res$up + sub_res$up
-                        res$down  <- res$down + sub_res$down
-                    }
-                }
-            } else {
-                res <- NULL
+                sub_counts <- Filter(Negate(is.null), lapply(pr, count_from_df))
+                if (length(sub_counts) == 0) return(NULL)
+                list(total = sum(vapply(sub_counts, `[[`, 0L, "total")),
+                     up    = sum(vapply(sub_counts, `[[`, 0L, "up")),
+                     down  = sum(vapply(sub_counts, `[[`, 0L, "down")))
             }
-            if (!is.null(res)) {
-                n_pathways_total <- n_pathways_total + res$total
-                n_pathways_up    <- n_pathways_up + res$up
-                n_pathways_down  <- n_pathways_down + res$down
-            }
-        }
+        }))
+        n_pathways_total <- n_pathways_total + sum(vapply(pathway_counts, `[[`, 0L, "total"))
+        n_pathways_up    <- n_pathways_up    + sum(vapply(pathway_counts, `[[`, 0L, "up"))
+        n_pathways_down  <- n_pathways_down  + sum(vapply(pathway_counts, `[[`, 0L, "down"))
     }
 
     # --- Subtitle from organism + groups ---

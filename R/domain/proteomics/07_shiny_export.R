@@ -215,10 +215,6 @@ build_shiny_payload_proteomics <- function(
             val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
         }
     }
-    # Legacy fallback: check de_res
-    if (is.null(val) && !is.null(de_res)) {
-        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
-    }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 
     # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)

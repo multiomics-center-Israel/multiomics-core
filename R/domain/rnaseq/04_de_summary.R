@@ -183,11 +183,11 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
   pass_cols <- grep("_pass$", colnames(summary_df), value = TRUE)
   if (length(pass_cols) > 0) {
     summary_df$pass_any_contrast <- apply(summary_df[, pass_cols, drop = FALSE], 1, function(x) {
-      val <- any(x != "" & !is.na(x))
-      if(val) return(1) else return("")
+      val <- any(x == 1 & !is.na(x))
+      if(val) return(1) else return(NA)
     })
   } else {
-    summary_df$pass_any_contrast <- ""
+    summary_df$pass_any_contrast <- NA
   }
   
   return(summary_df)

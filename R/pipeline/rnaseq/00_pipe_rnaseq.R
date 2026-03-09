@@ -50,7 +50,7 @@ pipe_rnaseq <- function() {
                 de_res = rna_de_res,
                 inputs = rna_inputs,
                 config = config,
-                out_dir = file.path(run_dir, "rna"),
+                out_dir = rna_out_dir,
                 clustering_res = rna_clustering_obj
             ),
             format = "file"
@@ -165,5 +165,6 @@ pipe_rnaseq <- function() {
             },
             format = "file"
         )
+     
     )
 }

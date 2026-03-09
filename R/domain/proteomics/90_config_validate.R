@@ -59,6 +59,37 @@ validate_proteomics_config <- function(cfg) {
         validate_clustering_config(cfg$clustering)
     }
 
+    # 6. PPI Settings (optional)
+    if (!is.null(cfg$ppi)) {
+        assert_scalar_bool(cfg$ppi$enabled, "ppi$enabled", allow_null = TRUE)
+        assert_scalar_num(cfg$ppi$string_score_threshold, "ppi$string_score_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1000)
+        assert_scalar_num(cfg$ppi$significance_threshold, "ppi$significance_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(cfg$ppi$lfc_threshold, "ppi$lfc_threshold",
+                          allow_null = TRUE, min_val = 0)
+    }
+
+    # 7. Advanced Stats Settings (optional)
+    if (!is.null(cfg$advanced_stats)) {
+        assert_scalar_bool(cfg$advanced_stats$enabled, "advanced_stats$enabled", allow_null = TRUE)
+        assert_scalar_num(cfg$advanced_stats$bootstrap_n, "advanced_stats$bootstrap_n",
+                          allow_null = TRUE, min_val = 100)
+        assert_scalar_bool(cfg$advanced_stats$compute_effect_size_ci,
+                           "advanced_stats$compute_effect_size_ci", allow_null = TRUE)
+        assert_scalar_bool(cfg$advanced_stats$run_robust_regression,
+                           "advanced_stats$run_robust_regression", allow_null = TRUE)
+    }
+
+    # 8. QC Settings (optional)
+    if (!is.null(cfg$qc)) {
+        assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
+        assert_scalar_num(cfg$qc$umap_n_neighbors, "qc$umap_n_neighbors",
+                          allow_null = TRUE, min_val = 2)
+        assert_scalar_num(cfg$qc$outlier_sd_threshold, "qc$outlier_sd_threshold",
+                          allow_null = TRUE, min_val = 0)
+    }
+
     invisible(TRUE)
 }
 

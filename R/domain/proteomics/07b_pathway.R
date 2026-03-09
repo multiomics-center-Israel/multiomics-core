@@ -1,7 +1,7 @@
 #' Proteomics Pathway Enrichment
 #'
 #' Bridges proteomics DE results to the shared pathway analysis
-#' (run_pathway_analysis from R/domain/rnaseq/07_pathway.R).
+#' (run_pathway_analysis from R/core/09_enrichment.R).
 
 # ==============================================================================
 # DE TABLE EXTRACTION
@@ -22,15 +22,21 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     cfg <- config$modes$proteomics
     src_id_col <- cfg$de_table$id_col %||% "FeatureID"
 
-    stopifnot(src_id_col %in% colnames(summary_df))
+    if (!src_id_col %in% colnames(summary_df))
+        stop(sprintf("ID column '%s' not found in DE summary table. Available: %s",
+                     src_id_col, paste(colnames(summary_df), collapse = ", ")))
 
     cn <- normalize_contrast_name(contrast_name)
     padj_col <- paste0("padj.imputs.", cn)
     pval_col <- paste0("pvalue.imputs.", cn)
     fc_col   <- paste0("linearFC.imputs.", cn)
 
-    stopifnot(padj_col %in% colnames(summary_df))
-    stopifnot(fc_col   %in% colnames(summary_df))
+    if (!padj_col %in% colnames(summary_df))
+        stop(sprintf("Adjusted p-value column '%s' not found for contrast '%s'. Available: %s",
+                     padj_col, contrast_name, paste(colnames(summary_df), collapse = ", ")))
+    if (!fc_col %in% colnames(summary_df))
+        stop(sprintf("Fold-change column '%s' not found for contrast '%s'. Available: %s",
+                     fc_col, contrast_name, paste(colnames(summary_df), collapse = ", ")))
 
     padj_vals <- as.numeric(summary_df[[padj_col]])
     pval_vals <- as.numeric(summary_df[[pval_col]])

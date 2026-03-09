@@ -29,6 +29,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     heatmaps_by_pattern <- NULL
     clusters_vec <- NULL
     excel_order <- NULL
+    
     written <- character(0)
     plots <- list()
 
@@ -131,6 +132,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             annotation_row_builder = TRUE,
             annotation_row_context = annot_context,
             out_file = f_hm,
+            cluster_cols = FALSE,
             title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
         )
         written <- c(written, f_hm)
@@ -197,6 +199,12 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Order rows: cluster then name
         ord <- order(part_res$clusters, names(part_res$clusters))
         mat_ord <- mat[ord, , drop = FALSE]
+        
+        clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+        annot_row <- data.frame(
+          Cluster = factor(paste0("C", clusters_ordered)),
+          row.names = rownames(mat_ord)
+        )
 
         f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
 
@@ -204,10 +212,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         p_part <- plot_heatmap_core(
             expr_mat       = mat_ord,
             annotation_col = annot,
+            annotation_row   = annot_row,
             title          = sprintf("Partition clustering (k=%d) on DE features (n=%d)", part_res$k, nrow(mat_ord)),
             scale_rows     = TRUE,
             cluster_rows   = FALSE,
-            cluster_cols   = TRUE,
+            cluster_cols   = FALSE,
             max_rows       = NULL
         )
 
@@ -216,11 +225,17 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         written <- c(written, f_hm)
 
         # (3) cluster profiles pdf
-        prof <- build_cluster_profiles(part_res$z_group_means, part_res$clusters, part_res$k)
+        prof <- build_cluster_profiles(part_res$group_means, part_res$clusters, part_res$k)
+
 
         if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            p_prof <- plot_cluster_profiles(prof, x_label = eff_color)
+            eff_col_name <- eff_color %||% "Group"
+            p_prof <- plot_cluster_profiles_legacy_style(
+              group_means = part_res$group_means,
+              clusters = part_res$clusters,
+              x_label = eff_col_name
+            )
 
             n_clusters <- length(unique(prof$cluster))
             calc_height <- max(6, ceiling(n_clusters / 2) * 3)

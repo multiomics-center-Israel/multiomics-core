@@ -107,9 +107,9 @@ pipe_proteomics <- function() {
                 clustering_res = prot_clustering_obj,
                 out_dir        = prot_out_dir
             )
-        ),
+        )
 
-        # ---- Pathway enrichment ----
+# ---- Pathway enrichment ----
         tar_target(
             prot_pathway_res,
             mod_proteomics_pathway(
@@ -119,7 +119,7 @@ pipe_proteomics <- function() {
                 out_dir = prot_out_dir
             )
         ),
-
+         
         # ---- PPI network analysis ----
         tar_target(
             prot_ppi_res,
@@ -157,7 +157,7 @@ pipe_proteomics <- function() {
                 adv_stats   = prot_adv_stats
             )
         ),
-
+         
         # ---- AI commentary ----
         tar_target(
             prot_commentary_file,
@@ -191,7 +191,7 @@ pipe_proteomics <- function() {
             format = "file"
         ),
 
-        # Pipeline summary — dark-themed workflow overview HTML
+#         Pipeline summary — dark-themed workflow overview HTML
         tar_target(
             prot_pipeline_summary,
             {

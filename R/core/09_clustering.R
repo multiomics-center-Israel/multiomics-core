@@ -224,10 +224,10 @@ run_binary_patterns <- function(expr_mat_corr,
     if (nrow(mat_z) >= 2) {
       row_dists <- stats::dist(mat_z, method = "euclidean")
       row_hc <- stats::hclust(row_dists, method = "complete")
-      mat_ordered <- mat2plot[row_hc$order, , drop = FALSE]
+      mat_ordered <- mat_z[row_hc$order, , drop = FALSE]
     } else {
       row_hc <- NULL
-      mat_ordered <- mat2plot
+      mat_ordered <- mat_z
     }
     
     # Build DE pattern row annotations (up/down per contrast)
@@ -637,7 +637,7 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   meta2 <- meta[idx, , drop = FALSE]
 
   groups <- droplevels(as.factor(meta2[[group_col]]))
-  group_levels <- levels(groups)
+  group_levels <- unique(meta2[[group_col]])
 
   group_means <- sapply(group_levels, function(g) {
     cols <- which(groups == g)
@@ -706,18 +706,19 @@ choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
   if (n < 2) stop("choose_k_gap_statistic: need at least 2 features")
   k_max <- min(as.integer(k_max), n - 1L)
   if (k_max < 2) return(2L)
-
-  # Clustering function: hclust with Pearson correlation distance + Ward.D2
+  
   hclust_func <- function(x, k) {
-    d <- as.dist(1 - cor(t(x)))
+    cmat <- stats::cor(t(x), use = "pairwise.complete.obs")
+    cmat[is.na(cmat)] <- 0
+    d <- stats::as.dist(1 - cmat)
     hc <- stats::hclust(d, method = "ward.D2")
     list(cluster = stats::cutree(hc, k = k))
   }
-
+  
   gap <- cluster::clusGap(mat_fg, FUNcluster = hclust_func, K.max = k_max, B = B)
   best_k <- cluster::maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"],
                            method = "firstSEmax", SE.factor = 1)
-
+  
   # Guard: maxSE can return 1; force minimum of 2
   max(as.integer(best_k), 2L)
 }
@@ -780,7 +781,7 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     if (!is.null(k_fixed)) {
       final_k <- as.integer(k_fixed)
     } else {
-      k_method <- tolower(cl_cfg$k_method %||% "silhouette")
+      k_method <- tolower(cl_cfg$k_method %||% "gap")
 
       if (k_method == "gap") {
         # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
@@ -912,7 +913,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   group_col <- get_color_config(cfg)
   sample_col <- cfg$effects$samples
 
-  meta_map <- meta %>%
+  meta_map <- meta |>
     dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
 
   # 2. Convert Expression Matrix to Long Format
