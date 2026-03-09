@@ -18,7 +18,10 @@ For in-depth documentation and tutorials, see the official targets book: <https:
 
 -   Standardized data loading and validation
 -   Omics-specific preprocessing (filtering, normalization, imputation)
--   Proteomics differential expression via a method-based interface (currently **limma**) with legacy-style multiple imputations and stability filtering
+-   Proteomics differential expression via **limma** with multiple imputations and stability filtering
+-   RNA-seq differential expression via **DESeq2** with batch correction (ComBat-Seq/SVA/RUV) and cell-type deconvolution
+-   Metabolomics preprocessing (missingness classification, MNAR/MAR imputation, TSS/Median/PQN normalization, LOESS drift correction) and DE
+-   Pathway enrichment analysis (fGSEA, ORA, QEA, ssGSEA)
 -   Unified QC utilities (PCA, heatmaps, sample distance)
 -   A central YAML configuration file controlling all parameters
 -   A `{targets}` pipeline for reproducible, dependency-aware execution
@@ -43,13 +46,13 @@ The onboarding guide explains:
 
 ## Repository structure
 
-```         
+```
 R/
-├── core/         # Generic utilities (I/O, validation, alignment, helpers)
-├── domain/       # Omics-specific logic (proteomics, rnaseq)
+├── core/         # Generic utilities (I/O, validation, QC, clustering, enrichment, plotting)
+├── domain/       # Omics-specific logic (proteomics, rnaseq, metabolomics)
 ├── modules/      # Pipeline steps (wrappers for domain logic)
 ├── pipeline/     # {targets} pipeline orchestration
-├── plots/        # Pure plotting functions (no I/O)
+├── services/     # External integrations (AI commentary)
 config/
 ├── config.yaml              # Central configuration file
 ├── templates/               # Analysis config templates
@@ -174,7 +177,7 @@ The configuration controls:
 
 ------------------------------------------------------------------------
 
-## Running the proteomics pipeline (via `{targets}`)
+## Running the pipeline (via `{targets}`)
 
 The recommended way to run analyses is via `{targets}`.
 
@@ -185,15 +188,15 @@ library(targets)
 tar_make()
 ```
 
-This will run, in order:
+`tar_make()` runs whichever modes are enabled in your config (proteomics, RNA-seq, metabolomics). Each mode executes its own DAG covering configuration validation, input loading, preprocessing, differential expression, QC, and output generation.
 
-1.  configuration validation
-2.  proteomics input loading
-3.  proteomics preprocessing
-4.  differential expression (multi-imputation, method-based)
-5.  QC analysis and diagnostic plots (if enabled)
-6.  clustering analysis (if enabled)
-7.  writing result tables to `outputs/`
+To run a single mode:
+
+``` r
+tar_make(names = starts_with("prot_"))  # proteomics only
+tar_make(names = starts_with("rna_"))   # RNA-seq only
+tar_make(names = starts_with("met_"))   # metabolomics only
+```
 
 `{targets}` ensures that only steps affected by changes are recomputed.
 
@@ -213,23 +216,31 @@ For exploratory work or debugging:
 # Load functions in dependency order
 # 1. Core utilities
 invisible(lapply(list.files("R/core", full.names = TRUE, recursive = TRUE), source))
-# 2. Domain logic
+# 2. Services
+invisible(lapply(list.files("R/services", full.names = TRUE, recursive = TRUE), source))
+# 3. Domain logic
 invisible(lapply(list.files("R/domain", full.names = TRUE, recursive = TRUE), source))
-# 3. Modules
+# 4. Modules
 invisible(lapply(list.files("R/modules", full.names = TRUE, recursive = TRUE), source))
 
 # Load config
 config <- load_config("config/config.yaml")
 
-# Load inputs
+# --- Proteomics ---
 inputs <- load_proteomics_inputs(config)
+res    <- preprocess_proteomics(inputs, config)
 
-# Run preprocessing
-res <- preprocess_proteomics(inputs, config)
+# --- RNA-seq ---
+inputs <- load_rna_inputs(config)
+res    <- preprocess_rna(inputs, config)
+
+# --- Metabolomics ---
+inputs <- load_metabolomics_inputs(config)
+res    <- preprocess_metabolomics(inputs, config)
 
 # Example QC: PCA
 qc_pca_scatter(
-  expr_mat = res$expr_imp_single,
+  expr_mat = res$expr_work,
   meta     = res$meta,
   cfg      = config$modes$proteomics,
   out_file = "outputs/proteomics/qc/pca_pc1_pc2.png"
@@ -302,6 +313,7 @@ If no API key is set, the pipeline automatically falls back to data-driven comme
 
 -   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
 -   **RNA-seq**: Full pipeline (DESeq2), Batch correction (ComBat-Seq/SVA/RUV), Cell-type deconvolution (xCell2), Pathway enrichment (fGSEA/ORA)
+-   **Metabolomics**: Missingness classification (MNAR/MAR), Imputation (KNN + min/2), Normalization (TSS/Median/PQN with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
 -   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection
 -   **Plots**: Volcano, MA, Heatmaps, Profile plots (3-color Up/Down/NS scheme)
 -   **Reporting**: Interactive HTML reports, Executive summaries, Pipeline summaries, AI figure commentary
@@ -310,6 +322,5 @@ If no API key is set, the pipeline automatically falls back to data-driven comme
 
 ### Planned
 
--   Metabolomics / lipidomics DE
 -   Multi-omics integration and reporting
 
