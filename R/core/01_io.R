@@ -32,7 +32,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     # Determine required files based on mode and input format
     is_preprocessed <- identical(cfg$input$format, "preprocessed")
     required_files <- switch(mode,
-        proteomics = if (is_preprocessed) c("metadata", "contrasts") else c("protein", "metadata", "contrasts"),
+        proteomics = if (is_preprocessed) c("preprocessed_protein", "metadata", "contrasts") else c("protein", "metadata", "contrasts"),
         rna = c("metadata", "contrasts"),
         character(0)
     )

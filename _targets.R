@@ -84,19 +84,12 @@ list(
     format = "file"
   ),
 
-  # Load configuration
+  # Load and validate configuration. validate_config() applies defaults (e.g.
+  # multiomics integration methods) and returns the updated config, so all
+  # downstream targets that depend on `config` receive the defaulted values.
   tar_target(
     config,
-    load_config(config_file)
-  ),
-
-  # Validate configuration early; downstream targets should depend on this
-  tar_target(
-    cfg_validated,
-    {
-      validate_config(config)
-      TRUE
-    }
+    validate_config(load_config(config_file))
   ),
 
   # Resolve run output directory
@@ -136,7 +129,7 @@ list(
                    !is.null(cfg_raw$modes$metabolomics))
 
     if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
-      mode_targets <- c(mode_targets, pipe_multiomics())
+      mode_targets <- c(mode_targets, pipe_multiomics(cfg_raw))
     }
 
     mode_targets

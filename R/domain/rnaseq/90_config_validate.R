@@ -14,8 +14,12 @@ validate_rna_config <- function(cfg) {
     # 1. ID Columns
     assert_named_list(cfg$id_columns, "rna$id_columns")
 
-    # gene_id is required for raw counts and preprocessed, but optional for tximport
-    if (!uses_tximport) {
+    # gene_id is required for raw counts and preprocessed, but optional for tximport.
+    # For preprocessed input, preprocess_rna() stops if gene_id is missing, so
+    # enforce it here at validation time for a clearer error message.
+    if (is_preprocessed) {
+        assert_scalar_chr(cfg$id_columns$gene_id, "id_columns$gene_id", allow_null = FALSE)
+    } else if (!uses_tximport) {
         assert_scalar_chr(cfg$id_columns$gene_id, "id_columns$gene_id", allow_null = TRUE)
     }
 
