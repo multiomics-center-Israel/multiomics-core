@@ -26,7 +26,7 @@
 #' @param concordance_results Concordance results
 #' @param config Configuration
 #' @return List with commentary structure
-generate_fallback_commentary <- function(fig, context, mae_data, integration_results, concordance_results, config) {
+generate_fallback_commentary_multiomics <- function(fig, context, mae_data, integration_results, concordance_results, config) {
     figure_id <- fig$figure_id
 
     # Route to specific fallback function based on figure type

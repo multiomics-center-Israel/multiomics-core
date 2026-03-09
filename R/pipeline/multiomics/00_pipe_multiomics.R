@@ -18,32 +18,45 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_harmonization,
             {
-                # Check if at least 2 omics pipelines have run
-                available_omics <- character(0)
-                rna_data <- if (exists("rna_pre")) rna_pre else NULL
-                prot_data <- if (exists("prot_pre")) prot_pre else NULL
-                metab_data <- if (exists("metab_pre")) metab_pre else NULL
+                input_mode <- config$modes$multiomics$input_mode %||% "pipeline"
 
-                if (!is.null(rna_data)) available_omics <- c(available_omics, "transcriptomics")
-                if (!is.null(prot_data)) available_omics <- c(available_omics, "proteomics")
-                if (!is.null(metab_data)) available_omics <- c(available_omics, "metabolomics")
-
-                if (length(available_omics) < 2) {
-                    message(
-                        "Multi-omics integration requires ≥2 omics layers. ",
-                        "Found: ", paste(available_omics, collapse = ", "), ". ",
-                        "Skipping multi-omics integration."
+                if (input_mode == "outputs") {
+                    # Load from pre-computed shiny payload RDS files
+                    mod_multiomics_harmonization(
+                        config = config,
+                        rna_pre = NULL,
+                        prot_pre = NULL,
+                        metab_pre = NULL,
+                        out_dir = multiomics_out_dir
                     )
-                    return(NULL)
-                }
+                } else {
+                    # Check if at least 2 omics pipelines have run
+                    available_omics <- character(0)
+                    rna_data <- if (exists("rna_pre")) rna_pre else NULL
+                    prot_data <- if (exists("prot_pre")) prot_pre else NULL
+                    metab_data <- if (exists("metab_pre")) metab_pre else NULL
 
-                mod_multiomics_harmonization(
-                    config = config,
-                    rna_pre = rna_data,
-                    prot_pre = prot_data,
-                    metab_pre = metab_data,
-                    out_dir = multiomics_out_dir
-                )
+                    if (!is.null(rna_data)) available_omics <- c(available_omics, "transcriptomics")
+                    if (!is.null(prot_data)) available_omics <- c(available_omics, "proteomics")
+                    if (!is.null(metab_data)) available_omics <- c(available_omics, "metabolomics")
+
+                    if (length(available_omics) < 2) {
+                        message(
+                            "Multi-omics integration requires \u22652 omics layers. ",
+                            "Found: ", paste(available_omics, collapse = ", "), ". ",
+                            "Skipping multi-omics integration."
+                        )
+                        return(NULL)
+                    }
+
+                    mod_multiomics_harmonization(
+                        config = config,
+                        rna_pre = rna_data,
+                        prot_pre = prot_data,
+                        metab_pre = metab_data,
+                        out_dir = multiomics_out_dir
+                    )
+                }
             }
         ),
 

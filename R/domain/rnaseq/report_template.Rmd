@@ -849,7 +849,9 @@ function updatePCAPlot(n_top) {
 }
 </script>
 
-### PC1 vs PC2
+### PC1 vs PC2 {.tabset}
+
+#### Static
 
 ```{r pca-12, fig.cap="PCA — PC1 vs PC2"}
 p <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
@@ -864,7 +866,37 @@ figure_legend("Principal Component Analysis (PCA) of normalized expression data,
 render_commentary("pca_plot")
 ```
 
-### PC1 vs PC3
+#### With Sample Names
+
+```{r pca-12-labeled, fig.cap="PCA — PC1 vs PC2 (labeled)"}
+p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC2_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
+```
+
+#### Interactive
+
+```{r pca-12-interactive, fig.width=8, fig.height=6}
+scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC2_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    color_var <- rna_cfg$effects$color %||% "Condition"
+    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
+    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2, color = as.formula(paste0("~`", color_var, "`")),
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = "PC1"), yaxis = list(title = "PC2"),
+                       title = "PCA: PC1 vs PC2 — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive PCA not available.*\n")
+}
+```
+
+### PC1 vs PC3 {.tabset}
+
+#### Static
 
 ```{r pca-13, fig.cap="PCA — PC1 vs PC3"}
 p <- file.path(diag_dir, "PCA_PC1.vs.PC3.png")
@@ -877,6 +909,34 @@ figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may cap
 
 ```{r commentary-pca-13, results='asis'}
 render_commentary("pca_plot_13")
+```
+
+#### With Sample Names
+
+```{r pca-13-labeled, fig.cap="PCA — PC1 vs PC3 (labeled)"}
+p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC3_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
+```
+
+#### Interactive
+
+```{r pca-13-interactive, fig.width=8, fig.height=6}
+scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC3_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    color_var <- rna_cfg$effects$color %||% "Condition"
+    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
+    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC3, color = as.formula(paste0("~`", color_var, "`")),
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = "PC1"), yaxis = list(title = "PC3"),
+                       title = "PCA: PC1 vs PC3 — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive PCA not available.*\n")
+}
 ```
 
 ### 3D Interactive

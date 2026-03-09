@@ -297,7 +297,7 @@ build_figures_table <- function(mae,
 #' @param stability_results Results from stability analysis
 #' @param out_dir Output directory for commentary
 #' @return A tibble with figure IDs and commentary
-generate_all_commentary <- function(figures_tbl,
+generate_all_commentary_multiomics <- function(figures_tbl,
                                     config,
                                     mae,
                                     foundational_results = NULL,
@@ -360,7 +360,7 @@ generate_all_commentary <- function(figures_tbl,
         message("Generating commentary for: ", figure_id)
 
         # Build context for this figure
-        context <- build_figure_context(fig, config, mae_data, integration_results, concordance_results)
+        context <- build_figure_context_multiomics(fig, config, mae_data, integration_results, concordance_results)
 
         # Generate commentary based on backend
         commentary <- tryCatch(
@@ -371,13 +371,13 @@ generate_all_commentary <- function(figures_tbl,
                     run_openai_commentary(fig, context, config, out_dir)
                 } else {
                     # Data-driven fallback
-                    generate_fallback_commentary(fig, context, mae_data, integration_results, concordance_results, config)
+                    generate_fallback_commentary_multiomics(fig, context, mae_data, integration_results, concordance_results, config)
                 }
             },
             error = function(e) {
                 message("  AI backend failed, using deterministic fallback")
                 # Fall back to deterministic commentary
-                generate_fallback_commentary(fig, context, mae_data, integration_results, concordance_results, config)
+                generate_fallback_commentary_multiomics(fig, context, mae_data, integration_results, concordance_results, config)
             }
         )
 
@@ -445,7 +445,7 @@ generate_all_commentary <- function(figures_tbl,
 #' @param integration_results Integration results
 #' @param concordance_results Concordance results
 #' @return List with context information
-build_figure_context <- function(fig, config, mae_data, integration_results, concordance_results) {
+build_figure_context_multiomics <- function(fig, config, mae_data, integration_results, concordance_results) {
     context <- list(
         plot_type = fig$plot_type,
         title = fig$title,
@@ -654,7 +654,7 @@ run_openai_commentary <- function(fig, context, config, output_dir) {
 
 
 #' Create placeholder commentary on error
-create_placeholder_commentary <- function(figure_id, error_message) {
+create_placeholder_commentary_multiomics <- function(figure_id, error_message) {
     list(
         figure_id = figure_id,
         title = "Commentary Generation Failed",

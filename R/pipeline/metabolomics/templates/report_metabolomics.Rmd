@@ -349,7 +349,9 @@ make_dt(module_status, "Module Status", pageLength = 10)
 
 # QC Diagnostics {.tabset}
 
-## PCA
+## PCA {.tabset}
+
+### Static
 
 ```{r qc-pca, fig.width=9, fig.height=7, results='asis'}
 if (!is.null(qc_res$plots)) {
@@ -367,6 +369,57 @@ if (!is.null(qc_res$plots)) {
     safe_print_plot(qc_res$plots[[pca13_main]])
     figure_legend("PCA projection onto PC1 vs PC3, capturing additional variance beyond the first two components.")
   }
+}
+```
+
+### With Sample Names
+
+```{r qc-pca-labeled, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(qc_res$plots)) {
+  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
+  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
+  if (!is.na(pca_main)) {
+    p <- qc_res$plots[[pca_main]]
+    if ("sample" %in% colnames(p$data)) {
+      p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+      safe_print_plot(p_lab)
+    }
+  }
+  pca13_keys <- grep("^pca_1_3", names(qc_res$plots), value = TRUE)
+  pca13_main <- pca13_keys[!grepl("_noQC$", pca13_keys)][1]
+  if (!is.na(pca13_main)) {
+    p13 <- qc_res$plots[[pca13_main]]
+    if ("sample" %in% colnames(p13$data)) {
+      p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+      safe_print_plot(p13_lab)
+    }
+  }
+}
+```
+
+### Interactive
+
+```{r qc-pca-interactive, fig.width=9, fig.height=7}
+if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
+  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
+  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
+  if (!is.na(pca_main)) {
+    p <- qc_res$plots[[pca_main]]
+    sc <- p$data
+    if ("sample" %in% colnames(sc)) {
+      color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+      sc$hover_text <- paste0("Sample: ", sc$sample, if (!is.na(color_var)) paste0("<br>", color_var, ": ", sc[[color_var]]) else "")
+      pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2,
+                            color = if (!is.na(color_var)) as.formula(paste0("~`", color_var, "`")) else NULL,
+                            text = ~hover_text, hoverinfo = "text",
+                            type = "scatter", mode = "markers",
+                            marker = list(size = 10)) |>
+          plotly::layout(title = "PCA: PC1 vs PC2 — Hover for sample names")
+      print(pl)
+    }
+  }
+} else {
+  cat("*Interactive PCA not available (plotly package missing).*\n")
 }
 ```
 

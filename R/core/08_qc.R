@@ -101,6 +101,15 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
 
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 6, height = 5)
+    # Save labeled version (with sample names)
+    labeled_file <- sub("(\\.[^.]+)$", "_labeled\\1", out_file)
+    p_labeled <- p + ggplot2::geom_text(
+      ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE
+    )
+    ggplot2::ggsave(labeled_file, plot = p_labeled, width = 7, height = 5.5)
+    # Save scores CSV for interactive plotly reconstruction in reports
+    scores_csv <- sub("\\.[^.]+$", "_scores.csv", out_file)
+    utils::write.csv(scores, scores_csv, row.names = FALSE)
   }
 
   # Attach PCA results as attributes (backward compatible - plot is still returned)

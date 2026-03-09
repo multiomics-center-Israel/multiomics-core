@@ -150,6 +150,8 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 .section.mode-prot:hover { border-color: var(--border); border-left-color: var(--prot-color); }
 .section.mode-metab { border-left: 3px solid var(--metab-border); }
 .section.mode-metab:hover { border-color: var(--border); border-left-color: var(--metab-color); }
+.section.mode-lipid { border-left: 3px solid #16a085; }
+.section.mode-lipid:hover { border-color: var(--border); border-left-color: #1abc9c; }
 
 /* Mode badge tag */
 .mode-tag { display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; padding: 2px 10px; border-radius: 4px; margin-left: auto; }
@@ -230,7 +232,15 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <button id="btn_rna" class="active" onclick="setMode('rna')">RNA-seq</button>
     <button id="btn_prot" onclick="setMode('proteomics')">Proteomics</button>
     <button id="btn_metab" onclick="setMode('metabolomics')">Metabolomics</button>
-    <button id="btn_multi" onclick="setMode('multi')">Multi</button>
+    <button id="btn_lipid" onclick="setMode('lipidomics')">Lipidomics</button>
+    <button id="btn_multi" onclick="setMode('multi')">Multiomics</button>
+    <button id="btn_combo" onclick="setMode('combination')">Combination</button>
+  </div>
+  <div id="combo_layers" style="display:none;margin-top:10px;">
+    <label style="margin-right:14px;"><input type="checkbox" id="combo_rna" onchange="updateComboLayers()"> RNA-seq</label>
+    <label style="margin-right:14px;"><input type="checkbox" id="combo_prot" onchange="updateComboLayers()"> Proteomics</label>
+    <label style="margin-right:14px;"><input type="checkbox" id="combo_metab" onchange="updateComboLayers()"> Metabolomics</label>
+    <label><input type="checkbox" id="combo_lipid" onchange="updateComboLayers()"> Lipidomics</label>
   </div>
 </div>
 
@@ -769,6 +779,177 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   </div>
 </div>
 
+<!-- 3. Data Files — Lipidomics -->
+<div class="section mode-section mode-lipid" id="sec_lipid_files">
+  <div class="section-title"><span class="num">03</span> Lipidomics Data Files <span class="mode-tag" style="background:#16a085;">LIPID</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">Enter absolute paths on your system. Optionally upload the file to auto-detect columns.</p>
+
+  <div class="field">
+    <label>Data file <span class="hint">(LipidSearch export, translated CSV, or processed table)</span></label>
+    <div class="file-detect">
+      <input type="text" id="lipid_data_path" placeholder="Upload or type path">
+      <div class="btn btn-primary" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab,.xlsx,.xls" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'lipid_data', 'lipidomics', 'data')">
+      </div>
+    </div>
+    <div class="detected-cols" id="lipid_data_cols"></div>
+    <div class="upload-status" id="lipid_data_status"></div>
+  </div>
+
+  <div class="field">
+    <label>Metadata file <span class="hint">(sample info, CSV/TSV — optional)</span></label>
+    <div class="file-detect">
+      <input type="text" id="lipid_metadata_path" placeholder="Upload or type path (optional)">
+      <div class="btn" style="position:relative;overflow:hidden;">
+        Upload
+        <input type="file" accept=".csv,.tsv,.txt,.tab" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="uploadFile(this, 'lipid_metadata', 'lipidomics', 'metadata')">
+      </div>
+    </div>
+    <div class="detected-cols" id="lipid_metadata_cols"></div>
+    <div class="upload-status" id="lipid_metadata_status"></div>
+  </div>
+</div>
+
+<!-- 4. Column Mapping — Lipidomics -->
+<div class="section mode-section mode-lipid" id="sec_lipid_columns">
+  <div class="section-title"><span class="num">04</span> Column Mapping <span class="mode-tag" style="background:#16a085;">LIPID</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Input format</label>
+      <select id="lipid_input_format">
+        <option value="lipidsearch">LipidSearch export</option>
+        <option value="translated_csv">Translated CSV (with group row)</option>
+        <option value="processed_wide">Already-processed wide table</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Feature name column</label>
+      <input type="text" id="lipid_name_col" value="Metabolite">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Sample ID column <span class="hint">(in metadata)</span></label>
+      <select id="lipid_sample_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+    <div class="field">
+      <label>Group / condition column <span class="hint">(for DE &amp; PCA)</span></label>
+      <select id="lipid_group_col"><option value="">-- upload file to detect --</option></select>
+    </div>
+  </div>
+  <div id="lipid_contrast_picker" style="margin-top:8px;"></div>
+</div>
+
+<!-- 5. Methods — Lipidomics -->
+<div class="section mode-section mode-lipid" id="sec_lipid_methods">
+  <div class="section-title"><span class="num">05</span> Analysis Methods <span class="mode-tag" style="background:#16a085;">LIPID</span></div>
+  <div class="field-row">
+    <div class="field">
+      <label>Sample normalization</label>
+      <select id="lipid_sample_norm">
+        <option value="sum">Sum normalization (recommended)</option>
+        <option value="pqn">PQN</option>
+        <option value="median">Median centering</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Transformation</label>
+      <select id="lipid_transform">
+        <option value="log2">log2 (recommended)</option>
+        <option value="log10">log10</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Scaling</label>
+      <select id="lipid_scaling">
+        <option value="auto">Auto-scaling (recommended)</option>
+        <option value="pareto">Pareto scaling</option>
+        <option value="none">None</option>
+        <option value="range">Range scaling</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>DE method</label>
+      <select id="lipid_de_method">
+        <option value="limma">Limma (recommended)</option>
+        <option value="t_test">Welch t-test</option>
+        <option value="t_test_equal">Student t-test</option>
+        <option value="wilcoxon">Wilcoxon rank-sum</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>Missing values</label>
+      <select id="lipid_na_policy">
+        <option value="min_half">Half-minimum (recommended)</option>
+        <option value="keep">Keep as NA</option>
+        <option value="zero">Replace with zero</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Linear fold-change cutoff</label>
+      <input type="number" id="lipid_fc_cutoff" value="1.5" step="0.1" min="1">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>p-value cutoff</label>
+      <input type="number" id="lipid_p_cutoff" value="0.05" step="0.01" min="0" max="1">
+    </div>
+  </div>
+
+  <div style="margin-top:14px;">
+    <div class="toggle-row"><input type="checkbox" id="lipid_rf" checked><label class="toggle-label" for="lipid_rf">Random Forest feature importance</label></div>
+    <div class="toggle-row"><input type="checkbox" id="lipid_plsda" checked><label class="toggle-label" for="lipid_plsda">PLS-DA multivariate analysis</label></div>
+    <div class="toggle-row"><input type="checkbox" id="lipid_has_group_row" checked><label class="toggle-label" for="lipid_has_group_row">First data row contains group labels</label></div>
+  </div>
+</div>
+
+<!-- 5b. Multiomics Integration Config -->
+<div class="section mode-section mode-multiomics" id="sec_multiomics">
+  <div class="section-title"><span class="num">05</span> Multi-Omics Integration <span class="mode-tag" style="background:#8e44ad;">MULTI</span></div>
+  <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">Configure multi-omics integration (DIABLO, SNF, MOFA2). Requires processed results from at least 2 omics layers.</p>
+
+  <div class="field">
+    <label>Input mode</label>
+    <select id="mo_input_mode" onchange="toggleMoInputMode()">
+      <option value="pipeline">From configs (run individual pipelines first)</option>
+      <option value="outputs">From existing results (payload RDS files)</option>
+    </select>
+  </div>
+
+  <div id="mo_config_paths" style="margin-top:10px;">
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Paths to existing config YAMLs or payload RDS files (leave blank to skip a layer):</p>
+    <div class="field"><label>RNA-seq</label><input type="text" id="mo_rna_path" placeholder="Path to RNA config/payload"></div>
+    <div class="field"><label>Proteomics</label><input type="text" id="mo_prot_path" placeholder="Path to proteomics config/payload"></div>
+    <div class="field"><label>Metabolomics</label><input type="text" id="mo_metab_path" placeholder="Path to metabolomics config/payload"></div>
+    <div class="field"><label>Lipidomics</label><input type="text" id="mo_lipid_path" placeholder="Path to lipidomics config/payload"></div>
+  </div>
+
+  <div class="field" style="margin-top:10px;">
+    <label>Condition column <span class="hint">(in metadata)</span></label>
+    <input type="text" id="mo_condition_col" value="condition">
+  </div>
+
+  <div class="field">
+    <label>Sample mapping CSV <span class="hint">(optional)</span></label>
+    <input type="text" id="mo_sample_mapping" placeholder="Leave blank if not needed">
+  </div>
+
+  <div style="margin-top:14px;">
+    <label style="font-weight:600;font-size:13px;">Integration methods:</label>
+    <div class="toggle-row"><input type="checkbox" id="mo_diablo" checked><label class="toggle-label" for="mo_diablo">DIABLO (supervised, mixOmics)</label></div>
+    <div class="toggle-row"><input type="checkbox" id="mo_snf" checked><label class="toggle-label" for="mo_snf">SNF (unsupervised clustering)</label></div>
+    <div class="toggle-row"><input type="checkbox" id="mo_mofa2"><label class="toggle-label" for="mo_mofa2">MOFA2 (factor analysis)</label></div>
+  </div>
+</div>
+
 <!-- 6. Organism -->
 <div class="section">
   <div class="section-title"><span class="num">06</span> Organism &amp; Annotation</div>
@@ -982,14 +1163,43 @@ var detectedColumns = {};  // { 'rna_counts': ['col1','col2',...], ... }
 // ============================================================
 function setMode(mode) {
   currentMode = mode;
-  document.getElementById('btn_rna').classList.toggle('active', mode === 'rna' || mode === 'multi');
-  document.getElementById('btn_prot').classList.toggle('active', mode === 'proteomics' || mode === 'multi');
-  document.getElementById('btn_metab').classList.toggle('active', mode === 'metabolomics' || mode === 'multi');
-  document.getElementById('btn_multi').classList.toggle('active', mode === 'multi');
 
-  var showRna = mode === 'rna' || mode === 'multi';
-  var showProt = mode === 'proteomics' || mode === 'multi';
-  var showMetab = mode === 'metabolomics' || mode === 'multi';
+  // Highlight active buttons
+  document.getElementById('btn_rna').classList.toggle('active', mode === 'rna');
+  document.getElementById('btn_prot').classList.toggle('active', mode === 'proteomics');
+  document.getElementById('btn_metab').classList.toggle('active', mode === 'metabolomics');
+  document.getElementById('btn_lipid').classList.toggle('active', mode === 'lipidomics');
+  document.getElementById('btn_multi').classList.toggle('active', mode === 'multi');
+  document.getElementById('btn_combo').classList.toggle('active', mode === 'combination');
+
+  // Show/hide combination layer checkboxes
+  document.getElementById('combo_layers').style.display = mode === 'combination' ? '' : 'none';
+
+  // Show/hide multiomics integration section
+  document.querySelectorAll('.mode-multiomics').forEach(function(el) {
+    el.classList.toggle('active', mode === 'multi');
+  });
+
+  if (mode === 'combination') {
+    updateComboLayers();
+    return;
+  }
+
+  // For multiomics mode, hide individual layer sections
+  if (mode === 'multi') {
+    document.querySelectorAll('.mode-rna, .mode-prot, .mode-metab, .mode-lipid').forEach(function(el) {
+      el.classList.remove('active');
+    });
+    toggleImpParams();
+    toggleNonModel();
+    toggleMetabEnrichment();
+    return;
+  }
+
+  var showRna = mode === 'rna';
+  var showProt = mode === 'proteomics';
+  var showMetab = mode === 'metabolomics';
+  var showLipid = mode === 'lipidomics';
 
   document.querySelectorAll('.mode-rna').forEach(function(el) {
     el.classList.toggle('active', showRna);
@@ -1000,12 +1210,52 @@ function setMode(mode) {
   document.querySelectorAll('.mode-metab').forEach(function(el) {
     el.classList.toggle('active', showMetab);
   });
+  document.querySelectorAll('.mode-lipid').forEach(function(el) {
+    el.classList.toggle('active', showLipid);
+  });
 
   // Update organism options
   document.querySelectorAll('.rna-only-opt').forEach(function(opt) {
-    opt.style.display = showRna && !showProt && !showMetab ? '' : 'none';
+    opt.style.display = showRna && !showProt && !showMetab && !showLipid ? '' : 'none';
   });
-  if (showProt || showMetab) {
+  if (showProt || showMetab || showLipid) {
+    var org = document.getElementById('organism');
+    if (org.value === 'auto') org.value = 'Homo sapiens';
+  }
+  toggleImpParams();
+  toggleNonModel();
+  toggleMetabEnrichment();
+}
+
+function updateComboLayers() {
+  var showRna = document.getElementById('combo_rna').checked;
+  var showProt = document.getElementById('combo_prot').checked;
+  var showMetab = document.getElementById('combo_metab').checked;
+  var showLipid = document.getElementById('combo_lipid').checked;
+
+  // Update button highlights for combo
+  document.getElementById('btn_rna').classList.toggle('active', showRna);
+  document.getElementById('btn_prot').classList.toggle('active', showProt);
+  document.getElementById('btn_metab').classList.toggle('active', showMetab);
+  document.getElementById('btn_lipid').classList.toggle('active', showLipid);
+
+  document.querySelectorAll('.mode-rna').forEach(function(el) {
+    el.classList.toggle('active', showRna);
+  });
+  document.querySelectorAll('.mode-prot').forEach(function(el) {
+    el.classList.toggle('active', showProt);
+  });
+  document.querySelectorAll('.mode-metab').forEach(function(el) {
+    el.classList.toggle('active', showMetab);
+  });
+  document.querySelectorAll('.mode-lipid').forEach(function(el) {
+    el.classList.toggle('active', showLipid);
+  });
+
+  document.querySelectorAll('.rna-only-opt').forEach(function(opt) {
+    opt.style.display = showRna && !showProt && !showMetab && !showLipid ? '' : 'none';
+  });
+  if (showProt || showMetab || showLipid) {
     var org = document.getElementById('organism');
     if (org.value === 'auto') org.value = 'Homo sapiens';
   }
@@ -1211,6 +1461,19 @@ function toggleMetabEnrichment() {
 function toggleMetabIdCols() {
   // Feature ID column is mainly useful for processed_wide format
   // For cd_raw, the pipeline constructs IDs from Name/mz/RT automatically
+}
+
+function toggleMoInputMode() {
+  var mode = document.getElementById('mo_input_mode').value;
+  var labels = document.querySelectorAll('#mo_config_paths label');
+  var inputs = document.querySelectorAll('#mo_config_paths input');
+  if (mode === 'outputs') {
+    labels.forEach(function(l) { l.textContent = l.textContent.replace('config/payload', 'payload RDS'); });
+    inputs.forEach(function(i) { i.placeholder = i.placeholder.replace('config/payload', 'payload RDS'); });
+  } else {
+    labels.forEach(function(l) { l.textContent = l.textContent.replace('payload RDS', 'config/payload'); });
+    inputs.forEach(function(i) { i.placeholder = i.placeholder.replace('payload RDS', 'config/payload'); });
+  }
 }
 
 function addPcaSubset() {
@@ -2024,6 +2287,200 @@ function generateMetaboYaml() {
 }
 
 // ============================================================
+// YAML Generation — Lipidomics
+// ============================================================
+function generateLipidYaml() {
+  var name = getProjectName();
+  var nameLower = name.toLowerCase();
+
+  var commentaryBackend = v('commentary_backend');
+  var commentaryEnabled = commentaryBackend !== 'none';
+  var groupCol = v('lipid_group_col') || 'condition';
+  var sampleCol = v('lipid_sample_col') || 'sample_id';
+  var inputFormat = v('lipid_input_format') || 'lipidsearch';
+  var nameCol = v('lipid_name_col') || 'Metabolite';
+
+  var dataPath = v('lipid_data_path');
+  var metaPath = v('lipid_metadata_path');
+
+  var dataDest = dataPath ? 'lipidomics/' + dataPath.split(/[/\\]/).pop() : '';
+  var metaDest = metaPath ? 'lipidomics/' + metaPath.split(/[/\\]/).pop() : '';
+
+  var hasGroupRow = checked('lipid_has_group_row');
+
+  // Build contrasts
+  var contrastsYaml = '';
+  var builtContrasts = getBuiltContrasts('lipid');
+  if (builtContrasts.length > 0) {
+    contrastsYaml = '      contrasts:\n';
+    builtContrasts.forEach(function(c) {
+      contrastsYaml += '        - "' + c.num + ' - ' + c.den + '"\n';
+    });
+  } else {
+    contrastsYaml = '      contrasts:\n        - "treated - control"\n';
+  }
+
+  var yaml = '# Auto-generated by multiomics-core wizard\n';
+  yaml += '# Project: ' + name + '\n';
+  yaml += '# Date: ' + new Date().toISOString().slice(0, 10) + '\n\n';
+
+  yaml += 'project:\n';
+  yaml += '  dir: "."\n';
+  yaml += '  name: ' + yamlStr(name) + '\n';
+  yaml += '  analysis_round: ' + yamlStr(v('round')) + '\n';
+  yaml += '  analyst: ' + yamlStr(v('analyst')) + '\n';
+
+  yaml += '\npaths:\n';
+  yaml += '  raw: "data/' + nameLower + '"\n';
+  yaml += '  out: "outputs/' + nameLower + '"\n';
+
+  yaml += '\nmodes:\n  lipidomics:\n';
+
+  yaml += '\n    input:\n';
+  yaml += '      format: ' + yamlStr(inputFormat) + '\n';
+  yaml += '      sheet: null\n';
+  yaml += '      has_group_row: ' + yamlBool(hasGroupRow) + '\n';
+
+  yaml += '\n    files:\n';
+  yaml += '      data: ' + yamlStr(dataDest) + '\n';
+  yaml += '      metadata: ' + yamlStr(metaDest) + '\n';
+
+  yaml += '\n    id_columns:\n';
+  yaml += '      name_col: ' + yamlStr(nameCol) + '\n';
+
+  var sampleNorm = v('lipid_sample_norm') || 'sum';
+  var transform = v('lipid_transform') || 'log2';
+  var scaling = v('lipid_scaling') || 'auto';
+  var naPolicy = v('lipid_na_policy') || 'min_half';
+
+  yaml += '\n    normalization:\n';
+  yaml += '      sample_norm: ' + yamlStr(sampleNorm) + '\n';
+  yaml += '      transform: ' + yamlStr(transform) + '\n';
+  yaml += '      scaling: ' + yamlStr(scaling) + '\n';
+  yaml += '      pseudocount: 1\n';
+  yaml += '      na_policy: ' + yamlStr(naPolicy) + '\n';
+
+  yaml += '\n    sample_filter:\n';
+  yaml += '      enabled: false\n';
+
+  yaml += '\n    effects:\n';
+  yaml += '      samples: ' + yamlStr(sampleCol) + '\n';
+  yaml += '      color: ' + yamlStr(groupCol) + '\n';
+
+  yaml += '\n    qc:\n';
+  yaml += '      adaptive_plots: true\n';
+  yaml += '      thresholds:\n        min_samples_for_pca3d: 10\n        max_samples_for_heatmaps: 120\n';
+
+  yaml += '\n    de:\n';
+  yaml += '      method: ' + yamlStr(v('lipid_de_method') || 'limma') + '\n';
+  yaml += '      condition_column: ' + yamlStr(groupCol) + '\n';
+  yaml += contrastsYaml;
+  yaml += '      p_cutoff: ' + (v('lipid_p_cutoff') || '0.05') + '\n';
+  yaml += '      linear_fc_cutoff: ' + (v('lipid_fc_cutoff') || '1.5') + '\n';
+
+  yaml += '\n    rf:\n';
+  yaml += '      run_rf: ' + yamlBool(checked('lipid_rf')) + '\n';
+  yaml += '      n_trees: 500\n      importance: "permutation"\n      top_n: 20\n      seed: 1234\n';
+
+  yaml += '\n    plsda:\n';
+  yaml += '      run_plsda: ' + yamlBool(checked('lipid_plsda')) + '\n';
+  yaml += '      vip_top_n: 15\n';
+
+  yaml += '\n    commentary:\n';
+  yaml += '      enabled: ' + yamlBool(commentaryEnabled) + '\n';
+  yaml += '      backend: ' + yamlStr(commentaryBackend) + '\n';
+  yaml += '      claude_code_model: "sonnet"\n      max_tokens: 1500\n      max_retries: 2\n';
+
+  yaml += '\n    outputs:\n';
+  yaml += '      generate_pptx: ' + yamlBool(checked('generate_pptx')) + '\n';
+
+  yaml += '\nparams:\n  seed: 1\n';
+  return yaml;
+}
+
+// ============================================================
+// YAML Generation — Multiomics Integration
+// ============================================================
+function generateMultiomicsYaml() {
+  var yaml = '# Auto-generated by multiomics-core wizard (multi-omics integration)\n';
+  yaml += '# Generated: ' + new Date().toISOString().slice(0,10) + '\n\n';
+
+  yaml += 'project:\n';
+  yaml += '  dir: ' + yamlStr(v('project_dir') || '.') + '\n';
+  yaml += '  name: ' + yamlStr(v('project_name') || 'MultiOmics') + '\n';
+  yaml += '  analysis_round: ' + yamlStr(v('round') || 'A01') + '\n';
+  yaml += '  analyst: ' + yamlStr(v('analyst') || 'Bioinformatics Core') + '\n';
+
+  yaml += '\npaths:\n  raw: "data"\n  out: "outputs"\n';
+
+  var condCol = v('mo_condition_col') || 'condition';
+  yaml += '\ndesign:\n  condition_column: ' + yamlStr(condCol) + '\n';
+
+  var inputMode = v('mo_input_mode') || 'pipeline';
+  yaml += '\nmodes:\n';
+  yaml += '  multiomics:\n';
+  yaml += '    input_mode: ' + yamlStr(inputMode) + '\n';
+  yaml += '    condition_column: ' + yamlStr(condCol) + '\n';
+
+  var sampleMapping = v('mo_sample_mapping');
+  if (sampleMapping) {
+    yaml += '    sample_mapping: ' + yamlStr(sampleMapping) + '\n';
+  }
+
+  if (inputMode === 'outputs') {
+    yaml += '\n    payload_paths:\n';
+    var rnaPath = v('mo_rna_path');
+    var protPath = v('mo_prot_path');
+    var metabPath = v('mo_metab_path');
+    var lipidPath = v('mo_lipid_path');
+    if (rnaPath)   yaml += '      rna: ' + yamlStr(rnaPath) + '\n';
+    if (protPath)  yaml += '      proteomics: ' + yamlStr(protPath) + '\n';
+    if (metabPath) yaml += '      metabolomics: ' + yamlStr(metabPath) + '\n';
+    if (lipidPath) yaml += '      lipidomics: ' + yamlStr(lipidPath) + '\n';
+  } else {
+    yaml += '\n    config_paths:\n';
+    var rnaPath = v('mo_rna_path');
+    var protPath = v('mo_prot_path');
+    var metabPath = v('mo_metab_path');
+    var lipidPath = v('mo_lipid_path');
+    if (rnaPath)   yaml += '      rna: ' + yamlStr(rnaPath) + '\n';
+    if (protPath)  yaml += '      proteomics: ' + yamlStr(protPath) + '\n';
+    if (metabPath) yaml += '      metabolomics: ' + yamlStr(metabPath) + '\n';
+    if (lipidPath) yaml += '      lipidomics: ' + yamlStr(lipidPath) + '\n';
+  }
+
+  yaml += '\n    feature_selection:\n';
+  yaml += '      method: "variance"\n';
+  yaml += '      top_n: 500\n';
+
+  // Integration methods
+  var methods = [];
+  if (checked('mo_diablo')) methods.push('"DIABLO"');
+  if (checked('mo_snf'))    methods.push('"SNF"');
+  if (checked('mo_mofa2'))  methods.push('"MOFA2"');
+  if (methods.length === 0) methods = ['"DIABLO"', '"SNF"'];
+
+  yaml += '\n    integration:\n';
+  yaml += '      methods: [' + methods.join(', ') + ']\n';
+
+  if (checked('mo_diablo')) {
+    yaml += '      diablo:\n        ncomp: 2\n        design_matrix: "full"\n        cv_folds: 5\n';
+  }
+  if (checked('mo_snf')) {
+    yaml += '      snf:\n        K: 20\n        alpha: 0.5\n        T: 20\n        n_clusters: 2\n';
+  }
+  if (checked('mo_mofa2')) {
+    yaml += '      mofa2:\n        num_factors: 10\n        convergence_mode: "medium"\n        seed: 42\n';
+  }
+
+  yaml += '\n    enrichment:\n      run_enrichment: true\n      multigsea:\n        run_multigsea: true\n';
+  yaml += '\n    consensus:\n      compare_methods: true\n';
+
+  yaml += '\nparams:\n  seed: 1\n';
+  return yaml;
+}
+
+// ============================================================
 // YAML Generation — Both (merged)
 // ============================================================
 function generateBothYaml() {
@@ -2058,22 +2515,36 @@ function generateMultiYaml(yamlList, label) {
 // ============================================================
 // Generate & Preview
 // ============================================================
+function getComboYamls() {
+  var yamls = [];
+  var labels = [];
+  if (document.getElementById('combo_rna').checked) { yamls.push(generateRNAYaml()); labels.push('RNA-seq'); }
+  if (document.getElementById('combo_prot').checked) { yamls.push(generateProtYaml()); labels.push('Proteomics'); }
+  if (document.getElementById('combo_metab').checked) { yamls.push(generateMetaboYaml()); labels.push('Metabolomics'); }
+  if (document.getElementById('combo_lipid').checked) { yamls.push(generateLipidYaml()); labels.push('Lipidomics'); }
+  return { yamls: yamls, label: labels.join(' + ') };
+}
+
 function getCurrentYaml() {
   if (currentMode === 'multi') {
-    return generateMultiYaml(
-      [generateRNAYaml(), generateProtYaml(), generateMetaboYaml()],
-      'RNA-seq + Proteomics + Metabolomics'
-    );
+    return generateMultiomicsYaml();
+  }
+  if (currentMode === 'combination') {
+    var combo = getComboYamls();
+    if (combo.yamls.length === 0) return '# No layers selected\n';
+    if (combo.yamls.length === 1) return combo.yamls[0];
+    return generateMultiYaml(combo.yamls, combo.label);
   }
   if (currentMode === 'rna') return generateRNAYaml();
   if (currentMode === 'proteomics') return generateProtYaml();
   if (currentMode === 'metabolomics') return generateMetaboYaml();
+  if (currentMode === 'lipidomics') return generateLipidYaml();
   return generateRNAYaml(); // fallback
 }
 
 function getConfigFilename() {
   var name = getProjectName().toLowerCase().replace(/[^a-z0-9_]/g, '_');
-  var prefixes = { 'rna': 'rna_', 'proteomics': 'prot_', 'metabolomics': 'metab_', 'multi': 'multi_' };
+  var prefixes = { 'rna': 'rna_', 'proteomics': 'prot_', 'metabolomics': 'metab_', 'lipidomics': 'lipid_', 'multi': 'multi_', 'combination': 'combo_' };
   var prefix = prefixes[currentMode] || 'rna_';
   return prefix + name + '.yaml';
 }
@@ -2108,9 +2579,17 @@ function getAutoContrastsCSV() {
   } else if (currentMode === 'metabolomics') {
     // Metabolomics contrasts are embedded in YAML, no separate CSV needed
     return '';
+  } else if (currentMode === 'multi') {
+    // multiomics integration mode — no contrasts needed
+    return '';
+  } else if (currentMode === 'combination') {
+    // combo mode — return RNA contrasts if RNA is active
+    if (document.getElementById('combo_rna').checked) {
+      return v('rna_contrasts_path') ? '' : generateContrastsCSV('rna');
+    }
+    return '';
   } else {
-    // multi mode — return RNA contrasts (prot handled separately in save/download)
-    return v('rna_contrasts_path') ? '' : generateContrastsCSV('rna');
+    return '';
   }
 }
 
