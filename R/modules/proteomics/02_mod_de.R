@@ -13,6 +13,16 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
 
     cfg <- config$modes$proteomics
 
+    # Check for pre-computed DE tables (skip limma if provided)
+    de_table_files <- cfg$files$de_table
+    has_precomputed <- !is.null(de_table_files) && length(de_table_files) > 0 &&
+                       all(nzchar(unlist(de_table_files)))
+
+    if (has_precomputed) {
+        message("Proteomics DE: loading pre-computed DE tables (skipping limma)")
+        return(load_precomputed_proteomics_de(config, contrasts_df = inputs$contrasts))
+    }
+
     # ---- choose DE method ----
     method <- cfg$de$method %||% "limma"
 

@@ -85,19 +85,12 @@ list(
     format = "file"
   ),
 
-  # Load configuration
+  # Load and validate configuration. validate_config() applies defaults (e.g.
+  # multiomics integration methods) and returns the updated config, so all
+  # downstream targets that depend on `config` receive the defaulted values.
   tar_target(
     config,
-    load_config(config_file)
-  ),
-
-  # Validate configuration early; downstream targets should depend on this
-  tar_target(
-    cfg_validated,
-    {
-      validate_config(config)
-      TRUE
-    }
+    validate_config(load_config(config_file))
   ),
 
   # Resolve run output directory
@@ -123,9 +116,22 @@ list(
   {
     cfg_raw      <- yaml::read_yaml(config_path)
     mode_targets <- list()
-    if (!is.null(cfg_raw$modes$rna))          mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics))   mode_targets <- c(mode_targets, pipe_proteomics())
+
+    # Single-omics pipelines
+    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
+    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
     if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics())
+
+    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
+    # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
+    n_omics <- sum(!is.null(cfg_raw$modes$rna),
+                   !is.null(cfg_raw$modes$proteomics),
+                   !is.null(cfg_raw$modes$metabolomics))
+
+    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
+      mode_targets <- c(mode_targets, pipe_multiomics(cfg_raw))
+    }
+
     mode_targets
   }
 )

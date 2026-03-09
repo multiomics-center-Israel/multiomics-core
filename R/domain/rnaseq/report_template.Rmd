@@ -386,12 +386,12 @@ settings <- data.frame(
     "Clustering Enabled"
   ),
   Value = c(
-    rna_cfg$normalization$method,
+    rna_cfg$normalization$method %||% "N/A",
     prior_count,
-    rna_cfg$filtering$group_col,
-    paste0(rna_cfg$filtering$auto_filter$min, " – ", rna_cfg$filtering$auto_filter$max, " CPM (pipeline selects optimal within this range)"),
-    rna_cfg$de$method, rna_cfg$de$deseq_mode,
-    rna_cfg$de$p_cutoff, rna_cfg$de$linear_fc_cutoff,
+    rna_cfg$filtering$group_col %||% "N/A",
+    paste0(rna_cfg$filtering$auto_filter$min %||% "?", " – ", rna_cfg$filtering$auto_filter$max %||% "?", " CPM (pipeline selects optimal within this range)"),
+    rna_cfg$de$method %||% "N/A", rna_cfg$de$deseq_mode %||% "N/A",
+    rna_cfg$de$p_cutoff %||% "N/A", rna_cfg$de$linear_fc_cutoff %||% "N/A",
     ifelse(isTRUE(rna_cfg$clustering$enabled), "Yes", "No")
   ),
   stringsAsFactors = FALSE
@@ -459,10 +459,10 @@ raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$
 filt_counts_file_exec <- file.path(datasets_dir, "rna_counts_filtered.tsv")
 n_genes_raw <- NA
 n_genes_filt <- NA
-if (file.exists(raw_counts_file_exec)) {
+if (nzchar(rna_cfg$files$counts) && file.exists(raw_counts_file_exec) && !dir.exists(raw_counts_file_exec)) {
     n_genes_raw <- nrow(read.csv(raw_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
 }
-if (file.exists(filt_counts_file_exec)) {
+if (file.exists(filt_counts_file_exec) && !dir.exists(filt_counts_file_exec)) {
     n_genes_filt <- nrow(read.delim(filt_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
 }
 
@@ -575,11 +575,11 @@ n_genes_filt <- NA
 raw_counts <- NULL
 filt_counts <- NULL
 
-if (file.exists(raw_counts_file)) {
+if (nzchar(rna_cfg$files$counts) && file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
     raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
     n_genes_raw <- nrow(raw_counts)
 }
-if (file.exists(filt_counts_file)) {
+if (file.exists(filt_counts_file) && !dir.exists(filt_counts_file)) {
     filt_counts <- read.delim(filt_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
     n_genes_filt <- nrow(filt_counts)
 }

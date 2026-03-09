@@ -9,6 +9,112 @@
 # Reuses: assert_numeric_matrix, assert_one_of, %||%
 
 
+# ---- pre-computed DE loader --------------------------------------------------
+
+#' Load pre-computed metabolomics DE tables from config$files$de_table
+#'
+#' Reads CSV files with columns: FC, log2(FC), raw.pval, -log10(p).
+#' Builds a summary_df conforming to the DE contract.
+#'
+#' @param config Full pipeline config.
+#' @return list conforming to the DE contract: summary_df, method, de_tables
+load_precomputed_metabolomics_de <- function(config) {
+    cfg <- config$modes$metabolomics
+    de_cfg <- cfg$de %||% list()
+
+    de_files <- cfg$files$de_table
+    if (is.list(de_files)) de_files <- unlist(de_files)
+
+    padj_cutoff <- de_cfg$p_cutoff %||% 0.05
+    linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
+    log2fc_cut  <- log2(linear_fc)
+
+    # Derive contrast labels from file names
+    contrast_labels <- vapply(de_files, function(f) {
+        bn <- tools::file_path_sans_ext(basename(f))
+        sub("^de_", "", bn)
+    }, character(1), USE.NAMES = FALSE)
+
+    de_tables <- list()
+    for (i in seq_along(de_files)) {
+        abs_path <- resolve_raw_path(config, de_files[i])
+        if (!file.exists(abs_path)) {
+            stop("Pre-computed DE table not found: ", abs_path)
+        }
+
+        raw <- read_table_auto(abs_path)
+
+        # Map columns to standard names
+        cn <- colnames(raw)
+
+        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
+        id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
+        feat_ids <- if (!is.na(id_col_idx)) {
+            as.character(raw[[id_col_idx]])
+        } else {
+            rownames(raw)
+        }
+
+        # logFC: try common column name variants
+        logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
+        logfc_vals <- if (!is.na(logfc_col)) as.numeric(raw[[logfc_col]]) else NA_real_
+
+        # P-value: try common column name variants
+        pval_col <- cn[cn %in% c("raw.pval", "P.Value", "pvalue", "PValue", "p.value")][1]
+        pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
+
+        tbl <- data.frame(
+            feature_id = feat_ids,
+            logFC      = logfc_vals,
+            P.Value    = pval_vals,
+            stringsAsFactors = FALSE
+        )
+        tbl$AveExpr <- NA_real_
+        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
+
+        de_tables[[contrast_labels[i]]] <- tbl
+        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
+                " (label: ", contrast_labels[i], ")")
+    }
+
+    # Build summary_df with full outer join (tables may have different features)
+    all_features <- unique(unlist(lapply(de_tables, function(t) t$feature_id)))
+    summary_df <- data.frame(feature_id = all_features, stringsAsFactors = FALSE)
+
+    for (ctr in names(de_tables)) {
+        tbl <- de_tables[[ctr]]
+        idx <- match(summary_df$feature_id, tbl$feature_id)
+
+        summary_df[[paste0("logFC_", ctr)]]     <- tbl$logFC[idx]
+        summary_df[[paste0("AveExpr_", ctr)]]   <- tbl$AveExpr[idx]
+        summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value[idx]
+        summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val[idx]
+
+        pass <- as.integer(
+            !is.na(tbl$adj.P.Val[idx]) &
+            tbl$adj.P.Val[idx] < padj_cutoff &
+            abs(tbl$logFC[idx]) >= log2fc_cut
+        )
+        summary_df[[paste0("pass_", ctr)]] <- pass
+    }
+
+    pass_cols <- grep("^pass_", colnames(summary_df), value = TRUE)
+    summary_df$pass_any_contrast <- as.integer(
+        rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE) > 0
+    )
+
+    message("metabolomics precomputed DE: ", nrow(summary_df), " features, ",
+            sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
+
+    list(
+        summary_df = summary_df,
+        method     = "precomputed",
+        de_tables  = de_tables,
+        de_model   = NULL
+    )
+}
+
+
 # ---- public entry point -----------------------------------------------------
 
 #' Run metabolomics differential analysis
@@ -109,10 +215,21 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     }
 
     design <- stats::model.matrix(~ 0 + condition)
-    colnames(design) <- levels(condition)
+    raw_levels <- levels(condition)
+    safe_levels <- make.names(raw_levels)
+    colnames(design) <- safe_levels
+
+    # Translate contrast string to use syntactically valid level names
+    # Replace longest names first to avoid partial matches
+    safe_contrast <- contrast_str
+    ord <- order(nchar(raw_levels), decreasing = TRUE)
+    for (i in ord) {
+        safe_contrast <- gsub(raw_levels[i], safe_levels[i], safe_contrast,
+                              fixed = TRUE)
+    }
 
     fit <- limma::lmFit(mat_imp, design)
-    contrast_matrix <- limma::makeContrasts(contrasts = contrast_str,
+    contrast_matrix <- limma::makeContrasts(contrasts = safe_contrast,
                                              levels = design)
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
     fit2 <- limma::eBayes(fit2)

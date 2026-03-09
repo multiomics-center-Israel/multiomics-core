@@ -474,8 +474,8 @@ subset_tximport_genes <- function(txi, genes) {
 #' @return expr with source_type attribute set
 #' @export
 annotate_source_type <- function(expr, source_type) {
-    if (!source_type %in% c("matrix", "tximport")) {
-        stop("source_type must be 'matrix' or 'tximport'", call. = FALSE)
+    if (!source_type %in% c("matrix", "tximport", "preprocessed")) {
+        stop("source_type must be 'matrix', 'tximport', or 'preprocessed'", call. = FALSE)
     }
     attr(expr, "source_type") <- source_type
     expr
