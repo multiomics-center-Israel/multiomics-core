@@ -176,5 +176,5 @@ validate_multiomics_config <- function(multiomics_cfg) {
     }
 
     message("Multi-omics config validation passed")
-    invisible(TRUE)
+    invisible(multiomics_cfg)
 }
