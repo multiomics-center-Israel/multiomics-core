@@ -107,7 +107,7 @@ pipe_proteomics <- function() {
                 clustering_res = prot_clustering_obj,
                 out_dir        = prot_out_dir
             )
-        )
+        ),
 
 # ---- Pathway enrichment ----
         tar_target(

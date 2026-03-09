@@ -98,7 +98,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       colnames(txi$length)    <- colnames(counts)
       abundance <- txi$abundance
     }
-    
+  }
   # =========================================================================
   # Sample alignment (strict by default)
   # =========================================================================
