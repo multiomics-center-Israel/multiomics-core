@@ -95,7 +95,7 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-        # Sample plot (scores on first 2 components)
+        # Sample plot (scores on first 2 components) — without labels
         plots$sample_plot <- file.path(out_dir, "diablo_sample_plot.png")
         png(plots$sample_plot, width = 800, height = 600, res = 120)
         tryCatch({
@@ -108,12 +108,41 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         })
         dev.off()
 
+        # Sample plot — with sample name labels
+        plots$sample_plot_labeled <- file.path(out_dir, "diablo_sample_plot_labeled.png")
+        png(plots$sample_plot_labeled, width = 900, height = 650, res = 120)
+        tryCatch({
+            mixOmics::plotIndiv(diablo_model, comp = c(1, 2), group = Y,
+                                ind.names = TRUE, legend = TRUE,
+                                title = "DIABLO Sample Scores (labeled)")
+        }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
+        })
+        dev.off()
+
+        # Save sample scores CSV for interactive plotly in report
+        tryCatch({
+            # Use first block's variates as sample coordinates
+            first_block <- setdiff(names(diablo_model$variates), "Y")[1]
+            sample_scores_df <- as.data.frame(diablo_model$variates[[first_block]])
+            colnames(sample_scores_df) <- paste0("comp", seq_len(ncol(sample_scores_df)))
+            sample_scores_df$sample <- rownames(sample_scores_df)
+            sample_scores_df$condition <- as.character(Y)
+            write.csv(sample_scores_df,
+                      file.path(out_dir, "diablo_sample_scores.csv"),
+                      row.names = FALSE)
+        }, error = function(e) {
+            warning("Failed to save DIABLO sample scores CSV: ", e$message)
+        })
+
         # Variable plot (loadings)
         plots$variable_plot <- file.path(out_dir, "diablo_variable_plot.png")
         png(plots$variable_plot, width = 1000, height = 800, res = 120)
         tryCatch({
             mixOmics::plotVar(diablo_model, comp = c(1, 2), style = "graphics",
-                              legend = TRUE, title = "DIABLO Variable Loadings")
+                              legend = TRUE, var.names = FALSE,
+                              title = "DIABLO Variable Loadings")
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
@@ -124,12 +153,80 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         plots$circos_plot <- file.path(out_dir, "diablo_circos_plot.png")
         png(plots$circos_plot, width = 1000, height = 1000, res = 120)
         tryCatch({
-            mixOmics::circosPlot(diablo_model, cutoff = 0.5, size.variables = 0.5)
+            # var.names must be NULL or a list of character vectors (not FALSE)
+            block_names <- setdiff(names(diablo_model$X), "Y")
+            empty_names <- lapply(block_names, function(b) {
+                rep("", ncol(diablo_model$X[[b]]))
+            })
+            mixOmics::circosPlot(diablo_model, cutoff = 0.5,
+                                 var.names = empty_names)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
         })
         dev.off()
+
+        # Variable loadings data for interactive plot
+        var_rows <- list()
+        for (vn in setdiff(names(diablo_model$loadings), "Y")) {
+            mat <- diablo_model$loadings[[vn]]
+            var_rows[[vn]] <- data.frame(
+                feature = rownames(mat),
+                comp1 = mat[, 1],
+                comp2 = if (ncol(mat) >= 2) mat[, 2] else 0,
+                omics = vn, stringsAsFactors = FALSE
+            )
+        }
+        write.csv(do.call(rbind, var_rows),
+                  file.path(out_dir, "diablo_variable_loadings.csv"),
+                  row.names = FALSE)
+
+        # Circos correlation data for interactive plot
+        tryCatch({
+            view_names <- setdiff(names(diablo_model$variates), "Y")
+            if (length(view_names) >= 2) {
+                load_list <- diablo_model$loadings[view_names]
+                # Take top 20 features per view and build all cross-omics pairs
+                edge_rows <- list()
+                top_n_circos <- 20
+                for (i in seq_along(view_names)) {
+                    for (j in seq_along(view_names)) {
+                        if (j <= i) next
+                        vi <- view_names[i]
+                        vj <- view_names[j]
+                        li <- load_list[[vi]]
+                        lj <- load_list[[vj]]
+                        top_i <- names(sort(abs(li[, 1]), decreasing = TRUE))[
+                            seq_len(min(top_n_circos, nrow(li)))]
+                        top_j <- names(sort(abs(lj[, 1]), decreasing = TRUE))[
+                            seq_len(min(top_n_circos, nrow(lj)))]
+                        for (fi in top_i) {
+                            for (fj in top_j) {
+                                w <- abs(li[fi, 1]) * abs(lj[fj, 1])
+                                edge_rows[[length(edge_rows) + 1]] <- data.frame(
+                                    from = fi, to = fj,
+                                    from_omics = vi, to_omics = vj,
+                                    weight = round(w, 6),
+                                    stringsAsFactors = FALSE
+                                )
+                            }
+                        }
+                    }
+                }
+                if (length(edge_rows) > 0) {
+                    all_edges <- do.call(rbind, edge_rows)
+                    # Keep top 200 edges by weight
+                    all_edges <- all_edges[order(all_edges$weight,
+                                                decreasing = TRUE), ]
+                    all_edges <- head(all_edges, 200)
+                    write.csv(all_edges,
+                              file.path(out_dir, "diablo_circos_correlations.csv"),
+                              row.names = FALSE)
+                }
+            }
+        }, error = function(e) {
+            warning("Circos correlation CSV export failed: ", e$message)
+        })
 
         message("  DIABLO plots saved to: ", out_dir)
     }

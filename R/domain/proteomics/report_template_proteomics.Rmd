@@ -470,7 +470,7 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            log2fc <- signed_fc_to_log2(lfc_vals)
             is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
@@ -603,7 +603,8 @@ if (isTRUE(show_pca) && !has_replicates) {
 ```{r pca-heading, eval=show_pca_section, results='asis'}
 cat("## PCA {.tabset}\n\n")
 cat("Principal Component Analysis (PCA) reduces high-dimensional expression data to a low-dimensional representation that captures the largest sources of variation. Samples that cluster together share similar expression profiles; separation along PC1 indicates the dominant source of biological or technical variation.\n\n")
-cat("### PC1 vs PC2\n")
+cat("### PC1 vs PC2 {.tabset}\n")
+cat("#### Static\n")
 ```
 
 ```{r pca-12, eval=show_pca_section, fig.cap="PCA -- PC1 vs PC2"}
@@ -617,6 +618,39 @@ figure_legend("Principal Component Analysis (PCA) of imputed protein expression 
 
 ```{r commentary-pca, eval=show_pca_section, results='asis'}
 render_commentary("pca_plot")
+```
+
+```{r pca-12-labeled-heading, eval=show_pca_section, results='asis'}
+cat("#### With Sample Names\n")
+```
+
+```{r pca-12-labeled, eval=show_pca_section, fig.cap="PCA -- PC1 vs PC2 (labeled)"}
+p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC2_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
+```
+
+```{r pca-12-interactive-heading, eval=show_pca_section, results='asis'}
+cat("#### Interactive\n")
+```
+
+```{r pca-12-interactive, eval=show_pca_section, fig.width=8, fig.height=6}
+scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC2_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    color_var <- prot_cfg$effects$color %||% "Condition"
+    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
+    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2, color = as.formula(paste0("~`", color_var, "`")),
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = colnames(sc)[1]),
+                       yaxis = list(title = colnames(sc)[2]),
+                       title = "PCA: PC1 vs PC2 — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive PCA not available (scores CSV or plotly package missing).*\n")
+}
 ```
 
 ```{r pca-topvar-heading, eval=show_pca_section, results='asis'}
@@ -697,7 +731,8 @@ function updateProtPCAPlot(n_top) {
 </script>
 
 ```{r pca-13-heading, eval=show_pca_section, results='asis'}
-cat("### PC1 vs PC3\n")
+cat("### PC1 vs PC3 {.tabset}\n")
+cat("#### Static\n")
 ```
 
 ```{r pca-13, eval=show_pca_section, fig.cap="PCA -- PC1 vs PC3"}
@@ -707,6 +742,39 @@ if (file.exists(p)) knitr::include_graphics(p)
 
 ```{r legend-pca-13, eval=show_pca_section, results='asis'}
 figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may capture additional biological variation or batch effects not visible in the PC1-PC2 projection.")
+```
+
+```{r pca-13-labeled-heading, eval=show_pca_section, results='asis'}
+cat("#### With Sample Names\n")
+```
+
+```{r pca-13-labeled, eval=show_pca_section, fig.cap="PCA -- PC1 vs PC3 (labeled)"}
+p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC3_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
+```
+
+```{r pca-13-interactive-heading, eval=show_pca_section, results='asis'}
+cat("#### Interactive\n")
+```
+
+```{r pca-13-interactive, eval=show_pca_section, fig.width=8, fig.height=6}
+scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC3_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    color_var <- prot_cfg$effects$color %||% "Condition"
+    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
+    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC3, color = as.formula(paste0("~`", color_var, "`")),
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = "PC1"),
+                       yaxis = list(title = "PC3"),
+                       title = "PCA: PC1 vs PC3 — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive PCA not available (scores CSV or plotly package missing).*\n")
+}
 ```
 
 ```{r pca-3d-heading, eval=show_pca_section, results='asis'}
@@ -982,7 +1050,7 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            log2fc <- signed_fc_to_log2(lfc_vals)
             is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
@@ -1031,7 +1099,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            log2fc <- signed_fc_to_log2(lfc_vals)
             is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             de_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_de]
@@ -1084,7 +1152,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            log2fc <- signed_fc_to_log2(lfc_vals)
             is_up <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc >= lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             up_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_up]
@@ -1126,7 +1194,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- log2(abs(lfc_vals)) * sign(lfc_vals)
+            log2fc <- signed_fc_to_log2(lfc_vals)
             is_down <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc <= -lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             down_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_down]
@@ -1292,7 +1360,7 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
 
     plot_df <- data.frame(
         protein = df[[gene_col]],
-        logFC = log2(abs(as.numeric(df[[lfc_col]]))) * sign(as.numeric(df[[lfc_col]])),
+        logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
         padj = as.numeric(df[[padj_col]]),
         stringsAsFactors = FALSE
     )
@@ -1533,7 +1601,7 @@ make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
 
     plot_df <- data.frame(
         protein = df[[gene_col]],
-        logFC = log2(abs(as.numeric(df[[lfc_col]]))) * sign(as.numeric(df[[lfc_col]])),
+        logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
         padj = as.numeric(df[[padj_col]]),
         baseMean = baseMean,
         stringsAsFactors = FALSE

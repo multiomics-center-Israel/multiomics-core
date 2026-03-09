@@ -134,6 +134,17 @@ rna_prot_dir     <- file.path(run_dir, "rna_protein_correlation")
 multigsea_dir    <- file.path(run_dir, "multigsea")
 commentary_dir   <- file.path(run_dir, "commentary")
 
+# New analysis directories
+feature_network_dir  <- file.path(run_dir, "feature_network")
+concordance_dir      <- file.path(run_dir, "concordance")
+consensus_base_dir   <- file.path(run_dir, "consensus")
+consensus_dir        <- file.path(consensus_base_dir, "consensus")
+stability_dir        <- file.path(consensus_base_dir, "stability")
+foundational_base_dir <- file.path(run_dir, "foundational")
+foundational_dir     <- file.path(foundational_base_dir, "foundational")
+mechanistic_base_dir <- file.path(run_dir, "mechanistic")
+mechanistic_dir      <- file.path(mechanistic_base_dir, "mechanistic")
+
 # Load commentary if available
 commentary <- NULL
 has_commentary <- FALSE
@@ -158,6 +169,12 @@ has_integration <- has_diablo || has_snf || has_mofa
 has_enrichment  <- dir.exists(enrichment_dir) && length(list.files(enrichment_dir, "\\.png$|\\.csv$")) > 0
 has_rna_prot    <- dir.exists(file.path(rna_prot_dir, "plots")) && length(list.files(file.path(rna_prot_dir, "plots"), "\\.png$")) > 0
 has_multigsea   <- dir.exists(multigsea_dir) && length(list.files(multigsea_dir, "\\.png$")) > 0
+has_feature_network <- dir.exists(file.path(feature_network_dir, "plots")) && length(list.files(file.path(feature_network_dir, "plots"), "\\.png$")) > 0
+has_concordance     <- dir.exists(concordance_dir) && length(list.files(concordance_dir, "\\.png$|\\.csv$")) > 0
+has_consensus       <- dir.exists(consensus_dir) && (length(list.files(file.path(consensus_dir, "plots"), "\\.png$")) > 0 || length(list.files(consensus_dir, "\\.csv$")) > 0)
+has_stability       <- dir.exists(stability_dir) && length(list.files(file.path(stability_dir, "plots"), "\\.png$")) > 0
+has_foundational    <- dir.exists(foundational_dir) && (length(list.files(file.path(foundational_dir, "plots"), "\\.png$")) > 0 || length(list.files(foundational_dir, "\\.csv$")) > 0)
+has_mechanistic     <- dir.exists(mechanistic_dir) && (length(list.files(file.path(mechanistic_dir, "plots"), "\\.png$")) > 0 || length(list.files(mechanistic_dir, "\\.csv$")) > 0)
 
 # Load gene-protein mapping if available
 mapping_file <- file.path(run_dir, "gene_protein_mapping.csv")
@@ -226,12 +243,20 @@ kable(settings, col.names = c("Parameter", "Value"))
 
 ```{r params-omics}
 omics_modes <- setdiff(names(cfg$modes), "multiomics")
-omics_tbl <- data.frame(
-    Omics = omics_modes,
-    Configured = "Yes",
-    stringsAsFactors = FALSE
-)
-kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
+# In output mode, omics modes may not be in config — use global$omics_present
+if (length(omics_modes) == 0 && !is.null(cfg$global$omics_present)) {
+    omics_modes <- unlist(cfg$global$omics_present)
+}
+if (length(omics_modes) > 0) {
+    omics_tbl <- data.frame(
+        Omics = omics_modes,
+        Configured = rep("Yes", length(omics_modes)),
+        stringsAsFactors = FALSE
+    )
+    kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
+} else {
+    cat("*No individual omics layers found in config.*\n")
+}
 ```
 
 ---
@@ -381,8 +406,7 @@ if (length(omics_barplots) > 0) {
     for (bp in omics_barplots) {
         omics_name <- gsub("_top_pathways\\.png$", "", basename(bp))
         cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
-        cat(knitr::include_graphics(bp))
-        cat("\n\n")
+        cat(sprintf("![%s pathways](%s)\n\n", tools::toTitleCase(omics_name), bp))
     }
 }
 ```
@@ -411,7 +435,7 @@ for (cf in csv_files) {
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
     cat("\n## Cross-Omics Pathway Comparison {.unnumbered}\n\n")
-    cat(knitr::include_graphics(p))
+    cat(sprintf("![Cross-Omics Pathway Heatmap](%s)\n\n", p))
 }
 ```
 
@@ -495,6 +519,10 @@ cat("*No integration results found. Integration methods may not have been config
 
 ## DIABLO
 
+### Sample Scores {.tabset}
+
+#### Static
+
 ```{r diablo-sample-plot, eval=has_diablo, results='asis'}
 p <- file.path(diablo_dir, "diablo_sample_plot.png")
 if (file.exists(p)) {
@@ -507,6 +535,37 @@ figure_legend("DIABLO sample scores plot. Samples are projected onto the first t
 render_commentary("diablo_sample_plot")
 ```
 
+#### With Sample Names
+
+```{r diablo-sample-labeled, eval=has_diablo, results='asis'}
+p_lab <- file.path(diablo_dir, "diablo_sample_plot_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled plot not available.*\n")
+```
+
+#### Interactive
+
+```{r diablo-sample-interactive, eval=has_diablo, fig.width=8, fig.height=6}
+scores_csv <- file.path(diablo_dir, "diablo_sample_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>Condition: ", sc$condition)
+    pl <- plotly::plot_ly(sc, x = ~comp1, y = ~comp2, color = ~condition,
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = "Component 1"),
+                       yaxis = list(title = "Component 2"),
+                       title = "DIABLO Sample Scores — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive plot not available.*\n")
+}
+```
+
+### Variable Loadings {.tabset}
+
+#### Static
+
 ```{r diablo-variable-plot, eval=has_diablo, results='asis'}
 p <- file.path(diablo_dir, "diablo_variable_plot.png")
 if (file.exists(p)) {
@@ -515,9 +574,33 @@ if (file.exists(p)) {
 ```
 
 ```{r diablo-variable-legend, eval=has_diablo, results='asis'}
-figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
+figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components. Labels are omitted for clarity; hover over points in the Interactive tab for feature names.")
 render_commentary("diablo_variable_plot")
 ```
+
+#### Interactive
+
+```{r diablo-variable-interactive, eval=has_diablo, results='asis'}
+loadings_csv <- file.path(diablo_dir, "diablo_variable_loadings.csv")
+if (file.exists(loadings_csv)) {
+    ld <- read.csv(loadings_csv, stringsAsFactors = FALSE)
+    ld$text <- paste0("Feature: ", ld$feature, "\nOmics: ", ld$omics,
+                      "\nComp1: ", round(ld$comp1, 3),
+                      "\nComp2: ", round(ld$comp2, 3))
+    p_var <- ggplot(ld, aes(x = comp1, y = comp2, color = omics, text = text)) +
+        geom_point(alpha = 0.7, size = 2) +
+        labs(x = "Component 1 loading", y = "Component 2 loading",
+             title = "DIABLO Variable Loadings", color = "Omics") +
+        theme_minimal()
+    plotly::ggplotly(p_var, tooltip = "text")
+} else {
+    cat("*Loadings CSV not available for interactive plot.*\n")
+}
+```
+
+### Circos Plot {.tabset}
+
+#### Static
 
 ```{r diablo-circos-plot, eval=has_diablo, results='asis'}
 p <- file.path(diablo_dir, "diablo_circos_plot.png")
@@ -527,8 +610,35 @@ if (file.exists(p)) {
 ```
 
 ```{r diablo-circos-legend, eval=has_diablo, results='asis'}
-figure_legend("DIABLO circos plot showing cross-omics feature correlations. Lines connect correlated features across omics layers.")
+figure_legend("DIABLO circos plot showing cross-omics feature correlations. Lines connect correlated features across omics layers. Labels are omitted for clarity; see the Interactive tab for a searchable heatmap of cross-omics correlations.")
 render_commentary("diablo_circos_plot")
+```
+
+#### Interactive
+
+```{r diablo-circos-interactive, eval=has_diablo, results='asis'}
+circos_csv <- file.path(diablo_dir, "diablo_circos_correlations.csv")
+if (file.exists(circos_csv)) {
+    edges <- read.csv(circos_csv, stringsAsFactors = FALSE)
+    edges <- edges[order(edges$weight, decreasing = TRUE), ]
+    edges <- head(edges, 80)
+    plotly::plot_ly(
+        x = edges$from, y = edges$to, z = edges$weight,
+        text = paste0(edges$from, " [", edges$from_omics, "] \u2014 ",
+                      edges$to, " [", edges$to_omics, "]",
+                      "\nWeight: ", round(edges$weight, 3)),
+        type = "heatmap", hoverinfo = "text",
+        colorscale = list(c(0, "#f7fbff"), c(1, "#08306b"))
+    ) %>%
+        plotly::layout(
+            title = "Cross-Omics Feature Correlations (DIABLO)",
+            xaxis = list(title = "", tickangle = 45, tickfont = list(size = 8)),
+            yaxis = list(title = "", tickfont = list(size = 8)),
+            margin = list(b = 120, l = 120)
+        )
+} else {
+    cat("*Circos correlation CSV not available for interactive plot.*\n")
+}
 ```
 
 ```{r diablo-feature-heatmap, eval=has_diablo, results='asis'}
@@ -544,16 +654,18 @@ if (file.exists(hm)) {
 ```{r diablo-top-features, eval=has_diablo}
 # Load top feature tables
 diablo_feat_files <- list.files(diablo_dir, pattern = "diablo_top_features_.*\\.csv$", full.names = TRUE)
-if (length(diablo_feat_files) > 0) {
-    for (ff in diablo_feat_files) {
-        omics_name <- gsub("diablo_top_features_|\\.csv$", "", basename(ff))
-        df <- tryCatch(read.csv(ff, stringsAsFactors = FALSE), error = function(e) NULL)
-        if (!is.null(df) && nrow(df) > 0) {
-            cat(sprintf("\n### Top DIABLO Features: %s\n\n", omics_name))
-            print(make_dt(df, caption = paste("DIABLO top features -", omics_name)))
-        }
+widgets <- list()
+for (ff in diablo_feat_files) {
+    omics_name <- gsub("diablo_top_features_|\\.csv$", "", basename(ff))
+    df <- tryCatch(read.csv(ff, stringsAsFactors = FALSE), error = function(e) NULL)
+    if (!is.null(df) && nrow(df) > 0) {
+        widgets <- c(widgets, list(
+            htmltools::tags$h4(paste("Top DIABLO Features:", omics_name)),
+            make_dt(df, caption = paste("DIABLO top features -", omics_name))
+        ))
     }
 }
+htmltools::tagList(widgets)
 ```
 
 ## SNF
@@ -634,12 +746,471 @@ if (length(weight_files) > 0) {
     for (wf in weight_files) {
         view_name <- gsub("mofa_top_weights_|\\.png$", "", basename(wf))
         cat(sprintf("\n### Top Weights: %s\n\n", view_name))
-        cat(knitr::include_graphics(wf))
+        cat(sprintf("![MOFA Top Weights %s](%s)\n\n", view_name, wf))
         figure_legend(sprintf("Top 20 features by absolute weight for MOFA Factor in the %s view.", view_name))
         fig_id <- paste0("mofa_top_weights_", view_name)
         render_commentary(fig_id)
     }
 }
+```
+
+---
+
+# Foundational Cross-Omics Analysis {.tabset}
+
+```{r foundational-note, eval=!has_foundational, results='asis'}
+cat("*No foundational cross-omics analysis results found.*\n")
+```
+
+## Cross-Omics Correlation
+
+```{r foundational-corr-boxplot, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "crossomics_correlation_boxplot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r foundational-corr-boxplot-legend, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "crossomics_correlation_boxplot.png")
+if (file.exists(p)) {
+    figure_legend("Cross-omics correlation boxplot. Distribution of pairwise sample correlations between omics layers. High median correlations indicate concordant omics profiles.")
+    render_commentary("crossomics_correlation_boxplot")
+}
+```
+
+```{r foundational-corr-density, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "crossomics_correlation_density.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r foundational-corr-density-legend, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "crossomics_correlation_density.png")
+if (file.exists(p)) {
+    figure_legend("Cross-omics correlation density plot. Smoothed distribution of per-sample correlations between omics layers.")
+    render_commentary("crossomics_correlation_density")
+}
+```
+
+## Sample Clustering
+
+```{r foundational-clustering, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_clustering_consistency.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r foundational-clustering-legend, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_clustering_consistency.png")
+if (file.exists(p)) {
+    figure_legend("Sample clustering consistency across omics layers. Measures whether samples cluster similarly regardless of omics platform, indicating robust biological signal.")
+    render_commentary("sample_clustering_consistency")
+}
+```
+
+## Condition Separation
+
+```{r foundational-condition, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_condition_separation.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r foundational-condition-legend, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_condition_separation.png")
+if (file.exists(p)) {
+    figure_legend("Sample condition separation across omics layers. Shows how well each omics layer separates experimental conditions, helping identify the most informative data types.")
+    render_commentary("sample_condition_separation")
+}
+```
+
+## Sample Discordance
+
+```{r foundational-discordance, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_discordance_distribution.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r foundational-discordance-legend, eval=has_foundational, results='asis'}
+p <- file.path(foundational_dir, "plots", "sample_discordance_distribution.png")
+if (file.exists(p)) {
+    figure_legend("Distribution of sample discordance scores across omics layers. Samples with high discordance may indicate technical issues or genuinely complex biological states.")
+    render_commentary("sample_discordance_distribution")
+}
+```
+
+## Summary Tables
+
+```{r foundational-tables, eval=has_foundational}
+widgets <- list()
+for (info in list(
+    list(file = "foundational_analysis_summary.csv", cap = "Foundational Analysis Summary"),
+    list(file = "crossomics_correlation_summary.csv", cap = "Cross-Omics Correlation Summary"),
+    list(file = "sample_concordance_summary.csv", cap = "Sample Concordance Summary"),
+    list(file = "sample_discordance.csv", cap = "Sample Discordance Scores")
+)) {
+    csv_path <- file.path(foundational_dir, "tables", info$file)
+    if (file.exists(csv_path)) {
+        df <- tryCatch(read.csv(csv_path, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (!is.null(df) && nrow(df) > 0)
+            widgets <- c(widgets, list(make_dt(head(df, 200), caption = info$cap)))
+    }
+}
+htmltools::tagList(widgets)
+```
+
+---
+
+# Cross-Omics Concordance
+
+```{r concordance-note, eval=!has_concordance, results='asis'}
+cat("*No cross-omics concordance results found.*\n")
+```
+
+```{r concordance-plot, eval=has_concordance, results='asis'}
+conc_pngs <- list.files(concordance_dir, pattern = "\\.png$", full.names = TRUE)
+for (cp in conc_pngs) {
+    display_name <- gsub("_", " ", gsub("\\.png$", "", basename(cp)))
+    cat(sprintf("\n## %s {.unnumbered}\n\n", tools::toTitleCase(display_name)))
+    cat(sprintf("![%s](%s)\n\n", display_name, cp))
+    figure_legend(sprintf("Cross-omics concordance analysis: %s. Shows the agreement in differential expression direction and magnitude between omics layers.", display_name))
+    fig_id <- gsub("\\.png$", "", basename(cp))
+    render_commentary(fig_id)
+}
+```
+
+```{r concordance-tables, eval=has_concordance}
+widgets <- list()
+conc_csvs <- list.files(concordance_dir, pattern = "\\.csv$", full.names = TRUE)
+for (cf in conc_csvs) {
+    tbl_name <- gsub("_", " ", gsub("\\.csv$", "", basename(cf)))
+    df <- tryCatch(read.csv(cf, stringsAsFactors = FALSE), error = function(e) NULL)
+    if (!is.null(df) && nrow(df) > 0)
+        widgets <- c(widgets, list(make_dt(head(df, 300), caption = tools::toTitleCase(tbl_name))))
+}
+htmltools::tagList(widgets)
+```
+
+---
+
+# Feature Networks {.tabset}
+
+```{r featnet-note, eval=!has_feature_network, results='asis'}
+cat("*No feature network results found.*\n")
+```
+
+## Tri-Omics Network
+
+```{r featnet-triomics, eval=has_feature_network, results='asis'}
+p <- file.path(feature_network_dir, "plots", "triomics_feature_network.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r featnet-triomics-legend, eval=has_feature_network, results='asis'}
+p <- file.path(feature_network_dir, "plots", "triomics_feature_network.png")
+if (file.exists(p)) {
+    figure_legend("Tri-omics feature network connecting top features across all omics layers. Node colors represent omics type; edge thickness reflects correlation strength. Hub nodes are key integrative features.")
+    render_commentary("triomics_feature_network")
+}
+```
+
+## Per-Factor Networks {.tabset}
+
+```{r featnet-factors, eval=has_feature_network, results='asis'}
+factor_pngs <- list.files(file.path(feature_network_dir, "plots"),
+                          pattern = "factor_.*_feature_network\\.png$",
+                          full.names = TRUE)
+factor_pngs <- sort(factor_pngs)
+for (fp in factor_pngs) {
+    factor_name <- gsub("_feature_network\\.png$", "", basename(fp))
+    factor_name <- gsub("factor_", "", factor_name)
+    cat(sprintf("\n### %s {.unnumbered}\n\n", factor_name))
+    cat(knitr::knit_child(text = sprintf(
+        '```{r featnet-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+        gsub("[^a-zA-Z0-9]", "", factor_name), fp
+    ), quiet = TRUE))
+    figure_legend(sprintf("Feature network for %s. Shows cross-omics feature connections driven by this integration factor.", factor_name))
+    render_commentary(paste0("factor_", factor_name, "_feature_network"))
+}
+```
+
+## Pathway Crosstalk
+
+```{r featnet-crosstalk, eval=has_feature_network, results='asis'}
+p <- file.path(feature_network_dir, "plots", "pathway_crosstalk_network.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r featnet-crosstalk-legend, eval=has_feature_network, results='asis'}
+p <- file.path(feature_network_dir, "plots", "pathway_crosstalk_network.png")
+if (file.exists(p)) {
+    figure_legend("Pathway crosstalk network. Nodes are enriched pathways; edges connect pathways that share features across omics layers, revealing biological process interdependencies.")
+    render_commentary("pathway_crosstalk_network")
+}
+```
+
+## Network Tables
+
+```{r featnet-tables, eval=has_feature_network}
+widgets <- list()
+tables_dir <- file.path(feature_network_dir, "tables")
+if (dir.exists(tables_dir)) {
+    net_csvs <- list.files(tables_dir, pattern = "\\.csv$", full.names = TRUE)
+    for (cf in net_csvs) {
+        tbl_name <- gsub("_", " ", gsub("\\.csv$", "", basename(cf)))
+        df <- tryCatch(read.csv(cf, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (!is.null(df) && nrow(df) > 0)
+            widgets <- c(widgets, list(make_dt(head(df, 300), caption = tools::toTitleCase(tbl_name))))
+    }
+}
+htmltools::tagList(widgets)
+```
+
+---
+
+# Consensus Analysis {.tabset}
+
+```{r consensus-note, eval=!has_consensus && !has_stability, results='asis'}
+cat("*No consensus analysis results found. Consensus analysis compares results across integration methods.*\n")
+```
+
+## Method Agreement
+
+```{r consensus-agreement, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "method_agreement_heatmap.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r consensus-agreement-legend, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "method_agreement_heatmap.png")
+if (file.exists(p)) {
+    figure_legend("Method agreement heatmap comparing integration results across DIABLO, SNF, and MOFA2. Higher values indicate stronger agreement between methods in sample grouping or feature selection.")
+    render_commentary("method_agreement_heatmap")
+}
+```
+
+## Robust Features
+
+```{r consensus-robust, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "robust_features.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r consensus-robust-legend, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "robust_features.png")
+if (file.exists(p)) {
+    figure_legend("Robust features identified by multiple integration methods. Features consistently selected across methods are most likely to be biologically relevant.")
+    render_commentary("robust_features")
+}
+```
+
+## Feature Rank Correlation
+
+```{r consensus-rank-corr, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "feature_rank_correlation.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r consensus-rank-corr-legend, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "feature_rank_correlation.png")
+if (file.exists(p)) {
+    figure_legend("Feature rank correlation between integration methods. High rank correlation indicates methods agree on which features are most important.")
+    render_commentary("feature_rank_correlation")
+}
+```
+
+## Meta-Integration PCA
+
+```{r consensus-meta-pca, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "meta_integration_pca.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r consensus-meta-pca-legend, eval=has_consensus, results='asis'}
+p <- file.path(consensus_dir, "plots", "meta_integration_pca.png")
+if (file.exists(p)) {
+    figure_legend("Meta-integration PCA combining results from all integration methods. This unified view highlights consensus sample groupings.")
+    render_commentary("meta_integration_pca")
+}
+```
+
+## Feature Stability
+
+```{r stability-plot, eval=has_stability, results='asis'}
+p <- file.path(stability_dir, "plots", "feature_stability.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r stability-legend, eval=has_stability, results='asis'}
+p <- file.path(stability_dir, "plots", "feature_stability.png")
+if (file.exists(p)) {
+    figure_legend("Feature selection stability across bootstrap iterations. Features with high stability scores are robustly selected regardless of sample composition.")
+    render_commentary("feature_stability")
+}
+```
+
+## Consensus Tables
+
+```{r consensus-tables, eval=has_consensus}
+widgets <- list()
+for (info in list(
+    list(file = "robust_features.csv", cap = "Robust Features (Multi-Method Consensus)", n = 300),
+    list(file = "feature_importance_comparison.csv", cap = "Feature Importance Comparison Across Methods", n = 300),
+    list(file = "meta_integration_results.csv", cap = "Meta-Integration Results", n = 200),
+    list(file = "method_ari_matrix.csv", cap = "Method Agreement — Adjusted Rand Index", n = NULL),
+    list(file = "method_nmi_matrix.csv", cap = "Method Agreement — Normalized Mutual Information", n = NULL)
+)) {
+    csv_path <- file.path(consensus_dir, info$file)
+    if (file.exists(csv_path)) {
+        df <- tryCatch(read.csv(csv_path, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (!is.null(df) && nrow(df) > 0) {
+            if (!is.null(info$n)) df <- head(df, info$n)
+            widgets <- c(widgets, list(make_dt(df, caption = info$cap)))
+        }
+    }
+}
+htmltools::tagList(widgets)
+```
+
+```{r stability-table, eval=has_stability}
+stab_csv <- file.path(stability_dir, "feature_selection_stability.csv")
+if (file.exists(stab_csv)) {
+    df <- tryCatch(read.csv(stab_csv, stringsAsFactors = FALSE), error = function(e) NULL)
+    if (!is.null(df) && nrow(df) > 0) make_dt(head(df, 300), caption = "Feature Selection Stability Scores")
+}
+```
+
+---
+
+# Mechanistic Insights {.tabset}
+
+```{r mechanistic-note, eval=!has_mechanistic, results='asis'}
+cat("*No mechanistic analysis results found.*\n")
+```
+
+## Regulatory Network
+
+```{r mech-regulatory, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_regulatory_network.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r mech-regulatory-legend, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_regulatory_network.png")
+if (file.exists(p)) {
+    figure_legend("Multi-omics regulatory network. Nodes represent genes/proteins; edges indicate regulatory relationships inferred from cross-omics correlations. Hub nodes with high connectivity are candidate master regulators.")
+    render_commentary("mech_regulatory_network")
+}
+```
+
+## Translation Efficiency
+
+```{r mech-te-dist, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_translation_efficiency_dist.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r mech-te-dist-legend, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_translation_efficiency_dist.png")
+if (file.exists(p)) {
+    figure_legend("Distribution of translation efficiency scores. Translation efficiency (protein log2FC - RNA log2FC) reveals post-transcriptional regulatory mechanisms.")
+    render_commentary("mech_translation_efficiency_dist")
+}
+```
+
+```{r mech-te-scatter, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_translation_efficiency_scatter.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r mech-te-scatter-legend, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_translation_efficiency_scatter.png")
+if (file.exists(p)) {
+    figure_legend("Translation efficiency scatter plot. Each point is a gene/protein pair; deviation from the diagonal indicates post-transcriptional regulation. Color highlights genes with extreme translation efficiency.")
+    render_commentary("mech_translation_efficiency_scatter")
+}
+```
+
+## RNA-Protein Correlation
+
+```{r mech-rnaprot-corr, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_rna_protein_correlation_dist.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r mech-rnaprot-corr-legend, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_rna_protein_correlation_dist.png")
+if (file.exists(p)) {
+    figure_legend("Distribution of per-gene RNA-protein correlations from the mechanistic analysis. Genes with low correlation are candidates for post-transcriptional regulation.")
+    render_commentary("mech_rna_protein_correlation_dist")
+}
+```
+
+## Protein Stability
+
+```{r mech-stability, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_protein_stability_dist.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r mech-stability-legend, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_protein_stability_dist.png")
+if (file.exists(p)) {
+    figure_legend("Protein stability distribution inferred from RNA-protein dynamics. Proteins with high stability scores maintain abundance despite transcript changes, suggesting long half-lives or regulated degradation.")
+    render_commentary("mech_protein_stability_dist")
+}
+```
+
+## Mechanistic Tables
+
+```{r mech-tables, eval=has_mechanistic}
+widgets <- list()
+for (info in list(
+    list(file = "mech_hub_regulators.csv", cap = "Hub Regulators — Multi-Omics Regulatory Network"),
+    list(file = "mech_post_transcriptional_regulation.csv", cap = "Post-Transcriptional Regulation Candidates"),
+    list(file = "mech_translation_efficiency.csv", cap = "Translation Efficiency Scores"),
+    list(file = "mech_protein_stability.csv", cap = "Protein Stability Estimates"),
+    list(file = "mech_rna_protein_correlations.csv", cap = "RNA-Protein Correlations"),
+    list(file = "mechanistic_analysis_summary.csv", cap = "Mechanistic Analysis Summary")
+)) {
+    csv_path <- file.path(mechanistic_dir, "tables", info$file)
+    if (file.exists(csv_path)) {
+        df <- tryCatch(read.csv(csv_path, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (!is.null(df) && nrow(df) > 0)
+            widgets <- c(widgets, list(make_dt(head(df, 200), caption = info$cap)))
+    }
+}
+htmltools::tagList(widgets)
 ```
 
 ---

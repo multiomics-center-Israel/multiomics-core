@@ -152,7 +152,7 @@ get_de_summary_stats_proteomics <- function(summary_df, cfg) {
 
         padj_vals <- as.numeric(summary_df[[pcol]])
         lfc_vals  <- as.numeric(summary_df[[fc_col]])
-        log2fc    <- log2(abs(lfc_vals)) * sign(lfc_vals)
+        log2fc    <- signed_fc_to_log2(lfc_vals)
 
         is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut &
                   abs(log2fc) >= log2(lfc_cut)
