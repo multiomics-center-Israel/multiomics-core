@@ -4,7 +4,7 @@
 # ==============================================================================
 
 project:
-  dir: "/home/ozsol/MultiOmics_Projects/MultiOmics_Projects/2025_06_Yonatan_Sharabi"
+  dir: "/home/ozsol/MultiOmics_Projects/MultiOmics_Projects/2025_06_Yonatan_Sharabi/"
   name: "GT15"
   analysis_round: "01"
 

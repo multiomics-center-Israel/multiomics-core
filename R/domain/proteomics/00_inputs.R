@@ -2,7 +2,18 @@
 #' @param config list as returned by load_config()
 #' @return list (protein, sample_map, meta, contrasts, engine, ...)
 load_proteomics_inputs <- function(config) {
-    load_omics_inputs(config, mode = "proteomics")
+    inputs <- load_omics_inputs(config, mode = "proteomics")
+
+    cfg <- config$modes$proteomics
+    is_preprocessed <- identical(cfg$input$format, "preprocessed")
+
+    if (is_preprocessed && is.null(inputs$protein) && !is.null(inputs$preprocessed_protein)) {
+        message("[load_proteomics_inputs] Using preprocessed_protein as protein matrix")
+        inputs$protein <- inputs$preprocessed_protein
+        inputs$source_type <- "preprocessed"
+    }
+
+    inputs
 }
 
 #' Validate proteomics inputs
@@ -13,6 +24,18 @@ validate_proteomics_inputs <- function(inputs, cfg) {
 
     id_cols <- cfg$id_columns
     eff_cols <- cfg$effects
+
+    # For preprocessed inputs, only validate protein ID column exists
+    if (identical(inputs$source_type, "preprocessed") ||
+        identical(cfg$input$format, "preprocessed")) {
+        if (!id_cols$protein_id %in% colnames(protein)) {
+            stop(sprintf(
+                "Preprocessed protein table missing ID column '%s'. Available: %s",
+                id_cols$protein_id, paste(colnames(protein), collapse = ", ")
+            ))
+        }
+        return(invisible(TRUE))
+    }
 
     check_has_cols(protein, id_cols$protein_id, df_name = "protein")
 
@@ -45,67 +68,4 @@ validate_proteomics_inputs <- function(inputs, cfg) {
     invisible(TRUE)
 }
 
-#' Generic loader helper (could be in core/01_io or locally here if only used by omics loaders)
-load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
-    mode <- match.arg(mode)
-    cfg <- config$modes[[mode]]
-    if (is.null(cfg)) stop("No config for mode ", mode)
-
-    files <- cfg$files
-
-    # Validate required files are specified in config
-    required_files <- switch(mode,
-        proteomics = c("protein", "sample_map", "metadata", "contrasts"),
-        rna = c("counts", "metadata", "contrasts"),
-        character(0)
-    )
-
-    missing_files <- setdiff(required_files, names(files))
-    if (length(missing_files) > 0) {
-        stop(
-            sprintf(
-                "[%s] Missing required file(s) in config$modes$%s$files: %s",
-                mode, mode, paste(missing_files, collapse = ", ")
-            ),
-            call. = FALSE
-        )
-    }
-
-    # Check that required files have non-empty paths
-    for (nm in required_files) {
-        if (is.null(files[[nm]]) || !nzchar(files[[nm]])) {
-            stop(
-                sprintf(
-                    "[%s] File '%s' is required but not specified in config$modes$%s$files",
-                    mode, nm, mode
-                ),
-                call. = FALSE
-            )
-        }
-    }
-
-    inputs <- list()
-
-    # Files that may legitimately have blank/null paths in the config
-    optional_files <- c("peptides", "sample_map", "annotation", "trinotate", "contrasts")
-
-    for (nm in names(files)) {
-        rel <- files[[nm]]
-        if (is.null(rel) || !nzchar(rel)) {
-            if (nm %in% optional_files) next
-            stop(sprintf("Required input file '%s' has an empty or missing path in config.", nm))
-        }
-        abs <- resolve_raw_path(config, rel)
-        if (!file.exists(abs)) stop("File not found: ", abs)
-        inputs[[nm]] <- read_table_auto(abs)
-    }
-
-    if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
-
-    # Validate contrasts file content (at least 1 row + expected columns)
-    if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
-        validate_contrasts_content(inputs$contrasts, mode)
-    }
-
-    inputs
-}
+# load_omics_inputs and validate_contrasts_content live in R/core/01_io.R

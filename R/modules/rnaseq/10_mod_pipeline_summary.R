@@ -10,7 +10,7 @@
 #' @param pathway_res Pathway results list
 #' @param run_dir     Run output directory
 #' @return Path to pipeline_summary.html (character, format = "file")
-mod_rnaseq_pipeline_summary <- function(config, pre, de_res, pathway_res, run_dir) {
+mod_rnaseq_pipeline_summary <- function(config, pre, de_res, pathway_res = NULL, run_dir) {
     message("[mod_pipeline_summary] Generating pipeline summary...")
     generate_pipeline_summary(
         config      = config,

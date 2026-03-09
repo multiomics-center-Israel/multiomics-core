@@ -31,8 +31,17 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
     out_qc <- dirs$diagnostic_plots
     out_ds <- dirs$datasets
 
-    # ---- Run DE ----
-    de_res <- run_metabolomics_de(pre, config)
+    # ---- Run DE or load pre-computed ----
+    de_table_files <- cfg$files$de_table
+    has_precomputed <- !is.null(de_table_files) && length(de_table_files) > 0 &&
+                       all(nzchar(unlist(de_table_files)))
+
+    if (has_precomputed) {
+        message("metabolomics DE: loading pre-computed DE tables")
+        de_res <- load_precomputed_metabolomics_de(config)
+    } else {
+        de_res <- run_metabolomics_de(pre, config)
+    }
     assert_de_contract(de_res, stage = stage)
 
     plots <- list()
@@ -43,11 +52,17 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
     files <- c(files, f_summary)
 
     # ---- Per-contrast outputs ----
-    contrasts <- de_cfg$contrasts
-    if (is.list(contrasts)) contrasts <- unlist(contrasts)
+    # For precomputed DE, use de_tables names directly as labels
+    if (has_precomputed && !is.null(de_res$de_tables)) {
+        contrast_labels <- names(de_res$de_tables)
+    } else {
+        contrasts <- de_cfg$contrasts
+        if (is.list(contrasts)) contrasts <- unlist(contrasts)
+        contrast_labels <- vapply(contrasts, make_contrast_label, character(1),
+                                  USE.NAMES = FALSE)
+    }
 
-    for (ctr in contrasts) {
-        ctr_label <- make_contrast_label(ctr)
+    for (ctr_label in contrast_labels) {
         ctr_tbl <- extract_contrast_table(de_res$summary_df, ctr_label)
 
         # Save per-contrast table
@@ -57,7 +72,7 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         # Volcano plot (using core plot_volcano)
         f_volcano <- file.path(out_qc, paste0("volcano_", ctr_label, ".png"))
         p_volcano <- tryCatch({
-            pv <- plot_volcano(ctr_tbl, cfg, title = paste0("Volcano: ", ctr))
+            pv <- plot_volcano(ctr_tbl, cfg, title = paste0("Volcano: ", ctr_label))
             ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
             pv
         }, error = function(e) {
@@ -72,7 +87,7 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         # MA plot (using core plot_ma)
         f_ma <- file.path(out_qc, paste0("MA_", ctr_label, ".png"))
         p_ma <- tryCatch({
-            pm <- plot_ma(ctr_tbl, cfg, title = paste0("MA: ", ctr))
+            pm <- plot_ma(ctr_tbl, cfg, title = paste0("MA: ", ctr_label))
             ggplot2::ggsave(f_ma, pm, width = 8, height = 6, dpi = 300)
             pm
         }, error = function(e) {
@@ -87,7 +102,7 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         # P-value histogram
         f_phist <- file.path(out_qc, paste0("pvalue_hist_", ctr_label, ".png"))
         p_phist <- tryCatch({
-            ph <- plot_pvalue_histogram(ctr_tbl, title = paste0("P-value: ", ctr))
+            ph <- plot_pvalue_histogram(ctr_tbl, title = paste0("P-value: ", ctr_label))
             ggplot2::ggsave(f_phist, ph, width = 7, height = 5, dpi = 300)
             ph
         }, error = function(e) {

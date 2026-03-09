@@ -35,7 +35,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # --- Get thresholds (use defaults if not configured) ---
     thresh <- if (!is.null(cfg$qc)) cfg$qc$thresholds else NULL
     thresh <- thresh %||% list()
-    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 10
+    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 4
     max_samples_heatmaps <- thresh$max_samples_for_heatmaps %||% 120
     max_samples_expr_heatmap <- thresh$max_samples_for_expr_heatmap %||% 60
 

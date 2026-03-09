@@ -12,23 +12,17 @@
 #' @export
 render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
-    # Locate the canonical Rmd template shipped with multiomics-core
+    # Locate the canonical Rmd template shipped with multiomics-core.
+    # When running via tar_source() (not an installed package), system.file()
+    # returns "".  Use getwd() as the primary fallback since {targets} always
+    # executes from the project root.
     template_path <- system.file("report_template.Rmd",
                                   package = "multiomics.core",
                                   mustWork = FALSE)
 
-    # Fallback: template lives alongside this source file
     if (!nzchar(template_path) || !file.exists(template_path)) {
-        src_dir <- system.file("R", "domain", "rnaseq",
-                                package = "multiomics.core",
-                                mustWork = FALSE)
-        if (!nzchar(src_dir)) {
-            # When running via targets::tar_source(), __file__ is not set.
-            # Use the project root from config instead.
-            proj_dir <- config$project$dir %||% "."
-            src_dir <- file.path(proj_dir, "R", "domain", "rnaseq")
-        }
-        template_path <- file.path(src_dir, "report_template.Rmd")
+        template_path <- file.path(getwd(), "R", "domain", "rnaseq",
+                                   "report_template.Rmd")
     }
 
     if (!file.exists(template_path)) {

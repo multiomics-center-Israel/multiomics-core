@@ -17,7 +17,7 @@
 #' @param de_res      DE results list (summary_df, tables)
 #' @param pathway_res Pathway results list
 #' @return Named list with all stats organized by section
-collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
+collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
 
     rna_cfg  <- config$modes$rna
     tech_rep <- rna_cfg$technical_report %||% list()
@@ -618,7 +618,7 @@ wrap_html_document <- function(body_html, stats) {
 #' @param run_dir     Run output directory
 #' @return Path to pipeline_summary.html
 #' @export
-generate_pipeline_summary <- function(config, pre, de_res, pathway_res, run_dir) {
+generate_pipeline_summary <- function(config, pre, de_res, pathway_res = NULL, run_dir) {
 
     message("=== Generating Pipeline Summary ===")
 

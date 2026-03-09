@@ -454,6 +454,17 @@ assert_de_stats <- function(de_stats, context = "de_stats") {
 #     payload[canonical_keys]
 # }
 
+#' Attach legacy aliases to a Shiny payload
+#'
+#' Placeholder — returns payload unchanged. Legacy alias mappings
+#' can be added here as needed for backward compatibility.
+#'
+#' @param payload Shiny payload list
+#' @return payload (unchanged)
+attach_legacy_aliases <- function(payload) {
+    payload
+}
+
 
 # ------------------------------------------------------------
 # Legacy Base Builder (for backward compatibility during transition)

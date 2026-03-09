@@ -26,6 +26,7 @@ pass_filter <- function(expr_mat, group, min_per_group) {
 find_optimal_threshold_safe <- function(cpm_mat, min_limit = 0.5, max_limit = 2.0, fallback = 1.0) {
     # Log2 transformation for density estimation
     log_vals <- c(as.matrix(log2(cpm_mat + 0.1)))
+    log_vals <- log_vals[!is.na(log_vals)]
     d <- density(log_vals)
 
     # Identify peaks and valleys (local maxima and minima)
@@ -135,7 +136,8 @@ run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
 
         png(output_plot, width = 800, height = 600)
 
-        log_vals <- as.matrix(log2(cpm_mat + 0.1))
+        log_vals <- c(as.matrix(log2(cpm_mat + 0.1)))
+        log_vals <- log_vals[!is.na(log_vals)]
         d <- density(log_vals)
 
         plot(d, main = "Automated Threshold Selection", xlab = "log2(CPM)", lwd = 2)

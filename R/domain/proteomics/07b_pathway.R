@@ -26,9 +26,10 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
         stop(sprintf("ID column '%s' not found in DE summary table. Available: %s",
                      src_id_col, paste(colnames(summary_df), collapse = ", ")))
 
-    padj_col <- paste0("padj.imputs.", contrast_name)
-    pval_col <- paste0("pvalue.imputs.", contrast_name)
-    fc_col   <- paste0("linearFC.imputs.", contrast_name)
+    cn <- normalize_contrast_name(contrast_name)
+    padj_col <- paste0("padj.imputs.", cn)
+    pval_col <- paste0("pvalue.imputs.", cn)
+    fc_col   <- paste0("linearFC.imputs.", cn)
 
     if (!padj_col %in% colnames(summary_df))
         stop(sprintf("Adjusted p-value column '%s' not found for contrast '%s'. Available: %s",
