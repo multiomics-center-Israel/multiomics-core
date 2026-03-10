@@ -715,14 +715,6 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
 #'   (PNGs + two \code{metrics_summary.tsv} files).  An empty
 #'   \code{character(0)} is returned when \code{qc$enabled} is \code{FALSE}.
 mod_met_qc_suite <- function(data, stage, out_dir, config) {
-  # Skip QC plots when chosen_norm is already set (pass 2)
-  chosen <- config$modes$metabolomics$preprocessing$chosen_norm
-  if (!is.null(chosen)) {
-    message(sprintf("[mod_met_qc_suite] chosen_norm = '%s'; skipping QC for stage '%s'.",
-                    chosen, stage))
-    return(character(0))
-  }
-
   cfg_qc      <- config$modes$metabolomics$qc           %||% list()
   cfg_mode    <- config$modes$metabolomics
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
@@ -799,13 +791,6 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
                                         median_qc_files, pqn_qc_files,
                                         out_dir, config,
                                         imputed_data = NULL) {
-  # Skip comparison when chosen_norm is already set (pass 2)
-  chosen <- config$modes$metabolomics$preprocessing$chosen_norm
-  if (!is.null(chosen)) {
-    message(sprintf("[mod_met_qc_comparison_table] chosen_norm = '%s'; skipping QC comparison.", chosen))
-    return(character(0))
-  }
-
   all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files)
 
   # Locate with_qc/metrics_summary.tsv in each file vector.

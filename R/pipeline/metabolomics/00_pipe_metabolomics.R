@@ -2,6 +2,16 @@
 #
 # {targets} assembly for metabolomics.
 #
+# ── Conditional DAG ──────────────────────────────────────────────────────────
+#
+# The pipeline is controlled by preprocessing$chosen_norm in config:
+#
+#   chosen_norm = NULL  → Review mode (QC path):
+#     base_targets + qc_targets → met_qc_summary_report (endpoint)
+#
+#   chosen_norm = "tss"|"median"|"pqn"  → Analysis mode (full pipeline):
+#     base_targets + analysis_targets → metab_report (endpoint)
+#
 # ── Scale Contract ────────────────────────────────────────────────────────────
 #
 #   met_raw      (Linear)
@@ -18,7 +28,7 @@
 #                    └────┴──── [chosen_norm] ──→ met_corrected
 #                                                      └─ metab_pre (adapter)
 #
-# ── QC Layer (leaf nodes — never block analysis targets) ─────────────────────
+# ── QC Layer (review mode only — leaf nodes) ─────────────────────────────────
 #
 #   met_qc_cfg  (derived: config$modes$metabolomics$qc)
 #     ├─ met_log_qc          (file: qc/log/)
@@ -27,15 +37,33 @@
 #     ├─ met_norm_pqn_qc     (file: qc/norm_pqn/)
 #     └─ met_qc_comparison   (file: qc/comparison/)
 #
-# ── Downstream (unchanged) ───────────────────────────────────────────────────
+# ── Downstream (analysis mode only) ─────────────────────────────────────────
 #
 #   metab_qc_pre_obj, metab_de_res, metab_feature_sel_res,
 #   metab_enrichment_res, metab_standard_outputs,
 #   metab_shiny_payload, metab_report
 
 
-pipe_metabolomics <- function() {
-    list(
+pipe_metabolomics <- function(chosen_norm = NULL) {
+
+    # -- Validate chosen_norm at plan-definition time --------------------------
+    valid_norms <- c("tss", "median", "pqn")
+    if (!is.null(chosen_norm)) {
+        chosen_norm <- tolower(chosen_norm)
+        if (!chosen_norm %in% valid_norms) {
+            stop(sprintf(
+                "pipe_metabolomics: chosen_norm = '%s' is not valid. Must be NULL or one of: %s",
+                chosen_norm, paste(valid_norms, collapse = ", ")
+            ))
+        }
+    }
+
+    review_mode <- is.null(chosen_norm)
+
+    # ==================================================================
+    # BASE TARGETS — always included (both modes)
+    # ==================================================================
+    base_targets <- list(
 
         # ------------------------------------------------------------------
         # Output directory (shared by all met_* and metab_* targets)
@@ -195,6 +223,102 @@ pipe_metabolomics <- function() {
             format = "file"
         ),
 
+    )
+    # end base_targets
+
+    # ==================================================================
+    # REVIEW MODE (chosen_norm = NULL): QC layer + summary report
+    # ==================================================================
+    if (review_mode) {
+        qc_targets <- list(
+
+            # met_qc_cfg: derived config target.
+            # Invalidated only when config$modes$metabolomics$qc changes.
+            tar_target(
+                met_qc_cfg,
+                config$modes$metabolomics$qc %||% list()
+            ),
+
+            # met_log_qc: QC suite on the post-log pre-normalization matrix.
+            tar_target(
+                met_log_qc,
+                {
+                    .qc_cfg <- met_qc_cfg
+                    mod_met_qc_suite(met_log, stage = "log",
+                                     out_dir = metab_out_dir, config = config)
+                },
+                format = "file"
+            ),
+
+            tar_target(
+                met_norm_tss_qc,
+                {
+                    .qc_cfg <- met_qc_cfg
+                    mod_met_qc_suite(met_norm_tss, stage = "norm_tss",
+                                     out_dir = metab_out_dir, config = config)
+                },
+                format = "file"
+            ),
+
+            tar_target(
+                met_norm_median_qc,
+                {
+                    .qc_cfg <- met_qc_cfg
+                    mod_met_qc_suite(met_norm_median, stage = "norm_median",
+                                     out_dir = metab_out_dir, config = config)
+                },
+                format = "file"
+            ),
+
+            tar_target(
+                met_norm_pqn_qc,
+                {
+                    .qc_cfg <- met_qc_cfg
+                    mod_met_qc_suite(met_norm_pqn, stage = "norm_pqn",
+                                     out_dir = metab_out_dir, config = config)
+                },
+                format = "file"
+            ),
+
+            # met_qc_comparison: aggregate benchmark TSV across all four QC stages.
+            tar_target(
+                met_qc_comparison,
+                mod_met_qc_comparison_table(
+                    log_qc_files    = met_log_qc,
+                    tss_qc_files    = met_norm_tss_qc,
+                    median_qc_files = met_norm_median_qc,
+                    pqn_qc_files    = met_norm_pqn_qc,
+                    imputed_data    = met_imputed,
+                    out_dir         = metab_out_dir,
+                    config          = config
+                ),
+                format = "file"
+            ),
+
+            # met_qc_summary_report: standalone normalization review report.
+            tar_target(
+                met_qc_summary_report,
+                mod_met_qc_summary_report(
+                    qc_comparison_file = met_qc_comparison,
+                    qc_suite_files     = c(met_log_qc,
+                                           met_norm_tss_qc,
+                                           met_norm_median_qc,
+                                           met_norm_pqn_qc),
+                    config  = config,
+                    out_dir = metab_out_dir
+                ),
+                format = "file"
+            )
+        )
+
+        return(c(base_targets, qc_targets))
+    }
+
+    # ==================================================================
+    # ANALYSIS MODE (chosen_norm set): full pipeline
+    # ==================================================================
+    analysis_targets <- list(
+
         # met_corrected: select chosen_norm, apply optional LOESS drift correction
         tar_target(
             met_corrected,
@@ -209,115 +333,13 @@ pipe_metabolomics <- function() {
             )
         ),
 
-        # ==================================================================
-        # QC LAYER — leaf nodes (never depended on by analysis targets)
-        # ==================================================================
-
-        # met_qc_cfg: derived config target.
-        # Invalidated only when config$modes$metabolomics$qc changes.
-        # Changes to QC config do NOT propagate to data targets (met_raw → metab_pre).
-        tar_target(
-            met_qc_cfg,
-            config$modes$metabolomics$qc %||% list()
-        ),
-
-        # met_log_qc: QC suite on the post-log pre-normalization matrix.
-        # Writes to: {metab_out_dir}/qc/log/with_qc/ and /no_qc/
-        tar_target(
-            met_log_qc,
-            {
-                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
-                mod_met_qc_suite(met_log, stage = "log",
-                                 out_dir = metab_out_dir, config = config)
-            },
-            format = "file"
-        ),
-
-        # met_norm_tss_qc: QC suite on the TSS-normalized matrix.
-        # Writes to: {metab_out_dir}/qc/norm_tss/with_qc/ and /no_qc/
-        tar_target(
-            met_norm_tss_qc,
-            {
-                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
-                mod_met_qc_suite(met_norm_tss, stage = "norm_tss",
-                                 out_dir = metab_out_dir, config = config)
-            },
-            format = "file"
-        ),
-
-        # met_norm_median_qc: QC suite on the median-normalized matrix.
-        # Writes to: {metab_out_dir}/qc/norm_median/with_qc/ and /no_qc/
-        tar_target(
-            met_norm_median_qc,
-            {
-                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
-                mod_met_qc_suite(met_norm_median, stage = "norm_median",
-                                 out_dir = metab_out_dir, config = config)
-            },
-            format = "file"
-        ),
-
-        # met_norm_pqn_qc: QC suite on the PQN-normalized matrix.
-        # Writes to: {metab_out_dir}/qc/norm_pqn/with_qc/ and /no_qc/
-        tar_target(
-            met_norm_pqn_qc,
-            {
-                .qc_cfg <- met_qc_cfg  # DAG dependency on met_qc_cfg
-                mod_met_qc_suite(met_norm_pqn, stage = "norm_pqn",
-                                 out_dir = metab_out_dir, config = config)
-            },
-            format = "file"
-        ),
-
-        # met_qc_comparison: aggregate benchmark TSV across all four QC stages.
-        # Reads with_qc/metrics_summary.tsv from each stage; adds pca_pc1_delta.
-        # Includes raw_linear row from met_imputed as the "Before" baseline.
-        # Writes to: {metab_out_dir}/qc/comparison/normalization_qc_benchmark.tsv
-        tar_target(
-            met_qc_comparison,
-            mod_met_qc_comparison_table(
-                log_qc_files    = met_log_qc,
-                tss_qc_files    = met_norm_tss_qc,
-                median_qc_files = met_norm_median_qc,
-                pqn_qc_files    = met_norm_pqn_qc,
-                imputed_data    = met_imputed,
-                out_dir         = metab_out_dir,
-                config          = config
-            ),
-            format = "file"
-        ),
-
-        # met_qc_summary_report: standalone intermediate normalization review.
-        # Available as soon as the QC layer completes; intended for review before
-        # interpreting DE/enrichment results.
-        # Writes to: {metab_out_dir}/qc/normalization_review_report.html
-        tar_target(
-            met_qc_summary_report,
-            mod_met_qc_summary_report(
-                qc_comparison_file = met_qc_comparison,
-                qc_suite_files     = c(met_log_qc,
-                                       met_norm_tss_qc,
-                                       met_norm_median_qc,
-                                       met_norm_pqn_qc),
-                config  = config,
-                out_dir = metab_out_dir
-            ),
-            format = "file"
-        ),
-
-        # ==================================================================
-        # metab_pre ADAPTER — bridges new met_* targets → existing contract
-        #
-        # Downstream metab_* targets (qc, de, enrichment, report, shiny)
-        # depend on metab_pre and remain unchanged.
-        # ==================================================================
+        # metab_pre ADAPTER — bridges met_* targets → existing contract
         tar_target(
             metab_pre,
             {
                 pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
                 norm_cfg <- config$modes$metabolomics$normalization  %||% list()
 
-                # Missingness stats for info (pre-filter, on raw matrix)
                 miss_stats <- met_missingness_stats$stats_df
                 miss_samp  <- met_missingness_stats$samp_miss_df
 
@@ -349,14 +371,12 @@ pipe_metabolomics <- function() {
                     meta             = met_corrected$meta,
                     row_data         = met_corrected$row_data,
                     info             = info,
-                    normalization_eval = NULL  # superseded by met_norm_comparison
+                    normalization_eval = NULL
                 )
             }
         ),
 
-        # ==================================================================
         # Stage 1: QC diagnostics
-        # ==================================================================
         tar_target(
             metab_qc_pre_obj,
             mod_metabolomics_qc_pre(
@@ -366,9 +386,7 @@ pipe_metabolomics <- function() {
             )
         ),
 
-        # ==================================================================
-        # Stage 2: Differential expression, feature selection, enrichment
-        # ==================================================================
+        # Stage 2: DE, feature selection, enrichment
         tar_target(
             metab_de_res,
             mod_metabolomics_de(
@@ -397,9 +415,7 @@ pipe_metabolomics <- function() {
             )
         ),
 
-        # ==================================================================
         # Standardized outputs, Shiny payload, HTML report
-        # ==================================================================
         tar_target(
             metab_standard_outputs,
             write_metabolomics_outputs(
@@ -431,27 +447,20 @@ pipe_metabolomics <- function() {
 
         tar_target(
             metab_report,
-            {
-                # Depend on met_qc_summary_report to guarantee the intermediate
-                # review report is generated before the full analysis report.
-                # This ensures consistency: both reports use the same QC outputs.
-                .qc_done <- met_qc_summary_report
-                mod_metabolomics_report(
-                    pre                = metab_pre,
-                    qc_res             = metab_qc_pre_obj,
-                    de_res             = metab_de_res,
-                    feature_sel_res    = metab_feature_sel_res,
-                    enrichment_res     = metab_enrichment_res,
-                    config             = config,
-                    out_dir            = metab_out_dir,
-                    qc_comparison_file = met_qc_comparison,
-                    qc_suite_files     = c(met_log_qc,
-                                           met_norm_tss_qc,
-                                           met_norm_median_qc,
-                                           met_norm_pqn_qc)
-                )
-            },
+            mod_metabolomics_report(
+                pre                = metab_pre,
+                qc_res             = metab_qc_pre_obj,
+                de_res             = metab_de_res,
+                feature_sel_res    = metab_feature_sel_res,
+                enrichment_res     = metab_enrichment_res,
+                config             = config,
+                out_dir            = metab_out_dir,
+                qc_comparison_file = NULL,
+                qc_suite_files     = NULL
+            ),
             format = "file"
         )
     )
+
+    c(base_targets, analysis_targets)
 }

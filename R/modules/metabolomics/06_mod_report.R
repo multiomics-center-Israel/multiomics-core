@@ -26,13 +26,6 @@
 #' @return Character scalar: absolute path to the rendered HTML file.
 mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
                                       config, out_dir) {
-    # Skip report when chosen_norm is already set (pass 2)
-    chosen <- config$modes$metabolomics$preprocessing$chosen_norm
-    if (!is.null(chosen)) {
-        message(sprintf("[mod_met_qc_summary_report] chosen_norm = '%s'; skipping QC report.", chosen))
-        return(character(0))
-    }
-
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping QC summary report generation")
         return(character(0))
