@@ -102,7 +102,7 @@ add_figure_slide <- function(pptx, title, img, subtitle = NULL, bl = "",
 
     # Image — centered, with good aspect ratio
     img_w <- 7.5
-    img_h <- 4.8
+    img_h <- 4.3
     img_left <- (SLIDE_W - img_w) / 2
     if (file.exists(img)) {
         pptx <- officer::ph_with(pptx,
@@ -118,7 +118,7 @@ add_figure_slide <- function(pptx, title, img, subtitle = NULL, bl = "",
             officer::ftext(bl, fp_bottom_line())
         )
         pptx <- officer::ph_with(pptx, value = bl_parts,
-            location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
     }
 
     # Footer
@@ -318,7 +318,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                 officer::ftext("AI Summary: ", fp_bl_prefix()),
                 officer::ftext(design_bl, fp_bottom_line())
             ),
-            location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
     }
     pptx <- officer::ph_with(pptx,
         value = officer::fpar(officer::ftext(footer_txt, fp_footer())),
@@ -458,7 +458,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                 value = officer::fpar(
                     officer::ftext("AI Summary: ", fp_bl_prefix()),
                     officer::ftext(tbl_bl, fp_bottom_line())),
-                location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+                location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
         }
         pptx <- officer::ph_with(pptx,
             value = officer::fpar(officer::ftext(footer_txt, fp_footer())),
