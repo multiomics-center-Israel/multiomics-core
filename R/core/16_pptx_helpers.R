@@ -9,6 +9,24 @@
 # AI BOTTOM LINE — Claude Code CLI
 # ==============================================================================
 
+#' Truncate bottom-line text to fit in the PPTX text box
+#'
+#' Limits text to max_chars, cutting at the last sentence boundary that fits.
+#' @param txt Character string.
+#' @param max_chars Maximum allowed characters (default 350).
+#' @return Truncated string.
+truncate_bl <- function(txt, max_chars = 350) {
+    if (nchar(txt) <= max_chars) return(txt)
+    # Try to cut at last sentence boundary within limit
+    short <- substr(txt, 1, max_chars)
+    last_period <- max(gregexpr("\\.", short)[[1]])
+    if (last_period > 0 && last_period > max_chars * 0.5) {
+        return(substr(txt, 1, last_period))
+    }
+    paste0(substr(txt, 1, max_chars - 3), "...")
+}
+
+
 #' Generate an AI bottom-line summary for a slide
 #'
 #' @param slide_context Character string describing what the slide shows.
@@ -27,9 +45,9 @@ generate_slide_bottom_line <- function(slide_context, stats_json = NULL,
     prompt_parts <- paste0(
         "You are an expert bioinformatics scientist writing a bottom-line summary ",
         "for a PowerPoint slide in an omics analysis presentation. ",
-        "Write 1-3 concise, scientifically precise sentences summarizing the key ",
-        "takeaway from this slide. Write in plain text (no markdown, no bullet points). ",
-        "Be direct and informative.\n\n",
+        "Write EXACTLY 1-2 short sentences (MAXIMUM 250 characters total). ",
+        "No markdown, no bullet points. Be direct and specific. ",
+        "Do NOT exceed 250 characters.\n\n",
         "SLIDE CONTENT:\n", slide_context
     )
 
@@ -45,7 +63,7 @@ generate_slide_bottom_line <- function(slide_context, stats_json = NULL,
     tryCatch({
         raw <- system(cmd, intern = TRUE, timeout = 120)
         txt <- trimws(paste(raw, collapse = " "))
-        if (nzchar(txt)) txt else ""
+        if (nzchar(txt)) truncate_bl(txt) else ""
     }, error = function(e) { message("  Claude CLI error: ", e$message); "" })
 }
 
@@ -123,7 +141,7 @@ pptx_add_figure_slide <- function(pptx, title, img, subtitle = NULL, bl = "",
 
     # Image
     if (file.exists(img)) {
-        img_w <- 7.5; img_h <- 4.8
+        img_w <- 7.5; img_h <- 4.3
         pptx <- officer::ph_with(pptx,
             value = officer::external_img(img, width = img_w, height = img_h),
             location = officer::ph_location(left = (10 - img_w) / 2, top = top_img,
@@ -136,7 +154,7 @@ pptx_add_figure_slide <- function(pptx, title, img, subtitle = NULL, bl = "",
             value = officer::fpar(
                 officer::ftext("AI Summary: ", pptx_fp_bl_prefix()),
                 officer::ftext(bl, pptx_fp_bottom_line())),
-            location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
     }
 
     # Footer
@@ -233,7 +251,7 @@ pptx_add_design_slide <- function(pptx, items, bl = "", footer = "") {
             value = officer::fpar(
                 officer::ftext("AI Summary: ", pptx_fp_bl_prefix()),
                 officer::ftext(bl, pptx_fp_bottom_line())),
-            location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
     }
 
     if (nzchar(footer)) {
@@ -294,7 +312,7 @@ pptx_add_table_slide <- function(pptx, title, display_df, subtitle = NULL,
             value = officer::fpar(
                 officer::ftext("AI Summary: ", pptx_fp_bl_prefix()),
                 officer::ftext(bl, pptx_fp_bottom_line())),
-            location = officer::ph_location(left = 0.5, top = 6.2, width = 9, height = 0.8))
+            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
     }
 
     if (nzchar(footer)) {
