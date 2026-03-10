@@ -57,17 +57,5 @@ Rplots.pdf
 Rplot.png
 .lintr
 
-# Generated artifacts (presentations, meeting docs)
-*.pptx
-
 # User-specific Claude Code settings
 .claude/settings.local.json
-
-# Researcher-specific scripts
-compare_*.R
-validate_*.R
-
-# Standalone HTML artifacts (keep report templates)
-PR*_Meeting_Prep.html
-researcher_intake_form.html
-wizard.html
