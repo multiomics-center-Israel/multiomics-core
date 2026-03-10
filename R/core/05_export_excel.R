@@ -165,6 +165,9 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     # Strip spaces to match summarize_limma_mult_imputation() convention
     # (proteomics convention; RNA preserves original contrast names)
     contrast_safe <- gsub(" ", "", contrast)
+    if (contrast_safe != contrast) {
+        message("Note: spaces removed from contrast name '", contrast, "' -> '", contrast_safe, "'")
+    }
 
     # FIX 2: RNA doesn't use ".imputs." in column names
     # RNA also preserves spaces in contrast names (from build_rnaseq_summary_df)

@@ -27,7 +27,7 @@ DONE_BG   = RGBColor(0x0D, 0x2B, 0x1A)  # dark green tint
 PROG_BG   = RGBColor(0x2B, 0x1D, 0x0D)  # dark amber tint
 PLAN_BG   = RGBColor(0x1A, 0x1A, 0x2E)  # dark indigo tint
 
-BASE = "/home/multiomics-core"
+BASE = os.path.dirname(os.path.abspath(__file__))
 prs = Presentation(f"{BASE}/multiomics_core_summary.pptx")
 
 # ---------------------------------------------------------------------------

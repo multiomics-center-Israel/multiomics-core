@@ -75,8 +75,8 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
                 } else {
                     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
                     if (log2_fc > 0) sig <- sig & (abs(tbl[[fc_col]]) >= log2_fc)
-                    up <- sum(sig & tbl[[fc_col]] > 0, na.rm = TRUE)
-                    dn <- sum(sig & tbl[[fc_col]] < 0, na.rm = TRUE)
+                    up <- sum(sig & tbl[[fc_col]] >= log2_fc, na.rm = TRUE)
+                    dn <- sum(sig & tbl[[fc_col]] <= -log2_fc, na.rm = TRUE)
                 }
             } else {
                 up <- 0; dn <- 0

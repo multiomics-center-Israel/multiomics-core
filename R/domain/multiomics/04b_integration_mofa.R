@@ -96,7 +96,12 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
     data_opts <- MOFA2::get_default_data_options(mofa_obj)
 
     model_opts <- MOFA2::get_default_model_options(mofa_obj)
-    model_opts$num_factors <- min(num_factors, ncol(matrices[[1]]) - 1)
+    n_samples <- ncol(matrices[[1]])
+    if (n_samples < 3) {
+        warning("MOFA requires at least 3 samples; found ", n_samples)
+        return(NULL)
+    }
+    model_opts$num_factors <- min(num_factors, n_samples - 1)
 
     train_opts <- MOFA2::get_default_training_options(mofa_obj)
     train_opts$convergence_mode <- convergence_mode
@@ -633,29 +638,24 @@ run_mofa <- function(views,
     })
     view_args_str <- paste(view_args, collapse = " ")
 
-    # Build command
-    cmd <- sprintf(
-        "%s '%s' --views %s --outfile '%s' --outdir '%s' --factors %d --seed %d --max_iter %d --convergence_mode %s",
-        python_exec,
+    # Build command arguments (use system2 to avoid shell injection)
+    cmd_args <- c(
         script_path,
-        view_args_str,
-        outfile,
-        outdir,
-        n_factors,
-        seed,
-        max_iter,
-        convergence_mode
+        "--views", view_args_str,
+        "--outfile", outfile,
+        "--outdir", outdir,
+        "--factors", as.character(n_factors),
+        "--seed", as.character(seed),
+        "--max_iter", as.character(max_iter),
+        "--convergence_mode", convergence_mode
     )
 
     if (scale_views) {
-        cmd <- paste(cmd, "--scale_views")
+        cmd_args <- c(cmd_args, "--scale_views")
     }
 
     if (verbose) {
-        cmd <- paste(cmd, "--verbose")
-    }
-
-    if (verbose) {
+        cmd_args <- c(cmd_args, "--verbose")
         message("Running MOFA+ analysis...")
         message("  Views: ", paste(names(views), collapse = ", "))
         message("  Factors: ", n_factors)
@@ -663,8 +663,8 @@ run_mofa <- function(views,
         message()
     }
 
-    # Execute command
-    exit_code <- system(cmd, intern = FALSE)
+    # Execute command (system2 avoids shell injection)
+    exit_code <- system2(python_exec, args = cmd_args)
 
     # Check if successful
     if (exit_code != 0) {

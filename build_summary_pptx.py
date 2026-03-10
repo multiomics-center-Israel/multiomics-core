@@ -24,7 +24,7 @@ PINK      = RGBColor(0xF4, 0x72, 0xB6)  # pink-400
 W = Inches(13.333)
 H = Inches(7.5)
 
-BASE = "/home/multiomics-core"
+BASE = os.path.dirname(os.path.abspath(__file__))
 
 prs = Presentation()
 prs.slide_width  = W

@@ -48,5 +48,9 @@ COPY _targets.R _targets.R
 # Create mount points for data and outputs
 RUN mkdir -p /app/data /app/outputs /app/config
 
+# Run as non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
 # Default: interactive wizard
 CMD ["Rscript", "run.R", "--new"]
