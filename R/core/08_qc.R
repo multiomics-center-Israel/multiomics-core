@@ -355,6 +355,55 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
 }
 
 
+#' RLE (Relative Log Expression) boxplot per sample
+#'
+#' Computes per-feature deviation from the row median and draws a boxplot
+#' per sample.  Well-normalized data centers around zero with tight IQRs.
+#' @param expr_norm Expression matrix (features x samples, log2 scale)
+#' @param meta Sample metadata data.frame
+#' @param cfg Mode config with effects$color, effects$samples
+#' @param out_file Optional output file path
+qc_rle_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
+  d <- prepare_qc_data(expr_norm, meta, cfg)
+
+  row_medians <- apply(d$expr, 1, stats::median, na.rm = TRUE)
+  rle_mat <- d$expr - row_medians
+
+  n_features <- nrow(rle_mat)
+  rle_long <- data.frame(
+    sample = rep(d$sample_ids, each = n_features),
+    value  = as.vector(rle_mat),
+    stringsAsFactors = FALSE
+  )
+  cond_values <- d$meta[[d$color_col]]
+  rle_long[[d$color_col]] <- rep(cond_values, each = n_features)
+  rle_long <- rle_long[is.finite(rle_long$value), , drop = FALSE]
+
+  p <- ggplot2::ggplot(
+    rle_long,
+    ggplot2::aes(x = sample, y = value, colour = .data[[d$color_col]])
+  ) +
+    ggplot2::geom_boxplot(outlier.size = 0.4) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+    ggplot2::labs(
+      title  = "Relative Log Expression (RLE)",
+      x      = "Sample",
+      y      = "Deviation from feature median",
+      colour = d$color_col
+    ) +
+    ggplot2::theme_bw() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
+    )
+
+  if (!is.null(out_file)) {
+    ggplot2::ggsave(out_file, plot = p, width = 8, height = 5)
+  }
+
+  invisible(p)
+}
+
+
 #' Histogram summary of normalized expression by condition
 norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)

@@ -321,6 +321,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
   do_dens  <- isTRUE(cfg$plots$density               %||% TRUE)
   do_box   <- isTRUE(cfg$plots$boxplot               %||% TRUE)
   do_hist  <- isTRUE(cfg$plots$histogram             %||% TRUE)
+  do_rle   <- isTRUE(cfg$plots$rle                    %||% TRUE)
   do_hcor  <- isTRUE(cfg$plots$heatmap_correlation   %||% TRUE)
   do_hdist <- isTRUE(cfg$plots$heatmap_distance      %||% TRUE)
   do_hexp  <- isTRUE(cfg$plots$heatmap_expression    %||% TRUE)
@@ -540,6 +541,26 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
     status  <- "partial"
   }
 
+  # ---- RLE (Relative Log Expression) -----------------------------------------
+  if (do_rle && n_samp >= 2L) {
+    rle_file <- file.path(out_dir, "rle_boxplot.png")
+    tryCatch({
+      qc_rle_boxplot(
+        mat_sub, meta_sub, cfg_mode,
+        out_file = rle_file
+      )
+      files <- c(files, rle_file)
+    }, error = function(e) {
+      skipped <<- c(skipped, sprintf("rle: %s", conditionMessage(e)))
+      status  <<- "partial"
+      message(sprintf("[QC][%s][%s] Skipped RLE: %s",
+                      stage, subset_mode, conditionMessage(e)))
+    })
+  } else if (do_rle) {
+    skipped <- c(skipped, sprintf("rle: n_samples (%d) < 2", n_samp))
+    status  <- "partial"
+  }
+
   # ---- Histogram (2–8 groups) ------------------------------------------------
   if (do_hist) {
     n_groups <- if (color_col %in% colnames(meta_sub)) {
@@ -694,6 +715,14 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
 #'   (PNGs + two \code{metrics_summary.tsv} files).  An empty
 #'   \code{character(0)} is returned when \code{qc$enabled} is \code{FALSE}.
 mod_met_qc_suite <- function(data, stage, out_dir, config) {
+  # Skip QC plots when chosen_norm is already set (pass 2)
+  chosen <- config$modes$metabolomics$preprocessing$chosen_norm
+  if (!is.null(chosen)) {
+    message(sprintf("[mod_met_qc_suite] chosen_norm = '%s'; skipping QC for stage '%s'.",
+                    chosen, stage))
+    return(character(0))
+  }
+
   cfg_qc      <- config$modes$metabolomics$qc           %||% list()
   cfg_mode    <- config$modes$metabolomics
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
@@ -770,6 +799,13 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
                                         median_qc_files, pqn_qc_files,
                                         out_dir, config,
                                         imputed_data = NULL) {
+  # Skip comparison when chosen_norm is already set (pass 2)
+  chosen <- config$modes$metabolomics$preprocessing$chosen_norm
+  if (!is.null(chosen)) {
+    message(sprintf("[mod_met_qc_comparison_table] chosen_norm = '%s'; skipping QC comparison.", chosen))
+    return(character(0))
+  }
+
   all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files)
 
   # Locate with_qc/metrics_summary.tsv in each file vector.

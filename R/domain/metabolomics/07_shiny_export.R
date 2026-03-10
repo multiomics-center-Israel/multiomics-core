@@ -297,11 +297,6 @@ build_shiny_payload_metabolomics <- function(
             payload$missingness <- pre$info$missingness
         }
 
-        # Normalization evaluation results (if any)
-        if (!is.null(pre$normalization_eval)) {
-            payload$normalization_eval <- pre$normalization_eval
-        }
-
         # Sample map (CD column to sample_id mapping)
         if (!is.null(pre$sample_map)) {
             payload$sample_map <- pre$sample_map

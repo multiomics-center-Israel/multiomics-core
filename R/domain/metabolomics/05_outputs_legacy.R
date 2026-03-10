@@ -34,11 +34,5 @@ write_metabolomics_outputs <- function(pre, config, out_dir) {
     written <- c(written, save_tsv(pre$sample_map, out_ds, "sample_map_cd.tsv"))
   }
   
-  # Normalization evaluation (if available)
-  if (!is.null(pre$normalization_eval)) {
-    written <- c(written, save_tsv(pre$normalization_eval, out_ds,
-                                   "normalization_method_comparison.tsv"))
-  }
-  
   written
 }

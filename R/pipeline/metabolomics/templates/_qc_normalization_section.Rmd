@@ -175,6 +175,34 @@ cat(embed_png(stage_files(qc_files, "norm_median"), "boxplot"))
 cat(embed_png(stage_files(qc_files, "norm_pqn"), "boxplot"))
 ```
 
+## RLE {.tabset}
+
+*Relative Log Expression: per-sample deviation from feature medians. Well-normalized data centers around zero with tight IQRs.*
+
+### Log
+
+```{r nqc-rle-log, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "log"), "rle_boxplot"))
+```
+
+### TSS
+
+```{r nqc-rle-tss, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_tss"), "rle_boxplot"))
+```
+
+### Median
+
+```{r nqc-rle-median, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_median"), "rle_boxplot"))
+```
+
+### PQN
+
+```{r nqc-rle-pqn, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_pqn"), "rle_boxplot"))
+```
+
 ## QC Noise Reduction {.tabset}
 
 *Each pair compares PCA **with** injected QC samples (all samples) vs **without** them (biological samples only).

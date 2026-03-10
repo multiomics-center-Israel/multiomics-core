@@ -300,6 +300,12 @@ mod_met_log <- function(imputed, config) {
 #'
 mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
                                     logged, out_dir, config) {
+  chosen <- config$modes$metabolomics$preprocessing$chosen_norm
+  if (!is.null(chosen)) {
+    message(sprintf("chosen_norm = '%s' is set; skipping normalization comparison.", chosen))
+    return(character(0))
+  }
+
   methods <- list(
     list(label = "tss",      obj = norm_tss),
     list(label = "median",   obj = norm_median),
@@ -359,19 +365,22 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   pre_cfg  <- cfg_mode$preprocessing %||% list()
   norm_cfg <- cfg_mode$normalization  %||% list()
 
-  chosen_norm <- tolower(pre_cfg$chosen_norm %||% "pqn")
+  chosen_norm_raw <- pre_cfg$chosen_norm
+
+  if (is.null(chosen_norm_raw)) {
+    stop("chosen_norm is NULL -- review mode. Set preprocessing.chosen_norm ",
+         "in config after reviewing qc/normalization_review_report.html, ",
+         "then re-run.")
+  }
+
+  chosen_norm <- tolower(chosen_norm_raw)
 
   chosen_mat <- switch(chosen_norm,
     tss    = norm_tss$mat,
     median = norm_median$mat,
     pqn    = norm_pqn$mat,
-    {
-      warning(sprintf(
-        "mod_met_corrected: unknown chosen_norm '%s'; defaulting to 'pqn'.",
-        chosen_norm
-      ))
-      norm_pqn$mat
-    }
+    stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
+                 "Valid options: tss, median, pqn.", chosen_norm))
   )
 
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)

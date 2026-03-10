@@ -5,7 +5,7 @@
 # representation, and applies normalization.
 #
 # Reuses: assert_numeric_matrix, assert_meta_contract, align_meta_to_expr,
-#         apply_normalization_pipeline, evaluate_normalization_methods,
+#         apply_normalization_pipeline,
 #         build_minimal_meta, parse_cd_raw, parse_processed_wide
 
 
@@ -14,8 +14,7 @@
 #' @param inputs  List from load_metabolomics_inputs().
 #' @param config  Full pipeline config.
 #' @return list matching the pre-processing contract:
-#'   expr_raw, expr_filt, expr_work, meta, row_data, info,
-#'   normalization_eval (NULL if evaluate_methods not set)
+#'   expr_raw, expr_filt, expr_work, meta, row_data, info
 preprocess_metabolomics <- function(inputs, config) {
     cfg <- config$modes$metabolomics
     format <- inputs$format %||% cfg$input$format %||% "cd_raw"
@@ -150,23 +149,7 @@ preprocess_metabolomics <- function(inputs, config) {
 
     assert_numeric_matrix(expr_work, "metab_expr_work")
 
-    # ---- 7. Optional: evaluate alternative methods ----
-    norm_eval <- NULL
-    eval_methods <- norm_cfg$evaluate_methods
-    if (!is.null(eval_methods) && length(eval_methods) > 0) {
-        # If input_already_normalized, filter out methods that apply sample_norm
-        # unless explicitly requested
-        if (input_already_normalized) {
-            for (j in seq_along(eval_methods)) {
-                if (is.null(eval_methods[[j]]$sample_norm)) {
-                    eval_methods[[j]]$sample_norm <- "none"
-                }
-            }
-        }
-        norm_eval <- evaluate_normalization_methods(expr_for_norm, eval_methods, row_data)
-    }
-
-    # ---- 8. Missingness summary ----
+    # ---- 7. Missingness summary ----
     miss_per_sample <- colSums(is.na(expr_filt)) / nrow(expr_filt)
     miss_per_feature <- rowSums(is.na(expr_filt)) / ncol(expr_filt)
     miss_summary <- list(
@@ -196,7 +179,6 @@ preprocess_metabolomics <- function(inputs, config) {
             n_samples       = ncol(expr_work),
             missingness     = miss_summary
         ),
-        normalization_eval = norm_eval,
         sample_map = parsed$sample_map %||% NULL
     )
 }
