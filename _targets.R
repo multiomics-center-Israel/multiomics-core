@@ -57,7 +57,8 @@ invisible(lapply(pipeline_files, tar_source))
 required_pkgs <- c(
   "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
   "openxlsx", "readr", "readxl", "tidyr", "tibble",
-  "edgeR", "DESeq2", "SummarizedExperiment"
+  "edgeR", "DESeq2", "SummarizedExperiment",
+  "impute"   # Bioconductor: KNN imputation for metabolomics MAR features
 )
 # Only require packages that are actually installed (allows running a
 # subset of pipelines when some omics-specific packages are absent).
@@ -91,19 +92,12 @@ list(
     format = "file"
   ),
 
-  # Load configuration
+  # Load and validate configuration. validate_config() applies defaults (e.g.
+  # multiomics integration methods) and returns the updated config, so all
+  # downstream targets that depend on `config` receive the defaulted values.
   tar_target(
     config,
-    load_config(config_file)
-  ),
-
-  # Validate configuration early; downstream targets should depend on this
-  tar_target(
-    cfg_validated,
-    {
-      validate_config(config)
-      TRUE
-    }
+    validate_config(load_config(config_file))
   ),
 
   # Resolve run output directory
@@ -116,25 +110,36 @@ list(
   tar_target(
     execution_info_files,
     write_execution_info(
-      config = config,
-      run_dir = run_dir,
-      config_path = config_file,
+      config       = config,
+      run_dir      = run_dir,
+      config_path  = config_file,
       targets_file = "_targets.R"
     ),
     format = "file"
   ),
 
-  # Mode-specific pipelines (only run if mode is present in config)
+  # Mode-specific pipelines — only included when the mode is present in config.
+  # Read config at plan-definition time so {targets} can detect mode changes.
   {
-    cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-    if (cfg_path == "") cfg_path <- file.path(getwd(), "config.yaml")
-    cfg_raw <- yaml::read_yaml(cfg_path)
+    cfg_raw      <- yaml::read_yaml(config_path)
     mode_targets <- list()
+
+    # Single-omics pipelines
     if (!is.null(cfg_raw$modes$rna))           mode_targets <- c(mode_targets, pipe_rnaseq())
     if (!is.null(cfg_raw$modes$proteomics))    mode_targets <- c(mode_targets, pipe_proteomics())
     if (!is.null(cfg_raw$modes$metabolomics))  mode_targets <- c(mode_targets, pipe_metabolomics())
-    if (!is.null(cfg_raw$modes$lipidomics))   mode_targets <- c(mode_targets, pipe_lipidomics())
-    if (!is.null(cfg_raw$modes$multiomics))  mode_targets <- c(mode_targets, pipe_multiomics())
+    if (!is.null(cfg_raw$modes$lipidomics))    mode_targets <- c(mode_targets, pipe_lipidomics())
+
+    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
+    # Only enabled if >=2 omics modes are present AND multiomics mode is configured
+    n_omics <- sum(!is.null(cfg_raw$modes$rna),
+                   !is.null(cfg_raw$modes$proteomics),
+                   !is.null(cfg_raw$modes$metabolomics))
+
+    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
+      mode_targets <- c(mode_targets, pipe_multiomics(cfg_raw))
+    }
+
     mode_targets
   }
 )
