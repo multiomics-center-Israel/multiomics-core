@@ -118,8 +118,17 @@ build_mae <- function(inputs, config, gene_protein_mapping = NULL) {
         } else {
             if (!identical(rownames(rd), rownames(expr))) {
                 # Align row_data to expression
-                rd <- rd[match(rownames(expr), rownames(rd)), , drop = FALSE]
-                rownames(rd) <- rownames(expr)
+                idx <- match(rownames(expr), rownames(rd))
+                if (all(is.na(idx))) {
+                    warning("No matching features between row_data and expression for '", om,
+                            "'; creating minimal row_data")
+                    rd <- data.frame(feature_id = rownames(expr),
+                                     row.names = rownames(expr),
+                                     stringsAsFactors = FALSE)
+                } else {
+                    rd <- rd[idx, , drop = FALSE]
+                    rownames(rd) <- rownames(expr)
+                }
             }
         }
 
