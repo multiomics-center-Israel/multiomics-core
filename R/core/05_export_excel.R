@@ -158,18 +158,18 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 
 #' Get standard column names for a contrast
 #' @param contrast Contrast name
-#' @param mode "proteomics" (uses .imputs.) or "rna" (no .imputs.)
+#' @param mode "proteomics" (uses .imputs.), "rna" or "metabolomics" (no .imputs.)
 get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
 
     # Proteomics DE summary strips spaces from contrast names;
-    # RNA-seq keeps them as-is.  Only normalize for proteomics.
-    if (mode != "rna") {
+    # RNA-seq and metabolomics keep them as-is.  Only normalize for proteomics.
+    if (!mode %in% c("rna", "metabolomics")) {
         contrast <- normalize_contrast_name(contrast)
     }
 
-    # RNA doesn't use ".imputs." in column names
-    if (mode == "rna") {
+    # RNA and metabolomics use identical column naming (no .imputs. infix)
+    if (mode %in% c("rna", "metabolomics")) {
         list(
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),

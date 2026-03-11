@@ -85,23 +85,24 @@ load_precomputed_metabolomics_de <- function(config) {
         tbl <- de_tables[[ctr]]
         idx <- match(summary_df$feature_id, tbl$feature_id)
 
-        summary_df[[paste0("logFC_", ctr)]]     <- tbl$logFC[idx]
-        summary_df[[paste0("AveExpr_", ctr)]]   <- tbl$AveExpr[idx]
-        summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value[idx]
-        summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val[idx]
+        # Signed linear FC from logFC (same transform as build_de_summary)
+        lfc <- tbl$logFC[idx]
+        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
+
+        summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
+        summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr[idx]
+        summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
+        summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
 
         pass <- as.integer(
             !is.na(tbl$adj.P.Val[idx]) &
             tbl$adj.P.Val[idx] < padj_cutoff &
             abs(tbl$logFC[idx]) >= log2fc_cut
         )
-        summary_df[[paste0("pass_", ctr)]] <- pass
+        summary_df[[paste0("pass.", ctr)]] <- pass
     }
 
-    pass_cols <- grep("^pass_", colnames(summary_df), value = TRUE)
-    summary_df$pass_any_contrast <- as.integer(
-        rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE) > 0
-    )
+    summary_df <- add_pass_any_contrast(summary_df, pass_prefix = "^pass\\.")
 
     message("metabolomics precomputed DE: ", nrow(summary_df), " features, ",
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
@@ -361,6 +362,9 @@ make_contrast_label <- function(contrast_str) {
 
 #' Build wide summary_df from per-contrast DE tables
 #'
+#' Column naming follows the RNA-style contract (no `.imputs.` infix):
+#'   linearFC.<cn>, pvalue.<cn>, padj.<cn>, pass.<cn>, AveExpr.<cn>
+#'
 #' @param de_tables Named list of per-contrast data.frames.
 #' @param padj_cutoff Numeric, adjusted p-value threshold.
 #' @param log2fc_cut  Numeric, absolute log2 FC threshold.
@@ -377,25 +381,26 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
     for (ctr in contrast_names) {
         tbl <- de_tables[[ctr]]
 
-        summary_df[[paste0("logFC_", ctr)]]     <- tbl$logFC
-        summary_df[[paste0("AveExpr_", ctr)]]   <- tbl$AveExpr
-        summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value
-        summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val
+        # Signed linear FC: preserves directionality from limma logFC
+        lfc <- tbl$logFC
+        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
 
-        # Significance flag
+        summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
+        summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr
+        summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value
+        summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val
+
+        # Significance flag (logic unchanged — same thresholds, same test)
         pass <- as.integer(
             !is.na(tbl$adj.P.Val) &
             tbl$adj.P.Val < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
-        summary_df[[paste0("pass_", ctr)]] <- pass
+        summary_df[[paste0("pass.", ctr)]] <- pass
     }
 
-    # Aggregate pass flag across contrasts
-    pass_cols <- grep("^pass_", colnames(summary_df), value = TRUE)
-    summary_df$pass_any_contrast <- as.integer(
-        rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE) > 0
-    )
+    # Aggregate pass flag across contrasts (reuse shared helper)
+    summary_df <- add_pass_any_contrast(summary_df, pass_prefix = "^pass\\.")
 
     summary_df
 }
@@ -403,19 +408,23 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
 
 #' Extract a per-contrast DE table from summary_df for plotting
 #'
-#' Returns a data.frame with columns logFC, P.Value, adj.P.Val, AveExpr
-#' matching the core plot_volcano / plot_ma signature.
+#' Reads aligned column names (linearFC., pvalue., padj.) from summary_df
+#' and returns logFC (back-computed) for plot_volcano / plot_ma compatibility.
 #'
 #' @param summary_df Wide DE summary.
 #' @param contrast   Contrast label (e.g. "2024_vs_2013").
 #' @return data.frame suitable for plot_volcano / plot_ma.
 extract_contrast_table <- function(summary_df, contrast) {
+    linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+    # Back-compute logFC from signed linearFC for plotting
+    logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+
     data.frame(
         feature_id = summary_df$feature_id,
-        logFC      = summary_df[[paste0("logFC_", contrast)]],
-        AveExpr    = summary_df[[paste0("AveExpr_", contrast)]],
-        P.Value    = summary_df[[paste0("P.Value_", contrast)]],
-        adj.P.Val  = summary_df[[paste0("adj.P.Val_", contrast)]],
+        logFC      = logfc,
+        AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+        P.Value    = summary_df[[paste0("pvalue.", contrast)]],
+        adj.P.Val  = summary_df[[paste0("padj.", contrast)]],
         stringsAsFactors = FALSE
     )
 }

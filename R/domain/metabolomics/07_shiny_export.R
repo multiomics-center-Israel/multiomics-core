@@ -357,32 +357,22 @@ build_shiny_payload_metabolomics <- function(
 build_de_summary_counts_metabolomics <- function(de_stats) {
     if (is.null(de_stats)) return(NULL)
 
-    pass_cols <- grep("^pass_", names(de_stats), value = TRUE)
+    # Aligned naming: pass.<cn> (dot separator, no underscore)
+    pass_cols <- grep("^pass\\.", names(de_stats), value = TRUE)
     pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
     if (length(pass_cols) == 0) return(NULL)
 
     summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass_", "", col)
+        contrast_name <- sub("^pass\\.", "", col)
 
-        # Try multiple FC column name patterns
-        fc_patterns <- c(
-            paste0("logFC_", contrast_name),
-            paste0("log2FoldChange_", contrast_name),
-            paste0("logFC.", contrast_name),
-            paste0("FC_", contrast_name)
-        )
-        fc_col <- NULL
-        for (pat in fc_patterns) {
-            if (pat %in% names(de_stats)) {
-                fc_col <- pat
-                break
-            }
-        }
+        # Aligned naming: linearFC.<cn> (signed, so >0 = up, <0 = down)
+        fc_col <- paste0("linearFC.", contrast_name)
+        has_fc <- fc_col %in% names(de_stats)
 
         sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1
 
-        if (!is.null(fc_col)) {
+        if (has_fc) {
             up <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
             down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
         } else {
