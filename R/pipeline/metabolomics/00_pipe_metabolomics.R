@@ -415,11 +415,22 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             )
         ),
 
-        # Standardized outputs, Shiny payload, HTML report
+        # Standardized outputs, final results, Shiny payload, HTML report
         tar_target(
             metab_standard_outputs,
             write_metabolomics_outputs(
                 pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            ),
+            format = "file"
+        ),
+
+        tar_target(
+            metab_final_results,
+            write_metabolomics_final_results(
+                pre     = metab_pre,
+                de_res  = metab_de_res,
                 config  = config,
                 out_dir = metab_out_dir
             ),
