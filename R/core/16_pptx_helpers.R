@@ -244,7 +244,7 @@ pptx_add_design_slide <- function(pptx, items, bl = "", footer = "") {
     })
     pptx <- officer::ph_with(pptx,
         value = do.call(officer::block_list, design_fpars),
-        location = officer::ph_location(left = 1.5, top = 1.2, width = 7, height = 4.5))
+        location = officer::ph_location(left = 1.5, top = 1.2, width = 7, height = 4.2))
 
     if (nzchar(bl)) {
         pptx <- officer::ph_with(pptx,
@@ -287,6 +287,8 @@ pptx_add_table_slide <- function(pptx, title, display_df, subtitle = NULL,
             location = officer::ph_location(left = 0.5, top = 0.85, width = 9, height = 0.3))
     }
 
+    # Table on left, AI sidebar on right to avoid overlap
+    tbl_w <- if (nzchar(bl)) 6.0 else 9.0
     if (requireNamespace("flextable", quietly = TRUE)) {
         ft <- flextable::flextable(display_df)
         ft <- flextable::fontsize(ft, size = 8, part = "body")
@@ -297,14 +299,14 @@ pptx_add_table_slide <- function(pptx, title, display_df, subtitle = NULL,
         ft <- flextable::autofit(ft)
         ft <- flextable::padding(ft, padding = 3, part = "all")
         pptx <- officer::ph_with(pptx, value = ft,
-            location = officer::ph_location(left = 0.5, top = 1.2, width = 9, height = 4.5))
+            location = officer::ph_location(left = 0.5, top = 1.2, width = tbl_w, height = 5.5))
     } else {
         tbl_text <- paste(
             apply(display_df, 1, function(r) paste(r, collapse = "    ")),
             collapse = "\n")
         pptx <- officer::ph_with(pptx,
             value = officer::fpar(officer::ftext(tbl_text, pptx_fp_body(9))),
-            location = officer::ph_location(left = 0.5, top = 1.2, width = 9, height = 4.5))
+            location = officer::ph_location(left = 0.5, top = 1.2, width = tbl_w, height = 5.5))
     }
 
     if (nzchar(bl)) {
@@ -312,7 +314,7 @@ pptx_add_table_slide <- function(pptx, title, display_df, subtitle = NULL,
             value = officer::fpar(
                 officer::ftext("AI Summary: ", pptx_fp_bl_prefix()),
                 officer::ftext(bl, pptx_fp_bottom_line())),
-            location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
+            location = officer::ph_location(left = 6.8, top = 1.2, width = 2.9, height = 5.5))
     }
 
     if (nzchar(footer)) {

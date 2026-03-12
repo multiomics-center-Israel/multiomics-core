@@ -149,8 +149,10 @@ add_figure_slide <- function(pptx, title, img, subtitle = NULL, bl = "",
 generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                                         enrichment_res, config, out_dir) {
 
-    if (!pptx_enabled(config, "metabolomics")) {
-        message("PowerPoint generation disabled for metabolomics — skipping")
+    # Check both metabolomics and lipidomics mode names
+    mode_key <- if (!is.null(config$modes$metabolomics)) "metabolomics" else "lipidomics"
+    if (!pptx_enabled(config, mode_key)) {
+        message("PowerPoint generation disabled — skipping")
         return(character(0))
     }
 
@@ -159,15 +161,22 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         return(character(0))
     }
 
-    message("Generating metabolomics PowerPoint presentation...")
+    # Detect actual mode: lipidomics reuses this function
+    mode_name <- basename(out_dir)
+    is_lipidomics <- grepl("lipid", mode_name, ignore.case = TRUE)
+    domain_label <- if (is_lipidomics) "Lipidomics" else "Metabolomics"
+    feature_label <- if (is_lipidomics) "Lipids" else "Metabolites"
+    feature_label_lc <- tolower(feature_label)
 
-    metab_cfg  <- config$modes$metabolomics
+    message("Generating ", domain_label, " PowerPoint presentation...")
+
+    metab_cfg  <- config$modes$metabolomics %||% config$modes$lipidomics
     de_cfg     <- metab_cfg$de %||% list()
     norm_cfg   <- metab_cfg$normalization %||% list()
     diag_dir   <- file.path(out_dir, "Diagnostic_plots")
 
     # Project info
-    project_name <- config$project$name %||% "Metabolomics Analysis"
+    project_name <- config$project$name %||% paste(domain_label, "Analysis")
     analyst      <- gsub("_", " ", config$project$analyst %||% "")
     date_str     <- format(Sys.Date(), "%B %d, %Y")
     cond_col     <- de_cfg$condition_column %||% metab_cfg$effects$color %||% "sample_type"
@@ -214,14 +223,14 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     # SLIDE 1: Title
     # ================================================================
     title_context <- sprintf(
-        "Title slide for metabolomics analysis. Project: %s. Analyst: %s. "
-        , project_name, analyst)
+        "Title slide for %s analysis. Project: %s. Analyst: %s. "
+        , domain_label, project_name, analyst)
     if (!is.null(groups)) {
         title_context <- paste0(title_context,
             sprintf("Groups: %s. ", paste(sprintf("%s (n=%d)", names(groups), as.integer(groups)), collapse = ", ")))
     }
     title_context <- paste0(title_context,
-        sprintf("%d metabolites, %d samples, %d significant DE.", n_features, n_samples, n_de))
+        sprintf("%d %s, %d samples, %d significant DE.", n_features, feature_label_lc, n_samples, n_de))
     title_bl <- generate_slide_bottom_line(title_context, config = config)
 
     pptx <- officer::add_slide(pptx, layout = "Blank", master = "Office Theme")
@@ -229,7 +238,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     # Main title
     pptx <- officer::ph_with(pptx,
         value = officer::fpar(
-            officer::ftext("Metabolomics Analysis", officer::fp_text(
+            officer::ftext(paste(domain_label, "Analysis"), officer::fp_text(
                 font.size = 28, bold = TRUE, color = COL_TITLE, font.family = "Calibri"))
         ),
         location = officer::ph_location(left = 1, top = 1.5, width = 8, height = 0.8))
@@ -254,8 +263,8 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     groups_str <- if (!is.null(groups)) {
         paste(sprintf("%s (n=%d)", names(groups), as.integer(groups)), collapse = "  vs  ")
     } else "N/A"
-    stats_text <- sprintf("%d metabolites  |  %d samples  |  %s  |  %d DE metabolites",
-                           n_features, n_samples, groups_str, n_de)
+    stats_text <- sprintf("%d %s  |  %d samples  |  %s  |  %d DE %s",
+                           n_features, feature_label_lc, n_samples, groups_str, n_de, feature_label_lc)
     pptx <- officer::ph_with(pptx,
         value = officer::fpar(officer::ftext(stats_text, fp_body(11))),
         location = officer::ph_location(left = 1, top = 4.0, width = 8, height = 0.4))
@@ -278,8 +287,8 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     # SLIDE 2: Study Design
     # ================================================================
     design_context <- sprintf(
-        "Study design. %d samples, %d metabolites. Groups: %s. DE method: %s. Normalization: %s + %s.",
-        n_samples, n_features, groups_str, de_method,
+        "Study design. %d samples, %d %s. Groups: %s. DE method: %s. Normalization: %s + %s.",
+        n_samples, n_features, feature_label_lc, groups_str, de_method,
         norm_cfg$transform %||% "glog10", norm_cfg$scaling %||% "auto")
     design_bl <- generate_slide_bottom_line(design_context, config = config)
 
@@ -291,14 +300,14 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     # Design info as clean formatted text
     design_items <- list(
         list(label = "Samples", value = as.character(n_samples)),
-        list(label = "Metabolites", value = as.character(n_features)),
+        list(label = feature_label, value = as.character(n_features)),
         list(label = "Groups", value = groups_str),
         list(label = "DE Method", value = de_method),
         list(label = "Transform", value = norm_cfg$transform %||% "glog10"),
         list(label = "Scaling", value = norm_cfg$scaling %||% "auto"),
         list(label = "P-value cutoff", value = as.character(p_cut)),
         list(label = "log2(FC) cutoff", value = as.character(lfc_cut)),
-        list(label = "DE metabolites", value = as.character(n_de))
+        list(label = paste("DE", feature_label_lc), value = as.character(n_de))
     )
 
     # Build formatted block list
@@ -310,7 +319,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     })
     pptx <- officer::ph_with(pptx,
         value = do.call(officer::block_list, design_fpars),
-        location = officer::ph_location(left = 1.5, top = 1.2, width = 7, height = 4.5))
+        location = officer::ph_location(left = 1.5, top = 1.2, width = 7, height = 4.2))
 
     if (nzchar(design_bl)) {
         pptx <- officer::ph_with(pptx,
@@ -414,8 +423,8 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         )
 
         tbl_context <- sprintf(
-            "Top %d DE metabolites for %s. Top: %s (log2FC=%.2f, p=%.2e). Total DE: %d.",
-            top_n, gsub("_vs_", " vs ", ctr),
+            "Top %d DE %s for %s. Top: %s (log2FC=%.2f, p=%.2e). Total DE: %d.",
+            top_n, feature_label_lc, gsub("_vs_", " vs ", ctr),
             display_df$Metabolite[1], display_df$`log2(FC)`[1],
             display_df$P.Value[1], nrow(sig))
         tbl_bl <- generate_slide_bottom_line(tbl_context, config = config)
@@ -423,15 +432,17 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         pptx <- officer::add_slide(pptx, layout = "Blank", master = "Office Theme")
         pptx <- officer::ph_with(pptx,
             value = officer::fpar(officer::ftext(
-                paste("Top DE Metabolites:", gsub("_vs_", " vs ", ctr)),
+                paste("Top DE", paste0(feature_label, ":"), gsub("_vs_", " vs ", ctr)),
                 fp_slide_title())),
             location = officer::ph_location(left = 0.5, top = 0.3, width = 9, height = 0.5))
         pptx <- officer::ph_with(pptx,
             value = officer::fpar(officer::ftext(
-                sprintf("%d significant metabolites (p < %s, |log2FC| >= %s)", nrow(sig), p_cut, lfc_cut),
+                sprintf("%d significant %s (p < %s, |log2FC| >= %s)", nrow(sig), feature_label_lc, p_cut, lfc_cut),
                 fp_label())),
             location = officer::ph_location(left = 0.5, top = 0.85, width = 9, height = 0.3))
 
+        # Table on left, AI sidebar on right to avoid overlap
+        tbl_w <- if (nzchar(tbl_bl)) 6.0 else 9.0
         if (requireNamespace("flextable", quietly = TRUE)) {
             ft <- flextable::flextable(display_df)
             ft <- flextable::fontsize(ft, size = 8, part = "body")
@@ -443,14 +454,14 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
             ft <- flextable::autofit(ft)
             ft <- flextable::padding(ft, padding = 3, part = "all")
             pptx <- officer::ph_with(pptx, value = ft,
-                location = officer::ph_location(left = 0.5, top = 1.2, width = 9, height = 4.5))
+                location = officer::ph_location(left = 0.5, top = 1.2, width = tbl_w, height = 5.5))
         } else {
             tbl_text <- paste(
                 apply(display_df, 1, function(r) paste(r, collapse = "    ")),
                 collapse = "\n")
             pptx <- officer::ph_with(pptx,
                 value = officer::fpar(officer::ftext(tbl_text, fp_body(9))),
-                location = officer::ph_location(left = 0.5, top = 1.2, width = 9, height = 4.5))
+                location = officer::ph_location(left = 0.5, top = 1.2, width = tbl_w, height = 5.5))
         }
 
         if (nzchar(tbl_bl)) {
@@ -458,7 +469,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                 value = officer::fpar(
                     officer::ftext("AI Summary: ", fp_bl_prefix()),
                     officer::ftext(tbl_bl, fp_bottom_line())),
-                location = officer::ph_location(left = 0.5, top = 5.7, width = 9, height = 1.1))
+                location = officer::ph_location(left = 6.8, top = 1.2, width = 2.9, height = 5.5))
         }
         pptx <- officer::ph_with(pptx,
             value = officer::fpar(officer::ftext(footer_txt, fp_footer())),
@@ -474,9 +485,9 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         if (length(hm_png) == 0) hm_png <- heatmap_pngs[1]
         hm_png <- hm_png[1]
 
-        hm_context <- "Heatmap of top DE metabolites with hierarchical clustering."
+        hm_context <- sprintf("Heatmap of top DE %s with hierarchical clustering.", feature_label_lc)
         hm_bl <- generate_slide_bottom_line(hm_context, image_path = hm_png, config = config)
-        pptx <- add_figure_slide(pptx, "DE Metabolites Heatmap", hm_png,
+        pptx <- add_figure_slide(pptx, paste("DE", feature_label, "Heatmap"), hm_png,
                                   subtitle = "Z-scored glog10 intensities | hierarchical clustering",
                                   bl = hm_bl, footer = footer_txt)
     }
@@ -576,7 +587,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
 
     # ---- Save to Results root (parent of mode dir) ----
     results_root <- dirname(out_dir)
-    out_file <- file.path(results_root, "metabolomics_summary.pptx")
+    out_file <- file.path(results_root, paste0(tolower(domain_label), "_summary.pptx"))
     print(pptx, target = out_file)
     message("PowerPoint saved: ", out_file)
     out_file
