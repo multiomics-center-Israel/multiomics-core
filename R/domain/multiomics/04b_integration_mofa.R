@@ -144,11 +144,15 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
     # Extract results
     mofa_results <- extract_mofa_results(mofa_trained, metadata, config)
 
+    # Build feature name map from MAE rowData for display labels
+    feature_name_map <- build_feature_name_map(mae)
+
     # Create visualizations
     plots <- list()
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-        plots <- create_mofa_plots(mofa_trained, mofa_results, metadata, config, out_dir)
+        plots <- create_mofa_plots(mofa_trained, mofa_results, metadata, config,
+                                    out_dir, feature_name_map = feature_name_map)
     }
 
     list(
@@ -157,6 +161,7 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
         weights = mofa_results$weights,
         variance_explained = mofa_results$var_df,
         top_features = mofa_results$top_features,
+        feature_name_map = feature_name_map,
         r2_per_factor = mofa_results$r2_per_factor,
         r2_total = mofa_results$r2_total,
         plots = plots,
@@ -275,7 +280,8 @@ extract_top_mofa_features <- function(weights, n_top = 50) {
 #' @param config Full config object
 #' @param out_dir Output directory
 #' @return List of plot file paths
-create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_dir) {
+create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_dir,
+                              feature_name_map = NULL) {
     message("Creating MOFA2 plots...")
 
     condition_col <- config$modes$multiomics$condition_column %||%
@@ -318,7 +324,8 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
     # 3. Top weights per factor
     tryCatch({
         for (view in names(mofa_results$weights)) {
-            p <- plot_mofa_top_weights(mofa_results$weights[[view]], view, n_top = 20)
+            p <- plot_mofa_top_weights(mofa_results$weights[[view]], view, n_top = 20,
+                                      feature_name_map = feature_name_map)
             plots[[paste0("top_weights_", view)]] <- p
             ggplot2::ggsave(
                 file.path(out_dir, paste0("mofa_top_weights_", view, ".png")),
@@ -402,7 +409,8 @@ plot_mofa_factors <- function(factors, metadata, condition_col, factor_idx = c(1
 #' @param n_top Number of top features per factor
 #' @param n_factors Number of factors to plot
 #' @return ggplot object (or patchwork if available)
-plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3) {
+plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
+                                  feature_name_map = NULL) {
     n_factors <- min(n_factors, ncol(weights))
     plots <- list()
 
@@ -411,10 +419,37 @@ plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3)
         ord <- order(abs(w), decreasing = TRUE)
         top_idx <- head(ord, n_top)
 
+        feat_ids <- rownames(weights)[top_idx]
+        # Drop entries with missing rownames
+        valid <- !is.na(feat_ids) & feat_ids != ""
+        feat_ids <- feat_ids[valid]
+        top_idx <- top_idx[valid]
+        if (length(feat_ids) == 0) next
+
+        # Resolve to original names if map is available
+        display_names <- if (!is.null(feature_name_map)) {
+            mapped <- feature_name_map[feat_ids]
+            # MOFA may append _viewname suffix for duplicates; try stripping it
+            still_na <- is.na(mapped)
+            if (any(still_na)) {
+                stripped <- sub("_(transcriptomics|proteomics|metabolomics)$", "", feat_ids[still_na])
+                mapped[still_na] <- feature_name_map[stripped]
+            }
+            ifelse(is.na(mapped), feat_ids, mapped)
+        } else {
+            feat_ids
+        }
+
+        # Guard against NA/empty display names
+        display_names[is.na(display_names) | display_names == ""] <- feat_ids[is.na(display_names) | display_names == ""]
+        # Make unique to avoid factor() issues with duplicates
+        display_names <- make.unique(display_names, sep = " ")
+
         df <- data.frame(
-            feature = rownames(weights)[top_idx],
+            feature = display_names,
             weight = w[top_idx],
-            stringsAsFactors = FALSE
+            stringsAsFactors = FALSE,
+            row.names = NULL
         )
         df$feature <- factor(df$feature, levels = df$feature[order(abs(df$weight))])
         df$direction <- ifelse(df$weight > 0, "positive", "negative")
@@ -526,11 +561,16 @@ write_mofa_results <- function(mofa_results, out_dir) {
 
     # Weights per view
     if (!is.null(mofa_results$weights)) {
+        name_map <- mofa_results$feature_name_map
         for (view in names(mofa_results$weights)) {
             w <- mofa_results$weights[[view]]
             w_df <- as.data.frame(w)
             w_df$feature_id <- rownames(w)
-            w_df <- w_df[, c("feature_id", setdiff(colnames(w_df), "feature_id"))]
+            if (!is.null(name_map)) {
+                w_df$original_name <- unname(name_map[rownames(w)])
+            }
+            lead_cols <- intersect(c("feature_id", "original_name"), colnames(w_df))
+            w_df <- w_df[, c(lead_cols, setdiff(colnames(w_df), lead_cols))]
             write.csv(w_df,
                       file.path(out_dir, paste0("mofa_weights_", view, ".csv")),
                       row.names = FALSE)
@@ -546,7 +586,11 @@ write_mofa_results <- function(mofa_results, out_dir) {
 
     # Top features
     if (!is.null(mofa_results$top_features)) {
-        write.csv(mofa_results$top_features,
+        top_df <- mofa_results$top_features
+        if (!is.null(name_map)) {
+            top_df$original_name <- unname(name_map[top_df$feature_id])
+        }
+        write.csv(top_df,
                   file.path(out_dir, "mofa_top_features.csv"),
                   row.names = FALSE)
     }

@@ -1,5 +1,11 @@
 library(targets)
 
+# Auto-detect conda Python for reticulate (needed by MOFA2)
+if (Sys.getenv("RETICULATE_PYTHON") == "" && Sys.getenv("CONDA_PREFIX") != "") {
+  conda_python <- file.path(Sys.getenv("CONDA_PREFIX"), "bin", "python")
+  if (file.exists(conda_python)) Sys.setenv(RETICULATE_PYTHON = conda_python)
+}
+
 # ------------------------------------------------------------------------------
 # Source R files in a strict dependency order:
 # 1) core     – generic utilities, no domain knowledge
@@ -131,10 +137,13 @@ list(
     cfg_raw <- yaml::read_yaml(cfg_path)
     mode_targets <- list()
 
-    # Single-omics pipelines
-    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
-    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics())
+    # Single-omics pipelines — when multiomics is active, only run core
+    # targets (load + preprocess + DE) needed by the integration pipeline;
+    # skip all single-omics outputs (QC, reports, exports, etc.)
+    has_multiomics <- !is.null(cfg_raw$modes$multiomics)
+    if (!is.null(cfg_raw$modes$rna))          mode_targets <- c(mode_targets, pipe_rnaseq(skip_outputs = has_multiomics))
+    if (!is.null(cfg_raw$modes$proteomics))   mode_targets <- c(mode_targets, pipe_proteomics(skip_outputs = has_multiomics))
+    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics(skip_outputs = has_multiomics))
 
     # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
     # Only enabled if ≥2 omics modes are present AND multiomics mode is configured

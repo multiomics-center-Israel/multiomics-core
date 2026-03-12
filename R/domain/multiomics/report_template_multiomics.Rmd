@@ -130,6 +130,7 @@ diablo_dir       <- file.path(integration_dir, "diablo")
 snf_dir          <- file.path(integration_dir, "snf")
 mofa_dir         <- file.path(integration_dir, "mofa")
 enrichment_dir   <- file.path(run_dir, "cross_enrichment")
+loadings_enrich_dir <- file.path(run_dir, "loadings_enrichment")
 rna_prot_dir     <- file.path(run_dir, "rna_protein_correlation")
 multigsea_dir    <- file.path(run_dir, "multigsea")
 commentary_dir   <- file.path(run_dir, "commentary")
@@ -158,6 +159,8 @@ has_integration <- has_diablo || has_snf || has_mofa
 has_enrichment  <- dir.exists(enrichment_dir) && length(list.files(enrichment_dir, "\\.png$|\\.csv$")) > 0
 has_rna_prot    <- dir.exists(file.path(rna_prot_dir, "plots")) && length(list.files(file.path(rna_prot_dir, "plots"), "\\.png$")) > 0
 has_multigsea   <- dir.exists(multigsea_dir) && length(list.files(multigsea_dir, "\\.png$")) > 0
+has_loadings_enrich <- dir.exists(loadings_enrich_dir) &&
+    length(list.files(loadings_enrich_dir, "\\.png$", recursive = TRUE)) > 0
 
 # Load gene-protein mapping if available
 mapping_file <- file.path(run_dir, "gene_protein_mapping.csv")
@@ -354,7 +357,7 @@ cat("*No MultiGSEA plots found.*\n")
 ```
 
 ```{r multigsea-plots, eval=has_multigsea, results='asis'}
-gsea_pngs <- list.files(multigsea_dir, pattern = "\\.png$", full.names = TRUE)
+gsea_pngs <- list.files(multigsea_dir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
 for (gp in gsea_pngs) {
     pair_name <- gsub("multigsea_|\\.png$", "", basename(gp))
     display_name <- gsub("_", " ", pair_name)
@@ -363,6 +366,58 @@ for (gp in gsea_pngs) {
     figure_legend(sprintf("MultiGSEA enrichment correlation plot for %s. Each point is a pathway; axis values represent enrichment scores. Color indicates joint significance status.", display_name))
     render_commentary(paste0("multigsea_", pair_name))
 }
+```
+
+```{r multi-ora-setup, include=FALSE}
+multi_ora_dir <- file.path(multigsea_dir, "multi_ora")
+has_multi_ora <- dir.exists(multi_ora_dir) && length(list.files(multi_ora_dir, "\\.png$")) > 0
+```
+
+## Multi-ORA (Combined Cross-Omics ORA) {.unnumbered}
+
+```{r multi-ora-note, eval=!has_multi_ora, results='asis'}
+cat("*No Multi-ORA results found.*\n")
+```
+
+```{r multi-ora-plots, eval=has_multi_ora, results='asis'}
+# Pooled barplot
+pooled_bp <- file.path(multi_ora_dir, "multi_ora_pooled_barplot.png")
+if (file.exists(pooled_bp)) {
+    cat("\n### Pooled Multi-ORA {.unnumbered}\n\n")
+    cat(sprintf("![Pooled Multi-ORA](%s)\n\n", pooled_bp))
+    figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation in KEGG pathways using Fisher's exact test. Red dashed line marks padj = 0.05.")
+}
+
+# Dot plot
+dotplot <- file.path(multi_ora_dir, "multi_ora_dotplot.png")
+if (file.exists(dotplot)) {
+    cat("\n### Pooled vs Per-Omics Comparison {.unnumbered}\n\n")
+    cat(sprintf("![Multi-ORA Dot Plot](%s)\n\n", dotplot))
+    figure_legend("Multi-ORA dot plot comparing per-omics and pooled enrichment results. Each dot represents a pathway; x-axis is -log10(padj), dot size reflects gene count, and color indicates the source (pooled or individual omics). Red dashed line marks padj = 0.05.")
+}
+
+# Omics support barplot
+support_bp <- file.path(multi_ora_dir, "multi_ora_support_barplot.png")
+if (file.exists(support_bp)) {
+    cat("\n### Omics Support per Pathway {.unnumbered}\n\n")
+    cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
+    figure_legend("Multi-ORA omics support barplot. Bar length shows pooled enrichment significance (-log10 p-value). Color indicates the number of individual omics layers that independently support each pathway (padj < 0.05).")
+}
+
+# Summary table
+multi_ora_csv <- file.path(multi_ora_dir, "multi_ora_results.csv")
+if (file.exists(multi_ora_csv)) {
+    cat("\n### Top Multi-ORA Pathways {.unnumbered}\n\n")
+    mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
+    mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
+    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "n_omics_support"), colnames(mora_show))
+    mora_show <- mora_show[, display_cols, drop = FALSE]
+    colnames(mora_show) <- c("Pathway", "Pooled padj", "Gene Count", "# Omics Supporting")[seq_along(display_cols)]
+    mora_show[[2]] <- signif(mora_show[[2]], 3)
+    knitr::kable(mora_show, row.names = FALSE, caption = "Top multi-ORA enriched KEGG pathways (pooled across gene-based omics)")
+}
+
+render_commentary("multi_ora")
 ```
 
 ---
@@ -378,10 +433,15 @@ cat("*No cross-omics enrichment results found. Enrichment analysis requires path
 omics_barplots <- list.files(enrichment_dir, pattern = "_top_pathways\\.png$", full.names = TRUE)
 if (length(omics_barplots) > 0) {
     cat("\n## Per-Omics Pathway Enrichment {.unnumbered}\n\n")
-    for (bp in omics_barplots) {
+    for (i in seq_along(omics_barplots)) {
+        bp <- omics_barplots[i]
         omics_name <- gsub("_top_pathways\\.png$", "", basename(bp))
         cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
-        cat(knitr::include_graphics(bp))
+        chunk_id <- paste0("enrich-bp-", i)
+        cat(knitr::knit_child(text = sprintf(
+            '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            chunk_id, bp
+        ), quiet = TRUE))
         cat("\n\n")
     }
 }
@@ -411,7 +471,10 @@ for (cf in csv_files) {
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
     cat("\n## Cross-Omics Pathway Comparison {.unnumbered}\n\n")
-    cat(knitr::include_graphics(p))
+    cat(knitr::knit_child(text = sprintf(
+        '```{r enrich-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+        p
+    ), quiet = TRUE))
 }
 ```
 
@@ -487,6 +550,74 @@ render_commentary("gene_protein_mapping")
 
 ---
 
+# Sample Concordance Across Omics
+
+```{r mantel-setup, include=FALSE}
+foundational_dir <- file.path(run_dir, "foundational", "foundational")
+mantel_heatmap <- file.path(foundational_dir, "plots", "mantel_test_heatmap.png")
+mantel_csv <- file.path(foundational_dir, "tables", "mantel_test_results.csv")
+clustering_consistency_plot <- file.path(foundational_dir, "plots", "sample_clustering_consistency.png")
+condition_separation_plot <- file.path(foundational_dir, "plots", "sample_condition_separation.png")
+has_mantel <- file.exists(mantel_heatmap)
+has_clustering <- file.exists(clustering_consistency_plot)
+has_separation <- file.exists(condition_separation_plot)
+
+# Find per-omics correlation heatmaps
+mantel_corr_heatmaps <- list.files(
+    file.path(foundational_dir, "plots"),
+    pattern = "^mantel_corr_heatmap_.*\\.png$",
+    full.names = TRUE
+)
+has_corr_heatmaps <- length(mantel_corr_heatmaps) > 0
+```
+
+## Mantel Test {.tabset}
+
+The Mantel test measures correlation between sample-distance matrices from different omics layers. A significant positive correlation indicates that samples which are similar in one omics space tend to also be similar in another — evidence that biological signal is shared across data types.
+
+### Test Results {.unnumbered}
+
+```{r mantel-table, eval=file.exists(mantel_csv), results='asis'}
+mantel_df <- read.csv(mantel_csv, stringsAsFactors = FALSE)
+mantel_df$significance <- ifelse(mantel_df$mantel_p < 0.001, "***",
+                           ifelse(mantel_df$mantel_p < 0.01, "**",
+                           ifelse(mantel_df$mantel_p < 0.05, "*", "ns")))
+kable(mantel_df, col.names = c("Omics Pair", "Mantel r", "p-value", "Sig."),
+      digits = c(0, 3, 4, 0), caption = "Mantel test results (999 permutations). Significance: *** p<0.001, ** p<0.01, * p<0.05")
+```
+
+### Mantel Concordance Heatmap {.unnumbered}
+
+```{r mantel-heatmap, eval=has_mantel, results='asis'}
+knitr::include_graphics(mantel_heatmap)
+figure_legend("Mantel test heatmap showing pairwise correlation between sample distance matrices across omics layers. Values close to 1 indicate strong concordance in how samples relate to each other across data types. P-values are computed from 999 permutations.")
+```
+
+### Per-Omics Sample Correlation Matrices {.unnumbered}
+
+```{r mantel-corr-heatmaps, eval=has_corr_heatmaps, results='asis'}
+for (hm_path in mantel_corr_heatmaps) {
+    om_name <- sub("^mantel_corr_heatmap_(.*)\\.png$", "\\1", basename(hm_path))
+    cat(sprintf("\n#### %s {.unnumbered}\n\n", tools::toTitleCase(om_name)))
+    cat(sprintf("![%s sample correlation matrix](%s)\n\n", om_name, hm_path))
+}
+figure_legend("Per-omics sample-sample Spearman correlation matrices with hierarchical clustering dendrograms (Ward's method). These are the distance matrices used in the Mantel test. Concordant clustering patterns across omics layers support shared biological structure.")
+```
+
+```{r clustering-consistency, eval=has_clustering, results='asis'}
+cat("## Clustering Consistency\n\n")
+knitr::include_graphics(clustering_consistency_plot)
+figure_legend("Adjusted Rand Index (ARI) and Normalized Mutual Information (NMI) comparing unsupervised sample clusters between omics pairs. Values near 1 indicate identical clustering structure.")
+```
+
+```{r condition-separation, eval=has_separation, results='asis'}
+cat("## Condition Separation\n\n")
+knitr::include_graphics(condition_separation_plot)
+figure_legend("Within-condition vs between-condition sample similarity per omics layer. Positive separation indicates that samples from the same experimental group are more similar than samples from different groups.")
+```
+
+---
+
 # Integration Results {.tabset}
 
 ```{r integration-note, eval=!has_integration, results='asis'}
@@ -529,6 +660,15 @@ if (file.exists(p)) {
 ```{r diablo-circos-legend, eval=has_diablo, results='asis'}
 figure_legend("DIABLO circos plot showing cross-omics feature correlations. Lines connect correlated features across omics layers.")
 render_commentary("diablo_circos_plot")
+```
+
+```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
+int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
+if (file.exists(int_html)) {
+    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
+    cat(sprintf('<iframe src="%s" width="100%%" height="650" frameborder="0" style="border:1px solid #ddd; border-radius:4px;"></iframe>\n\n', int_html))
+    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
+}
 ```
 
 ```{r diablo-feature-heatmap, eval=has_diablo, results='asis'}
@@ -634,10 +774,84 @@ if (length(weight_files) > 0) {
     for (wf in weight_files) {
         view_name <- gsub("mofa_top_weights_|\\.png$", "", basename(wf))
         cat(sprintf("\n### Top Weights: %s\n\n", view_name))
-        cat(knitr::include_graphics(wf))
+        chunk_id <- paste0("mofa-wt-", gsub("[^a-zA-Z0-9]", "", view_name))
+        cat(knitr::knit_child(text = sprintf(
+            '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            chunk_id, wf
+        ), quiet = TRUE))
         figure_legend(sprintf("Top 20 features by absolute weight for MOFA Factor in the %s view.", view_name))
         fig_id <- paste0("mofa_top_weights_", view_name)
         render_commentary(fig_id)
+    }
+}
+```
+
+## Loadings-Based Pathway Enrichment {.tabset}
+
+```{r loadings-enrich-note, eval=!has_loadings_enrich, results='asis'}
+cat("*No loadings-based enrichment results available. DIABLO/MOFA2 may not have been configured or enrichment may have failed.*\n")
+```
+
+```{r loadings-enrich-diablo, eval=has_loadings_enrich, results='asis'}
+diablo_le_dir <- file.path(loadings_enrich_dir, "diablo_loadings")
+diablo_le_plots <- list.files(diablo_le_dir, pattern = "\\.png$", full.names = TRUE)
+
+if (length(diablo_le_plots) > 0) {
+    cat("\n### DIABLO Loadings Enrichment\n\n")
+    for (i in seq_along(diablo_le_plots)) {
+        pf <- diablo_le_plots[i]
+        label <- gsub("_enrichment\\.png$", "", basename(pf))
+        label <- gsub("^DIABLO_", "", label)
+        cat(sprintf("\n#### %s {.unnumbered}\n\n", label))
+        chunk_id <- paste0("diablo-le-", i)
+        cat(knitr::knit_child(text = sprintf(
+            '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            chunk_id, pf
+        ), quiet = TRUE))
+        cat("\n\n")
+    }
+    figure_legend("KEGG pathway enrichment of top DIABLO loading features per component and omics layer. Red dashed line indicates p = 0.05.")
+}
+
+# Show combined table
+diablo_le_csv <- file.path(diablo_le_dir, "diablo_loadings_enrichment_all.csv")
+if (file.exists(diablo_le_csv)) {
+    df <- read.csv(diablo_le_csv, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        cat("\n#### DIABLO Loadings Enrichment Table {.unnumbered}\n\n")
+        print(make_dt(df, caption = "DIABLO loadings KEGG enrichment"))
+    }
+}
+```
+
+```{r loadings-enrich-mofa, eval=has_loadings_enrich, results='asis'}
+mofa_le_dir <- file.path(loadings_enrich_dir, "mofa_loadings")
+mofa_le_plots <- list.files(mofa_le_dir, pattern = "\\.png$", full.names = TRUE)
+
+if (length(mofa_le_plots) > 0) {
+    cat("\n### MOFA2 Weights Enrichment\n\n")
+    for (i in seq_along(mofa_le_plots)) {
+        pf <- mofa_le_plots[i]
+        label <- gsub("_enrichment\\.png$", "", basename(pf))
+        label <- gsub("^MOFA_", "", label)
+        cat(sprintf("\n#### %s {.unnumbered}\n\n", label))
+        chunk_id <- paste0("mofa-le-", i)
+        cat(knitr::knit_child(text = sprintf(
+            '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            chunk_id, pf
+        ), quiet = TRUE))
+        cat("\n\n")
+    }
+    figure_legend("KEGG pathway enrichment of top MOFA2 weight features per factor and omics view. Red dashed line indicates p = 0.05.")
+}
+
+# Show combined table
+mofa_le_csv <- file.path(mofa_le_dir, "mofa_weights_enrichment_all.csv")
+if (file.exists(mofa_le_csv)) {
+    df <- read.csv(mofa_le_csv, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        cat("\n#### MOFA2 Weights Enrichment Table {.unnumbered}\n\n")
+        print(make_dt(df, caption = "MOFA2 weights KEGG enrichment"))
     }
 }
 ```

@@ -613,3 +613,460 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 
     return(generated_plots)
 }
+
+
+# =============================================================================
+# Multi-ORA: Combined Over-Representation Analysis across omics
+# =============================================================================
+
+#' Run multi-omics ORA (multi-ORA)
+#'
+#' Pools significant features from all omics layers, maps them to KEGG
+#' pathways, and runs a single combined hypergeometric test per pathway.
+#' Gene-based omics (RNA, proteomics) are pooled via ENTREZID; metabolomics
+#' uses compound-level enrichment separately. Results are combined using
+#' Fisher's method.
+#'
+#' @param de_results Named list of DE results per omics
+#' @param harmonization_res Harmonization result with MAE and pre-processing data
+#' @param config Full config object
+#' @param out_dir Output directory for results and plots
+#' @return List with: results (data.frame), plots (list of paths)
+run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
+
+    message("=== Running Multi-ORA (combined cross-omics ORA) ===")
+
+    if (is.null(de_results) || length(de_results) < 2) {
+        message("Multi-ORA requires DE results from at least 2 omics layers")
+        return(NULL)
+    }
+
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    organism <- config$global$organism
+    kegg_org <- get_kegg_organism(organism)
+    org_db <- get_organism_db(organism)
+
+    if (is.null(kegg_org) || is.null(org_db)) {
+        message("Multi-ORA: organism annotation not available for ", organism)
+        return(NULL)
+    }
+
+    # --- Collect per-omics significant KEGG gene IDs ---
+    gene_omics <- c("transcriptomics", "proteomics")
+    per_omics_sig <- list()
+    per_omics_universe <- list()
+
+    for (om in intersect(gene_omics, names(de_results))) {
+        de_data <- de_results[[om]]
+        de_tables <- extract_de_tables(de_data, om, harmonization_res)
+        if (is.null(de_tables) || length(de_tables) == 0) next
+
+        # Map to ENTREZ IDs
+        id_map <- tryCatch(
+            map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
+            error = function(e) NULL
+        )
+        if (is.null(id_map) || nrow(id_map) == 0) next
+
+        # Collect significant features (padj < 0.05 in any contrast)
+        sig_ids <- character(0)
+        all_ids <- character(0)
+        for (nm in names(de_tables)) {
+            df <- de_tables[[nm]]
+            df_mapped <- merge(df, id_map, by = "feature_id")
+            all_ids <- c(all_ids, df_mapped$ENTREZID)
+
+            sig <- df_mapped$ENTREZID[!is.na(df_mapped$padj) & df_mapped$padj < 0.05]
+            if (length(sig) < 5) {
+                sig <- df_mapped$ENTREZID[!is.na(df_mapped$pvalue) & df_mapped$pvalue < 0.05]
+            }
+            sig_ids <- c(sig_ids, sig)
+        }
+
+        sig_ids <- unique(sig_ids[!is.na(sig_ids)])
+        all_ids <- unique(all_ids[!is.na(all_ids)])
+
+        if (length(sig_ids) > 0) {
+            per_omics_sig[[om]] <- sig_ids
+            per_omics_universe[[om]] <- all_ids
+            message("  ", om, ": ", length(sig_ids), " sig / ", length(all_ids), " total ENTREZ IDs")
+        }
+    }
+
+    if (length(per_omics_sig) == 0) {
+        message("Multi-ORA: no gene-based omics produced significant features")
+        return(NULL)
+    }
+
+    # Pool significant genes across gene-based omics
+    pooled_sig <- unique(unlist(per_omics_sig))
+    pooled_universe <- unique(unlist(per_omics_universe))
+    message("  Pooled: ", length(pooled_sig), " sig / ", length(pooled_universe),
+            " universe genes across ", length(per_omics_sig), " omics")
+
+    # Convert ENTREZID to KEGG gene IDs
+    kegg_conv <- convert_entrez_to_kegg(pooled_universe, kegg_org)
+    if (is.null(kegg_conv)) {
+        message("Multi-ORA: KEGG ID conversion failed")
+        return(NULL)
+    }
+
+    pooled_sig_kegg <- unique(kegg_conv[pooled_sig])
+    pooled_sig_kegg <- pooled_sig_kegg[!is.na(pooled_sig_kegg)]
+    pooled_univ_kegg <- unique(kegg_conv[pooled_universe])
+    pooled_univ_kegg <- pooled_univ_kegg[!is.na(pooled_univ_kegg)]
+
+    # Also convert per-omics sig lists to KEGG IDs (for per-omics ORA)
+    per_omics_sig_kegg <- lapply(per_omics_sig, function(ids) {
+        k <- kegg_conv[ids]
+        unique(k[!is.na(k)])
+    })
+
+    # --- Run pooled ORA ---
+    message("  Running pooled gene ORA...")
+    pooled_ora <- run_multi_ora_kegg(
+        sig_genes = pooled_sig_kegg,
+        universe = pooled_univ_kegg,
+        kegg_org = kegg_org,
+        label = "pooled"
+    )
+
+    # --- Run per-omics ORA (with same universe) ---
+    per_omics_ora <- list()
+    for (om in names(per_omics_sig_kegg)) {
+        message("  Running per-omics ORA for ", om, "...")
+        per_omics_ora[[om]] <- run_multi_ora_kegg(
+            sig_genes = per_omics_sig_kegg[[om]],
+            universe = pooled_univ_kegg,
+            kegg_org = kegg_org,
+            label = om
+        )
+    }
+
+    # --- Metabolomics compound ORA (separate) ---
+    metab_ora <- NULL
+    if ("metabolomics" %in% names(de_results)) {
+        metab_ora <- tryCatch({
+            de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics", harmonization_res)
+            id_map <- map_metabolite_ids_to_kegg(de_tables, harmonization_res)
+            if (!is.null(id_map) && nrow(id_map) > 0) {
+                full_universe <- unique(id_map$KEGG_CPD[!is.na(id_map$KEGG_CPD)])
+                # Merge DE stats with KEGG IDs
+                de_df <- do.call(rbind, de_tables)
+                de_mapped <- merge(de_df, id_map, by = "feature_id")
+                de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
+                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe)
+            } else NULL
+        }, error = function(e) {
+            message("  Metabolomics compound ORA failed: ", e$message)
+            NULL
+        })
+        if (!is.null(metab_ora) && nrow(metab_ora) > 0) {
+            message("  metabolomics: ", nrow(metab_ora), " enriched compound pathways")
+        }
+    }
+
+    # --- Combine results into summary table ---
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, metab_ora)
+
+    if (is.null(combined) || nrow(combined) == 0) {
+        message("Multi-ORA: no enriched pathways found")
+        return(NULL)
+    }
+
+    # Write results
+    write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
+    message("  Multi-ORA found ", nrow(combined), " enriched pathways (pooled)")
+
+    # --- Generate plots ---
+    plots <- list()
+
+    # 1. Pooled ORA barplot
+    if (!is.null(pooled_ora) && nrow(pooled_ora) > 0) {
+        plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
+        png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
+        tryCatch({
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (All Gene-Based Omics)")
+        }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
+        })
+        dev.off()
+    }
+
+    # 2. Multi-ORA dot plot comparing per-omics + pooled
+    plots$dotplot <- file.path(out_dir, "multi_ora_dotplot.png")
+    tryCatch({
+        plot_multi_ora_dotplot(combined, per_omics_ora, metab_ora, out_dir)
+    }, error = function(e) {
+        message("  Multi-ORA dot plot failed: ", e$message)
+    })
+
+    # 3. Upset-style bar showing number of omics supporting each pathway
+    plots$support_barplot <- file.path(out_dir, "multi_ora_support_barplot.png")
+    tryCatch({
+        plot_multi_ora_support(combined, out_dir)
+    }, error = function(e) {
+        message("  Multi-ORA support plot failed: ", e$message)
+    })
+
+    message("Multi-ORA complete: ", nrow(combined), " pathways")
+
+    list(
+        pooled = pooled_ora,
+        per_omics = per_omics_ora,
+        metabolomics = metab_ora,
+        combined = combined,
+        plots = plots
+    )
+}
+
+
+#' Run KEGG ORA with Fisher's exact test for multi-ORA
+#'
+#' @param sig_genes Significant KEGG gene IDs
+#' @param universe All KEGG gene IDs (shared universe)
+#' @param kegg_org KEGG organism code
+#' @param label Label for messages
+#' @return data.frame with ORA results
+run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
+                                label = "pooled", pval_cutoff = 0.1) {
+
+    if (length(sig_genes) < 3) {
+        message("    ", label, ": too few significant genes (", length(sig_genes), ")")
+        return(NULL)
+    }
+
+    # Try clusterProfiler first
+    ora_res <- tryCatch({
+        res <- clusterProfiler::enrichKEGG(
+            gene = sig_genes,
+            universe = universe,
+            organism = kegg_org,
+            keyType = "kegg",
+            minGSSize = 5,
+            maxGSSize = 500,
+            pvalueCutoff = pval_cutoff
+        )
+        if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
+            df <- as.data.frame(res)
+            return(data.frame(
+                pathway = df$Description,
+                ID = df$ID,
+                pvalue = df$pvalue,
+                padj = df$p.adjust,
+                GeneRatio = df$GeneRatio,
+                Count = df$Count,
+                geneID = df$geneID,
+                stringsAsFactors = FALSE
+            ))
+        }
+        NULL
+    }, error = function(e) {
+        message("    ", label, " clusterProfiler ORA failed: ", e$message)
+        NULL
+    })
+
+    if (!is.null(ora_res)) {
+        message("    ", label, ": ", nrow(ora_res), " enriched pathways")
+        return(ora_res)
+    }
+
+    # Fallback: Fisher's exact test
+    run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff)
+}
+
+
+#' Build combined multi-ORA summary table
+#'
+#' Merges pooled ORA with per-omics results into a single table showing
+#' which omics support each pathway.
+build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
+
+    if (is.null(pooled_ora) || nrow(pooled_ora) == 0) return(NULL)
+
+    summary <- pooled_ora[, c("pathway", "ID", "pvalue", "padj", "Count"), drop = FALSE]
+    colnames(summary)[colnames(summary) == "pvalue"] <- "pooled_pvalue"
+    colnames(summary)[colnames(summary) == "padj"] <- "pooled_padj"
+    colnames(summary)[colnames(summary) == "Count"] <- "pooled_count"
+
+    # Add per-omics support columns
+    omics_names <- names(per_omics_ora)
+    for (om in omics_names) {
+        om_res <- per_omics_ora[[om]]
+        if (is.null(om_res) || nrow(om_res) == 0) {
+            summary[[paste0(om, "_padj")]] <- NA_real_
+            next
+        }
+        om_padj <- setNames(om_res$padj, om_res$ID)
+        summary[[paste0(om, "_padj")]] <- om_padj[summary$ID]
+    }
+
+    # Add metabolomics if available
+    if (!is.null(metab_ora) && nrow(metab_ora) > 0 && "ID" %in% colnames(metab_ora)) {
+        met_padj <- setNames(metab_ora$padj, metab_ora$ID)
+        summary$metabolomics_padj <- met_padj[summary$ID]
+    }
+
+    # Count supporting omics (padj < 0.05)
+    padj_cols <- grep("_padj$", colnames(summary), value = TRUE)
+    padj_cols <- setdiff(padj_cols, "pooled_padj")
+    summary$n_omics_support <- rowSums(
+        sapply(padj_cols, function(col) !is.na(summary[[col]]) & summary[[col]] < 0.05)
+    )
+
+    summary <- summary[order(summary$pooled_pvalue), ]
+    summary
+}
+
+
+#' Plot multi-ORA pooled barplot
+plot_multi_ora_barplot <- function(ora_df, title, top_n = 20) {
+    df <- ora_df[order(ora_df$pvalue), ]
+    df <- df[seq_len(min(top_n, nrow(df))), ]
+
+    df$label <- ifelse(nchar(df$pathway) > 50,
+                        paste0(substr(df$pathway, 1, 47), "..."),
+                        df$pathway)
+    neg_log_p <- -log10(df$pvalue + 1e-300)
+    neg_log_p <- pmin(neg_log_p, 15)
+
+    par(mar = c(5, 17, 3, 2))
+    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
+            las = 1, cex.names = 0.65, col = "#7B2D8E",
+            xlab = "-log10(p-value)",
+            main = title)
+    abline(v = -log10(0.05), col = "red", lty = 2)
+}
+
+
+#' Plot multi-ORA dot plot comparing per-omics and pooled results
+plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, top_n = 20) {
+
+    if (is.null(combined) || nrow(combined) == 0) return(invisible(NULL))
+
+    top <- combined[seq_len(min(top_n, nrow(combined))), ]
+
+    # Collect per-omics data for these pathways
+    plot_data <- list()
+
+    # Pooled
+    plot_data[["Pooled"]] <- data.frame(
+        pathway = top$pathway,
+        source = "Pooled",
+        neg_log10_padj = -log10(top$pooled_padj + 1e-300),
+        count = top$pooled_count,
+        stringsAsFactors = FALSE
+    )
+
+    # Per-omics
+    for (om in names(per_omics_ora)) {
+        om_res <- per_omics_ora[[om]]
+        if (is.null(om_res) || nrow(om_res) == 0) next
+        padj_map <- setNames(om_res$padj, om_res$pathway)
+        count_map <- setNames(om_res$Count, om_res$pathway)
+
+        matched_padj <- padj_map[top$pathway]
+        matched_count <- count_map[top$pathway]
+
+        plot_data[[om]] <- data.frame(
+            pathway = top$pathway,
+            source = gsub("_", " ", tools::toTitleCase(om)),
+            neg_log10_padj = -log10(ifelse(is.na(matched_padj), 1, matched_padj) + 1e-300),
+            count = ifelse(is.na(matched_count), 0, matched_count),
+            stringsAsFactors = FALSE
+        )
+    }
+
+    plot_df <- do.call(rbind, plot_data)
+    plot_df$neg_log10_padj <- pmin(plot_df$neg_log10_padj, 15)
+    # Remove entries where pathway was not found in the per-omics results
+    plot_df <- plot_df[plot_df$neg_log10_padj > 0, ]
+
+    if (nrow(plot_df) == 0) return(invisible(NULL))
+
+    # Truncate long pathway names
+    plot_df$pathway_short <- ifelse(
+        nchar(plot_df$pathway) > 45,
+        paste0(substr(plot_df$pathway, 1, 42), "..."),
+        plot_df$pathway
+    )
+
+    # ggplot dot plot
+    source_colors <- c(
+        "Pooled" = "#7B2D8E",
+        "Transcriptomics" = "#E41A1C",
+        "Proteomics" = "#377EB8",
+        "Metabolomics" = "#4DAF4A"
+    )
+
+    p <- ggplot2::ggplot(plot_df,
+        ggplot2::aes(
+            x = neg_log10_padj,
+            y = stats::reorder(pathway_short, neg_log10_padj),
+            color = source,
+            size = count
+        )) +
+        ggplot2::geom_point(alpha = 0.7) +
+        ggplot2::scale_color_manual(values = source_colors, name = "Source") +
+        ggplot2::scale_size_continuous(name = "Gene Count", range = c(2, 8)) +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red", alpha = 0.5) +
+        ggplot2::labs(
+            title = "Multi-ORA: Pooled vs Per-Omics Enrichment",
+            x = "-log10(padj)",
+            y = NULL
+        ) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 7),
+            plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+        )
+
+    ggplot2::ggsave(
+        file.path(out_dir, "multi_ora_dotplot.png"),
+        plot = p, width = 12, height = max(6, 2 + top_n * 0.3), dpi = 300
+    )
+    message("  Saved multi-ORA dot plot")
+}
+
+
+#' Plot multi-ORA omics support barplot
+#'
+#' Shows how many omics layers support each enriched pathway.
+plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
+    if (is.null(combined) || nrow(combined) == 0) return(invisible(NULL))
+
+    top <- combined[seq_len(min(top_n, nrow(combined))), ]
+    top$label <- ifelse(nchar(top$pathway) > 45,
+                         paste0(substr(top$pathway, 1, 42), "..."),
+                         top$pathway)
+
+    support_colors <- c("0" = "grey70", "1" = "#FDB863", "2" = "#E66101", "3" = "#B35806")
+
+    p <- ggplot2::ggplot(top,
+        ggplot2::aes(
+            x = -log10(pooled_pvalue + 1e-300),
+            y = stats::reorder(label, -pooled_pvalue),
+            fill = factor(n_omics_support)
+        )) +
+        ggplot2::geom_col(alpha = 0.85) +
+        ggplot2::scale_fill_manual(values = support_colors, name = "# Omics\nSupporting") +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red", alpha = 0.5) +
+        ggplot2::labs(
+            title = "Multi-ORA: Pathway Enrichment with Omics Support",
+            x = "-log10(p-value)",
+            y = NULL
+        ) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 7),
+            plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+        )
+
+    ggplot2::ggsave(
+        file.path(out_dir, "multi_ora_support_barplot.png"),
+        plot = p, width = 12, height = max(6, 2 + top_n * 0.25), dpi = 300
+    )
+    message("  Saved multi-ORA support barplot")
+}

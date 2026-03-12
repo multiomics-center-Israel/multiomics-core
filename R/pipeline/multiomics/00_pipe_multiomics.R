@@ -167,7 +167,30 @@ pipe_multiomics <- function() {
             }
         ),
 
-        # MultiGSEA plots
+        # Loadings-based geneset enrichment (DIABLO + MOFA2 top features)
+        tar_target(
+            multiomics_loadings_enrichment,
+            {
+                if (is.null(multiomics_integration) || is.null(multiomics_harmonization)) {
+                    message("Skipping loadings enrichment: integration or harmonization not available")
+                    return(NULL)
+                }
+
+                tryCatch({
+                    run_loadings_enrichment(
+                        integration_res = multiomics_integration,
+                        harmonization_res = multiomics_harmonization,
+                        config = config,
+                        out_dir = file.path(multiomics_out_dir, "loadings_enrichment")
+                    )
+                }, error = function(e) {
+                    warning("Loadings enrichment failed: ", e$message)
+                    NULL
+                })
+            }
+        ),
+
+        # MultiGSEA plots + Multi-ORA
         tar_target(
             multiomics_multigsea,
             {
@@ -176,16 +199,36 @@ pipe_multiomics <- function() {
                     return(NULL)
                 }
 
-                tryCatch({
+                mg_dir <- file.path(multiomics_out_dir, "multigsea")
+
+                gsea_plots <- tryCatch({
                     run_multigsea_plots(
                         enrichment_results = multiomics_cross_enrichment,
                         config = config,
-                        out_dir = file.path(multiomics_out_dir, "multigsea")
+                        out_dir = mg_dir
                     )
                 }, error = function(e) {
                     warning("MultiGSEA plots failed: ", e$message)
                     NULL
                 })
+
+                # Multi-ORA: combined cross-omics ORA
+                multi_ora_res <- tryCatch({
+                    run_multi_ora(
+                        de_results = multiomics_de_results,
+                        harmonization_res = multiomics_harmonization,
+                        config = config,
+                        out_dir = file.path(mg_dir, "multi_ora")
+                    )
+                }, error = function(e) {
+                    warning("Multi-ORA failed: ", e$message)
+                    NULL
+                })
+
+                list(
+                    gsea_plots = gsea_plots,
+                    multi_ora = multi_ora_res
+                )
             }
         ),
 
@@ -282,6 +325,7 @@ pipe_multiomics <- function() {
                 force(multiomics_mechanistic)
                 force(multiomics_consensus)
                 force(multiomics_commentary)
+                force(multiomics_loadings_enrichment)
 
                 if (is.null(multiomics_harmonization)) {
                     message("Skipping multi-omics report: no harmonization results")
