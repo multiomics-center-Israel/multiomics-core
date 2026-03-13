@@ -1002,8 +1002,9 @@ zscore_rows <- function(mat) {
 #' them as white/blank. Columns with all NA (no DE genes) are removed.
 #'
 #' Auto-detects column style:
-#' - RNA-seq:     padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
-#' - Proteomics:  padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
+#' - RNA-seq:       padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
+#' - Proteomics:    padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
+#' - Metabolomics:  padj.<contrast>,      linearFC.<contrast>,      pass.<contrast>
 #'
 #' @param summary_df DE summary data frame
 #' @param feature_ids Character vector of feature IDs to include
@@ -1021,8 +1022,11 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
   cols <- colnames(summary_df)
 
   # Auto-detect column style
+  # TODO: refactor to parameter-driven prefix dispatch (pass prefix from calling module)
   pass_imputs_cols <- grep("^pass\\.imputs\\.", cols, value = TRUE)
   pass_suffix_cols <- grep("_pass$", cols, value = TRUE)
+  pass_dot_cols    <- grep("^pass\\.", cols, value = TRUE)
+  pass_dot_cols    <- setdiff(pass_dot_cols, c("pass_any_contrast", pass_imputs_cols))
 
   if (length(pass_imputs_cols) > 0) {
     # Proteomics style: pass.imputs.<contrast>, linearFC.imputs.<contrast>
@@ -1033,6 +1037,11 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
     # RNA-seq style: <contrast>_pass, linearFC.<contrast>
     contrasts <- sub("_pass$", "", pass_suffix_cols)
     pass_prefix <- NULL # special case: suffix pattern
+    fc_prefix <- "linearFC."
+  } else if (length(pass_dot_cols) > 0) {
+    # Metabolomics style: pass.<contrast>, linearFC.<contrast>
+    contrasts <- sub("^pass\\.", "", pass_dot_cols)
+    pass_prefix <- "pass."
     fc_prefix <- "linearFC."
   } else {
     warning("build_de_row_annotations: No pass columns found in summary_df")

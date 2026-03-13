@@ -396,6 +396,17 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             )
         ),
 
+        # Stage 2: Clustering (hierarchical + optional partition/binary patterns)
+        tar_target(
+            metab_clustering_obj,
+            mod_metabolomics_clustering(
+                pre     = metab_pre,
+                de_res  = metab_de_res,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
         tar_target(
             metab_feature_sel_res,
             mod_metabolomics_feature_selection(
@@ -429,10 +440,11 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
         tar_target(
             metab_final_results,
             write_metabolomics_final_results(
-                pre     = metab_pre,
-                de_res  = metab_de_res,
-                config  = config,
-                out_dir = metab_out_dir
+                pre            = metab_pre,
+                de_res         = metab_de_res,
+                config         = config,
+                out_dir        = metab_out_dir,
+                clustering_res = metab_clustering_obj
             ),
             format = "file"
         ),
@@ -445,7 +457,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 inputs         = metab_inputs,
                 config         = config,
                 pca_res        = metab_qc_pre_obj,
-                clustering_res = NULL,
+                clustering_res = metab_clustering_obj,
                 rf_res         = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$rf else NULL,
                 plsda_res      = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$plsda else NULL,
                 enrichment_res = metab_enrichment_res,
@@ -462,6 +474,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 pre                = metab_pre,
                 qc_res             = metab_qc_pre_obj,
                 de_res             = metab_de_res,
+                clustering_res     = metab_clustering_obj,
                 feature_sel_res    = metab_feature_sel_res,
                 enrichment_res     = metab_enrichment_res,
                 config             = config,
