@@ -11,11 +11,22 @@
 
 #' Preprocess metabolomics data
 #'
+#' @description
+#' \lifecycle{deprecated}
+#' Superseded by the met_* preprocessing DAG (Stage 0 targets).
+#' Use the individual met_* targets instead: met_raw, met_filtered,
+#' met_imputed, met_log, met_norm_*, met_corrected -> metab_pre.
+#'
 #' @param inputs  List from load_metabolomics_inputs().
 #' @param config  Full pipeline config.
 #' @return list matching the pre-processing contract:
 #'   expr_raw, expr_filt, expr_work, meta, row_data, info
+#' @keywords internal
+#' @deprecated
 preprocess_metabolomics <- function(inputs, config) {
+    .Deprecated("met_* preprocessing DAG (Stage 0 targets)",
+                msg = paste("preprocess_metabolomics() is deprecated.",
+                            "Use the met_* preprocessing DAG instead."))
     cfg <- config$modes$metabolomics
     format <- inputs$format %||% cfg$input$format %||% "cd_raw"
 
