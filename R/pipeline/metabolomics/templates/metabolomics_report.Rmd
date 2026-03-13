@@ -13,6 +13,7 @@ params:
   pre: NULL
   qc_res: NULL
   de_res: NULL
+  clustering_res: NULL
   rf_res: NULL
   plsda_res: NULL
   enrichment_res: NULL
@@ -132,6 +133,7 @@ metab_cfg <- cfg$modes$metabolomics
 pre <- params$pre
 qc_res <- params$qc_res
 de_res <- params$de_res
+clustering_res <- params$clustering_res
 rf_res <- params$rf_res
 plsda_res <- params$plsda_res
 enrichment_res <- params$enrichment_res
@@ -391,6 +393,59 @@ if (!is.null(de_contrasts)) {
 ```
 
 `r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
+
+---
+
+`r if (is.null(clustering_res) || length(clustering_res$plots) == 0) "<!--"`
+
+# Clustering {.tabset}
+
+## Hierarchical Clustering
+
+```{r clustering-hier, fig.width=10, fig.height=8}
+if (!is.null(clustering_res) && !is.null(clustering_res$plots$p_cluster_hier)) {
+  p <- clustering_res$plots$p_cluster_hier
+  if (inherits(p, "pheatmap")) {
+    grid::grid.newpage()
+    grid::grid.draw(p$gtable)
+  } else {
+    safe_print_plot(p)
+  }
+}
+```
+
+```{r clustering-hier-info, results='asis'}
+if (!is.null(clustering_res) && !is.null(clustering_res$objects$hm_hier_de)) {
+  n_feat <- length(clustering_res$objects$hm_hier_de$feature_ids)
+  cat(sprintf("\n\nHierarchical clustering on **%d DE features**.\n\n", n_feat))
+}
+```
+
+`r if (is.null(clustering_res) || is.null(clustering_res$plots$partition_heatmap)) "<!--"`
+
+## Partition Clustering
+
+```{r clustering-partition, fig.width=10, fig.height=8}
+if (!is.null(clustering_res) && !is.null(clustering_res$plots$partition_heatmap)) {
+  p <- clustering_res$plots$partition_heatmap
+  if (inherits(p, "pheatmap")) {
+    grid::grid.newpage()
+    grid::grid.draw(p$gtable)
+  } else {
+    safe_print_plot(p)
+  }
+}
+```
+
+```{r clustering-profiles, fig.width=10, fig.height=7}
+if (!is.null(clustering_res) && !is.null(clustering_res$plots$cluster_profiles)) {
+  safe_print_plot(clustering_res$plots$cluster_profiles)
+}
+```
+
+`r if (is.null(clustering_res) || is.null(clustering_res$plots$partition_heatmap)) "-->"`
+
+`r if (is.null(clustering_res) || length(clustering_res$plots) == 0) "-->"`
 
 ---
 

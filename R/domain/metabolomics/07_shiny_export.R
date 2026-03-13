@@ -95,6 +95,9 @@ build_shiny_payload_metabolomics <- function(
     # Check for NA policy - if na_policy="zero", NAs were replaced
     payload$expr_norm <- pre$expr_work
 
+    # expr_long: Long-format expression with metadata
+    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
         na_count <- sum(is.na(payload$expr_norm))
@@ -189,6 +192,11 @@ build_shiny_payload_metabolomics <- function(
         if (!is.null(payload$de_stats)) {
             payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats)
         }
+
+        # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
+        if (!is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
+            payload$de_final_table <- payload$de_sig_stats
+        }
     }
 
     # ============================================================
@@ -242,10 +250,11 @@ build_shiny_payload_metabolomics <- function(
     # CONFIGURATION (6 keys)
     # ============================================================
 
-    payload$config_padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
+    # Canonical key names (overwrite init_shiny_payload defaults)
+    payload$padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
 
     linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
-    payload$config_log_fc_cutoff <- log2(linear_fc)
+    payload$log_fc_cutoff <- log2(linear_fc)
 
     # Build normalization method description
     norm_method <- paste0(
@@ -255,19 +264,19 @@ build_shiny_payload_metabolomics <- function(
         "/",
         norm_cfg$scaling %||% "none"
     )
-    payload$config_norm_method <- norm_method
+    payload$norm_method <- norm_method
 
-    # Group and aesthetic variables
+    # Group and aesthetic variables (canonical: group, color)
     if (!is.null(effects_cfg$color)) {
-        payload$config_group_var <- as.character(effects_cfg$color[[1]])
+        payload$group <- as.character(effects_cfg$color[[1]])
     } else if (!is.null(effects_cfg$group)) {
-        payload$config_group_var <- as.character(effects_cfg$group[[1]])
+        payload$group <- as.character(effects_cfg$group[[1]])
     } else {
-        payload$config_group_var <- "sample_type"
+        payload$group <- "sample_type"
     }
 
     if (!is.null(effects_cfg$color)) {
-        payload$config_color_var <- as.character(effects_cfg$color)
+        payload$color <- as.character(effects_cfg$color)
     }
 
     if (!is.null(effects_cfg$shape)) {

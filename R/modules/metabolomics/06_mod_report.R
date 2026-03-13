@@ -69,12 +69,15 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param pre             List from preprocess_metabolomics().
 #' @param qc_res          List from mod_metabolomics_qc_pre().
 #' @param de_res          List from mod_metabolomics_de().
+#' @param clustering_res  List from mod_metabolomics_clustering() (or NULL).
 #' @param feature_sel_res List from mod_metabolomics_feature_selection() (or NULL).
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
 #' @return Character path to the rendered HTML file.
-mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
+mod_metabolomics_report <- function(pre, qc_res, de_res,
+                                    clustering_res = NULL,
+                                    feature_sel_res,
                                     enrichment_res,
                                     config, out_dir,
                                     qc_comparison_file = NULL,
@@ -121,6 +124,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
             pre                = pre,
             qc_res             = qc_res,
             de_res             = de_res,
+            clustering_res     = clustering_res,
             rf_res             = rf_res_out,
             plsda_res          = plsda_res_out,
             enrichment_res     = enrichment_res,

@@ -474,6 +474,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 pre                = metab_pre,
                 qc_res             = metab_qc_pre_obj,
                 de_res             = metab_de_res,
+                clustering_res     = metab_clustering_obj,
                 feature_sel_res    = metab_feature_sel_res,
                 enrichment_res     = metab_enrichment_res,
                 config             = config,
