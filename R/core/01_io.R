@@ -73,6 +73,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
             next
         }
         abs <- resolve_raw_path(config, rel)
+        if (dir.exists(abs)) next    # skip directory paths (e.g., data_dir)
         if (!file.exists(abs)) stop("File not found: ", abs)
 
         # Detect file type and load appropriately
