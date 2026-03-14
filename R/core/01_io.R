@@ -20,9 +20,9 @@ normalize_contrast_name <- function(x) {
 #' and RDS files, and validates contrasts content.
 #'
 #' @param config Configuration list
-#' @param mode One of "proteomics" or "rna"
+#' @param mode One of "proteomics", "rna", or "metabolomics"
 #' @return List of loaded objects
-load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
+load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomics")) {
     mode <- match.arg(mode)
     cfg <- config$modes[[mode]]
     if (is.null(cfg)) stop("No config for mode ", mode)
@@ -34,6 +34,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
     required_files <- switch(mode,
         proteomics = if (is_preprocessed) c("preprocessed_protein", "metadata", "contrasts") else c("protein", "metadata", "contrasts"),
         rna = c("metadata", "contrasts"),
+        metabolomics = c("metadata", "contrasts"),
         character(0)
     )
 

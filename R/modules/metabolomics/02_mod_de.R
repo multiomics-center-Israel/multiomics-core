@@ -4,7 +4,7 @@
 # (volcano, MA, p-value histogram), and saves result tables.
 #
 # Reuses core plotting: plot_volcano, plot_ma
-# Reuses domain: run_metabolomics_de, extract_contrast_table, make_contrast_label
+# Reuses domain: run_metabolomics_de, extract_contrast_table
 
 
 #' Metabolomics differential expression module
@@ -53,15 +53,8 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
     files <- c(files, f_summary)
 
     # ---- Per-contrast outputs ----
-    # For precomputed DE, use de_tables names directly as labels
-    if (has_precomputed && !is.null(de_res$de_tables)) {
-        contrast_labels <- names(de_res$de_tables)
-    } else {
-        contrasts <- de_cfg$contrasts
-        if (is.list(contrasts)) contrasts <- unlist(contrasts)
-        contrast_labels <- vapply(contrasts, make_contrast_label, character(1),
-                                  USE.NAMES = FALSE)
-    }
+    # Labels come from de_tables names (set by run_metabolomics_de or precomputed loader)
+    contrast_labels <- names(de_res$de_tables)
 
     for (ctr_label in contrast_labels) {
         ctr_tbl <- extract_contrast_table(de_res$summary_df, ctr_label)
