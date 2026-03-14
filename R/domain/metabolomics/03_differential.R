@@ -6,7 +6,11 @@
 # Operates on the standard pre-processing contract (expr_work, meta).
 # Returns a wide-format summary_df compatible with the DE contract.
 #
-# Reuses: assert_numeric_matrix, assert_one_of, %||%
+# Contrast loading follows the RNA/proteomics standard: structured table from
+# files$contrasts (CSV/TSV with Contrast_name, Factor, Numerator, Denominator)
+# loaded via load_omics_inputs(config, mode = "metabolomics").
+#
+# Reuses: assert_numeric_matrix, assert_one_of, normalize_contrast_name, %||%
 
 
 # ---- pre-computed DE loader --------------------------------------------------
@@ -134,11 +138,9 @@ run_metabolomics_de <- function(pre, config) {
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
 
-    contrasts <- de_cfg$contrasts
-    if (is.null(contrasts) || length(contrasts) == 0) {
-        stop("metabolomics DE: config$modes$metabolomics$de$contrasts is required.")
-    }
-    if (is.list(contrasts)) contrasts <- unlist(contrasts)
+    # ---- Load structured contrast table (RNA/proteomics standard) ----
+    inputs <- load_omics_inputs(config, mode = "metabolomics")
+    contrast_table <- inputs$contrasts
 
     mat  <- pre$expr_work
     # Use pre-scaling (log-transformed) matrix for DE statistical tests.
@@ -158,18 +160,22 @@ run_metabolomics_de <- function(pre, config) {
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
 
-    # Run DE for each contrast
+    # Run DE for each row of the contrast table
     de_tables <- list()
     de_model  <- NULL
 
-    for (ctr in contrasts) {
-        ctr_label <- make_contrast_label(ctr)
-        message("metabolomics DE [", method, "]: ", ctr)
+    for (i in seq_len(nrow(contrast_table))) {
+        ctr_name    <- normalize_contrast_name(contrast_table$Contrast_name[i])
+        numerator   <- as.character(contrast_table$Numerator[i])
+        denominator <- as.character(contrast_table$Denominator[i])
+
+        message("metabolomics DE [", method, "]: ", ctr_name,
+                " (", numerator, " vs ", denominator, ")")
 
         tbl <- switch(method,
-            limma    = de_limma(mat_for_test, condition, ctr),
-            t_test   = de_t_test(mat_for_test, condition, ctr),
-            wilcoxon = de_wilcoxon(mat_for_test, condition, ctr)
+            limma    = de_limma(mat_for_test, condition, numerator, denominator),
+            t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
+            wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
         )
 
         # Capture limma model from first contrast
@@ -177,7 +183,7 @@ run_metabolomics_de <- function(pre, config) {
             de_model <- attr(tbl, "fit")
         }
 
-        de_tables[[ctr_label]] <- tbl
+        de_tables[[ctr_name]] <- tbl
     }
 
     # Build wide summary_df
@@ -199,11 +205,13 @@ run_metabolomics_de <- function(pre, config) {
 
 #' Run limma on a single contrast
 #'
-#' @param mat       Numeric matrix (features x samples).
-#' @param condition Factor of conditions.
-#' @param contrast_str  Character, e.g. "B - A".
+#' @param mat         Numeric matrix (features x samples).
+#' @param condition   Factor of conditions.
+#' @param numerator   Character: numerator group level (e.g. "TreatmentA").
+#' @param denominator Character: denominator group level (e.g. "Control").
+#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val
-de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+de_limma <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for limma DE.")
     }
@@ -220,14 +228,10 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
     safe_levels <- make.names(raw_levels)
     colnames(design) <- safe_levels
 
-    # Translate contrast string to use syntactically valid level names
-    # Replace longest names first to avoid partial matches
-    safe_contrast <- contrast_str
-    ord <- order(nchar(raw_levels), decreasing = TRUE)
-    for (i in ord) {
-        safe_contrast <- gsub(raw_levels[i], safe_levels[i], safe_contrast,
-                              fixed = TRUE)
-    }
+    # Build contrast formula from structured numerator/denominator
+    safe_num <- make.names(numerator)
+    safe_den <- make.names(denominator)
+    safe_contrast <- paste(safe_num, "-", safe_den)
 
     fit <- limma::lmFit(mat_imp, design)
     contrast_matrix <- limma::makeContrasts(contrasts = safe_contrast,
@@ -249,9 +253,8 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 
     # Override logFC from pre-scaling matrix if provided
     if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
-        groups <- parse_metab_contrast(contrast_str)
-        idx_A <- which(condition == groups$denominator)
-        idx_B <- which(condition == groups$numerator)
+        idx_A <- which(condition == denominator)
+        idx_B <- which(condition == numerator)
         for (i in seq_len(nrow(mat_for_fc))) {
             res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
                             mean(mat_for_fc[i, idx_A], na.rm = TRUE)
@@ -269,17 +272,18 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 #'
 #' @param mat          Numeric matrix (features x samples) for statistical test.
 #' @param condition    Factor of conditions.
-#' @param contrast_str Character, e.g. "B - A".
+#' @param numerator    Character: numerator group level.
+#' @param denominator  Character: denominator group level.
 #' @param mat_for_fc   Optional pre-scaling matrix for logFC computation.
 #' @param test_fn      Function(vals_B, vals_A) returning list(statistic, p.value).
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val.
-de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_fn) {
-    groups <- parse_metab_contrast(contrast_str)
-    idx_A <- which(condition == groups$denominator)
-    idx_B <- which(condition == groups$numerator)
+de_two_group <- function(mat, condition, numerator, denominator, mat_for_fc = NULL, test_fn) {
+    idx_A <- which(condition == denominator)
+    idx_B <- which(condition == numerator)
 
     if (length(idx_A) == 0 || length(idx_B) == 0) {
-        stop("No samples for one of the groups in contrast: ", contrast_str)
+        stop("No samples for one of the groups in contrast: ",
+             numerator, " vs ", denominator)
     }
 
     fc_mat <- if (!is.null(mat_for_fc)) mat_for_fc else mat
@@ -317,8 +321,14 @@ de_two_group <- function(mat, condition, contrast_str, mat_for_fc = NULL, test_f
 # ---- t-test ----------------------------------------------------------------
 
 #' Run Welch t-tests per feature on a single contrast
-de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
-    de_two_group(mat, condition, contrast_str, mat_for_fc,
+#'
+#' @param mat         Numeric matrix (features x samples).
+#' @param condition   Factor of conditions.
+#' @param numerator   Character: numerator group level.
+#' @param denominator Character: denominator group level.
+#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
+de_t_test <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
+    de_two_group(mat, condition, numerator, denominator, mat_for_fc,
                  test_fn = function(b, a) stats::t.test(b, a, var.equal = FALSE))
 }
 
@@ -326,39 +336,19 @@ de_t_test <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
 # ---- wilcoxon --------------------------------------------------------------
 
 #' Run Wilcoxon rank-sum tests per feature on a single contrast
-de_wilcoxon <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
-    de_two_group(mat, condition, contrast_str, mat_for_fc,
+#'
+#' @param mat         Numeric matrix (features x samples).
+#' @param condition   Factor of conditions.
+#' @param numerator   Character: numerator group level.
+#' @param denominator Character: denominator group level.
+#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
+de_wilcoxon <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
+    de_two_group(mat, condition, numerator, denominator, mat_for_fc,
                  test_fn = function(b, a) stats::wilcox.test(b, a, exact = FALSE))
 }
 
 
-# ---- helpers ----------------------------------------------------------------
-
-#' Parse a metabolomics contrast string "B - A" into numerator/denominator
-#'
-#' Splits on " - " (space-dash-space) so that group names containing hyphens
-#' (e.g. "pre-treatment - post-treatment") are handled correctly.
-#'
-#' @param contrast_str Character, e.g. "post-treatment - pre-treatment".
-#' @return list(numerator, denominator)
-parse_metab_contrast <- function(contrast_str) {
-    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
-    if (length(parts) != 2) {
-        stop("Cannot parse contrast: '", contrast_str,
-             "'. Expected format: 'groupB - groupA'")
-    }
-    list(numerator = trimws(parts[1]), denominator = trimws(parts[2]))
-}
-
-
-#' Create a clean label from a contrast string
-#'
-#' Converts "post-treatment - pre-treatment" to "post-treatment_vs_pre-treatment".
-make_contrast_label <- function(contrast_str) {
-    parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
-    paste(trimws(parts), collapse = "_vs_")
-}
-
+# ---- summary builder -------------------------------------------------------
 
 #' Build wide summary_df from per-contrast DE tables
 #'

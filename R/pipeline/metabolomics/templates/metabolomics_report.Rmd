@@ -256,10 +256,10 @@ if (!is.null(qc_res$files)) {
 
 ```{r de-setup}
 de_contrasts <- NULL
-if (!is.null(de_res) && !is.null(de_res$summary_df)) {
+if (!is.null(de_res) && !is.null(de_res$de_tables)) {
   de_cfg <- metab_cfg$de %||% list()
-  de_contrasts <- de_cfg$contrasts
-  if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+  # Contrast labels from de_tables names (set by run_metabolomics_de)
+  de_contrasts <- names(de_res$de_tables)
 }
 ```
 
@@ -283,7 +283,8 @@ if (!is.null(de_res) && !is.null(de_res$summary_df)) {
 ```{r de-tabs, results='asis'}
 if (!is.null(de_contrasts)) {
   for (ctr in de_contrasts) {
-    ctr_label <- make_contrast_label(ctr)
+    # ctr is already a normalized label from de_res$de_tables names
+    ctr_label <- ctr
 
     cat("\n## ", ctr, " {.tabset}\n\n", sep = "")
 
