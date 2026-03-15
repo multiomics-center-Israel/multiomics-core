@@ -360,45 +360,23 @@ build_shiny_payload_metabolomics <- function(
 
 #' Build DE summary counts for Metabolomics
 #'
+#' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
+#' metabolomics naming conventions: \code{pass.<contrast>} pass columns and
+#' \code{linearFC.<contrast>} fold-change columns.
+#'
 #' @param de_stats DE statistics data.frame with pass columns
 #' @return data.frame with columns: contrast, up, down, total
 #' @keywords internal
 build_de_summary_counts_metabolomics <- function(de_stats) {
-    if (is.null(de_stats)) return(NULL)
-
-    # Aligned naming: pass.<cn> (dot separator, no underscore)
-    pass_cols <- grep("^pass\\.", names(de_stats), value = TRUE)
-    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
-
-    if (length(pass_cols) == 0) return(NULL)
-
-    summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass\\.", "", col)
-
-        # Aligned naming: linearFC.<cn> (signed, so >0 = up, <0 = down)
-        fc_col <- paste0("linearFC.", contrast_name)
-        has_fc <- fc_col %in% names(de_stats)
-
-        sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1
-
-        if (has_fc) {
-            up <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
-            down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
-        } else {
-            up <- NA
-            down <- NA
+    build_de_summary_counts_generic(
+        de_stats         = de_stats,
+        pass_pattern     = "^pass\\.",
+        extract_contrast = function(col) sub("^pass\\.", "", col),
+        find_fc_col      = function(cn, cols) {
+            fc <- paste0("linearFC.", cn)
+            if (fc %in% cols) fc else NULL
         }
-
-        data.frame(
-            contrast = contrast_name,
-            up = up,
-            down = down,
-            total = sum(sig_rows, na.rm = TRUE),
-            stringsAsFactors = FALSE
-        )
-    })
-
-    do.call(rbind, summaries)
+    )
 }
 
 
