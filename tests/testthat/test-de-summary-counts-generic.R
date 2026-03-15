@@ -26,12 +26,25 @@ make_de_stats_metab <- function(include_any = TRUE) {
 }
 
 make_de_stats_prot <- function() {
+    # Proteomics schema: pass.imputs.<contrast>, linearFC.imputs.<contrast>
     data.frame(
-        feature_id          = paste0("P", 1:6),
-        pass.X_vs_Y         = c(1, 1, 0, 1, NA, 1),
-        logFC_X_vs_Y        = c(0.5, -0.3, 0.1, -0.8, 0.4, 0.2),
-        pass_any_contrast   = c(1, 1, NA, 1, NA, 1),
-        stringsAsFactors    = FALSE
+        feature_id                = paste0("P", 1:6),
+        pass.imputs.X_vs_Y       = c(1, 1, 0, 1, NA, 1),
+        linearFC.imputs.X_vs_Y   = c(0.5, -0.3, 0.1, -0.8, 0.4, 0.2),
+        pass_any_contrast         = c(1, 1, NA, 1, NA, 1),
+        stringsAsFactors          = FALSE
+    )
+}
+
+make_de_stats_prot_logfc <- function() {
+    # Proteomics schema with logFC_ candidate (higher priority than linearFC.imputs.)
+    data.frame(
+        feature_id                = paste0("P", 1:4),
+        pass.imputs.A_vs_B       = c(1, 1, 0, 1),
+        logFC_A_vs_B             = c(0.5, -0.3, 0.1, -0.8),
+        linearFC.imputs.A_vs_B   = c(0.9, -0.9, 0.1, -0.1),
+        pass_any_contrast         = c(1, 1, NA, 1),
+        stringsAsFactors          = FALSE
     )
 }
 
@@ -162,6 +175,51 @@ test_that("generic: no 'any' row when pass_any_contrast is absent", {
     expect_false("any" %in% result$contrast)
 })
 
+test_that("generic: custom is_significant callback is honoured", {
+    df <- data.frame(
+        feature_id = 1:5,
+        pass.X     = c(TRUE, TRUE, FALSE, NA, TRUE),
+        linearFC.X = c(0.5, -0.3, 0.1, 0.2, -0.8),
+        stringsAsFactors = FALSE
+    )
+    # Use a boolean-based significance test instead of == 1
+    result <- build_de_summary_counts_generic(
+        de_stats         = df,
+        pass_pattern     = "^pass\\.",
+        extract_contrast = function(col) sub("^pass\\.", "", col),
+        find_fc_col      = function(cn, cols) {
+            fc <- paste0("linearFC.", cn)
+            if (fc %in% cols) fc else NULL
+        },
+        is_significant   = function(x) !is.na(x) & x == TRUE
+    )
+    # TRUE at rows 1, 2, 5 => total = 3
+    expect_equal(result$total[result$contrast == "X"], 3)
+    # FC > 0: row 1(0.5) => up = 1; FC < 0: rows 2(-0.3), 5(-0.8) => down = 2
+    expect_equal(result$up[result$contrast == "X"], 1)
+    expect_equal(result$down[result$contrast == "X"], 2)
+})
+
+test_that("generic: is_significant default matches == 1 semantics", {
+    df <- data.frame(
+        feature_id = 1:4,
+        pass.X     = c(1, 0, NA, 1),
+        linearFC.X = c(0.5, -0.3, 0.1, -0.8),
+        stringsAsFactors = FALSE
+    )
+    result <- build_de_summary_counts_generic(
+        df, "^pass\\.",
+        function(col) sub("^pass\\.", "", col),
+        function(cn, cols) {
+            fc <- paste0("linearFC.", cn)
+            if (fc %in% cols) fc else NULL
+        }
+        # is_significant omitted — uses default
+    )
+    # == 1 at rows 1, 4 => total = 2
+    expect_equal(result$total[result$contrast == "X"], 2)
+})
+
 
 # ===========================================================================
 # Tests for domain wrappers
@@ -181,28 +239,44 @@ test_that("metabolomics wrapper: NULL input returns NULL", {
     expect_null(build_de_summary_counts_metabolomics(NULL))
 })
 
-test_that("proteomics wrapper: FC column priority order respected", {
+test_that("proteomics wrapper: pass.imputs. schema with correct contrast names", {
     df <- make_de_stats_prot()
     result <- build_de_summary_counts_proteomics(df)
 
     expect_equal(names(result), c("contrast", "up", "down", "total"))
+    # Contrast name should be "X_vs_Y", NOT "imputs.X_vs_Y"
     row_x <- result[result$contrast == "X_vs_Y", ]
-    # pass.X_vs_Y == 1 at rows 1,2,4,6 => total = 4
+    expect_equal(nrow(row_x), 1)
+    # pass.imputs.X_vs_Y == 1 at rows 1,2,4,6 => total = 4
     expect_equal(row_x$total, 4)
-    # logFC_X_vs_Y > 0 among sig: rows 1(0.5), 6(0.2) => up = 2
+    # linearFC.imputs.X_vs_Y > 0 among sig: rows 1(0.5), 6(0.2) => up = 2
     expect_equal(row_x$up, 2)
-    # logFC_X_vs_Y < 0 among sig: rows 2(-0.3), 4(-0.8) => down = 2
+    # linearFC.imputs.X_vs_Y < 0 among sig: rows 2(-0.3), 4(-0.8) => down = 2
     expect_equal(row_x$down, 2)
     # "any" row
     expect_equal(result$contrast[nrow(result)], "any")
     expect_equal(result[result$contrast == "any", "total"], 4)
 })
 
+test_that("proteomics wrapper: FC candidate priority (logFC_ before linearFC.imputs.)", {
+    df <- make_de_stats_prot_logfc()
+    result <- build_de_summary_counts_proteomics(df)
+
+    row <- result[result$contrast == "A_vs_B", ]
+    # pass.imputs.A_vs_B == 1 at rows 1,2,4 => total = 3
+    expect_equal(row$total, 3)
+    # Should use logFC_A_vs_B (higher priority), not linearFC.imputs.A_vs_B
+    # logFC_A_vs_B > 0 among sig: row 1(0.5) => up = 1
+    expect_equal(row$up, 1)
+    # logFC_A_vs_B < 0 among sig: rows 2(-0.3), 4(-0.8) => down = 2
+    expect_equal(row$down, 2)
+})
+
 test_that("proteomics wrapper: NULL input returns NULL", {
     expect_null(build_de_summary_counts_proteomics(NULL))
 })
 
-test_that("rnaseq wrapper: _pass suffix handling", {
+test_that("rnaseq wrapper: _pass$ suffix handling (anchored)", {
     df <- make_de_stats_rna()
     result <- build_de_summary_counts_rnaseq(df)
 
@@ -217,6 +291,22 @@ test_that("rnaseq wrapper: _pass suffix handling", {
     # "any" row
     expect_equal(result$contrast[nrow(result)], "any")
     expect_equal(result[result$contrast == "any", "total"], 5)
+})
+
+test_that("rnaseq wrapper: _pass$ does not match mid-string _pass_", {
+    # Ensure a column like "foo_pass_bar" is NOT picked up
+    df <- data.frame(
+        feature_id          = 1:3,
+        A_vs_B_pass         = c(1, 0, 1),
+        foo_pass_bar        = c(1, 1, 1),
+        linearFC.A_vs_B     = c(0.5, -0.3, 0.8),
+        stringsAsFactors    = FALSE
+    )
+    result <- build_de_summary_counts_rnaseq(df)
+    # Only A_vs_B should appear, not "foo" or "foo_pass_bar"
+    per_contrast <- result[result$contrast != "any", ]
+    expect_equal(nrow(per_contrast), 1)
+    expect_equal(per_contrast$contrast, "A_vs_B")
 })
 
 test_that("rnaseq wrapper: grep fallback for FC column", {

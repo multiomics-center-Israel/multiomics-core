@@ -270,9 +270,9 @@ build_shiny_payload_proteomics <- function(
 #' Build DE summary counts for Proteomics
 #'
 #' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
-#' proteomics naming conventions: \code{pass.<contrast>} pass columns and
-#' multiple FC column candidates (\code{logFC_}, \code{log2FoldChange_},
-#' \code{logFC.}, \code{linearFC.}).
+#' proteomics naming conventions: \code{pass.imputs.<contrast>} pass columns
+#' and multiple FC column candidates (\code{logFC_}, \code{log2FoldChange_},
+#' \code{logFC.}, \code{linearFC.imputs.}).
 #'
 #' @param de_stats DE statistics data.frame with pass columns
 #' @return data.frame with columns: contrast, up, down, total
@@ -280,14 +280,14 @@ build_shiny_payload_proteomics <- function(
 build_de_summary_counts_proteomics <- function(de_stats) {
     build_de_summary_counts_generic(
         de_stats         = de_stats,
-        pass_pattern     = "^pass\\.",
-        extract_contrast = function(col) sub("^pass\\.", "", col),
+        pass_pattern     = "^pass\\.imputs\\.",
+        extract_contrast = function(col) sub("^pass\\.imputs\\.", "", col),
         find_fc_col      = function(cn, cols) {
             candidates <- c(
                 paste0("logFC_", cn),
                 paste0("log2FoldChange_", cn),
                 paste0("logFC.", cn),
-                paste0("linearFC.", cn)
+                paste0("linearFC.imputs.", cn)
             )
             matched <- candidates[candidates %in% cols]
             if (length(matched) > 0) matched[1] else NULL

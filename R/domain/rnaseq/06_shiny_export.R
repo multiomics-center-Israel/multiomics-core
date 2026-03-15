@@ -297,7 +297,7 @@ build_shiny_payload_rnaseq <- function(
 build_de_summary_counts_rnaseq <- function(de_stats) {
     build_de_summary_counts_generic(
         de_stats         = de_stats,
-        pass_pattern     = "_pass",
+        pass_pattern     = "_pass$",
         extract_contrast = function(col) sub("_pass$", "", col),
         find_fc_col      = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
