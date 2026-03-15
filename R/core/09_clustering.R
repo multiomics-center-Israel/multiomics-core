@@ -84,7 +84,7 @@ run_binary_patterns <- function(expr_mat_corr,
   # Ensure directory exists
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # Use clustering$group_col (no fallback to effects$color)
+  # Use clustering$group_col (strict; errors if missing)
   group_col <- get_clustering_group_col(cfg, meta)
   message(sprintf("[binary_patterns] Using group_col: %s", group_col))
 
@@ -521,13 +521,12 @@ run_partition_clustering <- function(z_expr, config) {
   )
 }
 
-# ---- Clustering group column (decoupled from effects$color) ----
+# ---- Clustering group column ----
 
 #' Get the clustering group column from config, with strict validation
 #'
 #' Returns \code{cfg$clustering$group_col} after checking it exists in
-#' \code{meta}.  No fallback to \code{effects$color} — the config must
-#' set \code{clustering$group_col} explicitly.
+#' \code{meta}.  Errors if the key is missing or the column is absent.
 #'
 #' @param cfg  Mode config (e.g. \code{config$modes$proteomics}).
 #' @param meta data.frame of sample metadata.
@@ -610,9 +609,9 @@ clustering_run_flags <- function(pre, cfg) {
   )
 }
 
-# ---- Partition clustering (legacy-like; effects-driven) ----
+# ---- Partition clustering ----
 
-#' Build feature x group mean matrix using effects$color + effects$samples
+#' Build feature x group mean matrix using clustering$group_col + effects$samples
 #'
 #' @return list(group_means = matrix feature x group,
 #'              groups = factor (per sample, aligned),
