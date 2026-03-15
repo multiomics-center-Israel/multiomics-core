@@ -292,11 +292,11 @@ cat(sprintf(
     paste0(
         "Gene filtering was performed using an adaptive density-based threshold ",
         "(KDE on log2-CPM distribution), selecting an optimal CPM threshold within the ",
-        "[%.1f\u2013%.1f] range. Genes passing the threshold in at least one complete ",
+        "[%.2f\u2013%.2f] range. Genes passing the threshold in at least one complete ",
         "biological group were retained. Normalization was performed using the %s method ",
         "with log2-CPM transformation (prior count = %d). ",
         "Differential expression was tested using %s (%s test, %s mode). ",
-        "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.1f.%s"
+        "Genes were called significant at %s \u2264 %s and absolute linear fold-change \u2265 %.2f.%s"
     ),
     filt_min, filt_max,
     norm_method, prior_ct,
@@ -335,7 +335,7 @@ if (!is.null(tech$upstream_de_note)) {
     cat(sprintf(
         paste0(
             "This report applies additional filtering: adaptive CPM-based gene filtering, ",
-            "%s normalization, and a fold-change cutoff of \u2265 %.1f"
+            "%s normalization, and a fold-change cutoff of \u2265 %.2f"
         ),
         norm_method, fc_cut
     ))
@@ -619,10 +619,10 @@ if (file.exists(filt_counts_file) && !dir.exists(filt_counts_file)) {
 
 if (!is.na(n_genes_raw) && !is.na(n_genes_filt)) {
     n_removed <- n_genes_raw - n_genes_filt
-    pct_kept <- round(100 * n_genes_filt / n_genes_raw, 1)
+    pct_kept <- round(100 * n_genes_filt / n_genes_raw, 2)
     cat(sprintf("**Genes before filtering:** %s\n\n", format(n_genes_raw, big.mark = ",")))
     cat(sprintf("**Genes after filtering:** %s\n\n", format(n_genes_filt, big.mark = ",")))
-    cat(sprintf("**Genes removed:** %s (%.1f%% retained)\n\n",
+    cat(sprintf("**Genes removed:** %s (%.2f%% retained)\n\n",
                 format(n_removed, big.mark = ","), pct_kept))
 }
 ```
@@ -1230,8 +1230,8 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
     p <- ggplot(plot_df, aes(x = logFC, y = neglog10padj, color = Direction,
-                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 3),
-                                           "\npadj: ", signif(padj, 3)))) +
+                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 2),
+                                           "\npadj: ", sprintf("%.2e", padj)))) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dashed") +
@@ -1567,9 +1567,9 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
     p <- ggplot(plot_df, aes(x = log10baseMean, y = logFC, color = Direction,
-                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 3),
-                                           "\nbaseMean: ", round(baseMean, 1),
-                                           "\npadj: ", signif(padj, 3)))) +
+                              text = paste0("Gene: ", gene, "\nlog2FC: ", round(logFC, 2),
+                                           "\nbaseMean: ", round(baseMean, 2),
+                                           "\npadj: ", sprintf("%.2e", padj)))) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
@@ -1867,7 +1867,7 @@ if (!is.null(de_summary_full)) {
           )
       ),
       rownames = FALSE
-    ) |> DT::formatSignif(columns = which(sapply(de_top, is.numeric)), digits = 4)
+    ) |> DT::formatRound(columns = which(sapply(de_top, is.numeric)), digits = 2)
 } else {
     cat("DE summary file not found.\n")
 }
@@ -1927,7 +1927,7 @@ if (!is.null(de_summary_full)) {
       ),
       rownames = FALSE,
       filter = 'top'
-    ) |> DT::formatSignif(columns = which(sapply(lookup_df, is.numeric)), digits = 4)
+    ) |> DT::formatRound(columns = which(sapply(lookup_df, is.numeric)), digits = 2)
 }
 ```
 
@@ -1981,7 +1981,7 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
 
     # Build matrix as list of numeric vectors (one per gene), rounded to 3 decimals
     expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
-        round(as.numeric(norm_expr_exp[i, ]), 3)
+        round(as.numeric(norm_expr_exp[i, ]), 2)
     })
 
     explorer_data <- list(
@@ -2523,7 +2523,7 @@ if (file.exists(anno_file)) {
     anno <- read.csv(anno_file, stringsAsFactors = FALSE)
     n_annotated <- sum(!is.na(anno$symbol) & anno$symbol != anno$gene_id)
     n_total <- nrow(anno)
-    cat(sprintf("**Gene annotation:** %d / %d genes annotated (%.1f%%)\n\n",
+    cat(sprintf("**Gene annotation:** %d / %d genes annotated (%.2f%%)\n\n",
                 n_annotated, n_total, 100 * n_annotated / n_total))
 }
 ```
@@ -2667,7 +2667,7 @@ if (length(fgsea_files) > 0) {
                 le_list[[i]] <- data.frame(
                     Pathway = pathway_name,
                     NES = round(sig$NES[i], 2),
-                    padj = signif(sig$padj[i], 3),
+                    padj = sprintf("%.2e", sig$padj[i]),
                     `Leading Edge Genes` = paste(head(le_genes, 15), collapse = ", "),
                     check.names = FALSE,
                     stringsAsFactors = FALSE
@@ -2738,8 +2738,8 @@ for (vf in pw_volcano_files_rna) {
                 sig$pathway[r]
             }
             pathway_info[[pname]] <- list(
-                NES = round(sig$NES[r], 3),
-                padj = signif(sig$padj[r], 3),
+                NES = round(sig$NES[r], 2),
+                padj = sprintf("%.2e", sig$padj[r]),
                 size = sig$size[r]
             )
         }
@@ -2765,8 +2765,8 @@ for (vf in pw_volcano_files_rna) {
         colors = dir_colors,
         marker = list(size = 5, opacity = 0.7),
         text = ~paste0("Gene: ", FeatureID,
-                        "<br>log2FC: ", round(log2FC, 3),
-                        "<br>padj: ", signif(padj, 3),
+                        "<br>log2FC: ", round(log2FC, 2),
+                        "<br>padj: ", sprintf("%.2e", padj),
                         "<br>Pathways: ", ifelse(nzchar(pathways), pathways, "none")),
         hoverinfo = "text",
         customdata = ~FeatureID,
@@ -2821,7 +2821,7 @@ for (vf in pw_volcano_files_rna) {
         pw_escaped <- gsub("\"", "&quot;", pw)
         info <- pathway_info[[pw]]
         label <- if (!is.null(info)) {
-            sprintf("%s (NES=%.2f, padj=%.3g)", pw, info$NES, info$padj)
+            sprintf("%s (NES=%.2f, padj=%.2e)", pw, info$NES, info$padj)
         } else { pw }
         label_escaped <- gsub("\"", "&quot;", label)
         options_html <- paste0(options_html,
@@ -3037,7 +3037,7 @@ n_samples
 ))
 
 cat(sprintf(
-"Lowly expressed genes were filtered using an adaptive CPM threshold approach (range: %.1f–%.1f CPM), ",
+"Lowly expressed genes were filtered using an adaptive CPM threshold approach (range: %.2f–%.2f CPM), ",
 filter_min, filter_max
 ))
 
@@ -3056,7 +3056,7 @@ de_method
 ))
 
 cat(sprintf(
-"Genes were considered differentially expressed at adjusted p-value ≤ %.2f and |fold change| ≥ %.1f. ",
+"Genes were considered differentially expressed at adjusted p-value ≤ %.2f and |fold change| ≥ %.2f. ",
 padj_cut, lfc_cut
 ))
 
@@ -3077,7 +3077,7 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). Lowly expressed genes were filtered using adaptive CPM thresholds (%.1f–%.1f CPM range). Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.1f). Pathway analysis was performed using %s on %s databases.",
+"RNA-seq analysis was performed using the multiomics-core pipeline (v1.0). Lowly expressed genes were filtered using adaptive CPM thresholds (%.2f–%.2f CPM range). Expression values were normalized using %s. Differential expression was assessed with %s (adjusted p ≤ %.2f, |FC| ≥ %.2f). Pathway analysis was performed using %s on %s databases.",
 filter_min, filter_max, norm_method, de_method, padj_cut, lfc_cut, pathway_method, pathway_dbs
 ))
 
