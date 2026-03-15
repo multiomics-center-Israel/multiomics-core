@@ -104,6 +104,7 @@ modes:
     # Optional clustering (off by default)
     clustering:
       enabled: false
+      group_col: "line"             # metadata column for clustering group logic
       de_source: "any_contrast"
       min_groups: 2
       steps:
@@ -123,7 +124,6 @@ modes:
           nstart: 25
         binary_patterns:
           enabled: true
-          group_col: "line"            # Metadata column defining biological groups (required if enabled)
           corr_cutoff: 0.8             # Minimum correlation to assign feature to pattern
           counts_cutoff_high: 0        # Minimum counts for "on" (1) positions
           counts_cutoff_low: null      # Maximum counts for "off" (0) positions (null = disabled)

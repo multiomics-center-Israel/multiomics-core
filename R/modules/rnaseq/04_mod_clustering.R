@@ -43,9 +43,10 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     }
 
     # 2. Validate prerequisites explicitly
-    # Check 1: Effects definition
-    if (is.null(eff_color) || is.null(cfg$effects$samples)) {
-        warning("[rnaseq clustering] skipped: effects$color or effects$samples missing in config.")
+    # Check 1: clustering$group_col and effects$samples must be set
+    group_col <- tryCatch(get_clustering_group_col(cfg, pre$meta), error = function(e) NULL)
+    if (is.null(group_col) || is.null(cfg$effects$samples)) {
+        warning("[rnaseq clustering] skipped: clustering$group_col or effects$samples missing in config.")
         return(list(plots = plots, files = written, objects = objects))
     }
 

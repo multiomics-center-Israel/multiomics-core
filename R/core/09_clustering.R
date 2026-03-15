@@ -84,18 +84,9 @@ run_binary_patterns <- function(expr_mat_corr,
   # Ensure directory exists
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # Task 5: Use configured group_col from binary_patterns config
-  # If not set, fall back to effects$color (for backward compatibility)
-  bin_cfg <- cfg$clustering$steps$binary_patterns %||% list()
-  group_col <- bin_cfg$group_col
-
-  if (is.null(group_col)) {
-    # Fallback to primary color for backward compatibility
-    group_col <- get_color_config(cfg)
-    message(sprintf("[binary_patterns] group_col not set, using effects$color fallback: %s", group_col))
-  } else {
-    message(sprintf("[binary_patterns] Using group_col: %s", group_col))
-  }
+  # Use clustering$group_col (no fallback to effects$color)
+  group_col <- get_clustering_group_col(cfg, meta)
+  message(sprintf("[binary_patterns] Using group_col: %s", group_col))
 
   sample_col <- cfg$effects$samples
 
@@ -530,38 +521,54 @@ run_partition_clustering <- function(z_expr, config) {
   )
 }
 
-# ---- Clustering guards (effects-driven; no GROUP/GROUP1) ----
+# ---- Clustering group column (decoupled from effects$color) ----
+
+#' Get the clustering group column from config, with strict validation
+#'
+#' Returns \code{cfg$clustering$group_col} after checking it exists in
+#' \code{meta}.  No fallback to \code{effects$color} — the config must
+#' set \code{clustering$group_col} explicitly.
+#'
+#' @param cfg  Mode config (e.g. \code{config$modes$proteomics}).
+#' @param meta data.frame of sample metadata.
+#' @return Character scalar: validated column name in \code{meta}.
+#' @export
+get_clustering_group_col <- function(cfg, meta) {
+  group_col <- cfg$clustering$group_col
+  if (is.null(group_col) || !nzchar(group_col)) {
+    stop("clustering$group_col is required but missing or empty. ",
+         "Set it in the config under clustering: group_col: \"<column_name>\"")
+  }
+  if (!(group_col %in% colnames(meta))) {
+    stop(sprintf(
+      "clustering$group_col '%s' not found in metadata columns: %s",
+      group_col, paste(colnames(meta), collapse = ", ")
+    ))
+  }
+  group_col
+}
+
+# ---- Clustering guards ----
 
 #' Count how many distinct groups exist for clustering
 #'
-#' Groups are derived from pre$meta[[cfg$effects$color]].
-#' If the column is missing or all NA -> returns 0.
+#' Groups are derived from \code{cfg$clustering$group_col}.
+#' If the key is missing or the column is absent -> returns 0
+#' (disables partition/binary steps without crashing).
 #'
-#' @param pre legacy-style pre object (must contain $meta)
-#' @param cfg proteomics mode config (must contain $effects$color)
+#' @param pre pre object (must contain $meta)
+#' @param cfg mode config with $clustering$group_col
 #' @return integer number of groups (levels)
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
 
-  color_col <- get_color_config(cfg)
-  if (is.null(color_col)) {
-    return(0L)
-  }
+  group_col <- tryCatch(
+    get_clustering_group_col(cfg, pre$meta),
+    error = function(e) NULL
+  )
+  if (is.null(group_col)) return(0L)
 
-  if (!nzchar(color_col)) {
-    return(0L)
-  }
-  if (!(color_col %in% colnames(pre$meta))) {
-    return(0L)
-  }
-
-  x <- pre$meta[[color_col]]
-  if (all(is.na(x))) {
-    return(0L)
-  }
-
-  # treat as factor levels; if character, make factor
-  x <- as.factor(x)
+  x <- as.factor(pre$meta[[group_col]])
   nlevels(droplevels(x))
 }
 
@@ -620,12 +627,9 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   stopifnot(is.data.frame(meta))
   expr_mat <- as.matrix(expr_mat)
 
-  group_col <- get_color_config(cfg)
+  group_col <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
-  if (is.null(group_col) || !(group_col %in% colnames(meta))) {
-    stop(sprintf("Partition clustering: effects$color column '%s' not found in meta", group_col))
-  }
   if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
     stop(sprintf("Partition clustering: effects$samples column '%s' not found in meta", sample_col))
   }
@@ -910,7 +914,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- get_color_config(cfg)
+  group_col <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
   meta_map <- meta |>

@@ -247,6 +247,29 @@ modes:
       # Condition column for Wilcoxon test in ssGSEA
       # condition_column: "treatment"  # defaults to de$condition_column
 
+    # ---- Clustering (optional) ----
+    clustering:
+      enabled: false
+      group_col: "treatment"        # metadata column for clustering group logic
+      min_groups: 2
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"
+          linkage: "complete"
+          k: null
+        partition:
+          enabled: true
+          algorithm: "hclust"
+          distance: "euclidean"
+          k: null
+          k_max: 20
+          nstart: 25
+        binary_patterns:
+          enabled: true
+          corr_cutoff: 0.8
+          counts_cutoff: 0
+
 
 # ==============================================================================
 # Example: "multi_level" batch input (one xlsx per detection level in a dir)
