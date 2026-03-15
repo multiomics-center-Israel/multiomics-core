@@ -13,6 +13,56 @@
 # Reuses: assert_numeric_matrix, assert_one_of, normalize_contrast_name, %||%
 
 
+# ---- local helpers -----------------------------------------------------------
+
+#' Vectorised logical coercion (NA -> FALSE)
+#' @keywords internal
+isTRUE_vec <- function(x) {
+    out <- as.logical(x)
+    out[is.na(out)] <- FALSE
+    out
+}
+
+
+#' Filter a matrix + metadata to biological samples only (exclude QC/blanks)
+#'
+#' Removes samples whose \code{condition_col} value matches "qc" or "blank"
+#' (case-insensitive), plus any rows flagged by \code{is_QC} or \code{is_blank}
+#' metadata columns.
+#'
+#' @param mat           Numeric matrix (features x samples).
+#' @param meta          data.frame with at least \code{sample_col} and
+#'                      \code{condition_col}.
+#' @param condition_col Column in meta identifying experimental groups.
+#' @param sample_col    Column in meta identifying sample IDs.
+#' @param label         Character label for log messages.
+#' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
+#' @keywords internal
+filter_to_biological <- function(mat, meta, condition_col, sample_col,
+                                 label = "metabolomics") {
+    condition_vals <- as.character(meta[[condition_col]])
+    is_bio <- !grepl("^(qc|blank)$", condition_vals, ignore.case = TRUE)
+
+    if ("is_QC" %in% colnames(meta))
+        is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
+    if ("is_blank" %in% colnames(meta))
+        is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
+
+    n_excluded <- sum(!is_bio)
+    if (n_excluded > 0L) {
+        message(sprintf(
+            "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
+            label, n_excluded, sum(is_bio)
+        ))
+        keep_ids <- meta[[sample_col]][is_bio]
+        mat  <- mat[, keep_ids, drop = FALSE]
+        meta <- meta[is_bio, , drop = FALSE]
+    }
+
+    list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
+}
+
+
 # ---- pre-computed DE loader --------------------------------------------------
 
 #' Load pre-computed metabolomics DE tables from config$files$de_table
@@ -153,7 +203,14 @@ run_metabolomics_de <- function(pre, config) {
 
     # Align metadata to matrix columns
     meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
-    condition <- factor(meta[[condition_col]])
+
+    # ---- Filter to biological samples only (exclude QC/blanks) ----
+    bio <- filter_to_biological(mat_for_test, meta, condition_col, sample_col,
+                                label = "metabolomics DE")
+    mat_for_test <- bio$mat
+    meta         <- bio$meta
+    condition    <- bio$condition
+    mat          <- mat[, colnames(mat_for_test), drop = FALSE]
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
@@ -237,9 +294,9 @@ de_limma <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) 
     contrast_matrix <- limma::makeContrasts(contrasts = safe_contrast,
                                              levels = design)
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
-    fit2 <- limma::eBayes(fit2)
+    fit2 <- limma::treat(fit2, lfc = log2(1.2))
 
-    tt <- limma::topTable(fit2, number = Inf, sort.by = "none")
+    tt <- limma::topTreat(fit2, number = Inf, sort.by = "none")
 
     res <- data.frame(
         feature_id = rownames(tt),
