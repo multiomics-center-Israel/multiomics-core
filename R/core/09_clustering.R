@@ -553,8 +553,8 @@ get_clustering_group_col <- function(cfg, meta) {
 #' Count how many distinct groups exist for clustering
 #'
 #' Groups are derived from \code{cfg$clustering$group_col}.
-#' If the key is missing or the column is absent -> returns 0
-#' (disables partition/binary steps without crashing).
+#' Fails fast if \code{group_col} is missing or invalid when clustering
+#' is enabled — the user must fix the config.
 #'
 #' @param pre pre object (must contain $meta)
 #' @param cfg mode config with $clustering$group_col
@@ -562,11 +562,7 @@ get_clustering_group_col <- function(cfg, meta) {
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
 
-  group_col <- tryCatch(
-    get_clustering_group_col(cfg, pre$meta),
-    error = function(e) NULL
-  )
-  if (is.null(group_col)) return(0L)
+  group_col <- get_clustering_group_col(cfg, pre$meta)
 
   x <- as.factor(pre$meta[[group_col]])
   nlevels(droplevels(x))

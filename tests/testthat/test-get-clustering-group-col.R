@@ -39,11 +39,14 @@ test_that("get_clustering_group_col errors when column not in meta", {
   )
 })
 
-test_that("get_n_groups_from_effects returns 0 when group_col missing", {
+test_that("get_n_groups_from_effects errors when group_col missing", {
   cfg <- list(clustering = list(enabled = TRUE))
   pre <- list(meta = data.frame(sample_id = "s1", treatment = "A"))
 
-  expect_equal(get_n_groups_from_effects(pre, cfg), 0L)
+  expect_error(
+    get_n_groups_from_effects(pre, cfg),
+    "clustering\\$group_col is required but missing or empty"
+  )
 })
 
 test_that("get_n_groups_from_effects counts distinct groups", {

@@ -44,11 +44,10 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
 
     # 2. Validate prerequisites explicitly
     # Check 1: clustering$group_col and effects$samples must be set
-    group_col <- tryCatch(get_clustering_group_col(cfg, pre$meta), error = function(e) NULL)
-    if (is.null(group_col) || is.null(cfg$effects$samples)) {
-        warning("[rnaseq clustering] skipped: clustering$group_col or effects$samples missing in config.")
-        return(list(plots = plots, files = written, objects = objects))
+    if (is.null(cfg$effects$samples)) {
+        stop("[rnaseq clustering] effects$samples is missing in config.")
     }
+    group_col <- get_clustering_group_col(cfg, pre$meta)
 
     # Check 2: Expression matrix dims
     expr_mat <- as.matrix(pre$expr_work)
@@ -278,12 +277,12 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         
         if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            eff_col_name <- eff_color %||% "Group"
+            grp_col_name <- cfg$clustering$group_col %||% "Group"
 
             p_prof <- plot_cluster_profiles_legacy_style(
               group_means = part_res$group_means,
               clusters = part_res$clusters,
-              x_label = eff_col_name
+              x_label = grp_col_name
             )
             
             n_clusters <- length(unique(prof$cluster))
