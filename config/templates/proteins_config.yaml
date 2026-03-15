@@ -119,6 +119,7 @@ modes:
     # --------------------------------------------------------
     clustering:
       enabled: false
+      group_col: "Condition"        # metadata column for clustering group logic
 
       # Which DE features to cluster.
       # "any_contrast" = pass_any_col == 1
