@@ -80,10 +80,10 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # formatSignif on numeric columns
+  # formatRound on numeric columns (3 decimal places)
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   if (length(num_cols) > 0) {
-    tbl <- DT::formatSignif(tbl, columns = num_cols, digits = 4)
+    tbl <- DT::formatRound(tbl, columns = num_cols, digits = 2)
   }
   htmltools::tagList(tbl)
 }
@@ -584,7 +584,7 @@ if (!is.null(qc_res$plots)) {
 if (!is.null(qc_res$plots)) {
   if (!is.null(qc_res$plots[["boxplot_raw"]])) {
     safe_print_plot(qc_res$plots[["boxplot_raw"]])
-    figure_legend("Per-sample boxplots of raw lipid intensities before normalization.")
+    figure_legend("Per-sample boxplots of log2-transformed raw lipid intensities before normalization. Log2 transformation is applied for visualization to make intensity distributions comparable across the dynamic range.")
     render_commentary("boxplot_raw")
   }
   # Show transform-only boxplot when scaling is applied; otherwise show
@@ -680,29 +680,47 @@ if (!is.null(qc_enhanced$plots$class_correlation)) {
 ## PERMANOVA
 
 ```{r qc-enh-permanova, results='asis'}
-if (!is.null(qc_enhanced$permanova)) {
-  cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
-  cat("<h4>PERMANOVA Results</h4>\n")
-  cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Permutational multivariate analysis of variance testing whether lipid profiles differ significantly between experimental groups.</em></p>\n")
+if (!is.null(qc_enhanced)) {
+  if (!is.null(qc_enhanced$permanova)) {
+    cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+    cat("<h4>PERMANOVA Results</h4>\n")
+    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Permutational multivariate analysis of variance testing whether lipid profiles differ significantly between experimental groups.</em></p>\n")
 
-  perm_df <- tryCatch({
-    if (is.data.frame(qc_enhanced$permanova)) {
-      qc_enhanced$permanova
-    } else if (!is.null(qc_enhanced$permanova$aov.tab)) {
-      as.data.frame(qc_enhanced$permanova$aov.tab)
-    } else if (!is.null(qc_enhanced$permanova$table)) {
-      as.data.frame(qc_enhanced$permanova$table)
-    } else {
-      NULL
+    perm_df <- tryCatch({
+      perm <- qc_enhanced$permanova
+      if (is.data.frame(perm)) {
+        perm
+      } else if (!is.null(perm$aov.tab)) {
+        as.data.frame(perm$aov.tab)
+      } else if (!is.null(perm$table)) {
+        as.data.frame(perm$table)
+      } else if (is.list(perm) && !is.null(perm$F_statistic)) {
+        # Handle list(F_statistic, R2, p_value) from run_permanova()
+        data.frame(
+          Statistic = c("F statistic", "R-squared", "p-value"),
+          Value = c(
+            round(perm$F_statistic, 2),
+            round(perm$R2, 2),
+            sprintf("%.2e", perm$p_value)
+          ),
+          stringsAsFactors = FALSE
+        )
+      } else {
+        NULL
+      }
+    }, error = function(e) NULL)
+
+    if (!is.null(perm_df)) {
+      print(make_dt(perm_df, caption = "PERMANOVA Results"))
     }
-  }, error = function(e) NULL)
+    cat("</div>\n")
 
-  if (!is.null(perm_df)) {
-    print(make_dt(perm_df, caption = "PERMANOVA Results"))
+    figure_legend("PERMANOVA (Permutational Multivariate Analysis of Variance) tests whether the centroids and dispersion of lipid profiles differ between groups. A significant p-value (< 0.05) indicates that group membership explains a significant proportion of the overall variation in the lipidome.")
+  } else {
+    cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>PERMANOVA not available</strong> — the <code>vegan</code> package is not installed. Install it with <code>install.packages('vegan')</code> to enable permutational multivariate analysis of variance.</p>\n")
+    cat("</div>\n")
   }
-  cat("</div>\n")
-
-  figure_legend("PERMANOVA (Permutational Multivariate Analysis of Variance) tests whether the centroids and dispersion of lipid profiles differ between groups. A significant p-value (< 0.05) indicates that group membership explains a significant proportion of the overall variation in the lipidome.")
 }
 ```
 
@@ -837,9 +855,9 @@ if (!is.null(de_contrasts)) {
         ctr_tbl,
         ggplot2::aes(x = logFC, y = neglog10_pval, color = Direction,
                      text = paste0("Lipid: ", Name,
-                                   "<br>log2(FC): ", round(logFC, 3),
-                                   "<br>P.Value: ", signif(P.Value, 3),
-                                   "<br>adj.P.Val: ", signif(adj.P.Val, 3)))
+                                   "<br>log2(FC): ", round(logFC, 2),
+                                   "<br>P.Value: ", sprintf("%.2e", P.Value),
+                                   "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
       ) +
         ggplot2::geom_point(alpha = 0.6, size = 1.5) +
         ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -1009,10 +1027,10 @@ if (!is.null(de_contrasts)) {
           ctr_tbl,
           ggplot2::aes(x = AveExpr, y = logFC, color = Direction,
                        text = paste0("Lipid: ", Name,
-                                     "<br>log2(FC): ", round(logFC, 3),
-                                     "<br>AveExpr: ", round(AveExpr, 3),
-                                     "<br>P.Value: ", signif(P.Value, 3),
-                                     "<br>adj.P.Val: ", signif(adj.P.Val, 3)))
+                                     "<br>log2(FC): ", round(logFC, 2),
+                                     "<br>AveExpr: ", round(AveExpr, 2),
+                                     "<br>P.Value: ", sprintf("%.2e", P.Value),
+                                     "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
         ) +
           ggplot2::geom_point(alpha = 0.6, size = 1.5) +
           ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -1173,8 +1191,8 @@ if (!is.null(de_contrasts)) {
       ),
       rownames = FALSE, filter = "top",
       class = "compact stripe hover"
-    ) |> DT::formatSignif(
-      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 4
+    ) |> DT::formatRound(
+      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 2
     ))
     cat("\n\n")
 
@@ -1213,7 +1231,7 @@ if (!is.null(explorer_expr) && !is.null(pre$meta)) {
 
   # Build expression matrix as list of numeric vectors
   expr_matrix_list <- lapply(seq_len(nrow(explorer_expr)), function(i) {
-    round(as.numeric(explorer_expr[i, ]), 3)
+    round(as.numeric(explorer_expr[i, ]), 2)
   })
 
   explorer_data <- list(
@@ -1568,8 +1586,8 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
 ### Normalized
 
 ```{r class-composition-norm, fig.width=10, fig.height=7, results='asis'}
-if (!is.null(class_res$plots$class_composition_normalized)) {
-  safe_print_plot(class_res$plots$class_composition_normalized)
+if (!is.null(class_res$plots$class_normalized)) {
+  safe_print_plot(class_res$plots$class_normalized)
   figure_legend("Normalized lipid class composition showing the relative proportion of each lipid class across samples or groups. Bars are scaled to 100% to facilitate comparison of class distributions.")
   render_commentary("class_normalized")
 }
@@ -1578,8 +1596,8 @@ if (!is.null(class_res$plots$class_composition_normalized)) {
 ### Absolute
 
 ```{r class-composition-abs, fig.width=10, fig.height=7, results='asis'}
-if (!is.null(class_res$plots$class_composition_absolute)) {
-  safe_print_plot(class_res$plots$class_composition_absolute)
+if (!is.null(class_res$plots$class_absolute)) {
+  safe_print_plot(class_res$plots$class_absolute)
   figure_legend("Absolute lipid class composition showing the total intensity or count of each lipid class across samples or groups.")
   render_commentary("class_absolute")
 }
@@ -1620,8 +1638,8 @@ if (!is.null(class_res$plots$class_ora)) {
 ### ORA Table
 
 ```{r class-ora-table}
-if (!is.null(class_res$ora_table)) {
-  make_dt(class_res$ora_table, caption = "Lipid Class Over-Representation Analysis")
+if (!is.null(class_res$class_ora)) {
+  make_dt(class_res$class_ora, caption = "Lipid Class Over-Representation Analysis")
 }
 ```
 
@@ -1686,11 +1704,22 @@ if (!is.null(plsda_res$plots$plsda_vip)) {
 
 ### VIP Table
 
-```{r plsda-vip-table}
+```{r plsda-vip-table, results='asis'}
 if (!is.null(plsda_res$vip_df)) {
   vip_df <- plsda_res$vip_df
   vip_col <- if ("VIP" %in% names(vip_df)) "VIP" else grep("^VIP", names(vip_df), value = TRUE)[1]
   vip_df <- vip_df[order(-vip_df[[vip_col]]), ]
+
+  # Summary statistics to help interpret VIP scores
+  vip_vals <- vip_df[[vip_col]]
+  vip_mean <- round(mean(vip_vals, na.rm = TRUE), 2)
+  vip_median <- round(median(vip_vals, na.rm = TRUE), 2)
+  n_above_1 <- sum(vip_vals > 1, na.rm = TRUE)
+  cat(sprintf(
+    "<div style='background: #f0f7ff; border: 1px solid #b8daff; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; font-size: 0.92em;'><strong>VIP Summary:</strong> Mean = %s, Median = %s, Features with VIP &gt; 1.0: %d/%d. <em>VIP &gt; 1.0 is generally considered important for group discrimination.</em></div>\n",
+    vip_mean, vip_median, n_above_1, length(vip_vals)
+  ))
+
   make_dt(head(vip_df, 50), caption = "PLS-DA VIP Scores (top 50)")
 }
 ```
@@ -1815,6 +1844,10 @@ if (!is.null(pathway_res$plots$enzyme_network)) {
   safe_print_plot(pathway_res$plots$enzyme_network)
   figure_legend("Enzyme interaction network for predicted dysregulated enzymes. Nodes represent enzymes, and edges represent known protein-protein interactions from the STRING database. Clusters of interacting enzymes may indicate coordinated metabolic pathway perturbations.")
   render_commentary("enzyme_network")
+} else if (!is.null(pathway_res)) {
+  cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+  cat("<p><strong>Enzyme interaction network not available</strong> — the <code>STRINGdb</code> package is not installed. Install it with <code>BiocManager::install('STRINGdb')</code> to enable enzyme interaction network visualization.</p>\n")
+  cat("</div>\n")
 }
 ```
 
@@ -1907,7 +1940,7 @@ cat(sprintf(
 ))
 
 cat(sprintf(
-  "Lipids were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
+  "Lipids were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.2f. ",
   padj_cut_m, lfc_cut_m
 ))
 
@@ -1943,7 +1976,7 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-  "Lipidomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f). A total of %s lipid features were quantified, with %s differentially expressed.",
+  "Lipidomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.2f). A total of %s lipid features were quantified, with %s differentially expressed.",
   if (norm_method != "N/A") sprintf("Data were normalized using %s. ", norm_method) else "",
   de_method, padj_cut_m, lfc_cut_m,
   format(as.numeric(n_lipids), big.mark = ","),

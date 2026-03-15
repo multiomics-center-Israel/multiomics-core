@@ -262,8 +262,8 @@ if (!is.null(de_contrasts)) {
       vdf$neglog10_FDR <- -log10(pmax(
         ifelse(is.na(vdf$adj.P.Val), 1, vdf$adj.P.Val), 1e-300
       ))
-      vdf$logFC_display <- round(vdf$logFC, 4)
-      vdf$FDR_display   <- signif(vdf$adj.P.Val, 3)
+      vdf$logFC_display <- round(vdf$logFC, 2)
+      vdf$FDR_display   <- sprintf("%.2e", vdf$adj.P.Val)
 
       cat("### Interactive Volcano\n\n")
       cat("*Type metabolite names in the search box to highlight them. ",

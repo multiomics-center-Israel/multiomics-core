@@ -76,10 +76,10 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # formatSignif on numeric columns
+  # formatRound on numeric columns
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   if (length(num_cols) > 0) {
-    tbl <- DT::formatSignif(tbl, columns = num_cols, digits = 4)
+    tbl <- DT::formatRound(tbl, columns = num_cols, digits = 2)
   }
   htmltools::tagList(tbl)
 }
@@ -577,9 +577,9 @@ if (!is.null(de_contrasts)) {
         ctr_tbl,
         ggplot2::aes(x = logFC, y = neglog10_pval, color = Direction,
                      text = paste0("Metabolite: ", Name,
-                                   "<br>log2(FC): ", round(logFC, 3),
-                                   "<br>P.Value: ", signif(P.Value, 3),
-                                   "<br>adj.P.Val: ", signif(adj.P.Val, 3)))
+                                   "<br>log2(FC): ", round(logFC, 2),
+                                   "<br>P.Value: ", sprintf("%.2e", P.Value),
+                                   "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
       ) +
         ggplot2::geom_point(alpha = 0.6, size = 1.5) +
         ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -748,10 +748,10 @@ if (!is.null(de_contrasts)) {
           ctr_tbl,
           ggplot2::aes(x = AveExpr, y = logFC, color = Direction,
                        text = paste0("Metabolite: ", Name,
-                                     "<br>log2(FC): ", round(logFC, 3),
-                                     "<br>AveExpr: ", round(AveExpr, 3),
-                                     "<br>P.Value: ", signif(P.Value, 3),
-                                     "<br>adj.P.Val: ", signif(adj.P.Val, 3)))
+                                     "<br>log2(FC): ", round(logFC, 2),
+                                     "<br>AveExpr: ", round(AveExpr, 2),
+                                     "<br>P.Value: ", sprintf("%.2e", P.Value),
+                                     "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
         ) +
           ggplot2::geom_point(alpha = 0.6, size = 1.5) +
           ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -911,8 +911,8 @@ if (!is.null(de_contrasts)) {
       ),
       rownames = FALSE, filter = "top",
       class = "compact stripe hover"
-    ) |> DT::formatSignif(
-      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 4
+    ) |> DT::formatRound(
+      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 2
     ))
     cat("\n\n")
 
@@ -951,7 +951,7 @@ if (!is.null(explorer_expr) && !is.null(pre$meta)) {
 
   # Build expression matrix as list of numeric vectors
   expr_matrix_list <- lapply(seq_len(nrow(explorer_expr)), function(i) {
-    round(as.numeric(explorer_expr[i, ]), 3)
+    round(as.numeric(explorer_expr[i, ]), 2)
   })
 
   explorer_data <- list(
@@ -1713,7 +1713,7 @@ cat(sprintf(
 ))
 
 cat(sprintf(
-  "Metabolites were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
+  "Metabolites were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.2f. ",
   padj_cut_m, lfc_cut_m
 ))
 
@@ -1749,7 +1749,7 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-  "Metabolomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f). A total of %s metabolites were quantified, with %s differentially expressed.",
+  "Metabolomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.2f). A total of %s metabolites were quantified, with %s differentially expressed.",
   if (norm_method != "N/A") sprintf("Data were normalized using %s. ", norm_method) else "",
   de_method, padj_cut_m, lfc_cut_m,
   format(as.numeric(n_metab), big.mark = ","),

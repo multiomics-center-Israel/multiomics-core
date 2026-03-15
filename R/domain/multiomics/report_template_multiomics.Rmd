@@ -311,7 +311,7 @@ if (dir.exists(per_contrast_dir)) {
             n_total <- nrow(de_df)
             n_conc <- sum(de_df$concordant, na.rm = TRUE)
             r_val <- cor(de_df$rna_log2FC, de_df$protein_log2FC, use = "complete.obs")
-            cat(sprintf("\n**%s:** %d gene-protein pairs, r = %.3f, %d/%d (%.0f%%) concordant\n\n",
+            cat(sprintf("\n**%s:** %d gene-protein pairs, r = %.2f, %d/%d (%.2f%%) concordant\n\n",
                         gsub("_", " ", cname), n_total, r_val,
                         n_conc, n_total, 100 * n_conc / n_total))
         }

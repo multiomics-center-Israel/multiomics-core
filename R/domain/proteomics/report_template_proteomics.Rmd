@@ -396,7 +396,7 @@ if (!is.null(tech)) {
 
 cat("## Downstream Analysis (multiomics-core)\n\n")
 cat(sprintf("- **Imputation:** %s", prot_cfg$imputation$method %||% "none"))
-if (!is.null(prot_cfg$imputation$width)) cat(sprintf(" (width=%.1f, downshift=%.1f)", prot_cfg$imputation$width, prot_cfg$imputation$downshift))
+if (!is.null(prot_cfg$imputation$width)) cat(sprintf(" (width=%.2f, downshift=%.2f)", prot_cfg$imputation$width, prot_cfg$imputation$downshift))
 cat("\n")
 cat(sprintf("- **DE method:** %s (adj.p <= %s, |FC| >= %s)\n",
             prot_cfg$de$method %||% "limma", prot_cfg$de$p_cutoff %||% 0.05, prot_cfg$de$linear_fc_cutoff %||% 1.5))
@@ -780,8 +780,8 @@ if (tolower(imp_method) == "perseus") {
         "Perseus-style imputation models these missing values by drawing random intensities ",
         "from a **downshifted normal distribution** relative to each sample's observed values.\n\n")
     cat("For each sample, the imputed values are drawn from:\n\n")
-    cat(sprintf("- **Mean** = sample mean - %.1f x sample SD (downshift)\n", imp_s))
-    cat(sprintf("- **SD** = %.1f x sample SD (width)\n\n", imp_w))
+    cat(sprintf("- **Mean** = sample mean - %.2f x sample SD (downshift)\n", imp_s))
+    cat(sprintf("- **SD** = %.2f x sample SD (width)\n\n", imp_w))
     cat("This places imputed values in the low-abundance tail of the distribution, ",
         "consistent with the MNAR assumption. ",
         "The narrow width (relative to the observed distribution) prevents imputed values ",
@@ -1298,8 +1298,8 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
     p <- ggplot(plot_df, aes(x = logFC, y = neglog10padj, color = Direction,
-                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
-                                           "\npadj: ", signif(padj, 3)))) +
+                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 2),
+                                           "\npadj: ", sprintf("%.2e", padj)))) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dashed") +
@@ -1541,9 +1541,9 @@ make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
     p <- ggplot(plot_df, aes(x = log10baseMean, y = logFC, color = Direction,
-                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
-                                           "\nbaseMean: ", round(baseMean, 1),
-                                           "\npadj: ", signif(padj, 3)))) +
+                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 2),
+                                           "\nbaseMean: ", round(baseMean, 2),
+                                           "\npadj: ", sprintf("%.2e", padj)))) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
@@ -1693,7 +1693,7 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
     }
 
     expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
-        round(as.numeric(norm_expr_exp[i, ]), 3)
+        round(as.numeric(norm_expr_exp[i, ]), 2)
     })
 
     explorer_data <- list(
@@ -2146,7 +2146,7 @@ if (length(fgsea_files) > 0) {
                 le_list[[i]] <- data.frame(
                     Pathway = pathway_name,
                     NES = round(sig$NES[i], 2),
-                    padj = signif(sig$padj[i], 3),
+                    padj = sprintf("%.2e", sig$padj[i]),
                     `Leading Edge Proteins` = paste(head(le_genes, 15), collapse = ", "),
                     check.names = FALSE,
                     stringsAsFactors = FALSE
@@ -2216,8 +2216,8 @@ for (vf in pw_volcano_files) {
                 sig$pathway[r]
             }
             pathway_info[[pname]] <- list(
-                NES = round(sig$NES[r], 3),
-                padj = signif(sig$padj[r], 3),
+                NES = round(sig$NES[r], 2),
+                padj = sprintf("%.2e", sig$padj[r]),
                 size = sig$size[r]
             )
         }
@@ -2243,8 +2243,8 @@ for (vf in pw_volcano_files) {
         colors = dir_colors,
         marker = list(size = 5, opacity = 0.7),
         text = ~paste0("Protein: ", FeatureID,
-                        "<br>log2FC: ", round(log2FC, 3),
-                        "<br>padj: ", signif(padj, 3),
+                        "<br>log2FC: ", round(log2FC, 2),
+                        "<br>padj: ", sprintf("%.2e", padj),
                         "<br>Pathways: ", ifelse(nzchar(pathways), pathways, "none")),
         hoverinfo = "text",
         customdata = ~FeatureID,
@@ -2299,7 +2299,7 @@ for (vf in pw_volcano_files) {
         pw_escaped <- gsub("\"", "&quot;", pw)
         info <- pathway_info[[pw]]
         label <- if (!is.null(info)) {
-            sprintf("%s (NES=%.2f, padj=%.3g)", pw, info$NES, info$padj)
+            sprintf("%s (NES=%.2f, padj=%.2e)", pw, info$NES, info$padj)
         } else { pw }
         label_escaped <- gsub("\"", "&quot;", label)
         options_html <- paste0(options_html,
@@ -2719,7 +2719,7 @@ cat(sprintf(
 ))
 
 cat(sprintf(
-"Proteins were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
+"Proteins were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.2f. ",
 padj_cut, lfc_cut
 ))
 
@@ -2746,7 +2746,7 @@ cat("**Copy-ready version:**\n\n")
 cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
 
 cat(sprintf(
-"Proteomics analysis was performed using the multiomics-core pipeline (v1.0). Data were acquired using %s. %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f).",
+"Proteomics analysis was performed using the multiomics-core pipeline (v1.0). Data were acquired using %s. %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.2f).",
 engine,
 if (tolower(imp_method) != "none") sprintf("Missing values were imputed using the %s method. ", imp_method) else "",
 de_method, padj_cut, lfc_cut

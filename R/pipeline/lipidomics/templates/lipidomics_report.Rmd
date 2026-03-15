@@ -305,9 +305,21 @@ if (!is.null(params$qc_enhanced$plots$class_correlation)) {
 
 ## PERMANOVA
 
-```{r eqc-permanova}
-if (!is.null(params$qc_enhanced$permanova)) {
-  render_dt(params$qc_enhanced$permanova, caption = "PERMANOVA Results")
+```{r eqc-permanova, results='asis'}
+perm <- params$qc_enhanced$permanova
+if (!is.null(perm)) {
+  perm_df <- data.frame(
+    Statistic = c("F-statistic", "R-squared", "P-value"),
+    Value = c(
+      round(perm$F_statistic %||% NA, 2),
+      round(perm$R2 %||% NA, 2),
+      sprintf("%.2e", perm$p_value %||% NA)
+    ),
+    stringsAsFactors = FALSE
+  )
+  knitr::kable(perm_df, caption = "PERMANOVA Results")
+} else {
+  cat("*PERMANOVA not available — the vegan package is not installed.*\n\n")
 }
 ```
 
@@ -403,8 +415,8 @@ if (!is.null(de_contrasts)) {
       vdf$neglog10_FDR <- -log10(pmax(
         ifelse(is.na(vdf$adj.P.Val), 1, vdf$adj.P.Val), 1e-300
       ))
-      vdf$logFC_display <- round(vdf$logFC, 4)
-      vdf$FDR_display   <- signif(vdf$adj.P.Val, 3)
+      vdf$logFC_display <- round(vdf$logFC, 2)
+      vdf$FDR_display   <- sprintf("%.2e", vdf$adj.P.Val)
 
       cat("### Interactive Volcano\n\n")
       cat("*Type lipid names in the search box to highlight them.*\n\n")
