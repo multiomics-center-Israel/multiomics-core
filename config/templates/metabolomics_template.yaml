@@ -201,7 +201,8 @@ modes:
       # Significance thresholds
       p_cutoff: 0.05              # adjusted p-value cutoff
       pval_cutoff: 0.05           # raw p-value for horizontal line on volcano
-      linear_fc_cutoff: 1.5       # linear FC cutoff (log2FC = log2(1.5) ~ 0.585)
+      linear_fc_cutoff: 1.5       # linear FC cutoff; also used as treat() lfc threshold
+      robust_ebayes: false         # true = robust empirical Bayes (outlier-tolerant)
 
       # Set to true to skip DE entirely
       # skip: false

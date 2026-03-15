@@ -217,6 +217,10 @@ run_metabolomics_de <- function(pre, config) {
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
 
+    # limma::treat() parameters — derived from user config
+    lfc_threshold <- log2(as.numeric(de_cfg$linear_fc_cutoff %||% 1.5))
+    robust_ebayes <- isTRUE(de_cfg$robust_ebayes)
+
     # Run DE for each row of the contrast table
     de_tables <- list()
     de_model  <- NULL
@@ -229,8 +233,13 @@ run_metabolomics_de <- function(pre, config) {
         message("metabolomics DE [", method, "]: ", ctr_name,
                 " (", numerator, " vs ", denominator, ")")
 
+        # Build safe contrast string for limma (makeContrasts needs R-safe names)
+        contrast_str <- paste(make.names(numerator), "-", make.names(denominator))
+
         tbl <- switch(method,
-            limma    = de_limma(mat_for_test, condition, numerator, denominator),
+            limma    = de_limma(mat_for_test, condition, contrast_str,
+                                lfc_threshold = lfc_threshold,
+                                robust = robust_ebayes),
             t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
             wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
         )
@@ -262,18 +271,22 @@ run_metabolomics_de <- function(pre, config) {
 
 #' Run limma on a single contrast
 #'
-#' @param mat         Numeric matrix (features x samples).
-#' @param condition   Factor of conditions.
-#' @param numerator   Character: numerator group level (e.g. "TreatmentA").
-#' @param denominator Character: denominator group level (e.g. "Control").
-#' @param mat_for_fc  Optional pre-scaling matrix for logFC override.
+#' @param mat           Numeric matrix (features x samples).
+#' @param condition     Factor of conditions.
+#' @param contrast_str  Character: safe contrast formula (e.g. "TreatmentA - Control").
+#' @param mat_for_fc    Optional pre-scaling matrix for logFC override.
+#' @param lfc_threshold Numeric: minimum log2-FC for \code{limma::treat()}
+#'   (default 0 = no threshold, equivalent to eBayes).
+#' @param robust        Logical: use robust empirical Bayes in \code{treat()}.
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val
-de_limma <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
+de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
+                     lfc_threshold = 0, robust = FALSE) {
     if (!requireNamespace("limma", quietly = TRUE)) {
         stop("Package 'limma' is required for limma DE.")
     }
 
-    # Impute NAs with row means (limma cannot handle NA)
+    # Defensive NA guard — input is normally NA-free after met_* imputation,
+    # but protects against edge cases (external matrices, future formats).
     mat_imp <- mat
     for (i in seq_len(nrow(mat_imp))) {
         nas <- is.na(mat_imp[i, ])
@@ -285,16 +298,11 @@ de_limma <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) 
     safe_levels <- make.names(raw_levels)
     colnames(design) <- safe_levels
 
-    # Build contrast formula from structured numerator/denominator
-    safe_num <- make.names(numerator)
-    safe_den <- make.names(denominator)
-    safe_contrast <- paste(safe_num, "-", safe_den)
-
     fit <- limma::lmFit(mat_imp, design)
-    contrast_matrix <- limma::makeContrasts(contrasts = safe_contrast,
+    contrast_matrix <- limma::makeContrasts(contrasts = contrast_str,
                                              levels = design)
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
-    fit2 <- limma::treat(fit2, lfc = log2(1.2))
+    fit2 <- limma::treat(fit2, lfc = lfc_threshold, robust = robust)
 
     tt <- limma::topTreat(fit2, number = Inf, sort.by = "none")
 
@@ -310,8 +318,9 @@ de_limma <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) 
 
     # Override logFC from pre-scaling matrix if provided
     if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
-        idx_A <- which(condition == denominator)
-        idx_B <- which(condition == numerator)
+        parts <- trimws(strsplit(contrast_str, "-")[[1]])
+        idx_B <- which(condition == raw_levels[match(parts[1], safe_levels)])
+        idx_A <- which(condition == raw_levels[match(parts[2], safe_levels)])
         for (i in seq_len(nrow(mat_for_fc))) {
             res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
                             mean(mat_for_fc[i, idx_A], na.rm = TRUE)
