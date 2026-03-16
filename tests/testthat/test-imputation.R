@@ -96,15 +96,12 @@ test_that("impute_proteomics method='perseus' fills NAs", {
     expect_equal(rownames(res), rownames(mat))
 })
 
-test_that("impute_proteomics method='minval' fills NAs deterministically", {
+test_that("impute_proteomics method='dep2' fills NAs", {
     mat <- make_expr_with_na()
-    cfg <- make_imp_cfg("minval")
+    cfg <- make_imp_cfg("dep2")
     res <- impute_proteomics(mat, cfg$modes$proteomics)
     expect_equal(sum(is.na(res)), 0)
-
-    # Run again — deterministic, should be identical
-    res2 <- impute_proteomics(mat, cfg$modes$proteomics)
-    expect_equal(res, res2)
+    expect_equal(dim(res), dim(mat))
 })
 
 test_that("impute_proteomics return_flags=TRUE returns list", {
