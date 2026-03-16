@@ -53,7 +53,7 @@ tryCatch({
 
 # Helper function for downloadable DT tables
 make_dt <- function(df, caption = NULL, pageLength = 15) {
-    DT::datatable(
+    tbl <- DT::datatable(
         df,
         caption = caption,
         extensions = 'Buttons',
@@ -68,6 +68,25 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
         ),
         rownames = FALSE
     )
+    num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols <- grep(pval_pat, num_cols, ignore.case = TRUE, value = TRUE)
+    other_cols <- setdiff(num_cols, pval_cols)
+    if (length(other_cols) > 0) tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+    if (length(pval_cols) > 0) {
+        pval_idx <- which(names(df) %in% pval_cols) - 1L
+        sci_render <- DT::JS(
+            "function(data, type, row) {",
+            "  if (type === 'display' && data !== null && data !== '') {",
+            "    return parseFloat(data).toExponential(2);",
+            "  }",
+            "  return data;",
+            "}"
+        )
+        col_defs <- lapply(pval_idx, function(i) list(targets = i, render = sci_render))
+        tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs, col_defs)
+    }
+    tbl
 }
 
 # Paths
@@ -1913,7 +1932,16 @@ if (!is.null(de_summary_full)) {
     pass_any_cols <- grep("pass_any", names(de_top), value = TRUE)
     if (length(pass_any_cols) > 0) de_top <- de_top[, !names(de_top) %in% pass_any_cols, drop = FALSE]
 
-    DT::datatable(
+    # Pre-format p-value columns as scientific notation
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols_de <- grep(pval_pat, names(de_top), ignore.case = TRUE, value = TRUE)
+    for (pc in pval_cols_de) {
+      if (is.numeric(de_top[[pc]])) {
+        de_top[[pc]] <- ifelse(is.na(de_top[[pc]]), NA_character_, sprintf("%.2e", de_top[[pc]]))
+      }
+    }
+    num_cols_de <- which(sapply(de_top, is.numeric))
+    tbl_de <- DT::datatable(
       de_top,
       caption = "Top 50 differentially expressed genes (sorted by smallest adjusted p-value)",
       extensions = 'Buttons',
@@ -1927,7 +1955,9 @@ if (!is.null(de_summary_full)) {
           )
       ),
       rownames = FALSE
-    ) |> DT::formatRound(columns = which(sapply(de_top, is.numeric)), digits = 2)
+    )
+    if (length(num_cols_de) > 0) tbl_de <- DT::formatRound(tbl_de, columns = num_cols_de, digits = 2)
+    tbl_de
 } else {
     cat("DE summary file not found.\n")
 }
@@ -1971,9 +2001,18 @@ if (!is.null(de_summary_full)) {
         if (!is.null(merged) && nrow(merged) > 0) lookup_df <- merged
     }
 
-    DT::datatable(
+    # Pre-format p-value columns as scientific notation
+    pval_pat2 <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols_lk <- grep(pval_pat2, names(lookup_df), ignore.case = TRUE, value = TRUE)
+    for (pc in pval_cols_lk) {
+      if (is.numeric(lookup_df[[pc]])) {
+        lookup_df[[pc]] <- ifelse(is.na(lookup_df[[pc]]), NA_character_, sprintf("%.2e", lookup_df[[pc]]))
+      }
+    }
+    num_cols_lk <- which(sapply(lookup_df, is.numeric))
+    tbl_lk <- DT::datatable(
       lookup_df,
-      caption = "Full DE results + normalized expression — search for any gene",
+      caption = "Full DE results + normalized expression \u2014 search for any gene",
       extensions = 'Buttons',
       options = list(
           scrollX = TRUE,
@@ -1987,7 +2026,9 @@ if (!is.null(de_summary_full)) {
       ),
       rownames = FALSE,
       filter = 'top'
-    ) |> DT::formatRound(columns = which(sapply(lookup_df, is.numeric)), digits = 2)
+    )
+    if (length(num_cols_lk) > 0) tbl_lk <- DT::formatRound(tbl_lk, columns = num_cols_lk, digits = 2)
+    tbl_lk
 }
 ```
 

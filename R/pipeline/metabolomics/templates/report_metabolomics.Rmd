@@ -76,10 +76,26 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # formatRound on numeric columns
+  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-  if (length(num_cols) > 0) {
-    tbl <- DT::formatRound(tbl, columns = num_cols, digits = 2)
+  pval_pattern <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+  pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
+  other_cols <- setdiff(num_cols, pval_cols)
+  if (length(other_cols) > 0) {
+    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+  }
+  if (length(pval_cols) > 0) {
+    pval_idx <- which(names(df) %in% pval_cols) - 1L
+    sci_render <- DT::JS(
+      "function(data, type, row) {",
+      "  if (type === 'display' && data !== null && data !== '') {",
+      "    return parseFloat(data).toExponential(2);",
+      "  }",
+      "  return data;",
+      "}"
+    )
+    col_defs <- lapply(pval_idx, function(i) list(targets = i, render = sci_render))
+    tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs, col_defs)
   }
   htmltools::tagList(tbl)
 }
@@ -950,7 +966,17 @@ if (!is.null(de_contrasts)) {
       if (nrow(merged) > 0) full_display <- merged
     }
 
-    print(DT::datatable(
+    # Format p-value columns as scientific notation strings before DT
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols_de <- grep(pval_pat, names(full_display), ignore.case = TRUE, value = TRUE)
+    for (pc in pval_cols_de) {
+      if (is.numeric(full_display[[pc]])) {
+        full_display[[pc]] <- ifelse(is.na(full_display[[pc]]), NA_character_,
+                                     sprintf("%.2e", full_display[[pc]]))
+      }
+    }
+    num_cols_de <- names(full_display)[vapply(full_display, is.numeric, logical(1))]
+    tbl_de <- DT::datatable(
       full_display,
       caption = paste0("DE Results + Normalized Expression: ", ctr),
       extensions = "Buttons",
@@ -964,9 +990,9 @@ if (!is.null(de_contrasts)) {
       ),
       rownames = FALSE, filter = "top",
       class = "compact stripe hover"
-    ) |> DT::formatRound(
-      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 2
-    ))
+    )
+    if (length(num_cols_de) > 0) tbl_de <- DT::formatRound(tbl_de, columns = num_cols_de, digits = 2)
+    print(htmltools::tagList(tbl_de))
     cat("\n\n")
 
   } # end contrast loop

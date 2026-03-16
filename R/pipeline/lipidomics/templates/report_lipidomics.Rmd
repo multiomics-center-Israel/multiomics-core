@@ -46,6 +46,23 @@ if (requireNamespace("plotly", quietly = TRUE))   library(plotly)
 if (requireNamespace("crosstalk", quietly = TRUE)) library(crosstalk)
 if (requireNamespace("jsonlite", quietly = TRUE))  library(jsonlite)
 
+# Source domain helpers needed for report
+make_contrast_label <- function(contrast_str) {
+  parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+  paste(trimws(parts), collapse = "_vs_")
+}
+
+extract_contrast_table <- function(summary_df, contrast) {
+  data.frame(
+    feature_id = summary_df$feature_id,
+    logFC      = summary_df[[paste0("logFC_", contrast)]],
+    AveExpr    = summary_df[[paste0("AveExpr_", contrast)]],
+    P.Value    = summary_df[[paste0("P.Value_", contrast)]],
+    adj.P.Val  = summary_df[[paste0("adj.P.Val_", contrast)]],
+    stringsAsFactors = FALSE
+  )
+}
+
 # Source interactive cutoff panel helpers
 tryCatch({
   .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
@@ -80,10 +97,26 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     rownames = FALSE,
     class    = "compact stripe hover"
   )
-  # formatRound on numeric columns (3 decimal places)
+  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-  if (length(num_cols) > 0) {
-    tbl <- DT::formatRound(tbl, columns = num_cols, digits = 2)
+  pval_pattern <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+  pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
+  other_cols <- setdiff(num_cols, pval_cols)
+  if (length(other_cols) > 0) {
+    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+  }
+  if (length(pval_cols) > 0) {
+    pval_idx <- which(names(df) %in% pval_cols) - 1L
+    sci_render <- DT::JS(
+      "function(data, type, row) {",
+      "  if (type === 'display' && data !== null && data !== '') {",
+      "    return parseFloat(data).toExponential(2);",
+      "  }",
+      "  return data;",
+      "}"
+    )
+    col_defs <- lapply(pval_idx, function(i) list(targets = i, render = sci_render))
+    tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs, col_defs)
   }
   htmltools::tagList(tbl)
 }
@@ -1177,7 +1210,17 @@ if (!is.null(de_contrasts)) {
       if (nrow(merged) > 0) full_display <- merged
     }
 
-    print(DT::datatable(
+    # Format p-value columns as scientific notation strings before DT
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols_de <- grep(pval_pat, names(full_display), ignore.case = TRUE, value = TRUE)
+    for (pc in pval_cols_de) {
+      if (is.numeric(full_display[[pc]])) {
+        full_display[[pc]] <- ifelse(is.na(full_display[[pc]]), NA_character_,
+                                     sprintf("%.2e", full_display[[pc]]))
+      }
+    }
+    num_cols_de <- names(full_display)[vapply(full_display, is.numeric, logical(1))]
+    tbl_de <- DT::datatable(
       full_display,
       caption = paste0("DE Results + Normalized Expression: ", ctr),
       extensions = "Buttons",
@@ -1191,9 +1234,9 @@ if (!is.null(de_contrasts)) {
       ),
       rownames = FALSE, filter = "top",
       class = "compact stripe hover"
-    ) |> DT::formatRound(
-      columns = which(vapply(full_display, is.numeric, logical(1))), digits = 2
-    ))
+    )
+    if (length(num_cols_de) > 0) tbl_de <- DT::formatRound(tbl_de, columns = num_cols_de, digits = 2)
+    print(htmltools::tagList(tbl_de))
     cat("\n\n")
 
   } # end contrast loop
@@ -1620,6 +1663,96 @@ if (!is.null(class_res$plots$chain_length)) {
   safe_print_plot(class_res$plots$chain_length)
   figure_legend("Distribution of fatty acyl chain lengths across lipid classes. Chain length influences membrane structure and lipid function.")
   render_commentary("chain_length")
+}
+```
+
+## Per-Class Chain Profiles {.tabset}
+
+```{r chain-profiles-interactive, fig.width=10, fig.height=6, results='asis'}
+if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0 &&
+    requireNamespace("plotly", quietly = TRUE)) {
+
+  # Build a combined data.frame from all classes
+  all_profiles <- do.call(rbind, lapply(names(class_res$chain_profiles), function(cls) {
+    df <- class_res$chain_profiles[[cls]]
+    df$lipid_class <- cls
+    df
+  }))
+
+  classes <- unique(all_profiles$lipid_class)
+
+  # Build one plotly figure with dropdown buttons to switch between classes
+  fig <- plotly::plot_ly()
+
+  for (i in seq_along(classes)) {
+    cls <- classes[i]
+    cls_df <- all_profiles[all_profiles$lipid_class == cls, ]
+    visible <- (i == 1)
+
+    for (grp in unique(cls_df$group)) {
+      grp_df <- cls_df[cls_df$group == grp, ]
+      fig <- plotly::add_trace(
+        fig,
+        data = grp_df,
+        x = ~chain, y = ~mean_intensity,
+        error_y = list(type = "data", array = grp_df$se, visible = TRUE),
+        type = "bar",
+        name = grp,
+        legendgroup = grp,
+        showlegend = (i == 1),
+        visible = visible,
+        text = ~paste0(chain, "<br>", group, ": ", round(mean_intensity, 2),
+                       " ± ", round(se, 2),
+                       if ("p_value" %in% names(grp_df))
+                         paste0("<br>p = ", sprintf("%.2e", p_value)) else ""),
+        hoverinfo = "text"
+      )
+    }
+  }
+
+  # Build dropdown buttons: each button sets visibility for its class
+  n_groups <- length(unique(all_profiles$group))
+  n_traces <- length(classes) * n_groups
+  buttons <- lapply(seq_along(classes), function(i) {
+    vis <- rep(FALSE, n_traces)
+    idx <- ((i - 1) * n_groups + 1):(i * n_groups)
+    vis[idx] <- TRUE
+    list(method = "update",
+         args = list(list(visible = as.list(vis)),
+                     list(title = paste0("Chain Profile — ", classes[i]))),
+         label = classes[i])
+  })
+
+  fig <- plotly::layout(fig,
+    barmode = "group",
+    title = paste0("Chain Profile — ", classes[1]),
+    xaxis = list(title = "Fatty Acid Chain", categoryorder = "trace"),
+    yaxis = list(title = "Mean Intensity"),
+    updatemenus = list(
+      list(
+        type = "dropdown",
+        active = 0,
+        x = 0.0, y = 1.18,
+        xanchor = "left",
+        buttons = buttons
+      )
+    )
+  )
+
+  print(htmltools::tagList(fig))
+
+  figure_legend("Per-class chain profiles showing individual fatty acid chain abundances within each lipid class. Use the dropdown to select a lipid class. Error bars show standard error; hover for p-values from group comparison.")
+
+} else if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0) {
+  # Fallback: static plots in tabs
+  for (cls in names(class_res$chain_profiles)) {
+    cat(paste0("\n### ", cls, "\n\n"))
+    p <- class_res$plots[[paste0("chain_profile_", cls)]]
+    if (!is.null(p)) {
+      safe_print_plot(p)
+    }
+    cat("\n\n")
+  }
 }
 ```
 
