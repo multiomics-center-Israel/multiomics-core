@@ -78,6 +78,74 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
                 "skipping cross-omics comparison (need >= 2)")
     }
 
+    # --- Per-contrast enrichment output ---
+    # Save per-contrast barplots, tables, and cross-omics comparison in
+    # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
+    contrast_names <- unique(unlist(lapply(per_omics, function(df) {
+        if (is.data.frame(df) && "contrast" %in% colnames(df)) df$contrast
+        else NULL
+    })))
+
+    if (length(contrast_names) > 1) {
+        message("  Generating per-contrast enrichment output for ",
+                length(contrast_names), " contrasts")
+        per_contrast_dir <- file.path(out_dir, "per_contrast")
+        dir.create(per_contrast_dir, recursive = TRUE, showWarnings = FALSE)
+
+        for (cname in contrast_names) {
+            safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
+            contrast_out <- file.path(per_contrast_dir, safe_dir)
+            dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
+
+            per_omics_contrast <- list()
+            for (om in names(per_omics)) {
+                df <- per_omics[[om]]
+                if (is.data.frame(df) && "contrast" %in% colnames(df)) {
+                    df_c <- df[df$contrast == cname, , drop = FALSE]
+                } else {
+                    df_c <- df
+                }
+                if (is.data.frame(df_c) && nrow(df_c) > 0) {
+                    per_omics_contrast[[om]] <- df_c
+
+                    plot_path <- file.path(contrast_out, paste0(om, "_top_pathways.png"))
+                    png(plot_path, width = 1000, height = 700, res = 120)
+                    tryCatch({
+                        plot_per_omics_barplot(df_c, paste0(om, " (", gsub("_", " ", cname), ")"))
+                    }, error = function(e) {
+                        plot.new()
+                        text(0.5, 0.5, paste(om, "barplot failed:", e$message), cex = 1.2)
+                    })
+                    dev.off()
+
+                    write.csv(df_c,
+                              file.path(contrast_out, paste0(om, "_enriched_pathways.csv")),
+                              row.names = FALSE)
+                }
+            }
+
+            message("    ", cname, ": ", length(per_omics_contrast),
+                    " omics (", paste(names(per_omics_contrast), collapse = ", "), ")")
+
+            if (length(per_omics_contrast) >= 2) {
+                cross_contrast <- tryCatch({
+                    analyze_cross_omics_enrichment(
+                        enrichment_results = per_omics_contrast,
+                        config = config,
+                        out_dir = contrast_out
+                    )
+                }, error = function(e) {
+                    message("    Cross-omics enrichment failed for ", cname, ": ", e$message)
+                    NULL
+                })
+                if (!is.null(cross_contrast)) {
+                    write_cross_omics_enrichment(cross_contrast, contrast_out)
+                }
+            }
+        }
+        message("  Per-contrast enrichment output saved to: ", per_contrast_dir)
+    }
+
     message("Cross-omics enrichment analysis complete")
 
     list(

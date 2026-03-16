@@ -379,9 +379,10 @@ extract_proteomics_de_tables <- function(de_data, harmonization_res) {
 
     tables <- list()
     for (padj_col in padj_cols) {
-        # Derive contrast name: "padj.imputs.1.56ppmvs.0ppm" -> "1.56ppm vs 0ppm"
+        # Derive contrast name: "padj.imputs.1.56ppmvs.0ppm" -> "1.56ppm vs. 0ppm"
         contrast_key <- sub("^padj\\.imputs\\.", "", padj_col)
-        contrast_name <- gsub("vs\\.", "vs ", contrast_key)
+        # Insert space before "vs" and restore the dot: "1.56ppmvs.0ppm" -> "1.56ppm vs. 0ppm"
+        contrast_name <- sub("vs\\.", " vs. ", contrast_key)
 
         pval_col <- sub("^padj\\.", "pvalue.", padj_col)
         fc_col <- sub("^padj\\.", "linearFC.", padj_col)
@@ -723,11 +724,22 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
 
     # Check which key the DE tables are using
     uses_names <- FALSE
+    uses_bare_numeric <- FALSE
     if (length(name_col) > 0) {
         metab_names <- as.character(row_data[[name_col[1]]])
         overlap_names <- sum(all_de_ids %in% metab_names, na.rm = TRUE)
         overlap_synth <- if (!is.null(synthetic_ids)) sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) else 0
         uses_names <- overlap_names > overlap_synth
+    }
+
+    # DE tables may use bare row indices ("1","2",...) from limma
+    if (!uses_names && !is.null(synthetic_ids) &&
+        sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) == 0) {
+        bare_indices <- as.character(seq_len(nrow(row_data)))
+        if (sum(all_de_ids %in% bare_indices, na.rm = TRUE) > length(all_de_ids) * 0.5) {
+            uses_bare_numeric <- TRUE
+            message("    DE tables use bare numeric row indices as feature_ids")
+        }
     }
 
     hmdb_ids <- as.character(row_data[[hmdb_col[1]]])
@@ -736,6 +748,9 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
         # DE tables use metabolite names; build name -> HMDB -> KEGG
         feat_ids <- metab_names
         message("    DE tables use metabolite names as feature_ids")
+    } else if (uses_bare_numeric) {
+        # DE tables use bare numeric indices; use same for join
+        feat_ids <- as.character(seq_len(nrow(row_data)))
     } else if (!is.null(synthetic_ids)) {
         feat_ids <- synthetic_ids
     } else {
@@ -1304,6 +1319,17 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 # =============================================================================
 # Helper functions
 # =============================================================================
+
+#' Normalize KEGG pathway IDs to bare numeric form
+#'
+#' Strips organism prefixes (hsa, mmu, cel, map, etc.) to allow
+#' joining gene-based and compound-based pathway results.
+#' @param ids Character vector of KEGG pathway IDs
+#' @return Character vector of numeric-only pathway IDs (e.g., "00010")
+normalize_kegg_pathway_id <- function(ids) {
+    sub("^[a-zA-Z]+", "", ids)
+}
+
 
 #' Merge pathway p-values from multiple omics
 merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {

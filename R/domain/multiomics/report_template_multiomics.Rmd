@@ -350,21 +350,55 @@ render_commentary("translation_efficiency_scatter")
 
 ---
 
-# MultiGSEA Plots
+# MultiGSEA Plots {.tabset}
 
 ```{r multigsea-note, eval=!has_multigsea, results='asis'}
 cat("*No MultiGSEA plots found.*\n")
 ```
+
+## All Contrasts (Combined) {.unnumbered}
 
 ```{r multigsea-plots, eval=has_multigsea, results='asis'}
 gsea_pngs <- list.files(multigsea_dir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
 for (gp in gsea_pngs) {
     pair_name <- gsub("multigsea_|\\.png$", "", basename(gp))
     display_name <- gsub("_", " ", pair_name)
-    cat(sprintf("\n## %s {.unnumbered}\n\n", display_name))
+    cat(sprintf("\n### %s {.unnumbered}\n\n", display_name))
     cat(sprintf("![%s](%s)\n\n", display_name, gp))
     figure_legend(sprintf("MultiGSEA enrichment correlation plot for %s. Each point is a pathway; axis values represent enrichment scores. Color indicates joint significance status.", display_name))
     render_commentary(paste0("multigsea_", pair_name))
+}
+```
+
+## Per-Contrast MultiGSEA {.tabset .unnumbered}
+
+```{r multigsea-per-contrast, eval=has_multigsea, results='asis'}
+multigsea_per_contrast_dir <- file.path(multigsea_dir, "per_contrast")
+if (dir.exists(multigsea_per_contrast_dir)) {
+    contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
+    for (cdir in contrast_dirs) {
+        cname <- basename(cdir)
+        cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
+
+        cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
+        if (length(cpngs) == 0) {
+            cat("*No MultiGSEA plots for this contrast.*\n\n")
+            next
+        }
+        for (cp in cpngs) {
+            pair_name <- gsub("multigsea_|\\.png$", "", basename(cp))
+            display_name <- gsub("_", " ", pair_name)
+            chunk_id <- paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname), "-",
+                               gsub("[^a-zA-Z0-9]", "", pair_name))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, cp
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+    }
+} else {
+    cat("*Per-contrast MultiGSEA results not available.*\n")
 }
 ```
 
@@ -373,17 +407,19 @@ multi_ora_dir <- file.path(multigsea_dir, "multi_ora")
 has_multi_ora <- dir.exists(multi_ora_dir) && length(list.files(multi_ora_dir, "\\.png$")) > 0
 ```
 
-## Multi-ORA (Combined Cross-Omics ORA) {.unnumbered}
+## Multi-ORA (Combined Cross-Omics ORA) {.tabset .unnumbered}
 
 ```{r multi-ora-note, eval=!has_multi_ora, results='asis'}
 cat("*No Multi-ORA results found.*\n")
 ```
 
+### All Contrasts (Pooled) {.unnumbered}
+
 ```{r multi-ora-plots, eval=has_multi_ora, results='asis'}
 # Pooled barplot
 pooled_bp <- file.path(multi_ora_dir, "multi_ora_pooled_barplot.png")
 if (file.exists(pooled_bp)) {
-    cat("\n### Pooled Multi-ORA {.unnumbered}\n\n")
+    cat("\n#### Pooled Multi-ORA {.unnumbered}\n\n")
     cat(sprintf("![Pooled Multi-ORA](%s)\n\n", pooled_bp))
     figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation in KEGG pathways using Fisher's exact test. Red dashed line marks padj = 0.05.")
 }
@@ -391,7 +427,7 @@ if (file.exists(pooled_bp)) {
 # Dot plot
 dotplot <- file.path(multi_ora_dir, "multi_ora_dotplot.png")
 if (file.exists(dotplot)) {
-    cat("\n### Pooled vs Per-Omics Comparison {.unnumbered}\n\n")
+    cat("\n#### Pooled vs Per-Omics Comparison {.unnumbered}\n\n")
     cat(sprintf("![Multi-ORA Dot Plot](%s)\n\n", dotplot))
     figure_legend("Multi-ORA dot plot comparing per-omics and pooled enrichment results. Each dot represents a pathway; x-axis is -log10(padj), dot size reflects gene count, and color indicates the source (pooled or individual omics). Red dashed line marks padj = 0.05.")
 }
@@ -399,7 +435,7 @@ if (file.exists(dotplot)) {
 # Omics support barplot
 support_bp <- file.path(multi_ora_dir, "multi_ora_support_barplot.png")
 if (file.exists(support_bp)) {
-    cat("\n### Omics Support per Pathway {.unnumbered}\n\n")
+    cat("\n#### Omics Support per Pathway {.unnumbered}\n\n")
     cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
     figure_legend("Multi-ORA omics support barplot. Bar length shows pooled enrichment significance (-log10 p-value). Color indicates the number of individual omics layers that independently support each pathway (padj < 0.05).")
 }
@@ -407,12 +443,14 @@ if (file.exists(support_bp)) {
 # Summary table
 multi_ora_csv <- file.path(multi_ora_dir, "multi_ora_results.csv")
 if (file.exists(multi_ora_csv)) {
-    cat("\n### Top Multi-ORA Pathways {.unnumbered}\n\n")
+    cat("\n#### Top Multi-ORA Pathways {.unnumbered}\n\n")
     mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
     mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
-    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "n_omics_support"), colnames(mora_show))
+    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(mora_show))
     mora_show <- mora_show[, display_cols, drop = FALSE]
-    colnames(mora_show) <- c("Pathway", "Pooled padj", "Gene Count", "# Omics Supporting")[seq_along(display_cols)]
+    col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
+                    metabolomics_padj = "Metab padj", n_omics_support = "# Omics Supporting")
+    colnames(mora_show) <- col_labels[display_cols]
     mora_show[[2]] <- signif(mora_show[[2]], 3)
     knitr::kable(mora_show, row.names = FALSE, caption = "Top multi-ORA enriched KEGG pathways (pooled across gene-based omics)")
 }
@@ -420,23 +458,134 @@ if (file.exists(multi_ora_csv)) {
 render_commentary("multi_ora")
 ```
 
+### Per-Contrast Multi-ORA {.tabset .unnumbered}
+
+```{r multi-ora-per-contrast, eval=has_multi_ora, results='asis'}
+mora_per_contrast_dir <- file.path(multi_ora_dir, "per_contrast")
+if (dir.exists(mora_per_contrast_dir)) {
+    mora_contrast_dirs <- list.dirs(mora_per_contrast_dir, full.names = TRUE, recursive = FALSE)
+    for (cdir in mora_contrast_dirs) {
+        cname <- basename(cdir)
+        cat(sprintf("\n#### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
+
+        # Barplot
+        c_bp <- file.path(cdir, "multi_ora_pooled_barplot.png")
+        if (file.exists(c_bp)) {
+            chunk_id <- paste0("mora-pc-bp-", gsub("[^a-zA-Z0-9]", "", cname))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, c_bp
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+
+        # Results table
+        c_csv <- file.path(cdir, "multi_ora_results.csv")
+        if (file.exists(c_csv)) {
+            c_df <- read.csv(c_csv, stringsAsFactors = FALSE)
+            c_show <- c_df[seq_len(min(20, nrow(c_df))), ]
+            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "n_omics_support"), colnames(c_show))
+            if (length(display_cols) > 0) {
+                c_show <- c_show[, display_cols, drop = FALSE]
+                cat(sprintf("\n**%s:** %d enriched pathways\n\n",
+                            gsub("_", " ", cname), nrow(c_df)))
+            }
+        } else {
+            cat("*No enriched pathways for this contrast.*\n\n")
+        }
+    }
+} else {
+    cat("*Per-contrast Multi-ORA results not available.*\n")
+}
+```
+
+```{r metab-ora-setup, include=FALSE}
+metab_ora_csv <- file.path(multi_ora_dir, "compound_ora_results.csv")
+has_metab_ora <- has_multi_ora && file.exists(metab_ora_csv)
+```
+
+## Metabolomics Compound Enrichment {.unnumbered}
+
+```{r metab-ora-note, eval=!has_metab_ora, results='asis'}
+cat("*No metabolomics compound ORA results found. Compound enrichment requires metabolomics DE results with KEGG compound ID mappings.*\n")
+```
+
+```{r metab-ora-results, eval=has_metab_ora, results='asis'}
+metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
+if (nrow(metab_df) > 0) {
+    cat("\nCompound-based over-representation analysis identified **", nrow(metab_df),
+        "** enriched KEGG pathways from significantly altered metabolites.\n\n")
+}
+```
+
+```{r metab-ora-barplot, eval=has_metab_ora, results='asis'}
+metab_bp <- file.path(multi_ora_dir, "compound_ora_barplot.png")
+if (file.exists(metab_bp)) {
+    cat(sprintf("![Compound ORA](%s)\n\n", metab_bp))
+    figure_legend("Metabolomics compound ORA barplot. Significant metabolites (KEGG compound IDs) are tested for over-representation in KEGG metabolic pathways using a hypergeometric test. Red dashed line marks p = 0.05.")
+}
+```
+
+```{r metab-ora-table, eval=has_metab_ora}
+metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
+display_cols <- intersect(c("pathway", "ID", "pvalue", "padj", "setSize", "compounds"), colnames(metab_df))
+metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), display_cols, drop = FALSE]
+col_labels <- c(pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
+                padj = "Adj. P-value", setSize = "Compound Count", compounds = "Compounds")
+colnames(metab_show) <- col_labels[display_cols]
+knitr::kable(metab_show, row.names = FALSE, caption = "Metabolomics compound ORA - enriched KEGG pathways")
+```
+
+```{r metab-ora-commentary, eval=has_metab_ora, results='asis'}
+render_commentary("compound_ora")
+```
+
+```{r pathview-setup, include=FALSE}
+pathview_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_supported.pdf")
+pathview_dir <- file.path(multi_ora_dir, "pathview")
+has_pathview <- file.exists(pathview_pdf)
+```
+
+## Multi-Omics Pathway Maps (Pathview) {.unnumbered}
+
+```{r pathview-note, eval=!has_pathview, results='asis'}
+cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layers.*\n")
+```
+
+```{r pathview-plots, eval=has_pathview, results='asis'}
+pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora\\.(multi\\.)?png$", full.names = TRUE))
+cat("KEGG pathway maps for **", length(pv_pngs),
+    "** pathways enriched in >= 2 omics layers. Gene nodes are colored by logFC ",
+    "(transcriptomics and/or proteomics); compound nodes are colored by metabolomics logFC.\n\n")
+cat(sprintf("[Download compiled PDF](%s)\n\n", pathview_pdf))
+for (pv_png in pv_pngs) {
+    pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora\\.png$", "", basename(pv_png)))
+    cat(sprintf("\n### Pathway %s {.unnumbered}\n\n", pw_id))
+    cat(sprintf("![Pathway %s](%s)\n\n", pw_id, pv_png))
+}
+figure_legend("KEGG pathway maps generated with pathview. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.")
+render_commentary("multi_ora_pathview")
+```
+
 ---
 
-# Cross-Omics Enrichment
+# Cross-Omics Enrichment {.tabset}
 
 ```{r enrichment-note, eval=!has_enrichment, results='asis'}
 cat("*No cross-omics enrichment results found. Enrichment analysis requires pathway results from at least 1 omics layer.*\n")
 ```
 
+## All Contrasts (Combined) {.unnumbered}
+
 ```{r enrichment-per-omics, eval=has_enrichment, results='asis'}
 # Show per-omics enrichment barplots
 omics_barplots <- list.files(enrichment_dir, pattern = "_top_pathways\\.png$", full.names = TRUE)
 if (length(omics_barplots) > 0) {
-    cat("\n## Per-Omics Pathway Enrichment {.unnumbered}\n\n")
+    cat("\n### Per-Omics Pathway Enrichment {.unnumbered}\n\n")
     for (i in seq_along(omics_barplots)) {
         bp <- omics_barplots[i]
         omics_name <- gsub("_top_pathways\\.png$", "", basename(bp))
-        cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
+        cat(sprintf("\n#### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
         chunk_id <- paste0("enrich-bp-", i)
         cat(knitr::knit_child(text = sprintf(
             '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
@@ -448,7 +597,7 @@ if (length(omics_barplots) > 0) {
 ```
 
 ```{r enrichment-per-omics-legend, eval=has_enrichment, results='asis'}
-figure_legend("Per-omics KEGG pathway enrichment. Bar length represents -log10(p-value). Red dashed line indicates p = 0.05 significance threshold.")
+figure_legend("Per-omics KEGG pathway enrichment (all contrasts combined). Bar length represents -log10(p-value). Red dashed line indicates p = 0.05 significance threshold.")
 ```
 
 ```{r enrichment-per-omics-table, eval=has_enrichment}
@@ -470,7 +619,7 @@ for (cf in csv_files) {
 ```{r enrichment-heatmap, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    cat("\n## Cross-Omics Pathway Comparison {.unnumbered}\n\n")
+    cat("\n### Cross-Omics Pathway Comparison {.unnumbered}\n\n")
     cat(knitr::knit_child(text = sprintf(
         '```{r enrich-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
         p
@@ -481,7 +630,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap. Color intensity represents -log10(p-value) for each pathway across omics layers. Pathways are hierarchically clustered to reveal shared biological themes.")
+    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts). Color intensity represents -log10(p-value) for each pathway across omics layers. Pathways are hierarchically clustered to reveal shared biological themes.")
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
@@ -503,6 +652,59 @@ meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
     figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Pathways significant in multiple omics are most informative.")
     render_commentary("cross_omics_meta_analysis")
+}
+```
+
+## Per-Contrast Enrichment {.tabset .unnumbered}
+
+```{r enrichment-per-contrast, eval=has_enrichment, results='asis'}
+enrich_per_contrast_dir <- file.path(enrichment_dir, "per_contrast")
+if (dir.exists(enrich_per_contrast_dir)) {
+    enrich_contrast_dirs <- list.dirs(enrich_per_contrast_dir, full.names = TRUE, recursive = FALSE)
+    for (cdir in enrich_contrast_dirs) {
+        cname <- basename(cdir)
+        cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
+
+        # Per-omics barplots for this contrast
+        c_barplots <- list.files(cdir, pattern = "_top_pathways\\.png$", full.names = TRUE)
+        for (cbp in c_barplots) {
+            omics_name <- gsub("_top_pathways\\.png$", "", basename(cbp))
+            cat(sprintf("\n#### %s {.unnumbered}\n\n", tools::toTitleCase(omics_name)))
+            chunk_id <- paste0("enr-pc-", gsub("[^a-zA-Z0-9]", "", cname), "-",
+                               gsub("[^a-zA-Z0-9]", "", omics_name))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, cbp
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+
+        # Cross-omics heatmap for this contrast
+        c_heatmap <- file.path(cdir, "cross_omics_pathway_heatmap.png")
+        if (file.exists(c_heatmap)) {
+            cat("\n#### Cross-Omics Heatmap {.unnumbered}\n\n")
+            chunk_id <- paste0("enr-pc-hm-", gsub("[^a-zA-Z0-9]", "", cname))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, c_heatmap
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+
+        # Meta-analysis table for this contrast
+        c_meta <- file.path(cdir, "cross_omics_pathways_meta_analysis.csv")
+        if (file.exists(c_meta)) {
+            c_meta_df <- read.csv(c_meta, stringsAsFactors = FALSE)
+            cat(sprintf("\n**%s:** %d pathways in cross-omics meta-analysis\n\n",
+                        gsub("_", " ", cname), nrow(c_meta_df)))
+        }
+
+        if (length(c_barplots) == 0 && !file.exists(c_heatmap)) {
+            cat("*No enrichment results for this contrast.*\n\n")
+        }
+    }
+} else {
+    cat("*Per-contrast enrichment results not available.*\n")
 }
 ```
 

@@ -291,8 +291,189 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         }
     }
 
+    # --- Per-contrast MultiGSEA plots ---
+    contrast_names_mg <- unique(unlist(lapply(per_omics, function(df) {
+        if (is.data.frame(df) && "contrast" %in% colnames(df)) unique(df$contrast)
+        else NULL
+    })))
+
+    if (length(contrast_names_mg) > 1 && !is.null(out_dir)) {
+        message("  Generating per-contrast MultiGSEA plots for ",
+                length(contrast_names_mg), " contrasts")
+        per_contrast_dir <- file.path(out_dir, "per_contrast")
+
+        for (cname in contrast_names_mg) {
+            safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
+            contrast_out <- file.path(per_contrast_dir, safe_dir)
+            dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
+
+            per_omics_contrast <- list()
+            for (om in omics_names) {
+                df <- per_omics[[om]]
+                if (is.data.frame(df) && "contrast" %in% colnames(df)) {
+                    df_c <- df[df$contrast == cname, , drop = FALSE]
+                } else {
+                    df_c <- df
+                }
+                if (is.data.frame(df_c) && nrow(df_c) > 0) {
+                    per_omics_contrast[[om]] <- df_c
+                }
+            }
+
+            if (length(per_omics_contrast) < 2) next
+
+            contrast_pairs <- utils::combn(names(per_omics_contrast), 2, simplify = FALSE)
+            for (pair in contrast_pairs) {
+                omic1 <- pair[1]
+                omic2 <- pair[2]
+                res1 <- per_omics_contrast[[omic1]]
+                res2 <- per_omics_contrast[[omic2]]
+                if (is.null(res1) || is.null(res2)) next
+
+                tryCatch({
+                    .save_multigsea_pair_plot(
+                        res1, res2, omic1, omic2,
+                        corr_method = corr_method,
+                        p_thresh = p_thresh,
+                        out_dir = contrast_out
+                    )
+                }, error = function(e) {
+                    message("    MultiGSEA plot failed for ", omic1, " vs ", omic2,
+                            " (", cname, "): ", e$message)
+                })
+            }
+        }
+        message("  Per-contrast MultiGSEA output saved to: ", per_contrast_dir)
+    }
+
     message("MultiGSEA plots generated: ", length(plots))
     return(plots)
+}
+
+
+#' Save a single MultiGSEA pairwise scatter plot
+#'
+#' Generates and saves the enrichment correlation scatter plot for one pair
+#' of omics layers. Used by both the combined and per-contrast MultiGSEA code.
+#'
+#' @param res1 Enrichment data frame for omics 1
+#' @param res2 Enrichment data frame for omics 2
+#' @param omic1 Name of omics 1
+#' @param omic2 Name of omics 2
+#' @param corr_method Correlation method (default "pearson")
+#' @param p_thresh P-value threshold for labeling (default 0.05)
+#' @param out_dir Output directory for saved files
+#' @return Invisible NULL
+.save_multigsea_pair_plot <- function(res1, res2, omic1, omic2,
+                                      corr_method = "pearson",
+                                      p_thresh = 0.05, out_dir) {
+
+    get_term_col <- function(df) {
+        if ("term" %in% colnames(df)) return(df$term)
+        if ("ID" %in% colnames(df)) return(df$ID)
+        if ("Description" %in% colnames(df)) return(df$Description)
+        return(rownames(df))
+    }
+
+    res1$term <- get_term_col(res1)
+    res2$term <- get_term_col(res2)
+
+    # Build ID -> pathway name lookup
+    id_to_name <- character(0)
+    for (df_tmp in list(res1, res2)) {
+        if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
+            nms <- setNames(df_tmp$pathway, df_tmp$ID)
+            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+        }
+    }
+
+    common_terms <- union(res1$term, res2$term)
+    if (length(common_terms) < 3) return(invisible(NULL))
+
+    df1 <- res1[match(common_terms, res1$term), ]
+    df2 <- res2[match(common_terms, res2$term), ]
+
+    get_score <- function(df) {
+        padj_col <- NULL
+        for (col in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
+            if (col %in% colnames(df)) { padj_col <- col; break }
+        }
+        if (is.null(padj_col)) return(rep(0, nrow(df)))
+        padj <- df[[padj_col]]
+        padj[is.na(padj)] <- 1
+        non_zeros <- padj[padj > 0 & padj < 1]
+        min_nz <- if (length(non_zeros) > 0) min(non_zeros, na.rm = TRUE) else 1e-10
+        padj[padj == 0] <- min_nz / 10
+        -log10(padj)
+    }
+
+    score1 <- get_score(df1)
+    score2 <- get_score(df2)
+
+    resolve_term <- function(term) {
+        if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
+            t <- id_to_name[[term]]
+        } else {
+            t <- sub("^GO:\\d+~", "", term)
+            t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
+            if (nchar(t) == 0) t <- term
+        }
+        if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
+        t
+    }
+
+    plot_df <- data.frame(
+        term = common_terms,
+        x = score1, y = score2,
+        stringsAsFactors = FALSE
+    )
+    plot_df$label <- vapply(plot_df$term, resolve_term, character(1))
+
+    cor_res <- cor.test(plot_df$x, plot_df$y, method = corr_method)
+    cor_val <- round(cor_res$estimate, 3)
+    p_val <- signif(cor_res$p.value, 3)
+
+    omic1_label <- gsub("_", " ", tools::toTitleCase(omic1))
+    omic2_label <- gsub("_", " ", tools::toTitleCase(omic2))
+
+    p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = x, y = y)) +
+        ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7) +
+        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+        ggplot2::labs(
+            title = paste0(omic1_label, " vs ", omic2_label),
+            subtitle = paste0("Terms: ", nrow(plot_df),
+                              "  |  ", corr_method, " r = ", cor_val, ", p = ", p_val),
+            x = paste0(omic1_label, " [-log10(FDR)]"),
+            y = paste0(omic2_label, " [-log10(FDR)]")
+        ) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.title = ggplot2::element_text(face = "bold"),
+            plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
+            plot.subtitle = ggplot2::element_text(hjust = 0.5)
+        )
+
+    if (requireNamespace("ggrepel", quietly = TRUE)) {
+        cut_score <- -log10(p_thresh)
+        both_sig <- plot_df[plot_df$x > cut_score & plot_df$y > cut_score, ]
+        top_x <- utils::head(plot_df[order(plot_df$x, decreasing = TRUE), ], 10)
+        top_y <- utils::head(plot_df[order(plot_df$y, decreasing = TRUE), ], 5)
+        label_df <- unique(rbind(both_sig, top_x, top_y))
+        label_df <- label_df[label_df$x > 0 | label_df$y > 0, ]
+        p <- p + ggrepel::geom_text_repel(
+            data = label_df, ggplot2::aes(label = label),
+            size = 3, max.overlaps = Inf, box.padding = 0.5,
+            force = 2, min.segment.length = 0
+        )
+    }
+
+    filename <- paste0("multigsea_", omic1, "_vs_", omic2)
+    ggplot2::ggsave(file.path(out_dir, paste0(filename, ".png")),
+                    plot = p, width = 8, height = 8, dpi = 300)
+    write.csv(plot_df, file.path(out_dir, paste0(filename, ".csv")),
+              row.names = FALSE)
+
+    invisible(NULL)
 }
 
 
@@ -764,6 +945,20 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         })
         if (!is.null(metab_ora) && nrow(metab_ora) > 0) {
             message("  metabolomics: ", nrow(metab_ora), " enriched compound pathways")
+            # Save compound ORA results for dedicated report section
+            write.csv(metab_ora, file.path(out_dir, "compound_ora_results.csv"),
+                      row.names = FALSE)
+            # Generate compound ORA barplot
+            compound_bp_path <- file.path(out_dir, "compound_ora_barplot.png")
+            png(compound_bp_path, width = 1000, height = 700, res = 120)
+            tryCatch({
+                plot_multi_ora_barplot(metab_ora, "Metabolomics Compound ORA (KEGG Pathways)")
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+            message("  Saved compound ORA barplot and results table")
         }
     }
 
@@ -811,6 +1006,56 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         message("  Multi-ORA support plot failed: ", e$message)
     })
 
+    # 4. Pathview maps for pathways supported by >= 2 omics
+    plots$pathview_pdf <- tryCatch({
+        generate_multi_ora_pathview(
+            combined = combined,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir,
+            min_support = 2
+        )
+    }, error = function(e) {
+        message("  Multi-ORA pathview failed: ", e$message)
+        NULL
+    })
+
+    # --- Per-contrast Multi-ORA ---
+    # Re-extract DE tables to get per-contrast names, then run ORA per contrast
+    all_de_tables <- list()
+    for (om in intersect(gene_omics, names(de_results))) {
+        de_tables_tmp <- extract_de_tables(de_results[[om]], om, harmonization_res)
+        if (!is.null(de_tables_tmp)) all_de_tables[[om]] <- de_tables_tmp
+    }
+    ora_contrast_names <- unique(unlist(lapply(all_de_tables, names)))
+
+    if (length(ora_contrast_names) > 1) {
+        message("  Generating per-contrast Multi-ORA for ",
+                length(ora_contrast_names), " contrasts")
+        per_contrast_dir <- file.path(out_dir, "per_contrast")
+
+        for (cname in ora_contrast_names) {
+            safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
+            contrast_out <- file.path(per_contrast_dir, safe_dir)
+            dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
+
+            tryCatch({
+                .run_multi_ora_contrast_group(
+                    all_de_tables = all_de_tables,
+                    contrast_name = cname,
+                    harmonization_res = harmonization_res,
+                    kegg_org = kegg_org,
+                    org_db = org_db,
+                    out_dir = contrast_out
+                )
+            }, error = function(e) {
+                message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
+            })
+        }
+        message("  Per-contrast Multi-ORA output saved to: ", per_contrast_dir)
+    }
+
     message("Multi-ORA complete: ", nrow(combined), " pathways")
 
     list(
@@ -825,6 +1070,91 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
 #' Run KEGG ORA with Fisher's exact test for multi-ORA
 #'
+#' Run Multi-ORA for a single contrast
+#'
+#' @param all_de_tables Named list (per omics) of named lists (per contrast) of DE data frames
+#' @param contrast_name Contrast name to process
+#' @param harmonization_res Harmonization result
+#' @param kegg_org KEGG organism code
+#' @param org_db Organism annotation database
+#' @param out_dir Output directory for this contrast
+#' @return Invisible NULL
+.run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
+                                           harmonization_res, kegg_org, org_db,
+                                           out_dir) {
+
+    per_omics_sig <- list()
+    per_omics_universe <- list()
+
+    for (om in names(all_de_tables)) {
+        de_tables <- all_de_tables[[om]]
+        if (!contrast_name %in% names(de_tables)) next
+
+        df <- de_tables[[contrast_name]]
+        id_map <- tryCatch(
+            map_feature_ids_to_entrez(de_tables[contrast_name], om, harmonization_res, org_db),
+            error = function(e) NULL
+        )
+        if (is.null(id_map) || nrow(id_map) == 0) next
+
+        df_mapped <- merge(df, id_map, by = "feature_id")
+        all_ids <- unique(df_mapped$ENTREZID[!is.na(df_mapped$ENTREZID)])
+        sig <- df_mapped$ENTREZID[!is.na(df_mapped$padj) & df_mapped$padj < 0.05]
+        if (length(sig) < 5) {
+            sig <- df_mapped$ENTREZID[!is.na(df_mapped$pvalue) & df_mapped$pvalue < 0.05]
+        }
+        sig <- unique(sig[!is.na(sig)])
+
+        if (length(sig) > 0) {
+            per_omics_sig[[om]] <- sig
+            per_omics_universe[[om]] <- all_ids
+        }
+    }
+
+    if (length(per_omics_sig) == 0) return(invisible(NULL))
+
+    pooled_sig <- unique(unlist(per_omics_sig))
+    pooled_universe <- unique(unlist(per_omics_universe))
+
+    kegg_conv <- convert_entrez_to_kegg(pooled_universe, kegg_org)
+    if (is.null(kegg_conv)) return(invisible(NULL))
+
+    pooled_sig_kegg <- unique(kegg_conv[pooled_sig])
+    pooled_sig_kegg <- pooled_sig_kegg[!is.na(pooled_sig_kegg)]
+    pooled_univ_kegg <- unique(kegg_conv[pooled_universe])
+    pooled_univ_kegg <- pooled_univ_kegg[!is.na(pooled_univ_kegg)]
+
+    pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org, "pooled")
+
+    per_omics_ora <- list()
+    for (om in names(per_omics_sig)) {
+        k <- kegg_conv[per_omics_sig[[om]]]
+        k <- unique(k[!is.na(k)])
+        per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om)
+    }
+
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, NULL)
+    if (!is.null(combined) && nrow(combined) > 0) {
+        write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
+
+        if (!is.null(pooled_ora) && nrow(pooled_ora) > 0) {
+            bp_path <- file.path(out_dir, "multi_ora_pooled_barplot.png")
+            png(bp_path, width = 1000, height = 700, res = 120)
+            tryCatch({
+                plot_multi_ora_barplot(pooled_ora,
+                    paste0("Multi-ORA (", gsub("_", " ", contrast_name), ")"))
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+        }
+    }
+
+    invisible(NULL)
+}
+
+
 #' @param sig_genes Significant KEGG gene IDs
 #' @param universe All KEGG gene IDs (shared universe)
 #' @param kegg_org KEGG organism code
@@ -903,10 +1233,11 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         summary[[paste0(om, "_padj")]] <- om_padj[summary$ID]
     }
 
-    # Add metabolomics if available
+    # Add metabolomics if available (join on normalized numeric pathway IDs
+    # since compound ORA uses "map0xxxx" while gene ORA uses "hsa0xxxx")
     if (!is.null(metab_ora) && nrow(metab_ora) > 0 && "ID" %in% colnames(metab_ora)) {
-        met_padj <- setNames(metab_ora$padj, metab_ora$ID)
-        summary$metabolomics_padj <- met_padj[summary$ID]
+        met_padj <- setNames(metab_ora$padj, normalize_kegg_pathway_id(metab_ora$ID))
+        summary$metabolomics_padj <- met_padj[normalize_kegg_pathway_id(summary$ID)]
     }
 
     # Count supporting omics (padj < 0.05)
@@ -973,6 +1304,24 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         plot_data[[om]] <- data.frame(
             pathway = top$pathway,
             source = gsub("_", " ", tools::toTitleCase(om)),
+            neg_log10_padj = -log10(ifelse(is.na(matched_padj), 1, matched_padj) + 1e-300),
+            count = ifelse(is.na(matched_count), 0, matched_count),
+            stringsAsFactors = FALSE
+        )
+    }
+
+    # Metabolomics compound ORA (join by normalized KEGG pathway ID)
+    if (!is.null(metab_ora) && nrow(metab_ora) > 0) {
+        met_padj_map <- setNames(metab_ora$padj, normalize_kegg_pathway_id(metab_ora$ID))
+        met_count_map <- setNames(metab_ora$setSize, normalize_kegg_pathway_id(metab_ora$ID))
+        norm_top_ids <- normalize_kegg_pathway_id(top$ID)
+
+        matched_padj <- met_padj_map[norm_top_ids]
+        matched_count <- met_count_map[norm_top_ids]
+
+        plot_data[["Metabolomics"]] <- data.frame(
+            pathway = top$pathway,
+            source = "Metabolomics",
             neg_log10_padj = -log10(ifelse(is.na(matched_padj), 1, matched_padj) + 1e-300),
             count = ifelse(is.na(matched_count), 0, matched_count),
             stringsAsFactors = FALSE
@@ -1069,4 +1418,173 @@ plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
         plot = p, width = 12, height = max(6, 2 + top_n * 0.25), dpi = 300
     )
     message("  Saved multi-ORA support barplot")
+}
+
+
+#' Generate pathview overlays for multi-omics-supported KEGG pathways
+#'
+#' For pathways enriched in >= min_support omics, renders KEGG pathway maps
+#' with per-omics logFC coloring and compiles them into a single PDF.
+#'
+#' @param combined Multi-ORA summary table (from build_multi_ora_summary)
+#' @param de_results Named list of DE results per omics
+#' @param harmonization_res Harmonization result
+#' @param config Full config
+#' @param out_dir Output directory for pathview files
+#' @param min_support Minimum n_omics_support to include (default 2)
+#' @return Character path to compiled PDF, or NULL
+generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
+                                        config, out_dir, min_support = 2) {
+
+    if (!requireNamespace("pathview", quietly = TRUE)) {
+        message("  Package 'pathview' not installed. Skipping pathway maps.")
+        return(NULL)
+    }
+
+    if (is.null(combined) || !"n_omics_support" %in% colnames(combined)) return(NULL)
+
+    # Filter pathways with sufficient omics support
+    supported <- combined[combined$n_omics_support >= min_support, ]
+    if (nrow(supported) == 0) {
+        message("  No pathways with >= ", min_support, " omics support for pathview")
+        return(NULL)
+    }
+
+    message("  Generating pathview for ", nrow(supported),
+            " pathways (>= ", min_support, " omics support)")
+
+    organism <- config$global$organism %||% "human"
+    kegg_org <- get_kegg_organism(organism)
+    org_db <- get_organism_db(organism)
+
+    if (is.null(kegg_org)) return(NULL)
+
+    pv_dir <- file.path(out_dir, "pathview")
+    dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # --- Build gene logFC matrix (transcriptomics + proteomics) ---
+    gene_fc_list <- list()
+    for (om in intersect(c("transcriptomics", "proteomics"), names(de_results))) {
+        de_tables <- extract_de_tables(de_results[[om]], om, harmonization_res)
+        if (is.null(de_tables) || length(de_tables) == 0) next
+
+        id_map <- tryCatch(
+            map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
+            error = function(e) NULL
+        )
+        if (is.null(id_map) || nrow(id_map) == 0) next
+
+        # Take first contrast; merge logFC with Entrez IDs
+        df <- de_tables[[1]]
+        df_mapped <- merge(df, id_map, by = "feature_id")
+        fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID, mean, na.rm = TRUE)
+        fc_vec <- as.numeric(fc_arr)
+        names(fc_vec) <- names(fc_arr)
+        gene_fc_list[[om]] <- fc_vec
+    }
+
+    gene_data <- NULL
+    if (length(gene_fc_list) == 2) {
+        all_genes <- unique(c(names(gene_fc_list[[1]]), names(gene_fc_list[[2]])))
+        gene_data <- matrix(NA, nrow = length(all_genes), ncol = 2,
+                            dimnames = list(all_genes, names(gene_fc_list)))
+        for (i in seq_along(gene_fc_list)) {
+            fc <- gene_fc_list[[i]]
+            gene_data[names(fc), i] <- fc
+        }
+    } else if (length(gene_fc_list) == 1) {
+        gene_data <- gene_fc_list[[1]]
+    }
+
+    # --- Build compound logFC vector (metabolomics) ---
+    cpd_data <- NULL
+    if ("metabolomics" %in% names(de_results)) {
+        de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics",
+                                        harmonization_res)
+        id_map <- tryCatch(
+            map_metabolite_ids_to_kegg(de_tables, harmonization_res),
+            error = function(e) NULL
+        )
+        if (!is.null(id_map) && nrow(id_map) > 0 && length(de_tables) > 0) {
+            df <- de_tables[[1]]
+            df_mapped <- merge(df, id_map, by = "feature_id")
+            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD, mean, na.rm = TRUE)
+            cpd_data <- as.numeric(cpd_fc)
+            names(cpd_data) <- names(cpd_fc)
+        }
+    }
+
+    if (is.null(gene_data) && is.null(cpd_data)) {
+        message("  No logFC data available for pathview")
+        return(NULL)
+    }
+
+    # --- Run pathview per pathway ---
+    # pathview requires its 'bods' dataset in the global environment
+    if (!exists("bods", envir = globalenv())) {
+        utils::data("bods", package = "pathview", envir = globalenv())
+    }
+
+    cwd <- getwd()
+    setwd(pv_dir)
+    on.exit(setwd(cwd), add = TRUE)
+
+    generated_pngs <- character(0)
+
+    for (i in seq_len(nrow(supported))) {
+        pid <- supported$ID[i]
+        pw_name <- supported$pathway[i]
+        clean_pid <- normalize_kegg_pathway_id(pid)
+
+        tryCatch({
+            pathview::pathview(
+                gene.data  = gene_data,
+                cpd.data   = cpd_data,
+                pathway.id = clean_pid,
+                species    = kegg_org,
+                out.suffix = "multi_ora",
+                kegg.dir   = pv_dir,
+                keys.align = "y",
+                match.data = TRUE,
+                multi.state = !is.null(dim(gene_data)) && ncol(gene_data) > 1,
+                same.layer = FALSE
+            )
+
+            # pathview appends ".multi" suffix for multi-state gene data
+            out_png <- paste0(kegg_org, clean_pid, ".multi_ora.multi.png")
+            if (!file.exists(out_png)) {
+                out_png <- paste0(kegg_org, clean_pid, ".multi_ora.png")
+            }
+            if (file.exists(out_png)) {
+                generated_pngs <- c(generated_pngs, file.path(pv_dir, out_png))
+                message("    Pathview: ", pw_name, " (", pid, ")")
+            }
+        }, error = function(e) {
+            message("    Pathview failed for ", pid, ": ", e$message)
+        })
+    }
+
+    if (length(generated_pngs) == 0) {
+        message("  No pathview plots generated")
+        return(NULL)
+    }
+
+    # --- Compile into a single PDF ---
+    pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
+    tryCatch({
+        grDevices::pdf(pdf_path, width = 12, height = 8)
+        for (png_file in generated_pngs) {
+            img <- png::readPNG(png_file)
+            grid::grid.newpage()
+            grid::grid.raster(img)
+        }
+        grDevices::dev.off()
+        message("  Compiled ", length(generated_pngs), " pathview maps into: ",
+                basename(pdf_path))
+        pdf_path
+    }, error = function(e) {
+        message("  PDF compilation failed: ", e$message)
+        tryCatch(grDevices::dev.off(), error = function(e2) NULL)
+        NULL
+    })
 }
