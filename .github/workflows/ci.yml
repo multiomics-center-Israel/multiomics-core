@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: rocker/r-ver:4.5.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libssl-dev libxml2-dev \
+            libfontconfig1-dev libfreetype6-dev libpng-dev \
+            libtiff5-dev libjpeg-dev libharfbuzz-dev libfribidi-dev \
+            libglpk-dev libgmp3-dev libcairo2-dev libxt-dev \
+            pandoc git
+
+      - name: Cache renv packages
+        uses: actions/cache@v4
+        with:
+          path: renv/library
+          key: renv-${{ hashFiles('renv.lock') }}
+          restore-keys: renv-
+
+      - name: Restore renv
+        run: |
+          R -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+          R -e "renv::restore(prompt = FALSE)"
+
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: |
+          R -e "
+          if (!requireNamespace('lintr', quietly = TRUE))
+            install.packages('lintr', repos = 'https://cloud.r-project.org')
+          results <- lintr::lint_dir('R', pattern = '\\\\.R$')
+          if (length(results) > 0) {
+            print(results)
+            message(sprintf('%d lint issues found', length(results)))
+          }
+          "
+
+      - name: Run tests
+        run: Rscript tests/testthat.R
+
+      - name: Validate config templates
+        run: |
+          R -e "
+          templates <- list.files('config/templates', pattern = '\\\\.yaml$', full.names = TRUE)
+          for (f in templates) {
+            tryCatch({
+              cfg <- yaml::read_yaml(f)
+              message(sprintf('OK: %s (%d top-level keys)', basename(f), length(cfg)))
+            }, error = function(e) {
+              stop(sprintf('INVALID YAML: %s - %s', basename(f), e\$message))
+            })
+          }
+          message('All config templates valid')
+          "
