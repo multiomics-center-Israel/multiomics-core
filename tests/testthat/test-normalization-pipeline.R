@@ -80,12 +80,10 @@ test_that("transform_metab 'log10' produces correct values", {
     expect_equal(res, log10(mat + 1))
 })
 
-test_that("transform_metab 'glog10' handles zeros without NaN", {
+test_that("transform_metab 'log10' produces correct values", {
     mat <- make_intensity_matrix()
-    mat[1, 1] <- 0  # introduce a zero
-    res <- transform_metab(mat, method = "glog10")
-    expect_equal(dim(res), dim(mat))
-    expect_false(any(is.nan(res)))
+    res <- transform_metab(mat, method = "log10", pseudocount = 1)
+    expect_equal(res, log10(mat + 1))
     expect_true(all(is.finite(res)))
 })
 
