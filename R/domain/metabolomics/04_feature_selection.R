@@ -285,12 +285,17 @@ plot_plsda_scores <- function(plsda_res, colors = NULL) {
 }
 
 
-#' PLS-DA VIP scores lollipop plot
+#' PLS-DA VIP scores lollipop plot with group heatmap sidebar
+#'
+#' Produces a MetaboAnalyst-style VIP plot: a lollipop/dot plot on the left
+#' showing VIP scores, and a heatmap strip on the right showing z-scored
+#' group means (blue = low, white = mid, red = high) for each feature.
+#' Falls back to the VIP-only plot when patchwork is not installed.
 #'
 #' @param plsda_res Result from run_metabolomics_plsda().
 #' @param top_n     Number of top features to display.
 #' @param colors    Optional character vector of colors.
-#' @return ggplot object.
+#' @return ggplot (or patchwork) object.
 plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
     vip_scores <- plsda_res$vip_scores
     X          <- plsda_res$X
@@ -319,8 +324,11 @@ plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
         )
     }
 
+    # Shared factor levels — reversed so highest VIP is at the top
+    feat_levels <- rev(display_names)
+
     df <- data.frame(
-        feature = factor(display_names, levels = rev(display_names)),
+        feature = factor(display_names, levels = feat_levels),
         VIP     = vip_sorted[top_feats],
         high_in = high_group,
         stringsAsFactors = FALSE
@@ -332,7 +340,9 @@ plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
     n_groups <- length(groups)
     group_colors <- stats::setNames(colors[seq_len(n_groups)], groups)
 
-    ggplot2::ggplot(df, ggplot2::aes(x = VIP, y = feature, color = high_in)) +
+    # ---- Left panel: VIP lollipop -------------------------------------------
+    p_vip <- ggplot2::ggplot(df, ggplot2::aes(x = VIP, y = feature,
+                                               color = high_in)) +
         ggplot2::geom_segment(
             ggplot2::aes(x = 0, xend = VIP, y = feature, yend = feature),
             color = "grey70", linewidth = 0.5
@@ -357,4 +367,52 @@ plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
             legend.text    = ggplot2::element_text(size = 11),
             legend.position = "bottom"
         )
+
+    # ---- Right panel: group-mean heatmap sidebar ----------------------------
+    if (!requireNamespace("patchwork", quietly = TRUE)) {
+        return(p_vip)
+    }
+
+    # Compute z-scored group means for each top feature
+    heat_list <- lapply(seq_along(top_feats), function(i) {
+        feat <- top_feats[i]
+        grp_means <- tapply(X[, feat], condition, mean, na.rm = TRUE)
+        z <- if (stats::sd(grp_means) == 0) {
+            rep(0, length(grp_means))
+        } else {
+            as.numeric(scale(grp_means))
+        }
+        data.frame(
+            feature = display_names[i],
+            group   = names(grp_means),
+            mean_z  = z,
+            stringsAsFactors = FALSE
+        )
+    })
+    heat_df <- do.call(rbind, heat_list)
+    heat_df$feature <- factor(heat_df$feature, levels = feat_levels)
+
+    p_heat <- ggplot2::ggplot(heat_df, ggplot2::aes(x = group, y = feature,
+                                                      fill = mean_z)) +
+        ggplot2::geom_tile(color = "white", linewidth = 0.5) +
+        ggplot2::scale_fill_gradient2(
+            low = "#2166AC", mid = "white", high = "#B2182B",
+            midpoint = 0, name = "Relative\nLevel"
+        ) +
+        ggplot2::labs(x = NULL, y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y      = ggplot2::element_blank(),
+            axis.ticks.y     = ggplot2::element_blank(),
+            axis.text.x      = ggplot2::element_text(size = 9, angle = 45,
+                                                      hjust = 1),
+            panel.grid       = ggplot2::element_blank(),
+            legend.position  = "bottom",
+            legend.key.width = ggplot2::unit(0.6, "cm"),
+            plot.margin      = ggplot2::margin(t = 5.5, r = 5.5, b = 5.5,
+                                                l = 0)
+        )
+
+    # Combine with patchwork
+    p_vip + p_heat + patchwork::plot_layout(widths = c(4, 1))
 }

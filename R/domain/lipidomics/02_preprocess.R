@@ -86,6 +86,12 @@ preprocess_lipidomics <- function(inputs, config) {
         row_data$total_double_bonds <- chain_info$total_double_bonds
     }
 
+    # ---- 4d. Parse bond type if not present ----
+    if (!"bond_type" %in% colnames(row_data)) {
+        bt_src <- row_data$Name %||% row_data$feature_id
+        row_data$bond_type <- detect_lipid_bond_type(bt_src)
+    }
+
     # Also ensure a Name column exists for downstream display
     if (!"Name" %in% colnames(row_data)) {
         row_data$Name <- row_data$feature_id

@@ -16,14 +16,24 @@
 #' metabolism.  Each row describes a substrate -> product conversion catalyzed
 #' by a specific enzyme or enzyme family.
 #'
-#' @param organism Character; currently only "human" is supported.
+#' @param organism Character; "human", "mouse", or "rat" (also accepts
+#'   "Homo sapiens", "Mus musculus", "Rattus norvegicus").
 #' @return data.frame with columns: reactant_class, product_class, enzyme,
 #'   reaction_type, description, gene_symbol
 lipid_reaction_database <- function(organism = "human") {
 
-    if (organism != "human") {
-        warning("lipid_reaction_database: only 'human' currently supported; ",
-                "returning human reactions")
+    # Normalize organism name
+    organism_lower <- tolower(organism)
+    organism_norm <- if (organism_lower %in% c("human", "homo sapiens")) {
+        "human"
+    } else if (organism_lower %in% c("mouse", "mus musculus")) {
+        "mouse"
+    } else if (organism_lower %in% c("rat", "rattus norvegicus")) {
+        "rat"
+    } else {
+        warning("lipid_reaction_database: organism '", organism,
+                "' not recognized; returning human gene symbols")
+        "human"
     }
 
     reactions <- data.frame(
@@ -208,6 +218,80 @@ lipid_reaction_database <- function(organism = "human") {
         stringsAsFactors = FALSE
     )
 
+    # Map gene symbols to organism orthologs
+    if (organism_norm %in% c("mouse", "rat")) {
+        human_to_rodent <- c(
+            "PLA2G2A" = "Pla2g2a",
+            "PLA2G4A" = "Pla2g4a",
+            "LPCAT1"  = "Lpcat1",
+            "LPCAT2"  = "Lpcat2",
+            "LPCAT3"  = "Lpcat3",
+            "LPCAT4"  = "Lpcat4",
+            "LCAT"    = "Lcat",
+            "PEMT"    = "Pemt",
+            "PSD"     = "Pisd",
+            "PSS1"    = "Ptdss1",
+            "PSS2"    = "Ptdss2",
+            "CEPT1"   = "Cept1",
+            "CHPT1"   = "Chpt1",
+            "CDS1"    = "Cds1",
+            "CDS2"    = "Cds2",
+            "PIS"     = "Cdipt",
+            "DGAT1"   = "Dgat1",
+            "DGAT2"   = "Dgat2",
+            "LIPE"    = "Lipe",
+            "PNPLA2"  = "Pnpla2",
+            "MGLL"    = "Mgll",
+            "CERS2"   = "Cers2",
+            "CERS4"   = "Cers4",
+            "CERS6"   = "Cers6",
+            "SMPD1"   = "Smpd1",
+            "SGMS1"   = "Sgms1",
+            "ASAH1"   = "Asah1",
+            "SPHK1"   = "Sphk1",
+            "UGCG"    = "Ugcg",
+            "PLCB1"   = "Plcb1",
+            "PLCD1"   = "Plcd1",
+            "PI4K2A"  = "Pi4k2a",
+            "PIP5K1A" = "Pip5k1a",
+            "ELOVL1"  = "Elovl1",
+            "ELOVL6"  = "Elovl6",
+            "SCD"     = "Scd1",
+            "FADS2"   = "Fads2",
+            "AGPS"    = "Agps",
+            "GNPAT"   = "Gnpat",
+            "PLA2G7"  = "Pla2g7",
+            "SOAT1"   = "Soat1",
+            "LIPA"    = "Lipa",
+            # Additional genes used in the reaction database
+            "PLD1"    = "Pld1",
+            "PLCG1"   = "Plcg1",
+            "LPIN1"   = "Lpin1",
+            "DGKA"    = "Dgka",
+            "MOGAT1"  = "Mogat1",
+            "LPEAT1"  = "Lpeat1",
+            "SELENOI" = "Selenoi",
+            "B4GALT5" = "B4galt5",
+            "ST3GAL5" = "St3gal5",
+            "DEGS1"   = "Degs1",
+            "PI4KA"   = "Pi4ka",
+            "CPT1A"   = "Cpt1a"
+        )
+
+        reactions$gene_symbol <- ifelse(
+            reactions$gene_symbol %in% names(human_to_rodent),
+            human_to_rodent[reactions$gene_symbol],
+            reactions$gene_symbol
+        )
+
+        # Also map enzyme column where it matches human gene names
+        reactions$enzyme <- ifelse(
+            reactions$enzyme %in% names(human_to_rodent),
+            human_to_rodent[reactions$enzyme],
+            reactions$enzyme
+        )
+    }
+
     reactions
 }
 
@@ -225,7 +309,8 @@ lipid_reaction_database <- function(organism = "human") {
 #' @return data.frame with columns: reaction, reactant_class, product_class,
 #'   enzyme, z_score, p_value, direction, n_reactant_species, n_product_species,
 #'   gene_symbol
-compute_lipid_pathway_scores <- function(pre, config, de_res = NULL) {
+compute_lipid_pathway_scores <- function(pre, config, de_res = NULL,
+                                         organism = "human") {
 
     cfg <- config$modes$lipidomics
     condition_col <- cfg$de$condition_column %||% cfg$effects$color %||% "sample_type"
@@ -254,7 +339,7 @@ compute_lipid_pathway_scores <- function(pre, config, de_res = NULL) {
     classes_in_data <- as.character(row_data$lipid_class)
 
     # Reaction database
-    rxn_db <- lipid_reaction_database()
+    rxn_db <- lipid_reaction_database(organism = organism)
 
     results <- list()
 

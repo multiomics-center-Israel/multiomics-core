@@ -34,7 +34,8 @@ mod_lipidomics_pathway <- function(pre, de_res, config, out_dir) {
 
     # ---- Lipid pathway scoring ----
     pathway_scores <- tryCatch(
-        compute_lipid_pathway_scores(pre, config, de_res = de_res),
+        compute_lipid_pathway_scores(pre, config, de_res = de_res,
+                                     organism = organism),
         error = function(e) {
             warning("Lipid pathway scoring failed: ", e$message)
             NULL
@@ -107,7 +108,20 @@ mod_lipidomics_pathway <- function(pre, de_res, config, out_dir) {
         nrow(enzyme_predictions) > 0 &&
         !identical(pw_cfg$string_network, FALSE)) {
 
-        string_organism <- pw_cfg$string_organism %||% 9606
+        # Map organism name to STRING taxonomy ID if not explicitly set
+        organism_taxid <- c(human = 9606L, mouse = 10090L, rat = 10116L)
+        organism_lower <- tolower(organism)
+        organism_key <- if (organism_lower %in% c("human", "homo sapiens")) {
+            "human"
+        } else if (organism_lower %in% c("mouse", "mus musculus")) {
+            "mouse"
+        } else if (organism_lower %in% c("rat", "rattus norvegicus")) {
+            "rat"
+        } else {
+            "human"
+        }
+        default_taxid <- organism_taxid[[organism_key]]
+        string_organism <- pw_cfg$string_organism %||% default_taxid
         score_threshold <- pw_cfg$string_score    %||% 400
 
         string_network <- tryCatch(

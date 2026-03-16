@@ -136,6 +136,14 @@ modes:
       vip_top_n: 15
       colors: null
 
+    pathway:
+      enabled: true
+      organism: "Homo sapiens"
+      p_threshold: 0.05
+      string_network: true
+      string_organism: 9606
+      string_score: 400
+
 
 # ==============================================================================
 # Example: translated CSV input (Ifat's translated dataset)

@@ -2420,6 +2420,16 @@ function generateLipidYaml() {
   yaml += '      run_plsda: ' + yamlBool(checked('lipid_plsda')) + '\n';
   yaml += '      vip_top_n: 15\n';
 
+  // Pathway (lipidomics)
+  var organism = getOrganism();
+  var stringOrg = {'Homo sapiens': 9606, 'Mus musculus': 10090, 'Rattus norvegicus': 10116}[organism] || 9606;
+  yaml += '\n    pathway:\n';
+  yaml += '      enabled: true\n';
+  yaml += '      organism: ' + yamlStr(organism) + '\n';
+  yaml += '      p_threshold: 0.05\n';
+  yaml += '      string_network: true\n';
+  yaml += '      string_organism: ' + stringOrg + '\n';
+
   yaml += '\n    commentary:\n';
   yaml += '      enabled: ' + yamlBool(commentaryEnabled) + '\n';
   yaml += '      backend: ' + yamlStr(commentaryBackend) + '\n';

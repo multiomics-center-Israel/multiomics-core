@@ -2122,6 +2122,26 @@ wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
   run_rf <- ask_yn("Run Random Forest feature importance?", TRUE)
   run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
 
+  # Organism
+  cat("\n--- [LIPID] Organism ---\n")
+  org_idx <- ask_choice("Which organism does your data come from?",
+    c("Human (Homo sapiens)",
+      "Mouse (Mus musculus)",
+      "Rat (Rattus norvegicus)",
+      "Giardia lamblia",
+      "Other (type name)"),
+    default = 1)
+  organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus",
+                      "Giardia lamblia", "other")
+  selected_organism <- organism_names[org_idx]
+  if (selected_organism == "other") {
+    selected_organism <- ask("Organism name (Latin binomial)")
+  }
+
+  # Pathway analysis
+  cat("\n--- [LIPID] Pathway Analysis ---\n")
+  run_pathway <- ask_yn("Enable lipid metabolic pathway analysis?", TRUE)
+
   # AI Commentary
   cat("\n--- [LIPID] AI Commentary ---\n")
   commentary_idx <- ask_choice("Commentary backend:",
@@ -2248,6 +2268,13 @@ modes:
       run_plsda: %s
       vip_top_n: 15
 
+    pathway:
+      enabled: %s
+      organism: "%s"
+      p_threshold: 0.05
+      string_network: true
+      string_organism: %s
+
     commentary:
       enabled: %s
       backend: "%s"
@@ -2274,6 +2301,10 @@ params:
     p_cutoff, fc_cutoff,
     tolower(run_rf),
     tolower(run_plsda),
+    tolower(run_pathway), selected_organism,
+    switch(selected_organism,
+           "Homo sapiens" = 9606, "Mus musculus" = 10090,
+           "Rattus norvegicus" = 10116, 9606),
     tolower(commentary_enabled), commentary_backend,
     tolower(generate_pptx)
   )

@@ -80,9 +80,12 @@ mod_lipidomics_class_analysis <- function(pre, de_res = NULL, config, out_dir) {
         files <- c(files, f_sat)
 
         f_sat_plot <- file.path(out_qc, "chain_saturation.png")
+        # Wider plot if faceted by bond type
+        sat_width <- if ("bond_type" %in% colnames(chain_sat) &&
+                         length(unique(chain_sat$bond_type)) > 1) 14 else 8
         p_sat <- tryCatch({
             ps <- plot_chain_saturation(chain_sat)
-            ggplot2::ggsave(f_sat_plot, ps, width = 8, height = 6, dpi = 300)
+            ggplot2::ggsave(f_sat_plot, ps, width = sat_width, height = 6, dpi = 300)
             ps
         }, error = function(e) NULL)
         if (!is.null(p_sat)) {
@@ -105,14 +108,43 @@ mod_lipidomics_class_analysis <- function(pre, de_res = NULL, config, out_dir) {
         files <- c(files, f_len)
 
         f_len_plot <- file.path(out_qc, "chain_length_distribution.png")
+        # Wider plot if faceted by bond type
+        len_width <- if ("bond_type" %in% colnames(chain_len) &&
+                         length(unique(chain_len$bond_type)) > 1) 14 else 8
         p_len <- tryCatch({
             pl <- plot_chain_length(chain_len)
-            ggplot2::ggsave(f_len_plot, pl, width = 8, height = 6, dpi = 300)
+            ggplot2::ggsave(f_len_plot, pl, width = len_width, height = 6, dpi = 300)
             pl
         }, error = function(e) NULL)
         if (!is.null(p_len)) {
             files <- c(files, f_len_plot)
             plots$chain_length <- p_len
+        }
+    }
+
+    # ---- Per-class chain profiles ----
+    chain_profiles <- tryCatch(
+        compute_per_class_chain_profiles(pre, config),
+        error = function(e) {
+            warning("Per-class chain profiles failed: ", e$message)
+            NULL
+        }
+    )
+
+    if (!is.null(chain_profiles) && length(chain_profiles) > 0) {
+        for (cls in names(chain_profiles)) {
+            cls_df <- chain_profiles[[cls]]
+            plot_key <- paste0("chain_profile_", cls)
+            f_cls_plot <- file.path(out_qc, paste0("chain_profile_", cls, ".png"))
+            p_cls <- tryCatch({
+                pc <- plot_per_class_chain_profile(cls_df, cls)
+                ggplot2::ggsave(f_cls_plot, pc, width = 10, height = 6, dpi = 300)
+                pc
+            }, error = function(e) NULL)
+            if (!is.null(p_cls)) {
+                files <- c(files, f_cls_plot)
+                plots[[plot_key]] <- p_cls
+            }
         }
     }
 
@@ -144,11 +176,12 @@ mod_lipidomics_class_analysis <- function(pre, de_res = NULL, config, out_dir) {
     }
 
     list(
-        class_comp = class_comp,
-        chain_sat  = chain_sat,
-        chain_len  = chain_len,
-        class_ora  = class_ora,
-        plots      = plots,
-        files      = unique(files)
+        class_comp     = class_comp,
+        chain_sat      = chain_sat,
+        chain_len      = chain_len,
+        chain_profiles = chain_profiles,
+        class_ora      = class_ora,
+        plots          = plots,
+        files          = unique(files)
     )
 }

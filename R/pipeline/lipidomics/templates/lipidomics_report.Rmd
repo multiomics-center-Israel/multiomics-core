@@ -503,6 +503,23 @@ if (!is.null(class_res$plots$chain_length)) {
 }
 ```
 
+## Per-Class Chain Profiles {.tabset}
+
+```{r chain-profiles, fig.width=10, fig.height=6, results='asis'}
+if (!is.null(class_res$chain_profiles)) {
+  classes <- names(class_res$chain_profiles)
+  for (cls in classes) {
+    cat(paste0("\n### ", cls, "\n\n"))
+    p <- class_res$plots[[paste0("chain_profile_", cls)]]
+    if (!is.null(p)) {
+      safe_print_plot(p)
+      render_commentary(paste0("chain_profile_", cls))
+    }
+    cat("\n\n")
+  }
+}
+```
+
 ## Class Enrichment (ORA)
 
 ```{r class-ora, fig.width=10, fig.height=7, results='asis'}

@@ -369,6 +369,23 @@ build_lipid_feature_ids <- function(data_df, id_cfg) {
 }
 
 
+#' Detect lipid bond type from lipid name
+#'
+#' Classifies the bond linkage type based on class-name suffixes
+#' (e.g. "PC-O", "PE-P") and chain-level prefixes (e.g. "(O-", "(P-").
+#'
+#' @param lipid_names Character vector of lipid names.
+#' @return Character vector: "Acyl", "Alkyl", or "Alkenyl".
+detect_lipid_bond_type <- function(lipid_names) {
+    bond_type <- rep("Acyl", length(lipid_names))
+    # Alkyl: class names ending in -O or chains with O- prefix
+    bond_type[grepl("-O\\b|\\(O-", lipid_names)] <- "Alkyl"
+    # Alkenyl: class names ending in -P or chains with P- prefix
+    bond_type[grepl("-P\\b|\\(P-", lipid_names)] <- "Alkenyl"
+    bond_type
+}
+
+
 #' Parse lipid class from lipid name string
 #'
 #' Extracts the headgroup/class from shorthand notation:
