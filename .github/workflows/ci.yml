@@ -27,6 +27,12 @@ jobs:
             libtiff5-dev libjpeg-dev libharfbuzz-dev libfribidi-dev \
             libglpk-dev libgmp3-dev libcairo2-dev libxt-dev \
             libmagick++-dev \
+            libglu1-mesa-dev libgl1-mesa-dev \
+            libhdf5-dev \
+            libudunits2-dev libgdal-dev libgeos-dev libproj-dev \
+            libfftw3-dev \
+            zlib1g-dev libbz2-dev liblzma-dev \
+            cmake \
             pandoc git
 
       - name: Cache renv packages
