@@ -26,6 +26,7 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libpng-dev \
             libtiff5-dev libjpeg-dev libharfbuzz-dev libfribidi-dev \
             libglpk-dev libgmp3-dev libcairo2-dev libxt-dev \
+            libmagick++-dev \
             pandoc git
 
       - name: Cache renv packages
