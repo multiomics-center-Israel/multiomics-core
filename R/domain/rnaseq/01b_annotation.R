@@ -204,9 +204,9 @@ process_annotation_data <- function(annotation_file, ANNOT_SOURCE = "") {
                     Gene_Type = "Gene.type", Gene_Title = "Gene.description")
         # process
         annot <-
-            annot %>%
-            dplyr::rename(dplyr::any_of(lookup)) %>%
-            dplyr::select(Ensembl_ID, Gene_Symbol, Gene_Title, Gene_Type) %>%
+            annot|>
+            dplyr::rename(dplyr::any_of(lookup))|>
+            dplyr::select(Ensembl_ID, Gene_Symbol, Gene_Title, Gene_Type)|>
             dplyr::mutate(Gene_Title = stringr::str_replace(
                 string = Gene_Title,
                 pattern = " \\[.*",
@@ -261,51 +261,51 @@ process_trinotate_data <- function(trinotate_file) {
     ## Parse Trinotate data
 
     # get all gene IDs (to be used on the final merge)
-    all_genes <- trinotate %>%
-        dplyr::select(X.gene_id) %>%
-        unique
+    all_genes <- trinotate|>
+        dplyr::select(X.gene_id)|>
+        unique()
 
     # get RNA predictions from infernal
     trinotate_main_infernal <-
-        trinotate[, c("X.gene_id", "infernal")] %>%
-        tibble::as_tibble() %>%
-        dplyr::filter(infernal != ".") %>%
-        unique() %>%
+        trinotate[, c("X.gene_id", "infernal")]|>
+        tibble::as_tibble()|>
+        dplyr::filter(infernal != ".")|>
+        unique()|>
         dplyr::mutate(RNA_Infernal = stringr::str_replace(
             string = infernal,
             pattern = "`",
             replacement = "|"
-        )) %>%
+        ))|>
         dplyr::select("X.gene_id", "RNA_Infernal")
 
     # get sprot_BLASTX results
     trinotate_main_sprot_BLASTX <-
-        trinotate[, c("X.gene_id", "sprot_Top_BLASTX_hit")] %>%
-        tibble::as_tibble() %>%
-        dplyr::filter(sprot_Top_BLASTX_hit != ".") %>%
+        trinotate[, c("X.gene_id", "sprot_Top_BLASTX_hit")]|>
+        tibble::as_tibble()|>
+        dplyr::filter(sprot_Top_BLASTX_hit != ".")|>
         dplyr::mutate(sprot_edit = stringr::str_replace(
             string = sprot_Top_BLASTX_hit,
             pattern = "\\`.*",
             replacement = ""
-        )) %>%
+        ))|>
         dplyr::mutate(sprot_edit = stringr::str_replace(
             string = sprot_edit,
             pattern = "\\{.*\\}",
             replacement = ""
-        )) %>%
-        dplyr::select(X.gene_id, sprot_edit) %>%
+        ))|>
+        dplyr::select(X.gene_id, sprot_edit)|>
         tidyr::separate(sprot_edit,
                         into = paste("sprot",
                                      c("Name", "Acc", "Pos", "percID", "eval", "RecName", "Lineage"),
                                      sep = "_"),
-                        sep = "\\^") %>%
+                        sep = "\\^")|>
         dplyr::mutate(sprot_RecName = stringr::str_replace(
             string = sprot_RecName,
             pattern = "^RecName: Full=",
             replacement = ""
-        )) %>%
-        unique() %>%
-        dplyr::group_by(X.gene_id) %>%
+        ))|>
+        unique()|>
+        dplyr::group_by(X.gene_id)|>
         dplyr::summarise(
             sprot_Name = paste(sprot_Name, collapse = "|"),
             sprot_Acc = paste(sprot_Acc, collapse = "|"),
@@ -314,50 +314,50 @@ process_trinotate_data <- function(trinotate_file) {
             sprot_eval = paste(sprot_eval, collapse = "|"),
             sprot_RecName = paste(sprot_RecName, collapse = "|"),
             sprot_Lineage = paste(sprot_Lineage, collapse = "|")
-        ) %>%
-        dplyr::ungroup() %>%
-        dplyr::select("X.gene_id", "sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval") %>%
+        )|>
+        dplyr::ungroup()|>
+        dplyr::select("X.gene_id", "sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval")|>
         unique()
 
     # Doing the same for the protein BLASTP results
     trinotate_main_sprot_BLASTP <-
-        trinotate[, c("X.gene_id", "sprot_Top_BLASTP_hit")] %>%
-        tibble::as_tibble() %>%
-        dplyr::filter(sprot_Top_BLASTP_hit != ".") %>%
+        trinotate[, c("X.gene_id", "sprot_Top_BLASTP_hit")]|>
+        tibble::as_tibble()|>
+        dplyr::filter(sprot_Top_BLASTP_hit != ".")|>
         dplyr::mutate(sprot_edit = stringr::str_replace(
             string = sprot_Top_BLASTP_hit,
             pattern = "\\`.*",
             replacement = ""
-        )) %>%
+        ))|>
         dplyr::mutate(sprot_edit = stringr::str_replace(
             string = sprot_edit,
             pattern = "\\{.*\\}",
             replacement = ""
-        )) %>%
-        dplyr::select(X.gene_id, sprot_edit) %>%
+        ))|>
+        dplyr::select(X.gene_id, sprot_edit)|>
         tidyr::separate(sprot_edit,
                         into = paste("sprot",
                                      c("Name", "Acc", "Pos", "percID", "eval", "RecName", "Lineage"),
                                      sep = "_"),
-                        sep = "\\^") %>%
+                        sep = "\\^")|>
         dplyr::mutate(sprot_RecName = stringr::str_replace(
             string = sprot_RecName,
             pattern = "^RecName: Full=",
             replacement = ""
-        )) %>%
-        dplyr::select("X.gene_id", "sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval") %>%
-        dplyr::group_by(X.gene_id) %>%
+        ))|>
+        dplyr::select("X.gene_id", "sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval")|>
+        dplyr::group_by(X.gene_id)|>
         dplyr::summarise(
             blastp_Name = paste0(sprot_Name, collapse = "|"),
             blastp_RecName = paste0(sprot_RecName, collapse = "|"),
             blastp_percID = paste0(sprot_percID, collapse = "|"),
             blastp_eval = paste0(sprot_eval, collapse = "|")
-        ) %>%
+        )|>
         unique()
 
     trinotate_main_pfam <-
-        trinotate[, c("X.gene_id", "Pfam")] %>%
-        dplyr::filter(Pfam != ".") %>%
+        trinotate[, c("X.gene_id", "Pfam")]|>
+        dplyr::filter(Pfam != ".")|>
         unique()
 
     trinotate_main_pfam$pfam_domains <- sapply(
@@ -366,19 +366,19 @@ process_trinotate_data <- function(trinotate_file) {
     )
 
     trinotate_main_pfam1 <-
-        trinotate_main_pfam %>%
-        dplyr::select("X.gene_id", "pfam_domains") %>%
-        dplyr::group_by(X.gene_id) %>%
+        trinotate_main_pfam|>
+        dplyr::select("X.gene_id", "pfam_domains")|>
+        dplyr::group_by(X.gene_id)|>
         dplyr::summarise(pfam_all = paste(pfam_domains, collapse = "|"))
 
     # merge all tables
 
     trinotate_main <-
-        all_genes %>%
-        dplyr::left_join(trinotate_main_sprot_BLASTX, by = "X.gene_id") %>%
-        dplyr::left_join(trinotate_main_infernal, by = "X.gene_id") %>%
-        dplyr::left_join(trinotate_main_sprot_BLASTP, by = "X.gene_id") %>%
-        dplyr::left_join(trinotate_main_pfam1, by = "X.gene_id") %>%
+        all_genes|>
+        dplyr::left_join(trinotate_main_sprot_BLASTX, by = "X.gene_id")|>
+        dplyr::left_join(trinotate_main_infernal, by = "X.gene_id")|>
+        dplyr::left_join(trinotate_main_sprot_BLASTP, by = "X.gene_id")|>
+        dplyr::left_join(trinotate_main_pfam1, by = "X.gene_id")|>
         unique()
 
     rm(trinotate_main_sprot_BLASTX)
@@ -393,13 +393,23 @@ process_trinotate_data <- function(trinotate_file) {
     ## Statistical analysis of trinotate data:
 
     cat(sprintf("Number of genes for which annotation exists: %s\n",
-                trinotate_main$X.gene_id %>% unique() %>% length()))
+                trinotate_main$X.gene_id|> unique()|> length()))
 
-    for (coln in c("sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval",
-                   "RNA_Infernal", "blastp_Name", "blastp_RecName", "blastp_percID",
-                   "blastp_eval", "pfam_all")) {
-        cat(sprintf("Number of genes positive in column %s: %s\n", coln,
-                    trinotate_main[, coln] %>% is.na() %>% `!`() %>% sum()))
+  
+    cols_to_check <- c(
+      "sprot_Name", "sprot_RecName", "sprot_percID", "sprot_eval",
+      "RNA_Infernal", "blastp_Name", "blastp_RecName", "blastp_percID",
+      "blastp_eval", "pfam_all"
+    )
+    
+    for (coln in cols_to_check) {
+      
+      n_pos <- sum(!is.na(trinotate_main[[coln]]))
+      
+      cat(sprintf(
+        "Number of genes positive in column %s: %s\n",
+        coln, n_pos
+      ))
     }
 
     return(trinotate_main)

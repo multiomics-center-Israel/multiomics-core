@@ -284,117 +284,145 @@ init_shiny_payload <- function(source, version = "2.0") {
 #' @return payload (invisibly) if valid; stops with error otherwise
 #' @export
 assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "payload") {
-    prefix <- sprintf("[%s]", context)
-
-    # 1. Check it's a list
-    if (!is.list(payload)) {
-        stop(prefix, " must be a list, got ", class(payload)[1], call. = FALSE)
+  prefix <- sprintf("[%s]", context)
+  
+  signal <- function(msg) {
+    if (strict) {
+      stop(msg, call. = FALSE)
+    } else {
+      warning(msg, call. = FALSE)
     }
-
-    # 2. Check all canonical keys exist
-    canonical_keys <- get_canonical_keys()
-    missing_keys <- setdiff(canonical_keys, names(payload))
-    if (length(missing_keys) > 0) {
-        stop(
-            prefix, " missing canonical keys: ",
-            paste(missing_keys, collapse = ", "),
-            call. = FALSE
-        )
+  }
+  
+  # 1. Check it's a list
+  if (!is.list(payload)) {
+    signal(paste0(prefix, " must be a list, got ", class(payload)[1]))
+    return(invisible(payload))
+  }
+  
+  # 2. Check all canonical keys exist
+  canonical_keys <- get_canonical_keys()
+  missing_keys <- setdiff(canonical_keys, names(payload))
+  if (length(missing_keys) > 0) {
+    signal(paste0(
+      prefix, " missing canonical keys: ",
+      paste(missing_keys, collapse = ", ")
+    ))
+  }
+  
+  # 3. Check required keys are not NULL
+  required_keys <- get_required_keys()
+  null_required <- required_keys[vapply(payload[required_keys], is.null, logical(1))]
+  if (length(null_required) > 0) {
+    signal(paste0(
+      prefix, " required keys are NULL: ",
+      paste(null_required, collapse = ", ")
+    ))
+  }
+  
+  # 4. Type checks for critical keys
+  
+  # payload_source
+  if (!is.character(payload$payload_source) || length(payload$payload_source) != 1) {
+    signal(paste0(prefix, " payload_source must be a single string"))
+  }
+  
+  # sample_meta
+  if (!is.data.frame(payload$sample_meta)) {
+    signal(paste0(prefix, " sample_meta must be a data.frame"))
+  }
+  
+  if (!is.null(payload$sample_meta)) {
+    if (is.null(rownames(payload$sample_meta)) ||
+        any(rownames(payload$sample_meta) == "")) {
+      signal(paste0(prefix, " sample_meta must have non-empty rownames (sample IDs)"))
     }
-
-    # 4. Check required keys are not NULL
-    required_keys <- get_required_keys()
-    null_required <- required_keys[vapply(payload[required_keys], is.null, logical(1))]
-    if (length(null_required) > 0) {
-        stop(
-            prefix, " required keys are NULL: ",
-            paste(null_required, collapse = ", "),
-            call. = FALSE
-        )
+  }
+  
+  # expr_raw
+  if (!is.matrix(payload$expr_raw)) {
+    signal(paste0(prefix, " expr_raw must be a matrix"))
+  }
+  if (!is.numeric(payload$expr_raw)) {
+    signal(paste0(prefix, " expr_raw must be numeric"))
+  }
+  
+  # expr_norm
+  if (!is.matrix(payload$expr_norm)) {
+    signal(paste0(prefix, " expr_norm must be a matrix"))
+  }
+  if (!is.numeric(payload$expr_norm)) {
+    signal(paste0(prefix, " expr_norm must be numeric"))
+  }
+  if (anyNA(payload$expr_norm)) {
+    signal(paste0(prefix, " expr_norm must NOT contain NA values (imputation required)"))
+  }
+  
+  # 5. Dimensional consistency
+  expr_samples <- colnames(payload$expr_norm)
+  meta_samples <- rownames(payload$sample_meta)
+  
+  if (is.null(expr_samples)) {
+    signal(paste0(prefix, " expr_norm must have colnames (sample IDs)"))
+  }
+  
+  if (!setequal(expr_samples, meta_samples)) {
+    missing_in_meta <- setdiff(expr_samples, meta_samples)
+    missing_in_expr <- setdiff(meta_samples, expr_samples)
+    
+    msg <- paste0(prefix, " sample mismatch between expr_norm and sample_meta")
+    
+    if (length(missing_in_meta) > 0) {
+      msg <- paste0(
+        msg,
+        "\n  In expr but not meta: ",
+        paste(head(missing_in_meta, 5), collapse = ", ")
+      )
     }
-
-    # 5. Type checks for critical keys
-    # -- payload_source
-    if (!is.character(payload$payload_source) || length(payload$payload_source) != 1) {
-        stop(prefix, " payload_source must be a single string", call. = FALSE)
+    
+    if (length(missing_in_expr) > 0) {
+      msg <- paste0(
+        msg,
+        "\n  In meta but not expr: ",
+        paste(head(missing_in_expr, 5), collapse = ", ")
+      )
     }
-
-    # -- sample_meta
-    if (!is.data.frame(payload$sample_meta)) {
-        stop(prefix, " sample_meta must be a data.frame", call. = FALSE)
+    
+    signal(msg)
+  }
+  
+  # 6. Check de_expr_norm subset relationship (if present)
+  if (!is.null(payload$de_expr_norm)) {
+    if (!is.matrix(payload$de_expr_norm)) {
+      signal(paste0(prefix, " de_expr_norm must be a matrix"))
     }
-    if (is.null(rownames(payload$sample_meta)) || any(rownames(payload$sample_meta) == "")) {
-        stop(prefix, " sample_meta must have non-empty rownames (sample IDs)", call. = FALSE)
+    
+    de_features <- rownames(payload$de_expr_norm)
+    all_features <- rownames(payload$expr_norm)
+    
+    if (!all(de_features %in% all_features)) {
+      signal(paste0(prefix,
+                    " de_expr_norm features must be a subset of expr_norm features"))
     }
-
-    # -- expr_raw
-    if (!is.matrix(payload$expr_raw)) {
-        stop(prefix, " expr_raw must be a matrix", call. = FALSE)
+  }
+  
+  # 7. Config variable validation
+  if (!is.null(payload$color)) {
+    if (!payload$color %in% colnames(payload$sample_meta)) {
+      signal(paste0(prefix, " color '", payload$color,
+                    "' not found in sample_meta columns"))
     }
-    if (!is.numeric(payload$expr_raw)) {
-        stop(prefix, " expr_raw must be numeric", call. = FALSE)
+  }
+  
+  if (!is.null(payload$shape)) {
+    if (!payload$shape %in% colnames(payload$sample_meta)) {
+      signal(paste0(prefix, " shape '", payload$shape,
+                    "' not found in sample_meta columns"))
     }
-
-    # -- expr_norm
-    if (!is.matrix(payload$expr_norm)) {
-        stop(prefix, " expr_norm must be a matrix", call. = FALSE)
-    }
-    if (!is.numeric(payload$expr_norm)) {
-        stop(prefix, " expr_norm must be numeric", call. = FALSE)
-    }
-    if (anyNA(payload$expr_norm)) {
-        stop(prefix, " expr_norm must NOT contain NA values (imputation required)", call. = FALSE)
-    }
-
-    # 6. Dimensional consistency
-    expr_samples <- colnames(payload$expr_norm)
-    meta_samples <- rownames(payload$sample_meta)
-
-    if (is.null(expr_samples)) {
-        stop(prefix, " expr_norm must have colnames (sample IDs)", call. = FALSE)
-    }
-    if (!setequal(expr_samples, meta_samples)) {
-        missing_in_meta <- setdiff(expr_samples, meta_samples)
-        missing_in_expr <- setdiff(meta_samples, expr_samples)
-        msg <- paste0(prefix, " sample mismatch between expr_norm and sample_meta")
-        if (length(missing_in_meta) > 0) {
-            msg <- paste0(msg, "\n  In expr but not meta: ", paste(head(missing_in_meta, 5), collapse = ", "))
-        }
-        if (length(missing_in_expr) > 0) {
-            msg <- paste0(msg, "\n  In meta but not expr: ", paste(head(missing_in_expr, 5), collapse = ", "))
-        }
-        stop(msg, call. = FALSE)
-    }
-
-    # 7. Check de_expr_norm subset relationship (if present)
-    if (!is.null(payload$de_expr_norm)) {
-        if (!is.matrix(payload$de_expr_norm)) {
-            stop(prefix, " de_expr_norm must be a matrix", call. = FALSE)
-        }
-        de_features <- rownames(payload$de_expr_norm)
-        all_features <- rownames(payload$expr_norm)
-        if (!all(de_features %in% all_features)) {
-            stop(prefix, " de_expr_norm features must be a subset of expr_norm features", call. = FALSE)
-        }
-    }
-
-    # 8. Config variable validation
-    if (!is.null(payload$color)) {
-        if (any(!payload$color %in% colnames(payload$sample_meta))) {
-            warning(prefix, " color '", payload$color,
-                    "' not found in sample_meta columns")
-        }
-    }
-    if (!is.null(payload$shape)) {
-        if (!payload$shape %in% colnames(payload$sample_meta)) {
-            warning(prefix, " shape '", payload$shape,
-                    "' not found in sample_meta columns")
-        }
-    }
-
-    invisible(payload)
+  }
+  
+  invisible(payload)
 }
-
 
 #' Validate DE stats data.frame structure
 #'

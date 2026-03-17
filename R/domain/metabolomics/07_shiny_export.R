@@ -137,8 +137,12 @@ build_shiny_payload_metabolomics <- function(
 
         # pca_3d: 3D PCA plotly widget
         payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+        
+        # QC plot
+        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        payload$samples_hm_w_qc <- pca_res$plots$dist_heatmap %||% NULL
+        payload$samples_hm <- pca_res$plots$dist_heatmap_noQC %||% NULL
     }
-
 
     # ============================================================
     # DE RESULTS (5 keys)
@@ -227,24 +231,20 @@ build_shiny_payload_metabolomics <- function(
     # Priority: clustering_res$objects$hm_hier_de (full payload with tree_row, row_order, etc.)
     val <- NULL
     if (!is.null(clustering_res)) {
-        # First check objects (where the full payload is stored)
-        if (!is.null(clustering_res$objects)) {
-            val <- clustering_res$objects$hm_hier_de
-        }
-        # Fallback to plots if needed
-        if (is.null(val) && !is.null(clustering_res$plots)) {
-            val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
-        }
-    }
-    # Legacy fallback: check de_res
-    if (is.null(val) && !is.null(de_res)) {
-        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
+      # First check objects (where the full payload is stored)
+      if (!is.null(clustering_res$objects)) {
+        val <- clustering_res$objects$hm_hier_de
+      }
+      # Fallback to plots if needed
+      if (is.null(val) && !is.null(clustering_res$plots)) {
+        val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
+      }
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
-
+    
     # clust_heatmap_hier_fig: The actual drawable gtable from pheatmap (print to see the plot)
     if (!is.null(val) && !is.null(val$pheatmap) && !is.null(val$pheatmap$gtable))
-        payload$clust_heatmap_hier_fig <- grid::grid.draw(val$pheatmap$gtable)
+      payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
     # CONFIGURATION (6 keys)
