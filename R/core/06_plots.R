@@ -28,8 +28,8 @@ plot_density_overlay <- function(expr_mat,
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   expr_mat <- as.data.frame(expr_mat)
 
-  norm_expr_long <- expr_mat %>%
-    tibble::rownames_to_column("feature") %>%
+  norm_expr_long <- expr_mat|>
+    tibble::rownames_to_column("feature")|>
     tidyr::pivot_longer(
       cols = -feature,
       names_to = "SampleID",
@@ -774,12 +774,13 @@ wrap_clustering_heatmap <- function(expr_mat, meta, cfg,
   sample_col <- cfg$effects$samples
   color_col  <- get_color_config(cfg)
   
-  annot_col <- data.frame(
-    Condition = meta[[color_col]],
-    row.names = meta[[sample_col]]
-  )
-  annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
-  
+  annot_col <- build_heatmap_annotation_col(meta, cfg)
+  # annot_col <- data.frame(
+  #   Condition = meta[[color_col]],
+  #   row.names = meta[[sample_col]]
+  # )
+  # annot_col <- annot_col[colnames(mat2plot), , drop = FALSE]
+  # 
   annot_row <- NULL
   if (annotation_row_builder) {
     annot_row <- build_contrast_row_context(use_ids, annotation_row_context)
@@ -832,4 +833,21 @@ build_contrast_row_context <- function(use_ids, context) {
   common <- intersect(use_ids, rownames(ar))
   full[common, ] <- ar[common, , drop = FALSE]
   full
+}
+
+build_heatmap_annotation_col <- function(meta, cfg) {
+  sample_col <- cfg$effects$samples %||% "sample_id"
+  color_col  <- cfg$effects$color %||% NULL
+  shape_col  <- cfg$effects$shape %||% NULL
+  
+  annot_cols <- c(
+    if (!is.null(color_col) && color_col %in% colnames(meta)) color_col,
+    if (!is.null(shape_col) && shape_col %in% colnames(meta) && shape_col != color_col) shape_col
+  )
+  
+  if (length(annot_cols) == 0) return(NULL)
+  
+  annot <- meta[, annot_cols, drop = FALSE]
+  rownames(annot) <- meta[[sample_col]]
+  annot
 }

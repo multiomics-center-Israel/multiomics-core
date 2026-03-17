@@ -221,7 +221,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 config      = config
             ),
             format = "file"
-        ),
+        )
 
     )
     # end base_targets

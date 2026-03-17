@@ -195,7 +195,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
             tag <- s$tag
 
             f_dist <- file.path(out_qc, paste0("sample_distance_heatmap", tag, ".png"))
-            qc_sample_distance_heatmap(s$expr_work, s$meta, cfg_primary,
+            ph_dist <- qc_sample_distance_heatmap(s$expr_work, s$meta, cfg_primary,
                                         out_file = f_dist, annot_cols = annot_cols)
             files <- c(files, f_dist)
 
@@ -203,6 +203,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
             qc_sample_correlation_heatmap(s$expr_work, s$meta, cfg_primary,
                                            out_file = f_cor, annot_cols = annot_cols)
             files <- c(files, f_cor)
+            plots[[paste0("dist_heatmap", tag)]] <- ph_dist
         }
     }
 

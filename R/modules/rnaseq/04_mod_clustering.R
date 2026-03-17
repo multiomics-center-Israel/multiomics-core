@@ -73,13 +73,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     ))
 
     # ---- build annotation_col for heatmaps using effects ----
-    annot <- NULL
-    if (eff_color %in% colnames(pre$meta)) {
-        annot <- data.frame(
-            Condition = pre$meta[[eff_color]],
-            row.names = pre$meta[[cfg$effects$samples]]
-        )
-    }
+    annot_col <- build_heatmap_annotation_col(pre$meta, cfg)
+    
 
     # Rebuild summary_df to identify DE features
     summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, config$modes$rna$de), error = function(e) NULL)
@@ -169,7 +164,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
             mat = z_de_ordered, # Already in clustered order
             row_order = rownames(z_de_ordered), # Ordered row names for Plotly
             col_order = colnames(z_de_ordered), # Column names
-            annotation_col = annot,
+            annotation_col = annot_col,
             feature_ids = de_features,
             is_zscored = TRUE,
             tree_row = hc_res$details # hclust object for dendrogram
