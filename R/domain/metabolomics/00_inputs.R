@@ -33,84 +33,72 @@
 #' @return list with: data (data.frame or named list), metadata (data.frame or NULL),
 #'         format
 load_metabolomics_inputs <- function(config) {
-    cfg <- config$modes$metabolomics
-    if (is.null(cfg)) stop("No config for mode metabolomics")
-
-    files <- cfg$files
-    fmt   <- cfg$input[["format"]] %||% "cd_raw"
-
-    # ── multi_level: read directory of level files ───────────────────────────
-    if (fmt == "multi_level") {
-        data_dir <- files[["data_dir"]]
-        if (is.null(data_dir) || !nzchar(data_dir))
-            stop("metabolomics: files$data_dir is required when format = 'multi_level'")
-
-        abs_dir <- resolve_raw_path(config, data_dir)
-        if (!dir.exists(abs_dir))
-            stop("Metabolomics data directory not found: ", abs_dir)
-
-        pattern   <- cfg$input[["level_pattern"]] %||% "\\.xlsx$"
-        data_list <- read_multi_level_dir(abs_dir, pattern = pattern,
-                                          sheet = cfg$input[["sheet"]])
-
-        meta       <- .load_optional_metadata(config, files)
-        sample_map <- .load_optional_sample_map(config, files)
-
-        return(list(
-            data       = data_list,   # named list: level_name -> data.frame
-            metadata   = meta,
-            sample_map = sample_map,
-            format     = fmt
-        ))
+  inputs <- load_omics_inputs(config, mode = "metabolomics")
+  
+  cfg <- config$modes$metabolomics
+  fmt <- cfg$input[["format"]] %||% "cd_raw"
+  
+  # multi-level stays metabolomics-specific
+  if (fmt == "multi_level") {
+    data_dir <- cfg$files[["data_dir"]]
+    if (is.null(data_dir) || !nzchar(data_dir)) {
+      stop("metabolomics: files$data_dir is required when format = 'multi_level'")
     }
-
-    # ── single-file path (cd_raw / processed_wide / long) ───────────────────
-    data_path <- files[["data"]]
-    if (is.null(data_path) || !nzchar(data_path))
-        stop("metabolomics config$files$data is required")
-
-    abs_data <- resolve_raw_path(config, data_path)
-    if (!file.exists(abs_data)) stop("Metabolomics data file not found: ", abs_data)
-
-    data_df <- read_metab_file(abs_data, sheet = cfg$input[["sheet"]])
-
-    meta       <- .load_optional_metadata(config, files)
-    sample_map <- .load_optional_sample_map(config, files)
-
-    # Handle group-row format: row 1 of data contains condition assignments
-    # for each sample column (annotation columns are empty/NA in that row).
-    if (isTRUE(cfg$input$has_group_row) && nrow(data_df) > 0) {
-        group_row <- data_df[1, , drop = FALSE]
-        data_df   <- data_df[-1, , drop = FALSE]
-        rownames(data_df) <- NULL
-
-        # Build metadata from group row if no external metadata provided
-        if (is.null(meta)) {
-            id_cfg      <- cfg$id_columns %||% list()
-            annot_cols  <- id_cfg$annotation_cols %||% character(0)
-            sample_cols <- setdiff(colnames(data_df), annot_cols)
-
-            cond_col <- cfg$de$condition_column %||%
-                        cfg$effects$color %||% "condition"
-
-            meta <- data.frame(
-                sample_id = sample_cols,
-                stringsAsFactors = FALSE
-            )
-            meta[[cond_col]] <- as.character(unlist(group_row[1, sample_cols]))
-            message(sprintf(
-                "metabolomics: built metadata from group row (%d samples, condition='%s')",
-                length(sample_cols), cond_col
-            ))
-        }
+    
+    abs_dir <- resolve_raw_path(config, data_dir)
+    if (!dir.exists(abs_dir)) {
+      stop("Metabolomics data directory not found: ", abs_dir)
     }
-
-    list(
-        data       = data_df,
-        metadata   = meta,
-        sample_map = sample_map,
-        format     = fmt
+    
+    pattern <- cfg$input[["level_pattern"]] %||% "\\.xlsx$"
+    data_list <- read_multi_level_dir(
+      abs_dir,
+      pattern = pattern,
+      sheet = cfg$input[["sheet"]]
     )
+    
+    inputs$data <- data_list
+    inputs$format <- fmt
+    return(inputs)
+  }
+  
+  # single-file path
+  if (is.null(inputs$data)) {
+    data_path <- cfg$files[["data"]]
+    if (is.null(data_path) || !nzchar(data_path)) {
+      stop("metabolomics config$files$data is required")
+    }
+    
+    abs_data <- resolve_raw_path(config, data_path)
+    if (!file.exists(abs_data)) {
+      stop("Metabolomics data file not found: ", abs_data)
+    }
+    
+    inputs$data <- read_metab_file(abs_data, sheet = cfg$input[["sheet"]])
+  }
+  
+  # group-row handling stays here
+  if (isTRUE(cfg$input$has_group_row) && nrow(inputs$data) > 0) {
+    group_row <- inputs$data[1, , drop = FALSE]
+    inputs$data <- inputs$data[-1, , drop = FALSE]
+    rownames(inputs$data) <- NULL
+    
+    if (is.null(inputs$metadata)) {
+      id_cfg      <- cfg$id_columns %||% list()
+      annot_cols  <- id_cfg$annotation_cols %||% character(0)
+      sample_cols <- setdiff(colnames(inputs$data), annot_cols)
+      
+      cond_col <- cfg$de$condition_column %||%
+        cfg$effects$color %||% "condition"
+      
+      meta <- data.frame(sample_id = sample_cols, stringsAsFactors = FALSE)
+      meta[[cond_col]] <- as.character(unlist(group_row[1, sample_cols]))
+      inputs$metadata <- meta
+    }
+  }
+  
+  inputs$format <- fmt
+  inputs
 }
 
 # Internal: read optional metadata file (shared by single-file and multi_level paths)
@@ -712,3 +700,35 @@ build_minimal_meta <- function(sample_ids) {
 escapeRegex <- function(string) {
     gsub("([\\[\\]\\{\\}\\(\\)\\^\\$\\.\\*\\+\\?\\|\\\\])", "\\\\\\1", string)
 }
+
+#' Extract sample filter rules for metabolomics
+get_sample_filter_rules_metab <- function(cfg) {
+  sf <- cfg$sample_filter
+  if (is.null(sf) || !isTRUE(sf$enabled)) return(NULL)
+  sf$rules %||% NULL
+}
+
+
+#' Apply simple sample filtering
+#'
+#' Supports rules like exclude_blanks=TRUE and exclude_qc=TRUE.
+#' @return Character vector of sample IDs to keep.
+apply_sample_filter_metab <- function(sample_ids, meta, rules, sample_col) {
+  keep <- rep(TRUE, length(sample_ids))
+  
+  if (isTRUE(rules$exclude_blanks) && "is_blank" %in% colnames(meta)) {
+    keep <- keep & !meta$is_blank
+  }
+  
+  if (isTRUE(rules$exclude_qc) && "is_QC" %in% colnames(meta)) {
+    keep <- keep & !meta$is_QC
+  }
+  
+  # Explicit exclude list
+  if (!is.null(rules$exclude_samples)) {
+    keep <- keep & !(sample_ids %in% rules$exclude_samples)
+  }
+  
+  sample_ids[keep]
+}
+

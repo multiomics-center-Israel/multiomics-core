@@ -84,7 +84,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
             message(sprintf("[load_omics_inputs] Loading RDS file: %s", nm))
             inputs[["txi"]] <- readRDS(abs)
         } else {
-            inputs[[nm]] <- read_table_auto(abs)
+            inputs[[nm]] <- read_metab_file(abs)
         }
     }
 

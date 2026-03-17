@@ -14,7 +14,7 @@
 #' @param out_dir Output directory for this mode.
 #' @return list conforming to the DE contract: summary_df, method, de_tables,
 #'   de_model, plots, files
-mod_metabolomics_de <- function(pre, config, out_dir) {
+mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     stage <- "metabolomics"
     assert_pre_contract(pre, stage = stage)
 
@@ -41,7 +41,7 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         message("metabolomics DE: loading pre-computed DE tables")
         de_res <- load_precomputed_metabolomics_de(config)
     } else {
-        de_res <- run_metabolomics_de(pre, config)
+        de_res <- run_metabolomics_de(pre, config, inputs$contrasts)
     }
     assert_de_contract(de_res, stage = stage)
 
