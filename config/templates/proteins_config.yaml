@@ -27,6 +27,7 @@ modes:
     # Data origin / engine
     # --------------------------------------------------------
     engine: "DIANN"          # e.g. DIANN / MaxQuant / FragPipe
+    scale_in: "linear" # If the data already transformed : "log" other wise: "linear"
 
     # --------------------------------------------------------
     # Input files (REQUIRED)
