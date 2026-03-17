@@ -95,6 +95,9 @@ build_shiny_payload_metabolomics <- function(
     # Check for NA policy - if na_policy="zero", NAs were replaced
     payload$expr_norm <- pre$expr_work
 
+    # expr_long: Long-format expression with metadata
+    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
         na_count <- sum(is.na(payload$expr_norm))
@@ -135,6 +138,11 @@ build_shiny_payload_metabolomics <- function(
         # pca_3d: 3D PCA plotly widget (may be NULL if too few samples)
         pca_3d_val <- pca_res$plots$pca_3d
         if (!is.null(pca_3d_val)) payload$pca_3d <- pca_3d_val
+
+        # QC plots
+        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        payload$samples_hm_w_qc <- pca_res$plots$dist_heatmap %||% NULL
+        payload$samples_hm <- pca_res$plots$dist_heatmap_noQC %||% NULL
     }
 
 
@@ -189,6 +197,11 @@ build_shiny_payload_metabolomics <- function(
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
             payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats)
+        }
+
+        # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
+        if (!is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
+            payload$de_final_table <- payload$de_sig_stats
         }
     }
 
