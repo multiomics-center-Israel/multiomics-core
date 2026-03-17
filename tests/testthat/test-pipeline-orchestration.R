@@ -82,12 +82,12 @@ test_that("pipe_proteomics returns expected number of targets", {
 # =============================================================================
 
 test_that("pipe_metabolomics returns a valid target list", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics(chosen_norm = "tss")
     assert_valid_targets(result)
 })
 
 test_that("pipe_metabolomics contains expected target names", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics(chosen_norm = "tss")
     names <- get_target_names(result)
     expect_true("metab_out_dir" %in% names)
     expect_true("metab_pre" %in% names)
@@ -95,7 +95,7 @@ test_that("pipe_metabolomics contains expected target names", {
 })
 
 test_that("pipe_metabolomics returns expected number of targets", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics(chosen_norm = "tss")
     expect_gte(length(result), 8)
 })
 
@@ -104,13 +104,23 @@ test_that("pipe_metabolomics returns expected number of targets", {
 # Tests: pipe_multiomics()
 # =============================================================================
 
+# Minimal cfg_raw with all three omics modes active, used by pipe_multiomics()
+# to determine gateway target wiring at plan-definition time.
+mock_cfg_raw <- list(
+    modes = list(
+        rna          = list(enabled = TRUE),
+        proteomics   = list(enabled = TRUE),
+        metabolomics = list(enabled = TRUE)
+    )
+)
+
 test_that("pipe_multiomics returns a valid target list", {
-    result <- pipe_multiomics()
+    result <- pipe_multiomics(cfg_raw = mock_cfg_raw)
     assert_valid_targets(result)
 })
 
 test_that("pipe_multiomics contains expected target names", {
-    result <- pipe_multiomics()
+    result <- pipe_multiomics(cfg_raw = mock_cfg_raw)
     names <- get_target_names(result)
     expect_true("multiomics_out_dir" %in% names)
     expect_true("multiomics_harmonization" %in% names)
@@ -121,12 +131,12 @@ test_that("pipe_multiomics contains expected target names", {
 })
 
 test_that("pipe_multiomics returns expected number of targets", {
-    result <- pipe_multiomics()
+    result <- pipe_multiomics(cfg_raw = mock_cfg_raw)
     expect_gte(length(result), 10)
 })
 
 test_that("multiomics_report target has file format", {
-    result <- pipe_multiomics()
+    result <- pipe_multiomics(cfg_raw = mock_cfg_raw)
     names <- get_target_names(result)
     report_idx <- which(names == "multiomics_report")
     expect_length(report_idx, 1)
@@ -142,8 +152,8 @@ test_that("target names are unique within each pipe", {
     pipes <- list(
         rna = pipe_rnaseq(),
         prot = pipe_proteomics(),
-        metab = pipe_metabolomics(),
-        multi = pipe_multiomics()
+        metab = pipe_metabolomics(chosen_norm = "tss"),
+        multi = pipe_multiomics(cfg_raw = mock_cfg_raw)
     )
 
     for (pipe_name in names(pipes)) {
