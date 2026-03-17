@@ -392,6 +392,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             mod_metabolomics_de(
                 pre     = metab_pre,
                 config  = config,
+                inputs  = metab_inputs,
                 out_dir = metab_out_dir
             )
         ),

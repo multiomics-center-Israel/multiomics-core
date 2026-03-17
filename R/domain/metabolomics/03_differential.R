@@ -178,7 +178,7 @@ load_precomputed_metabolomics_de <- function(config) {
 #' @param config Full pipeline config.
 #' @return list conforming to the DE contract:
 #'   summary_df, method, de_tables (per-contrast list), de_model
-run_metabolomics_de <- function(pre, config) {
+run_metabolomics_de <- function(pre, config, contrast_table) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
 
@@ -187,10 +187,6 @@ run_metabolomics_de <- function(pre, config) {
 
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
-
-    # ---- Load structured contrast table (RNA/proteomics standard) ----
-    inputs <- load_omics_inputs(config, mode = "metabolomics")
-    contrast_table <- inputs$contrasts
 
     mat  <- pre$expr_work
     # Use pre-scaling (log-transformed) matrix for DE statistical tests.
