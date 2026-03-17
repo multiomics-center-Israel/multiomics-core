@@ -91,12 +91,13 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   }
 
   p <- plot_pca_scatter(
-    scores    = scores,
-    color_col = color_col,
-    shape_col = shape_col,
-    pc_x      = pc_x,
-    pc_y      = pc_y,
-    pc_labels = pc_labels
+    scores     = scores,
+    color_col  = color_col,
+    shape_col  = shape_col,
+    pc_x       = pc_x,
+    pc_y       = pc_y,
+    pc_labels  = pc_labels,
+    sample_col = sample_col
   )
 
   if (!is.null(out_file)) {

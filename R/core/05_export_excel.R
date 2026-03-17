@@ -181,12 +181,12 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     } else {
         # Proteomics (uses imputation naming)
         list(
-            fc     = paste0("linearFC.imputs.", contrast_safe),
-            p      = paste0("pvalue.imputs.", contrast_safe),
-            padj   = paste0("padj.imputs.", contrast_safe),
-            pass   = paste0("pass.imputs.", contrast_safe),
-            updown = paste0("upDown.imputs.", contrast_safe),
-            manual = paste0("manual_cutoffs.", contrast_safe)
+            fc     = paste0("linearFC.imputs.", contrast),
+            p      = paste0("pvalue.imputs.", contrast),
+            padj   = paste0("padj.imputs.", contrast),
+            pass   = paste0("pass.imputs.", contrast),
+            updown = paste0("upDown.imputs.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
         )
     }
 }
@@ -515,14 +515,21 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
     mat_clean[idx_na] <- row_means[idx_na[,1]]
   }
   
+  # Guard: hclust needs >= 2 rows
+  if (nrow(mat_clean) < 2) {
+    message("Fallback clustering skipped: fewer than 2 features.")
+    df$order <- seq_len(nrow(df))
+    return(df)
+  }
+
   # Simple clustering
   dists <- dist(mat_clean)
   hc <- hclust(dists, method = "complete")
-  
+
   # Create an order mapping
   ordered_ids <- rownames(mat_clean)[hc$order]
   ranks <- match(df[[id_col]], ordered_ids)
-  
+
   df$order <- ranks
   return(df)
 }

@@ -466,6 +466,11 @@ run_clustering <- function(expr_mat, col_data, de_features, config) {
 
 
 run_hierarchical_clustering <- function(z_expr, config) {
+  if (nrow(z_expr) < 2) {
+    warning("Hierarchical clustering requires >= 2 features; only ", nrow(z_expr), " found. Skipping.")
+    return(NULL)
+  }
+
   dist_method <- config$distance %||% "euclidean"
   linkage <- config$linkage %||% "complete"
   k <- config$k

@@ -44,24 +44,57 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
     # unified: get tables per contrast (list)
     tables <- get_de_tables_qc_post(de_res, cfg, de_source = de_source)
 
+    # Build contrast_info lookup from contrasts CSV (Numerator/Denominator)
+    contrast_lookup <- list()
+    contrasts_path <- tryCatch({
+        file.path(config$project$dir, config$paths$raw, cfg$files$contrasts)
+    }, error = function(e) NULL)
+    if (!is.null(contrasts_path) && file.exists(contrasts_path)) {
+        contrasts_csv <- read.csv(contrasts_path, stringsAsFactors = FALSE)
+        if (all(c("Contrast_name", "Numerator", "Denominator") %in% names(contrasts_csv))) {
+            for (i in seq_len(nrow(contrasts_csv))) {
+                contrast_lookup[[contrasts_csv$Contrast_name[i]]] <- list(
+                    Numerator = contrasts_csv$Numerator[i],
+                    Denominator = contrasts_csv$Denominator[i]
+                )
+            }
+        }
+    }
 
     # per-contrast plots
     for (cn in names(tables)) {
         de_tbl <- tables[[cn]]
         if (is.null(de_tbl)) next
 
-        # Volcano
-        if (do_volcano) {
-            p_volcano <- plot_volcano(de_tbl,
-                cfg = cfg,
-                title = paste0("Volcano: ", cn, " (", de_source, ")"),
-                use_adj = TRUE
-            )
-            f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, de_source))
-            ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
+        ci <- contrast_lookup[[cn]]
 
-            plots[[paste0("volcano_", cn)]] <- p_volcano
-            files <- c(files, f_volcano)
+        # Volcano — one plot cutoff on P.Value, one on adj.P.Val
+        if (do_volcano) {
+            # P-value volcano
+            p_volcano_pval <- plot_volcano(de_tbl,
+                cfg = cfg,
+                title = paste0("Volcano (P.Value): ", cn, " (", de_source, ")"),
+                contrast_info = ci,
+                pval_col = "P.Value"
+            )
+            f_volcano_pval <- file.path(out_qc_post, sprintf("volcano_%s_%s_pvalue.png", cn, de_source))
+            ggplot2::ggsave(f_volcano_pval, plot = p_volcano_pval, width = 8, height = 6, dpi = 150)
+            plots[[paste0("volcano_pval_", cn)]] <- p_volcano_pval
+            files <- c(files, f_volcano_pval)
+
+            # Adjusted p-value volcano
+            if ("adj.P.Val" %in% colnames(de_tbl)) {
+                p_volcano_padj <- plot_volcano(de_tbl,
+                    cfg = cfg,
+                    title = paste0("Volcano (adj.P.Val): ", cn, " (", de_source, ")"),
+                    contrast_info = ci,
+                    pval_col = "adj.P.Val"
+                )
+                f_volcano_padj <- file.path(out_qc_post, sprintf("volcano_%s_%s_padj.png", cn, de_source))
+                ggplot2::ggsave(f_volcano_padj, plot = p_volcano_padj, width = 8, height = 6, dpi = 150)
+                plots[[paste0("volcano_padj_", cn)]] <- p_volcano_padj
+                files <- c(files, f_volcano_padj)
+            }
         }
 
         # MA
@@ -75,6 +108,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
             p_ma <- plot_ma(de_tbl_ma,
                 cfg = cfg,
                 title = paste0("MA: ", cn, " (", de_source, ")"),
+                contrast_info = ci,
                 use_adj = TRUE
             )
             f_ma <- file.path(out_qc_post, sprintf("ma_%s_%s.png", cn, de_source))

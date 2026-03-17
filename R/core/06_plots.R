@@ -333,7 +333,8 @@ plot_imputation_histogram_one_sample <- function(expr_mat,
     )
 }
 plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
-                             pc_x, pc_y, pc_labels) {
+                             pc_x, pc_y, pc_labels,
+                             sample_col = NULL) {
   # Resolve PC column names (e.g., PC1, PC2)
   x_col <- paste0("PC", pc_x)
   y_col <- paste0("PC", pc_y)
@@ -367,6 +368,19 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
       shape  = if (!is.null(shape_col)) shape_col else NULL
     ) +
     ggplot2::theme_minimal()
+
+  # Add sample labels
+  label_col <- if (!is.null(sample_col) && sample_col %in% colnames(scores)) {
+    sample_col
+  } else {
+    NULL
+  }
+  if (!is.null(label_col)) {
+    p <- p + ggrepel::geom_text_repel(
+      ggplot2::aes(label = !!rlang::sym(label_col)),
+      size = 2.5, max.overlaps = 20, show.legend = FALSE
+    )
+  }
 
   p
 }
@@ -412,13 +426,15 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
 #' @param cfg Config list (sections de$p_cutoff, de$logfc_cutoff or de$linear_fc_cutoff)
 #' @param title Plot title
+#' @param contrast_info Named list with Numerator/Denominator for directional labels (optional)
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, contrast_info = NULL,
+                         pval_col = "P.Value", ...) {
   stopifnot(is.data.frame(de_tbl))
 
   # Required columns
-  req_cols <- c("logFC", "P.Value")
+  req_cols <- c("logFC", pval_col)
   missing <- setdiff(req_cols, colnames(de_tbl))
   if (length(missing) > 0) {
     stop("plot_volcano: de_tbl missing columns: ", paste(missing, collapse = ", "))
@@ -433,13 +449,15 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     log2fc_cut <- log2(lin_fc_cut)
   }
 
+  # Y-axis label based on which p-value column is used
+  y_label <- if (pval_col == "adj.P.Val") "-log10(adj.P.Val)" else "-log10(P.Value)"
+
   df <- de_tbl
 
   # Prepare plotting data
   df$.logFC <- as.numeric(df[["logFC"]])
 
-  # Y-axis uses raw P-value
-  df$.pval <- as.numeric(df[["P.Value"]])
+  df$.pval <- as.numeric(df[[pval_col]])
   df$.pval_plot <- ifelse(is.na(df$.pval), 1, df$.pval)
   df$.neglog10p <- -log10(pmax(df$.pval_plot, 1e-300))
 
@@ -464,16 +482,24 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   if (n_total == 0) {
     if (is.null(title)) title <- "Volcano (0 sig)"
     message(sprintf(
-      "[plot_volcano] '%s': 0 genes passed (p<=%.2g, |logFC|>=%.2g). Total rows: %d",
-      title, p_cut, log2fc_cut, nrow(df)
+      "[plot_volcano] '%s': 0 genes passed (%s<=%.2g, |logFC|>=%.2g). Total rows: %d",
+      title, pval_col, p_cut, log2fc_cut, nrow(df)
     ))
   } else {
     # Sort so significant points are plotted last (on top)
     df <- df[order(df$.direction), ]
     message(sprintf(
-      "[plot_volcano] '%s': %d up, %d down (p<=%.2g, |logFC|>=%.2g)",
-      title, n_up, n_down, p_cut, log2fc_cut
+      "[plot_volcano] '%s': %d up, %d down (%s<=%.2g, |logFC|>=%.2g)",
+      title, n_up, n_down, pval_col, p_cut, log2fc_cut
     ))
+  }
+
+  # Build directional labels from contrast_info (Numerator/Denominator)
+  up_label <- "Up"
+  down_label <- "Down"
+  if (!is.null(contrast_info$Numerator) && nzchar(contrast_info$Numerator)) {
+    up_label <- paste0("Up in ", contrast_info$Numerator)
+    down_label <- paste0("Down in ", contrast_info$Numerator)
   }
 
   ggplot2::ggplot(df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
@@ -483,8 +509,8 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
       values = c("NS" = "grey70", "Down" = "blue", "Up" = "red"),
       labels = c(
         "NS" = sprintf("NS (%d)", nrow(df) - n_total),
-        "Down" = sprintf("Down (%d)", n_down),
-        "Up" = sprintf("Up (%d)", n_up)
+        "Down" = sprintf("%s (%d)", down_label, n_down),
+        "Up" = sprintf("%s (%d)", up_label, n_up)
       )
     ) +
     ggplot2::scale_alpha_manual(values = c("NS" = 0.25, "Down" = 0.8, "Up" = 0.8), guide = "none") +
@@ -493,7 +519,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::labs(
       title = title %||% "Volcano plot",
       x = "log2(FC)",
-      y = "-log10(P.Value)"
+      y = y_label
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(legend.position = "right")
@@ -512,9 +538,10 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
 #' @param cfg mode config (e.g., config$modes$proteomics)
 #' @param title optional plot title
 #' @param use_adj logical; if TRUE uses adj.P.Val, else P.Value
+#' @param contrast_info Named list with Numerator/Denominator for directional labels (optional)
 #'
 #' @return ggplot object
-plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
+plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE, contrast_info = NULL) {
   stopifnot(is.data.frame(de_tbl))
   if (!("logFC" %in% colnames(de_tbl))) stop("plot_ma: de_tbl missing 'logFC' column.")
 
@@ -563,6 +590,14 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   # Sort so significant points are plotted last (on top)
   df <- df[order(df$.direction), ]
 
+  # Build directional labels from contrast_info (Numerator/Denominator)
+  up_label <- "Up"
+  down_label <- "Down"
+  if (!is.null(contrast_info$Numerator) && nzchar(contrast_info$Numerator)) {
+    up_label <- paste0("Up in ", contrast_info$Numerator)
+    down_label <- paste0("Down in ", contrast_info$Numerator)
+  }
+
   ggplot2::ggplot(df, ggplot2::aes(x = .A, y = .logFC)) +
     ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
     ggplot2::scale_color_manual(
@@ -570,8 +605,8 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
       values = c("NS" = "grey60", "Down" = "blue", "Up" = "red"),
       labels = c(
         "NS" = sprintf("NS (%d)", nrow(df) - n_up - n_down),
-        "Down" = sprintf("Down (%d)", n_down),
-        "Up" = sprintf("Up (%d)", n_up)
+        "Down" = sprintf("%s (%d)", down_label, n_down),
+        "Up" = sprintf("%s (%d)", up_label, n_up)
       )
     ) +
     ggplot2::scale_alpha_manual(values = c("NS" = 0.4, "Down" = 0.8, "Up" = 0.8), guide = "none") +

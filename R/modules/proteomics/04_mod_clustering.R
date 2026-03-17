@@ -62,6 +62,15 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     # Get DE features
     de_features <- get_de_features(de_res, cfg)
 
+    if (length(de_features) < 2) {
+        message(sprintf("Clustering: only %d DE feature(s) found; need >= 2. Skipping.", length(de_features)))
+        return(list(
+            plots = list(), files = character(0), excel_order = NULL,
+            objects = list(hm_hier_de = NULL, patterns = NULL, patterns_list = NULL,
+                           heatmaps_by_pattern = NULL, clusters = NULL)
+        ))
+    }
+
     # Expression matrix (Imputed)
     expr_mat <- as.matrix(pre$expr_imp_single)
 
