@@ -5,7 +5,9 @@
 # ---------------------------------------------------------------------------
 # Helper: build a minimal de_stats data.frame
 # ---------------------------------------------------------------------------
-make_de_stats_metab <- function(include_any = TRUE) {
+# Generic test helper — uses "pass." and "linearFC." dot-prefix naming
+# for testing build_de_summary_counts_generic() with custom patterns.
+make_de_stats_generic <- function(include_any = TRUE) {
     df <- data.frame(
         feature_id          = paste0("F", 1:10),
         pass.A_vs_B         = c(1, 1, 1, NA, 0, 1, NA, 0, 1, 1),
@@ -19,6 +21,28 @@ make_de_stats_metab <- function(include_any = TRUE) {
         df$pass_any_contrast <- ifelse(
             (!is.na(df$pass.A_vs_B) & df$pass.A_vs_B == 1) |
             (!is.na(df$pass.C_vs_D) & df$pass.C_vs_D == 1),
+            1, NA
+        )
+    }
+    df
+}
+
+# Metabolomics wrapper helper — uses "pass_" and "logFC_" underscore naming
+# matching the current build_de_summary_counts_metabolomics() expectations.
+make_de_stats_metab <- function(include_any = TRUE) {
+    df <- data.frame(
+        feature_id          = paste0("F", 1:10),
+        pass_A_vs_B         = c(1, 1, 1, NA, 0, 1, NA, 0, 1, 1),
+        pass_C_vs_D         = c(1, NA, 0, 1, 1, 0, NA, 1, 0, 0),
+        logFC_A_vs_B        = c(0.5, -0.3, 1.2, 0.1, -0.8, 0.4, 0.2, -1.0, -0.6, 0.9),
+        logFC_C_vs_D        = c(-0.2, 0.7, 0.3, -0.5, 0.1, -0.4, 0.6, 0.8, -0.3, 0.2),
+        stringsAsFactors    = FALSE
+    )
+    if (include_any) {
+        # features significant in at least one contrast
+        df$pass_any_contrast <- ifelse(
+            (!is.na(df$pass_A_vs_B) & df$pass_A_vs_B == 1) |
+            (!is.na(df$pass_C_vs_D) & df$pass_C_vs_D == 1),
             1, NA
         )
     }
@@ -79,7 +103,7 @@ test_that("generic: no matching pass columns returns NULL", {
 })
 
 test_that("generic: correct per-contrast counts with FC column", {
-    df <- make_de_stats_metab(include_any = FALSE)
+    df <- make_de_stats_generic(include_any = FALSE)
     result <- build_de_summary_counts_generic(
         de_stats         = df,
         pass_pattern     = "^pass\\.",
@@ -140,7 +164,7 @@ test_that("generic: pass_any_contrast excluded from per-contrast rows", {
 })
 
 test_that("generic: 'any' row appended when pass_any_contrast exists", {
-    df <- make_de_stats_metab(include_any = TRUE)
+    df <- make_de_stats_generic(include_any = TRUE)
     result <- build_de_summary_counts_generic(
         df, "^pass\\.",
         function(col) sub("^pass\\.", "", col),
@@ -163,7 +187,7 @@ test_that("generic: 'any' row appended when pass_any_contrast exists", {
 })
 
 test_that("generic: no 'any' row when pass_any_contrast is absent", {
-    df <- make_de_stats_metab(include_any = FALSE)
+    df <- make_de_stats_generic(include_any = FALSE)
     result <- build_de_summary_counts_generic(
         df, "^pass\\.",
         function(col) sub("^pass\\.", "", col),
@@ -225,14 +249,17 @@ test_that("generic: is_significant default matches == 1 semantics", {
 # Tests for domain wrappers
 # ===========================================================================
 
-test_that("metabolomics wrapper: correct output with 'any' row", {
+test_that("metabolomics wrapper: correct output with pass_any_contrast excluded", {
     df <- make_de_stats_metab(include_any = TRUE)
     result <- build_de_summary_counts_metabolomics(df)
 
     expect_equal(names(result), c("contrast", "up", "down", "total"))
     expect_true("A_vs_B" %in% result$contrast)
     expect_true("C_vs_D" %in% result$contrast)
-    expect_equal(result$contrast[nrow(result)], "any")
+    # build_de_summary_counts_metabolomics excludes pass_any_contrast
+    # and does not append an "any" row
+    expect_false("any" %in% result$contrast)
+    expect_false("any_contrast" %in% result$contrast)
 })
 
 test_that("metabolomics wrapper: NULL input returns NULL", {
