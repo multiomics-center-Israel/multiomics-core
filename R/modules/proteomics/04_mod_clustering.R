@@ -138,7 +138,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
             mat = z_de_ordered, # Already in clustered order
             row_order = rownames(z_de_ordered), # Ordered row names for Plotly
             col_order = colnames(z_de_ordered), # Column names
-            annotation_col = annot,
+            annotation_col = annot_col,
             feature_ids = de_features,
             is_zscored = TRUE,
             cluster_cols = FALSE,

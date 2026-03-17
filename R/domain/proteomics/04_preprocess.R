@@ -10,6 +10,9 @@ preprocess_proteomics <- function(inputs, config) {
 
     # Downstream contract: work on log2 assay
     expr_raw <- prot_obj$assay_log2
+    # TODO: expr_raw currently reflects log-transformed data when scale_in = "linear".
+    # Consider whether expr_raw should instead preserve the original input matrix.
+    
     row_data <- prot_obj$row_data
     col_data <- prot_obj$col_data
 
