@@ -120,7 +120,10 @@ list(
     # Single-omics pipelines
     if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
     if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
-    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics())
+    if (!is.null(cfg_raw$modes$metabolomics)) {
+      met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
+      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen))
+    }
 
     # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
     # Only enabled if ≥2 omics modes are present AND multiomics mode is configured

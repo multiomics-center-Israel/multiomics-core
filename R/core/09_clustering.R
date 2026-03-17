@@ -49,8 +49,7 @@ run_binary_patterns <- function(expr_mat_corr,
   stopifnot(is.data.frame(meta))
   stopifnot(is.character(de_features))
   
-  de_cfg <- cfg$modes$rna$de %||% list()
-  
+  de_cfg <- cfg$de %||% list()  
 
   # If no separate counts matrix provided, use the corr matrix for gating (legacy behavior)
   if (is.null(expr_mat_counts)) {
@@ -84,18 +83,9 @@ run_binary_patterns <- function(expr_mat_corr,
   # Ensure directory exists
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # Task 5: Use configured group_col from binary_patterns config
-  # If not set, fall back to effects$color (for backward compatibility)
-  bin_cfg <- cfg$clustering$steps$binary_patterns %||% list()
-  group_col <- bin_cfg$group_col
-
-  if (is.null(group_col)) {
-    # Fallback to primary color for backward compatibility
-    group_col <- get_color_config(cfg)
-    message(sprintf("[binary_patterns] group_col not set, using effects$color fallback: %s", group_col))
-  } else {
-    message(sprintf("[binary_patterns] Using group_col: %s", group_col))
-  }
+  # Use clustering$group_col (strict; errors if missing)
+  group_col <- get_clustering_group_col(cfg, meta)
+  message(sprintf("[binary_patterns] Using group_col: %s", group_col))
 
   sample_col <- cfg$effects$samples
 
@@ -240,7 +230,7 @@ run_binary_patterns <- function(expr_mat_corr,
       summary_df    = summary_df,
       p_cutoff      = de_cfg$p_cutoff %||% 0.05,
       log2fc_cutoff = log2fc_cutoff,
-      id_col        = "FeatureID"
+      id_col        = "feature_id"
     )
     
     
@@ -530,38 +520,49 @@ run_partition_clustering <- function(z_expr, config) {
   )
 }
 
-# ---- Clustering guards (effects-driven; no GROUP/GROUP1) ----
+# ---- Clustering group column ----
+
+#' Get the clustering group column from config, with strict validation
+#'
+#' Returns \code{cfg$clustering$group_col} after checking it exists in
+#' \code{meta}.  Errors if the key is missing or the column is absent.
+#'
+#' @param cfg  Mode config (e.g. \code{config$modes$proteomics}).
+#' @param meta data.frame of sample metadata.
+#' @return Character scalar: validated column name in \code{meta}.
+#' @export
+get_clustering_group_col <- function(cfg, meta) {
+  group_col <- cfg$clustering$group_col
+  if (is.null(group_col) || !nzchar(group_col)) {
+    stop("clustering$group_col is required but missing or empty. ",
+         "Set it in the config under clustering: group_col: \"<column_name>\"")
+  }
+  if (!(group_col %in% colnames(meta))) {
+    stop(sprintf(
+      "clustering$group_col '%s' not found in metadata columns: %s",
+      group_col, paste(colnames(meta), collapse = ", ")
+    ))
+  }
+  group_col
+}
+
+# ---- Clustering guards ----
 
 #' Count how many distinct groups exist for clustering
 #'
-#' Groups are derived from pre$meta[[cfg$effects$color]].
-#' If the column is missing or all NA -> returns 0.
+#' Groups are derived from \code{cfg$clustering$group_col}.
+#' Fails fast if \code{group_col} is missing or invalid when clustering
+#' is enabled — the user must fix the config.
 #'
-#' @param pre legacy-style pre object (must contain $meta)
-#' @param cfg proteomics mode config (must contain $effects$color)
+#' @param pre pre object (must contain $meta)
+#' @param cfg mode config with $clustering$group_col
 #' @return integer number of groups (levels)
 get_n_groups_from_effects <- function(pre, cfg) {
   stopifnot(!is.null(pre$meta))
 
-  color_col <- get_color_config(cfg)
-  if (is.null(color_col)) {
-    return(0L)
-  }
+  group_col <- get_clustering_group_col(cfg, pre$meta)
 
-  if (!nzchar(color_col)) {
-    return(0L)
-  }
-  if (!(color_col %in% colnames(pre$meta))) {
-    return(0L)
-  }
-
-  x <- pre$meta[[color_col]]
-  if (all(is.na(x))) {
-    return(0L)
-  }
-
-  # treat as factor levels; if character, make factor
-  x <- as.factor(x)
+  x <- as.factor(pre$meta[[group_col]])
   nlevels(droplevels(x))
 }
 
@@ -593,7 +594,7 @@ clustering_run_flags <- function(pre, cfg) {
   # If group_col is NULL/missing, don't perform binary clustering
   bin_cfg <- steps$binary_patterns %||% list()
   bin_enabled <- isTRUE(bin_cfg$enabled %||% FALSE)
-  bin_group_col <- bin_cfg$group_col
+  bin_group_col <- cl$group_col
   # Only enable if both enabled flag is TRUE AND group_col is provided (non-NULL)
   bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
 
@@ -607,9 +608,9 @@ clustering_run_flags <- function(pre, cfg) {
   )
 }
 
-# ---- Partition clustering (legacy-like; effects-driven) ----
+# ---- Partition clustering ----
 
-#' Build feature x group mean matrix using effects$color + effects$samples
+#' Build feature x group mean matrix using clustering$group_col + effects$samples
 #'
 #' @return list(group_means = matrix feature x group,
 #'              groups = factor (per sample, aligned),
@@ -620,12 +621,9 @@ build_group_means_from_effects <- function(expr_mat, meta, cfg) {
   stopifnot(is.data.frame(meta))
   expr_mat <- as.matrix(expr_mat)
 
-  group_col <- get_color_config(cfg)
+  group_col <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
-  if (is.null(group_col) || !(group_col %in% colnames(meta))) {
-    stop(sprintf("Partition clustering: effects$color column '%s' not found in meta", group_col))
-  }
   if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
     stop(sprintf("Partition clustering: effects$samples column '%s' not found in meta", sample_col))
   }
@@ -910,7 +908,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
   # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- get_color_config(cfg)
+  group_col <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
   meta_map <- meta |>
@@ -918,12 +916,12 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
 
   # 2. Convert Expression Matrix to Long Format
   # Rows = Genes, Cols = Samples -> Melt
-  norm_expr_long <- as.data.frame(expr_mat) %>%
-    tibble::rownames_to_column("Gene") %>%
+  norm_expr_long <- as.data.frame(expr_mat)|>
+    tibble::rownames_to_column("Gene")|>
     tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
 
   # 3. Join with Metadata
-  df_annotated <- norm_expr_long %>%
+  df_annotated <- norm_expr_long|>
     dplyr::inner_join(meta_map, by = "Name")
 
   # 4. Map Genes to Clusters
@@ -934,7 +932,7 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   )
 
   # Final Join: Only keep genes that are in a cluster
-  df_final <- df_annotated %>%
+  df_final <- df_annotated|>
     dplyr::inner_join(cluster_map, by = "Gene")
 
   files_written <- character(0)
@@ -944,8 +942,8 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   unique_clusters <- sort(unique(df_final$Cluster))
 
   for (k in unique_clusters) {
-    clus_data <- df_final %>%
-      dplyr::filter(Cluster == k) %>%
+    clus_data <- df_final|>
+      dplyr::filter(Cluster == k)|>
       dplyr::select(Name, Group, Exp)
 
     fname <- file.path(out_dir, sprintf("cluster_profiles_cluster%s_data.txt", k))
@@ -957,18 +955,18 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   # 6. Write Summary File (Calculated Stats)
   fname_all <- file.path(out_dir, "cluster_profiles_data.txt")
 
-  summary_df <- df_final %>%
-    dplyr::group_by(Cluster, Group) %>%
+  summary_df <- df_final|>
+    dplyr::group_by(Cluster, Group)|>
     dplyr::summarise(
       Mean = mean(Exp, na.rm = TRUE),
       SE = sd(Exp, na.rm = TRUE) / sqrt(dplyr::n()),
       .groups = "drop"
-    ) %>%
+    )|>
     dplyr::mutate(
       Mean_SE.y    = Mean,
       Mean_SE.ymin = Mean - SE,
       Mean_SE.ymax = Mean + SE
-    ) %>%
+    )|>
     # --- Rounding to 4 decimal places ---
     dplyr::mutate(across(where(is.numeric), ~ round(., 4)))
 
@@ -1002,8 +1000,9 @@ zscore_rows <- function(mat) {
 #' them as white/blank. Columns with all NA (no DE genes) are removed.
 #'
 #' Auto-detects column style:
-#' - RNA-seq:     padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
-#' - Proteomics:  padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
+#' - RNA-seq:       padj.<contrast>,      linearFC.<contrast>,      <contrast>_pass
+#' - Proteomics:    padj.imputs.<contrast>,linearFC.imputs.<contrast>,pass.imputs.<contrast>
+#' - Metabolomics:  padj.<contrast>,      linearFC.<contrast>,      pass.<contrast>
 #'
 #' @param summary_df DE summary data frame
 #' @param feature_ids Character vector of feature IDs to include
@@ -1014,15 +1013,20 @@ zscore_rows <- function(mat) {
 #'
 #' @return Data frame with genes as rownames, contrasts as columns, values = "up"/"down"/NA
 #' @export
-build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, log2fc_cutoff = 0.585, id_col = "FeatureID") {
+build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_cutoff, id_col) {
+  
+
   stopifnot(is.data.frame(summary_df))
   stopifnot(id_col %in% colnames(summary_df))
 
   cols <- colnames(summary_df)
 
   # Auto-detect column style
+  # TODO: refactor to parameter-driven prefix dispatch (pass prefix from calling module)
   pass_imputs_cols <- grep("^pass\\.imputs\\.", cols, value = TRUE)
   pass_suffix_cols <- grep("_pass$", cols, value = TRUE)
+  pass_dot_cols    <- grep("^pass\\.", cols, value = TRUE)
+  pass_dot_cols    <- setdiff(pass_dot_cols, c("pass_any_contrast", pass_imputs_cols))
 
   if (length(pass_imputs_cols) > 0) {
     # Proteomics style: pass.imputs.<contrast>, linearFC.imputs.<contrast>
@@ -1033,6 +1037,11 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff = 0.05, l
     # RNA-seq style: <contrast>_pass, linearFC.<contrast>
     contrasts <- sub("_pass$", "", pass_suffix_cols)
     pass_prefix <- NULL # special case: suffix pattern
+    fc_prefix <- "linearFC."
+  } else if (length(pass_dot_cols) > 0) {
+    # Metabolomics style: pass.<contrast>, linearFC.<contrast>
+    contrasts <- sub("^pass\\.", "", pass_dot_cols)
+    pass_prefix <- "pass."
     fc_prefix <- "linearFC."
   } else {
     warning("build_de_row_annotations: No pass columns found in summary_df")

@@ -43,15 +43,10 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
         id_col <- intersect(c("FeatureID", "feature_id", "protein_id"), names(df))[1]
         id_vals <- if (is.na(id_col)) rownames(df) else df[[id_col]]
 
-        # Wide-format contrast columns (proteomics naming convention)
-        lfc_cols <- grep("^(linearFC\\.imputs\\.|logFC\\.|log2FoldChange\\.)", names(df), value = TRUE)
-        padj_cols <- grep("^(padj\\.imputs\\.|padj\\.|adj\\.P\\.Val\\.)", names(df), value = TRUE)
-
-        if (length(lfc_cols) == 0) {
-            # Try metabolomics naming: logFC_contrast
-            lfc_cols <- grep("^logFC_", names(df), value = TRUE)
-            padj_cols <- grep("^adj\\.P\\.Val_", names(df), value = TRUE)
-        }
+        # Wide-format contrast columns (all omics modes)
+        # linearFC\. matches both proteomics (linearFC.imputs.<cn>) and metabolomics (linearFC.<cn>)
+        lfc_cols <- grep("^(linearFC\\.|logFC\\.|log2FoldChange\\.)", names(df), value = TRUE)
+        padj_cols <- grep("^(padj\\.|adj\\.P\\.Val\\.)", names(df), value = TRUE)
 
         if (length(lfc_cols) == 0) {
             stop("Cannot find logFC columns in ", omics_type, " summary_df. Available: ",

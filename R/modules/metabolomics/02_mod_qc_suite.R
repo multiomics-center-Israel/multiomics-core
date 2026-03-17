@@ -321,6 +321,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
   do_dens  <- isTRUE(cfg$plots$density               %||% TRUE)
   do_box   <- isTRUE(cfg$plots$boxplot               %||% TRUE)
   do_hist  <- isTRUE(cfg$plots$histogram             %||% TRUE)
+  do_rle   <- isTRUE(cfg$plots$rle                    %||% TRUE)
   do_hcor  <- isTRUE(cfg$plots$heatmap_correlation   %||% TRUE)
   do_hdist <- isTRUE(cfg$plots$heatmap_distance      %||% TRUE)
   do_hexp  <- isTRUE(cfg$plots$heatmap_expression    %||% TRUE)
@@ -537,6 +538,26 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
     })
   } else if (do_box) {
     skipped <- c(skipped, sprintf("boxplot: n_samples (%d) < 2", n_samp))
+    status  <- "partial"
+  }
+
+  # ---- RLE (Relative Log Expression) -----------------------------------------
+  if (do_rle && n_samp >= 2L) {
+    rle_file <- file.path(out_dir, "rle_boxplot.png")
+    tryCatch({
+      qc_rle_boxplot(
+        mat_sub, meta_sub, cfg_mode,
+        out_file = rle_file
+      )
+      files <- c(files, rle_file)
+    }, error = function(e) {
+      skipped <<- c(skipped, sprintf("rle: %s", conditionMessage(e)))
+      status  <<- "partial"
+      message(sprintf("[QC][%s][%s] Skipped RLE: %s",
+                      stage, subset_mode, conditionMessage(e)))
+    })
+  } else if (do_rle) {
+    skipped <- c(skipped, sprintf("rle: n_samples (%d) < 2", n_samp))
     status  <- "partial"
   }
 

@@ -51,15 +51,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     ))
 
     # ---- build annotation_col for heatmaps using effects ----
-    eff_color <- get_color_config(cfg)
-    annot <- NULL
-    if (!is.null(eff_color) && eff_color %in% colnames(pre$meta)) {
-        annot <- data.frame(
-            Condition = pre$meta[[eff_color]],
-            row.names = pre$meta[[cfg$effects$samples]]
-        )
-    }
-
+    annot_col <- build_heatmap_annotation_col(pre$meta, cfg)
+    
     # Get DE features
     de_features <- get_de_features(de_res, cfg)
 
@@ -211,7 +204,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
         # Using Core Plotter directly for custom ordering
         p_part <- plot_heatmap_core(
             expr_mat       = mat_ord,
-            annotation_col = annot,
+            annotation_col = annot_col,
             annotation_row   = annot_row,
             title          = sprintf("Partition clustering (k=%d) on DE features (n=%d)", part_res$k, nrow(mat_ord)),
             scale_rows     = TRUE,
@@ -230,11 +223,11 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
 
         if (!is.null(prof)) {
             f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            eff_col_name <- eff_color %||% "Group"
+            grp_col_name <- cfg$clustering$group_col %||% "Group"
             p_prof <- plot_cluster_profiles_legacy_style(
               group_means = part_res$group_means,
               clusters = part_res$clusters,
-              x_label = eff_col_name
+              x_label = grp_col_name
             )
 
             n_clusters <- length(unique(prof$cluster))

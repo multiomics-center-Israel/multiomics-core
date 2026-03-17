@@ -359,19 +359,14 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   pre_cfg  <- cfg_mode$preprocessing %||% list()
   norm_cfg <- cfg_mode$normalization  %||% list()
 
-  chosen_norm <- tolower(pre_cfg$chosen_norm %||% "pqn")
+  chosen_norm <- tolower(pre_cfg$chosen_norm)
 
   chosen_mat <- switch(chosen_norm,
     tss    = norm_tss$mat,
     median = norm_median$mat,
     pqn    = norm_pqn$mat,
-    {
-      warning(sprintf(
-        "mod_met_corrected: unknown chosen_norm '%s'; defaulting to 'pqn'.",
-        chosen_norm
-      ))
-      norm_pqn$mat
-    }
+    stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
+                 "Valid options: tss, median, pqn.", chosen_norm))
   )
 
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)

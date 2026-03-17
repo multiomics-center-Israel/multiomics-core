@@ -16,24 +16,30 @@ stage_files <- function(files, stage, subset = "with_qc") {
 ## Benchmark
 
 ```{r nqc-benchmark}
-if (!is.null(params$qc_comparison_file) &&
-    length(params$qc_comparison_file) > 0 &&
-    file.exists(params$qc_comparison_file[1])) {
-  bench    <- utils::read.table(params$qc_comparison_file[1], sep = "\t",
-                                header = TRUE, stringsAsFactors = FALSE,
-                                check.names = FALSE)
+
+qc_file <- params$qc_comparison_file
+
+if (!is.null(qc_file) &&
+    length(qc_file) >= 1 &&
+    !is.na(qc_file[1]) &&
+    nzchar(qc_file[1]) &&
+    file.exists(qc_file[1])) {
+
+  bench <- utils::read.table(
+    qc_file[1],
+    sep = "\t",
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
 
   # ---- Column reordering ------------------------------------------------
-  # Desired order:
-  #   1. non-RSD, non-PCA columns (stage, n_samples, n_features, ...)
-  #   2. median_rsd_* columns immediately after n_features (if present)
-  #   3. remaining non-PCA columns
-  #   4. pca_* columns last (if present)
   rsd_cols   <- grep("^median_rsd", colnames(bench), value = TRUE)
   pca_cols   <- grep("^pca_",       colnames(bench), value = TRUE)
   other_cols <- setdiff(colnames(bench), c(rsd_cols, pca_cols))
 
   nf_pos <- match("n_features", other_cols)
+
   if (!is.na(nf_pos) && length(rsd_cols) > 0) {
     ordered_cols <- c(
       other_cols[seq_len(nf_pos)],
@@ -44,19 +50,25 @@ if (!is.null(params$qc_comparison_file) &&
   } else {
     ordered_cols <- c(other_cols, rsd_cols, pca_cols)
   }
+
   bench <- bench[, intersect(ordered_cols, colnames(bench)), drop = FALSE]
 
   # ---- Round numeric columns --------------------------------------------
   num_cols <- vapply(bench, is.numeric, logical(1L))
   bench[num_cols] <- lapply(bench[num_cols], round, 4)
 
-  render_dt(bench,
-            caption = paste0("Normalization QC Benchmark \u2014 ",
-                             "raw_linear (met_imputed) \u2192 log \u2192 norm_*. ",
-                             "Median RSD on linear scale; lower is better. ",
-                             "pca_pc1_delta = PC1 gain vs log stage."),
-            pageLength = 10)
+  render_dt(
+    bench,
+    caption = paste0(
+      "Normalization QC Benchmark — ",
+      "raw_linear (met_imputed) → log → norm_*. ",
+      "Median RSD on linear scale; lower is better. ",
+      "pca_pc1_delta = PC1 gain vs log stage."
+    ),
+    pageLength = 10
+  )
 }
+
 ```
 
 ## Density {.tabset}
@@ -173,6 +185,34 @@ cat(embed_png(stage_files(qc_files, "norm_median"), "boxplot"))
 
 ```{r nqc-boxplot-pqn, out.width="100%", echo=FALSE, results='asis'}
 cat(embed_png(stage_files(qc_files, "norm_pqn"), "boxplot"))
+```
+
+## RLE {.tabset}
+
+*Relative Log Expression: per-sample deviation from feature medians. Well-normalized data centers around zero with tight IQRs.*
+
+### Log
+
+```{r nqc-rle-log, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "log"), "rle_boxplot"))
+```
+
+### TSS
+
+```{r nqc-rle-tss, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_tss"), "rle_boxplot"))
+```
+
+### Median
+
+```{r nqc-rle-median, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_median"), "rle_boxplot"))
+```
+
+### PQN
+
+```{r nqc-rle-pqn, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_pqn"), "rle_boxplot"))
 ```
 
 ## QC Noise Reduction {.tabset}

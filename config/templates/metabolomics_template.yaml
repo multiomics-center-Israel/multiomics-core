@@ -74,11 +74,12 @@ modes:
       knn_k: 10                        # k for KNN imputation of MAR features
       epsilon: 1.0e-8                  # near-zero guard for imputed values
 
-      # Normalization selection — TSS, Median, and PQN are ALWAYS computed in
-      # parallel (met_norm_tss / met_norm_median / met_norm_pqn targets).
-      # chosen_norm selects which feeds into drift correction and all downstream
-      # analysis targets (metab_de_res, metab_qc_pre_obj, etc.).
-      chosen_norm: "pqn"              # "tss" | "median" | "pqn"
+      # Two-pass normalization review workflow:
+      #   null  — review mode (pass 1): run QC suite + summary report, then stop.
+      #           Review qc/normalization_review_report.html, then set chosen_norm.
+      #   "pqn" — full pipeline (pass 2): skip QC layer, run analysis + report.
+      # Valid values: null | "tss" | "median" | "pqn"
+      chosen_norm: null
 
       # LOESS drift correction — only activates when BOTH metadata columns exist
       # AND there are >= 4 QC samples (is_QC == TRUE) with no NA injection_order.
@@ -130,27 +131,6 @@ modes:
       # Column in row_data marking internal standard (only if sample_norm = "is")
       is_ref_col: null
 
-      # ---- Method evaluation (LEGACY path only) ----
-      # In the new preprocessing pipeline, TSS / Median / PQN are always benchmarked
-      # via the met_norm_comparison target (saved as datasets/normalization_comparison.tsv).
-      # This evaluate_methods list is only consumed by the legacy
-      # preprocess_metabolomics() single-step path.
-      # List of method combos to compare. Each entry must have:
-      #   sample_norm, transform, scaling
-      evaluate_methods:
-        - sample_norm: "none"
-          transform: "log2"
-          scaling: "none"
-        - sample_norm: "pqn"
-          transform: "log2"
-          scaling: "none"
-        - sample_norm: "pqn"
-          transform: "log2"
-          scaling: "pareto"
-        - sample_norm: "median"
-          transform: "log2"
-          scaling: "auto"
-
     # ---- Sample filtering (optional) ----
     sample_filter:
       enabled: false
@@ -191,6 +171,7 @@ modes:
         pca: true
         density: true
         boxplot: true
+        rle: true
         histogram: true           # skipped automatically when groups < 2 or > 8
         heatmap_expression: true
         heatmap_correlation: true
@@ -220,7 +201,8 @@ modes:
       # Significance thresholds
       p_cutoff: 0.05              # adjusted p-value cutoff
       pval_cutoff: 0.05           # raw p-value for horizontal line on volcano
-      linear_fc_cutoff: 1.5       # linear FC cutoff (log2FC = log2(1.5) ~ 0.585)
+      linear_fc_cutoff: 1.5       # linear FC cutoff; also used as treat() lfc threshold
+      robust_ebayes: false         # true = robust empirical Bayes (outlier-tolerant)
 
       # Set to true to skip DE entirely
       # skip: false
@@ -264,6 +246,29 @@ modes:
 
       # Condition column for Wilcoxon test in ssGSEA
       # condition_column: "treatment"  # defaults to de$condition_column
+
+    # ---- Clustering (optional) ----
+    clustering:
+      enabled: false
+      group_col: "treatment"        # metadata column for clustering group logic
+      min_groups: 2
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"
+          linkage: "complete"
+          k: null
+        partition:
+          enabled: true
+          algorithm: "hclust"
+          distance: "euclidean"
+          k: null
+          k_max: 20
+          nstart: 25
+        binary_patterns:
+          enabled: true
+          corr_cutoff: 0.8
+          counts_cutoff: 0
 
 
 # ==============================================================================
