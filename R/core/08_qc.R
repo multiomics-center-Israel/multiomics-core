@@ -597,41 +597,6 @@ qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = 
   invisible(p)
 }
 
-#' QC wrapper: missingness heatmap
-#'
-#' Calls \code{plot_missingness_heatmap()} and saves the result to a PNG file.
-#' Follows the established \code{qc_*} pattern: handles I/O and calls the pure
-#' \code{plot_*} function internally.
-#'
-#' @param mat Numeric matrix (features x samples).
-#' @param miss_stats data.frame returned by \code{classify_missingness()}, with
-#'   columns \code{feature_id} and \code{mnar_class} ("MNAR", "MAR",
-#'   "all_missing", "all_observed"). Alternatively, a named logical vector where
-#'   TRUE = MNAR (as returned by \code{classify_mnar_features()}).
-#' @param out_file Output PNG file path.
-#'
-#' @return Invisibly returns the pheatmap object.
-#'
-#' @seealso plot_missingness_heatmap
-#'
-qc_missingness_heatmap <- function(mat, miss_stats, out_file) {
-  # Accept either a data.frame (from classify_missingness) or a logical vector
-  if (is.data.frame(miss_stats)) {
-    mnar_class <- stats::setNames(miss_stats$mnar_class, miss_stats$feature_id)
-  } else {
-    # Named logical vector: TRUE = MNAR
-    mnar_class <- miss_stats
-  }
-
-  # Restrict to features present in mat
-  common <- intersect(names(mnar_class), rownames(mat))
-  mnar_class <- mnar_class[common]
-
-  ph <- plot_missingness_heatmap(mat, mnar_class)
-  save_heatmap_to_file(ph, out_file, width = 2400, height = 1800)
-  invisible(ph)
-}
-
 #' Write per-sample imputation histograms (Batch writer)
 #' Refactored: Uses ggsave and returns objects
 write_imputation_histograms_per_sample <- function(expr_mat, imputed_flag, out_dir) {

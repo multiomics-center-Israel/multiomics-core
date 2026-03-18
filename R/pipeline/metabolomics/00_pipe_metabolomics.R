@@ -153,14 +153,6 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             mod_met_missingness_stats(met_raw, config)
         ),
 
-        # met_missingness_plot: diagnostic binary heatmap (file target)
-        tar_target(
-            met_missingness_plot,
-            mod_met_missingness_plot(met_missingness_stats, met_raw,
-                                     metab_out_dir, config),
-            format = "file"
-        ),
-
         # met_filtered: threshold-based feature + sample removal
         # Scale: Linear
         tar_target(
@@ -484,8 +476,36 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 qc_suite_files     = NULL
             ),
             format = "file"
+        ), 
+        tar_target(
+          metab_pipeline_summary,
+          generate_metab_pipeline_summary(
+            config          = config,
+            pre             = metab_pre,
+            de_res          = metab_de_res,
+            feature_sel_res = metab_feature_sel_res,
+            enrichment_res  = metab_enrichment_res,
+            run_dir         = metab_out_dir
+          ),
+          format = "file"
+        ),
+        
+        # ---- PowerPoint summary presentation ----
+        tar_target(
+          metab_pptx,
+          mod_metabolomics_powerpoint(
+            pre             = metab_pre,
+            qc_res          = metab_qc_pre_obj,
+            de_res          = metab_de_res,
+            feature_sel_res = metab_feature_sel_res,
+            enrichment_res  = metab_enrichment_res,
+            config          = config,
+            out_dir         = metab_out_dir
+          ),
+          format = "file"
         )
     )
+    
 
     c(base_targets, analysis_targets)
 }
