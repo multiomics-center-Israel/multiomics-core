@@ -99,7 +99,7 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
   )
   # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
   num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-  pval_pattern <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+  pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
   pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
   other_cols <- setdiff(num_cols, pval_cols)
   if (length(other_cols) > 0) {
@@ -256,7 +256,8 @@ lipid_cfg <- cfg$modes$lipidomics
 
 ```{r force-dependencies, include=FALSE}
 # Force DT and Plotly JS dependencies to be included in the self-contained HTML
-DT::datatable(data.frame(x = 1))
+# Note: filter="top" forces noUiSlider dependency (needed for numeric range filters)
+DT::datatable(data.frame(x = 1), filter = "top")
 if (requireNamespace("plotly", quietly = TRUE)) {
   plotly::plot_ly(data.frame(x = 1, y = 1), x = ~x, y = ~y,
                   type = "scatter", mode = "markers")
@@ -556,7 +557,7 @@ if (!is.null(qc_res$plots)) {
 
 ### Interactive
 
-```{r qc-pca-interactive, fig.width=9, fig.height=7}
+```{r qc-pca-interactive, results='asis'}
 if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
   pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
   pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
@@ -564,15 +565,18 @@ if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
     p <- qc_res$plots[[pca_main]]
     sc <- p$data
     if ("sample" %in% colnames(sc)) {
-      color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
-      sc$hover_text <- paste0("Sample: ", sc$sample, if (!is.na(color_var)) paste0("<br>", color_var, ": ", sc[[color_var]]) else "")
+      # Use condition column for coloring (prefer over sample_id)
+      non_pc <- setdiff(colnames(sc), c("sample", "sample_id", grep("^PC", colnames(sc), value = TRUE)))
+      color_var <- if (length(non_pc) > 0) non_pc[1] else NA
+      sc$hover_text <- paste0("Sample: ", sc$sample,
+                              if (!is.na(color_var)) paste0("<br>", color_var, ": ", sc[[color_var]]) else "")
       pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2,
                             color = if (!is.na(color_var)) as.formula(paste0("~`", color_var, "`")) else NULL,
                             text = ~hover_text, hoverinfo = "text",
                             type = "scatter", mode = "markers",
                             marker = list(size = 10)) |>
           plotly::layout(title = "PCA: PC1 vs PC2 — Hover for sample names")
-      print(pl)
+      print(htmltools::tagList(pl))
     }
   }
 } else {
@@ -690,10 +694,18 @@ if (!is.null(qc_enhanced$plots$pca_loading)) {
 }
 ```
 
-## Category Donut
+## Category Donut {.tabset}
 
-```{r qc-enh-donut, fig.width=9, fig.height=7, results='asis'}
-if (!is.null(qc_enhanced$plots$category_donut)) {
+```{r qc-enh-donut, fig.width=9, fig.height=9, results='asis'}
+if (!is.null(qc_enhanced$plots$category_donuts) && length(qc_enhanced$plots$category_donuts) > 0) {
+  for (grp in names(qc_enhanced$plots$category_donuts)) {
+    cat(paste0("\n### ", grp, "\n\n"))
+    safe_print_plot(qc_enhanced$plots$category_donuts[[grp]])
+    cat("\n\n")
+  }
+  figure_legend("Donut charts showing the distribution of detected lipid features across major lipid categories (e.g., glycerophospholipids, sphingolipids, glycerolipids) per condition. This provides an overview of lipidome coverage and allows comparison of category composition between groups.")
+  render_commentary("category_donut")
+} else if (!is.null(qc_enhanced$plots$category_donut)) {
   safe_print_plot(qc_enhanced$plots$category_donut)
   figure_legend("Donut chart showing the distribution of detected lipid features across major lipid categories (e.g., glycerophospholipids, sphingolipids, glycerolipids). This provides an overview of lipidome coverage.")
   render_commentary("category_donut")
@@ -877,20 +889,19 @@ if (!is.null(de_contrasts)) {
       cat("\n\n")
     }
 
-    # -- Interactive Volcano --
+    # -- Interactive Volcano (matching proteomics pattern) --
     if (requireNamespace("plotly", quietly = TRUE)) {
       cat("### Interactive\n\n")
 
-      # Unique ID for this contrast's JS namespace
-      vol_cid <- gsub("[^a-zA-Z0-9]", "", ctr_label)
+      vol_cid <- gsub("[^a-zA-Z0-9]", "_", ctr_label)
 
       vol_p <- ggplot2::ggplot(
         ctr_tbl,
         ggplot2::aes(x = logFC, y = neglog10_pval, color = Direction,
                      text = paste0("Lipid: ", Name,
-                                   "<br>log2(FC): ", round(logFC, 2),
-                                   "<br>P.Value: ", sprintf("%.2e", P.Value),
-                                   "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
+                                   "\nlog2(FC): ", round(logFC, 2),
+                                   "\nP.Value: ", sprintf("%.2e", P.Value),
+                                   "\nadj.P.Val: ", sprintf("%.2e", adj.P.Val)))
       ) +
         ggplot2::geom_point(alpha = 0.6, size = 1.5) +
         ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -901,13 +912,11 @@ if (!is.null(de_contrasts)) {
 
       vol_plotly <- plotly::ggplotly(vol_p, tooltip = "text")
 
-      # Emit search box + highlight JS (matching RNA/prot pattern)
       cat(sprintf('
 <div style="margin-bottom: 15px; position: relative;">
 <label for="volcano_genes_%s"><strong>Highlight lipids:</strong></label>
 <div style="display: inline-block; position: relative; margin-left: 10px;">
-<input type="text" id="volcano_genes_%s" placeholder="Start typing a lipid name..."
-  autocomplete="off"
+<input type="text" id="volcano_genes_%s" placeholder="Start typing a lipid name..." autocomplete="off"
   style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
   oninput="volcanoAutocomplete_%s(this)" onkeydown="volcanoAutoKey_%s(event)">
 <div id="volcano_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
@@ -918,9 +927,8 @@ if (!is.null(de_contrasts)) {
 </div>
 ', vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid))
 
-      cat(sprintf('<div id="volcano_plot_%s">\n', vol_cid))
+      vol_plotly$elementId <- paste0("volcano_plot_", vol_cid)
       print(htmltools::tagList(vol_plotly))
-      cat('</div>\n')
 
       # Register volcano plot for cutoff panel
       if (exists("cutoff_register_plot")) {
@@ -931,106 +939,126 @@ if (!is.null(de_contrasts)) {
           adjPval = ctr_tbl$adj.P.Val,
           stringsAsFactors = FALSE
         )
-        # The plotly widget is inside the wrapper div; JS uses querySelector fallback
         cat(cutoff_register_plot(
           paste0("volcano_plot_", vol_cid),
           vol_reg_df, "volcano", "Lipid", ctr
         ))
       }
 
-      # JS for autocomplete + highlight
-      cat(sprintf('<script>
+      # JS for autocomplete + highlight (proteomics pattern)
+      cat(sprintf('
+<script>
 (function() {
-  var cid = "%s";
-  var selectedGenes = [];
-  var acIndex = -1;
-  function getLipidNames() {
-    var plotDiv = document.getElementById("volcano_plot_" + cid);
-    if (!plotDiv) plotDiv = document.querySelector("#volcano_plot_" + cid + " .plotly");
-    var el = plotDiv ? plotDiv.querySelector(".js-plotly-plot") || plotDiv : null;
-    if (!el || !el.data) return [];
-    var names = [];
-    for (var t = 0; t < el.data.length; t++) {
-      var d = el.data[t];
-      if (!d.text) continue;
-      for (var i = 0; i < d.text.length; i++) {
-        var txt = typeof d.text[i] === "string" ? d.text[i] : "";
-        var m = txt.match(/Lipid:\\s*(.+?)(?:<br>|$)/);
-        if (m && m[1] && names.indexOf(m[1]) === -1) names.push(m[1]);
-      }
-    }
-    return names.sort();
-  }
-  function renderTags() {
-    var c = document.getElementById("volcano_tags_" + cid);
-    c.innerHTML = "";
-    selectedGenes.forEach(function(g) {
-      var tag = document.createElement("span");
-      tag.style.cssText = "display:inline-flex;align-items:center;background:#007bff;color:white;padding:2px 8px;border-radius:12px;font-size:12px;gap:4px;";
-      var txt = document.createTextNode(g + " ");
-      tag.appendChild(txt);
-      var btn = document.createElement("span");
-      btn.textContent = String.fromCharCode(215);
-      btn.style.cssText = "cursor:pointer;font-weight:bold;";
-      btn.addEventListener("click", (function(gene){return function(){window["removeVolcanoGene_"+cid](gene);};})(g));
-      tag.appendChild(btn);
-      c.appendChild(tag);
-    });
-  }
-  function applyHighlight() {
-    var plotDiv = document.getElementById("volcano_plot_" + cid);
-    var el = plotDiv ? plotDiv.querySelector(".js-plotly-plot") || plotDiv : null;
-    if (!el || !el.data) return;
-    if (selectedGenes.length === 0) { Plotly.relayout(el, {annotations:[]}); return; }
-    var gl = selectedGenes.map(function(g){return g.toLowerCase();});
-    var ann = [];
-    for (var t = 0; t < el.data.length; t++) {
-      var d = el.data[t];
-      if (!d.text) continue;
-      for (var i = 0; i < d.text.length; i++) {
-        var txt = typeof d.text[i] === "string" ? d.text[i] : "";
-        var m2 = txt.match(/Lipid:\\s*(.+?)(?:<br>|$)/);
-        if (m2 && gl.indexOf(m2[1].toLowerCase()) !== -1) {
-          ann.push({x:d.x[i],y:d.y[i],text:m2[1],showarrow:true,arrowhead:2,ax:20,ay:-30,
-            font:{size:11,color:"black"},bgcolor:"rgba(255,255,255,0.9)",bordercolor:"black",borderwidth:1});
+    var cid = "%s";
+    var selectedGenes = [];
+    var acIndex = -1;
+    function getLipidNames() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
         }
-      }
+        return names.sort();
     }
-    Plotly.relayout(el, {annotations:ann});
-  }
-  window["volcanoAutocomplete_" + cid] = function(el) {
-    var ac = document.getElementById("volcano_ac_" + cid);
-    var val = el.value.trim().toLowerCase(); ac.innerHTML = ""; acIndex = -1;
-    if (val.length < 1) {ac.style.display="none"; return;}
-    var all = getLipidNames();
-    var matches = all.filter(function(g){return g.toLowerCase().indexOf(val)!==-1 && selectedGenes.indexOf(g)===-1;}).slice(0,15);
-    if (matches.length===0){ac.style.display="none"; return;}
-    matches.forEach(function(g){
-      var item=document.createElement("div"); item.textContent=g;
-      item.style.cssText="padding:6px 10px;cursor:pointer;font-size:13px;";
-      item.onmouseenter=function(){this.style.background="#e9ecef";};
-      item.onmouseleave=function(){this.style.background="white";};
-      item.onclick=function(){selectedGenes.push(g);el.value="";ac.style.display="none";renderTags();applyHighlight();};
-      ac.appendChild(item);
+    window.volcanoAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = ""; acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var allNames = getLipidNames();
+        var matches = allNames.filter(function(g) { return g.toLowerCase().indexOf(val) !== -1 && selectedGenes.indexOf(g) === -1; }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+    window.volcanoAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcHighlight(items); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcHighlight(items); }
+        else if (e.key === "Enter" && acIndex >= 0) { e.preventDefault(); items[acIndex].click(); }
+    };
+    function updateAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === acIndex ? "#e9ecef" : "white"; }
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    }
+    function renderTags() {
+        var container = document.getElementById("volcano_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeVolcanoGene_" + cid + "(\'" + g + "\')\\">x</span>";
+            container.appendChild(tag);
+        });
+    }
+    window["removeVolcanoGene_" + cid] = function(gene) { selectedGenes = selectedGenes.filter(function(g) { return g !== gene; }); renderTags(); applyHighlight(); };
+    function applyHighlight() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) { Plotly.relayout(plotDiv, { annotations: [] }); return; }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var lipidName = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (genesLower.indexOf(lipidName.toLowerCase()) !== -1) {
+                        annotations.push({ x: data.x[i], y: data.y[i], text: lipidName, showarrow: true, arrowhead: 2, ax: 20, ay: -30, font: { size: 12, color: "black" }, bgcolor: "rgba(255,255,255,0.9)", bordercolor: "black", borderwidth: 1 });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+    window.highlightVolcanoGenes_%s = function() {
+        var input = document.getElementById("volcano_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allNames = getLipidNames();
+        manual.forEach(function(m) { var mLower = m.toLowerCase(); var match = allNames.find(function(g) { return g.toLowerCase() === mLower; }); if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match); });
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    };
+    window.clearVolcanoHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("volcano_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var input = document.getElementById("volcano_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
     });
-    ac.style.display="block";
-  };
-  window["volcanoAutoKey_" + cid] = function(e) {
-    var ac = document.getElementById("volcano_ac_" + cid);
-    var items = ac.children;
-    if (e.key==="ArrowDown"){acIndex=Math.min(acIndex+1,items.length-1);for(var i=0;i<items.length;i++)items[i].style.background=i===acIndex?"#e9ecef":"white";}
-    else if(e.key==="ArrowUp"){acIndex=Math.max(acIndex-1,0);for(var i=0;i<items.length;i++)items[i].style.background=i===acIndex?"#e9ecef":"white";}
-    else if(e.key==="Enter"&&acIndex>=0&&items[acIndex]){items[acIndex].click();e.preventDefault();}
-  };
-  window["highlightVolcanoGenes_" + cid] = function() {
-    var el = document.getElementById("volcano_genes_" + cid);
-    var val = el.value.trim();
-    if (val && selectedGenes.indexOf(val)===-1) { selectedGenes.push(val); el.value=""; renderTags(); applyHighlight(); }
-  };
-  window["clearVolcanoHighlight_" + cid] = function() { selectedGenes=[]; renderTags(); applyHighlight(); };
-  window["removeVolcanoGene_" + cid] = function(g) { selectedGenes=selectedGenes.filter(function(x){return x!==g;}); renderTags(); applyHighlight(); };
 })();
-</script>\n', vol_cid))
+</script>
+', vol_cid, vol_cid, vol_cid, vol_cid, vol_cid))
 
       figure_legend(paste0("Interactive volcano plot for ", ctr, ". Type lipid names in the search box to annotate them on the plot. Hover over points for details."))
       cat("\n\n")
@@ -1050,20 +1078,20 @@ if (!is.null(de_contrasts)) {
       render_commentary(paste0("ma_", ctr_label))
       cat("\n\n")
 
-      # Interactive MA
+      # Interactive MA (matching proteomics pattern)
       if (requireNamespace("plotly", quietly = TRUE)) {
         cat("### Interactive\n\n")
 
-        ma_cid <- paste0("ma_", gsub("[^a-zA-Z0-9]", "", ctr_label))
+        ma_cid <- paste0("ma_", gsub("[^a-zA-Z0-9]", "_", ctr_label))
 
         ma_p <- ggplot2::ggplot(
           ctr_tbl,
           ggplot2::aes(x = AveExpr, y = logFC, color = Direction,
                        text = paste0("Lipid: ", Name,
-                                     "<br>log2(FC): ", round(logFC, 2),
-                                     "<br>AveExpr: ", round(AveExpr, 2),
-                                     "<br>P.Value: ", sprintf("%.2e", P.Value),
-                                     "<br>adj.P.Val: ", sprintf("%.2e", adj.P.Val)))
+                                     "\nlog2(FC): ", round(logFC, 2),
+                                     "\nAveExpr: ", round(AveExpr, 2),
+                                     "\nP.Value: ", sprintf("%.2e", P.Value),
+                                     "\nadj.P.Val: ", sprintf("%.2e", adj.P.Val)))
         ) +
           ggplot2::geom_point(alpha = 0.6, size = 1.5) +
           ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
@@ -1079,8 +1107,7 @@ if (!is.null(de_contrasts)) {
 <div style="margin-bottom: 15px; position: relative;">
 <label for="ma_genes_%s"><strong>Highlight lipids:</strong></label>
 <div style="display: inline-block; position: relative; margin-left: 10px;">
-<input type="text" id="ma_genes_%s" placeholder="Start typing a lipid name..."
-  autocomplete="off"
+<input type="text" id="ma_genes_%s" placeholder="Start typing a lipid name..." autocomplete="off"
   style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
   oninput="maAutocomplete_%s(this)" onkeydown="maAutoKey_%s(event)">
 <div id="ma_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
@@ -1091,9 +1118,8 @@ if (!is.null(de_contrasts)) {
 </div>
 ', ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid))
 
-        cat(sprintf('<div id="ma_plot_%s">\n', ma_cid))
+        ma_plotly$elementId <- paste0("ma_plot_", ma_cid)
         print(htmltools::tagList(ma_plotly))
-        cat('</div>\n')
 
         # Register MA plot for cutoff panel
         if (exists("cutoff_register_plot")) {
@@ -1111,56 +1137,117 @@ if (!is.null(de_contrasts)) {
           ))
         }
 
-        cat(sprintf('<script>
+        cat(sprintf('
+<script>
 (function() {
-  var cid = "%s"; var selectedGenes = []; var acIndex = -1;
-  function getNames() {
-    var plotDiv = document.getElementById("ma_plot_" + cid);
-    var el = plotDiv ? plotDiv.querySelector(".js-plotly-plot") || plotDiv : null;
-    if (!el || !el.data) return [];
-    var names = [];
-    for (var t = 0; t < el.data.length; t++) {
-      var d = el.data[t]; if (!d.text) continue;
-      for (var i = 0; i < d.text.length; i++) {
-        var m = (typeof d.text[i]==="string"?d.text[i]:"").match(/Lipid:\\s*(.+?)(?:<br>|$)/);
-        if (m && m[1] && names.indexOf(m[1])===-1) names.push(m[1]);
-      }
-    } return names.sort();
-  }
-  function renderTags() {
-    var c = document.getElementById("ma_tags_" + cid); c.innerHTML = "";
-    selectedGenes.forEach(function(g) {
-      var tag = document.createElement("span");
-      tag.style.cssText = "display:inline-flex;align-items:center;background:#007bff;color:white;padding:2px 8px;border-radius:12px;font-size:12px;gap:4px;";
-      var txt = document.createTextNode(g + " ");
-      tag.appendChild(txt);
-      var btn = document.createElement("span");
-      btn.textContent = String.fromCharCode(215);
-      btn.style.cssText = "cursor:pointer;font-weight:bold;";
-      btn.addEventListener("click",(function(gene){return function(){window["removeMAGene_"+cid](gene);};})(g));
-      tag.appendChild(btn);
-      c.appendChild(tag);
+    var cid = "%s"; var selectedGenes = []; var acIndex = -1;
+    function getLipidNames() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+    window.maAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = ""; acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var allNames = getLipidNames();
+        var matches = allNames.filter(function(g) { return g.toLowerCase().indexOf(val) !== -1 && selectedGenes.indexOf(g) === -1; }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+    window.maAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcHighlight(items); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcHighlight(items); }
+        else if (e.key === "Enter" && acIndex >= 0) { e.preventDefault(); items[acIndex].click(); }
+    };
+    function updateAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === acIndex ? "#e9ecef" : "white"; }
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    }
+    function renderTags() {
+        var container = document.getElementById("ma_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeMAGene_" + cid + "(\'" + g + "\')\\">x</span>";
+            container.appendChild(tag);
+        });
+    }
+    window["removeMAGene_" + cid] = function(gene) { selectedGenes = selectedGenes.filter(function(g) { return g !== gene; }); renderTags(); applyHighlight(); };
+    function applyHighlight() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) { Plotly.relayout(plotDiv, { annotations: [] }); return; }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var lipidName = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (genesLower.indexOf(lipidName.toLowerCase()) !== -1) {
+                        annotations.push({ x: data.x[i], y: data.y[i], text: lipidName, showarrow: true, arrowhead: 2, ax: 20, ay: -30, font: { size: 12, color: "black" }, bgcolor: "rgba(255,255,255,0.9)", bordercolor: "black", borderwidth: 1 });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+    window.highlightMAGenes_%s = function() {
+        var input = document.getElementById("ma_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allNames = getLipidNames();
+        manual.forEach(function(m) { var mLower = m.toLowerCase(); var match = allNames.find(function(g) { return g.toLowerCase() === mLower; }); if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match); });
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    };
+    window.clearMAHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("ma_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var input = document.getElementById("ma_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
     });
-  }
-  function applyHighlight() {
-    var plotDiv = document.getElementById("ma_plot_" + cid);
-    var el = plotDiv ? plotDiv.querySelector(".js-plotly-plot") || plotDiv : null;
-    if (!el || !el.data) return;
-    if (selectedGenes.length===0){Plotly.relayout(el,{annotations:[]});return;}
-    var gl = selectedGenes.map(function(g){return g.toLowerCase();});
-    var ann = [];
-    for (var t=0;t<el.data.length;t++){var d=el.data[t];if(!d.text)continue;
-      for(var i=0;i<d.text.length;i++){var m2=(typeof d.text[i]==="string"?d.text[i]:"").match(/Lipid:\\s*(.+?)(?:<br>|$)/);
-        if(m2&&gl.indexOf(m2[1].toLowerCase())!==-1){ann.push({x:d.x[i],y:d.y[i],text:m2[1],showarrow:true,arrowhead:2,ax:20,ay:-30,font:{size:11,color:"black"},bgcolor:"rgba(255,255,255,0.9)",bordercolor:"black",borderwidth:1});}
-    }} Plotly.relayout(el,{annotations:ann});
-  }
-  window["maAutocomplete_"+cid]=function(el){var ac=document.getElementById("ma_ac_"+cid);var val=el.value.trim().toLowerCase();ac.innerHTML="";acIndex=-1;if(val.length<1){ac.style.display="none";return;}var all=getNames();var matches=all.filter(function(g){return g.toLowerCase().indexOf(val)!==-1&&selectedGenes.indexOf(g)===-1;}).slice(0,15);if(matches.length===0){ac.style.display="none";return;}matches.forEach(function(g){var item=document.createElement("div");item.textContent=g;item.style.cssText="padding:6px 10px;cursor:pointer;font-size:13px;";item.onmouseenter=function(){this.style.background="#e9ecef";};item.onmouseleave=function(){this.style.background="white";};item.onclick=function(){selectedGenes.push(g);el.value="";ac.style.display="none";renderTags();applyHighlight();};ac.appendChild(item);});ac.style.display="block";};
-  window["maAutoKey_"+cid]=function(e){var ac=document.getElementById("ma_ac_"+cid);var items=ac.children;if(e.key==="ArrowDown"){acIndex=Math.min(acIndex+1,items.length-1);for(var i=0;i<items.length;i++)items[i].style.background=i===acIndex?"#e9ecef":"white";}else if(e.key==="ArrowUp"){acIndex=Math.max(acIndex-1,0);for(var i=0;i<items.length;i++)items[i].style.background=i===acIndex?"#e9ecef":"white";}else if(e.key==="Enter"&&acIndex>=0&&items[acIndex]){items[acIndex].click();e.preventDefault();}};
-  window["highlightMAGenes_"+cid]=function(){var el=document.getElementById("ma_genes_"+cid);var val=el.value.trim();if(val&&selectedGenes.indexOf(val)===-1){selectedGenes.push(val);el.value="";renderTags();applyHighlight();}};
-  window["clearMAHighlight_"+cid]=function(){selectedGenes=[];renderTags();applyHighlight();};
-  window["removeMAGene_"+cid]=function(g){selectedGenes=selectedGenes.filter(function(x){return x!==g;});renderTags();applyHighlight();};
 })();
-</script>\n', ma_cid))
+</script>
+', ma_cid, ma_cid, ma_cid, ma_cid, ma_cid))
         figure_legend(paste0("Interactive MA plot for ", ctr, ". Search and highlight specific lipids."))
         cat("\n\n")
       }
@@ -1668,83 +1755,8 @@ if (!is.null(class_res$plots$chain_length)) {
 
 ## Per-Class Chain Profiles {.tabset}
 
-```{r chain-profiles-interactive, fig.width=10, fig.height=6, results='asis'}
-if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0 &&
-    requireNamespace("plotly", quietly = TRUE)) {
-
-  # Build a combined data.frame from all classes
-  all_profiles <- do.call(rbind, lapply(names(class_res$chain_profiles), function(cls) {
-    df <- class_res$chain_profiles[[cls]]
-    df$lipid_class <- cls
-    df
-  }))
-
-  classes <- unique(all_profiles$lipid_class)
-
-  # Build one plotly figure with dropdown buttons to switch between classes
-  fig <- plotly::plot_ly()
-
-  for (i in seq_along(classes)) {
-    cls <- classes[i]
-    cls_df <- all_profiles[all_profiles$lipid_class == cls, ]
-    visible <- (i == 1)
-
-    for (grp in unique(cls_df$group)) {
-      grp_df <- cls_df[cls_df$group == grp, ]
-      fig <- plotly::add_trace(
-        fig,
-        data = grp_df,
-        x = ~chain, y = ~mean_intensity,
-        error_y = list(type = "data", array = grp_df$se, visible = TRUE),
-        type = "bar",
-        name = grp,
-        legendgroup = grp,
-        showlegend = (i == 1),
-        visible = visible,
-        text = ~paste0(chain, "<br>", group, ": ", round(mean_intensity, 2),
-                       " ± ", round(se, 2),
-                       if ("p_value" %in% names(grp_df))
-                         paste0("<br>p = ", sprintf("%.2e", p_value)) else ""),
-        hoverinfo = "text"
-      )
-    }
-  }
-
-  # Build dropdown buttons: each button sets visibility for its class
-  n_groups <- length(unique(all_profiles$group))
-  n_traces <- length(classes) * n_groups
-  buttons <- lapply(seq_along(classes), function(i) {
-    vis <- rep(FALSE, n_traces)
-    idx <- ((i - 1) * n_groups + 1):(i * n_groups)
-    vis[idx] <- TRUE
-    list(method = "update",
-         args = list(list(visible = as.list(vis)),
-                     list(title = paste0("Chain Profile — ", classes[i]))),
-         label = classes[i])
-  })
-
-  fig <- plotly::layout(fig,
-    barmode = "group",
-    title = paste0("Chain Profile — ", classes[1]),
-    xaxis = list(title = "Fatty Acid Chain", categoryorder = "trace"),
-    yaxis = list(title = "Mean Intensity"),
-    updatemenus = list(
-      list(
-        type = "dropdown",
-        active = 0,
-        x = 0.0, y = 1.18,
-        xanchor = "left",
-        buttons = buttons
-      )
-    )
-  )
-
-  print(htmltools::tagList(fig))
-
-  figure_legend("Per-class chain profiles showing individual fatty acid chain abundances within each lipid class. Use the dropdown to select a lipid class. Error bars show standard error; hover for p-values from group comparison.")
-
-} else if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0) {
-  # Fallback: static plots in tabs
+```{r chain-profiles-static, fig.width=10, fig.height=6, results='asis'}
+if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0) {
   for (cls in names(class_res$chain_profiles)) {
     cat(paste0("\n### ", cls, "\n\n"))
     p <- class_res$plots[[paste0("chain_profile_", cls)]]
@@ -1753,6 +1765,7 @@ if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0 &
     }
     cat("\n\n")
   }
+  figure_legend("Per-class chain profiles showing individual fatty acid chain abundances within each lipid class. Select a lipid class tab to view its chain profile. Error bars show standard error.")
 }
 ```
 
@@ -1770,9 +1783,9 @@ if (!is.null(class_res$plots$class_ora)) {
 
 ### ORA Table
 
-```{r class-ora-table}
+```{r class-ora-table, results='asis'}
 if (!is.null(class_res$class_ora)) {
-  make_dt(class_res$class_ora, caption = "Lipid Class Over-Representation Analysis")
+  print(htmltools::tagList(make_dt(class_res$class_ora, caption = "Lipid Class Over-Representation Analysis")))
 }
 ```
 
@@ -1800,12 +1813,12 @@ if (!is.null(rf_res$plots$rf_importance)) {
 
 ### Importance Table
 
-```{r rf-table}
+```{r rf-table, results='asis'}
 if (!is.null(rf_res$importance_df)) {
   imp_df <- rf_res$importance_df
   sort_col <- if ("MeanDecreaseAccuracy" %in% names(imp_df)) "MeanDecreaseAccuracy" else "importance"
   imp_df <- imp_df[order(-imp_df[[sort_col]]), ]
-  make_dt(head(imp_df, 50), caption = "RF Feature Importance (top 50)")
+  print(htmltools::tagList(make_dt(head(imp_df, 50), caption = "RF Feature Importance (top 50)")))
 }
 ```
 
@@ -1853,7 +1866,7 @@ if (!is.null(plsda_res$vip_df)) {
     vip_mean, vip_median, n_above_1, length(vip_vals)
   ))
 
-  make_dt(head(vip_df, 50), caption = "PLS-DA VIP Scores (top 50)")
+  print(htmltools::tagList(make_dt(head(vip_df, 50), caption = "PLS-DA VIP Scores (top 50)")))
 }
 ```
 
@@ -1978,9 +1991,15 @@ if (!is.null(pathway_res$plots$enzyme_network)) {
   figure_legend("Enzyme interaction network for predicted dysregulated enzymes. Nodes represent enzymes, and edges represent known protein-protein interactions from the STRING database. Clusters of interacting enzymes may indicate coordinated metabolic pathway perturbations.")
   render_commentary("enzyme_network")
 } else if (!is.null(pathway_res)) {
-  cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
-  cat("<p><strong>Enzyme interaction network not available</strong> — the <code>STRINGdb</code> package is not installed. Install it with <code>BiocManager::install('STRINGdb')</code> to enable enzyme interaction network visualization.</p>\n")
-  cat("</div>\n")
+  if (!requireNamespace("STRINGdb", quietly = TRUE)) {
+    cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>Enzyme interaction network not available</strong> — the <code>STRINGdb</code> package is not installed. Install it with <code>BiocManager::install('STRINGdb')</code> to enable enzyme interaction network visualization.</p>\n")
+    cat("</div>\n")
+  } else {
+    cat("<div style='background: #f0f7ff; border: 1px solid #b8daff; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>Enzyme interaction network not available</strong> — fewer than 2 enzymes mapped to STRING, or no interactions found above the score threshold.</p>\n")
+    cat("</div>\n")
+  }
 }
 ```
 
@@ -2157,3 +2176,30 @@ sessionInfo()
 ```
 
 </details>
+
+```{r dt-tab-fix, results='asis', echo=FALSE}
+# Fix DT tables inside hidden tabs: redraw when tab becomes visible
+cat('
+<script>
+$(document).on("shown.bs.tab", function(e) {
+  $($(e.target).attr("href")).find(".datatables.html-widget").each(function() {
+    var widget = HTMLWidgets.find("#" + this.id);
+    if (widget && widget.table) {
+      widget.table.columns.adjust().draw(false);
+    }
+  });
+});
+// Also trigger for any tables that may be in the initially active tab
+$(document).ready(function() {
+  setTimeout(function() {
+    $(".datatables.html-widget").each(function() {
+      var widget = HTMLWidgets.find("#" + this.id);
+      if (widget && widget.table) {
+        widget.table.columns.adjust().draw(false);
+      }
+    });
+  }, 500);
+});
+</script>
+')
+```

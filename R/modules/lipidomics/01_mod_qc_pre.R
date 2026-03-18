@@ -110,7 +110,7 @@ mod_lipidomics_qc_pre <- function(pre, config, out_dir) {
         tag   <- s$tag
         label <- s$label
 
-        # Density: raw
+        # Density: raw (log2)
         f_dens_raw <- file.path(out_qc, paste0("intensity_density_raw", tag, ".png"))
         expr_filt_log2 <- log2(s$expr_filt + 1)
         p_dens_raw <- qc_omic_density(
@@ -121,7 +121,19 @@ mod_lipidomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_raw)
         plots[[paste0("density_raw", tag)]] <- p_dens_raw
 
-        # Density: normalized
+        # Density: transformed (log2 + normalization, no scaling)
+        if (!is.null(s$expr_log)) {
+            f_dens_trans <- file.path(out_qc, paste0("intensity_density_transformed", tag, ".png"))
+            p_dens_trans <- qc_omic_density(
+                s$expr_log, s$meta, cfg_primary,
+                out_file = f_dens_trans,
+                title = paste0("Density: log2 + normalized", label)
+            )
+            files <- c(files, f_dens_trans)
+            plots[[paste0("density_transformed", tag)]] <- p_dens_trans
+        }
+
+        # Density: fully normalized (log2 + normalization + scaling)
         f_dens_norm <- file.path(out_qc, paste0("intensity_density_normalized", tag, ".png"))
         p_dens_norm <- qc_omic_density(
             s$expr_work, s$meta, cfg_primary,
@@ -131,18 +143,31 @@ mod_lipidomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_norm)
         plots[[paste0("density_norm", tag)]] <- p_dens_norm
 
-        # Boxplot: raw
+        # Boxplot: raw (log2)
         f_box_raw <- file.path(out_qc, paste0("intensity_boxplot_raw", tag, ".png"))
         p_box_raw <- norm_boxplot(
-            s$expr_filt, s$meta, cfg_primary,
+            expr_filt_log2, s$meta, cfg_primary,
             out_file = f_box_raw,
-            title = paste0("Boxplot: raw intensities", label),
-            y_label = "Raw intensity"
+            title = paste0("Boxplot: log2(raw intensities)", label),
+            y_label = "log2(raw intensity)"
         )
         files <- c(files, f_box_raw)
         plots[[paste0("boxplot_raw", tag)]] <- p_box_raw
 
-        # Boxplot: normalized
+        # Boxplot: transformed (log2 + normalization, no scaling)
+        if (!is.null(s$expr_log)) {
+            f_box_trans <- file.path(out_qc, paste0("intensity_boxplot_transformed", tag, ".png"))
+            p_box_trans <- norm_boxplot(
+                s$expr_log, s$meta, cfg_primary,
+                out_file = f_box_trans,
+                title = paste0("Boxplot: log2 + normalized", label),
+                y_label = "log2(normalized intensity)"
+            )
+            files <- c(files, f_box_trans)
+            plots[[paste0("boxplot_transformed", tag)]] <- p_box_trans
+        }
+
+        # Boxplot: fully normalized (log2 + normalization + scaling)
         f_box <- file.path(out_qc, paste0("intensity_boxplot_normalized", tag, ".png"))
         p_box <- norm_boxplot(
             s$expr_work, s$meta, cfg_primary,

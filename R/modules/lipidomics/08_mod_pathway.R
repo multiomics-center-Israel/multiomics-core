@@ -126,7 +126,7 @@ mod_lipidomics_pathway <- function(pre, de_res, config, out_dir) {
 
         string_network <- tryCatch(
             run_enzyme_string_network(
-                enzyme_list     = enzyme_predictions,
+                enzyme_list     = unique(enzyme_predictions$gene_symbol),
                 organism        = string_organism,
                 score_threshold = score_threshold
             ),

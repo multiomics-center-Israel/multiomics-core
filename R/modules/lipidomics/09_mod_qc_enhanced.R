@@ -132,24 +132,33 @@ mod_lipidomics_qc_enhanced <- function(pre, qc_res, feature_sel_res,
         plots$class_correlation <- p_class_cor
     }
 
-    # ---- Category Donut Chart ----
+    # ---- Category Donut Charts (one per condition) ----
     cat_data <- tryCatch(
         compute_lipid_category_composition(pre, config),
         error = function(e) { NULL }
     )
     if (!is.null(cat_data)) {
-        f_donut <- file.path(out_qc, "lipid_category_donut.png")
-        p_donut <- tryCatch({
-            pd <- plot_lipid_category_donut(cat_data)
-            ggplot2::ggsave(f_donut, pd, width = 9, height = 8, dpi = 300)
-            pd
-        }, error = function(e) {
-            warning("Category donut chart failed: ", e$message)
-            NULL
-        })
-        if (!is.null(p_donut)) {
-            files <- c(files, f_donut)
-            plots$category_donut <- p_donut
+        groups <- colnames(cat_data$cat_norm)
+        donut_plots <- list()
+        for (grp in groups) {
+            f_donut_grp <- file.path(out_qc, paste0("lipid_category_donut_", grp, ".png"))
+            p_donut_grp <- tryCatch({
+                pd <- plot_lipid_category_donut(cat_data, group = grp)
+                ggplot2::ggsave(f_donut_grp, pd, width = 9, height = 9, dpi = 300)
+                pd
+            }, error = function(e) {
+                warning("Category donut chart failed for ", grp, ": ", e$message)
+                NULL
+            })
+            if (!is.null(p_donut_grp)) {
+                files <- c(files, f_donut_grp)
+                donut_plots[[grp]] <- p_donut_grp
+            }
+        }
+        # Store per-group donuts; also keep first as legacy key for template
+        plots$category_donuts <- donut_plots
+        if (length(donut_plots) > 0) {
+            plots$category_donut <- donut_plots[[1]]
         }
     }
 

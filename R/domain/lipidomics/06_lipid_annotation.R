@@ -419,10 +419,26 @@ plot_lipid_category_donut <- function(cat_data, group = NULL) {
                        stringsAsFactors = FALSE)
         )
 
+        # Build named colour vector for legend (categories + classes)
+        legend_fills <- c(
+            stats::setNames(inner_df$fill, paste0(inner_df$label, " (", round(inner_df$fraction * 100, 1), "%)")),
+            stats::setNames(outer_df$fill, outer_df$label)
+        )
+        combined$legend_label <- ifelse(
+            combined$ring == "inner",
+            paste0(combined$label, " (", round(combined$ymax * 100 - combined$ymin * 100, 1), "%)"),
+            combined$label
+        )
+
         p <- ggplot2::ggplot(combined) +
             ggplot2::geom_rect(
-                ggplot2::aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-                fill = combined$fill, colour = "white", linewidth = 0.3
+                ggplot2::aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax,
+                             fill = legend_label),
+                colour = "white", linewidth = 0.3
+            ) +
+            ggplot2::scale_fill_manual(
+                values = legend_fills,
+                name = NULL
             ) +
             ggplot2::geom_text(
                 data = combined[combined$ring == "inner", , drop = FALSE],
@@ -441,8 +457,11 @@ plot_lipid_category_donut <- function(cat_data, group = NULL) {
             ggplot2::labs(title = plot_title) +
             ggplot2::theme(
                 plot.title = ggplot2::element_text(face = "bold", size = 13,
-                                                    hjust = 0.5)
-            )
+                                                    hjust = 0.5),
+                legend.position = "bottom",
+                legend.text = ggplot2::element_text(size = 8)
+            ) +
+            ggplot2::guides(fill = ggplot2::guide_legend(ncol = 4))
     } else {
         # Single ring (category only)
         cat_df$xmin <- 2
@@ -451,10 +470,18 @@ plot_lipid_category_donut <- function(cat_data, group = NULL) {
         cat_df$fill <- cat_colours[cat_df$label]
         cat_df$fill[is.na(cat_df$fill)] <- "#bcbd22"
 
+        cat_df$legend_label <- paste0(cat_df$label, " (", round(cat_df$fraction * 100, 1), "%)")
+        legend_fills_single <- stats::setNames(cat_df$fill, cat_df$legend_label)
+
         p <- ggplot2::ggplot(cat_df) +
             ggplot2::geom_rect(
-                ggplot2::aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
-                fill = cat_df$fill, colour = "white", linewidth = 0.5
+                ggplot2::aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax,
+                             fill = legend_label),
+                colour = "white", linewidth = 0.5
+            ) +
+            ggplot2::scale_fill_manual(
+                values = legend_fills_single,
+                name = NULL
             ) +
             ggplot2::geom_text(
                 ggplot2::aes(x = 3, y = ymid, label = label),
@@ -466,8 +493,11 @@ plot_lipid_category_donut <- function(cat_data, group = NULL) {
             ggplot2::labs(title = plot_title) +
             ggplot2::theme(
                 plot.title = ggplot2::element_text(face = "bold", size = 13,
-                                                    hjust = 0.5)
-            )
+                                                    hjust = 0.5),
+                legend.position = "bottom",
+                legend.text = ggplot2::element_text(size = 8)
+            ) +
+            ggplot2::guides(fill = ggplot2::guide_legend(ncol = 4))
     }
 
     p

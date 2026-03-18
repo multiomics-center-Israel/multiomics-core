@@ -354,17 +354,14 @@ plot_chain_saturation <- function(sat_data) {
     keep_bt <- unique(sat_data$bond_type[sat_data$mean_intensity > 0])
     sat_data <- sat_data[sat_data$bond_type %in% keep_bt, ]
 
+    # Restructure: x = saturation category, fill = group (so brackets go between groups)
     p <- ggplot2::ggplot(sat_data,
-                    ggplot2::aes(x = group, y = mean_intensity, fill = saturation)) +
-        ggplot2::geom_col(position = "dodge", width = 0.7) +
-        ggplot2::scale_fill_manual(values = c(
-            "SFA (0 DB)"   = "#4DAF4A",
-            "MUFA (1 DB)"  = "#377EB8",
-            "PUFA (2+ DB)" = "#E41A1C"
-        )) +
+                    ggplot2::aes(x = saturation, y = mean_intensity, fill = group)) +
+        ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.7),
+                          width = 0.65) +
         ggplot2::labs(
             title = "Chain Saturation Profile",
-            x = NULL, y = "Mean Total Intensity", fill = "Saturation"
+            x = NULL, y = "Mean Total Intensity", fill = "Group"
         ) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
@@ -377,7 +374,7 @@ plot_chain_saturation <- function(sat_data) {
         p <- p + ggplot2::facet_wrap(~ bond_type, scales = "free_y")
     }
 
-    # Add significance stars if per-sample data is available
+    # Add significance brackets between the two group bars
     if (!is.null(per_sample)) {
         per_sample <- per_sample[per_sample$saturation != "Unknown" &
                                   per_sample$bond_type %in% keep_bt, ]
@@ -386,9 +383,22 @@ plot_chain_saturation <- function(sat_data) {
         if (!is.null(sig_annot) && nrow(sig_annot) > 0) {
             sig_annot <- sig_annot[sig_annot$bond_type %in% keep_bt, ]
             if (nrow(sig_annot) > 0) {
-                groups <- unique(sat_data$group)
-                sig_annot$x <- mean(seq_along(groups))
-                p <- p + ggplot2::geom_text(
+                # Position bracket between the two dodged bars
+                dodge_w <- 0.7
+                cats <- levels(factor(sat_data$saturation))
+                if (is.null(cats)) cats <- unique(sat_data$saturation)
+                sig_annot$x_cat <- match(sig_annot$saturation, cats)
+                sig_annot$xmin <- sig_annot$x_cat - dodge_w / 2 + 0.05
+                sig_annot$xmax <- sig_annot$x_cat + dodge_w / 2 - 0.05
+                sig_annot$x <- sig_annot$x_cat
+                # Bracket line
+                p <- p + ggplot2::geom_segment(
+                    data = sig_annot,
+                    ggplot2::aes(x = xmin, xend = xmax,
+                                 y = y_position, yend = y_position),
+                    inherit.aes = FALSE, linewidth = 0.4
+                ) +
+                ggplot2::geom_text(
                     data = sig_annot,
                     ggplot2::aes(x = x, y = y_position, label = label),
                     inherit.aes = FALSE, size = 5, vjust = -0.3
@@ -416,14 +426,15 @@ plot_chain_length <- function(len_data) {
     keep_bt <- unique(len_data$bond_type[len_data$mean_intensity > 0])
     len_data <- len_data[len_data$bond_type %in% keep_bt, ]
 
+    # Restructure: x = chain length category, fill = group (so brackets go between groups)
     p <- ggplot2::ggplot(len_data,
-                    ggplot2::aes(x = group, y = mean_intensity,
-                                 fill = chain_length_bin)) +
-        ggplot2::geom_col(position = "dodge", width = 0.7) +
-        ggplot2::scale_fill_brewer(palette = "Set2") +
+                    ggplot2::aes(x = chain_length_bin, y = mean_intensity,
+                                 fill = group)) +
+        ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.7),
+                          width = 0.65) +
         ggplot2::labs(
             title = "Chain Length Distribution",
-            x = NULL, y = "Mean Total Intensity", fill = "Chain Length"
+            x = NULL, y = "Mean Total Intensity", fill = "Group"
         ) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
@@ -436,7 +447,7 @@ plot_chain_length <- function(len_data) {
         p <- p + ggplot2::facet_wrap(~ bond_type, scales = "free_y")
     }
 
-    # Add significance stars if per-sample data is available
+    # Add significance brackets between the two group bars
     if (!is.null(per_sample)) {
         per_sample <- per_sample[per_sample$chain_length_bin != "Unknown" &
                                   per_sample$bond_type %in% keep_bt, ]
@@ -445,9 +456,20 @@ plot_chain_length <- function(len_data) {
         if (!is.null(sig_annot) && nrow(sig_annot) > 0) {
             sig_annot <- sig_annot[sig_annot$bond_type %in% keep_bt, ]
             if (nrow(sig_annot) > 0) {
-                groups <- unique(len_data$group)
-                sig_annot$x <- mean(seq_along(groups))
-                p <- p + ggplot2::geom_text(
+                dodge_w <- 0.7
+                cats <- levels(len_data$chain_length_bin)
+                if (is.null(cats)) cats <- unique(len_data$chain_length_bin)
+                sig_annot$x_cat <- match(sig_annot$chain_length_bin, cats)
+                sig_annot$xmin <- sig_annot$x_cat - dodge_w / 2 + 0.05
+                sig_annot$xmax <- sig_annot$x_cat + dodge_w / 2 - 0.05
+                sig_annot$x <- sig_annot$x_cat
+                p <- p + ggplot2::geom_segment(
+                    data = sig_annot,
+                    ggplot2::aes(x = xmin, xend = xmax,
+                                 y = y_position, yend = y_position),
+                    inherit.aes = FALSE, linewidth = 0.4
+                ) +
+                ggplot2::geom_text(
                     data = sig_annot,
                     ggplot2::aes(x = x, y = y_position, label = label),
                     inherit.aes = FALSE, size = 5, vjust = -0.3
