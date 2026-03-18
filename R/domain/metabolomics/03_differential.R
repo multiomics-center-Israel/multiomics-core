@@ -6,7 +6,168 @@
 # Operates on the standard pre-processing contract (expr_work, meta).
 # Returns a wide-format summary_df compatible with the DE contract.
 #
-# Reuses: assert_numeric_matrix, assert_one_of, %||%
+# Contrast loading follows the RNA/proteomics standard: structured table from
+# files$contrasts (CSV/TSV with Contrast_name, Factor, Numerator, Denominator)
+# loaded via load_omics_inputs(config, mode = "metabolomics").
+#
+# Reuses: assert_numeric_matrix, assert_one_of, normalize_contrast_name, %||%
+
+
+# ---- local helpers -----------------------------------------------------------
+
+#' Vectorised logical coercion (NA -> FALSE)
+#' @keywords internal
+isTRUE_vec <- function(x) {
+    out <- as.logical(x)
+    out[is.na(out)] <- FALSE
+    out
+}
+
+
+#' Filter a matrix + metadata to biological samples only (exclude QC/blanks)
+#'
+#' Removes samples whose \code{condition_col} value matches "qc" or "blank"
+#' (case-insensitive), plus any rows flagged by \code{is_QC} or \code{is_blank}
+#' metadata columns.
+#'
+#' @param mat           Numeric matrix (features x samples).
+#' @param meta          data.frame with at least \code{sample_col} and
+#'                      \code{condition_col}.
+#' @param condition_col Column in meta identifying experimental groups.
+#' @param sample_col    Column in meta identifying sample IDs.
+#' @param label         Character label for log messages.
+#' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
+#' @keywords internal
+filter_to_biological <- function(mat, meta, condition_col, sample_col,
+                                 label = "metabolomics") {
+    condition_vals <- as.character(meta[[condition_col]])
+    is_bio <- !grepl("^(qc|blank)$", condition_vals, ignore.case = TRUE)
+
+    if ("is_QC" %in% colnames(meta))
+        is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
+    if ("is_blank" %in% colnames(meta))
+        is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
+
+    n_excluded <- sum(!is_bio)
+    if (n_excluded > 0L) {
+        message(sprintf(
+            "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
+            label, n_excluded, sum(is_bio)
+        ))
+        keep_ids <- meta[[sample_col]][is_bio]
+        mat  <- mat[, keep_ids, drop = FALSE]
+        meta <- meta[is_bio, , drop = FALSE]
+    }
+
+    list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
+}
+
+
+# ---- pre-computed DE loader --------------------------------------------------
+
+#' Load pre-computed metabolomics DE tables from config$files$de_table
+#'
+#' Reads CSV files with columns: FC, log2(FC), raw.pval, -log10(p).
+#' Builds a summary_df conforming to the DE contract.
+#'
+#' @param config Full pipeline config.
+#' @return list conforming to the DE contract: summary_df, method, de_tables
+load_precomputed_metabolomics_de <- function(config) {
+    cfg <- config$modes$metabolomics
+    de_cfg <- cfg$de %||% list()
+
+    de_files <- cfg$files$de_table
+    if (is.list(de_files)) de_files <- unlist(de_files)
+
+    padj_cutoff <- de_cfg$p_cutoff %||% 0.05
+    linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
+    log2fc_cut  <- log2(linear_fc)
+
+    # Derive contrast labels from file names
+    contrast_labels <- vapply(de_files, function(f) {
+        bn <- tools::file_path_sans_ext(basename(f))
+        sub("^de_", "", bn)
+    }, character(1), USE.NAMES = FALSE)
+
+    de_tables <- list()
+    for (i in seq_along(de_files)) {
+        abs_path <- resolve_raw_path(config, de_files[i])
+        if (!file.exists(abs_path)) {
+            stop("Pre-computed DE table not found: ", abs_path)
+        }
+
+        raw <- read_table_auto(abs_path)
+
+        # Map columns to standard names
+        cn <- colnames(raw)
+
+        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
+        id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
+        feat_ids <- if (!is.na(id_col_idx)) {
+            as.character(raw[[id_col_idx]])
+        } else {
+            rownames(raw)
+        }
+
+        # logFC: try common column name variants
+        logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
+        logfc_vals <- if (!is.na(logfc_col)) as.numeric(raw[[logfc_col]]) else NA_real_
+
+        # P-value: try common column name variants
+        pval_col <- cn[cn %in% c("raw.pval", "P.Value", "pvalue", "PValue", "p.value")][1]
+        pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
+
+        tbl <- data.frame(
+            feature_id = feat_ids,
+            logFC      = logfc_vals,
+            P.Value    = pval_vals,
+            stringsAsFactors = FALSE
+        )
+        tbl$AveExpr <- NA_real_
+        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
+
+        de_tables[[contrast_labels[i]]] <- tbl
+        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
+                " (label: ", contrast_labels[i], ")")
+    }
+
+    # Build summary_df with full outer join (tables may have different features)
+    all_features <- unique(unlist(lapply(de_tables, function(t) t$feature_id)))
+    summary_df <- data.frame(feature_id = all_features, stringsAsFactors = FALSE)
+
+    for (ctr in names(de_tables)) {
+        tbl <- de_tables[[ctr]]
+        idx <- match(summary_df$feature_id, tbl$feature_id)
+
+        # Signed linear FC from logFC (same transform as build_de_summary)
+        lfc <- tbl$logFC[idx]
+        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
+
+        summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
+        summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr[idx]
+        summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
+        summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
+
+        pass <- as.integer(
+            !is.na(tbl$adj.P.Val[idx]) &
+            tbl$adj.P.Val[idx] < padj_cutoff &
+            abs(tbl$logFC[idx]) >= log2fc_cut
+        )
+        summary_df[[paste0("pass.", ctr)]] <- pass
+    }
+
+    summary_df <- add_pass_any_contrast(summary_df, pass_prefix = "^pass\\.")
+
+    message("metabolomics precomputed DE: ", nrow(summary_df), " features, ",
+            sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
+
+    list(
+        summary_df = summary_df,
+        method     = "precomputed",
+        de_tables  = de_tables,
+        de_model   = NULL
+    )
+}
 
 
 # ---- public entry point -----------------------------------------------------
@@ -17,7 +178,7 @@
 #' @param config Full pipeline config.
 #' @return list conforming to the DE contract:
 #'   summary_df, method, de_tables (per-contrast list), de_model
-run_metabolomics_de <- function(pre, config) {
+run_metabolomics_de <- function(pre, config, contrast_table) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
 
@@ -27,9 +188,15 @@ run_metabolomics_de <- function(pre, config) {
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
 
-    contrasts <- de_cfg$contrasts
+    # Contrast loading: prefer explicit contrast_table argument (from pipeline),
+    # fall back to config$de$contrasts for backwards compatibility
+    if (!missing(contrast_table) && !is.null(contrast_table)) {
+        contrasts <- contrast_table
+    } else {
+        contrasts <- de_cfg$contrasts
+    }
     if (is.null(contrasts) || length(contrasts) == 0) {
-        stop("metabolomics DE: config$modes$metabolomics$de$contrasts is required.")
+        stop("metabolomics DE: contrasts are required (via contrast_table argument or config$de$contrasts).")
     }
     if (is.list(contrasts)) contrasts <- unlist(contrasts)
 

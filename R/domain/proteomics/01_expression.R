@@ -58,15 +58,15 @@ get_proteomics_expression_matrix <- function(inputs, config) {
   cfg <- config$modes$proteomics
   is_preprocessed <- identical(inputs$source_type, "preprocessed") ||
     identical(cfg$input$format, "preprocessed")
-  
+
   # Resolved input scale for reporting / transform decisions
   scale_in <- cfg$scale_in %||% NULL
-  
+
   if (is_preprocessed) {
     # ---- Preprocessed path: protein table is already an expression matrix ----
     protein_id_col <- cfg$id_columns$protein_id
     protein <- inputs$protein
-    
+
     if (!protein_id_col %in% colnames(protein)) {
       stop(sprintf(
         "[proteomics preprocessed] Protein ID column '%s' not found. Available: %s",
@@ -89,7 +89,7 @@ get_proteomics_expression_matrix <- function(inputs, config) {
     if (length(sample_cols) == 0) {
       stop("[proteomics preprocessed] No numeric sample columns found in protein table.")
     }
-    
+
     # Build row_data from ID + annotation columns
     row_data <- protein[, c(protein_id_col, anno_cols), drop = FALSE]
     
@@ -141,7 +141,8 @@ get_proteomics_expression_matrix <- function(inputs, config) {
       cfg        = cfg,
       scale_in   = scale_in
     )
-    assay_linear <- NULL
+    assay_linear <- attr(assay_log2, "linear")
+    attr(assay_log2, "linear") <- NULL
     
     # Feature annotations (row_data)
     row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
@@ -209,11 +210,19 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg, sc
     check.names = FALSE
   )
   
+  # 2a) Convert exact zeros to NA (matching DEP::make_se behavior)
+  # Some search engines report 0 for truly missing values; log2(0) = -Inf
+  n_zeros <- sum(df_m == 0, na.rm = TRUE)
+  if (n_zeros > 0) {
+    message(sprintf("Converted %d zero values to NA before log2 transformation.", n_zeros))
+    df_m[df_m == 0] <- NA
+  }
+
+  # 2b) Keep a linear-scale copy (needed for VSN normalization)
+  df_m_linear <- df_m
+
   # 3) Transform only if needed
   if (identical(scale_in, "linear")) {
-    if (any(df_m <= 0, na.rm = TRUE)) {
-      warning("Non-positive values found before log2 on DIA-NN input; will produce -Inf/NaN")
-    }
     message("[proteomics DIANN] Applying log2 transform")
     df_m <- as.data.frame(
       log2(df_m),
@@ -231,6 +240,7 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg, sc
   # 4) Rename columns: raw sample names -> SampleID using sample_map
   if (!is.null(sample_map)) {
     df_m <- apply_sample_map_to_colnames(df_m, sample_map, id_cols$map_from, id_cols$map_to)
+    colnames(df_m_linear) <- colnames(df_m)
   }
   # else: no sample_map — column names are already the sample IDs
   
@@ -249,7 +259,11 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg, sc
   
   ordered_cols <- intersect(meta_sample_ids, colnames(df_m))
   df_m_ordered <- df_m[, ordered_cols, drop = FALSE]
-  
-  # 6) Return as numeric matrix with proper rownames
-  coerce_df_to_numeric_matrix(df_m_ordered, rownames_vec = feat_ids, name = "diann_measurements")
+  df_m_linear_ordered <- df_m_linear[, ordered_cols, drop = FALSE]
+
+  # 6) Return as numeric matrix with proper rownames (log2 + linear)
+  mat_log2 <- coerce_df_to_numeric_matrix(df_m_ordered, rownames_vec = feat_ids, name = "diann_measurements")
+  mat_linear <- coerce_df_to_numeric_matrix(df_m_linear_ordered, rownames_vec = feat_ids, name = "diann_measurements_linear")
+  attr(mat_log2, "linear") <- mat_linear
+  mat_log2
 }

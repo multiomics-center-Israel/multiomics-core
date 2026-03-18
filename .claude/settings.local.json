@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Rscript:*)",
+      "Bash(git add:*)",
+      "Bash(git rebase:*)",
+      "Bash(git checkout:*)",
+      "Bash(GIT_EDITOR=true git rebase --continue)",
+      "Bash(GIT_EDITOR=true git rebase --continue 2>&1)",
+      "Bash(find /home/multiomics-core -path */lipidomics/*.Rmd -type f)",
+      "Bash(grep -E \"^#{1,3} \")"
+    ]
+  }
+}

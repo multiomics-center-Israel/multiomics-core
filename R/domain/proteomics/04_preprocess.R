@@ -10,9 +10,7 @@ preprocess_proteomics <- function(inputs, config) {
 
     # Downstream contract: work on log2 assay
     expr_raw <- prot_obj$assay_log2
-    # TODO: expr_raw currently reflects log-transformed data when scale_in = "linear".
-    # Consider whether expr_raw should instead preserve the original input matrix.
-    
+    expr_linear <- prot_obj$assay_linear
     row_data <- prot_obj$row_data
     col_data <- prot_obj$col_data
 
@@ -35,15 +33,37 @@ preprocess_proteomics <- function(inputs, config) {
     }
     assert_numeric_matrix(expr_raw, "expr_raw")
 
-    # Contaminant filtering (e.g. cRAP proteins)
-    contam_res <- filter_contaminants(expr_raw, row_data, cfg)
-    expr_raw <- contam_res$expr_mat
-    row_data <- contam_res$row_data
+    # Contaminant filtering (e.g. cRAP proteins) — configurable toggle
+    if (isTRUE(cfg$filtering$remove_contaminants %||% TRUE)) {
+        contam_res <- filter_contaminants(expr_raw, row_data, cfg)
+        # Sync linear matrix to same rows
+        if (!is.null(expr_linear)) {
+            keep_rows <- rownames(contam_res$expr_mat)
+            expr_linear <- expr_linear[keep_rows, , drop = FALSE]
+        }
+        expr_raw <- contam_res$expr_mat
+        row_data <- contam_res$row_data
+    }
 
     # Align col_data
     sample_id_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
     check_has_cols(col_data, sample_id_col, df_name = "col_data")
     col_data <- align_meta_to_expr(expr_raw, col_data, cfg)
+
+    # Exclude specific samples (if configured)
+    excl <- cfg$exclude_samples
+    if (!is.null(excl) && length(excl) > 0) {
+        excl <- as.character(unlist(excl))
+        n_before <- nrow(col_data)
+        col_data <- col_data[!col_data[[sample_id_col]] %in% excl, , drop = FALSE]
+        message(sprintf("[preprocess_proteomics] Excluded %d sample(s): %s",
+                        n_before - nrow(col_data), paste(excl, collapse = ", ")))
+        keep_cols <- intersect(colnames(expr_raw), rownames(col_data))
+        expr_raw <- expr_raw[, keep_cols, drop = FALSE]
+        if (!is.null(expr_linear)) {
+            expr_linear <- expr_linear[, keep_cols, drop = FALSE]
+        }
+    }
 
     # Optional: sample_filter
     rules <- get_sample_filter_rules(config, mode = "proteomics")
@@ -58,6 +78,9 @@ preprocess_proteomics <- function(inputs, config) {
             filtered <- apply_sample_filter(sample_col = sample_id_col, meta = col_data, expr = expr_raw, rules = rules, mode = "proteomics")
             col_data <- filtered$meta
             expr_raw <- filtered$expr
+            if (!is.null(expr_linear)) {
+                expr_linear <- expr_linear[rownames(expr_raw), colnames(expr_raw), drop = FALSE]
+            }
         }
     }
 
@@ -72,8 +95,17 @@ preprocess_proteomics <- function(inputs, config) {
     if (norm_method == "median") {
         expr_filt <- normalize_proteomics_median(expr_filt)
         message("Normalization: median centering applied.")
+    } else if (norm_method == "vsn") {
+        # VSN operates on linear (raw) intensities and produces its own
+        # generalized-log transform, so we feed the linear-scale matrix
+        if (is.null(expr_linear)) {
+            stop("VSN normalization requires linear-scale data but assay_linear is NULL.")
+        }
+        expr_linear_filt <- expr_linear[rownames(expr_filt), colnames(expr_filt), drop = FALSE]
+        expr_filt <- normalize_proteomics_vsn(expr_linear_filt)
+        message("Normalization: VSN (variance stabilizing) applied to linear intensities.")
     } else if (norm_method != "none") {
-        stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median'.", norm_method))
+        stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median', 'vsn'.", norm_method))
     }
 
     # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
@@ -108,6 +140,27 @@ normalize_proteomics_median <- function(expr_mat) {
     col_medians <- apply(expr_mat, 2, median, na.rm = TRUE)
     global_median <- median(col_medians, na.rm = TRUE)
     sweep(expr_mat, 2, col_medians - global_median)
+}
+
+#' Variance Stabilizing Normalization (VSN) for proteomics
+#'
+#' Applies vsnMatrix to linear-scale intensity data (matching DEP::normalize_vsn).
+#' VSN performs its own generalized-log transformation internally,
+#' so the output is on a log-like (glog2) scale comparable to log2.
+#' NAs are preserved: the model is fitted on complete values only.
+#' Requires the Bioconductor 'vsn' package.
+#' @param expr_mat numeric matrix (proteins x samples), linear scale
+#' @return normalized matrix (glog2 scale)
+normalize_proteomics_vsn <- function(expr_mat) {
+    if (!requireNamespace("vsn", quietly = TRUE))
+        stop("VSN normalization requires the 'vsn' Bioconductor package.\n",
+             "Install with: BiocManager::install('vsn')")
+    na_mask <- is.na(expr_mat)
+    # Use vsnMatrix (matching DEP::normalize_vsn exactly)
+    vsn_fit <- vsn::vsnMatrix(expr_mat)
+    result <- vsn::predict(vsn_fit, expr_mat)
+    result[na_mask] <- NA
+    result
 }
 
 get_sample_filter_rules <- function(config, mode) {

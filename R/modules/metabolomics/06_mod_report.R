@@ -1,8 +1,64 @@
 # R/modules/metabolomics/06_mod_report.R
 #
-# Metabolomics HTML report module: renders the parameterized Rmd template
-# with all module results and returns the output file path for targets
-# format = "file" tracking.
+# Metabolomics HTML report module.
+#
+# Functions:
+#   mod_met_qc_summary_report()  — standalone intermediate normalization QC report
+#   mod_metabolomics_report()    — full analysis report (includes QC section via child Rmd)
+
+
+#' Render standalone Normalization QC summary report
+#'
+#' Renders \code{qc_summary_report.Rmd} to a self-contained HTML at
+#' \code{\{out_dir\}/qc/normalization_review_report.html}.  This report is
+#' intended for intermediate review: open it after \code{tar_make()} completes
+#' the QC layer to decide which normalization method to use, before looking at
+#' the full analysis report.
+#'
+#' @param qc_comparison_file Character scalar.  Path to
+#'   \code{normalization_qc_benchmark.tsv} (return value of
+#'   \code{met_qc_comparison}).
+#' @param qc_suite_files     Character vector.  All QC file paths from
+#'   \code{met_log_qc}, \code{met_norm_tss_qc}, \code{met_norm_median_qc},
+#'   and \code{met_norm_pqn_qc} combined.
+#' @param config             Full pipeline config list.
+#' @param out_dir            Mode output directory (\code{metab_out_dir}).
+#' @return Character scalar: absolute path to the rendered HTML file.
+mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
+                                      config, out_dir) {
+    if (!requireNamespace("rmarkdown", quietly = TRUE)) {
+        warning("rmarkdown not available -- skipping QC summary report generation")
+        return(character(0))
+    }
+
+    template <- file.path("R", "pipeline", "metabolomics", "templates",
+                          "qc_summary_report.Rmd")
+    if (!file.exists(template)) {
+        stop("QC summary report template not found at: ", template)
+    }
+
+    qc_dir   <- file.path(out_dir, "qc")
+    ensure_dir(qc_dir)
+    proj_name <- config$project$analysis_round
+    out_file <- file.path(qc_dir, paste0("normalization_review_report_", proj_name, ".html"))
+
+    message("Rendering normalization QC summary report -> ", out_file)
+
+    rmarkdown::render(
+        input       = template,
+        output_file = basename(out_file),
+        output_dir  = dirname(out_file),
+        params = list(
+            qc_comparison_file = qc_comparison_file,
+            qc_suite_files     = qc_suite_files,
+            config             = config
+        ),
+        envir  = new.env(parent = globalenv()),
+        quiet  = TRUE
+    )
+
+    out_file
+}
 
 
 #' Render metabolomics HTML report
@@ -13,14 +69,21 @@
 #' @param pre             List from preprocess_metabolomics().
 #' @param qc_res          List from mod_metabolomics_qc_pre().
 #' @param de_res          List from mod_metabolomics_de().
+#' @param clustering_res  List from mod_metabolomics_clustering() (or NULL).
 #' @param feature_sel_res List from mod_metabolomics_feature_selection() (or NULL).
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
+#' @param qc_comparison_file Character scalar. Path to normalization_qc_benchmark.tsv (or NULL).
+#' @param qc_suite_files     Character vector. QC file paths (or NULL).
 #' @return Character path to the rendered HTML file.
-mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
+mod_metabolomics_report <- function(pre, qc_res, de_res,
+                                    clustering_res = NULL,
+                                    feature_sel_res,
                                     enrichment_res,
-                                    config, out_dir) {
+                                    config, out_dir,
+                                    qc_comparison_file = NULL,
+                                    qc_suite_files     = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -56,13 +119,16 @@ mod_metabolomics_report <- function(pre, qc_res, de_res, feature_sel_res,
     }
 
     render_params <- list(
-        pre            = pre,
-        qc_res         = qc_res,
-        de_res         = de_res,
-        rf_res         = rf_res_out,
-        plsda_res      = plsda_res_out,
-        enrichment_res = enrichment_res,
-        config         = config
+        pre                = pre,
+        qc_res             = qc_res,
+        de_res             = de_res,
+        clustering_res     = clustering_res,
+        rf_res             = rf_res_out,
+        plsda_res          = plsda_res_out,
+        enrichment_res     = enrichment_res,
+        config             = config,
+        qc_comparison_file = qc_comparison_file,
+        qc_suite_files     = qc_suite_files
     )
 
     rmarkdown::render(
