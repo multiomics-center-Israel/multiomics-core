@@ -88,9 +88,9 @@ validate_rna_inputs <- function(inputs, cfg) {
 #' - RDS files (loaded via readRDS, used for tximport objects)
 #'
 #' @param config Configuration list
-#' @param mode One of "proteomics" or "rna"
+#' @param mode One of "proteomics", "rna", or "metabolomics"
 #' @return List of loaded objects
-load_omics_inputs <- function(config, mode = c("proteomics", "rna")) {
+load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomics")) {
     mode <- match.arg(mode)
     cfg <- config$modes[[mode]]
     if (is.null(cfg)) stop("No config for mode ", mode)

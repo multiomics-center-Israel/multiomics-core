@@ -469,6 +469,18 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             format = "file"
         ),
 
+        # ---- AI commentary ----
+        tar_target(
+            metab_commentary,
+            mod_metabolomics_commentary(
+                de_res     = metab_de_res,
+                qc_pre_obj = metab_qc_pre_obj,
+                config     = config,
+                out_dir    = metab_out_dir
+            ),
+            format = "file"
+        ),
+
         tar_target(
             metab_report,
             mod_metabolomics_report(
@@ -481,7 +493,8 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 config             = config,
                 out_dir            = metab_out_dir,
                 qc_comparison_file = NULL,
-                qc_suite_files     = NULL
+                qc_suite_files     = NULL,
+                commentary_file    = metab_commentary
             ),
             format = "file"
         ),

@@ -180,6 +180,16 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             updown = paste0("upDown.", contrast),
             manual = paste0("manual_cutoffs.", contrast)
         )
+    } else if (mode %in% c("metabolomics", "lipidomics")) {
+        # Metabolomics/lipidomics use logFC_, P.Value_, adj.P.Val_ naming
+        list(
+            fc     = paste0("logFC_", contrast_safe),
+            p      = paste0("P.Value_", contrast_safe),
+            padj   = paste0("adj.P.Val_", contrast_safe),
+            pass   = paste0("pass_", contrast_safe),
+            updown = paste0("upDown_", contrast_safe),
+            manual = paste0("manual_cutoffs_", contrast_safe)
+        )
     } else {
         # Proteomics (uses imputation naming)
         list(

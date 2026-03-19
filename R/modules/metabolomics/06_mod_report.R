@@ -83,7 +83,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     enrichment_res,
                                     config, out_dir,
                                     qc_comparison_file = NULL,
-                                    qc_suite_files     = NULL) {
+                                    qc_suite_files     = NULL,
+                                    commentary_file    = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -128,7 +129,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         enrichment_res     = enrichment_res,
         config             = config,
         qc_comparison_file = qc_comparison_file,
-        qc_suite_files     = qc_suite_files
+        qc_suite_files     = qc_suite_files,
+        commentary_file    = commentary_file
     )
 
     rmarkdown::render(

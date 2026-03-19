@@ -656,9 +656,11 @@ build_feature_ids <- function(data_df, id_cfg) {
     }
 
     if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
-        original_id <- as.character(data_df[[fid_col]])
-        ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
-        attr(ids, "original_id") <- original_id
+        raw_names <- as.character(data_df[[fid_col]])
+        raw_names <- ifelse(is.na(raw_names) | raw_names == "",
+                            make_rt_mz_ids(), raw_names)
+        ids <- make.unique(raw_names, sep = "_dup")
+        attr(ids, "original_id") <- make_rt_mz_ids()
         return(ids)
     }
 

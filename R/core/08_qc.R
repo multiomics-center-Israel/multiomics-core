@@ -608,6 +608,63 @@ qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = 
   invisible(p)
 }
 
+#' Plot missingness heatmap
+#'
+#' Creates a binary heatmap (observed vs missing) with row annotation
+#' indicating MNAR classification.
+#'
+#' @param mat Numeric matrix (features x samples).
+#' @param mnar_class Named character vector with MNAR classification per feature.
+#' @return pheatmap object.
+plot_missingness_heatmap <- function(mat, mnar_class) {
+  # Binary matrix: 1 = observed, 0 = missing
+  bin_mat <- ifelse(is.na(mat), 0, 1)
+
+  # Restrict to features with at least some missingness
+  has_na <- rowSums(is.na(mat)) > 0
+  if (sum(has_na) == 0) {
+    message("plot_missingness_heatmap: no missing values — skipping")
+    return(NULL)
+  }
+  bin_mat <- bin_mat[has_na, , drop = FALSE]
+  mnar_sub <- mnar_class[rownames(bin_mat)]
+  mnar_sub[is.na(mnar_sub)] <- "Unknown"
+
+  row_annot <- data.frame(
+    Class = as.character(mnar_sub),
+    row.names = rownames(bin_mat)
+  )
+
+  annot_colors <- list(
+    Class = c(MNAR = "#E41A1C", MAR = "#377EB8",
+              all_missing = "#999999", all_observed = "#4DAF4A",
+              Unknown = "#CCCCCC")
+  )
+  # Keep only colors for classes that exist
+  annot_colors$Class <- annot_colors$Class[names(annot_colors$Class) %in% unique(row_annot$Class)]
+
+  # Limit rows for readability
+  if (nrow(bin_mat) > 200) {
+    bin_mat <- bin_mat[seq_len(200), , drop = FALSE]
+    row_annot <- row_annot[rownames(bin_mat), , drop = FALSE]
+  }
+
+  pheatmap::pheatmap(
+    bin_mat,
+    color = c("grey90", "steelblue"),
+    legend_breaks = c(0, 1),
+    legend_labels = c("Missing", "Observed"),
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    show_rownames = nrow(bin_mat) <= 50,
+    annotation_row = row_annot,
+    annotation_colors = annot_colors,
+    main = "Missingness Pattern",
+    silent = TRUE
+  )
+}
+
+
 #' QC wrapper: missingness heatmap
 #'
 #' Calls \code{plot_missingness_heatmap()} and saves the result to a PNG file.

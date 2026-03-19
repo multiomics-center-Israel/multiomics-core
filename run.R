@@ -152,12 +152,48 @@ wizard_build_contrasts <- function(metadata_path, group_col) {
     c(sprintf("All pairwise comparisons (%d contrasts) (recommended)", n_pairs),
       "Pick specific comparisons from the list",
       "Build custom contrasts (choose numerator & denominator)",
-      "Skip — no contrasts (DE will auto-generate all pairwise at runtime)"),
+      "Skip — no contrasts (DE will auto-generate all pairwise at runtime)",
+      "Load from a contrasts CSV file"),
     default = 1)
 
   if (action_idx == 4) {
     cat("  Skipping. Pipeline will auto-generate all pairwise contrasts at runtime.\n")
     return(NULL)
+  }
+
+  if (action_idx == 5) {
+    contrasts_path <- ask("Path to contrasts CSV file")
+    contrasts_path <- validate_file(contrasts_path, "Contrasts file")
+    if (is.null(contrasts_path)) {
+      cat("  File not found. Falling back to all pairwise contrasts.\n")
+      contrasts_df <- all_pairs
+    } else {
+      sep <- detect_separator(contrasts_path)
+      contrasts_df <- read.table(contrasts_path, sep = sep, header = TRUE,
+                                  stringsAsFactors = FALSE, check.names = FALSE)
+      # Normalize column names: expect Numerator/Denominator or similar
+      cn <- tolower(colnames(contrasts_df))
+      if (!"Numerator" %in% colnames(contrasts_df)) {
+        # Try common alternatives
+        if ("numerator" %in% cn) colnames(contrasts_df)[cn == "numerator"] <- "Numerator"
+      }
+      if (!"Denominator" %in% colnames(contrasts_df)) {
+        if ("denominator" %in% cn) colnames(contrasts_df)[cn == "denominator"] <- "Denominator"
+      }
+      if (!"Factor" %in% colnames(contrasts_df)) {
+        if ("factor" %in% cn) {
+          colnames(contrasts_df)[cn == "factor"] <- "Factor"
+        } else {
+          contrasts_df$Factor <- group_col
+        }
+      }
+      cat(sprintf("  Loaded %d contrast(s) from file:\n", nrow(contrasts_df)))
+      for (i in seq_len(nrow(contrasts_df))) {
+        cat(sprintf("    %d) %s vs %s\n", i, contrasts_df$Numerator[i], contrasts_df$Denominator[i]))
+      }
+    }
+    cat(sprintf("  %d contrast(s) defined.\n", nrow(contrasts_df)))
+    return(contrasts_df)
   }
 
   contrasts_df <- NULL
@@ -1753,6 +1789,20 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   # --- PowerPoint ---
   generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
 
+  # --- QC Review vs Full Analysis ---
+  cat("\n--- [METAB] Run Mode ---\n")
+  cat("QC Review mode runs all normalizations (TSS, Median, PQN), compares them,\n")
+  cat("and produces a QC summary report. No DE or downstream analysis.\n")
+  cat("Use this first to pick the best normalization, then re-run in Full mode.\n\n")
+  run_mode_idx <- ask_choice("Run mode:",
+    c("QC Review — compare normalizations, no DE (recommended first run)",
+      "Full Analysis — use selected normalization, run DE + everything"),
+    default = 1)
+  qc_only <- (run_mode_idx == 1)
+
+  # For full mode, chosen_norm maps from the normalization selected above
+  chosen_norm <- if (qc_only) "null" else sprintf('"%s"', sample_norm)
+
   # Copy data into project structure
   cat("\n--- [METAB] Setting Up Project ---\n")
 
@@ -1805,6 +1855,9 @@ paths:
 
 modes:
   metabolomics:
+
+    preprocessing:
+      chosen_norm: %s
 
     input:
       format: "%s"
@@ -1893,6 +1946,7 @@ params:
 ',
     project_name, Sys.Date(), project_dir, project_name, round, analyst,
     tolower(project_name), tolower(project_name),
+    chosen_norm,
     input_format,
     data_dest, meta_dest,
     feature_id_yaml, name_col, mz_col, rt_col,
@@ -1911,6 +1965,15 @@ params:
 
   writeLines(config_yaml, config_path)
   cat(sprintf("\n  Config saved: %s\n", config_path))
+
+  if (qc_only) {
+    cat("\n  ** QC REVIEW MODE **\n")
+    cat("  The pipeline will compare TSS, Median, and PQN normalizations.\n")
+    cat("  Review the QC report, then re-run the wizard in Full Analysis mode\n")
+    cat("  with your chosen normalization to run DE + downstream analysis.\n\n")
+  } else {
+    cat(sprintf("\n  ** FULL ANALYSIS MODE (normalization: %s) **\n\n", sample_norm))
+  }
 
   config_path
 }

@@ -179,13 +179,13 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_norm)
         plots[[paste0("density_norm", tag)]] <- p_dens_norm
 
-        # -- Boxplot: raw --
+        # -- Boxplot: raw (log2) --
         f_box_raw <- file.path(out_qc, paste0("intensity_boxplot_raw", tag, ".png"))
         p_box_raw <- norm_boxplot(
-            s$expr_filt, s$meta, cfg_primary,
+            expr_filt_log2, s$meta, cfg_primary,
             out_file = f_box_raw,
-            title = paste0("Boxplot: raw intensities", label),
-            y_label = "Raw intensity"
+            title = paste0("Boxplot: log2(raw intensities)", label),
+            y_label = "log2(raw intensity)"
         )
         files <- c(files, f_box_raw)
         plots[[paste0("boxplot_raw", tag)]] <- p_box_raw

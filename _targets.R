@@ -127,7 +127,10 @@ list(
     # Single-omics pipelines
     if (!is.null(cfg_raw$modes$rna))           mode_targets <- c(mode_targets, pipe_rnaseq())
     if (!is.null(cfg_raw$modes$proteomics))    mode_targets <- c(mode_targets, pipe_proteomics())
-    if (!is.null(cfg_raw$modes$metabolomics))  mode_targets <- c(mode_targets, pipe_metabolomics())
+    if (!is.null(cfg_raw$modes$metabolomics)) {
+        metab_chosen_norm <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
+        mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = metab_chosen_norm))
+    }
     if (!is.null(cfg_raw$modes$lipidomics))    mode_targets <- c(mode_targets, pipe_lipidomics())
 
     # Multi-omics integration pipeline (runs AFTER single-omics pipelines)

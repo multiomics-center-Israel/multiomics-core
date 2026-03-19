@@ -57,12 +57,14 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     fc_lin <- metab_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
-        for (cn in names(de_res$tables)) {
-            tbl <- de_res$tables[[cn]]
+    de_tables <- de_res$de_tables %||% de_res$tables
+    if (!is.null(de_tables) && length(de_tables) > 0) {
+        for (cn in names(de_tables)) {
+            tbl <- de_tables[[cn]]
             if (!is.data.frame(tbl)) next
 
-            padj_col <- intersect(c("padj", "adj.P.Val", "p.adjusted"), names(tbl))[1]
+            # Use raw P.Value for significance (matches DE module behavior)
+            padj_col <- intersect(c("P.Value", "pvalue", "padj", "adj.P.Val", "p.adjusted"), names(tbl))[1]
             lfc_col  <- intersect(c("log2FoldChange", "logFC", "log2FC"), names(tbl))[1]
             if (is.na(padj_col)) next
 
@@ -89,14 +91,16 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
 
     if (!is.null(feature_sel_res$rf)) {
         rf_res <- feature_sel_res$rf
-        if (!is.null(rf_res$importance) && is.data.frame(rf_res$importance)) {
-            rf_top_n <- nrow(rf_res$importance)
+        rf_imp <- rf_res$importance_df %||% rf_res$importance
+        if (!is.null(rf_imp) && is.data.frame(rf_imp)) {
+            rf_top_n <- metab_cfg$rf$top_n %||% min(20, nrow(rf_imp))
         }
     }
     if (!is.null(feature_sel_res$plsda)) {
         plsda_res <- feature_sel_res$plsda
-        if (!is.null(plsda_res$vip) && is.data.frame(plsda_res$vip)) {
-            plsda_top_n <- nrow(plsda_res$vip)
+        plsda_vip <- plsda_res$vip_df %||% plsda_res$vip
+        if (!is.null(plsda_vip) && is.data.frame(plsda_vip)) {
+            plsda_top_n <- metab_cfg$plsda$vip_top_n %||% min(15, nrow(plsda_vip))
         }
     }
 
@@ -529,13 +533,13 @@ generate_metab_summary_body_r <- function(stats) {
 
     # Step 5: DE
     de_label <- toupper(stats$methods$de_method)
-    de_desc <- sprintf("%s differential expression test. Significance: adj. p-value &le; %s and |linear FC| &ge; %s.",
+    de_desc <- sprintf("%s differential expression test. Significance: p-value &le; %s and |linear FC| &ge; %s.",
         de_label, stats$methods$p_cutoff, stats$methods$fc_cutoff)
     de_stats <- build_metab_stats_row(
         list(value = format(stats$de$total, big.mark = ","), label = "DE features", color = "var(--accent-violet)"),
         list(value = format(stats$de$up, big.mark = ","), label = "up", color = "var(--accent-green)"),
         list(value = format(stats$de$down, big.mark = ","), label = "down", color = "var(--accent-rose)"))
-    de_tags <- c(de_label, sprintf("padj \u2264 %s", stats$methods$p_cutoff),
+    de_tags <- c(de_label, sprintf("p \u2264 %s", stats$methods$p_cutoff),
                  sprintf("|FC| \u2265 %s", stats$methods$fc_cutoff))
     step5 <- build_metab_step_html(5, "\U0001F4CA", "Differential Expression", "phase-de", "analysis",
         de_desc, de_tags, de_stats)

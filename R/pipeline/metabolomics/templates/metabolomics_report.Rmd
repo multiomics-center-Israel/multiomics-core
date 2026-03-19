@@ -20,6 +20,7 @@ params:
   config: NULL
   qc_comparison_file: NULL
   qc_suite_files: NULL
+  commentary_file: NULL
 ---
 
 ```{r setup, include=FALSE}
