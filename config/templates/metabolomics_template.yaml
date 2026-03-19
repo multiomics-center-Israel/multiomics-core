@@ -144,6 +144,17 @@ modes:
       shape: "time"
       heatmap_annotations: "group"
 
+    # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
+
     qc:
       enabled: true
 
