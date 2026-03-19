@@ -317,6 +317,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         de_df <- add_default_order_if_missing(de_df, mat_de, id_col)
         de_df <- add_zscores_if_missing(de_df, mat_de, id_col)
 
+        # Sort DE table by Hierarchical_Order to match heatmap row ordering
+        if ("Hierarchical_Order" %in% names(de_df) && !all(is.na(de_df$Hierarchical_Order))) {
+            de_df <- de_df[order(de_df$Hierarchical_Order, na.last = TRUE), , drop = FALSE]
+        }
+
         # Reorder columns to: ID, annotations, expression, DE_stats, clustering, z-scores
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
