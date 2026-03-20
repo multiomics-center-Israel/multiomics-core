@@ -603,7 +603,7 @@ clustering_run_flags <- function(pre, cfg) {
 
   list(
     hierarchical    = hier_enabled,
-    partition       = isTRUE(part_enabled && can_multi_group),
+    partition       = part_enabled,
     binary_patterns = isTRUE(bin_enabled && can_multi_group)
   )
 }

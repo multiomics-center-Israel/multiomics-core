@@ -36,9 +36,9 @@ build_shiny_payload_proteomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
-    annot = NULL,
     final_results = NULL,
-    out_dir = NULL)
+    out_dir = NULL,
+    annot = NULL)
   {
     # ============================================================
     # Initialize canonical payload structure
@@ -333,21 +333,21 @@ build_de_contrast_summary <- function(de_stats) {
 }
 
 
-#' Save Proteomics Shiny payload to RDS file
-#'
-#' @param ... Arguments passed to build_shiny_payload_proteomics()
-#' @param out_file Output file path
-#' @return Path to saved file (invisibly)
-#' @export
-save_shiny_payload_proteomics <- function(..., out_file = "shiny_payload_proteomics.rds") {
-    out_dir <- dirname(out_file)
-    payload <- build_shiny_payload_proteomics(..., out_dir = out_dir)
-    if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
-        dir.create(out_dir, recursive = TRUE)
-    }
-
-    saveRDS(payload, out_file)
-    message("Saved proteomics payload to: ", out_file)
-
-    invisible(out_file)
-}
+#' #' Save Proteomics Shiny payload to RDS file
+#' #'
+#' #' @param ... Arguments passed to build_shiny_payload_proteomics()
+#' #' @param out_file Output file path
+#' #' @return Path to saved file (invisibly)
+#' #' @export
+#' save_shiny_payload_proteomics <- function(..., out_file = "shiny_payload_proteomics.rds") {
+#'     out_dir <- dirname(out_file)
+#'     payload <- build_shiny_payload_proteomics(..., out_dir = out_dir)
+#'     if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
+#'         dir.create(out_dir, recursive = TRUE)
+#'     }
+#' 
+#'     saveRDS(payload, out_file)
+#'     message("Saved proteomics payload to: ", out_file)
+#' 
+#'     invisible(out_file)
+#' }

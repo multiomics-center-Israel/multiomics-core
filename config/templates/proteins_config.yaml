@@ -108,7 +108,7 @@ modes:
     # --------------------------------------------------------
     qc_post:
       enabled: true
-      de_source: "summary"   # "summary" | "table1"
+      de_source: "table1"   # "summary" | "table1"
       plots:
         volcano: true
         ma: true
