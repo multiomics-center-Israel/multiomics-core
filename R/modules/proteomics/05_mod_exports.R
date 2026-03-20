@@ -122,8 +122,8 @@ mod_proteomics_exports <- function(
     # =========================================================================
     shiny_payload_file <- file.path(out_dir, "shiny_payload_proteomics.rds")
     final_results = files[grep("Final_results_DE", files)]
-
-    save_shiny_payload_proteomics(
+    
+    shiny_payload <- build_shiny_payload_proteomics(
         pre = pre,
         de_res = de_res,
         inputs = inputs,
@@ -131,9 +131,11 @@ mod_proteomics_exports <- function(
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
         final_results = final_results,
-        out_file = shiny_payload_file
+        out_dir = out_dir
     )
 
+    saveRDS(shiny_payload, shiny_payload_file)
+    message("Saved proteomics Shiny payload to: ", shiny_payload_file)
     files <- c(files, shiny_payload_file)
 
     # =========================================================================
