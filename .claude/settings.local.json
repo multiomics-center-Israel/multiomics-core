@@ -26,7 +26,15 @@
       "Bash(gh pr:*)",
       "Bash(git fetch:*)",
       "Bash(gh api:*)",
-      "Bash(gh run:*)"
+      "Bash(gh run:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:rdrr.io)",
+      "Bash(Rscript -e \"parse\\(''''R/pipeline/metabolomics/00_pipe_metabolomics.R''''\\); parse\\(''''R/modules/metabolomics/00_mod_preprocessing.R''''\\); parse\\(''''R/domain/metabolomics/01_normalization.R''''\\); cat\\(''''All OK\\\\n''''\\)\")",
+      "Bash(Rscript -e \"library\\(targets\\); tar_invalidate\\(met_qc_summary_report\\); tar_make\\(\\)\")",
+      "Bash(Rscript scripts/run_metabolome_overview.R \\\\\n  --data \"data/elad_chiel/metabolomics/Level 1+2 compounds.csv\" \\\\\n  --level1 \"/home/data/Elad_Chiel/Metabolomics/Level 1 compounds.xlsx\" \\\\\n  --metadata \"data/elad_chiel/metabolomics/metadata_EC.csv\" \\\\\n  --project \"Elad_Chiel\" \\\\\n  --analyst \"Dor Shalev\" \\\\\n  --output \"outputs/elad_chiel/Results_Elad_Chiel_A01/\" 2>&1)",
+      "Bash(Rscript scripts/run_metabolome_overview.R --data \"/home/multiomics-core/data/elad_chiel/metabolomics/Level 1+2 compounds.csv\" --level1 \"/home/data/Elad_Chiel/Metabolomics/Level 1 compounds.xlsx\" --metadata \"/home/multiomics-core/data/elad_chiel/metabolomics/metadata_EC.csv\" --project \"Elad_Chiel\" --analyst \"Dor Shalev\" --output \"/home/multiomics-core/outputs/elad_chiel/Results_Elad_Chiel_A01/\")",
+      "Bash(Rscript scripts/run_metabolome_overview.R --data \"/home/multiomics-core/data/elad_chiel/metabolomics/Level 1+2 compounds.csv\" --level1 \"/home/data/Elad_Chiel/Metabolomics/Level 1 compounds.xlsx\" --metadata \"/home/multiomics-core/data/elad_chiel/metabolomics/metadata_EC.csv\" --kegg_mapping \"/home/multiomics-core/data/elad_chiel/metabolomics/kegg_pathway_mapping.rds\" --project \"Elad_Chiel\" --analyst \"Dor Shalev\" --output \"/home/multiomics-core/outputs/elad_chiel/Results_Elad_Chiel_A01/\")",
+      "Bash(git log:*)"
     ]
   }
 }

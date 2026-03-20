@@ -354,7 +354,8 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}, \code{info}.
 #'
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
-                              logged, meta, out_dir, config) {
+                              logged, meta, out_dir, config,
+                              norm_eigenms = NULL) {
   cfg_mode <- config$modes$metabolomics
   pre_cfg  <- cfg_mode$preprocessing %||% list()
   norm_cfg <- cfg_mode$normalization  %||% list()
@@ -362,11 +363,12 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   chosen_norm <- tolower(pre_cfg$chosen_norm)
 
   chosen_mat <- switch(chosen_norm,
-    tss    = norm_tss$mat,
-    median = norm_median$mat,
-    pqn    = norm_pqn$mat,
+    tss     = norm_tss$mat,
+    median  = norm_median$mat,
+    pqn     = norm_pqn$mat,
+    eigenms = if (!is.null(norm_eigenms)) norm_eigenms$mat else stop("EigenMS target not available"),
     stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
-                 "Valid options: tss, median, pqn.", chosen_norm))
+                 "Valid options: tss, median, pqn, eigenms.", chosen_norm))
   )
 
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)
@@ -443,6 +445,42 @@ mod_met_normalize_linear <- function(data, method, config) {
   )
 
   mat_log <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
+
+  list(
+    mat      = mat_log,
+    meta     = data$meta,
+    row_data = data$row_data
+  )
+}
+
+
+# ==============================================================================
+# mod_met_normalize_eigenms — EigenMS on linear scale, then log2 transform
+# ==============================================================================
+
+#' Apply EigenMS normalization then log2 transformation
+#'
+#' EigenMS uses SVD on residuals from a group-aware model to identify and
+#' remove systematic technical bias while preserving biological signal.
+#'
+#' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
+#' @param config Full pipeline config list.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+mod_met_normalize_eigenms <- function(data, config) {
+  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  pseudocount <- norm_cfg$pseudocount %||% 1
+
+  # Extract group labels for EigenMS
+  cfg_mode  <- config$modes$metabolomics
+  group_col <- cfg_mode$effects$color %||% cfg_mode$de$condition_column %||% "sample_type"
+  groups <- if (!is.null(data$meta) && group_col %in% colnames(data$meta)) {
+    as.character(data$meta[[group_col]])
+  } else {
+    NULL
+  }
+
+  mat_norm <- norm_eigenms(data$mat, groups = groups)
+  mat_log  <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
 
   list(
     mat      = mat_log,

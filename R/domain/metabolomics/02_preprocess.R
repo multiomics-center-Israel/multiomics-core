@@ -130,14 +130,20 @@ preprocess_metabolomics <- function(inputs, config) {
     norm_cfg$transform   <- norm_cfg$transform   %||% "none"
     norm_cfg$scaling     <- norm_cfg$scaling     %||% "none"
 
+    # Extract group labels for methods that need them (e.g. eigenms)
+    group_col <- cfg$effects$color %||% cfg$de$condition_column %||% "sample_type"
+    norm_groups <- if (group_col %in% colnames(meta)) as.character(meta[[group_col]]) else NULL
+
     # Run sample_norm + transform first (pre-scaling matrix for logFC)
     norm_cfg_no_scale <- norm_cfg
     norm_cfg_no_scale$scaling <- "none"
-    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data)
+    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data,
+                                                     groups = norm_groups)
     expr_log <- pre_scale_result$expr_norm
 
     # Full pipeline (with scaling) for statistical tests
-    norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data)
+    norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data,
+                                                groups = norm_groups)
     expr_work <- norm_result$expr_norm
 
     assert_numeric_matrix(expr_work, "metab_expr_work")

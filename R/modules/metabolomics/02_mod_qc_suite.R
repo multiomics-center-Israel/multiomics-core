@@ -95,7 +95,7 @@
 #' computed with \code{na.rm = TRUE}.
 compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
   # ---- Input validation -------------------------------------------------------
-  valid_stages <- c("log", "norm_tss", "norm_pqn", "norm_median")
+  valid_stages <- c("log", "norm_tss", "norm_pqn", "norm_median", "norm_eigenms")
   if (!stage %in% valid_stages) {
     warning(sprintf(
       "compute_linear_rsd: unknown stage '%s'; expected one of: %s.",
@@ -117,7 +117,7 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
       rsd_per_feature     = setNames(numeric(0), character(0)),
       n_features          = nrow(mat),
       n_samples           = ncol(mat),
-      backtransform_exact = stage %in% c("log", "norm_tss", "norm_pqn"),
+      backtransform_exact = stage %in% c("log", "norm_tss", "norm_pqn", "norm_eigenms"),
       pseudocount_used    = pseudocount
     ))
   }
@@ -790,8 +790,10 @@ mod_met_qc_suite <- function(data, stage, out_dir, config) {
 mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
                                         median_qc_files, pqn_qc_files,
                                         out_dir, config,
-                                        imputed_data = NULL) {
-  all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files)
+                                        imputed_data = NULL,
+                                        eigenms_qc_files = NULL) {
+  all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files,
+                 eigenms_qc_files)
 
   # Locate with_qc/metrics_summary.tsv in each file vector.
   # Use a regex that matches the platform path separator (/ or \).

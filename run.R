@@ -1723,9 +1723,10 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     c("PQN — Probabilistic Quotient Normalization (recommended)",
       "Median centering",
       "Sum normalization",
+      "EigenMS — SVD-based systematic bias removal (NOREVA)",
       "None (data already normalized)"),
     default = 1)
-  sample_norm <- c("pqn", "median", "sum", "none")[norm_idx]
+  sample_norm <- c("pqn", "median", "sum", "eigenms", "none")[norm_idx]
 
   transform_idx <- ask_choice("Transformation:",
     c("log2 (recommended)",

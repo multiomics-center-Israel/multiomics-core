@@ -15,22 +15,26 @@
 #' Apply sample normalization
 #'
 #' @param mat     Numeric matrix (features x samples).
-#' @param method  One of "none", "sum", "median", "pqn", "is".
+#' @param method  One of "none", "sum", "median", "pqn", "eigenms", "is".
 #' @param ref_col Character: column in row_data that flags the internal standard
 #'                (only used when method = "is").
 #' @param row_data data.frame with at least a column matching ref_col (for IS).
+#' @param groups  Character/factor vector of group labels per sample
+#'                (required for eigenms; ignored by other methods).
 #' @return Normalized numeric matrix (same dimensions).
-normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL) {
+normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL,
+                              groups = NULL) {
     method <- tolower(method)
     assert_one_of(method, "sample_norm",
-                  c("none", "sum", "median", "pqn", "is"))
+                  c("none", "sum", "median", "pqn", "eigenms", "is"))
 
     switch(method,
-        none   = mat,
-        sum    = norm_total_sum(mat),
-        median = norm_median(mat),
-        pqn    = norm_pqn(mat),
-        is     = norm_internal_standard(mat, ref_col, row_data),
+        none    = mat,
+        sum     = norm_total_sum(mat),
+        median  = norm_median(mat),
+        pqn     = norm_pqn(mat),
+        eigenms = norm_eigenms(mat, groups),
+        is      = norm_internal_standard(mat, ref_col, row_data),
         stop("Unknown sample normalization method: ", method)
     )
 }
@@ -92,6 +96,94 @@ norm_pqn <- function(mat) {
     med_quotients[!is.finite(med_quotients) | med_quotients == 0] <- 1
 
     sweep(mat_mn, 2, med_quotients, FUN = "/")
+}
+
+
+#' EigenMS normalization (Eigenvector-based normalization)
+#'
+#' Uses the ProteoMM Bioconductor package (Karpievitch et al., 2009, 2014) to
+#' perform EigenMS normalization via SVD on residuals from a group-aware linear
+#' model, identifying and removing systematic technical bias while preserving
+#' biological signal.
+#'
+#' References:
+#'   Karpievitch YV et al. (2009) Bioinformatics — original EigenMS method.
+#'   Karpievitch YV et al. (2014) PLoS ONE — EigenMS for metabolomics.
+#'
+#' @param mat    Numeric matrix (features x samples), log-scale or linear.
+#' @param groups Character/factor vector of group labels per sample.
+#' @return Normalized numeric matrix (same dimensions).
+norm_eigenms <- function(mat, groups = NULL) {
+    if (is.null(groups)) {
+        warning("norm_eigenms: groups not provided — falling back to PQN normalization.")
+        return(norm_pqn(mat))
+    }
+
+    if (!requireNamespace("ProteoMM", quietly = TRUE)) {
+        stop("norm_eigenms requires the ProteoMM Bioconductor package.\n",
+             "Install with: BiocManager::install('ProteoMM')")
+    }
+
+    groups <- as.factor(groups)
+    if (length(groups) != ncol(mat)) {
+        stop("norm_eigenms: length(groups) must equal ncol(mat)")
+    }
+
+    # ProteoMM requires rownames
+    if (is.null(rownames(mat))) rownames(mat) <- paste0("feat_", seq_len(nrow(mat)))
+    if (is.null(colnames(mat))) colnames(mat) <- paste0("S", seq_len(ncol(mat)))
+
+    # prot.info: data.frame with at least one column of feature IDs
+    prot_info <- data.frame(id = rownames(mat), stringsAsFactors = FALSE)
+
+    # Suppress ProteoMM's built-in plotting (it calls par/plot internally)
+    grDevices::pdf(NULL)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    # Step 1: Identify eigentrends (SVD + parallel analysis)
+    set.seed(12345)  # reproducibility as recommended by ProteoMM
+    rv <- suppressWarnings(suppressMessages(
+        ProteoMM::eig_norm1(m = mat, treatment = groups, prot.info = prot_info)
+    ))
+
+    n_eigentrends <- rv$h.c
+    message(sprintf("norm_eigenms (ProteoMM): found %d significant eigentrend(s)",
+                    n_eigentrends))
+
+    if (n_eigentrends == 0) {
+        message("norm_eigenms: no significant systematic bias detected — returning original data.")
+        return(mat)
+    }
+
+    # Step 2: Normalize by removing identified eigentrends
+    res <- suppressWarnings(suppressMessages(
+        ProteoMM::eig_norm2(rv)
+    ))
+
+    # res$norm_m is the normalized matrix (features x samples) with row/colnames
+    mat_norm <- res$norm_m
+
+    # Ensure output has same dimensions and names as input
+    # ProteoMM may drop features that are entirely NA in any group
+    if (nrow(mat_norm) == nrow(mat)) {
+        rownames(mat_norm) <- rownames(mat)
+        colnames(mat_norm) <- colnames(mat)
+        return(mat_norm)
+    }
+
+    # If ProteoMM dropped some features, map back to original dimensions
+    mat_out <- mat
+    shared <- intersect(rownames(mat_norm), rownames(mat))
+    if (length(shared) > 0) {
+        mat_out[shared, ] <- mat_norm[shared, ]
+    }
+    # Features not returned by ProteoMM keep their original values
+    n_kept <- length(shared)
+    if (n_kept < nrow(mat)) {
+        message(sprintf("norm_eigenms: ProteoMM normalized %d/%d features; %d kept original values.",
+                        n_kept, nrow(mat), nrow(mat) - n_kept))
+    }
+    mat_out
 }
 
 
@@ -230,8 +322,10 @@ scale_metab <- function(mat, method = "none") {
 #' @param mat         Numeric matrix (features x samples).
 #' @param norm_cfg    normalization config section.
 #' @param row_data    data.frame (for IS normalization only).
+#' @param groups      Character/factor vector of group labels per sample
+#'                    (required for eigenms; ignored by other methods).
 #' @return list(expr_norm, applied) where applied records what was done.
-apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL) {
+apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL, groups = NULL) {
     sample_norm <- norm_cfg$sample_norm %||% "none"
     transform   <- norm_cfg$transform   %||% "none"
     scaling     <- norm_cfg$scaling     %||% "none"
@@ -242,7 +336,8 @@ apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL) {
 
     # Step 1: sample normalization
     mat <- normalize_samples(mat, method = sample_norm,
-                             ref_col = is_ref_col, row_data = row_data)
+                             ref_col = is_ref_col, row_data = row_data,
+                             groups = groups)
 
     # Step 2: transformation
     mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
