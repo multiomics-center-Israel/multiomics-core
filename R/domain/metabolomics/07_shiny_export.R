@@ -43,7 +43,8 @@ build_shiny_payload_metabolomics <- function(
     plsda_res = NULL,
     enrichment_res = NULL,
     annot = NULL,
-    include_legacy = TRUE
+    include_legacy = TRUE,
+    out_dir = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -194,7 +195,7 @@ build_shiny_payload_metabolomics <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats)
+            payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats, out_dir = out_dir)
         }
 
         # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)

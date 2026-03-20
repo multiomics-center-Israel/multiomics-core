@@ -37,7 +37,8 @@ build_shiny_payload_rnaseq <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
-    trinotate_main = NULL
+    trinotate_main = NULL,
+    out_dir = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -158,7 +159,7 @@ build_shiny_payload_rnaseq <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats)
+            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats, out_dir = out_dir)
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)

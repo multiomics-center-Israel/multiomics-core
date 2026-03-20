@@ -37,7 +37,8 @@ build_shiny_payload_proteomics <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
-    final_results = NULL) 
+    final_results = NULL,
+    out_dir = NULL)
   {
     # ============================================================
     # Initialize canonical payload structure
@@ -161,7 +162,7 @@ build_shiny_payload_proteomics <- function(
             }
 
             # de_summary: Per-contrast summary counts
-            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats)
+            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats, out_dir = out_dir)
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 

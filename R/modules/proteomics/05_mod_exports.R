@@ -130,7 +130,8 @@ mod_proteomics_exports <- function(
         config = config,
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
-        final_results = final_results
+        final_results = final_results,
+        out_dir = out_dir
     )
 
     saveRDS(shiny_payload, shiny_payload_file)
