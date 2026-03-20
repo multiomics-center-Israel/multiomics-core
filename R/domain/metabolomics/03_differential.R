@@ -40,26 +40,32 @@ isTRUE_vec <- function(x) {
 #' @keywords internal
 filter_to_biological <- function(mat, meta, condition_col, sample_col,
                                  label = "metabolomics") {
-    condition_vals <- as.character(meta[[condition_col]])
-    is_bio <- !grepl("^(qc|blank)$", condition_vals, ignore.case = TRUE)
-
-    if ("is_QC" %in% colnames(meta))
-        is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
-    if ("is_blank" %in% colnames(meta))
-        is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
-
-    n_excluded <- sum(!is_bio)
-    if (n_excluded > 0L) {
-        message(sprintf(
-            "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
-            label, n_excluded, sum(is_bio)
-        ))
-        keep_ids <- meta[[sample_col]][is_bio]
-        mat  <- mat[, keep_ids, drop = FALSE]
-        meta <- meta[is_bio, , drop = FALSE]
-    }
-
-    list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
+  condition_vals <- trimws(as.character(meta[[condition_col]]))
+  sample_vals    <- trimws(as.character(meta[[sample_col]]))
+  
+  is_qc_or_blank_condition <- grepl("(^|_)(qc|blank|blanks)($|_)",
+                                    condition_vals, ignore.case = TRUE)
+  is_qc_sample <- grepl("^QC", sample_vals, ignore.case = TRUE)
+  
+  is_bio <- !(is_qc_or_blank_condition | is_qc_sample)
+  
+  if ("is_QC" %in% colnames(meta))
+    is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
+  if ("is_blank" %in% colnames(meta))
+    is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
+  
+  n_excluded <- sum(!is_bio)
+  if (n_excluded > 0L) {
+    message(sprintf(
+      "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
+      label, n_excluded, sum(is_bio)
+    ))
+    keep_ids <- meta[[sample_col]][is_bio]
+    mat  <- mat[, keep_ids, drop = FALSE]
+    meta <- meta[is_bio, , drop = FALSE]
+  }
+  
+  list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
 }
 
 

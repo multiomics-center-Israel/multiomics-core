@@ -74,6 +74,11 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
             # Pass RAW counts (expr_filt) and clustering results
             # ID column will be "Gene" (from legacy rename in write_rnaseq_outputs_legacy)
             id_col <- if ("Gene" %in% names(final_results)) "Gene" else "FeatureID"
+
+            # Extract Excel config for enriched layout (annotation rows, sample labels)
+            excel_cfg <- config$modes$rna$excel %||% list()
+            rna_sample_id_col <- config$modes$rna$effects$samples %||% "SampleID"
+
             files <- c(files, write_final_results_excels_legacy_generic(
                 final_results = final_results,
                 config = config,
@@ -82,7 +87,11 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
                 id_col = id_col,
                 expr_for_de = pre$expr_filt,  # RAW counts, not normalized
                 with_cutoffs = TRUE,
-                clustering_res = list(excel_order = excel_order)
+                clustering_res = list(excel_order = excel_order),
+                sample_meta = pre$meta,
+                sample_id_col = rna_sample_id_col,
+                annotation_rows = excel_cfg$annotation_rows,
+                sample_label_cols = excel_cfg$sample_label_cols
             ))
         }
     }
