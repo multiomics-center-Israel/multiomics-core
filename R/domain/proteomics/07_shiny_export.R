@@ -275,10 +275,11 @@ build_shiny_payload_proteomics <- function(
 #' \code{logFC.}, \code{linearFC.imputs.}).
 #'
 #' @param de_stats DE statistics data.frame with pass columns
-#' @return data.frame with columns: contrast, up, down, total
+#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
+#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
 #' @keywords internal
-build_de_summary_counts_proteomics <- function(de_stats) {
-    build_de_summary_counts_generic(
+build_de_summary_counts_proteomics <- function(de_stats, out_dir = NULL) {
+    result <- build_de_summary_counts_generic(
         de_stats         = de_stats,
         pass_pattern     = "^pass\\.imputs\\.",
         extract_contrast = function(col) sub("^pass\\.imputs\\.", "", col),
@@ -293,6 +294,12 @@ build_de_summary_counts_proteomics <- function(de_stats) {
             if (length(matched) > 0) matched[1] else NULL
         }
     )
+
+    if (!is.null(out_dir) && !is.null(result) && nrow(result) > 0) {
+        save_tsv(result, out_dir, "de_summary_counts.tsv")
+    }
+
+    result
 }
 
 
