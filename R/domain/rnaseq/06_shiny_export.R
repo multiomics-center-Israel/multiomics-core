@@ -325,9 +325,8 @@ build_de_summary_counts_rnaseq <- function(de_stats, out_dir = NULL) {
 #' @return Path to saved file (invisibly)
 #' @export
 save_shiny_payload_rnaseq <- function(..., out_file = "shiny_payload_rnaseq.rds") {
-    payload <- build_shiny_payload_rnaseq(...)
-
     out_dir <- dirname(out_file)
+    payload <- build_shiny_payload_rnaseq(..., out_dir = out_dir)
     if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
         dir.create(out_dir, recursive = TRUE)
     }
