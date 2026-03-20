@@ -151,6 +151,21 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             }
         }
 
+        # ---- Detect DE stat columns and group by contrast ----
+        de_col_pattern <- "^(linearFC|pvalue|padj|upDown)\\."
+        de_col_indices <- grep(de_col_pattern, colnames(df_out))
+        contrast_groups <- list()
+        if (length(de_col_indices) > 0) {
+            for (ci in de_col_indices) {
+                col_name <- colnames(df_out)[ci]
+                contrast <- sub("^[^.]+\\.", "", col_name)
+                contrast <- sub("^imputs\\.", "", contrast)
+                contrast_groups[[contrast]] <- c(contrast_groups[[contrast]], ci)
+            }
+        }
+        has_contrast_groups <- length(contrast_groups) > 0
+        n_contrast_header_rows <- if (has_contrast_groups) 1L else 0L
+
         # ---- Number of annotation rows above the data ----
         n_annot_rows <- 0
         if (!is.null(annot_row_data) && length(annot_row_data) > 0 &&
@@ -220,9 +235,40 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                cols = seq_along(df_cols), stack = TRUE)
         }
 
+        # ---- Grouped contrast header row ----
+        if (has_contrast_groups) {
+            contrast_row <- n_annot_rows + 1
+            contrast_style <- openxlsx::createStyle(
+                textDecoration = "bold", halign = "center",
+                border = "bottom", borderStyle = "thin"
+            )
+            for (contrast_name in names(contrast_groups)) {
+                cols <- contrast_groups[[contrast_name]]
+                openxlsx::writeData(wb, sheet, x = contrast_name,
+                                    startCol = cols[1], startRow = contrast_row,
+                                    colNames = FALSE, rowNames = FALSE)
+                if (length(cols) > 1) {
+                    openxlsx::mergeCells(wb, sheet,
+                                         cols = cols, rows = contrast_row)
+                }
+                openxlsx::addStyle(wb, sheet, contrast_style,
+                                   rows = contrast_row, cols = cols, stack = TRUE)
+            }
+        }
+
         # ---- Write data table (header + data) ----
-        data_start_row <- n_annot_rows + 1
+        data_start_row <- n_annot_rows + n_contrast_header_rows + 1
         openxlsx::writeData(wb, sheet, df_out, startRow = data_start_row)
+
+        # ---- Overwrite DE header cells with short stat names ----
+        if (has_contrast_groups) {
+            for (ci in de_col_indices) {
+                stat_name <- sub("\\..*", "", colnames(df_out)[ci])
+                openxlsx::writeData(wb, sheet, x = stat_name,
+                                    startCol = ci, startRow = data_start_row,
+                                    colNames = FALSE, rowNames = FALSE)
+            }
+        }
 
         # ---- Header styling ----
         header_style <- openxlsx::createStyle(textDecoration = "bold",
