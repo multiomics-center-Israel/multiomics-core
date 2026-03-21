@@ -165,6 +165,9 @@ mod_met_missingness_stats <- function(raw, config) {
 #' @return Character scalar: path to saved PNG (for \code{format = "file"} target).
 #'
 mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
+  met_cfg <- config$modes$metabolomics
+  if (!isTRUE(met_cfg$qc$missingness_heatmap)) return(character(0))
+
   diag_dir <- file.path(out_dir, "diagnostic_plots")
   dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(diag_dir, "missingness_heatmap.png")
