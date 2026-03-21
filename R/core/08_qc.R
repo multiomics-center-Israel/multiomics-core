@@ -168,6 +168,12 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
 
+  # Build formula references so plotly splits traces by group
+  color_formula <- if (!is.null(color_col))
+    stats::as.formula(paste0("~`", color_col, "`")) else NULL
+  symbol_formula <- if (!is.null(shape_col) && shape_col %in% colnames(scores))
+    stats::as.formula(paste0("~`", shape_col, "`")) else NULL
+
   plt <- plotly::plot_ly(
     data = scores,
     x = ~PC1,
@@ -175,11 +181,11 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     z = ~PC3,
     type = "scatter3d",
     mode = "markers",
-    color = if (!is.null(color_col)) scores[[color_col]] else NULL,
-    symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
+    color = color_formula,
+    symbol = symbol_formula,
     text = hover_text,
     hoverinfo = "text"
-  )|>
+  ) |>
     plotly::layout(
       scene = list(
         xaxis = list(title = pc_labels[1]),
@@ -190,13 +196,19 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     )
 
   if (!is.null(out_file)) {
-    tryCatch(
-      htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = TRUE),
-      error = function(e) {
-        warning("3D PCA not saved (pandoc required for self-contained HTML): ",
-                conditionMessage(e))
-      }
-    )
+    if (!nzchar(Sys.which("pandoc"))) {
+      warning("3D PCA not saved to disk (pandoc required for self-contained HTML).")
+    } else {
+      tryCatch(
+        htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = TRUE),
+        error = function(e) {
+          warning("3D PCA save failed: ", conditionMessage(e))
+        }
+      )
+    }
+    # Defense-in-depth: remove any auxiliary _files directory
+    lib_dir <- sub("\\.html$", "_files", out_file)
+    if (dir.exists(lib_dir)) unlink(lib_dir, recursive = TRUE)
   }
 
   plt
