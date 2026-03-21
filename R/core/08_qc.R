@@ -196,7 +196,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     )
 
   if (!is.null(out_file)) {
-    if (!nzchar(Sys.which("pandoc"))) {
+    if (!rmarkdown::pandoc_available()) {
       warning("3D PCA not saved to disk (pandoc required for self-contained HTML).")
     } else {
       tryCatch(
