@@ -142,6 +142,15 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_raw)
         plots[[paste0("density_raw", tag)]] <- p_dens_raw
 
+        # -- Density: log2(raw) -- (retained for plots list; not saved to disk)
+        expr_log2_raw <- log2(pmax(s$expr_filt, 1))
+        p_dens_log2 <- qc_omic_density(
+            expr_log2_raw, s$meta, cfg_primary,
+            out_file = NULL,
+            title = paste0("Density: log2(raw intensities)", label)
+        )
+        plots[[paste0("density_log2raw", tag)]] <- p_dens_log2
+
         # -- Density: normalized --
         f_dens_norm <- file.path(out_qc, paste0("intensity_density_normalized", tag, ".png"))
         p_dens_norm <- qc_omic_density(
@@ -152,12 +161,13 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_norm)
         plots[[paste0("density_norm", tag)]] <- p_dens_norm
 
-        # -- Boxplot: raw --
+        # -- Boxplot: raw (log2-transformed for visualization) --
         f_box_raw <- file.path(out_qc, paste0("intensity_boxplot_raw", tag, ".png"))
+        expr_filt_log2_box <- log2(s$expr_filt + 1)
         p_box_raw <- norm_boxplot(
-            s$expr_filt, s$meta, cfg_primary,
+            expr_filt_log2_box, s$meta, cfg_primary,
             out_file = f_box_raw,
-            title = paste0("Boxplot: raw intensities", label)
+            title = paste0("Boxplot: log2(raw intensities)", label)
         )
         files <- c(files, f_box_raw)
         plots[[paste0("boxplot_raw", tag)]] <- p_box_raw
@@ -182,7 +192,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
 
         # Distance heatmap: all samples (with QC)
         s_all <- subsets[[1]]
-        f_dist_wqc <- file.path(out_qc, "sample_distance_heatmap_w_qc.png")
+        f_dist_wqc <- file.path(out_qc, "sample_distance_metab_heatmap_w_qc.png")
         ph_dist_wqc <- qc_sample_distance_heatmap(s_all$expr_work, s_all$meta, cfg_primary,
                                     out_file = f_dist_wqc, annot_cols = annot_cols)
         files <- c(files, f_dist_wqc)
@@ -191,7 +201,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         # Distance heatmap: without QC (only when QC samples exist)
         if (length(subsets) >= 2) {
             s_noqc <- subsets[[2]]
-            f_dist <- file.path(out_qc, "sample_distance_heatmap.png")
+            f_dist <- file.path(out_qc, "sample_distance_metab_heatmap.png")
             ph_dist <- qc_sample_distance_heatmap(s_noqc$expr_work, s_noqc$meta, cfg_primary,
                                         out_file = f_dist, annot_cols = annot_cols)
             files <- c(files, f_dist)
