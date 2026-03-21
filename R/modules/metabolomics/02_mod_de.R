@@ -28,7 +28,7 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     }
 
     dirs <- create_legacy_output_dirs(out_dir)
-    out_qc <- file.path(dirs$diagnostic_plots, "QC_post")
+    out_qc <- file.path(dirs$diagnostic_plots, "DE_plots")
     ensure_dir(out_qc)
     out_ds <- dirs$datasets
 

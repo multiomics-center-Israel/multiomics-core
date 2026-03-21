@@ -146,9 +146,9 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   pc_labels <- sprintf("PC%d (%.1f%%)", seq_along(var_expl), 100 * var_expl)
 
   # Attach metadata (order is aligned)
-  scores[[color_col]] <- meta_sub[[color_col]]
+  scores[[color_col]] <- as.factor(meta_sub[[color_col]])
   if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
-    scores[[shape_col]] <- meta_sub[[shape_col]]
+    scores[[shape_col]] <- as.factor(meta_sub[[shape_col]])
   }
 
   # Attach label column if configured
@@ -190,12 +190,13 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     )
 
   if (!is.null(out_file)) {
-    # Check if pandoc is available for self-contained HTML
-    has_pandoc <- nzchar(Sys.which("pandoc"))
-    if (!has_pandoc) {
-      warning("Pandoc not found: Saving 3D PCA widget as non-self-contained (creates matching '_files' directory). Install Pandoc to enable self-contained HTML.")
-    }
-    htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = has_pandoc)
+    tryCatch(
+      htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = TRUE),
+      error = function(e) {
+        warning("3D PCA not saved (pandoc required for self-contained HTML): ",
+                conditionMessage(e))
+      }
+    )
   }
 
   plt
