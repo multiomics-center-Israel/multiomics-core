@@ -170,9 +170,9 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
 
   # Build formula references so plotly splits traces by group
   color_formula <- if (!is.null(color_col))
-    stats::as.formula(paste0("~`", color_col, "`")) else NULL
+    stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL
   symbol_formula <- if (!is.null(shape_col) && shape_col %in% colnames(scores))
-    stats::as.formula(paste0("~`", shape_col, "`")) else NULL
+    stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL
 
   plt <- plotly::plot_ly(
     data = scores,
