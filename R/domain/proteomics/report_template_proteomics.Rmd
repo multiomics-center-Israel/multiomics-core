@@ -2176,6 +2176,81 @@ if (length(ora_files) > 0) {
 }
 ```
 
+## Clustered Enrichment (Redundancy-Reduced) {.tabset}
+
+Enrichment results often contain many similar terms (e.g., "ribosome biogenesis", "large ribosomal subunit assembly", "small ribosomal subunit assembly"). Semantic clustering groups related terms into clusters and selects a single representative per cluster, revealing a broader functional landscape. For GO terms, clustering uses semantic similarity ([rrvgo](https://bioconductor.org/packages/rrvgo/)); for KEGG/custom databases, it uses Jaccard similarity on shared genes.
+
+```{r clustered-setup, include=FALSE}
+clustered_dir <- file.path(enrich_dir, "clustered")
+has_clustered <- dir.exists(clustered_dir) && length(list.files(clustered_dir, pattern = "\\.csv$")) > 0
+```
+
+```{r clustered-skip, eval=!has_clustered && has_enrichment, results='asis'}
+cat("Clustered enrichment results are not available. To enable clustering, install the `rrvgo` package (`BiocManager::install('rrvgo')`).\n")
+```
+
+```{r clustered-method-note, eval=has_clustered, results='asis'}
+cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Enrichment terms clustered by semantic similarity (GO) or gene overlap (KEGG/custom). Each row represents a cluster of related terms. The representative term is the most significant member. \"Members\" lists other terms merged into the cluster.</em></p>\n")
+```
+
+```{r clustered-tables, eval=has_clustered, results='asis'}
+clustered_files <- list.files(clustered_dir, pattern = "\\.csv$", full.names = TRUE)
+for (cf in clustered_files) {
+    label <- gsub("^clustered_|\\.csv$", "", basename(cf))
+    label_clean <- gsub("_", " ", label)
+
+    cl_df <- read.csv(cf, stringsAsFactors = FALSE)
+    if (nrow(cl_df) == 0) next
+
+    cat(sprintf("\n### %s\n\n", label_clean))
+    cat(sprintf("**%d clusters** from %d enriched terms\n\n",
+                nrow(cl_df), sum(cl_df$n_members)))
+
+    # Select display columns based on what's available (fgsea vs ORA)
+    has_nes <- "NES" %in% names(cl_df) && !all(is.na(cl_df$NES))
+    if (has_nes) {
+        show_cols <- intersect(
+            c("representative_term", "n_members", "padj", "NES", "size", "member_terms"),
+            names(cl_df))
+    } else {
+        show_cols <- intersect(
+            c("representative_term", "n_members", "padj", "pvalue", "size", "member_terms"),
+            names(cl_df))
+    }
+
+    display_df <- cl_df[, show_cols, drop = FALSE]
+    # Rename for clarity
+    names(display_df)[names(display_df) == "representative_term"] <- "Representative Term"
+    names(display_df)[names(display_df) == "n_members"] <- "# Merged"
+    names(display_df)[names(display_df) == "member_terms"] <- "Clustered Terms"
+
+    print(htmltools::tagList(make_dt(display_df, paste("Clustered -", label_clean))))
+    cat("\n\n")
+}
+```
+
+### Clustered Dotplots {.tabset}
+
+```{r clustered-dotplots-setup, include=FALSE}
+clustered_plot_dir <- file.path(enrich_dir, "clustered", "plots")
+has_clustered_plots <- dir.exists(clustered_plot_dir) && length(list.files(clustered_plot_dir, pattern = "\\.png$")) > 0
+```
+
+```{r clustered-dotplots, eval=has_clustered_plots, results='asis'}
+cl_pngs <- list.files(clustered_plot_dir, pattern = "\\.png$", full.names = TRUE)
+for (pp in cl_pngs) {
+    label_raw <- gsub("\\.png$", "", basename(pp))
+    label <- gsub("_", " ", label_raw)
+    cat(sprintf("\n#### %s\n\n", label))
+    cat(sprintf("![%s](%s)\n\n", label, pp))
+    figure_legend(sprintf("Clustered dotplot for %s. Each dot represents a cluster of semantically similar terms. Dot size reflects the number of merged terms; color intensity reflects significance. Numbers in parentheses indicate cluster size.", label))
+}
+```
+
+```{r clustered-dotplots-skip, eval=has_clustered && !has_clustered_plots, results='asis'}
+cat("Clustered dotplots could not be generated.\n")
+```
+
 ## Pathway Dotplots {.tabset}
 
 ```{r pathway-dotplots, eval=has_pathway_plots, results='asis'}

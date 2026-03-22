@@ -253,6 +253,7 @@ modes:
       max_size: 500
       gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
       pathway_volcano: true   # produce pathway-colored volcano data for report
+      cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
     # --------------------------------------------------------
     # PPI network analysis

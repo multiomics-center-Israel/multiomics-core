@@ -243,6 +243,57 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         message("Saved gene annotation to: ", anno_file)
     }
 
+    # ------------------------------------------------------------------
+    # Cluster enrichment terms (rrvgo for GO, Jaccard for KEGG/custom)
+    # ------------------------------------------------------------------
+    cluster_threshold <- pw_cfg$cluster_threshold %||% 0.7
+    message("=== Clustering enrichment terms (threshold: ", cluster_threshold, ") ===")
+
+    clustered_dir <- file.path(enrich_dir, "clustered")
+    dir.create(clustered_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (contrast_name in names(pathway_results)) {
+        contrast_res <- pathway_results[[contrast_name]]
+
+        for (analysis_name in names(contrast_res)) {
+            res_df <- contrast_res[[analysis_name]]
+            if (is.null(res_df) || nrow(res_df) == 0) next
+
+            # Determine the database for this result
+            db_name <- res_df$database[1]
+            if (is.null(db_name)) db_name <- sub("_.*$", "", analysis_name)
+
+            clustered <- tryCatch(
+                cluster_enrichment_terms(
+                    enrichment_df = res_df,
+                    database = db_name,
+                    gene_sets = gene_sets[[db_name]],
+                    organism = organism,
+                    threshold = cluster_threshold
+                ),
+                error = function(e) {
+                    message("Clustering failed for ", contrast_name, "/", analysis_name, ": ", e$message)
+                    NULL
+                }
+            )
+
+            if (!is.null(clustered) && nrow(clustered) > 0) {
+                clean_contrast <- gsub("[^a-zA-Z0-9_-]", "_", contrast_name)
+                clean_analysis <- gsub("[^a-zA-Z0-9_-]", "_", analysis_name)
+                out_file <- file.path(clustered_dir,
+                                      paste0("clustered_", clean_contrast, "_", clean_analysis, ".csv"))
+                write.csv(clustered, out_file, row.names = FALSE)
+                message("  Saved clustered results: ", basename(out_file),
+                        " (", nrow(clustered), " clusters from ",
+                        sum(clustered$n_members), " terms)")
+            }
+        }
+    }
+
+    # Generate clustered dotplots
+    clustered_plot_dir <- file.path(enrich_dir, "clustered", "plots")
+    generate_clustered_dotplots(clustered_dir, clustered_plot_dir)
+
     # Build pathway-colored volcano data if enabled
     if (isTRUE(pw_cfg$pathway_volcano)) {
         message("Building pathway-colored volcano data...")

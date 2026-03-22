@@ -572,6 +572,225 @@ save_pathway_results <- function(pathway_results, output_dir) {
     output_files
 }
 
+# ==============================================================================
+# SEMANTIC CLUSTERING OF ENRICHMENT TERMS (rrvgo)
+# ==============================================================================
+
+#' Cluster enrichment terms to reduce redundancy
+#'
+#' For GO terms, uses rrvgo (semantic similarity via GOSemSim).
+#' For KEGG/custom terms, uses Jaccard similarity on gene overlap.
+#'
+#' @param enrichment_df Data frame with enrichment results (must have 'pathway' and 'padj' columns)
+#' @param database Character: "GO", "KEGG", or "custom"
+#' @param gene_sets Named list of gene sets (needed for Jaccard clustering of non-GO terms)
+#' @param organism Character: organism name for OrgDb lookup (needed for GO clustering)
+#' @param threshold Numeric: similarity threshold for merging (0-1, default 0.7). Lower = more aggressive merging.
+#' @param ont Character: GO ontology for rrvgo ("BP", "MF", "CC"). Default "BP".
+#' @return Data frame with added columns: cluster, parentTerm, parentPadj
+#' @export
+cluster_enrichment_terms <- function(enrichment_df,
+                                      database,
+                                      gene_sets = NULL,
+                                      organism = "Homo sapiens",
+                                      threshold = 0.7,
+                                      ont = "BP") {
+
+    if (is.null(enrichment_df) || nrow(enrichment_df) == 0) return(enrichment_df)
+    if (!"pathway" %in% colnames(enrichment_df)) return(enrichment_df)
+
+    # Only cluster significant terms
+    sig <- enrichment_df[!is.na(enrichment_df$padj) & enrichment_df$padj < 0.05, ]
+    if (nrow(sig) < 2) return(NULL)
+
+    is_go <- grepl("^GO", database, ignore.case = TRUE) ||
+        all(grepl("^GO:[0-9]+", sig$pathway))
+
+    if (is_go) {
+        clustered <- .cluster_go_terms(sig, organism, threshold, ont)
+    } else {
+        clustered <- .cluster_by_jaccard(sig, gene_sets, threshold)
+    }
+
+    clustered
+}
+
+#' Cluster GO terms using rrvgo semantic similarity
+#' @keywords internal
+.cluster_go_terms <- function(sig_df, organism, threshold, ont) {
+    if (!requireNamespace("rrvgo", quietly = TRUE)) {
+        message("rrvgo package not installed. Install with: BiocManager::install('rrvgo')")
+        message("Falling back to Jaccard-based clustering.")
+        return(NULL)
+    }
+
+    org_info <- get_organism_info(organism)
+    if (is.na(org_info$orgdb)) {
+        message("No OrgDb available for '", organism, "'. Cannot compute GO semantic similarity.")
+        return(NULL)
+    }
+
+    if (!requireNamespace(org_info$orgdb, quietly = TRUE)) {
+        message("OrgDb package '", org_info$orgdb, "' not installed.")
+        return(NULL)
+    }
+
+    go_ids <- sig_df$pathway
+    # Ensure all are valid GO IDs
+    valid_go <- grepl("^GO:[0-9]+", go_ids)
+    if (sum(valid_go) < 2) {
+        message("Fewer than 2 valid GO IDs found. Skipping GO clustering.")
+        return(NULL)
+    }
+
+    sig_df <- sig_df[valid_go, ]
+    go_ids <- sig_df$pathway
+    scores <- setNames(-log10(sig_df$padj + 1e-300), go_ids)
+
+    sim_matrix <- tryCatch({
+        rrvgo::calculateSimMatrix(
+            go_ids,
+            orgdb = org_info$orgdb,
+            ont = ont,
+            method = "Rel"
+        )
+    }, error = function(e) {
+        message("rrvgo similarity matrix computation failed: ", e$message)
+        NULL
+    })
+
+    if (is.null(sim_matrix) || nrow(sim_matrix) < 2) return(NULL)
+
+    # Only keep GO IDs that appear in the similarity matrix
+    common_ids <- intersect(go_ids, rownames(sim_matrix))
+    if (length(common_ids) < 2) return(NULL)
+    scores <- scores[common_ids]
+
+    reduced <- tryCatch({
+        rrvgo::reduceSimMatrix(sim_matrix, scores, threshold = threshold,
+                               orgdb = org_info$orgdb)
+    }, error = function(e) {
+        message("rrvgo reduceSimMatrix failed: ", e$message)
+        NULL
+    })
+
+    if (is.null(reduced) || nrow(reduced) == 0) return(NULL)
+
+    # Build clustered result: merge reduced info back into enrichment data
+    # reduced has columns: go, cluster, parent, parentSimScore, parentTerm, score
+    sig_df <- sig_df[sig_df$pathway %in% reduced$go, ]
+    sig_df$cluster <- reduced$cluster[match(sig_df$pathway, reduced$go)]
+    sig_df$parentTerm <- reduced$parentTerm[match(sig_df$pathway, reduced$go)]
+    sig_df$parent <- reduced$parent[match(sig_df$pathway, reduced$go)]
+
+    # Build cluster summary: one row per cluster (representative = parent term)
+    cluster_summary <- .build_cluster_summary(sig_df)
+
+    cluster_summary
+}
+
+#' Cluster non-GO terms by Jaccard similarity on gene overlap
+#' @keywords internal
+.cluster_by_jaccard <- function(sig_df, gene_sets, threshold) {
+    if (is.null(gene_sets) || length(gene_sets) == 0) {
+        message("No gene sets provided for Jaccard clustering.")
+        return(NULL)
+    }
+
+    pathways <- sig_df$pathway
+    # Only use pathways that exist in gene_sets
+    pathways <- pathways[pathways %in% names(gene_sets)]
+    if (length(pathways) < 2) return(NULL)
+
+    sig_df <- sig_df[sig_df$pathway %in% pathways, ]
+
+    # Compute pairwise Jaccard similarity
+    n <- length(pathways)
+    sim_mat <- matrix(0, nrow = n, ncol = n, dimnames = list(pathways, pathways))
+
+    for (i in seq_len(n)) {
+        for (j in i:n) {
+            a <- gene_sets[[pathways[i]]]
+            b <- gene_sets[[pathways[j]]]
+            inter <- length(intersect(a, b))
+            union_size <- length(union(a, b))
+            sim <- if (union_size > 0) inter / union_size else 0
+            sim_mat[i, j] <- sim
+            sim_mat[j, i] <- sim
+        }
+    }
+
+    # Hierarchical clustering with complete linkage
+    dist_mat <- as.dist(1 - sim_mat)
+    hc <- hclust(dist_mat, method = "complete")
+    clusters <- cutree(hc, h = 1 - threshold)
+
+    sig_df$cluster <- clusters[sig_df$pathway]
+
+    # Within each cluster, pick the term with the lowest padj as the representative
+    sig_df$parentTerm <- NA_character_
+    sig_df$parent <- NA_character_
+    for (cl in unique(sig_df$cluster)) {
+        cl_rows <- which(sig_df$cluster == cl)
+        best <- cl_rows[which.min(sig_df$padj[cl_rows])]
+        label <- if ("pathway_name" %in% colnames(sig_df) && nzchar(sig_df$pathway_name[best] %||% "")) {
+            sig_df$pathway_name[best]
+        } else {
+            sig_df$pathway[best]
+        }
+        sig_df$parentTerm[cl_rows] <- label
+        sig_df$parent[cl_rows] <- sig_df$pathway[best]
+    }
+
+    .build_cluster_summary(sig_df)
+}
+
+#' Build cluster summary table from clustered enrichment data
+#' @keywords internal
+.build_cluster_summary <- function(clustered_df) {
+    clusters <- split(clustered_df, clustered_df$cluster)
+
+    summaries <- lapply(clusters, function(cl_df) {
+        # Representative is the parent term (lowest padj in cluster)
+        rep_idx <- which.min(cl_df$padj)
+
+        rep_name <- if ("pathway_name" %in% colnames(cl_df) && nzchar(cl_df$pathway_name[rep_idx] %||% "")) {
+            cl_df$pathway_name[rep_idx]
+        } else {
+            cl_df$parentTerm[rep_idx]
+        }
+
+        # Collect member term names
+        member_names <- if ("pathway_name" %in% colnames(cl_df)) {
+            cl_df$pathway_name[cl_df$pathway_name != rep_name]
+        } else {
+            cl_df$pathway[cl_df$pathway != cl_df$pathway[rep_idx]]
+        }
+
+        # Carry over method-specific columns from the representative row
+        rep_row <- cl_df[rep_idx, , drop = FALSE]
+
+        data.frame(
+            cluster_id = cl_df$cluster[1],
+            representative_term = rep_name,
+            representative_id = cl_df$pathway[rep_idx],
+            n_members = nrow(cl_df),
+            member_terms = paste(head(member_names, 10), collapse = "; "),
+            padj = rep_row$padj,
+            NES = if ("NES" %in% colnames(rep_row)) rep_row$NES else NA_real_,
+            size = if ("size" %in% colnames(rep_row)) rep_row$size else NA_integer_,
+            pvalue = if ("pvalue" %in% colnames(rep_row)) rep_row$pvalue else
+                if ("pval" %in% colnames(rep_row)) rep_row$pval else NA_real_,
+            stringsAsFactors = FALSE
+        )
+    })
+
+    result <- do.call(rbind, summaries)
+    rownames(result) <- NULL
+    result <- result[order(result$padj), ]
+    result
+}
+
 #' Generate pathway visualization dotplots
 #'
 #' @param pathway_results Output of run_pathway_analysis()
@@ -647,5 +866,85 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
     }
 
     message("Generated ", length(plot_files), " pathway plots in ", output_dir)
+    plot_files
+}
+
+#' Generate dotplots from clustered enrichment CSVs
+#'
+#' Reads clustered result CSVs and produces one dotplot per file showing
+#' cluster representatives instead of redundant terms.
+#'
+#' @param clustered_dir Directory containing clustered CSV files
+#' @param output_dir Directory for PNG output
+#' @return Named list of plot file paths
+#' @export
+generate_clustered_dotplots <- function(clustered_dir, output_dir) {
+
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    plot_files <- list()
+
+    csv_files <- list.files(clustered_dir, pattern = "\\.csv$", full.names = TRUE)
+    if (length(csv_files) == 0) return(plot_files)
+
+    for (cf in csv_files) {
+        cl_df <- read.csv(cf, stringsAsFactors = FALSE)
+        if (is.null(cl_df) || nrow(cl_df) < 2) next
+
+        label_raw <- gsub("^clustered_|\\.csv$", "", basename(cf))
+        top <- head(cl_df[order(cl_df$padj), ], 25)
+
+        # Build display label: "term (n members)" for clusters with >1 member
+        top$display_label <- ifelse(
+            top$n_members > 1,
+            paste0(substr(top$representative_term, 1, 50), " (", top$n_members, ")"),
+            substr(top$representative_term, 1, 55)
+        )
+
+        has_nes <- "NES" %in% colnames(top) && !all(is.na(top$NES))
+
+        if (has_nes) {
+            p <- ggplot2::ggplot(top,
+                    ggplot2::aes(x = NES, y = reorder(display_label, NES))) +
+                ggplot2::geom_point(ggplot2::aes(
+                    size = n_members,
+                    color = -log10(padj))) +
+                ggplot2::scale_color_gradient(low = "blue", high = "red",
+                                              name = "-log10(padj)") +
+                ggplot2::labs(
+                    title = paste("Clustered Pathways:", gsub("_", " ", label_raw)),
+                    x = "NES (representative term)",
+                    y = "",
+                    size = "# Merged\nTerms"
+                ) +
+                ggplot2::theme_minimal() +
+                ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+        } else {
+            pval_col <- if ("pvalue" %in% colnames(top)) top$pvalue else top$padj
+            top$.neg_log10_p <- -log10(pval_col + 1e-300)
+
+            p <- ggplot2::ggplot(top,
+                    ggplot2::aes(x = .neg_log10_p,
+                                 y = reorder(display_label, .neg_log10_p))) +
+                ggplot2::geom_point(ggplot2::aes(
+                    size = n_members,
+                    color = -log10(padj))) +
+                ggplot2::scale_color_gradient(low = "blue", high = "red",
+                                              name = "-log10(padj)") +
+                ggplot2::labs(
+                    title = paste("Clustered Pathways:", gsub("_", " ", label_raw)),
+                    x = "-log10(p-value)",
+                    y = "",
+                    size = "# Merged\nTerms"
+                ) +
+                ggplot2::theme_minimal() +
+                ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+        }
+
+        plot_file <- file.path(output_dir, paste0(label_raw, ".png"))
+        ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+        plot_files[[label_raw]] <- plot_file
+    }
+
+    message("Generated ", length(plot_files), " clustered dotplots in ", output_dir)
     plot_files
 }
