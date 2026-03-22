@@ -207,6 +207,33 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
             files <- c(files, f_dist)
             plots[["dist_heatmap_noQC"]] <- ph_dist
         }
+
+        # Expression heatmap: all samples
+        f_hm <- file.path(out_qc, "samples_metab_heatmap.png")
+        hm_clusters <- wrap_qc_heatmap(s_all$expr_work, s_all$meta, cfg_primary,
+                                       stage = stage, out_file = f_hm)
+        files <- c(files, f_hm)
+        plots[["heatmap_clusters"]] <- hm_clusters
+
+        # Expression heatmap: without column clustering
+        f_hm_nocol <- file.path(out_qc, "samples_metab_heatmap_wo_col.png")
+        hm_nocol <- wrap_qc_heatmap(s_all$expr_work, s_all$meta, cfg_primary,
+                                    stage = stage, out_file = f_hm_nocol,
+                                    cluster_cols = FALSE)
+        files <- c(files, f_hm_nocol)
+        plots[["heatmap_nocol"]] <- hm_nocol
+
+        # Correlation heatmap: without QC
+        if (length(subsets) >= 2) {
+            s_noqc <- subsets[[2]]
+            f_cor <- file.path(out_qc, "sample_correlation_metab_heatmap.png")
+            p_cor <- qc_sample_correlation_heatmap(s_noqc$expr_work, s_noqc$meta,
+                                                   cfg_primary, out_file = f_cor,
+                                                   annot_cols = annot_cols,
+                                                   adjust_scale = TRUE)
+            files <- c(files, f_cor)
+            plots[["correlation_noQC"]] <- p_cor
+        }
     }
 
     # ---- Extract PCA objects for downstream use ----
