@@ -177,7 +177,7 @@ sanitize_character_columns <- function(df, source = "input") {
         orig <- df[[j]]
         # Step 1: convert to UTF-8 (safe baseline for subsequent comparisons)
         utf8 <- enc2utf8(orig)
-        n_encoding <- sum(!validUTF8(as.character(orig)), na.rm = TRUE)
+        n_encoding <- sum(utf8 != orig, useBytes = TRUE, na.rm = TRUE)
         # Step 2: replace NBSP and trim whitespace
         cleaned <- gsub("\u00A0", " ", utf8, fixed = TRUE)
         cleaned <- trimws(cleaned)
