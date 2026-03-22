@@ -58,6 +58,22 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   # Expression matrix (Imputed)
   expr_mat <- as.matrix(pre$expr_imp_single)
   
+  
+  # Build DE pattern row annotations
+  prot_de_cfg <- cfg$de %||% list()
+  prot_p_cutoff <- prot_de_cfg$p_cutoff %||% 0.05
+  prot_lin_fc <- prot_de_cfg$linear_fc_cutoff %||% 1.5
+  prot_log2fc <- log2(prot_lin_fc)
+  prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
+  
+  annot_context <- list(
+    summary_df    = de_res$summary_df,
+    p_cutoff      = prot_p_cutoff,
+    log2fc_cutoff = prot_log2fc,
+    id_col        = prot_id_col
+  )
+  
+  
   # ------ 1) Hierarchical clustering ---------
   if (isTRUE(flags$hierarchical)) {
     hcfg <- cl$steps$hierarchical %||% list()
@@ -94,19 +110,6 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
       binary_best        = NULL
     )
     
-    # Build DE pattern row annotations
-    prot_de_cfg <- cfg$de %||% list()
-    prot_p_cutoff <- prot_de_cfg$p_cutoff %||% 0.05
-    prot_lin_fc <- prot_de_cfg$linear_fc_cutoff %||% 1.5
-    prot_log2fc <- log2(prot_lin_fc)
-    prot_id_col <- cfg$de_table$id_col %||% "FeatureID"
-    
-    annot_context <- list(
-      summary_df    = de_res$summary_df,
-      p_cutoff      = prot_p_cutoff,
-      log2fc_cutoff = prot_log2fc,
-      id_col        = prot_id_col
-    )
     
     f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
     
@@ -249,7 +252,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
       summary_df         = de_res$summary_df,
       corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
       counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
-      counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
+      counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+      annot_context      = annot_context
     )
     
     if (!is.null(bp_res$files)) written <- c(written, bp_res$files)

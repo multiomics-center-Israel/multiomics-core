@@ -526,15 +526,53 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster
 #' @param show_labels Show sample names on axes (default FALSE to prevent overload)
 #' @param cluster_samples Enable hierarchical clustering (default TRUE)
 #' @param adjust_scale Adjust color scale for tight correlation ranges (default TRUE)
+# qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
+#                                           annot_cols = NULL,
+#                                           method = "pearson",
+#                                           fontsize = 10,
+#                                           show_labels = TRUE,
+#                                           cluster_samples = TRUE,
+#                                           adjust_scale = TRUE) {
+#   d <- prepare_qc_data(expr_mat, meta, cfg)
+# 
+#   # Build annotations: use multi-column if provided, otherwise default
+#   if (!is.null(annot_cols)) {
+#     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
+#     rownames(annot) <- d$sample_ids
+#   } else {
+#     annot <- d$annot  # Default single-column annotation
+#   }
+# 
+#   ph <- plot_sample_correlation_heatmap(
+#     expr_mat = d$expr,
+#     method = method,
+#     annotation_col = annot,
+#     fontsize = fontsize,
+#     show_labels = show_labels,
+#     cluster_rows = cluster_samples,
+#     cluster_cols = cluster_samples,
+#     adjust_scale = adjust_scale
+#   )
+# 
+#   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
+#   save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
+#   invisible(ph)
+# }
+# 
+# 
+# 
+
+
+
 qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           annot_cols = NULL,
                                           method = "pearson",
                                           fontsize = 10,
                                           show_labels = TRUE,
                                           cluster_samples = TRUE,
-                                          adjust_scale = TRUE) {
+                                          adjust_scale = FALSE) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
-
+  
   # Build annotations: use multi-column if provided, otherwise default
   if (!is.null(annot_cols)) {
     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
@@ -542,23 +580,29 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
   } else {
     annot <- d$annot  # Default single-column annotation
   }
-
+  
+  # --- CUSTOM COLOR FIX: High correlation = Dark Blue ---
+  # Define a high-contrast palette from white/light blue to dark blue
+  custom_colors <- grDevices::colorRampPalette(c("#F7FBFF", "#084594"))(100)
+  # ------------------------------------------------------
+  
   ph <- plot_sample_correlation_heatmap(
     expr_mat = d$expr,
     method = method,
     annotation_col = annot,
+    colors = custom_colors,  # Passing the custom colors here
     fontsize = fontsize,
     show_labels = show_labels,
     cluster_rows = cluster_samples,
     cluster_cols = cluster_samples,
-    adjust_scale = adjust_scale
+    adjust_scale = adjust_scale,
+    
   )
-
+  
   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
   save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
   invisible(ph)
 }
-
 
 #' Sample–sample distance heatmap (QC)
 #' @param annot_cols Character vector of metadata columns for annotations.

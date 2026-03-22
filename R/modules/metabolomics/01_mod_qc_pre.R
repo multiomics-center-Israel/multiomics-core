@@ -101,17 +101,34 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
 
             color_suffix <- ""
 
-            f_pca12 <- file.path(out_qc, paste0("PCA_PC1.vs.PC2", color_suffix, tag, ".png"))
+            # PCA with QC samples
+            f_pca12_wqc <- file.path(out_qc, paste0("PCA_PC1.vs.PC2_w_qc", color_suffix, tag, ".png"))
             p12 <- qc_pca_scatter(s$expr_work, s$meta, cfg_temp, pcs = c(1, 2),
-                                   out_file = f_pca12)
-            files <- c(files, f_pca12)
-            plots[[paste0("pca_1_2", color_suffix, tag)]] <- p12
+                                   out_file = f_pca12_wqc)
+            files <- c(files, f_pca12_wqc)
+            plots[[paste0("pca_1_2_w_qc", color_suffix, tag)]] <- p12
 
-            f_pca13 <- file.path(out_qc, paste0("PCA_PC1.vs.PC3", color_suffix, tag, ".png"))
+            f_pca13_wqc <- file.path(out_qc, paste0("PCA_PC1.vs.PC3_w_qc", color_suffix, tag, ".png"))
             p13 <- qc_pca_scatter(s$expr_work, s$meta, cfg_temp, pcs = c(1, 3),
-                                   out_file = f_pca13)
-            files <- c(files, f_pca13)
-            plots[[paste0("pca_1_3", color_suffix, tag)]] <- p13
+                                   out_file = f_pca13_wqc)
+            files <- c(files, f_pca13_wqc)
+            plots[[paste0("pca_1_3_w_qc", color_suffix, tag)]] <- p13
+
+            # PCA without QC samples
+            if (length(subsets) >= 2) {
+                s_noqc_pca <- subsets[[2]]
+                f_pca12 <- file.path(out_qc, paste0("PCA_PC1.vs.PC2", color_suffix, ".png"))
+                p12_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 2),
+                                            out_file = f_pca12)
+                files <- c(files, f_pca12)
+                plots[[paste0("pca_1_2", color_suffix)]] <- p12_noqc
+
+                f_pca13 <- file.path(out_qc, paste0("PCA_PC1.vs.PC3", color_suffix, ".png"))
+                p13_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 3),
+                                            out_file = f_pca13)
+                files <- c(files, f_pca13)
+                plots[[paste0("pca_1_3", color_suffix)]] <- p13_noqc
+            }
 
             # 3D PCA only for the first color variable, all-samples subset
             if (ci == 1 && tag == "" && ncol(s$expr_work) >= 10) {
@@ -232,7 +249,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
             p_cor <- qc_sample_correlation_heatmap(s_noqc$expr_work, s_noqc$meta,
                                                    cfg_primary, out_file = f_cor,
                                                    annot_cols = annot_cols,
-                                                   adjust_scale = TRUE)
+                                                   adjust_scale = FALSE)
             files <- c(files, f_cor)
             plots[["correlation_noQC"]] <- p_cor
         }

@@ -130,7 +130,7 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             show_labels = TRUE,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
-                                            adjust_scale = TRUE) {
+                                            adjust_scale = FALSE) {
   expr_mat <- as.matrix(expr_mat)
 
   cor_mat <- stats::cor(
@@ -841,8 +841,8 @@ build_heatmap_annotation_col <- function(meta, cfg) {
   shape_col  <- cfg$effects$shape %||% NULL
   
   annot_cols <- c(
-    if (!is.null(color_col) && color_col %in% colnames(meta)) color_col,
-    if (!is.null(shape_col) && shape_col %in% colnames(meta) && shape_col != color_col) shape_col
+    if (!is.null(color_col) && all(color_col %in% colnames(meta))) color_col,
+    if (!is.null(shape_col) && all(shape_col %in% colnames(meta)) && all(shape_col != color_col)) shape_col
   )
   
   if (length(annot_cols) == 0) return(NULL)
