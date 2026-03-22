@@ -175,14 +175,19 @@ sanitize_character_columns <- function(df, source = "input") {
 
     for (j in chr_cols) {
         orig <- df[[j]]
-        cleaned <- enc2utf8(orig)
-        cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
+        # Step 1: convert to UTF-8 (safe baseline for subsequent comparisons)
+        utf8 <- enc2utf8(orig)
+        n_encoding <- sum(!validUTF8(as.character(orig)), na.rm = TRUE)
+        # Step 2: replace NBSP and trim whitespace
+        cleaned <- gsub("\u00A0", " ", utf8, fixed = TRUE)
         cleaned <- trimws(cleaned)
+        # Count NBSP/whitespace changes (comparing two valid UTF-8 vectors)
+        n_ws <- sum(utf8 != cleaned, na.rm = TRUE)
 
-        n_changed <- sum(orig != cleaned, na.rm = TRUE)
-        if (n_changed > 0L) {
+        n_total <- n_encoding + n_ws
+        if (n_total > 0L) {
             modified_summary <- c(modified_summary,
-                sprintf("  - %s: %d value(s)", names(df)[j], n_changed))
+                sprintf("  - %s: %d value(s)", names(df)[j], n_total))
         }
         df[[j]] <- cleaned
     }
