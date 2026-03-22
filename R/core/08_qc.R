@@ -168,40 +168,82 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
 
-  # Build formula references so plotly splits traces by group
-  color_formula <- if (!is.null(color_col))
-    stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL
-  symbol_formula <- if (!is.null(shape_col) && shape_col %in% colnames(scores))
-    stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL
+  has_shape <- !is.null(shape_col) && shape_col %in% colnames(scores)
 
-  # Legend title: combine color and shape column names
-  legend_title <- if (!is.null(shape_col) && shape_col %in% colnames(scores)) {
+  color_levels <- levels(scores[[color_col]])
+  default_colors <- c(
+    "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
+  )
+  color_map <- stats::setNames(
+    default_colors[seq_along(color_levels)],
+    color_levels
+  )
+
+  plotly_symbols <- c("circle", "square", "diamond", "cross",
+                      "x", "triangle-up", "triangle-down", "star")
+  if (has_shape) {
+    shape_levels <- levels(scores[[shape_col]])
+    symbol_map <- stats::setNames(
+      plotly_symbols[seq_along(shape_levels)],
+      shape_levels
+    )
+  }
+
+  legend_title <- if (has_shape) {
     paste(color_col, shape_col, sep = " / ")
   } else {
     color_col
   }
 
-  plt <- plotly::plot_ly(
-    data = scores,
-    x = ~PC1,
-    y = ~PC2,
-    z = ~PC3,
-    type = "scatter3d",
-    mode = "markers",
-    color = color_formula,
-    symbol = symbol_formula,
-    text = hover_text,
-    hoverinfo = "text"
-  ) |>
-    plotly::layout(
-      scene = list(
-        xaxis = list(title = pc_labels[1]),
-        yaxis = list(title = pc_labels[2]),
-        zaxis = list(title = pc_labels[3])
-      ),
-      title = "3D PCA: PC1 vs PC2 vs PC3",
-      legend = list(title = list(text = legend_title))
-    )
+  scores$.hover <- hover_text
+  plt <- plotly::plot_ly()
+
+  # One trace per color x shape combination, single combined legend
+  for (clr in color_levels) {
+    if (has_shape) {
+      for (shp in shape_levels) {
+        idx <- scores[[color_col]] == clr & scores[[shape_col]] == shp
+        if (!any(idx)) next
+        sub <- scores[idx, , drop = FALSE]
+        combo_name <- paste0(clr, "\n", shp)
+        plt <- plotly::add_markers(
+          plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
+          type = "scatter3d",
+          marker = list(
+            color = color_map[[clr]],
+            symbol = symbol_map[[shp]],
+            size = 6
+          ),
+          text = sub$.hover, hoverinfo = "text",
+          name = combo_name,
+          showlegend = TRUE
+        )
+      }
+    } else {
+      idx <- scores[[color_col]] == clr
+      sub <- scores[idx, , drop = FALSE]
+      plt <- plotly::add_markers(
+        plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
+        type = "scatter3d",
+        marker = list(color = color_map[[clr]], size = 6),
+        text = sub$.hover, hoverinfo = "text",
+        name = clr,
+        showlegend = TRUE
+      )
+    }
+  }
+
+  plt <- plotly::layout(
+    plt,
+    scene = list(
+      xaxis = list(title = pc_labels[1]),
+      yaxis = list(title = pc_labels[2]),
+      zaxis = list(title = pc_labels[3])
+    ),
+    title = "3D PCA: PC1 vs PC2 vs PC3",
+    legend = list(title = list(text = legend_title))
+  )
 
   if (!is.null(out_file)) {
     if (!rmarkdown::pandoc_available()) {
