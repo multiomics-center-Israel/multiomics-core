@@ -175,7 +175,7 @@ sanitize_character_columns <- function(df, source = "input") {
 
     for (j in chr_cols) {
         orig <- df[[j]]
-        cleaned <- enc2utf8(orig)
+        cleaned <- iconv(orig, from = "", to = "UTF-8", sub = "")
         cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
         cleaned <- trimws(cleaned)
 
