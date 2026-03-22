@@ -43,7 +43,8 @@ run_binary_patterns <- function(expr_mat_corr,
                                 summary_df = NULL,
                                 corr_cutoff = 0.8,
                                 counts_cutoff_high = 0,
-                                counts_cutoff_low = NULL) {
+                                counts_cutoff_low = NULL, 
+                                annot_context = NULL) {
   stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
   expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
@@ -224,14 +225,6 @@ run_binary_patterns <- function(expr_mat_corr,
 
     lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cutoff <- log2(lin_fc_cutoff)
-    
-    
-    annot_context <- list(
-      summary_df    = summary_df,
-      p_cutoff      = de_cfg$p_cutoff %||% 0.05,
-      log2fc_cutoff = log2fc_cutoff,
-      id_col        = "feature_id"
-    )
     
     
     p_bin <- wrap_clustering_heatmap(

@@ -83,7 +83,20 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
 
     # Expression matrix
     expr_mat <- as.matrix(pre$expr_work)
-
+    
+    # DE row annotations
+    de_cfg <- cfg$de %||% list()
+    met_p_cutoff  <- de_cfg$p_cutoff %||% 0.05
+    met_lin_fc    <- de_cfg$linear_fc_cutoff %||% 1.5
+    met_log2fc    <- log2(met_lin_fc)
+    
+    annot_context <- list(
+      summary_df    = de_res$summary_df,
+      p_cutoff      = met_p_cutoff,
+      log2fc_cutoff = met_log2fc,
+      id_col        = "feature_id"
+    )
+    
     # ------ 1) Hierarchical clustering ---------
     if (isTRUE(flags$hierarchical)) {
         hcfg <- cl$steps$hierarchical %||% list()
@@ -118,18 +131,7 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             binary_best        = NULL
         )
 
-        # DE row annotations
-        de_cfg <- cfg$de %||% list()
-        met_p_cutoff  <- de_cfg$p_cutoff %||% 0.05
-        met_lin_fc    <- de_cfg$linear_fc_cutoff %||% 1.5
-        met_log2fc    <- log2(met_lin_fc)
-
-        annot_context <- list(
-            summary_df    = de_res$summary_df,
-            p_cutoff      = met_p_cutoff,
-            log2fc_cutoff = met_log2fc,
-            id_col        = "feature_id"
-        )
+        
 
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
 
@@ -278,7 +280,8 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
             counts_cutoff_high = bcfg$counts_cutoff_high %||%
                                      bcfg$counts_cutoff %||% 0,
-            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
+            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+            annot_context      = annot_context
         )
 
         if (!is.null(bp_res$files)) written <- c(written, bp_res$files)
