@@ -123,7 +123,7 @@ modes:
     # --------------------------------------------------------
     qc_post:
       enabled: true
-      de_source: "summary"   # "summary" | "table1"
+      de_source: "table1"   # "summary" | "table1"
       plots:
         volcano: true
         ma: true
@@ -203,6 +203,17 @@ modes:
       stats_methods_text: ""               # Custom DE statistics description in Results section
       stats_section_text: ""               # Custom statistical analysis text in Methods section
       disclaimer_text: ""                  # Legal disclaimer (shown verbatim if non-empty)
+
+    # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
 
     # --------------------------------------------------------
     # Annotation / Organism

@@ -133,17 +133,27 @@ write_metabolomics_final_results <- function(pre, de_res, config, out_dir,
     files <- c(files, save_tsv(final_results, dirs$datasets,
                                 "Final_results_metabolomics.tsv"))
 
+    # Extract Excel config
+    excel_cfg <- config$modes$metabolomics$excel %||% list()
+
+    # Resolve sample ID column
+    sample_id_col <- config$modes$metabolomics$effects$samples %||% "sample_id"
+
     # Write Excel files (ALL + DE-only)
     excel_files <- tryCatch(
         write_final_results_excels_legacy_generic(
-            final_results  = final_results,
-            config         = config,
-            out_dir        = out_dir,
-            mode           = "metabolomics",
-            id_col         = "feature_id",
-            expr_for_de    = pre$expr_work,
-            with_cutoffs   = TRUE,
-            clustering_res = clustering_res
+            final_results   = final_results,
+            config          = config,
+            out_dir         = out_dir,
+            mode            = "metabolomics",
+            id_col          = "feature_id",
+            expr_for_de     = pre$expr_work,
+            with_cutoffs    = TRUE,
+            clustering_res  = clustering_res,
+            sample_meta     = pre$meta,
+            sample_id_col   = sample_id_col,
+            annotation_rows = excel_cfg$annotation_rows,
+            sample_label_cols = excel_cfg$sample_label_cols
         ),
         error = function(e) {
             warning("Excel export failed: ", e$message)

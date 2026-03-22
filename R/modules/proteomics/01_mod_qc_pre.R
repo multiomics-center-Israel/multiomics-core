@@ -29,7 +29,7 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     plots$pca_1_3 <- p13
 
     # ---------- PCA with top variable proteins (for report dropdown) ----------
-    n_top_values <- c(100, 500, 1000, 2000)
+    n_top_values <- c(500, 1000, 2000)
     n_features <- nrow(pre$expr_imp_single)
     cfg_temp <- cfg
 

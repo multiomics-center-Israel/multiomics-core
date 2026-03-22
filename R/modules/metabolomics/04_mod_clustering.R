@@ -111,8 +111,11 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
         z_de_ordered <- z_de[ordered_row_ids, , drop = FALSE]
 
         excel_order <- list(
-            ordered_ids = hc_res$ordering,
-            zscore_mat  = z_de
+            ordered_ids        = hc_res$ordering,
+            zscore_mat         = z_de,
+            partition_clusters = NULL,
+            partition_k        = NULL,
+            binary_best        = NULL
         )
 
         # DE row annotations
@@ -250,6 +253,12 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             out_dir  = part_dir
         )
         written <- c(written, legacy_files)
+
+        # Attach partition results to excel_order
+        if (!is.null(excel_order)) {
+            excel_order$partition_clusters <- part_res$clusters
+            excel_order$partition_k        <- part_res$k
+        }
     }
 
     # ---- 3) Binary patterns ----
@@ -278,6 +287,11 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
         patterns_tbl        <- bp_res$best %||% NULL
         heatmaps_by_pattern <- bp_res$plots %||% NULL
         patterns_list       <- bp_res$bp_pat %||% NULL
+
+        # Attach binary pattern results to excel_order
+        if (!is.null(excel_order) && !is.null(bp_res$best)) {
+            excel_order$binary_best <- bp_res$best
+        }
     }
 
     list(

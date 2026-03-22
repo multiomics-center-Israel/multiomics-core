@@ -36,8 +36,9 @@ build_shiny_payload_proteomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
-    annot = NULL,
-    final_results = NULL) 
+    final_results = NULL,
+    out_dir = NULL,
+    annot = NULL)
   {
     # ============================================================
     # Initialize canonical payload structure
@@ -161,7 +162,7 @@ build_shiny_payload_proteomics <- function(
             }
 
             # de_summary: Per-contrast summary counts
-            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats)
+            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats, out_dir = out_dir)
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 
@@ -275,10 +276,11 @@ build_shiny_payload_proteomics <- function(
 #' \code{logFC.}, \code{linearFC.imputs.}).
 #'
 #' @param de_stats DE statistics data.frame with pass columns
-#' @return data.frame with columns: contrast, up, down, total
+#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
+#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
 #' @keywords internal
-build_de_summary_counts_proteomics <- function(de_stats) {
-    build_de_summary_counts_generic(
+build_de_summary_counts_proteomics <- function(de_stats, out_dir = NULL) {
+    result <- build_de_summary_counts_generic(
         de_stats         = de_stats,
         pass_pattern     = "^pass\\.imputs\\.",
         extract_contrast = function(col) sub("^pass\\.imputs\\.", "", col),
@@ -293,6 +295,12 @@ build_de_summary_counts_proteomics <- function(de_stats) {
             if (length(matched) > 0) matched[1] else NULL
         }
     )
+
+    if (!is.null(out_dir) && !is.null(result) && nrow(result) > 0) {
+        save_tsv(result, out_dir, "de_summary_counts.tsv")
+    }
+
+    result
 }
 
 
@@ -324,23 +332,3 @@ build_de_contrast_summary <- function(de_stats) {
     do.call(rbind, summaries)
 }
 
-
-#' Save Proteomics Shiny payload to RDS file
-#'
-#' @param ... Arguments passed to build_shiny_payload_proteomics()
-#' @param out_file Output file path
-#' @return Path to saved file (invisibly)
-#' @export
-save_shiny_payload_proteomics <- function(..., out_file = "shiny_payload_proteomics.rds") {
-    payload <- build_shiny_payload_proteomics(...)
-
-    out_dir <- dirname(out_file)
-    if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
-        dir.create(out_dir, recursive = TRUE)
-    }
-
-    saveRDS(payload, out_file)
-    message("Saved proteomics payload to: ", out_file)
-
-    invisible(out_file)
-}
