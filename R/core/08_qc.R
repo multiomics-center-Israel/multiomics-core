@@ -174,6 +174,13 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   symbol_formula <- if (!is.null(shape_col) && shape_col %in% colnames(scores))
     stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL
 
+  # Legend title: combine color and shape column names
+  legend_title <- if (!is.null(shape_col) && shape_col %in% colnames(scores)) {
+    paste(color_col, shape_col, sep = " / ")
+  } else {
+    color_col
+  }
+
   plt <- plotly::plot_ly(
     data = scores,
     x = ~PC1,
@@ -192,7 +199,8 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
         yaxis = list(title = pc_labels[2]),
         zaxis = list(title = pc_labels[3])
       ),
-      title = "3D PCA: PC1 vs PC2 vs PC3"
+      title = "3D PCA: PC1 vs PC2 vs PC3",
+      legend = list(title = list(text = legend_title))
     )
 
   if (!is.null(out_file)) {
