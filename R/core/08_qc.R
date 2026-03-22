@@ -168,104 +168,32 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
 
-  # Build traces manually so color and shape get separate legend sections
-  has_shape <- !is.null(shape_col) && shape_col %in% colnames(scores)
+  # Build formula references so plotly splits traces by group
+  color_formula <- if (!is.null(color_col))
+    stats::as.formula(paste0("~factor(`", color_col, "`)")) else NULL
+  symbol_formula <- if (!is.null(shape_col) && shape_col %in% colnames(scores))
+    stats::as.formula(paste0("~factor(`", shape_col, "`)")) else NULL
 
-  color_levels <- levels(scores[[color_col]])
-  # Plotly default qualitative palette
-  default_colors <- c(
-    "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
-    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
-  )
-  color_map <- stats::setNames(
-    default_colors[seq_along(color_levels)],
-    color_levels
-  )
-
-  plotly_symbols <- c("circle", "square", "diamond", "cross",
-                      "x", "triangle-up", "triangle-down", "star")
-  if (has_shape) {
-    shape_levels <- levels(scores[[shape_col]])
-    symbol_map <- stats::setNames(
-      plotly_symbols[seq_along(shape_levels)],
-      shape_levels
+  plt <- plotly::plot_ly(
+    data = scores,
+    x = ~PC1,
+    y = ~PC2,
+    z = ~PC3,
+    type = "scatter3d",
+    mode = "markers",
+    color = color_formula,
+    symbol = symbol_formula,
+    text = hover_text,
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      scene = list(
+        xaxis = list(title = pc_labels[1]),
+        yaxis = list(title = pc_labels[2]),
+        zaxis = list(title = pc_labels[3])
+      ),
+      title = "3D PCA: PC1 vs PC2 vs PC3"
     )
-  }
-
-  scores$.hover <- hover_text
-
-  plt <- plotly::plot_ly()
-
-  # One trace per color x shape combination
-  for (clr in color_levels) {
-    if (has_shape) {
-      for (j in seq_along(shape_levels)) {
-        shp <- shape_levels[j]
-        idx <- scores[[color_col]] == clr & scores[[shape_col]] == shp
-        if (!any(idx)) next
-        sub <- scores[idx, , drop = FALSE]
-        plt <- plotly::add_markers(
-          plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
-          type = "scatter3d",
-          marker = list(
-            color = color_map[[clr]],
-            symbol = symbol_map[[shp]],
-            size = 6
-          ),
-          text = sub$.hover, hoverinfo = "text",
-          name = clr,
-          legendgroup = clr,
-          legendgrouptitle = list(text = color_col),
-          showlegend = (j == 1)
-        )
-      }
-    } else {
-      idx <- scores[[color_col]] == clr
-      sub <- scores[idx, , drop = FALSE]
-      plt <- plotly::add_markers(
-        plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
-        type = "scatter3d",
-        marker = list(color = color_map[[clr]], size = 6),
-        text = sub$.hover, hoverinfo = "text",
-        name = clr,
-        legendgroup = clr,
-        legendgrouptitle = list(text = color_col),
-        showlegend = TRUE
-      )
-    }
-  }
-
-  # Add shape legend entries (hidden from plot, visible in legend)
-  if (has_shape) {
-    ref_point <- list(x = scores$PC1[1], y = scores$PC2[1], z = scores$PC3[1])
-    for (shp in shape_levels) {
-      plt <- plotly::add_markers(
-        plt,
-        x = ref_point$x, y = ref_point$y, z = ref_point$z,
-        type = "scatter3d",
-        visible = "legendonly",
-        marker = list(
-          color = "grey40",
-          symbol = symbol_map[[shp]],
-          size = 6
-        ),
-        name = shp,
-        legendgroup = paste0("shape_", shp),
-        legendgrouptitle = list(text = shape_col),
-        showlegend = TRUE
-      )
-    }
-  }
-
-  plt <- plotly::layout(
-    plt,
-    scene = list(
-      xaxis = list(title = pc_labels[1]),
-      yaxis = list(title = pc_labels[2]),
-      zaxis = list(title = pc_labels[3])
-    ),
-    title = "3D PCA: PC1 vs PC2 vs PC3"
-  )
 
   if (!is.null(out_file)) {
     if (!rmarkdown::pandoc_available()) {
