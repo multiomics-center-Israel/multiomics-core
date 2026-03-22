@@ -174,5 +174,10 @@ read_table_auto <- function(path) {
         readr::read_csv(path, show_col_types = FALSE)
     }
     # Convert tibble to data.frame to support rownames and proper subsetting
-    as.data.frame(df)
+    df <- as.data.frame(df)
+    # Ensure all character columns are valid UTF-8 (fixes encoding issues from
+    # Latin-1 or other non-UTF-8 source files that crash downstream writers)
+    chr_cols <- vapply(df, is.character, logical(1))
+    df[chr_cols] <- lapply(df[chr_cols], enc2utf8)
+    df
 }
