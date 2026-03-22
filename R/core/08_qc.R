@@ -235,13 +235,15 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     }
   }
 
-  # Add shape legend entries (invisible dummy points)
+  # Add shape legend entries (hidden from plot, visible in legend)
   if (has_shape) {
+    ref_point <- list(x = scores$PC1[1], y = scores$PC2[1], z = scores$PC3[1])
     for (shp in shape_levels) {
       plt <- plotly::add_markers(
         plt,
-        x = NA_real_, y = NA_real_, z = NA_real_,
+        x = ref_point$x, y = ref_point$y, z = ref_point$z,
         type = "scatter3d",
+        visible = "legendonly",
         marker = list(
           color = "grey40",
           symbol = symbol_map[[shp]],
