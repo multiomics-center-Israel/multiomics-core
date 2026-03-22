@@ -175,19 +175,14 @@ sanitize_character_columns <- function(df, source = "input") {
 
     for (j in chr_cols) {
         orig <- df[[j]]
-        # Step 1: convert to UTF-8 (safe baseline for subsequent comparisons)
-        utf8 <- enc2utf8(orig)
-        n_encoding <- sum(utf8 != orig, useBytes = TRUE, na.rm = TRUE)
-        # Step 2: replace NBSP and trim whitespace
-        cleaned <- gsub("\u00A0", " ", utf8, fixed = TRUE)
+        cleaned <- enc2utf8(orig)
+        cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
         cleaned <- trimws(cleaned)
-        # Count NBSP/whitespace changes (comparing two valid UTF-8 vectors)
-        n_ws <- sum(utf8 != cleaned, na.rm = TRUE)
 
-        n_total <- n_encoding + n_ws
-        if (n_total > 0L) {
+        n_changed <- sum(orig != cleaned, na.rm = TRUE)
+        if (n_changed > 0L) {
             modified_summary <- c(modified_summary,
-                sprintf("  - %s: %d value(s)", names(df)[j], n_total))
+                sprintf("  - %s: %d value(s)", names(df)[j], n_changed))
         }
         df[[j]] <- cleaned
     }
@@ -206,14 +201,27 @@ sanitize_character_columns <- function(df, source = "input") {
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
     ext <- tolower(tools::file_ext(path))
-    df <- if (ext %in% c("tsv", "txt")) {
-        readr::read_tsv(path, show_col_types = FALSE)
-    } else {
-        readr::read_csv(path, show_col_types = FALSE)
-    }
+    read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+    df <- tryCatch(
+        read_fn(path, show_col_types = FALSE),
+        error = function(e) {
+            if (grepl("invalid.*UTF-8|invalid.*utf8", conditionMessage(e),
+                       ignore.case = TRUE)) {
+                warning(
+                    sprintf("Non-UTF-8 encoding detected in %s; re-reading as Latin1.",
+                            basename(path)),
+                    call. = FALSE
+                )
+                read_fn(path, show_col_types = FALSE,
+                         locale = readr::locale(encoding = "Latin1"))
+            } else {
+                stop(e)
+            }
+        }
+    )
     # Convert tibble to data.frame to support rownames and proper subsetting
     df <- as.data.frame(df)
-    # Sanitize character columns: UTF-8 encoding, NBSP, whitespace
+    # Sanitize character columns: NBSP, whitespace
     df <- sanitize_character_columns(df, source = basename(path))
     df
 }
