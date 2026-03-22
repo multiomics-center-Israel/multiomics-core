@@ -165,6 +165,39 @@ save_tsv_path <- function(x, path) {
     path
 }
 
+#' Sanitize character columns: convert to UTF-8, replace NBSP, trim whitespace.
+#' Emits a warning listing affected columns and modification counts.
+sanitize_character_columns <- function(df, source = "input") {
+    chr_cols <- which(vapply(df, is.character, logical(1)))
+    if (length(chr_cols) == 0L) return(df)
+
+    modified_summary <- character(0)
+
+    for (j in chr_cols) {
+        orig <- df[[j]]
+        cleaned <- enc2utf8(orig)
+        cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
+        cleaned <- trimws(cleaned)
+
+        n_changed <- sum(orig != cleaned, na.rm = TRUE)
+        if (n_changed > 0L) {
+            modified_summary <- c(modified_summary,
+                sprintf("  - %s: %d value(s)", names(df)[j], n_changed))
+        }
+        df[[j]] <- cleaned
+    }
+
+    if (length(modified_summary) > 0L) {
+        warning(
+            sprintf("Encoding/whitespace issues sanitized in %s:\n", source),
+            paste(modified_summary, collapse = "\n"),
+            call. = FALSE
+        )
+    }
+
+    df
+}
+
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
     ext <- tolower(tools::file_ext(path))
@@ -175,9 +208,7 @@ read_table_auto <- function(path) {
     }
     # Convert tibble to data.frame to support rownames and proper subsetting
     df <- as.data.frame(df)
-    # Ensure all character columns are valid UTF-8 (fixes encoding issues from
-    # Latin-1 or other non-UTF-8 source files that crash downstream writers)
-    chr_cols <- vapply(df, is.character, logical(1))
-    df[chr_cols] <- lapply(df[chr_cols], enc2utf8)
+    # Sanitize character columns: UTF-8 encoding, NBSP, whitespace
+    df <- sanitize_character_columns(df, source = basename(path))
     df
 }
