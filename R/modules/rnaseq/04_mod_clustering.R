@@ -202,6 +202,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     # (2) Heatmap
     feats <- names(part_res$clusters)
     valid_feats <- intersect(feats, rownames(expr_mat))
+
     mat_ord <- expr_mat[valid_feats, ][order(part_res$clusters[valid_feats], valid_feats), ]
     
     
