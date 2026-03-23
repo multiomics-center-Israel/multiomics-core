@@ -73,7 +73,7 @@ if (basename(run_dir) == "proteomics") {
     config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
 }
 diag_dir <- file.path(prot_dir, "Diagnostic_plots")
-qc_post_dir <- file.path(diag_dir, "QC_post")
+qc_post_dir <- file.path(diag_dir, "DE_plots")
 datasets_dir <- file.path(prot_dir, "Datasets")
 clustering_dir <- file.path(prot_dir, "Clustering")
 enrich_dir <- file.path(prot_dir, "Enrichment")
@@ -535,7 +535,7 @@ figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may cap
 ```{r pca-3d-link, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
-    cat(sprintf('<p><a href="proteomics/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">Open 3D PCA (new tab)</a></p>'))
+    cat(sprintf('<p><a href="Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">Open 3D PCA (new tab)</a></p>'))
 } else {
     cat("*3D PCA plot not available.*")
 }

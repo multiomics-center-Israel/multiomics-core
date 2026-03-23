@@ -61,14 +61,21 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
 
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
-diag_dir <- file.path(run_dir, "rna", "Diagnostic_plots")
-qc_post_dir <- file.path(diag_dir, "QC_post")
-datasets_dir <- file.path(run_dir, "rna", "Datasets")
-enrich_dir <- file.path(run_dir, "rna", "Enrichment")
+# Detect if we are already inside the rna output dir
+if (basename(run_dir) == "rna") {
+    prot_dir <- run_dir
+    config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
+} else {
+    prot_dir <- file.path(run_dir, "rna")
+    config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+}
+diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+qc_post_dir <- file.path(diag_dir, "DE_plots")
+datasets_dir <- file.path(run_dir,  "Datasets")
+enrich_dir <- file.path(run_dir,"Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
 filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "rna", "commentary")
+commentary_dir <- file.path(run_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
@@ -850,7 +857,7 @@ An interactive 3D PCA plot is available:
 ```{r pca-3d-link, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
-    cat(sprintf('<p><a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
+    cat(sprintf('<p><a href="Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
 } else {
     cat("*3D PCA plot not available.*")
 }
