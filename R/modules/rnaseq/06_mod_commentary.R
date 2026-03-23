@@ -80,8 +80,8 @@ build_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
 
     # --- Experimental groups and sample count ---
     tryCatch({
-        group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
-        if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+      group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1]
+      if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
             # Try to get groups from contrast names
             extra$groups <- names(de_res$tables)
         }

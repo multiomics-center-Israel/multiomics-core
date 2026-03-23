@@ -146,9 +146,9 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   pc_labels <- sprintf("PC%d (%.1f%%)", seq_along(var_expl), 100 * var_expl)
 
   # Attach metadata (order is aligned)
-  scores[[color_col]] <- meta_sub[[color_col]]
+  scores[[color_col]] <- as.factor(meta_sub[[color_col]])
   if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
-    scores[[shape_col]] <- meta_sub[[shape_col]]
+    scores[[shape_col]] <- as.factor(meta_sub[[shape_col]])
   }
 
   # Attach label column if configured
@@ -168,34 +168,97 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
 
-  plt <- plotly::plot_ly(
-    data = scores,
-    x = ~PC1,
-    y = ~PC2,
-    z = ~PC3,
-    type = "scatter3d",
-    mode = "markers",
-    color = if (!is.null(color_col)) scores[[color_col]] else NULL,
-    symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
-    text = hover_text,
-    hoverinfo = "text"
-  )|>
-    plotly::layout(
-      scene = list(
-        xaxis = list(title = pc_labels[1]),
-        yaxis = list(title = pc_labels[2]),
-        zaxis = list(title = pc_labels[3])
-      ),
-      title = "3D PCA: PC1 vs PC2 vs PC3"
+  has_shape <- !is.null(shape_col) && shape_col %in% colnames(scores)
+
+  color_levels <- levels(scores[[color_col]])
+  default_colors <- c(
+    "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"
+  )
+  color_map <- stats::setNames(
+    default_colors[seq_along(color_levels)],
+    color_levels
+  )
+
+  plotly_symbols <- c("circle", "square", "diamond", "cross",
+                      "x", "triangle-up", "triangle-down", "star")
+  if (has_shape) {
+    shape_levels <- levels(scores[[shape_col]])
+    symbol_map <- stats::setNames(
+      plotly_symbols[seq_along(shape_levels)],
+      shape_levels
     )
+  }
+
+  legend_title <- if (has_shape) {
+    paste(color_col, shape_col, sep = " / ")
+  } else {
+    color_col
+  }
+
+  scores$.hover <- hover_text
+  plt <- plotly::plot_ly()
+
+  # One trace per color x shape combination, single combined legend
+  for (clr in color_levels) {
+    if (has_shape) {
+      for (shp in shape_levels) {
+        idx <- scores[[color_col]] == clr & scores[[shape_col]] == shp
+        if (!any(idx)) next
+        sub <- scores[idx, , drop = FALSE]
+        combo_name <- paste0(clr, "\n", shp)
+        plt <- plotly::add_markers(
+          plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
+          type = "scatter3d",
+          marker = list(
+            color = color_map[[clr]],
+            symbol = symbol_map[[shp]],
+            size = 6
+          ),
+          text = sub$.hover, hoverinfo = "text",
+          name = combo_name,
+          showlegend = TRUE
+        )
+      }
+    } else {
+      idx <- scores[[color_col]] == clr
+      sub <- scores[idx, , drop = FALSE]
+      plt <- plotly::add_markers(
+        plt, data = sub, x = ~PC1, y = ~PC2, z = ~PC3,
+        type = "scatter3d",
+        marker = list(color = color_map[[clr]], size = 6),
+        text = sub$.hover, hoverinfo = "text",
+        name = clr,
+        showlegend = TRUE
+      )
+    }
+  }
+
+  plt <- plotly::layout(
+    plt,
+    scene = list(
+      xaxis = list(title = pc_labels[1]),
+      yaxis = list(title = pc_labels[2]),
+      zaxis = list(title = pc_labels[3])
+    ),
+    title = "3D PCA: PC1 vs PC2 vs PC3",
+    legend = list(title = list(text = legend_title))
+  )
 
   if (!is.null(out_file)) {
-    # Check if pandoc is available for self-contained HTML
-    has_pandoc <- nzchar(Sys.which("pandoc"))
-    if (!has_pandoc) {
-      warning("Pandoc not found: Saving 3D PCA widget as non-self-contained (creates matching '_files' directory). Install Pandoc to enable self-contained HTML.")
+    if (!rmarkdown::pandoc_available()) {
+      warning("3D PCA not saved to disk (pandoc required for self-contained HTML).")
+    } else {
+      tryCatch(
+        htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = TRUE),
+        error = function(e) {
+          warning("3D PCA save failed: ", conditionMessage(e))
+        }
+      )
     }
-    htmlwidgets::saveWidget(widget = plt, file = out_file, selfcontained = has_pandoc)
+    # Defense-in-depth: remove any auxiliary _files directory
+    lib_dir <- sub("\\.html$", "_files", out_file)
+    if (dir.exists(lib_dir)) unlink(lib_dir, recursive = TRUE)
   }
 
   plt
@@ -463,15 +526,53 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster
 #' @param show_labels Show sample names on axes (default FALSE to prevent overload)
 #' @param cluster_samples Enable hierarchical clustering (default TRUE)
 #' @param adjust_scale Adjust color scale for tight correlation ranges (default TRUE)
+# qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
+#                                           annot_cols = NULL,
+#                                           method = "pearson",
+#                                           fontsize = 10,
+#                                           show_labels = TRUE,
+#                                           cluster_samples = TRUE,
+#                                           adjust_scale = TRUE) {
+#   d <- prepare_qc_data(expr_mat, meta, cfg)
+# 
+#   # Build annotations: use multi-column if provided, otherwise default
+#   if (!is.null(annot_cols)) {
+#     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
+#     rownames(annot) <- d$sample_ids
+#   } else {
+#     annot <- d$annot  # Default single-column annotation
+#   }
+# 
+#   ph <- plot_sample_correlation_heatmap(
+#     expr_mat = d$expr,
+#     method = method,
+#     annotation_col = annot,
+#     fontsize = fontsize,
+#     show_labels = show_labels,
+#     cluster_rows = cluster_samples,
+#     cluster_cols = cluster_samples,
+#     adjust_scale = adjust_scale
+#   )
+# 
+#   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
+#   save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
+#   invisible(ph)
+# }
+# 
+# 
+# 
+
+
+
 qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
                                           annot_cols = NULL,
                                           method = "pearson",
                                           fontsize = 10,
                                           show_labels = TRUE,
                                           cluster_samples = TRUE,
-                                          adjust_scale = TRUE) {
+                                          adjust_scale = FALSE) {
   d <- prepare_qc_data(expr_mat, meta, cfg)
-
+  
   # Build annotations: use multi-column if provided, otherwise default
   if (!is.null(annot_cols)) {
     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
@@ -479,23 +580,29 @@ qc_sample_correlation_heatmap <- function(expr_mat, meta, cfg, out_file,
   } else {
     annot <- d$annot  # Default single-column annotation
   }
-
+  
+  # --- CUSTOM COLOR FIX: High correlation = Dark Blue ---
+  # Define a high-contrast palette from white/light blue to dark blue
+  custom_colors <- grDevices::colorRampPalette(c("#F7FBFF", "#084594"))(100)
+  # ------------------------------------------------------
+  
   ph <- plot_sample_correlation_heatmap(
     expr_mat = d$expr,
     method = method,
     annotation_col = annot,
+    colors = custom_colors,  # Passing the custom colors here
     fontsize = fontsize,
     show_labels = show_labels,
     cluster_rows = cluster_samples,
     cluster_cols = cluster_samples,
-    adjust_scale = adjust_scale
+    adjust_scale = adjust_scale,
+    
   )
-
+  
   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
   save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
   invisible(ph)
 }
-
 
 #' Sample–sample distance heatmap (QC)
 #' @param annot_cols Character vector of metadata columns for annotations.

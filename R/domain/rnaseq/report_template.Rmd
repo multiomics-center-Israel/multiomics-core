@@ -58,16 +58,24 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     )
 }
 
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
-diag_dir <- file.path(run_dir, "rna", "Diagnostic_plots")
-qc_post_dir <- file.path(diag_dir, "QC_post")
-datasets_dir <- file.path(run_dir, "rna", "Datasets")
-enrich_dir <- file.path(run_dir, "rna", "Enrichment")
+# Detect if we are already inside the rna output dir
+if (basename(run_dir) == "rna") {
+    prot_dir <- run_dir
+    config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
+} else {
+    prot_dir <- file.path(run_dir, "rna")
+    config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+}
+diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+qc_post_dir <- file.path(diag_dir, "DE_plots")
+datasets_dir <- file.path(run_dir,  "Datasets")
+enrich_dir <- file.path(run_dir,"Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
 filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "rna", "commentary")
+commentary_dir <- file.path(run_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
@@ -358,11 +366,9 @@ kable(proj, col.names = c("Parameter", "Value"))
 ## Experimental Design
 
 ```{r params-design}
-meta <- read.csv(
-  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata),
-  stringsAsFactors = FALSE
-)
-group_col <- rna_cfg$filtering$group_col
+meta <- read_table_auto(
+  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata))
+group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% "Condition"
 
 design_tbl <- as.data.frame(table(meta[[group_col]]))
 colnames(design_tbl) <- c("Group", "n (replicates)")
@@ -851,7 +857,7 @@ An interactive 3D PCA plot is available:
 ```{r pca-3d-link, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
-    cat(sprintf('<p><a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
+    cat(sprintf('<p><a href="Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
 } else {
     cat("*3D PCA plot not available.*")
 }
@@ -2267,7 +2273,7 @@ make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
 # Load metadata
 meta_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
 meta_df <- if (file.exists(meta_file)) read.csv(meta_file, stringsAsFactors = FALSE) else NULL
-group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+group_col <- rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% rna_cfg$effects$color[1] %||% "Condition"
 ```
 
 ### Top 10

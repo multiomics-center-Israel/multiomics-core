@@ -190,7 +190,7 @@ modes:
       heatmap_viz:
         show_sample_labels: false   # Show sample names on axes (default: false to prevent overload)
         cluster_samples: true       # Enable hierarchical clustering (default: true)
-        adjust_correlation_scale: true  # Adjust color scale for tight ranges (default: true)
+        adjust_correlation_scale: false  # Adjust color scale for tight ranges (default: false)
 
       # To disable adaptive plotting and generate all plots unconditionally:
       #   qc:

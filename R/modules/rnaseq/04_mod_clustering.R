@@ -81,6 +81,17 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
   
+  
+  
+  # Build DE pattern row annotations
+  de_cfg <- cfg$de %||% list()
+  annot_context <- list(
+    summary_df    = summary_df,
+    p_cutoff      = de_cfg$p_cutoff %||% 0.05,
+    log2fc_cutoff = log2(de_cfg$linear_fc_cutoff %||% 1.5),
+    id_col        = "FeatureID"
+  )
+  
   # ------ 1) Hierarchical clustering ---------
   if (isTRUE(flags$hierarchical)) {
     hcfg <- cl$steps$hierarchical %||% list()
@@ -115,15 +126,6 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       partition_clusters = NULL,
       partition_k        = NULL,
       binary_best        = NULL
-    )
-    
-    # Build DE pattern row annotations
-    de_cfg <- cfg$de %||% list()
-    annot_context <- list(
-      summary_df    = summary_df,
-      p_cutoff      = de_cfg$p_cutoff %||% 0.05,
-      log2fc_cutoff = log2(de_cfg$linear_fc_cutoff %||% 1.5),
-      id_col        = "FeatureID"
     )
     
     # Heatmap
@@ -200,7 +202,9 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     # (2) Heatmap
     feats <- names(part_res$clusters)
     valid_feats <- intersect(feats, rownames(expr_mat))
-    mat_ord <- expr_mat[order(part_res$clusters[valid_feats], valid_feats), , drop = FALSE]
+
+    mat_ord <- expr_mat[valid_feats, ][order(part_res$clusters[valid_feats], valid_feats), ]
+    
     
     annot_row <- data.frame(
       Cluster = factor(paste0("C", part_res$clusters[rownames(mat_ord)])),
@@ -253,7 +257,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       out_dir            = clust_out_dir,
       corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
       counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
-      counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
+      counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+      annot_context      = annot_context
     )
     
     if (!is.null(bp_res$files)) written <- c(written, bp_res$files)

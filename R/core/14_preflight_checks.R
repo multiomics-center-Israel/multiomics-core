@@ -202,7 +202,8 @@ check_metadata <- function(metadata, rna_cfg, result, verbose) {
         }
     }
 
-    group_col <- rna_cfg$filtering$group_col %||% "condition"
+    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color %||% "Condition"
+    
 
     if (!(group_col %in% names(metadata))) {
         potential <- c("condition", "Condition", "group", "Group", "treatment", "Treatment")
@@ -277,7 +278,8 @@ check_sample_matching <- function(data, metadata, rna_cfg, result, verbose) {
 #' Check group sizes for statistical validity
 #' @noRd
 check_group_sizes <- function(metadata, rna_cfg, result, verbose) {
-    group_col <- rna_cfg$filtering$group_col %||% "condition"
+    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color %||% "Condition"
+    
 
     if (!(group_col %in% names(metadata))) return(result)
 
