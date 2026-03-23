@@ -199,7 +199,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     p_cfg <- cfg$modes$proteomics
 
     sample_col <- p_cfg$effects$samples %||% "SampleID"
-    group_col <- p_cfg$de_table$group_col %||% "Condition"
+    group_col <- p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
+    
 
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")

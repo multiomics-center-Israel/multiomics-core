@@ -209,7 +209,7 @@ kable(proj, col.names = c("Parameter", "Value"))
 meta_file <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
     meta <- read.csv(meta_file, stringsAsFactors = FALSE)
-    group_col <- prot_cfg$effects$color %||% "Condition"
+    group_col <- prot_cfg$de_table$group_col %||% prot_cfg$effects$color %||% "Condition"
 
     if (group_col %in% names(meta)) {
         design_tbl <- as.data.frame(table(meta[[group_col]]))

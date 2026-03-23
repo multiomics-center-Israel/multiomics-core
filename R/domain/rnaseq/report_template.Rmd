@@ -368,7 +368,7 @@ kable(proj, col.names = c("Parameter", "Value"))
 ```{r params-design}
 meta <- read_table_auto(
   file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata))
-group_col <- rna_cfg$filtering$group_col
+group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% "Condition"
 
 design_tbl <- as.data.frame(table(meta[[group_col]]))
 colnames(design_tbl) <- c("Group", "n (replicates)")
@@ -2273,7 +2273,7 @@ make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
 # Load metadata
 meta_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
 meta_df <- if (file.exists(meta_file)) read.csv(meta_file, stringsAsFactors = FALSE) else NULL
-group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+group_col <- rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% rna_cfg$effects$color[1] %||% "Condition"
 ```
 
 ### Top 10
