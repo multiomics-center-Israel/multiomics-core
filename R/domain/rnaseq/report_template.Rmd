@@ -58,32 +58,6 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     )
 }
 
-read_table_auto <- function(path) {
-    ext <- tolower(tools::file_ext(path))
-    read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
-    df <- tryCatch(
-        read_fn(path, show_col_types = FALSE),
-        error = function(e) {
-            if (grepl("invalid.*UTF-8|invalid.*utf8", conditionMessage(e),
-                       ignore.case = TRUE)) {
-                warning(
-                    sprintf("Non-UTF-8 encoding detected in %s; re-reading as Latin1.",
-                            basename(path)),
-                    call. = FALSE
-                )
-                read_fn(path, show_col_types = FALSE,
-                         locale = readr::locale(encoding = "Latin1"))
-            } else {
-                stop(e)
-            }
-        }
-    )
-    # Convert tibble to data.frame to support rownames and proper subsetting
-    df <- as.data.frame(df)
-    # Sanitize character columns: NBSP, whitespace
-    df <- sanitize_character_columns(df, source = basename(path))
-    df
-}
 
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
