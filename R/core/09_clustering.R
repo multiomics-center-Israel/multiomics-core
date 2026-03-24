@@ -848,6 +848,21 @@ build_clustering_output_table <- function(clusters, out_file = NULL) {
   tbl
 }
 
+#' Compute row gap positions for pheatmap from ordered cluster assignments
+#'
+#' Given an integer vector of cluster assignments (in heatmap row order),
+#' returns cumulative positions where gaps should appear between clusters.
+#'
+#' @param clusters_ordered Integer vector of cluster assignments in display order
+#' @return Integer vector of gap positions (empty for k=1)
+#' @export
+compute_cluster_gaps <- function(clusters_ordered) {
+  stopifnot(is.integer(clusters_ordered) || is.numeric(clusters_ordered))
+  rl <- rle(as.integer(clusters_ordered))
+  if (length(rl$lengths) <= 1) return(integer(0))
+  cumsum(rl$lengths[-length(rl$lengths)])
+}
+
 #' Build cluster profile data frame from z-scored group means
 #'
 #' Computes per-cluster mean and SD of z-scored group means. Handles empty
@@ -967,6 +982,60 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   files_written <- c(files_written, fname_all)
 
   return(files_written)
+}
+
+#' Save per-cluster profile PNGs and multi-panel grid PDF
+#'
+#' Produces individual cluster profile PNGs (600 dpi, 3x3 in) and a
+#' multi-panel PDF using gridExtra::marrangeGrob with source-parity layout:
+#' k<=2 -> 1 row; k<=4 -> 2x2; k>4 -> 2x3.
+#'
+#' @param group_means Feature x group matrix
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param out_dir Output directory
+#' @param x_label X-axis label for profile plots
+#' @return list(files = character vector of written paths, plots = named list of ggplots)
+#' @export
+save_cluster_profile_outputs <- function(group_means, clusters, out_dir, x_label = "Group") {
+  requireNamespace("gridExtra", quietly = TRUE)
+
+  plot_list <- build_cluster_profile_plots(group_means, clusters, x_label)
+  if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
+
+  written <- character(0)
+  k <- length(plot_list)
+
+  # Per-cluster PNGs (source parity: 600 dpi, 3x3 in)
+  for (nm in names(plot_list)) {
+    f_png <- file.path(out_dir, sprintf("cluster_profiles_cluster%s.png", nm))
+    ggplot2::ggsave(f_png, plot = plot_list[[nm]],
+                    dpi = 600, width = 3, height = 3, units = "in")
+    written <- c(written, f_png)
+  }
+
+  # Multi-panel grid PDF (source parity layout)
+  if (k <= 2) {
+    ncol_grid <- k
+    nrow_grid <- 1
+  } else if (k <= 4) {
+    ncol_grid <- 2
+    nrow_grid <- 2
+  } else {
+    ncol_grid <- 3
+    nrow_grid <- 2
+  }
+
+  f_pdf <- file.path(out_dir, "cluster_profiles.pdf")
+  ml <- gridExtra::marrangeGrob(
+    grobs = plot_list,
+    ncol = ncol_grid,
+    nrow = nrow_grid,
+    top = NULL
+  )
+  ggplot2::ggsave(f_pdf, ml, width = 6.99, height = 3.99, dpi = 600)
+  written <- c(written, f_pdf)
+
+  list(files = written, plots = plot_list)
 }
 
 

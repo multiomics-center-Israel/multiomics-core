@@ -440,6 +440,55 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 }
+
+#' Build per-cluster profile ggplots (one plot per cluster)
+#'
+#' Each plot shows the mean expression trend across groups with SE error bars.
+#' Uses the same stat_summary approach as plot_cluster_profiles_legacy_style()
+#' but returns individual plots rather than a faceted panel.
+#'
+#' @param group_means Feature x group matrix (raw or z-scored group means)
+#' @param clusters Named integer vector mapping feature IDs to cluster numbers
+#' @param x_label X-axis label (typically the group column name)
+#' @return Named list of ggplot objects, keyed by cluster number (as character)
+#' @export
+build_cluster_profile_plots <- function(group_means, clusters, x_label = "Group") {
+  gm <- as.matrix(group_means)
+  clv <- clusters[rownames(gm)]
+  unique_clusters <- sort(unique(clv))
+
+  plot_list <- list()
+  for (ci in unique_clusters) {
+    rows <- which(clv == ci)
+    if (length(rows) == 0) next
+    sub <- gm[rows, , drop = FALSE]
+    n_feat <- nrow(sub)
+
+    df <- as.data.frame(sub)
+    df$gene <- rownames(sub)
+    long <- tidyr::pivot_longer(
+      df,
+      cols = setdiff(colnames(df), "gene"),
+      names_to = "group",
+      values_to = "EXP"
+    )
+    long$group <- factor(long$group, levels = colnames(gm))
+
+    p <- ggplot2::ggplot(long, ggplot2::aes(x = group, y = EXP, group = 1)) +
+      ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+      ggplot2::stat_summary(fun.data = ggplot2::mean_se, geom = "errorbar", width = 0.3) +
+      ggplot2::labs(
+        title = sprintf("Cluster %d (n=%d)", ci, n_feat),
+        y = "Expression (group means)", x = x_label
+      ) +
+      ggplot2::theme_bw() +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+    plot_list[[as.character(ci)]] <- p
+  }
+  plot_list
+}
+
 # R/plots/plot_de.R
 
 #' Volcano plot for a single DE table (one contrast)
@@ -725,6 +774,48 @@ save_heatmap_to_file <- function(pheatmap_obj, out_file,
 
   out_file
 }
+
+#' Save per-cluster heatmaps from partition clustering
+#'
+#' For each cluster, subsets features and generates a separate heatmap PNG.
+#' Within each cluster, rows are hierarchically clustered for readability.
+#'
+#' @param expr_mat Feature x sample expression matrix (full, not just DE)
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param annotation_col Column annotation data.frame for pheatmap
+#' @param out_dir Output directory for heatmap PNGs
+#' @param ... Additional arguments passed to plot_heatmap_core()
+#' @return Character vector of written file paths
+#' @export
+save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_dir, ...) {
+  expr_mat <- as.matrix(expr_mat)
+  unique_clusters <- sort(unique(clusters))
+  written <- character(0)
+
+  for (ci in unique_clusters) {
+    feats <- names(clusters[clusters == ci])
+    valid_feats <- intersect(feats, rownames(expr_mat))
+    if (length(valid_feats) == 0) next
+
+    mat_sub <- expr_mat[valid_feats, , drop = FALSE]
+    f_hm <- file.path(out_dir, sprintf("Partition_clustering_heatmap_cluster%d.png", ci))
+
+    p <- plot_heatmap_core(
+      expr_mat       = mat_sub,
+      annotation_col = annotation_col,
+      title          = sprintf("Partition Cluster %d (%d features)", ci, length(valid_feats)),
+      scale_rows     = TRUE,
+      cluster_rows   = TRUE,
+      cluster_cols   = FALSE,
+      max_rows       = NULL,
+      ...
+    )
+    save_heatmap_to_file(p, f_hm)
+    written <- c(written, f_hm)
+  }
+  written
+}
+
 #' Build a long-format table for imputation QC
 #' Used by plot_imputation_summary
 build_imputation_long_df <- function(expr_mat, imputed_flag) {
