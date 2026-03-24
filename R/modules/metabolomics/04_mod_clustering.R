@@ -219,32 +219,33 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             scale_rows   = TRUE,
             cluster_rows = FALSE,
             cluster_cols = FALSE,
-            max_rows     = NULL
+            max_rows     = NULL,
+            gaps_row     = compute_cluster_gaps(clusters_ordered)
         )
 
         save_heatmap_to_file(p_part, f_hm)
         plots$partition_heatmap <- p_part
         written <- c(written, f_hm)
 
-        # Cluster profiles
-        prof <- build_cluster_profiles(part_res$group_means,
-                                       part_res$clusters, part_res$k)
+        # Per-cluster heatmaps
+        per_clust_hm_files <- save_per_cluster_heatmaps(
+            expr_mat       = expr_mat,
+            clusters       = part_res$clusters,
+            annotation_col = annot_col,
+            out_dir        = part_dir
+        )
+        written <- c(written, per_clust_hm_files)
 
-        if (!is.null(prof)) {
-            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            grp_col_name <- cfg$clustering$group_col %||% "Group"
-            p_prof <- plot_cluster_profiles_legacy_style(
-                group_means = part_res$group_means,
-                clusters    = part_res$clusters,
-                x_label     = grp_col_name
-            )
-
-            n_clusters <- length(unique(prof$cluster))
-            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
-            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
-            written <- c(written, f_pdf)
-            plots$cluster_profiles <- p_prof
-        }
+        # Cluster profile outputs (per-cluster PNGs + multi-panel grid PDF)
+        prof_out <- save_cluster_profile_outputs(
+            expr_mat = expr_mat,
+            meta     = pre$meta,
+            clusters = part_res$clusters,
+            cfg      = cfg,
+            out_dir  = part_dir
+        )
+        written <- c(written, prof_out$files)
+        plots$cluster_profiles <- prof_out$plots
 
         # Legacy profile exports
         legacy_files <- write_clustering_legacy_profiles(
