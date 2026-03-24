@@ -239,12 +239,12 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     written <- c(written, per_clust_hm_files)
 
     # (3) Cluster profile outputs (per-cluster PNGs + multi-panel grid PDF)
-    grp_col_name <- cfg$clustering$group_col %||% "Group"
     prof_out <- save_cluster_profile_outputs(
-      group_means = part_res$group_means,
-      clusters    = part_res$clusters,
-      out_dir     = part_dir,
-      x_label     = grp_col_name
+      expr_mat = expr_mat,
+      meta     = pre$meta,
+      clusters = part_res$clusters,
+      cfg      = cfg,
+      out_dir  = part_dir
     )
     written <- c(written, prof_out$files)
     plots$cluster_profiles <- prof_out$plots

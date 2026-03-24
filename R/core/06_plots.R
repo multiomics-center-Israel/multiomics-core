@@ -441,45 +441,56 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 }
 
-#' Build per-cluster profile ggplots (one plot per cluster)
+#' Build per-cluster profile ggplots from sample-level long data
 #'
 #' Each plot shows the mean expression trend across groups with SE error bars.
-#' Uses the same stat_summary approach as plot_cluster_profiles_legacy_style()
-#' but returns individual plots rather than a faceted panel.
+#' Supports optional secondary grouping (color/linetype) when ColorGroup column
+#' is present in the input data.
 #'
-#' @param group_means Feature x group matrix (raw or z-scored group means)
-#' @param clusters Named integer vector mapping feature IDs to cluster numbers
-#' @param x_label X-axis label (typically the group column name)
+#' @param long_df data.frame with columns: Gene, Name, Exp, Group, Cluster,
+#'   and optionally ColorGroup
+#' @param x_label Character: X-axis label (group column name)
+#' @param color_label Character or NULL: legend label for color/linetype
+#'   grouping. NULL means no secondary grouping.
 #' @return Named list of ggplot objects, keyed by cluster number (as character)
 #' @export
-build_cluster_profile_plots <- function(group_means, clusters, x_label = "Group") {
-  gm <- as.matrix(group_means)
-  clv <- clusters[rownames(gm)]
-  unique_clusters <- sort(unique(clv))
+build_cluster_profile_plots <- function(long_df, x_label = "Group",
+                                        color_label = NULL) {
+  has_color <- "ColorGroup" %in% colnames(long_df) && !is.null(color_label)
 
+  # Consistent group ordering across all cluster panels
+  long_df$Group <- factor(long_df$Group, levels = unique(long_df$Group))
+  if (has_color) long_df$ColorGroup <- factor(long_df$ColorGroup)
+
+  unique_clusters <- sort(unique(long_df$Cluster))
   plot_list <- list()
+
   for (ci in unique_clusters) {
-    rows <- which(clv == ci)
-    if (length(rows) == 0) next
-    sub <- gm[rows, , drop = FALSE]
-    n_feat <- nrow(sub)
+    sub <- long_df[long_df$Cluster == ci, , drop = FALSE]
+    if (nrow(sub) == 0) next
+    n_feat <- length(unique(sub$Gene))
 
-    df <- as.data.frame(sub)
-    df$gene <- rownames(sub)
-    long <- tidyr::pivot_longer(
-      df,
-      cols = setdiff(colnames(df), "gene"),
-      names_to = "group",
-      values_to = "EXP"
-    )
-    long$group <- factor(long$group, levels = colnames(gm))
+    if (has_color) {
+      p <- ggplot2::ggplot(sub, ggplot2::aes(
+             x = Group, y = Exp,
+             colour = ColorGroup, linetype = ColorGroup,
+             group = ColorGroup)) +
+        ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+        ggplot2::stat_summary(fun.data = ggplot2::mean_se,
+                              geom = "errorbar", width = 0.3) +
+        ggplot2::labs(colour = color_label, linetype = color_label)
+    } else {
+      p <- ggplot2::ggplot(sub, ggplot2::aes(
+             x = Group, y = Exp, group = 1)) +
+        ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+        ggplot2::stat_summary(fun.data = ggplot2::mean_se,
+                              geom = "errorbar", width = 0.3)
+    }
 
-    p <- ggplot2::ggplot(long, ggplot2::aes(x = group, y = EXP, group = 1)) +
-      ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
-      ggplot2::stat_summary(fun.data = ggplot2::mean_se, geom = "errorbar", width = 0.3) +
+    p <- p +
       ggplot2::labs(
         title = sprintf("Cluster %d (n=%d)", ci, n_feat),
-        y = "Expression (group means)", x = x_label
+        y = "Expression", x = x_label
       ) +
       ggplot2::theme_bw() +
       ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))

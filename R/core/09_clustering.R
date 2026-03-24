@@ -539,6 +539,48 @@ get_clustering_group_col <- function(cfg, meta) {
   group_col
 }
 
+#' Build sample-level long data frame annotated with group and cluster
+#'
+#' Shared data-preparation helper used by both write_clustering_legacy_profiles()
+#' (for data export) and save_cluster_profile_outputs() (for plotting).
+#' Converts a feature x sample expression matrix into long format, joins with
+#' metadata groups and cluster assignments.
+#'
+#' @param expr_mat Numeric matrix (features x samples)
+#' @param meta Sample metadata data.frame
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param group_col Character: metadata column for group (X-axis)
+#' @param sample_col Character: metadata column identifying samples
+#' @param color_col Character or NULL: optional metadata column for secondary grouping
+#' @return data.frame with columns: Gene, Name, Exp, Group, Cluster,
+#'   and optionally ColorGroup (only when color_col is not NULL)
+build_cluster_long_df <- function(expr_mat, meta, clusters,
+                                  group_col, sample_col,
+                                  color_col = NULL) {
+  meta_map <- meta |>
+    dplyr::select(Name = dplyr::all_of(sample_col), Group = dplyr::all_of(group_col))
+
+  if (!is.null(color_col)) {
+    meta_map$ColorGroup <- meta[[color_col]]
+  }
+
+  norm_expr_long <- as.data.frame(expr_mat) |>
+    tibble::rownames_to_column("Gene") |>
+    tidyr::pivot_longer(cols = -"Gene", names_to = "Name", values_to = "Exp")
+
+  df_annotated <- norm_expr_long |>
+    dplyr::inner_join(meta_map, by = "Name")
+
+  cluster_map <- data.frame(
+    Gene = names(clusters),
+    Cluster = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+
+  df_annotated |>
+    dplyr::inner_join(cluster_map, by = "Gene")
+}
+
 # ---- Clustering guards ----
 
 #' Count how many distinct groups exist for clustering
@@ -915,33 +957,10 @@ build_cluster_profiles <- function(z_group_means, clusters, k) {
 write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_dir) {
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
-  # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- get_clustering_group_col(cfg, meta)
+  group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
-  meta_map <- meta |>
-    dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
-
-  # 2. Convert Expression Matrix to Long Format
-  # Rows = Genes, Cols = Samples -> Melt
-  norm_expr_long <- as.data.frame(expr_mat)|>
-    tibble::rownames_to_column("Gene")|>
-    tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
-
-  # 3. Join with Metadata
-  df_annotated <- norm_expr_long|>
-    dplyr::inner_join(meta_map, by = "Name")
-
-  # 4. Map Genes to Clusters
-  cluster_map <- data.frame(
-    Gene = names(clusters),
-    Cluster = as.integer(clusters),
-    stringsAsFactors = FALSE
-  )
-
-  # Final Join: Only keep genes that are in a cluster
-  df_final <- df_annotated|>
-    dplyr::inner_join(cluster_map, by = "Gene")
+  df_final <- build_cluster_long_df(expr_mat, meta, clusters, group_col, sample_col)
 
   files_written <- character(0)
 
@@ -986,20 +1005,36 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
 
 #' Save per-cluster profile PNGs and multi-panel grid PDF
 #'
-#' Produces individual cluster profile PNGs (600 dpi, 3x3 in) and a
-#' multi-panel PDF using gridExtra::marrangeGrob with source-parity layout:
-#' k<=2 -> 1 row; k<=4 -> 2x2; k>4 -> 2x3.
+#' Orchestration layer: resolves config, builds sample-level long data via
+#' build_cluster_long_df(), generates per-cluster ggplots via
+#' build_cluster_profile_plots(), and saves PNGs + grid PDF.
 #'
-#' @param group_means Feature x group matrix
+#' @param expr_mat Expression matrix (features x samples)
+#' @param meta Sample metadata data.frame
 #' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param cfg Mode config list
 #' @param out_dir Output directory
-#' @param x_label X-axis label for profile plots
 #' @return list(files = character vector of written paths, plots = named list of ggplots)
 #' @export
-save_cluster_profile_outputs <- function(group_means, clusters, out_dir, x_label = "Group") {
+save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir) {
   requireNamespace("gridExtra", quietly = TRUE)
 
-  plot_list <- build_cluster_profile_plots(group_means, clusters, x_label)
+  group_col  <- get_clustering_group_col(cfg, meta)
+  sample_col <- cfg$effects$samples
+  color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
+
+  if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+                    color_col))
+    color_col <- NULL
+  }
+
+  long_df <- build_cluster_long_df(expr_mat, meta, clusters,
+                                    group_col, sample_col, color_col)
+
+  color_label <- if (!is.null(color_col)) color_col else NULL
+  plot_list <- build_cluster_profile_plots(long_df, x_label = group_col,
+                                            color_label = color_label)
   if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
 
   written <- character(0)
