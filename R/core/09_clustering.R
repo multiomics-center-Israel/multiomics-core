@@ -1022,18 +1022,24 @@ save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir)
   group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
   color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
+  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
 
   if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
     warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
                     color_col))
     color_col <- NULL
   }
+  if (!(x_axis_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+                    x_axis_col))
+    x_axis_col <- group_col
+  }
 
   long_df <- build_cluster_long_df(expr_mat, meta, clusters,
-                                    group_col, sample_col, color_col)
+                                    x_axis_col, sample_col, color_col)
 
   color_label <- if (!is.null(color_col)) color_col else NULL
-  plot_list <- build_cluster_profile_plots(long_df, x_label = group_col,
+  plot_list <- build_cluster_profile_plots(long_df, x_label = x_axis_col,
                                             color_label = color_label)
   if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
 
