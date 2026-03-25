@@ -166,7 +166,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
         sprintf("DE method: %s with multiple imputation. Imputation: %s.",
                 de_method, imp_method))
 
-    title_bl <- generate_slide_bottom_line(title_context, config = config)
+    title_bl <- generate_slide_bottom_line(title_context, config = config, mode = "proteomics")
 
     stats_text <- sprintf(
         "%d proteins  |  %d samples  |  %s  |  %d DE proteins",
@@ -192,7 +192,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
         sprintf("DE method: %s. Imputation: %s. ", de_method, imp_method),
         sprintf("Missing data: %.1f%%. p-cutoff: %s, linear FC cutoff: %s.",
                 pct_missing %||% NA, p_cut, fc_lin_cut))
-    design_bl <- generate_slide_bottom_line(design_context, config = config)
+    design_bl <- generate_slide_bottom_line(design_context, config = config, mode = "proteomics")
 
     design_items <- list(
         list(label = "Samples",           value = as.character(n_samples)),
@@ -221,7 +221,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
                     n_samples, groups_str, n_proteins))
         pca_bl <- generate_slide_bottom_line(pca_context,
                                               image_path = pca_png,
-                                              config = config)
+                                              config = config, mode = "proteomics")
         pptx <- pptx_add_figure_slide(pptx,
             title    = "PCA: PC1 vs PC2",
             img      = pca_png,
@@ -241,7 +241,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             sprintf("%d samples, groups: %s.", n_samples, groups_str))
         umap_bl <- generate_slide_bottom_line(umap_context,
                                                image_path = umap_png,
-                                               config = config)
+                                               config = config, mode = "proteomics")
         pptx <- pptx_add_figure_slide(pptx,
             title    = "UMAP: Protein Expression",
             img      = umap_png,
@@ -260,7 +260,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             sprintf("%d samples, groups: %s.", n_samples, groups_str))
         cor_bl <- generate_slide_bottom_line(cor_context,
                                               image_path = cor_png,
-                                              config = config)
+                                              config = config, mode = "proteomics")
         pptx <- pptx_add_figure_slide(pptx,
             title    = "Sample Correlation Heatmap",
             img      = cor_png,
@@ -323,7 +323,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
         vol_bl <- generate_slide_bottom_line(vol_context,
                                               stats_json = vol_stats,
                                               image_path = volcano_png,
-                                              config = config)
+                                              config = config, mode = "proteomics")
 
         subtitle <- sprintf(
             "Up: %d  |  Down: %d  |  Total DE: %d  (adj.p < %s, linear FC >= %s)",
@@ -360,7 +360,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             gsub("_vs_", " vs ", ctr))
         ma_bl <- generate_slide_bottom_line(ma_context,
                                              image_path = ma_png,
-                                             config = config)
+                                             config = config, mode = "proteomics")
         pptx <- pptx_add_figure_slide(pptx,
             title    = paste("MA Plot:", gsub("_vs_", " vs ", ctr)),
             img      = ma_png,
@@ -409,7 +409,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             sprintf("Top: %s (log2FC=%.2f, adj.p=%.2e). Total DE: %d.",
                     display_df$Protein[1], display_df$`log2(FC)`[1],
                     display_df$adj.P.Val[1], n_sig))
-        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config)
+        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config, mode = "proteomics")
 
         pptx <- pptx_add_table_slide(pptx,
             title      = paste("Top DE Proteins:",
@@ -438,7 +438,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
                 gsub("_vs_", " vs ", cn))
             hm_bl <- generate_slide_bottom_line(hm_context,
                                                  image_path = hf,
-                                                 config = config)
+                                                 config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = paste("DE Heatmap:",
                                  gsub("_vs_", " vs ", cn)),
@@ -473,7 +473,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             }
             ppi_bl <- generate_slide_bottom_line(ppi_context,
                                                   image_path = ppi_net_png,
-                                                  config = config)
+                                                  config = config, mode = "proteomics")
 
             subtitle_ppi <- sprintf(
                 "%d nodes | %d edges | density: %.3f",
@@ -498,7 +498,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
                 ppi_res$summary$modularity %||% 0)
             comm_bl <- generate_slide_bottom_line(comm_context,
                                                    image_path = ppi_comm_png,
-                                                   config = config)
+                                                   config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = "PPI Network Communities",
                 img      = ppi_comm_png,
@@ -521,7 +521,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             }
             hub_bl <- generate_slide_bottom_line(hub_context,
                                                   image_path = ppi_hub_png,
-                                                  config = config)
+                                                  config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = "PPI Hub Proteins",
                 img      = ppi_hub_png,
@@ -537,7 +537,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             topo_context <- "PPI network topology: degree distribution and centrality metrics."
             topo_bl <- generate_slide_bottom_line(topo_context,
                                                    image_path = ppi_topo_png,
-                                                   config = config)
+                                                   config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = "PPI Network Topology",
                 img      = ppi_topo_png,
@@ -554,7 +554,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
                 "Subcellular localization of significant proteins ",
                 "in the PPI network.")
             subcell_bl <- generate_slide_bottom_line(subcell_context,
-                image_path = ppi_subcell_png, config = config)
+                image_path = ppi_subcell_png, config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = "Subcellular Localization",
                 img      = ppi_subcell_png,
@@ -579,7 +579,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
             ep_context <- sprintf("Pathway enrichment: %s.", ep_label)
             ep_bl <- generate_slide_bottom_line(ep_context,
                                                  image_path = ep,
-                                                 config = config)
+                                                 config = config, mode = "proteomics")
             pptx <- pptx_add_figure_slide(pptx,
                 title    = paste("Enrichment:", ep_label),
                 img      = ep,
