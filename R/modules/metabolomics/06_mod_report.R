@@ -89,7 +89,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
 
     # Locate template relative to project root (targets sets cwd to project root)
     template <- file.path("R", "pipeline", "metabolomics", "templates",
-                          "metabolomics_report.Rmd")
+                          "report_metabolomics.Rmd")
 
     if (!file.exists(template)) {
         stop("Report template not found at: ", template)

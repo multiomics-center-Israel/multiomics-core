@@ -152,7 +152,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     title_context <- paste0(title_context,
         sprintf("%s genes, %d samples, %d DE genes (DESeq2).",
                 format(n_genes, big.mark = ","), n_samples, n_de))
-    title_bl <- generate_slide_bottom_line(title_context, config = config)
+    title_bl <- generate_slide_bottom_line(title_context, config = config, mode = "rna")
 
     stats_text <- sprintf("%s genes  |  %d samples  |  %s  |  %d DE genes",
                            format(n_genes, big.mark = ","), n_samples, groups_str, n_de)
@@ -178,7 +178,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
         , organism, n_samples, format(n_genes, big.mark = ","), groups_str)
     design_context <- paste0(design_context,
         sprintf("DE method: %s. Normalization: %s.", de_method, norm_method))
-    design_bl <- generate_slide_bottom_line(design_context, config = config)
+    design_bl <- generate_slide_bottom_line(design_context, config = config, mode = "rna")
 
     design_items <- list(
         list(label = "Organism",        value = organism),
@@ -209,7 +209,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             "PCA plot (PC1 vs PC2) of RNA-seq normalized expression. %d samples, groups: %s.",
             n_samples, groups_str)
         pca_bl <- generate_slide_bottom_line(pca_context, image_path = pca_png,
-                                              config = config)
+                                              config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx     = pptx,
             title    = "PCA: PC1 vs PC2",
@@ -228,7 +228,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
     if (file.exists(cor_png)) {
         cor_context <- "Sample-to-sample Pearson correlation heatmap after normalization."
         cor_bl <- generate_slide_bottom_line(cor_context, image_path = cor_png,
-                                              config = config)
+                                              config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx   = pptx,
             title  = "Sample Correlation Heatmap",
@@ -274,7 +274,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             "Volcano plot: %s. %d up-regulated, %d down-regulated (padj < %.2g, |log2FC| >= %.2f). Top genes: %s.",
             gsub("_vs_", " vs ", ctr), n_up, n_down, p_cut, lfc_cut, top_names)
         vol_bl <- generate_slide_bottom_line(vol_context, stats_json = vol_stats,
-                                              image_path = volcano_png, config = config)
+                                              image_path = volcano_png, config = config, mode = "rna")
 
         subtitle <- sprintf("Up: %d  |  Down: %d  |  Total DE: %d  (padj < %s, |log2FC| >= %.2f)",
                              n_up, n_down, n_up + n_down, p_cut, lfc_cut)
@@ -298,7 +298,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
         ma_context <- sprintf("MA plot: %s. log2(FC) vs average expression for RNA-seq.",
                                gsub("_vs_", " vs ", ctr))
         ma_bl <- generate_slide_bottom_line(ma_context, image_path = ma_png,
-                                             config = config)
+                                             config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx   = pptx,
             title  = paste("MA Plot:", gsub("_vs_", " vs ", ctr)),
@@ -337,7 +337,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             top_n, gsub("_vs_", " vs ", ctr),
             display_df$Gene[1], display_df$`log2FC`[1],
             display_df$padj[1], nrow(sig))
-        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config)
+        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config, mode = "rna")
 
         subtitle <- sprintf("%d significant genes (padj < %s, |log2FC| >= %.2f)",
                              nrow(sig), p_cut, lfc_cut)
@@ -363,7 +363,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             "Heatmap of top 25 DE genes for %s with hierarchical clustering.",
             gsub("_vs_", " vs ", ctr))
         hm_bl <- generate_slide_bottom_line(hm_context, image_path = hm_png,
-                                             config = config)
+                                             config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx     = pptx,
             title    = paste("DE Heatmap:", gsub("_vs_", " vs ", ctr)),
@@ -381,7 +381,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
         file.exists(global_hm)) {
         hm_context <- "Heatmap of top DE genes across all contrasts with hierarchical clustering."
         hm_bl <- generate_slide_bottom_line(hm_context, image_path = global_hm,
-                                             config = config)
+                                             config = config, mode = "rna")
         pptx <- pptx_add_figure_slide(
             pptx     = pptx,
             title    = "Top DE Genes Heatmap",
@@ -404,7 +404,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             ep_label <- tools::toTitleCase(ep_label)
             ep_context <- sprintf("Pathway enrichment: %s.", ep_label)
             ep_bl <- generate_slide_bottom_line(ep_context, image_path = ep,
-                                                 config = config)
+                                                 config = config, mode = "rna")
             pptx <- pptx_add_figure_slide(
                 pptx   = pptx,
                 title  = paste("Enrichment:", ep_label),
@@ -425,7 +425,7 @@ generate_rnaseq_pptx <- function(pre, qc_pre_obj, de_res, clustering_obj,
             ep_label <- tools::toTitleCase(ep_label)
             ep_context <- sprintf("Pathway enrichment: %s.", ep_label)
             ep_bl <- generate_slide_bottom_line(ep_context, image_path = ep,
-                                                 config = config)
+                                                 config = config, mode = "rna")
             pptx <- pptx_add_figure_slide(
                 pptx   = pptx,
                 title  = paste("Enrichment:", ep_label),
