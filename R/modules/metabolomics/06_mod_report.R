@@ -121,16 +121,13 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         output_file = basename(out_file),
         output_dir  = dirname(out_file),
         params = list(
-            pre                = pre,
-            qc_res             = qc_res,
-            de_res             = de_res,
-            clustering_res     = clustering_res,
-            rf_res             = rf_res_out,
-            plsda_res          = plsda_res_out,
-            enrichment_res     = enrichment_res,
-            config             = config,
-            qc_comparison_file = qc_comparison_file,
-            qc_suite_files     = qc_suite_files
+            pre            = pre,
+            qc_res         = qc_res,
+            de_res         = de_res,
+            rf_res         = rf_res_out,
+            plsda_res      = plsda_res_out,
+            enrichment_res = enrichment_res,
+            config         = config
         ),
         envir  = new.env(parent = globalenv()),
         quiet  = TRUE
