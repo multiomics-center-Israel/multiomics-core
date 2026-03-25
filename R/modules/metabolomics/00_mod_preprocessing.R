@@ -83,6 +83,7 @@ mod_met_raw <- function(inp, config) {
 
   # Align metadata; build minimal stub if none provided
   meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
+  expr_raw <- align_matrix_to_meta(expr_raw, meta, sample_col)
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
 
   # Apply optional sample filter (QC/blank exclusion)

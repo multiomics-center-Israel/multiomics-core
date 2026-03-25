@@ -272,7 +272,7 @@ align_samples_strict <- function(expr_samples, meta, sample_col, lenient = TRUE)
     }
 
     # Compute intersection
-    common_samples <- intersect(expr_samples, meta_samples)
+    common_samples <- intersect(meta_samples, expr_samples)
     if (length(common_samples) == 0) {
         stop("[alignment] No samples in common between expression data and metadata.", call. = FALSE)
     }

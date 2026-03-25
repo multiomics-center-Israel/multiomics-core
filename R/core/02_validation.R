@@ -63,7 +63,7 @@ assert_meta_contract <- function(meta, sample_col) {
     invisible(TRUE)
 }
 
-assert_expr_meta_alignment <- function(expr_mat, meta, cfg, strict = TRUE) {
+assert_expr_meta_alignment <- function(expr_mat, meta, cfg, strict = FALSE) {
     sample_col <- get_sample_col(cfg)
 
     assert_numeric_matrix(expr_mat, "expr_mat")

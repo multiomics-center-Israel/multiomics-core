@@ -43,6 +43,7 @@ preprocess_proteomics <- function(inputs, config) {
     # Align col_data
     sample_id_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
     check_has_cols(col_data, sample_id_col, df_name = "col_data")
+    expr_raw <- align_matrix_to_meta(expr_raw, col_data, sample_id_col)
     col_data <- align_meta_to_expr(expr_raw, col_data, cfg)
 
     # Optional: sample_filter
