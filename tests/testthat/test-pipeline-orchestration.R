@@ -82,12 +82,12 @@ test_that("pipe_proteomics returns expected number of targets", {
 # =============================================================================
 
 test_that("pipe_metabolomics returns a valid target list", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics("pqn")
     assert_valid_targets(result)
 })
 
 test_that("pipe_metabolomics contains expected target names", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics("pqn")
     names <- get_target_names(result)
     expect_true("metab_out_dir" %in% names)
     expect_true("metab_pre" %in% names)
@@ -95,7 +95,7 @@ test_that("pipe_metabolomics contains expected target names", {
 })
 
 test_that("pipe_metabolomics returns expected number of targets", {
-    result <- pipe_metabolomics()
+    result <- pipe_metabolomics("pqn")
     expect_gte(length(result), 8)
 })
 

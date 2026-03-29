@@ -484,12 +484,12 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     all_annot_cols <- Reduce(union, lapply(parsed_levels, function(p) colnames(p$row_data)))
 
     # Deterministic column ordering:
-    #   1. feature_id  (RT[rt]_MZ[mz], no prefix)
-    #   2. level_id    (lowercase level label, e.g. "level_1")
-    #   3. identification_level (integer parsed from file/level name) / original_id
+    #   1. feature_id        (prefixed with level label, e.g. "Level_1__...")
+    #   2. Source_File       (original level label, e.g. "Level_1")
+    #   3. feature_id_orig   (pre-prefix feature id)
     #   4. remaining annotation columns in union order
-    fixed_cols      <- c("feature_id", "level_id", "identification_level", "original_id")
-    remaining_cols  <- setdiff(all_annot_cols, fixed_cols)
+    fixed_cols <- c("feature_id", "Source_File", "feature_id_orig")
+    remaining_cols <- setdiff(c(all_annot_cols, "identification_level"), fixed_cols)
     final_col_order <- c(fixed_cols, remaining_cols)
 
     expr_list <- vector("list", length(parsed_levels))
@@ -499,26 +499,48 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     for (i in seq_along(parsed_levels)) {
         p  <- parsed_levels[[i]]
         lv <- level_names[i]
+        
+        expr_mat <- p$expr_raw[, ref_ids, drop = FALSE]
+        
+        prefixed_ids <- paste0(lv, "__", rownames(expr_mat))
+        rownames(expr_mat) <- prefixed_ids
+        expr_list[[i]] <- expr_mat
+        
+        rd <- p$row_data
+        
+        raw_ids <- rd$feature_id
+        rd$feature_id <- prefixed_ids
+        rd$feature_id_orig <- prefixed_ids
+        rd$Source_File <- lv
+        rd$identification_level <- suppressWarnings(
+          as.integer(sub("^Level_(\\d+)$", "\\1", lv, perl = TRUE))
+        )
 
         # ── Expression matrix ────────────────────────────────────────────────
         # Reorder columns to canonical ref_ids order; prefix rownames with the
         # level label to guarantee cross-level uniqueness after rbind.
-        expr_mat                <- p$expr_raw[, ref_ids, drop = FALSE]
-        rownames(expr_mat)      <- paste0(tolower(lv), "__", rownames(expr_mat))
-        expr_list[[i]]          <- expr_mat
-
-        # ── row_data ─────────────────────────────────────────────────────────
-        rd                      <- p$row_data
-        rd$level_id             <- tolower(lv)   # e.g. "level_1"
-        rd$identification_level <- suppressWarnings(
-            as.integer(sub("^Level_(\\d+)$", "\\1", lv, perl = TRUE))
-        )
-
+        # expr_mat                <- p$expr_raw[, ref_ids, drop = FALSE]
+        # rownames(expr_mat)      <- paste0(lv, "__", rownames(expr_mat))
+        # expr_list[[i]]          <- expr_mat
+        # 
+        # # ── row_data ─────────────────────────────────────────────────────────
+        # rd <- p$row_data
+        # 
+        # rd$feature_id <- paste0(lv, "__", rd$feature_id)
+        # rd$feature_id_orig <- rd$feature_id
+        # 
+        # rd$feature_id <- paste0(lv, "__", rd$feature_id)
+        # rd$Source_File <- lv
+        # rd$identification_level <- suppressWarnings(
+        #   as.integer(sub("^Level_(\\d+)$", "\\1", lv, perl = TRUE))
+        # )
+        
         # Fill annotation columns absent in this level
-        for (col in setdiff(all_annot_cols, colnames(rd))) {
-            rd[[col]] <- NA
+        for (col in setdiff(final_col_order, colnames(rd))) {
+          rd[[col]] <- NA
         }
-
+        
+        stopifnot(identical(rownames(expr_mat), rd$feature_id))
         # Apply deterministic column ordering
         rd_list[[i]] <- rd[, final_col_order, drop = FALSE]
 
@@ -528,7 +550,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 
     expr_raw <- do.call(rbind, expr_list)
     row_data <- do.call(rbind, rd_list)
-    rownames(row_data) <- paste0(row_data$level_id, "__", row_data$feature_id)
+    rownames(row_data) <- row_data$feature_id
 
     # ── Deduplication: one representative per feature_id ─────────────────────
     # Sort: lowest identification_level first (NA treated as Inf = worst),
@@ -553,11 +575,12 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     dup_log <- NULL
     if (nrow(dropped) > 0) {
         kept_lookup <- data.frame(
-            feature_id                = kept_rows$feature_id,
-            kept_level_id             = kept_rows$level_id,
-            kept_identification_level = kept_rows$identification_level,
-            stringsAsFactors          = FALSE
+          feature_id                = kept_rows$feature_id,
+          kept_Source_File          = kept_rows$Source_File,
+          kept_identification_level = kept_rows$identification_level,
+          stringsAsFactors          = FALSE
         )
+
         dup_log <- merge(dropped, kept_lookup, by = "feature_id", all.x = TRUE)
 
         dup_log$drop_reason <- ifelse(
@@ -574,8 +597,9 @@ merge_level_parsed <- function(parsed_levels, level_names) {
         )
 
         # Lead columns first, then remaining annotation columns, drop helpers
-        log_lead <- c("feature_id", "identification_level", "original_id", "Name",
-                      "drop_reason", "kept_level_id", "kept_identification_level")
+      
+        log_lead <- c("feature_id", "Source_File", "feature_id_orig", "identification_level",
+                      "Name", "drop_reason", "kept_Source_File", "kept_identification_level")
         log_lead    <- intersect(log_lead, colnames(dup_log))
         log_rest    <- setdiff(colnames(dup_log),
                                c(log_lead, ".sort_level", ".row_idx"))
@@ -588,7 +612,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     kept_rows$.sort_level <- NULL
     kept_rows$.row_idx    <- NULL
     row_data              <- kept_rows
-    expr_raw              <- expr_raw[paste0(row_data$level_id, "__", row_data$feature_id), , drop = FALSE]
+    expr_raw              <- expr_raw[row_data$feature_id, , drop = FALSE]
     rownames(expr_raw)    <- row_data$feature_id
     rownames(row_data)    <- row_data$feature_id
 
@@ -602,14 +626,14 @@ merge_level_parsed <- function(parsed_levels, level_names) {
     sample_map    <- if (length(non_null_maps) > 0) unique(do.call(rbind, non_null_maps)) else NULL
 
     out <- list(
-        expr_raw        = expr_raw,
-        row_data        = row_data,
-        sample_ids      = ref_ids,
-        sample_map      = sample_map,
-        duplicate_log   = dup_log
+      expr_raw   = expr_raw,
+      row_data   = row_data,
+      sample_ids = ref_ids,
+      sample_map = sample_map
     )
     attr(out, "duplicate_log") <- dup_log
     out
+  
 }
 
 

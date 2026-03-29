@@ -243,21 +243,29 @@ align_samples_strict <- function(expr_samples, meta, sample_col, lenient = TRUE)
         msg_parts <- c("[alignment] Sample mismatch detected:")
 
         if (length(in_expr_not_meta) > 0) {
-            msg_parts <- c(msg_parts, sprintf(
-                "  - In expression data but not metadata (%d): %s",
-                length(in_expr_not_meta),
-                paste(head(in_expr_not_meta, 5), collapse = ", "),
-                if (length(in_expr_not_meta) > 5) "..." else ""
-            ))
+          preview <- paste0(
+            paste(head(in_expr_not_meta, 5), collapse = ", "),
+            if (length(in_expr_not_meta) > 5) ", ..." else ""
+          )
+          
+          msg_parts <- c(msg_parts, sprintf(
+            "  - In expression data but not metadata (%d): %s",
+            length(in_expr_not_meta),
+            preview
+          ))
         }
-
+        
         if (length(in_meta_not_expr) > 0) {
-            msg_parts <- c(msg_parts, sprintf(
-                "  - In metadata but not expression data (%d): %s",
-                length(in_meta_not_expr),
-                paste(head(in_meta_not_expr, 5), collapse = ", "),
-                if (length(in_meta_not_expr) > 5) "..." else ""
-            ))
+          preview <- paste0(
+            paste(head(in_meta_not_expr, 5), collapse = ", "),
+            if (length(in_meta_not_expr) > 5) ", ..." else ""
+          )
+          
+          msg_parts <- c(msg_parts, sprintf(
+            "  - In metadata but not expression data (%d): %s",
+            length(in_meta_not_expr),
+            preview
+          ))
         }
 
         if (!lenient) {
