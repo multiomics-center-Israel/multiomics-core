@@ -20,7 +20,7 @@
 
 #' Discover all figure files from the RNA output directory
 #'
-#' Scans Diagnostic_plots/, QC_post/, and Enrichment/plots/ directories
+#' Scans Diagnostic_plots/, DE_plots/, and Enrichment/plots/ directories
 #' for PNG files and builds a metadata table.
 #'
 #' @param out_dir  RNA output directory (e.g. .../rna)
@@ -29,7 +29,7 @@
 discover_figures <- function(out_dir, config = NULL) {
 
     diag_dir   <- file.path(out_dir, "Diagnostic_plots")
-    qc_post    <- file.path(diag_dir, "QC_post")
+    qc_post    <- file.path(diag_dir, "DE_plots")
     enrich_plt <- file.path(out_dir, "Enrichment", "plots")
 
     figures <- list()

@@ -130,7 +130,7 @@ plot_sample_correlation_heatmap <- function(expr_mat,
                                             show_labels = TRUE,
                                             cluster_rows = TRUE,
                                             cluster_cols = TRUE,
-                                            adjust_scale = TRUE) {
+                                            adjust_scale = FALSE) {
   expr_mat <- as.matrix(expr_mat)
 
   cor_mat <- stats::cor(
@@ -440,6 +440,66 @@ plot_cluster_profiles <- function(prof_df, x_label = "Group") {
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 }
+
+#' Build per-cluster profile ggplots from sample-level long data
+#'
+#' Each plot shows the mean expression trend across groups with SE error bars.
+#' Supports optional secondary grouping (color/linetype) when ColorGroup column
+#' is present in the input data.
+#'
+#' @param long_df data.frame with columns: Gene, Name, Exp, Group, Cluster,
+#'   and optionally ColorGroup
+#' @param x_label Character: X-axis label (group column name)
+#' @param color_label Character or NULL: legend label for color/linetype
+#'   grouping. NULL means no secondary grouping.
+#' @return Named list of ggplot objects, keyed by cluster number (as character)
+#' @export
+build_cluster_profile_plots <- function(long_df, x_label = "Group",
+                                        color_label = NULL) {
+  has_color <- "ColorGroup" %in% colnames(long_df) && !is.null(color_label)
+
+  # Consistent group ordering across all cluster panels
+  long_df$Group <- factor(long_df$Group, levels = unique(long_df$Group))
+  if (has_color) long_df$ColorGroup <- factor(long_df$ColorGroup)
+
+  unique_clusters <- sort(unique(long_df$Cluster))
+  plot_list <- list()
+
+  for (ci in unique_clusters) {
+    sub <- long_df[long_df$Cluster == ci, , drop = FALSE]
+    if (nrow(sub) == 0) next
+    n_feat <- length(unique(sub$Gene))
+
+    if (has_color) {
+      p <- ggplot2::ggplot(sub, ggplot2::aes(
+             x = Group, y = Exp,
+             colour = ColorGroup, linetype = ColorGroup,
+             group = ColorGroup)) +
+        ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+        ggplot2::stat_summary(fun.data = ggplot2::mean_se,
+                              geom = "errorbar", width = 0.3) +
+        ggplot2::labs(colour = color_label, linetype = color_label)
+    } else {
+      p <- ggplot2::ggplot(sub, ggplot2::aes(
+             x = Group, y = Exp, group = 1)) +
+        ggplot2::stat_summary(fun = mean, geom = "line", linewidth = 1.3) +
+        ggplot2::stat_summary(fun.data = ggplot2::mean_se,
+                              geom = "errorbar", width = 0.3)
+    }
+
+    p <- p +
+      ggplot2::labs(
+        title = sprintf("Cluster %d (n=%d)", ci, n_feat),
+        y = "Expression", x = x_label
+      ) +
+      ggplot2::theme_bw() +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+    plot_list[[as.character(ci)]] <- p
+  }
+  plot_list
+}
+
 # R/plots/plot_de.R
 
 #' Volcano plot for a single DE table (one contrast)
@@ -634,6 +694,48 @@ save_heatmap_to_file <- function(pheatmap_obj, out_file,
 
   out_file
 }
+
+#' Save per-cluster heatmaps from partition clustering
+#'
+#' For each cluster, subsets features and generates a separate heatmap PNG.
+#' Within each cluster, rows are hierarchically clustered for readability.
+#'
+#' @param expr_mat Feature x sample expression matrix (full, not just DE)
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param annotation_col Column annotation data.frame for pheatmap
+#' @param out_dir Output directory for heatmap PNGs
+#' @param ... Additional arguments passed to plot_heatmap_core()
+#' @return Character vector of written file paths
+#' @export
+save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_dir, ...) {
+  expr_mat <- as.matrix(expr_mat)
+  unique_clusters <- sort(unique(clusters))
+  written <- character(0)
+
+  for (ci in unique_clusters) {
+    feats <- names(clusters[clusters == ci])
+    valid_feats <- intersect(feats, rownames(expr_mat))
+    if (length(valid_feats) == 0) next
+
+    mat_sub <- expr_mat[valid_feats, , drop = FALSE]
+    f_hm <- file.path(out_dir, sprintf("Partition_clustering_heatmap_cluster%d.png", ci))
+
+    p <- plot_heatmap_core(
+      expr_mat       = mat_sub,
+      annotation_col = annotation_col,
+      title          = sprintf("Partition Cluster %d (%d features)", ci, length(valid_feats)),
+      scale_rows     = TRUE,
+      cluster_rows   = TRUE,
+      cluster_cols   = FALSE,
+      max_rows       = NULL,
+      ...
+    )
+    save_heatmap_to_file(p, f_hm)
+    written <- c(written, f_hm)
+  }
+  written
+}
+
 #' Build a long-format table for imputation QC
 #' Used by plot_imputation_summary
 build_imputation_long_df <- function(expr_mat, imputed_flag) {
@@ -750,8 +852,8 @@ build_heatmap_annotation_col <- function(meta, cfg) {
   shape_col  <- cfg$effects$shape %||% NULL
   
   annot_cols <- c(
-    if (!is.null(color_col) && color_col %in% colnames(meta)) color_col,
-    if (!is.null(shape_col) && shape_col %in% colnames(meta) && shape_col != color_col) shape_col
+    if (!is.null(color_col) && all(color_col %in% colnames(meta))) color_col,
+    if (!is.null(shape_col) && all(shape_col %in% colnames(meta)) && all(shape_col != color_col)) shape_col
   )
   
   if (length(annot_cols) == 0) return(NULL)

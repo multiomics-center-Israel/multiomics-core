@@ -50,7 +50,20 @@ p_tag_generic <- function(config, mode, default = "NA") {
 }
 
 #' Write legacy-style Final_results excels (generic for any mode)
-write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col, expr_for_de, with_cutoffs = TRUE, clustering_res = NULL) {
+#'
+#' @param sample_meta Optional sample metadata data.frame for annotation rows.
+#' @param sample_id_col Column name in sample_meta that matches expression column names.
+#' @param annotation_rows Character vector of metadata column names to show as
+#'   annotation rows above the data. NULL = all non-ID columns.
+#' @param sample_label_cols Character vector of metadata columns to concatenate
+#'   (with "_") for informative sample headers. NULL = keep original IDs.
+write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col,
+                                                       expr_for_de, with_cutoffs = TRUE,
+                                                       clustering_res = NULL,
+                                                       sample_meta = NULL,
+                                                       sample_id_col = NULL,
+                                                       annotation_rows = NULL,
+                                                       sample_label_cols = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
     # Validate inputs
     if (is.null(final_results)) {
@@ -67,17 +80,219 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
     f_all <- file.path(out_dir, sprintf("Final_results_ALL_P_%s.xlsx", p_tag_val))
     f_de <- file.path(out_dir, sprintf("Final_results_DE_P_%s.xlsx", p_tag_val))
 
+    # ---- Build sample label mapping and annotation data ----
+    sample_label_map <- NULL
+    annot_row_data   <- NULL
+    has_sample_annots <- !is.null(sample_meta) && !is.null(sample_id_col) &&
+        sample_id_col %in% colnames(sample_meta)
+
+    if (has_sample_annots) {
+        meta_ids <- as.character(sample_meta[[sample_id_col]])
+
+        # Build informative sample labels if configured
+        if (!is.null(sample_label_cols) && length(sample_label_cols) > 0) {
+            valid_cols <- intersect(sample_label_cols, colnames(sample_meta))
+            if (length(valid_cols) > 0) {
+                labels <- apply(sample_meta[, valid_cols, drop = FALSE], 1, function(row) {
+                    paste(as.character(row), collapse = "_")
+                })
+                # Ensure uniqueness by appending index for duplicates
+                labels <- make.unique(labels, sep = "_")
+                sample_label_map <- stats::setNames(labels, meta_ids)
+            }
+        }
+
+        # Determine which metadata columns to use as annotation rows
+        if (is.null(annotation_rows)) {
+            annotation_rows <- setdiff(colnames(sample_meta), sample_id_col)
+        } else {
+            annotation_rows <- intersect(annotation_rows, colnames(sample_meta))
+        }
+
+        if (length(annotation_rows) > 0) {
+            # Build a named list: annotation_label -> named vector (sample_id -> value)
+            annot_row_data <- lapply(annotation_rows, function(col) {
+                stats::setNames(as.character(sample_meta[[col]]), meta_ids)
+            })
+            names(annot_row_data) <- annotation_rows
+        }
+    }
+
     save_wb_results <- function(df, path, with_cutoffs = FALSE) {
         wb <- openxlsx::createWorkbook()
-        openxlsx::addWorksheet(wb, "Results")
-        openxlsx::writeData(wb, "Results", df)
+        sheet <- "Results"
+        openxlsx::addWorksheet(wb, sheet, gridLines = TRUE)
+
+        # Identify sample columns in df (expression + zscore columns that match meta IDs)
+        df_cols <- colnames(df)
+        sample_cols_in_df <- character(0)
+        if (has_sample_annots) {
+            meta_ids <- as.character(sample_meta[[sample_id_col]])
+            sample_cols_in_df <- intersect(df_cols, meta_ids)
+        }
+
+        # ---- Apply sample label renaming ----
+        df_out <- df
+        if (!is.null(sample_label_map) && length(sample_cols_in_df) > 0) {
+            for (sc in sample_cols_in_df) {
+                if (sc %in% names(sample_label_map)) {
+                    new_name <- sample_label_map[[sc]]
+                    colnames(df_out)[colnames(df_out) == sc] <- new_name
+                }
+            }
+            # Also rename z-score columns
+            zscore_cols_in_df <- grep("\\.zscore$", colnames(df_out), value = TRUE)
+            for (zc in zscore_cols_in_df) {
+                base_id <- sub("\\.zscore$", "", zc)
+                if (base_id %in% names(sample_label_map)) {
+                    new_name <- paste0(sample_label_map[[base_id]], ".zscore")
+                    colnames(df_out)[colnames(df_out) == zc] <- new_name
+                }
+            }
+        }
+
+        # ---- Detect DE stat columns and group by contrast ----
+        de_col_pattern <- "^(linearFC|pvalue|padj|upDown)\\."
+        de_col_indices <- grep(de_col_pattern, colnames(df_out))
+        contrast_groups <- list()
+        if (length(de_col_indices) > 0) {
+            for (ci in de_col_indices) {
+                col_name <- colnames(df_out)[ci]
+                contrast <- sub("^[^.]+\\.", "", col_name)
+                contrast <- sub("^imputs\\.", "", contrast)
+                contrast_groups[[contrast]] <- c(contrast_groups[[contrast]], ci)
+            }
+        }
+        has_contrast_groups <- length(contrast_groups) > 0
+        n_contrast_header_rows <- if (has_contrast_groups) 1L else 0L
+
+        # ---- Number of annotation rows above the data ----
+        n_annot_rows <- 0
+        if (!is.null(annot_row_data) && length(annot_row_data) > 0 &&
+            length(sample_cols_in_df) > 0) {
+            # Always include "Sample_ID" row for traceability
+            n_annot_rows <- length(annot_row_data) + 1  # +1 for Sample_ID row
+        }
+
+        # ---- Write annotation rows (rows 1..n_annot_rows) ----
+        if (n_annot_rows > 0) {
+            # Map sample columns to their column indices in df_out
+            # (after potential renaming)
+            sample_col_indices <- vapply(sample_cols_in_df, function(sc) {
+                target <- if (!is.null(sample_label_map) && sc %in% names(sample_label_map)) {
+                    sample_label_map[[sc]]
+                } else {
+                    sc
+                }
+                match(target, colnames(df_out))
+            }, integer(1))
+            sample_col_indices <- sample_col_indices[!is.na(sample_col_indices)]
+
+            row_idx <- 1
+            # Write Sample_ID row first
+            openxlsx::writeData(wb, sheet, x = "Sample_ID", startCol = 1, startRow = row_idx,
+                                colNames = FALSE, rowNames = FALSE)
+            for (j in seq_along(sample_col_indices)) {
+                sc <- sample_cols_in_df[j]
+                openxlsx::writeData(wb, sheet, x = sc,
+                                    startCol = sample_col_indices[j],
+                                    startRow = row_idx,
+                                    colNames = FALSE, rowNames = FALSE)
+            }
+            row_idx <- row_idx + 1
+
+            # Write metadata annotation rows
+            for (annot_name in names(annot_row_data)) {
+                vals <- annot_row_data[[annot_name]]
+                openxlsx::writeData(wb, sheet, x = annot_name, startCol = 1,
+                                    startRow = row_idx, colNames = FALSE, rowNames = FALSE)
+                for (j in seq_along(sample_col_indices)) {
+                    sc <- sample_cols_in_df[j]
+                    val <- if (sc %in% names(vals)) vals[[sc]] else NA
+                    openxlsx::writeData(wb, sheet, x = val,
+                                        startCol = sample_col_indices[j],
+                                        startRow = row_idx,
+                                        colNames = FALSE, rowNames = FALSE)
+                }
+                row_idx <- row_idx + 1
+            }
+
+            # ---- Style annotation rows ----
+            annot_fill <- openxlsx::createStyle(fgFill = "#F0F0F0", textDecoration = "bold")
+            label_style <- openxlsx::createStyle(fgFill = "#D9D9D9", textDecoration = "bold")
+            separator_style <- openxlsx::createStyle(
+                border = "bottom", borderStyle = "thick", borderColour = "#333333"
+            )
+
+            for (r in seq_len(n_annot_rows)) {
+                openxlsx::addStyle(wb, sheet, annot_fill, rows = r,
+                                   cols = seq_along(df_cols), stack = TRUE)
+                # Bold label in column 1
+                openxlsx::addStyle(wb, sheet, label_style, rows = r, cols = 1, stack = TRUE)
+            }
+            # Thick border on last annotation row
+            openxlsx::addStyle(wb, sheet, separator_style, rows = n_annot_rows,
+                               cols = seq_along(df_cols), stack = TRUE)
+        }
+
+        # ---- Grouped contrast header row ----
+        if (has_contrast_groups) {
+            contrast_row <- n_annot_rows + 1
+            contrast_style <- openxlsx::createStyle(
+                textDecoration = "bold", halign = "center",
+                border = "bottom", borderStyle = "thin"
+            )
+            for (contrast_name in names(contrast_groups)) {
+                cols <- contrast_groups[[contrast_name]]
+                openxlsx::writeData(wb, sheet, x = contrast_name,
+                                    startCol = cols[1], startRow = contrast_row,
+                                    colNames = FALSE, rowNames = FALSE)
+                if (length(cols) > 1) {
+                    openxlsx::mergeCells(wb, sheet,
+                                         cols = cols, rows = contrast_row)
+                }
+                openxlsx::addStyle(wb, sheet, contrast_style,
+                                   rows = contrast_row, cols = cols, stack = TRUE)
+            }
+        }
+
+        # ---- Write data table (header + data) ----
+        data_start_row <- n_annot_rows + n_contrast_header_rows + 1
+        openxlsx::writeData(wb, sheet, df_out, startRow = data_start_row)
+
+        # ---- Overwrite DE header cells with short stat names ----
+        if (has_contrast_groups) {
+            for (ci in de_col_indices) {
+                stat_name <- sub("\\..*", "", colnames(df_out)[ci])
+                openxlsx::writeData(wb, sheet, x = stat_name,
+                                    startCol = ci, startRow = data_start_row,
+                                    colNames = FALSE, rowNames = FALSE)
+            }
+        }
+
+        # ---- Header styling ----
+        header_style <- openxlsx::createStyle(textDecoration = "bold",
+                                               border = "bottom", borderStyle = "thin")
+        openxlsx::addStyle(wb, sheet, header_style, rows = data_start_row,
+                           cols = seq_along(colnames(df_out)), stack = TRUE)
+
+        # ---- Freeze panes ----
+        # Freeze after annotation rows + header row, and after the ID column
+        openxlsx::freezePane(wb, sheet,
+                             firstActiveRow = data_start_row + 1,
+                             firstActiveCol = 2)
+
+        # ---- Auto-width for first column (ID) ----
+        openxlsx::setColWidths(wb, sheet, cols = 1, widths = "auto")
 
         if (with_cutoffs) {
             add_cutoffs_sheet_legacy(wb, config, mode = mode)
-            fill_manual_cutoffs_formulas_legacy(wb, "Results", df, config, mode = mode)
+            fill_manual_cutoffs_formulas_legacy(wb, sheet, df_out, config,
+                                                 mode = mode,
+                                                 start_row = data_start_row + 1)
         }
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
-        path # Return the file path for targets tracking
+        path
     }
 
     # Save full results (ALL table) and capture path
@@ -103,14 +318,14 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # Integrate clustering order and z-scores if available
         cl_obj <- clustering_res %||% list()
         excel_ord <- cl_obj$excel_order %||% NULL
-        
-        
+
+
         if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
             ordered_ids <- excel_ord$ordered_ids
 
-            # 1. Add 'order' column (hierarchical clustering rank)
+            # 1. Hierarchical_Order (rank in hierarchical dendrogram)
             ranks <- match(de_df[[id_col]], ordered_ids)
-            de_df$order <- ranks
+            de_df$Hierarchical_Order <- ranks
 
             # 2. Add Z-score columns
             if (!is.null(excel_ord$zscore_mat)) {
@@ -119,21 +334,54 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 z_sub <- zmat[idx, , drop = FALSE]
                 de_df <- cbind(de_df, z_sub)
             }
+
+            # 3. Partition clustering columns
+            if (!is.null(excel_ord$partition_clusters)) {
+                pc <- excel_ord$partition_clusters
+                de_df$Partition_Cluster_ID <- pc[match(de_df[[id_col]], names(pc))]
+                # Partition_Order: rank features by cluster ID, then Hierarchical_Order within
+                sort_key <- order(
+                    ifelse(is.na(de_df$Partition_Cluster_ID), Inf, de_df$Partition_Cluster_ID),
+                    ifelse(is.na(de_df$Hierarchical_Order), Inf, de_df$Hierarchical_Order)
+                )
+                de_df$Partition_Order <- NA_integer_
+                de_df$Partition_Order[sort_key] <- seq_len(nrow(de_df))
+            }
+
+            # 4. Binary pattern columns
+            if (!is.null(excel_ord$binary_best)) {
+                bp <- excel_ord$binary_best
+                bp_idx <- match(de_df[[id_col]], bp$feature_id)
+                de_df$Binary_Pattern <- bp$best_pattern[bp_idx]
+                de_df$Binary_Corr <- bp$best_corr[bp_idx]
+            }
         } else {
-            # No clustering: add order column with NA
-            de_df$order <- NA_integer_
+            # No clustering: add Hierarchical_Order with NA
+            de_df$Hierarchical_Order <- NA_integer_
         }
-        
+
         de_df <- add_default_order_if_missing(de_df, mat_de, id_col)
         de_df <- add_zscores_if_missing(de_df, mat_de, id_col)
 
-        # Reorder columns to: ID, raw_counts, DE_stats, order, z-scores
-        # Identify column groups
+        # Sort DE table by Hierarchical_Order to match heatmap row ordering
+        if ("Hierarchical_Order" %in% names(de_df) && !all(is.na(de_df$Hierarchical_Order))) {
+            de_df <- de_df[order(de_df$Hierarchical_Order, na.last = TRUE), , drop = FALSE]
+        }
+
+        # Reorder columns to: ID, annotations, expression, DE_stats, clustering, z-scores
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
         de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
-        order_col <- "order"
+        clustering_cols <- intersect(
+            c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
+              "Binary_Pattern", "Binary_Corr"),
+            names(de_df)
+        )
         zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
+
+        # Annotation columns = everything not in ID, expression, DE stats, clustering, z-scores, or 'order'
+        all_known <- c(id_cols, expr_cols, de_stat_cols, clustering_cols, zscore_cols, "order")
+        annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
         expr_cols_present <- intersect(expr_cols, names(de_df))
@@ -141,13 +389,15 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # Build desired column order
         desired_order <- c(
             id_cols,
-            expr_cols_present,  # Raw counts (already in de_df)
+            annot_cols_present,
+            expr_cols_present,
             de_stat_cols,
-            order_col,
+            clustering_cols,
             zscore_cols
         )
 
-        # Reorder columns
+        # Reorder columns (only keep columns that exist)
+        desired_order <- intersect(desired_order, names(de_df))
         de_df <- de_df[, desired_order, drop = FALSE]
     }
 
@@ -191,7 +441,8 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     }
 }
 
-fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config, mode = "proteomics") {
+fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config,
+                                                mode = "proteomics", start_row = 2) {
     de_cfg <- config$modes[[mode]]$de
     use_fdr <- isTRUE(de_cfg$use_adj_for_pass1)
 
@@ -200,7 +451,6 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
         return(invisible(NULL))
     }
 
-    start_row <- 2
     n_rows <- nrow(final_results)
     if (n_rows < 1) {
         return(invisible(NULL))
@@ -498,7 +748,11 @@ add_zscores_if_missing <- function(df, expr_mat, id_col) {
 
 #' Fallback hierarchical clustering for row order
 add_default_order_if_missing <- function(df, expr_mat, id_col) {
-  # If order is already populated (not all NA), keep it
+  # If Hierarchical_Order is already populated (not all NA), keep it
+  if ("Hierarchical_Order" %in% names(df) && !all(is.na(df$Hierarchical_Order))) {
+    return(df)
+  }
+  # Legacy compat: also check old 'order' column
   if ("order" %in% names(df) && !all(is.na(df$order))) {
     return(df)
   }
@@ -522,7 +776,12 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
   # Create an order mapping
   ordered_ids <- rownames(mat_clean)[hc$order]
   ranks <- match(df[[id_col]], ordered_ids)
-  
-  df$order <- ranks
+
+  # Use Hierarchical_Order if column exists, otherwise fall back to 'order'
+  if ("Hierarchical_Order" %in% names(df)) {
+    df$Hierarchical_Order <- ranks
+  } else {
+    df$order <- ranks
+  }
   return(df)
 }

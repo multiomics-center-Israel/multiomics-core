@@ -108,7 +108,7 @@ modes:
     # --------------------------------------------------------
     qc_post:
       enabled: true
-      de_source: "summary"   # "summary" | "table1"
+      de_source: "table1"   # "summary" | "table1"
       plots:
         volcano: true
         ma: true
@@ -143,6 +143,8 @@ modes:
           k: null
           k_max: 20
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8
@@ -159,6 +161,17 @@ modes:
       color: "Condition"
       shape: null
       samples: "SampleID"
+
+    # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
 
     # --------------------------------------------------------
     # Annotation / Organism

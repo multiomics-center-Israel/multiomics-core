@@ -144,11 +144,25 @@ modes:
       shape: "time"
       heatmap_annotations: "group"
 
+    # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
+
     qc:
       enabled: true
 
       # Used for QC-specific plots (e.g., drift, QC clustering)
       qc_flag_column: "treatment"
+
+      # Set true to generate the binary missingness heatmap (diagnostic_plots/)
+      missingness_heatmap: false
 
       thresholds:
         min_samples_for_pca3d: 4
@@ -187,6 +201,8 @@ modes:
           distance: "euclidean"
           k_max: 20
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
 
         binary_patterns:
           enabled: true

@@ -148,7 +148,8 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   # Gene filtering
   # =========================================================================
   filter_mode <- cfg$filtering$mode %||% "adaptive"
-  group_col <- cfg$filtering$group_col %||% "Line"
+  group_col <- cfg$filtering$group_col %||% cfg$de_table$group_col %||% cfg$effects$color[1]
+  
 
   if (filter_mode == "none" || source_type == "preprocessed") {
     message("Filtering mode: none/preprocessed — keeping all features.")

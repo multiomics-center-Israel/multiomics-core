@@ -37,7 +37,8 @@ build_shiny_payload_rnaseq <- function(
     pca_res = NULL,
     clustering_res = NULL,
     annot = NULL,
-    trinotate_main = NULL
+    trinotate_main = NULL,
+    out_dir = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -158,7 +159,7 @@ build_shiny_payload_rnaseq <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats)
+            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats, out_dir = out_dir)
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
@@ -292,10 +293,11 @@ build_shiny_payload_rnaseq <- function(
 #' \code{linearFC.<contrast>} fold-change columns (with grep fallback).
 #'
 #' @param de_stats DE statistics data.frame with pass columns
-#' @return data.frame with columns: contrast, up, down, total
+#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
+#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
 #' @keywords internal
-build_de_summary_counts_rnaseq <- function(de_stats) {
-    build_de_summary_counts_generic(
+build_de_summary_counts_rnaseq <- function(de_stats, out_dir = NULL) {
+    result <- build_de_summary_counts_generic(
         de_stats         = de_stats,
         pass_pattern     = "_pass$",
         extract_contrast = function(col) sub("_pass$", "", col),
@@ -307,6 +309,12 @@ build_de_summary_counts_rnaseq <- function(de_stats) {
             if (length(hits) > 0) hits[1] else NULL
         }
     )
+
+    if (!is.null(out_dir) && !is.null(result) && nrow(result) > 0) {
+        save_tsv(result, out_dir, "de_summary_counts.tsv")
+    }
+
+    result
 }
 
 
@@ -317,9 +325,8 @@ build_de_summary_counts_rnaseq <- function(de_stats) {
 #' @return Path to saved file (invisibly)
 #' @export
 save_shiny_payload_rnaseq <- function(..., out_file = "shiny_payload_rnaseq.rds") {
-    payload <- build_shiny_payload_rnaseq(...)
-
     out_dir <- dirname(out_file)
+    payload <- build_shiny_payload_rnaseq(..., out_dir = out_dir)
     if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
         dir.create(out_dir, recursive = TRUE)
     }

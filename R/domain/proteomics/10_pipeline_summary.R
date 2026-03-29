@@ -38,7 +38,7 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
     n_proteins_raw <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA
     n_proteins     <- if (!is.null(pre$expr_imp_single)) nrow(pre$expr_imp_single) else NA
 
-    group_col <- prot_cfg$effects$color %||% "Condition"
+    group_col <- prot_cfg$de_table$group_col %||% prot_cfg$effects$color %||% "Condition"
     n_groups <- NA
     groups <- character()
     if (!is.null(pre$meta) && !is.null(group_col) && group_col %in% names(pre$meta)) {

@@ -67,8 +67,8 @@ run_deconvolution <- function(pre, de_res, cfg, out_dir) {
     deconv_dir <- file.path(out_dir, "Deconvolution")
     if (!dir.exists(deconv_dir)) dir.create(deconv_dir, recursive = TRUE)
 
-    group_col <- cfg$filtering$group_col %||% "condition"
-
+    group_col <-  cfg$filtering$group_col %||% cfg$de_table$group_col %||% cfg$effects$color %||% "Condition"
+    
     # Prepare expression for xCell2 (needs non-log CPM)
     expr_for_xcell <- prepare_expression_for_xcell(pre$expr_filt)
 

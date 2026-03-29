@@ -5,7 +5,7 @@
 #
 # Reuses core plotting: qc_pca_scatter, qc_pca_3d, norm_boxplot,
 #   qc_omic_density (works for any intensity matrix),
-#   qc_sample_distance_heatmap, qc_sample_correlation_heatmap,
+#   qc_sample_distance_heatmap,
 #   plot_density_overlay, save_heatmap_to_file, save_tsv
 
 
@@ -84,11 +84,11 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
     n_colors <- length(color_config)
     is_multi <- n_colors > 1
 
-    for (s in subsets) {
+    for (s in subsets[1]) {
         tag   <- s$tag
         label <- s$label
 
-        for (ci in seq_along(color_config)) {
+        for (ci in 1) {
             color_var <- as.character(color_config[[ci]])
 
             if (!color_var %in% colnames(s$meta)) {
@@ -99,19 +99,36 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
             cfg_temp <- cfg
             cfg_temp$effects$color <- color_var
 
-            color_suffix <- if (is_multi) paste0("_by_", color_var) else ""
+            color_suffix <- ""
 
-            f_pca12 <- file.path(out_qc, paste0("PCA_PC1.vs.PC2", color_suffix, tag, ".png"))
+            # PCA with QC samples
+            f_pca12_wqc <- file.path(out_qc, paste0("PCA_PC1.vs.PC2_w_qc", color_suffix, tag, ".png"))
             p12 <- qc_pca_scatter(s$expr_work, s$meta, cfg_temp, pcs = c(1, 2),
-                                   out_file = f_pca12)
-            files <- c(files, f_pca12)
-            plots[[paste0("pca_1_2", color_suffix, tag)]] <- p12
+                                   out_file = f_pca12_wqc)
+            files <- c(files, f_pca12_wqc)
+            plots[[paste0("pca_1_2_w_qc", color_suffix, tag)]] <- p12
 
-            f_pca13 <- file.path(out_qc, paste0("PCA_PC1.vs.PC3", color_suffix, tag, ".png"))
+            f_pca13_wqc <- file.path(out_qc, paste0("PCA_PC1.vs.PC3_w_qc", color_suffix, tag, ".png"))
             p13 <- qc_pca_scatter(s$expr_work, s$meta, cfg_temp, pcs = c(1, 3),
-                                   out_file = f_pca13)
-            files <- c(files, f_pca13)
-            plots[[paste0("pca_1_3", color_suffix, tag)]] <- p13
+                                   out_file = f_pca13_wqc)
+            files <- c(files, f_pca13_wqc)
+            plots[[paste0("pca_1_3_w_qc", color_suffix, tag)]] <- p13
+
+            # PCA without QC samples
+            if (length(subsets) >= 2) {
+                s_noqc_pca <- subsets[[2]]
+                f_pca12 <- file.path(out_qc, paste0("PCA_PC1.vs.PC2", color_suffix, ".png"))
+                p12_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 2),
+                                            out_file = f_pca12)
+                files <- c(files, f_pca12)
+                plots[[paste0("pca_1_2", color_suffix)]] <- p12_noqc
+
+                f_pca13 <- file.path(out_qc, paste0("PCA_PC1.vs.PC3", color_suffix, ".png"))
+                p13_noqc <- qc_pca_scatter(s_noqc_pca$expr_work, s_noqc_pca$meta, cfg_temp, pcs = c(1, 3),
+                                            out_file = f_pca13)
+                files <- c(files, f_pca13)
+                plots[[paste0("pca_1_3", color_suffix)]] <- p13_noqc
+            }
 
             # 3D PCA only for the first color variable, all-samples subset
             if (ci == 1 && tag == "" && ncol(s$expr_work) >= 10) {
@@ -127,7 +144,7 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
     cfg_primary <- cfg
     cfg_primary$effects$color <- as.character(color_config[[1]])
 
-    for (s in subsets) {
+    for (s in subsets[1]) {
         tag   <- s$tag       # "" or "_noQC"
         label <- s$label     # "" or " [excl. QC]"
 
@@ -142,15 +159,13 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_raw)
         plots[[paste0("density_raw", tag)]] <- p_dens_raw
 
-        # -- Density: log2(raw) --
+        # -- Density: log2(raw) -- (retained for plots list; not saved to disk)
         expr_log2_raw <- log2(pmax(s$expr_filt, 1))
-        f_dens_log2 <- file.path(out_qc, paste0("intensity_density_log2raw", tag, ".png"))
         p_dens_log2 <- qc_omic_density(
             expr_log2_raw, s$meta, cfg_primary,
-            out_file = f_dens_log2,
+            out_file = NULL,
             title = paste0("Density: log2(raw intensities)", label)
         )
-        files <- c(files, f_dens_log2)
         plots[[paste0("density_log2raw", tag)]] <- p_dens_log2
 
         # -- Density: normalized --
@@ -163,12 +178,13 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
         files <- c(files, f_dens_norm)
         plots[[paste0("density_norm", tag)]] <- p_dens_norm
 
-        # -- Boxplot: raw --
+        # -- Boxplot: raw (log2-transformed for visualization) --
         f_box_raw <- file.path(out_qc, paste0("intensity_boxplot_raw", tag, ".png"))
+        expr_filt_log2_box <- log2(s$expr_filt + 1)
         p_box_raw <- norm_boxplot(
-            s$expr_filt, s$meta, cfg_primary,
+            expr_filt_log2_box, s$meta, cfg_primary,
             out_file = f_box_raw,
-            title = paste0("Boxplot: raw intensities", label)
+            title = paste0("Boxplot: log2(raw intensities)", label)
         )
         files <- c(files, f_box_raw)
         plots[[paste0("boxplot_raw", tag)]] <- p_box_raw
@@ -191,19 +207,51 @@ mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
     if (n_samples <= max_hm) {
         annot_cols <- build_heatmap_annotation(pre$meta, cfg)
 
-        for (s in subsets) {
-            tag <- s$tag
+        # Distance heatmap: all samples (with QC)
+        s_all <- subsets[[1]]
+        f_dist_wqc <- file.path(out_qc, "sample_distance_metab_heatmap_w_qc.png")
+        ph_dist_wqc <- qc_sample_distance_heatmap(s_all$expr_work, s_all$meta, cfg_primary,
+                                    out_file = f_dist_wqc, annot_cols = annot_cols)
+        files <- c(files, f_dist_wqc)
+        plots[["dist_heatmap"]] <- ph_dist_wqc
 
-            f_dist <- file.path(out_qc, paste0("sample_distance_heatmap", tag, ".png"))
-            ph_dist <- qc_sample_distance_heatmap(s$expr_work, s$meta, cfg_primary,
+        # Distance heatmap: without QC (only when QC samples exist)
+        if (length(subsets) >= 2) {
+            s_noqc <- subsets[[2]]
+            f_dist <- file.path(out_qc, "sample_distance_metab_heatmap.png")
+            ph_dist <- qc_sample_distance_heatmap(s_noqc$expr_work, s_noqc$meta, cfg_primary,
                                         out_file = f_dist, annot_cols = annot_cols)
             files <- c(files, f_dist)
+            plots[["dist_heatmap_noQC"]] <- ph_dist
+        }
 
-            f_cor <- file.path(out_qc, paste0("sample_correlation_heatmap", tag, ".png"))
-            qc_sample_correlation_heatmap(s$expr_work, s$meta, cfg_primary,
-                                           out_file = f_cor, annot_cols = annot_cols)
+        # Expression heatmaps: without QC samples
+        if (length(subsets) >= 2) {
+            s_noqc <- subsets[[2]]
+            f_hm <- file.path(out_qc, "samples_metab_heatmap.png")
+            hm_clusters <- wrap_qc_heatmap(s_noqc$expr_work, s_noqc$meta, cfg_primary,
+                                           stage = stage, out_file = f_hm)
+            files <- c(files, f_hm)
+            plots[["heatmap_clusters"]] <- hm_clusters
+
+            f_hm_nocol <- file.path(out_qc, "samples_metab_heatmap_wo_col.png")
+            hm_nocol <- wrap_qc_heatmap(s_noqc$expr_work, s_noqc$meta, cfg_primary,
+                                        stage = stage, out_file = f_hm_nocol,
+                                        cluster_cols = FALSE)
+            files <- c(files, f_hm_nocol)
+            plots[["heatmap_nocol"]] <- hm_nocol
+        }
+
+        # Correlation heatmap: without QC
+        if (length(subsets) >= 2) {
+            s_noqc <- subsets[[2]]
+            f_cor <- file.path(out_qc, "sample_correlation_metab_heatmap.png")
+            p_cor <- qc_sample_correlation_heatmap(s_noqc$expr_work, s_noqc$meta,
+                                                   cfg_primary, out_file = f_cor,
+                                                   annot_cols = annot_cols,
+                                                   adjust_scale = FALSE)
             files <- c(files, f_cor)
-            plots[[paste0("dist_heatmap", tag)]] <- ph_dist
+            plots[["correlation_noQC"]] <- p_cor
         }
     }
 

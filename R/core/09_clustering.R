@@ -43,7 +43,8 @@ run_binary_patterns <- function(expr_mat_corr,
                                 summary_df = NULL,
                                 corr_cutoff = 0.8,
                                 counts_cutoff_high = 0,
-                                counts_cutoff_low = NULL) {
+                                counts_cutoff_low = NULL, 
+                                annot_context = NULL) {
   stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
   expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
@@ -224,14 +225,6 @@ run_binary_patterns <- function(expr_mat_corr,
 
     lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cutoff <- log2(lin_fc_cutoff)
-    
-    
-    annot_context <- list(
-      summary_df    = summary_df,
-      p_cutoff      = de_cfg$p_cutoff %||% 0.05,
-      log2fc_cutoff = log2fc_cutoff,
-      id_col        = "feature_id"
-    )
     
     
     p_bin <- wrap_clustering_heatmap(
@@ -546,6 +539,48 @@ get_clustering_group_col <- function(cfg, meta) {
   group_col
 }
 
+#' Build sample-level long data frame annotated with group and cluster
+#'
+#' Shared data-preparation helper used by both write_clustering_legacy_profiles()
+#' (for data export) and save_cluster_profile_outputs() (for plotting).
+#' Converts a feature x sample expression matrix into long format, joins with
+#' metadata groups and cluster assignments.
+#'
+#' @param expr_mat Numeric matrix (features x samples)
+#' @param meta Sample metadata data.frame
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param group_col Character: metadata column for group (X-axis)
+#' @param sample_col Character: metadata column identifying samples
+#' @param color_col Character or NULL: optional metadata column for secondary grouping
+#' @return data.frame with columns: Gene, Name, Exp, Group, Cluster,
+#'   and optionally ColorGroup (only when color_col is not NULL)
+build_cluster_long_df <- function(expr_mat, meta, clusters,
+                                  group_col, sample_col,
+                                  color_col = NULL) {
+  meta_map <- meta |>
+    dplyr::select(Name = dplyr::all_of(sample_col), Group = dplyr::all_of(group_col))
+
+  if (!is.null(color_col)) {
+    meta_map$ColorGroup <- meta[[color_col]]
+  }
+
+  norm_expr_long <- as.data.frame(expr_mat) |>
+    tibble::rownames_to_column("Gene") |>
+    tidyr::pivot_longer(cols = -"Gene", names_to = "Name", values_to = "Exp")
+
+  df_annotated <- norm_expr_long |>
+    dplyr::inner_join(meta_map, by = "Name")
+
+  cluster_map <- data.frame(
+    Gene = names(clusters),
+    Cluster = as.integer(clusters),
+    stringsAsFactors = FALSE
+  )
+
+  df_annotated |>
+    dplyr::inner_join(cluster_map, by = "Gene")
+}
+
 # ---- Clustering guards ----
 
 #' Count how many distinct groups exist for clustering
@@ -603,7 +638,7 @@ clustering_run_flags <- function(pre, cfg) {
 
   list(
     hierarchical    = hier_enabled,
-    partition       = isTRUE(part_enabled && can_multi_group),
+    partition       = part_enabled,
     binary_patterns = isTRUE(bin_enabled && can_multi_group)
   )
 }
@@ -855,6 +890,21 @@ build_clustering_output_table <- function(clusters, out_file = NULL) {
   tbl
 }
 
+#' Compute row gap positions for pheatmap from ordered cluster assignments
+#'
+#' Given an integer vector of cluster assignments (in heatmap row order),
+#' returns cumulative positions where gaps should appear between clusters.
+#'
+#' @param clusters_ordered Integer vector of cluster assignments in display order
+#' @return Integer vector of gap positions (empty for k=1)
+#' @export
+compute_cluster_gaps <- function(clusters_ordered) {
+  stopifnot(is.integer(clusters_ordered) || is.numeric(clusters_ordered))
+  rl <- rle(as.integer(clusters_ordered))
+  if (length(rl$lengths) <= 1) return(integer(0))
+  cumsum(rl$lengths[-length(rl$lengths)])
+}
+
 #' Build cluster profile data frame from z-scored group means
 #'
 #' Computes per-cluster mean and SD of z-scored group means. Handles empty
@@ -907,33 +957,10 @@ build_cluster_profiles <- function(z_group_means, clusters, k) {
 write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_dir) {
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
-  # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- get_clustering_group_col(cfg, meta)
+  group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
-  meta_map <- meta |>
-    dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
-
-  # 2. Convert Expression Matrix to Long Format
-  # Rows = Genes, Cols = Samples -> Melt
-  norm_expr_long <- as.data.frame(expr_mat)|>
-    tibble::rownames_to_column("Gene")|>
-    tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
-
-  # 3. Join with Metadata
-  df_annotated <- norm_expr_long|>
-    dplyr::inner_join(meta_map, by = "Name")
-
-  # 4. Map Genes to Clusters
-  cluster_map <- data.frame(
-    Gene = names(clusters),
-    Cluster = as.integer(clusters),
-    stringsAsFactors = FALSE
-  )
-
-  # Final Join: Only keep genes that are in a cluster
-  df_final <- df_annotated|>
-    dplyr::inner_join(cluster_map, by = "Gene")
+  df_final <- build_cluster_long_df(expr_mat, meta, clusters, group_col, sample_col)
 
   files_written <- character(0)
 
@@ -974,6 +1001,82 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   files_written <- c(files_written, fname_all)
 
   return(files_written)
+}
+
+#' Save per-cluster profile PNGs and multi-panel grid PDF
+#'
+#' Orchestration layer: resolves config, builds sample-level long data via
+#' build_cluster_long_df(), generates per-cluster ggplots via
+#' build_cluster_profile_plots(), and saves PNGs + grid PDF.
+#'
+#' @param expr_mat Expression matrix (features x samples)
+#' @param meta Sample metadata data.frame
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param cfg Mode config list
+#' @param out_dir Output directory
+#' @return list(files = character vector of written paths, plots = named list of ggplots)
+#' @export
+save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir) {
+  requireNamespace("gridExtra", quietly = TRUE)
+
+  group_col  <- get_clustering_group_col(cfg, meta)
+  sample_col <- cfg$effects$samples
+  color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
+  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
+
+  if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+                    color_col))
+    color_col <- NULL
+  }
+  if (!(x_axis_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+                    x_axis_col))
+    x_axis_col <- group_col
+  }
+
+  long_df <- build_cluster_long_df(expr_mat, meta, clusters,
+                                    x_axis_col, sample_col, color_col)
+
+  color_label <- if (!is.null(color_col)) color_col else NULL
+  plot_list <- build_cluster_profile_plots(long_df, x_label = x_axis_col,
+                                            color_label = color_label)
+  if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
+
+  written <- character(0)
+  k <- length(plot_list)
+
+  # Per-cluster PNGs (source parity: 600 dpi, 3x3 in)
+  for (nm in names(plot_list)) {
+    f_png <- file.path(out_dir, sprintf("cluster_profiles_cluster%s.png", nm))
+    ggplot2::ggsave(f_png, plot = plot_list[[nm]],
+                    dpi = 600, width = 3, height = 3, units = "in")
+    written <- c(written, f_png)
+  }
+
+  # Multi-panel grid PDF (source parity layout)
+  if (k <= 2) {
+    ncol_grid <- k
+    nrow_grid <- 1
+  } else if (k <= 4) {
+    ncol_grid <- 2
+    nrow_grid <- 2
+  } else {
+    ncol_grid <- 3
+    nrow_grid <- 2
+  }
+
+  f_pdf <- file.path(out_dir, "cluster_profiles.pdf")
+  ml <- gridExtra::marrangeGrob(
+    grobs = plot_list,
+    ncol = ncol_grid,
+    nrow = nrow_grid,
+    top = NULL
+  )
+  ggplot2::ggsave(f_pdf, ml, width = 6.99, height = 3.99, dpi = 600)
+  written <- c(written, f_pdf)
+
+  list(files = written, plots = plot_list)
 }
 
 

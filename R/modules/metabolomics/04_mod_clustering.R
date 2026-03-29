@@ -83,7 +83,20 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
 
     # Expression matrix
     expr_mat <- as.matrix(pre$expr_work)
-
+    
+    # DE row annotations
+    de_cfg <- cfg$de %||% list()
+    met_p_cutoff  <- de_cfg$p_cutoff %||% 0.05
+    met_lin_fc    <- de_cfg$linear_fc_cutoff %||% 1.5
+    met_log2fc    <- log2(met_lin_fc)
+    
+    annot_context <- list(
+      summary_df    = de_res$summary_df,
+      p_cutoff      = met_p_cutoff,
+      log2fc_cutoff = met_log2fc,
+      id_col        = "feature_id"
+    )
+    
     # ------ 1) Hierarchical clustering ---------
     if (isTRUE(flags$hierarchical)) {
         hcfg <- cl$steps$hierarchical %||% list()
@@ -111,22 +124,14 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
         z_de_ordered <- z_de[ordered_row_ids, , drop = FALSE]
 
         excel_order <- list(
-            ordered_ids = hc_res$ordering,
-            zscore_mat  = z_de
+            ordered_ids        = hc_res$ordering,
+            zscore_mat         = z_de,
+            partition_clusters = NULL,
+            partition_k        = NULL,
+            binary_best        = NULL
         )
 
-        # DE row annotations
-        de_cfg <- cfg$de %||% list()
-        met_p_cutoff  <- de_cfg$p_cutoff %||% 0.05
-        met_lin_fc    <- de_cfg$linear_fc_cutoff %||% 1.5
-        met_log2fc    <- log2(met_lin_fc)
-
-        annot_context <- list(
-            summary_df    = de_res$summary_df,
-            p_cutoff      = met_p_cutoff,
-            log2fc_cutoff = met_log2fc,
-            id_col        = "feature_id"
-        )
+        
 
         f_hm <- file.path(clust_out_dir, "Hierarchical_DE_heatmap.png")
 
@@ -214,32 +219,33 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             scale_rows   = TRUE,
             cluster_rows = FALSE,
             cluster_cols = FALSE,
-            max_rows     = NULL
+            max_rows     = NULL,
+            gaps_row     = compute_cluster_gaps(clusters_ordered)
         )
 
         save_heatmap_to_file(p_part, f_hm)
         plots$partition_heatmap <- p_part
         written <- c(written, f_hm)
 
-        # Cluster profiles
-        prof <- build_cluster_profiles(part_res$group_means,
-                                       part_res$clusters, part_res$k)
+        # Per-cluster heatmaps
+        per_clust_hm_files <- save_per_cluster_heatmaps(
+            expr_mat       = expr_mat,
+            clusters       = part_res$clusters,
+            annotation_col = annot_col,
+            out_dir        = part_dir
+        )
+        written <- c(written, per_clust_hm_files)
 
-        if (!is.null(prof)) {
-            f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-            grp_col_name <- cfg$clustering$group_col %||% "Group"
-            p_prof <- plot_cluster_profiles_legacy_style(
-                group_means = part_res$group_means,
-                clusters    = part_res$clusters,
-                x_label     = grp_col_name
-            )
-
-            n_clusters <- length(unique(prof$cluster))
-            calc_height <- max(6, ceiling(n_clusters / 2) * 3)
-            ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = calc_height)
-            written <- c(written, f_pdf)
-            plots$cluster_profiles <- p_prof
-        }
+        # Cluster profile outputs (per-cluster PNGs + multi-panel grid PDF)
+        prof_out <- save_cluster_profile_outputs(
+            expr_mat = expr_mat,
+            meta     = pre$meta,
+            clusters = part_res$clusters,
+            cfg      = cfg,
+            out_dir  = part_dir
+        )
+        written <- c(written, prof_out$files)
+        plots$cluster_profiles <- prof_out$plots
 
         # Legacy profile exports
         legacy_files <- write_clustering_legacy_profiles(
@@ -250,6 +256,12 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             out_dir  = part_dir
         )
         written <- c(written, legacy_files)
+
+        # Attach partition results to excel_order
+        if (!is.null(excel_order)) {
+            excel_order$partition_clusters <- part_res$clusters
+            excel_order$partition_k        <- part_res$k
+        }
     }
 
     # ---- 3) Binary patterns ----
@@ -269,7 +281,8 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
             corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
             counts_cutoff_high = bcfg$counts_cutoff_high %||%
                                      bcfg$counts_cutoff %||% 0,
-            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL
+            counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+            annot_context      = annot_context
         )
 
         if (!is.null(bp_res$files)) written <- c(written, bp_res$files)
@@ -278,6 +291,11 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
         patterns_tbl        <- bp_res$best %||% NULL
         heatmaps_by_pattern <- bp_res$plots %||% NULL
         patterns_list       <- bp_res$bp_pat %||% NULL
+
+        # Attach binary pattern results to excel_order
+        if (!is.null(excel_order) && !is.null(bp_res$best)) {
+            excel_order$binary_best <- bp_res$best
+        }
     }
 
     list(
