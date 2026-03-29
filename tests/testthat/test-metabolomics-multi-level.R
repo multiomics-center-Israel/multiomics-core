@@ -298,11 +298,13 @@ test_that("sample_map is deduplicated when levels share identical mappings", {
         parsed_levels = list(Level_1 = .lv1, Level_2 = .lv2),
         level_names   = c("Level_1", "Level_2")
     )
-t_equal(nrow(sm), length(.samples))
-    sm <- result$sample_map
-    expect_false(is.null(sm))
-    expect_equal(nrow(sm), length(.samples))   # one row per sample, no dupes
-    expect_equal(nrow(sm), nrow(unique(sm)))
+    
+  sm <- result$sample_map
+  expect_equal(nrow(sm), length(.samples))
+      sm <- result$sample_map
+      expect_false(is.null(sm))
+      expect_equal(nrow(sm), length(.samples))   # one row per sample, no dupes
+      expect_equal(nrow(sm), nrow(unique(sm)))
 })
 
 test_that("sample_map is NULL when all levels return NULL (processed_wide path)", {

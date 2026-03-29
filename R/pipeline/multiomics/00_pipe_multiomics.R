@@ -8,7 +8,7 @@
 #'   time to determine which omics modes are active. This allows {targets} to
 #'   wire upstream dependencies correctly via direct symbol references.
 #' @return List of target objects
-pipe_multiomics <- function(cfg_raw) {
+pipe_multiomics <- function(cfg_raw = list()) {
 
     # Determine which omics modes are active at plan-definition time.
     # Gateway targets below use these flags to include a direct symbol reference

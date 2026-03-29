@@ -153,7 +153,9 @@ get_proteomics_expression_matrix <- function(inputs, config) {
   
   # Align col_data to assay columns
   col_data <- inputs$metadata
-  col_data <- align_meta_to_expr(assay_log2, inputs$metadata, cfg)
+  sample_col <- get_sample_col(cfg)
+  assay_log2 <- align_matrix_to_meta(assay_log2, col_data, sample_col)
+  col_data <- align_meta_to_expr(assay_log2, col_data, cfg)
   
   list(
     assay_log2 = assay_log2,

@@ -56,7 +56,7 @@ apply_sample_map_to_colnames <- function(mat, sample_map, map_from, map_to) {
 }
 
 #' Align matrix columns to match meta sample order
-align_matrix_to_meta <- function(mat, meta, sample_col, strict = TRUE) {
+align_matrix_to_meta <- function(mat, meta, sample_col, strict = FALSE) {
     check_has_cols(meta, sample_col, df_name = "meta")
     samp <- as.character(meta[[sample_col]])
 

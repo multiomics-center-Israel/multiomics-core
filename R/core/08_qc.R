@@ -55,6 +55,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   shape_col <- eff$shape
   if (is.null(shape_col)) shape_col <- NULL # avoid dependency on %||%
 
+  expr_mat <- align_matrix_to_meta(expr_mat, meta, sample_col)
   sample_ids <- colnames(expr_mat)
   meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
 
@@ -135,6 +136,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     stop("Sample column '", sample_col, "' not found in metadata.")
   }
 
+  expr_mat <- align_matrix_to_meta(expr_mat, meta, sample_col)
   sample_ids <- colnames(expr_mat)
   meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
 
