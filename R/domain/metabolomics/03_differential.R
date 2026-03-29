@@ -68,7 +68,6 @@ filter_to_biological <- function(mat, meta, condition_col, sample_col,
   list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
 }
 
-
 # ---- pre-computed DE loader --------------------------------------------------
 
 #' Load pre-computed metabolomics DE tables from config$files$de_table

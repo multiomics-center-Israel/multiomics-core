@@ -27,7 +27,7 @@ The metabolomics pipeline is a production-grade, modular R framework built on `{
 
 ```
 met_input_files → met_raw (load & parse)
-                      ├→ met_missingness_stats → met_missingness_plot (PNG)
+                      ├→ met_missingness_stats 
                       └→ met_filtered (sample + feature filtering)
                             └→ met_imputed (MNAR: min/2, MAR: KNN)
                                   └→ met_log (log2 + pseudocount)

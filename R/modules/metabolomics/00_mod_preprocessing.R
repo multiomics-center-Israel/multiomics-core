@@ -10,8 +10,6 @@
 #   R/domain/metabolomics/10_drift_correction.R (LOESS)
 #   R/domain/metabolomics/01_normalization.R   (norm_*, transform_metab)
 #   R/core/08_qc.R                         (qc_pca_scatter, norm_boxplot)
-#   R/core/06_plots.R                      (qc_missingness_heatmap via 08_qc.R)
-
 
 # ==============================================================================
 # mod_met_raw — load, parse, apply sample filter, align metadata
@@ -149,32 +147,6 @@ mod_met_missingness_stats <- function(raw, config) {
   )
 
   c(result, list(mnar_mask = mnar_mask, mar_mask = mar_mask))
-}
-
-
-# ==============================================================================
-# mod_met_missingness_plot — save binary heatmap as PNG, return file path
-# ==============================================================================
-
-#' Save the missingness heatmap to disk
-#'
-#' @param miss_stats List returned by \code{mod_met_missingness_stats()}.
-#' @param raw        List returned by \code{mod_met_raw()}.
-#' @param out_dir    Mode output directory (met_out_dir).
-#' @param config     Full pipeline config list.
-#' @return Character scalar: path to saved PNG (for \code{format = "file"} target).
-#'
-mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
-  met_cfg <- config$modes$metabolomics
-  if (!isTRUE(met_cfg$qc$missingness_heatmap)) return(character(0))
-
-  diag_dir <- file.path(out_dir, "diagnostic_plots")
-  dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
-  out_file <- file.path(diag_dir, "missingness_heatmap.png")
-
-  qc_missingness_heatmap(raw$expr_raw, miss_stats$stats_df, out_file)
-
-  out_file
 }
 
 

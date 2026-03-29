@@ -24,7 +24,7 @@ Stages 1 and 2 consume `metab_pre`, an adapter target that converts the new
 
 ```
 met_input_files ──► met_raw
-                        ├──► met_missingness_stats ──► met_missingness_plot (PNG)
+                        ├──► met_missingness_stats
                         └──► met_filtered
                                   └──► met_imputed
                                             └──► met_log
@@ -62,12 +62,6 @@ Operated on the **pre-filter** matrix to give the complete picture.
 - Special classes: `all_observed`, `all_missing`
 
 Threshold: `preprocessing.mnar_threshold` (default 0.3, sign-agnostic)
-
-### 3. Missingness heatmap (`met_missingness_plot`)
-
-Binary heatmap (dark = missing), columns sorted ascending by sample intensity
-to reveal MNAR patterns. Rows colour-annotated by MNAR/MAR class.
-
 Saved to: `diagnostic_plots/missingness_heatmap.png`
 
 ### 4. Missingness filtering (`met_filtered`)
