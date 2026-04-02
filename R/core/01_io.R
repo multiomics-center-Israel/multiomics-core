@@ -166,10 +166,17 @@ save_tsv_path <- function(x, path) {
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
     ext <- tolower(tools::file_ext(path))
-    df <- if (ext %in% c("tsv", "txt")) {
-        readr::read_tsv(path, show_col_types = FALSE)
+    if (ext %in% c("tsv", "txt")) {
+        df <- readr::read_tsv(path, show_col_types = FALSE)
     } else {
-        readr::read_csv(path, show_col_types = FALSE)
+        # Default to CSV, but sniff the first line for tabs in case a .csv is
+        # actually tab-delimited
+        first_line <- readLines(path, n = 1, warn = FALSE)
+        if (grepl("\t", first_line)) {
+            df <- readr::read_tsv(path, show_col_types = FALSE)
+        } else {
+            df <- readr::read_csv(path, show_col_types = FALSE)
+        }
     }
     # Convert tibble to data.frame to support rownames and proper subsetting
     as.data.frame(df)

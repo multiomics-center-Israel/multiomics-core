@@ -47,8 +47,10 @@ load_precomputed_metabolomics_de <- function(config) {
         # Map columns to standard names
         cn <- colnames(raw)
 
-        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
-        id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
+        # Feature IDs: named ID column or unnamed first column
+        id_col_idx <- match(TRUE, cn %in% c("HMDB_ID", "HMDB", "feature_id",
+                                             "Metabolite", "Name",
+                                             "...1", "", "X", "V1"))
         feat_ids <- if (!is.na(id_col_idx)) {
             as.character(raw[[id_col_idx]])
         } else {

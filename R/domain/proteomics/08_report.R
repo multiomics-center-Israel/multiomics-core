@@ -8,9 +8,10 @@
 #' @param run_dir  The results run directory (e.g. outputs/project/Results_...)
 #' @param config   Full pipeline config list
 #' @param config_file Path to the original YAML config file (for embedding)
+#' @param report_type Type of report: "detailed" (default) or "short"
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
-render_proteomics_report <- function(run_dir, config, config_file = NULL) {
+render_proteomics_report <- function(run_dir, config, config_file = NULL, report_type = "detailed") {
 
     # Locate the canonical Rmd template shipped with multiomics-core
     template_path <- system.file("report_template_proteomics.Rmd",
@@ -40,6 +41,9 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
         return(NA_character_)
     }
 
+    # Validate report_type parameter
+    report_type <- match.arg(report_type, c("detailed", "short"))
+
     # Ensure run_dir exists, then copy template into it (the knit directory)
     dir.create(run_dir, recursive = TRUE, showWarnings = FALSE)
     dest_rmd <- file.path(run_dir, "report_proteomics.Rmd")
@@ -58,16 +62,21 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
     }
 
     # Render
-    out_html <- file.path(run_dir, "report_proteomics.html")
+    output_suffix <- if (report_type == "short") "_short" else "_detailed"
+    out_html <- file.path(run_dir, paste0("report_proteomics", output_suffix, ".html"))
 
-    message("Rendering proteomics report to: ", out_html)
+    message("Rendering proteomics report (", report_type, ") to: ", out_html)
+
+    # Remove stale HTML so a failed render doesn't silently return the old report
+    if (file.exists(out_html)) file.remove(out_html)
 
     tryCatch({
         rmarkdown::render(
             input       = dest_rmd,
             output_file = out_html,
             output_dir  = run_dir,
-            quiet       = TRUE,
+            params      = list(report_type = report_type),
+            quiet       = FALSE,
             envir       = new.env(parent = globalenv())
         )
     }, error = function(e) {

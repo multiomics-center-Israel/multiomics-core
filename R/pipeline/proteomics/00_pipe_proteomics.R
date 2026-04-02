@@ -193,9 +193,9 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
                 }
             ),
 
-            # Proteomics HTML report
+            # Proteomics HTML report (detailed)
             tar_target(
-                prot_report,
+                prot_report_detailed,
                 {
                     force(prot_pathway_res)
                     force(prot_ppi_res)
@@ -207,9 +207,38 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
                     render_proteomics_report(
                         run_dir     = prot_out_dir,
                         config      = config,
-                        config_file = config_file
+                        config_file = config_file,
+                        report_type = "detailed"
                     )
                 },
+                format = "file"
+            ),
+
+            # Proteomics HTML report (short)
+            tar_target(
+                prot_report_short,
+                {
+                    force(prot_pathway_res)
+                    force(prot_ppi_res)
+                    force(prot_adv_stats)
+                    force(prot_commentary_file)
+                    force(prot_exec_summary)
+                    force(prot_exports)
+                    force(prot_user_summary)
+                    render_proteomics_report(
+                        run_dir     = prot_out_dir,
+                        config      = config,
+                        config_file = config_file,
+                        report_type = "short"
+                    )
+                },
+                format = "file"
+            ),
+
+            # Combined report target (both versions)
+            tar_target(
+                prot_report,
+                c(prot_report_detailed, prot_report_short),
                 format = "file"
             ),
 

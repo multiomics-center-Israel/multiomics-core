@@ -716,50 +716,61 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
     # Collect all unique feature_ids from DE tables
     all_de_ids <- unique(unlist(lapply(de_tables, function(df) df$feature_id)))
 
-    # Determine whether DE feature_ids are metabolite names or synthetic IDs.
-    # DE tables may use metabolite names (e.g., "Palmitoleic acid") while
-    # row_data$feature_id uses synthetic "feature_N" IDs.
-    name_col <- intersect(c("Metabolite", "Name", "Molecule"), colnames(row_data))
-    synthetic_ids <- if ("feature_id" %in% colnames(row_data)) row_data$feature_id else NULL
-
-    # Check which key the DE tables are using
-    uses_names <- FALSE
-    uses_bare_numeric <- FALSE
-    if (length(name_col) > 0) {
-        metab_names <- as.character(row_data[[name_col[1]]])
-        overlap_names <- sum(all_de_ids %in% metab_names, na.rm = TRUE)
-        overlap_synth <- if (!is.null(synthetic_ids)) sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) else 0
-        uses_names <- overlap_names > overlap_synth
-    }
-
-    # DE tables may use bare row indices ("1","2",...) from limma
-    if (!uses_names && !is.null(synthetic_ids) &&
-        sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) == 0) {
-        bare_indices <- as.character(seq_len(nrow(row_data)))
-        if (sum(all_de_ids %in% bare_indices, na.rm = TRUE) > length(all_de_ids) * 0.5) {
-            uses_bare_numeric <- TRUE
-            message("    DE tables use bare numeric row indices as feature_ids")
-        }
-    }
+    # Check if DE feature_ids are already HMDB IDs (direct mapping, no row_data needed)
+    hmdb_pattern <- sum(grepl("^HMDB\\d+$", all_de_ids, ignore.case = TRUE), na.rm = TRUE)
+    uses_hmdb_direct <- hmdb_pattern > length(all_de_ids) * 0.5
 
     hmdb_ids <- as.character(row_data[[hmdb_col[1]]])
 
-    if (uses_names) {
-        # DE tables use metabolite names; build name -> HMDB -> KEGG
-        feat_ids <- metab_names
-        message("    DE tables use metabolite names as feature_ids")
-    } else if (uses_bare_numeric) {
-        # DE tables use bare numeric indices; use same for join
-        feat_ids <- as.character(seq_len(nrow(row_data)))
-    } else if (!is.null(synthetic_ids)) {
-        feat_ids <- synthetic_ids
+    if (uses_hmdb_direct) {
+        # DE tables already use HMDB IDs as feature_ids — direct mapping
+        message("    DE tables use HMDB IDs as feature_ids (direct mapping)")
+        feat_ids <- hmdb_ids
+        kegg_cpds <- hmdb_kegg[hmdb_ids]
     } else {
-        feat_ids <- rownames(row_data)
-        if (is.null(feat_ids)) feat_ids <- paste0("feature_", seq_len(nrow(row_data)))
-    }
+        # Determine whether DE feature_ids are metabolite names or synthetic IDs.
+        # DE tables may use metabolite names (e.g., "Palmitoleic acid") while
+        # row_data$feature_id uses synthetic "feature_N" IDs.
+        name_col <- intersect(c("Metabolite", "Name", "Molecule"), colnames(row_data))
+        synthetic_ids <- if ("feature_id" %in% colnames(row_data)) row_data$feature_id else NULL
 
-    # Map HMDB -> KEGG compound
-    kegg_cpds <- hmdb_kegg[hmdb_ids]
+        # Check which key the DE tables are using
+        uses_names <- FALSE
+        uses_bare_numeric <- FALSE
+        if (length(name_col) > 0) {
+            metab_names <- as.character(row_data[[name_col[1]]])
+            overlap_names <- sum(all_de_ids %in% metab_names, na.rm = TRUE)
+            overlap_synth <- if (!is.null(synthetic_ids)) sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) else 0
+            uses_names <- overlap_names > overlap_synth
+        }
+
+        # DE tables may use bare row indices ("1","2",...) from limma
+        if (!uses_names && !is.null(synthetic_ids) &&
+            sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) == 0) {
+            bare_indices <- as.character(seq_len(nrow(row_data)))
+            if (sum(all_de_ids %in% bare_indices, na.rm = TRUE) > length(all_de_ids) * 0.5) {
+                uses_bare_numeric <- TRUE
+                message("    DE tables use bare numeric row indices as feature_ids")
+            }
+        }
+
+        if (uses_names) {
+            # DE tables use metabolite names; build name -> HMDB -> KEGG
+            feat_ids <- metab_names
+            message("    DE tables use metabolite names as feature_ids")
+        } else if (uses_bare_numeric) {
+            # DE tables use bare numeric indices; use same for join
+            feat_ids <- as.character(seq_len(nrow(row_data)))
+        } else if (!is.null(synthetic_ids)) {
+            feat_ids <- synthetic_ids
+        } else {
+            feat_ids <- rownames(row_data)
+            if (is.null(feat_ids)) feat_ids <- paste0("feature_", seq_len(nrow(row_data)))
+        }
+
+        # Map HMDB -> KEGG compound
+        kegg_cpds <- hmdb_kegg[hmdb_ids]
+    }
 
     mapped <- data.frame(
         feature_id = feat_ids,

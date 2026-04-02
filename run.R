@@ -1153,7 +1153,8 @@ run_pipeline <- function(config_path, fresh = FALSE) {
 
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
-    targets::tar_invalidate(everything())
+    targets::tar_destroy(ask = FALSE)
+    dir.create("_targets/scratch", recursive = TRUE, showWarnings = FALSE)
   }
 
   # Quick pre-flight: verify input files exist before starting pipeline

@@ -211,9 +211,31 @@ plot_heatmap_core <- function(expr_mat,
   # 2. Title default
   if (is.null(title)) title <- sprintf("Heatmap (%d features)", nrow(expr_mat))
 
-  # 3. Draw
+  # 3. Clean non-finite values
+  mat <- as.matrix(expr_mat)
+  n_nonfinite <- sum(!is.finite(mat))
+  if (n_nonfinite > 0) {
+    message(sprintf("Heatmap: replacing %d non-finite values with column medians", n_nonfinite))
+    for (j in seq_len(ncol(mat))) {
+      col_med <- median(mat[, j], na.rm = TRUE)
+      bad <- !is.finite(mat[, j])
+      mat[bad, j] <- if (is.finite(col_med)) col_med else 0
+    }
+  }
+
+  # Remove zero-variance rows (would produce NaN when row-scaling)
+  if (scale_rows) {
+    row_vars <- apply(mat, 1, var, na.rm = TRUE)
+    zero_var <- !is.finite(row_vars) | row_vars == 0
+    if (any(zero_var)) {
+      message(sprintf("Heatmap: dropping %d zero-variance rows before scaling", sum(zero_var)))
+      mat <- mat[!zero_var, , drop = FALSE]
+    }
+  }
+
+  # 4. Draw
   args <- list(...)
-  args$mat <- as.matrix(expr_mat)
+  args$mat <- mat
   args$scale <- if (scale_rows) "row" else "none"
   args$cluster_rows <- cluster_rows
   args$cluster_cols <- cluster_cols

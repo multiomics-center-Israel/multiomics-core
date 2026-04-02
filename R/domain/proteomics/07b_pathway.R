@@ -214,13 +214,31 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     min_size <- pw_cfg$min_size %||% 10
     max_size <- pw_cfg$max_size %||% 500
 
+    # GO simplification config
+    simplify_go        <- isTRUE(pw_cfg$simplify_go)
+    simplify_threshold <- pw_cfg$simplify_threshold %||% 0.7
+    simplify_measure   <- pw_cfg$simplify_measure   %||% "Wang"
+    simplify_orgdb     <- if (simplify_go) {
+        org_info <- get_organism_info(organism)
+        if (!is.na(org_info$orgdb)) org_info$orgdb else NULL
+    } else NULL
+
+    if (simplify_go && is.null(simplify_orgdb)) {
+        message("GO simplification requested but no OrgDb available for '", organism,
+                "'. Simplification will be skipped.")
+    }
+
     pathway_results <- run_pathway_analysis(
-        de_tables  = de_tables,
-        gene_sets  = gene_sets,
-        annotation = annotation_df,
-        method     = method,
-        min_size   = min_size,
-        max_size   = max_size
+        de_tables          = de_tables,
+        gene_sets          = gene_sets,
+        annotation         = annotation_df,
+        method             = method,
+        min_size           = min_size,
+        max_size           = max_size,
+        simplify_go        = simplify_go,
+        simplify_threshold = simplify_threshold,
+        simplify_measure   = simplify_measure,
+        simplify_orgdb     = simplify_orgdb
     )
 
     # Save results and plots

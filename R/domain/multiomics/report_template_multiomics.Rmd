@@ -451,8 +451,11 @@ if (file.exists(multi_ora_csv)) {
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
                     metabolomics_padj = "Metab padj", n_omics_support = "# Omics Supporting")
     colnames(mora_show) <- col_labels[display_cols]
-    mora_show[[2]] <- signif(mora_show[[2]], 3)
-    knitr::kable(mora_show, row.names = FALSE, caption = "Top multi-ORA enriched KEGG pathways (pooled across gene-based omics)")
+    # Format numeric columns (signif handles NA gracefully)
+    for (nc in intersect(c("Pooled padj", "Metab padj"), colnames(mora_show))) {
+        mora_show[[nc]] <- signif(mora_show[[nc]], 3)
+    }
+    knitr::kable(mora_show, row.names = FALSE, caption = "Top multi-ORA enriched KEGG pathways (gene-based + metabolite compound ORA)")
 }
 
 render_commentary("multi_ora")
@@ -484,7 +487,7 @@ if (dir.exists(mora_per_contrast_dir)) {
         if (file.exists(c_csv)) {
             c_df <- read.csv(c_csv, stringsAsFactors = FALSE)
             c_show <- c_df[seq_len(min(20, nrow(c_df))), ]
-            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "n_omics_support"), colnames(c_show))
+            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(c_show))
             if (length(display_cols) > 0) {
                 c_show <- c_show[, display_cols, drop = FALSE]
                 cat(sprintf("\n**%s:** %d enriched pathways\n\n",

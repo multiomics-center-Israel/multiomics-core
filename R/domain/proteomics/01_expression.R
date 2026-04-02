@@ -180,22 +180,48 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg) {
         check.names = FALSE
     )
 
-    # 2a) Convert exact zeros to NA (matching DEP::make_se behavior)
+    # 2a) Detect input scale from config (default: linear for DIANN raw output)
+    already_log2 <- identical(cfg$scale_in, "log2")
+
+    # Sanity check: warn if scale_in looks wrong based on data range
+    med_val <- median(unlist(df_m), na.rm = TRUE)
+    if (!already_log2 && med_val > 0 && med_val < 40) {
+        warning(sprintf(
+            "[DIANN] scale_in is not 'log2' but median value is %.1f, which looks log2-scaled. ",
+            med_val), "Set scale_in: 'log2' in config to avoid double-log2 transformation.",
+            call. = FALSE)
+    }
+    if (already_log2 && med_val > 1000) {
+        warning(sprintf(
+            "[DIANN] scale_in is 'log2' but median value is %.0f, which looks linear-scaled. ",
+            med_val), "Set scale_in: 'linear' in config if data is not log2-transformed.",
+            call. = FALSE)
+    }
+
+    # 2b) Convert exact zeros to NA (matching DEP::make_se behavior)
     # Some search engines report 0 for truly missing values; log2(0) = -Inf
     n_zeros <- sum(df_m == 0, na.rm = TRUE)
     if (n_zeros > 0) {
-        message(sprintf("Converted %d zero values to NA before log2 transformation.", n_zeros))
+        message(sprintf("Converted %d zero values to NA.", n_zeros))
         df_m[df_m == 0] <- NA
     }
 
-    # 2b) Keep a linear-scale copy (needed for VSN normalization)
-    df_m_linear <- df_m
+    # 2c) Keep a linear-scale copy (needed for VSN normalization)
+    if (already_log2) {
+        df_m_linear <- as.data.frame(2^df_m, check.names = FALSE)
+    } else {
+        df_m_linear <- df_m
+    }
 
-    # 3) Log2 transformation
-    df_m <- as.data.frame(
-        log2(df_m),
-        check.names = FALSE
-    )
+    # 3) Log2 transformation (skip if input is already log2)
+    if (already_log2) {
+        message("[DIANN] Input is already log2-scaled (scale_in='log2'); skipping log2 transform.")
+    } else {
+        df_m <- as.data.frame(
+            log2(df_m),
+            check.names = FALSE
+        )
+    }
 
     # 4) Rename columns: raw sample names -> SampleID using sample_map
     raw_names <- colnames(df_m)

@@ -11,8 +11,9 @@ mod_proteomics_commentary <- function(de_res, qc_pre_obj, config, out_dir) {
     cfg <- config$modes$proteomics
     if (!isTRUE(cfg$commentary$enabled)) {
         message("Commentary disabled.")
-        return(NULL)
+        return(NA_character_)
     }
 
-    run_proteomics_commentary(de_res, qc_pre_obj, config, out_dir)
+    result <- run_proteomics_commentary(de_res, qc_pre_obj, config, out_dir)
+    if (is.null(result)) NA_character_ else result
 }

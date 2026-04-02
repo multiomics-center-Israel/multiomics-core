@@ -105,19 +105,6 @@ discover_proteomics_figures <- function(out_dir, config = NULL) {
             )
         }
 
-        for (mf in list.files(qc_post, pattern = "^ma_.*\\.png$", full.names = TRUE)) {
-            cn <- gsub("^ma_|\\.png$", "", basename(mf))
-            fid <- paste0("ma_", cn)
-            figures[[fid]] <- data.frame(
-                figure_id = fid, filepath = mf, plot_type = "ma_plot",
-                section = "Differential Expression",
-                title = paste("MA:", gsub("_", " ", cn)),
-                description = "Mean expression vs fold change",
-                x_axis = "Mean Expression", y_axis = "log2 Fold Change",
-                contrast = cn, stringsAsFactors = FALSE
-            )
-        }
-
         for (hf in list.files(qc_post, pattern = "^heatmap_top.*\\.png$", full.names = TRUE)) {
             cn <- gsub("^heatmap_top[0-9]+_|\\.png$", "", basename(hf))
             fid <- paste0("heatmap_", gsub("\\.png$", "", basename(hf)))
@@ -239,11 +226,35 @@ build_proteomics_extra_data <- function(de_res, qc_pre_obj, config) {
     cfg <- config$modes$proteomics
     extra <- list()
 
-    # Groups
-    extra$groups <- NULL
-    extra$n_samples <- NULL
+    # Domain label for prompt customisation
+    extra$domain_label <- "proteomics"
+    extra$domain_guidance <- build_proteomics_figure_guidance()
 
-    # Methods
+    # --- Experimental groups and sample count ---
+    tryCatch({
+        group_col <- cfg$effects$color %||% "Condition"
+        pca_scores <- qc_pre_obj$objects$pca_scores
+        if (!is.null(pca_scores) && group_col %in% names(pca_scores)) {
+            extra$groups <- as.character(unique(pca_scores[[group_col]]))
+            extra$n_samples <- nrow(pca_scores)
+        }
+    }, error = function(e) {
+        message("  Could not extract group info: ", e$message)
+    })
+
+    # --- PCA variance explained ---
+    tryCatch({
+        var_expl <- qc_pre_obj$objects$var_expl
+        if (!is.null(var_expl) && length(var_expl) >= 2) {
+            extra$pca_variance <- as.numeric(var_expl[1:min(3, length(var_expl))])
+            message("  PCA variance: PC1=", round(extra$pca_variance[1], 1),
+                    "%, PC2=", round(extra$pca_variance[2], 1), "%")
+        }
+    }, error = function(e) {
+        message("  Could not extract PCA variance: ", e$message)
+    })
+
+    # --- Methods ---
     extra$norm_method <- cfg$normalization$method %||% "none"
     extra$de_method <- cfg$de$method %||% "limma"
     extra$de_cutoffs <- list(
@@ -251,10 +262,63 @@ build_proteomics_extra_data <- function(de_res, qc_pre_obj, config) {
         fc_cutoff = cfg$de$linear_fc_cutoff %||% 1.5
     )
 
-    # PCA variance
-    if (!is.null(qc_pre_obj$objects$var_expl)) {
-        extra$pca_variance <- qc_pre_obj$objects$var_expl
-    }
+    # --- Top DE proteins per contrast (up to 5 up + 5 down) ---
+    extra$top_genes <- list()
+    tryCatch({
+        sdf <- de_res$summary_df
+        if (!is.null(sdf)) {
+            # Detect gene/protein name column
+            gene_col <- NULL
+            for (candidate in c("Genes", "Protein.Names", "GeneName", "FeatureID")) {
+                if (candidate %in% names(sdf)) {
+                    gene_col <- candidate
+                    break
+                }
+            }
+            if (is.null(gene_col)) gene_col <- names(sdf)[1]
+
+            padj_cols <- grep("^padj\\.imputs\\.", names(sdf), value = TRUE)
+            p_cut <- extra$de_cutoffs$p_cutoff %||% 0.05
+
+            for (pc in padj_cols) {
+                cn <- sub("^padj\\.imputs\\.", "", pc)
+                fc_col <- paste0("linearFC.imputs.", cn)
+                if (!(fc_col %in% names(sdf))) next
+
+                padj_vals <- as.numeric(sdf[[pc]])
+                lfc_vals  <- as.numeric(sdf[[fc_col]])
+                log2fc    <- sign(lfc_vals) * log2(pmax(abs(lfc_vals), 1e-10))
+                genes     <- as.character(sdf[[gene_col]])
+
+                sig_mask <- !is.na(padj_vals) & padj_vals <= p_cut
+                if (sum(sig_mask) == 0) next
+
+                sig_df <- data.frame(
+                    gene   = genes[sig_mask],
+                    log2FC = log2fc[sig_mask],
+                    padj   = padj_vals[sig_mask],
+                    stringsAsFactors = FALSE
+                )
+
+                up_df <- sig_df[sig_df$log2FC > 0, ]
+                dn_df <- sig_df[sig_df$log2FC < 0, ]
+                up_df <- up_df[order(-abs(up_df$log2FC)), ]
+                dn_df <- dn_df[order(-abs(dn_df$log2FC)), ]
+                top_combined <- rbind(
+                    if (nrow(up_df) > 0) cbind(head(up_df, 5), direction = "up") else NULL,
+                    if (nrow(dn_df) > 0) cbind(head(dn_df, 5), direction = "down") else NULL
+                )
+
+                if (!is.null(top_combined) && nrow(top_combined) > 0) {
+                    extra$top_genes[[cn]] <- top_combined
+                    message("  Top proteins for ", cn, ": ",
+                            min(nrow(up_df), 5), " up + ", min(nrow(dn_df), 5), " down")
+                }
+            }
+        }
+    }, error = function(e) {
+        message("  Could not extract top DE proteins: ", e$message)
+    })
 
     extra
 }
@@ -286,13 +350,22 @@ run_proteomics_commentary <- function(de_res, qc_pre_obj, config, out_dir) {
     # Build extra data
     extra_data <- build_proteomics_extra_data(de_res, qc_pre_obj, config)
 
+    # Build DE summary counts for context
+    de_summary <- tryCatch(
+        build_de_summary_counts_proteomics(de_res$summary_df),
+        error = function(e) { message("  Could not build DE summary: ", e$message); NULL }
+    )
+
     # Override config to point at proteomics commentary settings
-    # generate_all_commentary reads config$modes$rna$commentary,
-    # so we temporarily inject our proteomics commentary config there
+    # generate_all_commentary reads config$modes$rna for organism, effects, etc.
+    # so we temporarily inject our proteomics config there
     config_for_commentary <- config
     if (is.null(config_for_commentary$modes$rna))
         config_for_commentary$modes$rna <- list()
     config_for_commentary$modes$rna$commentary <- comm_cfg
+    config_for_commentary$modes$rna$annotation <- cfg$annotation
+    config_for_commentary$modes$rna$effects <- cfg$effects
+    config_for_commentary$modes$rna$filtering <- cfg$filtering
 
     # Commentary output dir
     commentary_dir <- file.path(out_dir, "commentary")
@@ -300,6 +373,7 @@ run_proteomics_commentary <- function(de_res, qc_pre_obj, config, out_dir) {
     commentary_list <- generate_all_commentary(
         figures_tbl = figures_tbl,
         config      = config_for_commentary,
+        de_summary  = de_summary,
         extra_data  = extra_data,
         output_dir  = commentary_dir
     )

@@ -111,7 +111,11 @@ run_pathway_analysis <- function(de_tables,
                                   annotation = NULL,
                                   method = "fgsea",
                                   min_size = 10,
-                                  max_size = 500) {
+                                  max_size = 500,
+                                  simplify_go = FALSE,
+                                  simplify_threshold = 0.7,
+                                  simplify_measure = "Wang",
+                                  simplify_orgdb = NULL) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -130,6 +134,9 @@ run_pathway_analysis <- function(de_tables,
         for (db_name in names(gene_sets)) {
             gs <- gene_sets[[db_name]]
             if (length(gs) == 0) next
+
+            # Determine if this database contains GO terms (for simplification)
+            is_go_db <- grepl("^GO", db_name, ignore.case = TRUE)
 
             message("  Database: ", db_name, " (", length(gs), " gene sets)")
 
@@ -174,6 +181,28 @@ run_pathway_analysis <- function(de_tables,
                         # Add pathway names (GO term names, etc.)
                         fgsea_df <- add_pathway_names(fgsea_df, db_name, gs)
 
+                        # ---- GO simplification (fGSEA) ----
+                        if (isTRUE(simplify_go) && is_go_db && !is.null(simplify_orgdb)) {
+                            simp <- simplify_go_results(
+                                fgsea_df,
+                                go_col     = "pathway",
+                                pval_col   = "pval",
+                                sig_col    = "padj",
+                                sig_cutoff = 0.10,
+                                max_terms  = 500,
+                                orgdb      = simplify_orgdb,
+                                ontology   = "BP",
+                                threshold  = simplify_threshold,
+                                measure    = simplify_measure
+                            )
+                            # Store full results with cluster annotations
+                            contrast_results[[paste0(db_name, "_fgsea_full")]] <- simp$full
+                            # Use reduced set as the primary result
+                            fgsea_df <- simp$reduced
+                            # Store similarity matrix for treemap plotting
+                            attr(fgsea_df, "sim_matrix") <- simp$sim_matrix
+                        }
+
                         contrast_results[[paste0(db_name, "_fgsea")]] <- fgsea_df
 
                         n_sig <- sum(fgsea_df$padj < 0.05, na.rm = TRUE)
@@ -203,6 +232,26 @@ run_pathway_analysis <- function(de_tables,
                             ora_up$method <- "ora"
                             ora_up$direction <- "up"
                             ora_up <- add_pathway_names(ora_up, db_name, gs)
+
+                            # ---- GO simplification (ORA up) ----
+                            if (isTRUE(simplify_go) && is_go_db && !is.null(simplify_orgdb)) {
+                                simp <- simplify_go_results(
+                                    ora_up,
+                                    go_col     = "pathway",
+                                    pval_col   = "pvalue",
+                                    sig_col    = "padj",
+                                    sig_cutoff = 0.10,
+                                    max_terms  = 500,
+                                    orgdb      = simplify_orgdb,
+                                    ontology   = "BP",
+                                    threshold  = simplify_threshold,
+                                    measure    = simplify_measure
+                                )
+                                contrast_results[[paste0(db_name, "_ora_up_full")]] <- simp$full
+                                ora_up <- simp$reduced
+                                attr(ora_up, "sim_matrix") <- simp$sim_matrix
+                            }
+
                             contrast_results[[paste0(db_name, "_ora_up")]] <- ora_up
                         }
                     }
@@ -215,6 +264,26 @@ run_pathway_analysis <- function(de_tables,
                             ora_down$method <- "ora"
                             ora_down$direction <- "down"
                             ora_down <- add_pathway_names(ora_down, db_name, gs)
+
+                            # ---- GO simplification (ORA down) ----
+                            if (isTRUE(simplify_go) && is_go_db && !is.null(simplify_orgdb)) {
+                                simp <- simplify_go_results(
+                                    ora_down,
+                                    go_col     = "pathway",
+                                    pval_col   = "pvalue",
+                                    sig_col    = "padj",
+                                    sig_cutoff = 0.10,
+                                    max_terms  = 500,
+                                    orgdb      = simplify_orgdb,
+                                    ontology   = "BP",
+                                    threshold  = simplify_threshold,
+                                    measure    = simplify_measure
+                                )
+                                contrast_results[[paste0(db_name, "_ora_down_full")]] <- simp$full
+                                ora_down <- simp$reduced
+                                attr(ora_down, "sim_matrix") <- simp$sim_matrix
+                            }
+
                             contrast_results[[paste0(db_name, "_ora_down")]] <- ora_down
                         }
                     }
@@ -286,6 +355,9 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
         clean_contrast <- gsub("[^a-zA-Z0-9_-]", "_", contrast_name)
 
         for (analysis_name in names(contrast_res)) {
+            # Skip "_full" annotation tables — they are for CSV export, not plotting
+            if (grepl("_full$", analysis_name)) next
+
             res_df <- contrast_res[[analysis_name]]
             if (is.null(res_df) || nrow(res_df) == 0) next
 
@@ -341,6 +413,63 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
                                    paste0("pathway_", clean_contrast, "_", clean_analysis, ".png"))
             ggplot2::ggsave(plot_file, p, width = 10, height = 8)
             plot_files[[paste0(clean_contrast, "_", clean_analysis)]] <- plot_file
+
+            # ---- GO Treemap plot (if similarity matrix is attached) ----
+            sim_matrix <- attr(res_df, "sim_matrix")
+            if (!is.null(sim_matrix) && nrow(sim_matrix) >= 2) {
+                pval_col <- if ("pvalue" %in% colnames(res_df)) "pvalue" else if ("pval" %in% colnames(res_df)) "pval" else "padj"
+                go_ids <- res_df[["pathway"]][grepl("^GO:[0-9]+$", res_df[["pathway"]])]
+                scores <- setNames(
+                    -log10(res_df[[pval_col]][grepl("^GO:[0-9]+$", res_df[["pathway"]])] + 1e-300),
+                    go_ids
+                )
+                # Use scores that overlap with the sim_matrix rows
+                scores <- scores[intersect(names(scores), rownames(sim_matrix))]
+
+                if (length(scores) >= 2) {
+                    # Retrieve orgdb from the result's database column
+                    treemap_file <- file.path(output_dir,
+                                              paste0("treemap_", clean_contrast, "_", clean_analysis, ".png"))
+                    treemap_title <- paste("GO Term Clusters:", contrast_name, "-", analysis_name)
+
+                    tryCatch({
+                        if (requireNamespace("rrvgo", quietly = TRUE)) {
+                            # Get orgdb from the sim_matrix attribute or detect from results
+                            orgdb_name <- attr(sim_matrix, "orgdb")
+                            if (!is.null(orgdb_name) && requireNamespace(orgdb_name, quietly = TRUE)) {
+                                orgdb_obj <- getExportedValue(orgdb_name, orgdb_name)
+                            } else {
+                                # Try common OrgDbs
+                                orgdb_obj <- NULL
+                                for (try_db in c("org.Hs.eg.db", "org.Mm.eg.db")) {
+                                    if (requireNamespace(try_db, quietly = TRUE)) {
+                                        orgdb_obj <- getExportedValue(try_db, try_db)
+                                        break
+                                    }
+                                }
+                            }
+
+                            if (!is.null(orgdb_obj)) {
+                                reduced_terms <- rrvgo::reduceSimMatrix(
+                                    sim_matrix,
+                                    scores    = scores[rownames(sim_matrix)],
+                                    threshold = 0.7,
+                                    orgdb     = orgdb_obj
+                                )
+                                png(treemap_file, width = 12, height = 8, units = "in", res = 150)
+                                rrvgo::treemapPlot(reduced_terms)
+                                title(main = treemap_title, cex.main = 1.2)
+                                dev.off()
+                                plot_files[[paste0(clean_contrast, "_", clean_analysis, "_treemap")]] <- treemap_file
+                                message("  Saved GO treemap: ", treemap_file)
+                            }
+                        }
+                    }, error = function(e) {
+                        tryCatch(dev.off(), error = function(x) NULL)
+                        message("  Treemap plot skipped: ", e$message)
+                    })
+                }
+            }
         }
     }
 
