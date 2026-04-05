@@ -95,6 +95,20 @@ mod_multiomics_mechanistic <- function(harmonization_res, de_results = NULL,
             summary_stats$n_genes_tested_mediation <- nrow(med$mediation_df)
             summary_stats$n_genes_mediated <- med$n_mediated
         }
+
+        # Multi-layer mediation summary
+        if (!is.null(mechanistic_results$multilayer_mediation)) {
+            ml <- mechanistic_results$multilayer_mediation
+            summary_stats$n_multilayer_paths_tested <- nrow(ml$multilayer_df)
+            summary_stats$n_multilayer_significant <- ml$n_significant
+        }
+
+        # COSMOS summary
+        if (!is.null(mechanistic_results$cosmos)) {
+            cosmos <- mechanistic_results$cosmos
+            summary_stats$cosmos_n_nodes <- cosmos$n_nodes
+            summary_stats$cosmos_n_edges <- cosmos$n_edges
+        }
     }
 
     list(

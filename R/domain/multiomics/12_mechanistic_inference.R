@@ -93,6 +93,34 @@ run_mechanistic_analysis <- function(mae, de_results = NULL,
         })
     }
 
+    # 5. Multi-layer mediation (RNA -> Protein -> Metabolite -> Phenotype)
+    if (mc$run_mediation && !is.null(mae_data$metadata) &&
+        "metabolomics" %in% names(harmonized)) {
+        results$multilayer_mediation <- tryCatch({
+            run_multilayer_mediation(
+                harmonized, mae_data$metadata, mc, config, out_dir
+            )
+        }, error = function(e) {
+            message("Multi-layer mediation failed: ", e$message)
+            NULL
+        })
+    }
+
+    # 6. COSMOS causal network (if cosmosR is available)
+    if ((mc$run_cosmos %||% TRUE) && requireNamespace("cosmosR", quietly = TRUE)) {
+        results$cosmos <- tryCatch({
+            run_cosmos_causal_network(
+                mae = mae_data$mae,
+                de_results = de_results,
+                config = config,
+                out_dir = out_dir
+            )
+        }, error = function(e) {
+            message("COSMOS causal network failed: ", e$message)
+            NULL
+        })
+    }
+
     # Generate summary
     results$summary <- summarize_mechanistic_results(results, out_dir)
 
@@ -113,6 +141,7 @@ get_mechanistic_config <- function(config) {
         infer_regulatory_network = mc$infer_regulatory_network %||% TRUE,
         network_method = mc$network_method %||% "genie3",
         run_mediation = mc$run_mediation %||% TRUE,
+        run_cosmos = mc$run_cosmos %||% TRUE,
         n_top_regulators = mc$n_top_regulators %||% 50,
         fdr_threshold = mc$fdr_threshold %||% 0.05,
         min_targets = mc$min_targets %||% 10
@@ -1276,7 +1305,7 @@ run_mediation_analysis <- function(harmonized, metadata, gene_mapping, mc, confi
     )
 }
 
-#' Run single gene mediation analysis
+#' Run single gene mediation analysis with sensitivity
 run_single_mediation <- function(rna_expr, prot_expr, outcome, gene_name) {
     tryCatch({
         # Create data frame
@@ -1289,7 +1318,8 @@ run_single_mediation <- function(rna_expr, prot_expr, outcome, gene_name) {
 
         if (nrow(df) < 20) {
             return(data.frame(gene = gene_name, prop_mediated = NA, acme_pval = NA,
-                              ade_pval = NA, stringsAsFactors = FALSE))
+                              ade_pval = NA, rho_at_acme_zero = NA,
+                              stringsAsFactors = FALSE))
         }
 
         # Mediator model: Protein ~ RNA
@@ -1307,6 +1337,39 @@ run_single_mediation <- function(rna_expr, prot_expr, outcome, gene_name) {
             sims = 100
         )
 
+        # Sensitivity analysis: find rho at which ACME = 0
+        # medsens probes the sequential ignorability assumption
+        # by varying the correlation between mediator and outcome residuals
+        rho_at_zero <- NA_real_
+        tryCatch({
+            sens <- mediation::medsens(
+                med_result,
+                rho.by = 0.05,
+                effect.type = "indirect",
+                sims = 100
+            )
+            # Extract rho value where ACME crosses zero
+            # sens$rho gives the rho grid, sens$d0 gives ACME at each rho
+            if (!is.null(sens$rho) && !is.null(sens$d0)) {
+                # Find sign changes in ACME across rho values
+                signs <- sign(sens$d0)
+                sign_changes <- which(diff(signs) != 0)
+                if (length(sign_changes) > 0) {
+                    # Interpolate to find rho where ACME = 0
+                    idx <- sign_changes[1]
+                    rho_at_zero <- sens$rho[idx] +
+                        (sens$rho[idx + 1] - sens$rho[idx]) *
+                        abs(sens$d0[idx]) / (abs(sens$d0[idx]) + abs(sens$d0[idx + 1]))
+                } else {
+                    # ACME never crosses zero — highly robust
+                    rho_at_zero <- Inf
+                }
+            }
+        }, error = function(e) {
+            # Sensitivity analysis can fail with singular models
+            NULL
+        })
+
         data.frame(
             gene = gene_name,
             acme = med_result$d0,
@@ -1315,11 +1378,12 @@ run_single_mediation <- function(rna_expr, prot_expr, outcome, gene_name) {
             ade_pval = med_result$z0.p,
             total_effect = med_result$tau.coef,
             prop_mediated = med_result$n0,
+            rho_at_acme_zero = rho_at_zero,
             stringsAsFactors = FALSE
         )
     }, error = function(e) {
         data.frame(gene = gene_name, prop_mediated = NA, acme_pval = NA,
-                   stringsAsFactors = FALSE)
+                   rho_at_acme_zero = NA, stringsAsFactors = FALSE)
     })
 }
 
@@ -1385,6 +1449,199 @@ plot_mediation_results <- function(mediation_df, out_dir) {
 
 
 # =============================================================================
+# 5. Multi-Layer Mediation (RNA -> Protein -> Metabolite -> Phenotype)
+# =============================================================================
+
+#' Run multi-layer mediation: RNA -> Protein -> Metabolite -> Phenotype
+#'
+#' Tests cascading mediation chains across three omics layers.
+#' Each step is a separate mediation analysis:
+#'   Step 1: RNA -> Protein -> Phenotype (already done in standard mediation)
+#'   Step 2: Protein -> Metabolite -> Phenotype
+#'
+#' NOTE: Each additional step compounds the untestable sequential ignorability
+#' assumption. Results should be treated as hypothesis-generating, not as
+#' proof of causality.
+#'
+#' @param harmonized List of harmonized omics data
+#' @param metadata Sample metadata
+#' @param mc Mechanistic config
+#' @param config Full config
+#' @param out_dir Output directory
+#' @return List with multilayer mediation results, or NULL
+run_multilayer_mediation <- function(harmonized, metadata, mc, config,
+                                     out_dir = NULL) {
+    message("Running multi-layer mediation (RNA -> Protein -> Metabolite -> Phenotype)...")
+
+    required <- c("transcriptomics", "proteomics", "metabolomics")
+    present <- intersect(required, names(harmonized))
+    if (length(present) < 3) {
+        message("  Requires all three omics layers. Present: ",
+                paste(present, collapse = ", "), ". Skipping.")
+        return(NULL)
+    }
+
+    if (!requireNamespace("mediation", quietly = TRUE)) {
+        message("  mediation package not available. Skipping.")
+        return(NULL)
+    }
+
+    outcome_col <- config$design$outcome_column %||% config$design$condition_column
+    if (is.null(outcome_col) || !outcome_col %in% colnames(metadata)) {
+        message("  No outcome variable. Skipping multi-layer mediation.")
+        return(NULL)
+    }
+
+    rna_mat <- harmonized$transcriptomics$normalized_matrix
+    prot_mat <- harmonized$proteomics$normalized_matrix
+    metab_mat <- harmonized$metabolomics$normalized_matrix
+
+    # Find common samples across all three omics + metadata
+    common_samples <- Reduce(intersect, list(
+        colnames(rna_mat), colnames(prot_mat), colnames(metab_mat),
+        rownames(metadata)
+    ))
+
+    if (length(common_samples) < 20) {
+        message("  Insufficient common samples (", length(common_samples),
+                "). Need >= 20. Skipping.")
+        return(NULL)
+    }
+
+    rna_mat <- rna_mat[, common_samples, drop = FALSE]
+    prot_mat <- prot_mat[, common_samples, drop = FALSE]
+    metab_mat <- metab_mat[, common_samples, drop = FALSE]
+    outcome <- metadata[common_samples, outcome_col]
+
+    if (is.factor(outcome) || is.character(outcome)) {
+        outcome <- as.numeric(as.factor(outcome)) - 1
+    }
+
+    # For each protein, find the most correlated metabolite
+    # This is a data-driven pairing since we lack explicit protein-metabolite mapping
+    n_prot <- min(nrow(prot_mat), 100)
+    # Rank proteins by variance for efficiency
+    prot_var <- apply(prot_mat, 1, var, na.rm = TRUE)
+    top_prot_idx <- order(prot_var, decreasing = TRUE)[seq_len(n_prot)]
+
+    message("  Testing ", n_prot, " proteins x top metabolite correlations")
+
+    results_list <- list()
+    for (i in seq_along(top_prot_idx)) {
+        pi <- top_prot_idx[i]
+        prot_id <- rownames(prot_mat)[pi]
+        prot_vals <- as.numeric(prot_mat[pi, ])
+
+        # Find best-correlated metabolite
+        metab_cors <- apply(metab_mat, 1, function(m) {
+            tryCatch(cor(prot_vals, m, use = "pairwise.complete.obs"),
+                     error = function(e) 0)
+        })
+        best_metab_idx <- which.max(abs(metab_cors))
+        if (abs(metab_cors[best_metab_idx]) < 0.2) next  # skip weak pairs
+
+        metab_id <- rownames(metab_mat)[best_metab_idx]
+        metab_vals <- as.numeric(metab_mat[best_metab_idx, ])
+
+        # Mediation: Protein -> Metabolite -> Phenotype
+        res <- tryCatch({
+            df <- data.frame(
+                protein = prot_vals,
+                metabolite = metab_vals,
+                outcome = outcome
+            )
+            df <- df[complete.cases(df), ]
+            if (nrow(df) < 20) return(NULL)
+
+            med_mod <- lm(metabolite ~ protein, data = df)
+            out_mod <- lm(outcome ~ protein + metabolite, data = df)
+
+            med_res <- mediation::mediate(
+                med_mod, out_mod,
+                treat = "protein", mediator = "metabolite",
+                boot = FALSE, sims = 100
+            )
+
+            data.frame(
+                protein = prot_id,
+                metabolite = metab_id,
+                prot_metab_cor = metab_cors[best_metab_idx],
+                acme = med_res$d0,
+                acme_pval = med_res$d0.p,
+                ade = med_res$z0,
+                ade_pval = med_res$z0.p,
+                total_effect = med_res$tau.coef,
+                prop_mediated = med_res$n0,
+                stringsAsFactors = FALSE
+            )
+        }, error = function(e) NULL)
+
+        if (!is.null(res)) results_list[[length(results_list) + 1]] <- res
+    }
+
+    if (length(results_list) == 0) {
+        message("  No successful multi-layer mediation results.")
+        return(NULL)
+    }
+
+    multilayer_df <- do.call(rbind, results_list)
+    multilayer_df$acme_padj <- p.adjust(multilayer_df$acme_pval, method = "BH")
+    multilayer_df <- multilayer_df[order(abs(multilayer_df$prop_mediated),
+                                         decreasing = TRUE), ]
+
+    n_sig <- sum(multilayer_df$acme_padj < 0.1 &
+                     abs(multilayer_df$prop_mediated) > 0.1, na.rm = TRUE)
+    message("  Found ", n_sig, " significant Protein->Metabolite mediation paths")
+
+    if (!is.null(out_dir)) {
+        write.csv(multilayer_df,
+                  file.path(out_dir, "tables", "mech_multilayer_mediation_results.csv"),
+                  row.names = FALSE)
+        plot_multilayer_mediation(multilayer_df, out_dir)
+    }
+
+    list(multilayer_df = multilayer_df, n_significant = n_sig)
+}
+
+
+#' Plot multi-layer mediation results
+plot_multilayer_mediation <- function(multilayer_df, out_dir) {
+    if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
+
+    # Show top results
+    top <- utils::head(multilayer_df[!is.na(multilayer_df$prop_mediated), ], 20)
+    if (nrow(top) == 0) return(NULL)
+
+    top$label <- paste0(top$protein, " -> ", top$metabolite)
+    top$label <- ifelse(nchar(top$label) > 40,
+                        paste0(substr(top$label, 1, 37), "..."), top$label)
+
+    p <- ggplot2::ggplot(top, ggplot2::aes(
+            x = reorder(label, abs(prop_mediated)),
+            y = prop_mediated)) +
+        ggplot2::geom_col(ggplot2::aes(fill = prop_mediated > 0)) +
+        ggplot2::scale_fill_manual(values = c("TRUE" = "#E64B35", "FALSE" = "#4DBBD5"),
+                                    guide = "none") +
+        ggplot2::geom_hline(yintercept = c(-0.1, 0.1), linetype = "dashed",
+                            color = "grey50") +
+        ggplot2::coord_flip() +
+        ggplot2::theme_bw() +
+        ggplot2::theme(panel.grid = ggplot2::element_blank()) +
+        ggplot2::labs(
+            title = "Multi-Layer Mediation: Protein -> Metabolite -> Phenotype",
+            subtitle = "Proportion of protein effect mediated by metabolite (hypothesis-generating)",
+            x = NULL,
+            y = "Proportion Mediated"
+        )
+
+    ggplot2::ggsave(
+        file.path(out_dir, "plots", "mech_multilayer_mediation_barplot.png"),
+        p, width = 10, height = 7, dpi = 300
+    )
+}
+
+
+# =============================================================================
 # Summary Function
 # =============================================================================
 
@@ -1432,6 +1689,24 @@ summarize_mechanistic_results <- function(results, out_dir = NULL) {
         summary_list$mediation <- list(
             n_genes_tested = nrow(med$mediation_df),
             n_mediated = med$n_mediated
+        )
+    }
+
+    # Multi-layer mediation
+    if (!is.null(results$multilayer_mediation)) {
+        ml <- results$multilayer_mediation
+        summary_list$multilayer_mediation <- list(
+            n_paths_tested = nrow(ml$multilayer_df),
+            n_significant = ml$n_significant
+        )
+    }
+
+    # COSMOS
+    if (!is.null(results$cosmos)) {
+        cosmos <- results$cosmos
+        summary_list$cosmos <- list(
+            n_nodes = cosmos$n_nodes %||% NA,
+            n_edges = cosmos$n_edges %||% NA
         )
     }
 

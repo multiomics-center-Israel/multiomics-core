@@ -821,6 +821,41 @@ knitr::include_graphics(condition_separation_plot)
 figure_legend("Within-condition vs between-condition sample similarity per omics layer. Positive separation indicates that samples from the same experimental group are more similar than samples from different groups.")
 ```
 
+```{r group-dist-setup, include=FALSE}
+group_dist_scatter <- file.path(foundational_dir, "plots", "sample_within_vs_cross_group_distance.png")
+group_dist_boxplot <- file.path(foundational_dir, "plots", "sample_group_distance_boxplot.png")
+has_group_dist <- file.exists(group_dist_scatter) || file.exists(group_dist_boxplot)
+```
+
+```{r group-dist-section, eval=has_group_dist, results='asis'}
+cat("## Per-Sample Within vs Cross-Group Distance\n\n")
+cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. Samples below the diagonal are closer to their own group; samples above the diagonal are ambiguous or misplaced.\n\n")
+```
+
+```{r group-dist-scatter, eval=file.exists(group_dist_scatter), results='asis'}
+knitr::include_graphics(group_dist_scatter)
+figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points below the diagonal line indicate samples that are closer to their own condition group. Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
+render_commentary("sample_group_distances")
+```
+
+```{r group-dist-boxplot, eval=file.exists(group_dist_boxplot), results='asis'}
+knitr::include_graphics(group_dist_boxplot)
+figure_legend("Distribution of within-group and cross-group mean distances across all samples per omics layer. Clear separation between the two distributions indicates strong condition effect in that omics layer.")
+```
+
+```{r group-dist-table, eval=has_group_dist}
+group_dist_csv <- file.path(foundational_dir, "tables", "sample_within_vs_cross_group_distances.csv")
+if (file.exists(group_dist_csv)) {
+    df <- read.csv(group_dist_csv, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        df$within_group_dist <- round(df$within_group_dist, 2)
+        df$cross_group_dist <- round(df$cross_group_dist, 2)
+        df$dist_ratio <- round(df$dist_ratio, 3)
+        make_dt(df, caption = "Per-sample within-group vs cross-group distances")
+    }
+}
+```
+
 ---
 
 # Integration Results {.tabset}
@@ -855,18 +890,6 @@ figure_legend("DIABLO variable loadings plot. Top contributing features from eac
 render_commentary("diablo_variable_plot")
 ```
 
-```{r diablo-circos-plot, eval=has_diablo, results='asis'}
-p <- file.path(diablo_dir, "diablo_circos_plot.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r diablo-circos-legend, eval=has_diablo, results='asis'}
-figure_legend("DIABLO circos plot showing cross-omics feature correlations. Lines connect correlated features across omics layers.")
-render_commentary("diablo_circos_plot")
-```
-
 ```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
 int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
 if (file.exists(int_html)) {
@@ -883,6 +906,21 @@ if (file.exists(hm)) {
     cat(sprintf("![DIABLO Feature Heatmap](%s)\n\n", hm))
     figure_legend("Heatmap of top DIABLO features across omics layers. Values are z-scored per feature. Rows are grouped by omics type; columns are samples annotated by condition.")
     render_commentary("diablo_feature_heatmap")
+}
+```
+
+```{r diablo-loadings-log2fc, eval=has_diablo, results='asis'}
+lfc_plots <- list.files(diablo_dir, pattern = "diablo_loadings_log2fc_.*\\.png$", full.names = TRUE)
+if (length(lfc_plots) > 0) {
+    cat("\n### Loadings Colored by log2FC {.unnumbered}\n\n")
+    for (lp in lfc_plots) {
+        contrast_label <- gsub("diablo_loadings_log2fc_|\\.png$", "", basename(lp))
+        contrast_label <- gsub("\\.", " ", contrast_label)
+        cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
+        cat(sprintf("![DIABLO Loadings log2FC - %s](%s)\n\n", contrast_label, lp))
+    }
+    figure_legend("DIABLO loadings (Component 1 vs Component 2) colored by log2 fold-change from differential expression. Red indicates upregulation, blue indicates downregulation. Faceted by omics layer; top features are labeled.")
+    render_commentary("diablo_loadings_log2fc")
 }
 ```
 
@@ -991,6 +1029,21 @@ if (length(weight_files) > 0) {
 }
 ```
 
+```{r mofa-loadings-log2fc, eval=has_mofa, results='asis'}
+mofa_lfc_plots <- list.files(mofa_dir, pattern = "mofa_loadings_log2fc_.*\\.png$", full.names = TRUE)
+if (length(mofa_lfc_plots) > 0) {
+    cat("\n### Weights Colored by log2FC {.unnumbered}\n\n")
+    for (lp in mofa_lfc_plots) {
+        contrast_label <- gsub("mofa_loadings_log2fc_|\\.png$", "", basename(lp))
+        contrast_label <- gsub("\\.", " ", contrast_label)
+        cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
+        cat(sprintf("![MOFA2 Weights log2FC - %s](%s)\n\n", contrast_label, lp))
+    }
+    figure_legend("MOFA2 weights (Factor 1 vs Factor 2) colored by log2 fold-change from differential expression. Red indicates upregulation, blue indicates downregulation. Faceted by omics view; top features are labeled.")
+    render_commentary("mofa_loadings_log2fc")
+}
+```
+
 ## Loadings-Based Pathway Enrichment {.tabset}
 
 ```{r loadings-enrich-note, eval=!has_loadings_enrich, results='asis'}
@@ -1058,6 +1111,153 @@ if (file.exists(mofa_le_csv)) {
         cat("\n#### MOFA2 Weights Enrichment Table {.unnumbered}\n\n")
         print(make_dt(df, caption = "MOFA2 weights KEGG enrichment"))
     }
+}
+```
+
+---
+
+# Mechanistic & Causal Inference {.tabset}
+
+```{r mech-setup, include=FALSE}
+mechanistic_dir <- file.path(run_dir, "mechanistic", "mechanistic")
+has_mechanistic <- dir.exists(mechanistic_dir) &&
+    (length(list.files(file.path(mechanistic_dir, "plots"), "\\.png$")) > 0 ||
+     length(list.files(file.path(mechanistic_dir, "tables"), "\\.csv$")) > 0)
+```
+
+```{r mech-note, eval=!has_mechanistic, results='asis'}
+cat("*Mechanistic inference was not run or produced no results. Enable in config: `mechanistic.run_mechanistic: true`*\n")
+```
+
+## Mediation: RNA -> Protein -> Phenotype
+
+```{r mech-mediation-prop, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_mediation_proportion_barplot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Proportion of the RNA effect on phenotype that is mediated through protein levels. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating — the sequential ignorability assumption (no unmeasured confounders) is untestable.")
+    render_commentary("mediation_proportion")
+}
+```
+
+```{r mech-mediation-decomp, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_mediation_effect_decomposition.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Decomposition of total effect into ACME (Average Causal Mediation Effect, the indirect/mediated path) and ADE (Average Direct Effect, not through protein).")
+}
+```
+
+```{r mech-mediation-table, eval=has_mechanistic}
+med_csv <- file.path(mechanistic_dir, "tables", "mech_mediation_analysis_results.csv")
+if (file.exists(med_csv)) {
+    df <- read.csv(med_csv, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        # Flag sensitivity robustness
+        if ("rho_at_acme_zero" %in% colnames(df)) {
+            df$sensitivity <- ifelse(
+                is.na(df$rho_at_acme_zero), "N/A",
+                ifelse(is.infinite(df$rho_at_acme_zero), "Robust (ACME never zero)",
+                ifelse(abs(df$rho_at_acme_zero) > 0.3, "Robust",
+                ifelse(abs(df$rho_at_acme_zero) > 0.1, "Moderate", "Fragile")))
+            )
+        }
+        make_dt(df, caption = "Mediation analysis: RNA -> Protein -> Phenotype")
+    }
+}
+```
+
+```{r mech-mediation-sens-legend, eval=has_mechanistic, results='asis'}
+med_csv <- file.path(mechanistic_dir, "tables", "mech_mediation_analysis_results.csv")
+if (file.exists(med_csv)) {
+    df <- read.csv(med_csv, stringsAsFactors = FALSE)
+    if ("rho_at_acme_zero" %in% colnames(df)) {
+        cat("\n**Sensitivity interpretation (rho\\_at\\_acme\\_zero):** The rho value at which the mediation effect (ACME) would become zero under unmeasured confounding. |rho| > 0.3 = robust; |rho| < 0.1 = fragile (easily explained by confounders).\n\n")
+    }
+}
+```
+
+## Multi-Layer Mediation: Protein -> Metabolite -> Phenotype
+
+```{r mech-multilayer-plot, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_multilayer_mediation_barplot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Multi-layer mediation testing whether protein effects on phenotype are mediated through metabolite levels. Each bar shows the proportion of the protein effect carried through the most correlated metabolite. This extends causal inference across all three omics layers but compounds confounding assumptions — interpret as hypothesis-generating.")
+    render_commentary("multilayer_mediation")
+}
+```
+
+```{r mech-multilayer-table, eval=has_mechanistic}
+ml_csv <- file.path(mechanistic_dir, "tables", "mech_multilayer_mediation_results.csv")
+if (file.exists(ml_csv)) {
+    df <- read.csv(ml_csv, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        make_dt(df, caption = "Multi-layer mediation: Protein -> Metabolite -> Phenotype")
+    }
+}
+```
+
+## COSMOS Causal Network
+
+```{r cosmos-network, eval=has_mechanistic, results='asis'}
+cosmos_plot <- file.path(mechanistic_dir, "plots", "cosmos_causal_network.png")
+if (file.exists(cosmos_plot)) {
+    cat("\n### Signaling-to-Metabolism Network {.unnumbered}\n\n")
+    knitr::include_graphics(cosmos_plot)
+    figure_legend("COSMOS causal network connecting deregulated transcription factors to metabolites through known signaling and metabolic interactions (OmniPath + STITCH + Recon3D prior knowledge). Red edges = activating interactions; blue = inhibiting. Node size reflects degree centrality. This network represents the smallest coherent subnetwork explaining the observed molecular changes, constrained by prior biological knowledge.")
+    render_commentary("cosmos_network")
+} else {
+    cat("*COSMOS causal network was not generated. Requires: cosmosR, CARNIVAL, and decoupleR packages.*\n\n")
+}
+```
+
+```{r cosmos-tables, eval=has_mechanistic}
+cosmos_edges <- file.path(mechanistic_dir, "tables", "cosmos_network_edges.csv")
+cosmos_nodes <- file.path(mechanistic_dir, "tables", "cosmos_network_nodes.csv")
+
+if (file.exists(cosmos_nodes)) {
+    df <- read.csv(cosmos_nodes, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        make_dt(df, caption = "COSMOS network nodes")
+    }
+}
+
+if (file.exists(cosmos_edges)) {
+    df <- read.csv(cosmos_edges, stringsAsFactors = FALSE)
+    if (nrow(df) > 0) {
+        make_dt(df, caption = "COSMOS network edges")
+    }
+}
+```
+
+## TF Activity
+
+```{r mech-tf-heatmap, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_tf_activity_heatmap.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Transcription factor activity inferred from target gene expression using dorothea/decoupleR regulons. Rows are TFs; columns are samples. Activity is estimated as the weighted mean of target expression, accounting for mode of regulation.")
+    render_commentary("tf_activity")
+}
+```
+
+```{r mech-tf-barplot, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_tf_activity_barplot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Top differentially active transcription factors between conditions.")
+}
+```
+
+## Regulatory Network
+
+```{r mech-network, eval=has_mechanistic, results='asis'}
+p <- file.path(mechanistic_dir, "plots", "mech_regulatory_network.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+    figure_legend("Gene regulatory network inferred using GENIE3/ARACNe/correlation. Edges represent predicted regulatory relationships (association-based, not causal). Hub genes with many targets are highlighted.")
+    render_commentary("regulatory_network")
 }
 ```
 
