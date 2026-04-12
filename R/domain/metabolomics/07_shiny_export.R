@@ -256,7 +256,7 @@ build_shiny_payload_metabolomics <- function(
 
     linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
     payload$log_fc_cutoff <- log2(linear_fc)
-
+    payload$fc_cutoff <- linear_fc
     # Build normalization method description
     norm_method <- paste0(
         norm_cfg$sample_norm %||% "none",
