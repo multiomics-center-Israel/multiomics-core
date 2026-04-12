@@ -324,9 +324,8 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
         }
 
     } else if (omics_type == "proteomics") {
-        # Proteomics multi-imputation summary has numeric FeatureIDs.
-        # Run limma on the actual expression matrix to get real protein-level stats.
-        tables <- run_limma_for_proteomics(harmonization_res)
+        # Use precomputed DE from summary_df, mapping numeric IDs to UniProt
+        tables <- extract_proteomics_de_tables(de_data, harmonization_res)
 
     } else if (omics_type == "metabolomics") {
         # Metabolomics: de_tables named list
@@ -352,10 +351,79 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
 }
 
 
+#' Extract precomputed DE tables from proteomics results
+#'
+#' Parses the multi-imputation summary_df, resolves numeric FeatureIDs to
+#' UniProt protein IDs via row_data, and converts linearFC to log2FC.
+#' Falls back to re-running limma if summary_df is unavailable.
+extract_proteomics_de_tables <- function(de_data, harmonization_res) {
+    sdf <- de_data$summary_df
+    if (is.null(sdf) || nrow(sdf) == 0) {
+        return(run_limma_for_proteomics(harmonization_res))
+    }
+
+    # Build numeric-ID -> UniProt mapping from row_data
+    id_map <- NULL
+    prot_pre <- harmonization_res$inputs$proteomics
+    if (!is.null(prot_pre) && !is.null(prot_pre$row_data)) {
+        rd <- prot_pre$row_data
+        # row_data rows correspond 1:1 with expr_work rows (both 7251)
+        id_map <- setNames(rownames(prot_pre$expr_work), seq_len(nrow(rd)))
+    }
+
+    # Find contrast columns by their padj pattern
+    padj_cols <- grep("^padj\\.imputs\\.", colnames(sdf), value = TRUE)
+    if (length(padj_cols) == 0) {
+        return(run_limma_for_proteomics(harmonization_res))
+    }
+
+    tables <- list()
+    for (padj_col in padj_cols) {
+        # Derive contrast name: "padj.imputs.1.56ppmvs.0ppm" -> "1.56ppm vs. 0ppm"
+        contrast_key <- sub("^padj\\.imputs\\.", "", padj_col)
+        # Insert space before "vs" and restore the dot: "1.56ppmvs.0ppm" -> "1.56ppm vs. 0ppm"
+        contrast_name <- sub("vs\\.", " vs. ", contrast_key)
+
+        pval_col <- sub("^padj\\.", "pvalue.", padj_col)
+        fc_col <- sub("^padj\\.", "linearFC.", padj_col)
+
+        if (!pval_col %in% colnames(sdf) || !fc_col %in% colnames(sdf)) next
+
+        # Map numeric FeatureIDs to UniProt IDs
+        feat_ids <- as.character(sdf$FeatureID)
+        if (!is.null(id_map)) {
+            resolved <- id_map[feat_ids]
+            feat_ids <- ifelse(is.na(resolved), feat_ids, resolved)
+        }
+
+        # linearFC is signed linear fold change; convert to log2
+        linear_fc <- sdf[[fc_col]]
+        log2fc <- ifelse(linear_fc >= 0, log2(abs(linear_fc)), -log2(abs(linear_fc)))
+        log2fc[is.na(linear_fc)] <- NA
+
+        std <- data.frame(
+            feature_id = feat_ids,
+            log2fc = log2fc,
+            pvalue = sdf[[pval_col]],
+            padj = sdf[[padj_col]],
+            stringsAsFactors = FALSE
+        )
+        std <- std[!is.na(std$pvalue), ]
+        if (nrow(std) > 0) tables[[contrast_name]] <- std
+    }
+
+    if (length(tables) == 0) {
+        return(run_limma_for_proteomics(harmonization_res))
+    }
+
+    tables
+}
+
+
 #' Run limma DE on proteomics expression matrix
 #'
-#' Uses the actual protein expression data (168 proteins) rather than
-#' the multi-imputation summary which has unusable numeric IDs.
+#' Fallback when precomputed DE is unavailable. Uses the actual protein
+#' expression data rather than the multi-imputation summary.
 run_limma_for_proteomics <- function(harmonization_res) {
     if (is.null(harmonization_res) || is.null(harmonization_res$inputs$proteomics)) {
         return(list())
@@ -656,11 +724,22 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
 
     # Check which key the DE tables are using
     uses_names <- FALSE
+    uses_bare_numeric <- FALSE
     if (length(name_col) > 0) {
         metab_names <- as.character(row_data[[name_col[1]]])
         overlap_names <- sum(all_de_ids %in% metab_names, na.rm = TRUE)
         overlap_synth <- if (!is.null(synthetic_ids)) sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) else 0
         uses_names <- overlap_names > overlap_synth
+    }
+
+    # DE tables may use bare row indices ("1","2",...) from limma
+    if (!uses_names && !is.null(synthetic_ids) &&
+        sum(all_de_ids %in% synthetic_ids, na.rm = TRUE) == 0) {
+        bare_indices <- as.character(seq_len(nrow(row_data)))
+        if (sum(all_de_ids %in% bare_indices, na.rm = TRUE) > length(all_de_ids) * 0.5) {
+            uses_bare_numeric <- TRUE
+            message("    DE tables use bare numeric row indices as feature_ids")
+        }
     }
 
     hmdb_ids <- as.character(row_data[[hmdb_col[1]]])
@@ -669,6 +748,9 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
         # DE tables use metabolite names; build name -> HMDB -> KEGG
         feat_ids <- metab_names
         message("    DE tables use metabolite names as feature_ids")
+    } else if (uses_bare_numeric) {
+        # DE tables use bare numeric indices; use same for join
+        feat_ids <- as.character(seq_len(nrow(row_data)))
     } else if (!is.null(synthetic_ids)) {
         feat_ids <- synthetic_ids
     } else {
@@ -1238,6 +1320,17 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 # Helper functions
 # =============================================================================
 
+#' Normalize KEGG pathway IDs to bare numeric form
+#'
+#' Strips organism prefixes (hsa, mmu, cel, map, etc.) to allow
+#' joining gene-based and compound-based pathway results.
+#' @param ids Character vector of KEGG pathway IDs
+#' @return Character vector of numeric-only pathway IDs (e.g., "00010")
+normalize_kegg_pathway_id <- function(ids) {
+    sub("^[a-zA-Z]+", "", ids)
+}
+
+
 #' Merge pathway p-values from multiple omics
 merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
 
@@ -1527,4 +1620,360 @@ write_cross_omics_enrichment <- function(enrichment_res, out_dir) {
 
     message("Cross-omics enrichment results written to: ", out_dir)
     invisible(NULL)
+}
+
+
+# =============================================================================
+# Loadings-based enrichment (DIABLO / MOFA2 top features)
+# =============================================================================
+
+#' Run geneset enrichment on integration loadings
+#'
+#' Takes top features from DIABLO loadings or MOFA2 weights and runs
+#' ORA enrichment (KEGG) for each component/factor per omics view.
+#'
+#' @param integration_res Output from mod_multiomics_integration()
+#' @param harmonization_res Output from mod_multiomics_harmonization()
+#' @param config Full config object
+#' @param out_dir Output directory for results
+#' @param top_n Number of top features per component/factor to use (default 50)
+#' @return List with diablo and mofa enrichment results
+run_loadings_enrichment <- function(integration_res, harmonization_res,
+                                     config, out_dir, top_n = 50) {
+
+    message("\n=== Loadings-based Geneset Enrichment ===\n")
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    organism <- config$global$organism
+    kegg_org <- get_kegg_organism(organism)
+    org_db <- get_organism_db(organism)
+
+    results <- list()
+
+    # --- DIABLO loadings enrichment ---
+    if (!is.null(integration_res$diablo_results)) {
+        message("Running enrichment on DIABLO loadings...")
+        diablo_dir <- file.path(out_dir, "diablo_loadings")
+        dir.create(diablo_dir, showWarnings = FALSE)
+
+        results$diablo <- run_diablo_loadings_enrichment(
+            diablo_results = integration_res$diablo_results,
+            harmonization_res = harmonization_res,
+            organism = organism,
+            kegg_org = kegg_org,
+            org_db = org_db,
+            out_dir = diablo_dir,
+            top_n = top_n
+        )
+    }
+
+    # --- MOFA2 weights enrichment ---
+    if (!is.null(integration_res$mofa_results)) {
+        message("Running enrichment on MOFA2 weights...")
+        mofa_dir <- file.path(out_dir, "mofa_loadings")
+        dir.create(mofa_dir, showWarnings = FALSE)
+
+        results$mofa <- run_mofa_weights_enrichment(
+            mofa_results = integration_res$mofa_results,
+            harmonization_res = harmonization_res,
+            organism = organism,
+            kegg_org = kegg_org,
+            org_db = org_db,
+            out_dir = mofa_dir,
+            top_n = top_n
+        )
+    }
+
+    message("Loadings enrichment complete")
+    results
+}
+
+
+#' Run enrichment on DIABLO top loadings per component
+run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
+                                            organism, kegg_org, org_db,
+                                            out_dir, top_n = 50) {
+
+    top_features <- diablo_results$top_features
+    if (is.null(top_features) || length(top_features) == 0) return(NULL)
+
+    all_results <- list()
+
+    for (om in names(top_features)) {
+        if (om == "Y") next  # Skip outcome
+        feat_df <- top_features[[om]]
+        if (is.null(feat_df) || nrow(feat_df) == 0) next
+
+        # Gene-based omics only (not metabolomics for now)
+        if (om == "metabolomics") {
+            message("  Skipping metabolomics loadings enrichment (compound-based)")
+            next
+        }
+
+        components <- unique(feat_df$component)
+        for (comp in components) {
+            comp_feats <- feat_df[feat_df$component == comp, ]
+            comp_feats <- comp_feats[order(-comp_feats$abs_loading), ]
+            top_feat_ids <- head(comp_feats$feature, top_n)
+
+            label <- paste0("DIABLO_", om, "_", comp)
+            message("  ", label, ": ", length(top_feat_ids), " features")
+
+            enrich_df <- enrich_feature_list(
+                feature_ids = top_feat_ids,
+                omics_type = om,
+                harmonization_res = harmonization_res,
+                organism = organism,
+                kegg_org = kegg_org,
+                org_db = org_db
+            )
+
+            if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
+                enrich_df$method <- "DIABLO"
+                enrich_df$omics <- om
+                enrich_df$component <- comp
+                all_results[[label]] <- enrich_df
+
+                write.csv(enrich_df,
+                          file.path(out_dir, paste0(label, "_enrichment.csv")),
+                          row.names = FALSE)
+
+                # Barplot
+                plot_loadings_enrichment_barplot(
+                    enrich_df, label,
+                    file.path(out_dir, paste0(label, "_enrichment.png"))
+                )
+            }
+        }
+    }
+
+    if (length(all_results) == 0) return(NULL)
+    combined <- do.call(rbind, all_results)
+    rownames(combined) <- NULL
+    write.csv(combined, file.path(out_dir, "diablo_loadings_enrichment_all.csv"),
+              row.names = FALSE)
+    combined
+}
+
+
+#' Run enrichment on MOFA2 top weights per factor
+run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
+                                         organism, kegg_org, org_db,
+                                         out_dir, top_n = 50) {
+
+    weights <- mofa_results$weights
+    if (is.null(weights) || length(weights) == 0) return(NULL)
+
+    all_results <- list()
+
+    for (view in names(weights)) {
+        if (view == "metabolomics") {
+            message("  Skipping metabolomics weights enrichment (compound-based)")
+            next
+        }
+
+        w <- weights[[view]]
+        n_factors <- min(ncol(w), 3)  # Top 3 factors
+
+        for (k in seq_len(n_factors)) {
+            factor_name <- colnames(w)[k]
+            loadings <- w[, k]
+            ord <- order(abs(loadings), decreasing = TRUE)
+            top_feat_ids <- rownames(w)[head(ord, top_n)]
+
+            label <- paste0("MOFA_", view, "_", factor_name)
+            message("  ", label, ": ", length(top_feat_ids), " features")
+
+            enrich_df <- enrich_feature_list(
+                feature_ids = top_feat_ids,
+                omics_type = view,
+                harmonization_res = harmonization_res,
+                organism = organism,
+                kegg_org = kegg_org,
+                org_db = org_db
+            )
+
+            if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
+                enrich_df$method <- "MOFA2"
+                enrich_df$view <- view
+                enrich_df$factor <- factor_name
+                all_results[[label]] <- enrich_df
+
+                write.csv(enrich_df,
+                          file.path(out_dir, paste0(label, "_enrichment.csv")),
+                          row.names = FALSE)
+
+                plot_loadings_enrichment_barplot(
+                    enrich_df, label,
+                    file.path(out_dir, paste0(label, "_enrichment.png"))
+                )
+            }
+        }
+    }
+
+    if (length(all_results) == 0) return(NULL)
+    combined <- do.call(rbind, all_results)
+    rownames(combined) <- NULL
+    write.csv(combined, file.path(out_dir, "mofa_weights_enrichment_all.csv"),
+              row.names = FALSE)
+    combined
+}
+
+
+#' Run ORA enrichment on a list of feature IDs
+#'
+#' Maps feature IDs to ENTREZ IDs and runs KEGG ORA via clusterProfiler.
+#' Handles GENE_N synthetic IDs from the harmonized MAE by translating
+#' them to WBGene IDs via the gene_protein_mapping table.
+enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
+                                 organism, kegg_org, org_db) {
+
+    if (is.null(kegg_org) || is.null(org_db)) return(NULL)
+
+    # Translate GENE_N synthetic IDs to gene_id (WBGene) for ENTREZ mapping.
+    # For both transcriptomics and proteomics, we use gene_id since that maps
+    # to ENTREZ IDs. Proteomics protein_ids (UniProt) don't map cleanly.
+    resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res,
+                                        "transcriptomics")  # always use gene_id
+
+    # Map resolved gene IDs to ENTREZ IDs (always treat as transcriptomics
+    # since we resolved to gene_id/WBGene above)
+    id_map <- tryCatch(
+        map_feature_ids_to_entrez(
+            de_tables = list(dummy = data.frame(feature_id = resolved_ids,
+                                                 stringsAsFactors = FALSE)),
+            omics_type = "transcriptomics",
+            harmonization_res = harmonization_res,
+            org_db = org_db
+        ),
+        error = function(e) {
+            message("    ID mapping failed: ", e$message)
+            NULL
+        }
+    )
+
+    if (is.null(id_map) || nrow(id_map) == 0) return(NULL)
+
+    entrez_ids <- unique(id_map$ENTREZID[!is.na(id_map$ENTREZID)])
+    if (length(entrez_ids) < 3) return(NULL)
+
+    # Build universe from all measured genes (use transcriptomics universe
+    # since gene_id is the common namespace for enrichment)
+    universe_entrez <- NULL
+    pre_data <- harmonization_res$inputs[["transcriptomics"]]
+    if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
+        all_features <- rownames(pre_data$expr_work)
+        all_id_map <- tryCatch(
+            map_feature_ids_to_entrez(
+                de_tables = list(all = data.frame(feature_id = all_features,
+                                                   stringsAsFactors = FALSE)),
+                omics_type = "transcriptomics",
+                harmonization_res = harmonization_res,
+                org_db = org_db
+            ),
+            error = function(e) NULL
+        )
+        if (!is.null(all_id_map)) {
+            universe_entrez <- unique(all_id_map$ENTREZID[!is.na(all_id_map$ENTREZID)])
+        }
+    }
+
+    message("    ORA (clusterProfiler): ", length(entrez_ids), " query ENTREZ IDs",
+            if (!is.null(universe_entrez)) paste0(" / ", length(universe_entrez), " universe"))
+
+    # Run KEGG ORA via clusterProfiler (handles KEGG ID conversion internally)
+    enrich_res <- tryCatch({
+        clusterProfiler::enrichKEGG(
+            gene = entrez_ids,
+            organism = kegg_org,
+            keyType = "ncbi-geneid",
+            universe = universe_entrez,
+            pvalueCutoff = 0.1,
+            minGSSize = 5,
+            maxGSSize = 500
+        )
+    }, error = function(e) {
+        message("    clusterProfiler::enrichKEGG failed: ", e$message)
+        NULL
+    })
+
+    if (is.null(enrich_res)) return(NULL)
+
+    df <- as.data.frame(enrich_res)
+    if (nrow(df) == 0) return(NULL)
+
+    # Standardize column names to match expected format
+    result <- data.frame(
+        pathway = df$Description,
+        ID = df$ID,
+        pvalue = df$pvalue,
+        padj = df$p.adjust,
+        GeneRatio = df$GeneRatio,
+        setSize = df$Count,
+        stringsAsFactors = FALSE
+    )
+    result <- result[order(result$pvalue), ]
+    message("    Found ", nrow(result), " enriched KEGG pathways")
+    result
+}
+
+
+#' Resolve GENE_N synthetic IDs to original feature IDs
+#'
+#' The harmonized MAE uses GENE_N IDs (where N = row in gene_protein_mapping).
+#' This function translates them back to WBGene (for transcriptomics) or
+#' protein IDs (for proteomics).
+resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
+    gpm <- harmonization_res$gene_protein_mapping
+    if (is.null(gpm)) return(feature_ids)
+
+    # Check if IDs look like GENE_N
+    is_gene_n <- grepl("^GENE_\\d+$", feature_ids)
+    if (!any(is_gene_n)) return(feature_ids)
+
+    # Build lookup: GENE_N -> original ID
+    if (omics_type == "transcriptomics") {
+        id_col <- "gene_id"
+    } else if (omics_type == "proteomics") {
+        id_col <- "protein_id"
+    } else {
+        return(feature_ids)  # metabolomics uses feature_N, not GENE_N
+    }
+
+    lookup <- setNames(gpm[[id_col]], paste0("GENE_", seq_len(nrow(gpm))))
+
+    resolved <- feature_ids
+    resolved[is_gene_n] <- lookup[feature_ids[is_gene_n]]
+    resolved <- resolved[!is.na(resolved)]
+
+    n_mapped <- sum(is_gene_n) - sum(is.na(lookup[feature_ids[is_gene_n]]))
+    message("    Resolved ", n_mapped, "/", sum(is_gene_n),
+            " GENE_N IDs to ", id_col, " (", omics_type, ")")
+
+    resolved
+}
+
+
+#' Plot barplot for loadings enrichment
+plot_loadings_enrichment_barplot <- function(enrich_df, title, out_path, top_n = 15) {
+    if (nrow(enrich_df) == 0) return(invisible(NULL))
+
+    df <- enrich_df[order(enrich_df$pvalue), ]
+    df <- df[seq_len(min(top_n, nrow(df))), ]
+
+    df$label <- ifelse(nchar(df$pathway) > 45,
+                        paste0(substr(df$pathway, 1, 42), "..."),
+                        df$pathway)
+    neg_log_p <- -log10(df$pvalue + 1e-300)
+    neg_log_p <- pmin(neg_log_p, 15)
+
+    png(out_path, width = 900, height = 600, res = 120)
+    par(mar = c(5, 15, 3, 2))
+    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
+            las = 1, cex.names = 0.65, col = "steelblue",
+            xlab = "-log10(p-value)",
+            main = paste("Loadings Enrichment:", title))
+    abline(v = -log10(0.05), col = "red", lty = 2)
+    dev.off()
+    message("    Saved: ", out_path)
 }
