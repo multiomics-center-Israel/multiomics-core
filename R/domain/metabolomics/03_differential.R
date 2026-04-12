@@ -222,35 +222,101 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     lfc_threshold <- log2(as.numeric(de_cfg$linear_fc_cutoff %||% 1.5))
     robust_ebayes <- isTRUE(de_cfg$robust_ebayes)
 
-    # Run DE for each row of the contrast table
+    # Run DE — limma fits all contrasts at once (same pattern as proteomics);
+    # t_test / wilcoxon use a per-contrast loop.
     de_tables <- list()
     de_model  <- NULL
+    design          <- NULL
+    contrast_matrix <- NULL
+    contrast_formulas <- NULL
 
-    for (i in seq_len(nrow(contrast_table))) {
-        ctr_name    <- normalize_contrast_name(contrast_table$Contrast_name[i])
-        numerator   <- as.character(contrast_table$Numerator[i])
-        denominator <- as.character(contrast_table$Denominator[i])
-
-        message("metabolomics DE [", method, "]: ", ctr_name,
-                " (", numerator, " vs ", denominator, ")")
-
-        # Build safe contrast string for limma (makeContrasts needs R-safe names)
-        contrast_str <- paste(make.names(numerator), "-", make.names(denominator))
-
-        tbl <- switch(method,
-            limma    = de_limma(mat_for_test, condition, contrast_str,
-                                lfc_threshold = lfc_threshold,
-                                robust = robust_ebayes),
-            t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
-            wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
-        )
-
-        # Capture limma model from first contrast
-        if (method == "limma" && is.null(de_model)) {
-            de_model <- attr(tbl, "fit")
+    if (method == "limma") {
+        if (!requireNamespace("limma", quietly = TRUE)) {
+            stop("Package 'limma' is required for limma DE.")
         }
 
-        de_tables[[ctr_name]] <- tbl
+        # -- Validate Factor column (same pattern as proteomics) --
+        factor_col <- unique(contrast_table$Factor)
+        if (length(factor_col) != 1 || factor_col != condition_col) {
+            stop(sprintf(
+                "All contrasts must use the same Factor column matching condition_col. Got Factor='%s', expected='%s'",
+                paste(factor_col, collapse = ", "), condition_col
+            ))
+        }
+
+        # -- Safe factor levels (same as proteomics) --
+        raw_levels  <- levels(condition)
+        safe_levels <- make.names(raw_levels)
+        levels(condition) <- safe_levels
+
+        # -- Design matrix (once) --
+        design <- stats::model.matrix(~ 0 + condition)
+        colnames(design) <- safe_levels
+
+        # -- All contrast formulas at once (same API as proteomics) --
+        safe_num <- make.names(contrast_table$Numerator)
+        safe_den <- make.names(contrast_table$Denominator)
+        contrast_names <- vapply(contrast_table$Contrast_name,
+                                 normalize_contrast_name, character(1))
+        contrast_formulas <- setNames(
+            paste(safe_num, safe_den, sep = " - "),
+            contrast_names
+        )
+
+        contrast_matrix <- limma::makeContrasts(contrasts = contrast_formulas,
+                                                 levels = design)
+        colnames(contrast_matrix) <- names(contrast_formulas)
+
+        # -- Defensive NA imputation --
+        mat_imp <- mat_for_test
+        for (i in seq_len(nrow(mat_imp))) {
+            nas <- is.na(mat_imp[i, ])
+            if (any(nas)) mat_imp[i, nas] <- mean(mat_imp[i, !nas], na.rm = TRUE)
+        }
+
+        # -- Single fit for all contrasts --
+        fit  <- limma::lmFit(mat_imp, design)
+        fit2 <- limma::contrasts.fit(fit, contrast_matrix)
+        # treat() tests against an LFC threshold (different null hypothesis
+        # from eBayes); intentionally kept for metabolomics
+        fit2 <- limma::treat(fit2, lfc = lfc_threshold, robust = robust_ebayes)
+        de_model <- fit2
+
+        # -- Extract per-contrast tables --
+        for (cn in colnames(contrast_matrix)) {
+            message("metabolomics DE [limma]: ", cn)
+            tt <- limma::topTreat(fit2, coef = cn, number = Inf, sort.by = "none")
+            de_tables[[cn]] <- data.frame(
+                feature_id = rownames(tt),
+                Contrast   = cn,
+                logFC      = tt$logFC,
+                AveExpr    = tt$AveExpr,
+                t          = tt$t,
+                P.Value    = tt$P.Value,
+                adj.P.Val  = tt$adj.P.Val,
+                # B placeholder — treat() does not produce the B-statistic
+                # (log-odds of DE); set to NA for schema compatibility
+                B          = NA_real_,
+                stringsAsFactors = FALSE
+            )
+        }
+    } else {
+        # t_test / wilcoxon: per-contrast loop
+        for (i in seq_len(nrow(contrast_table))) {
+            ctr_name    <- normalize_contrast_name(contrast_table$Contrast_name[i])
+            numerator   <- as.character(contrast_table$Numerator[i])
+            denominator <- as.character(contrast_table$Denominator[i])
+
+            message("metabolomics DE [", method, "]: ", ctr_name,
+                    " (", numerator, " vs ", denominator, ")")
+
+            tbl <- switch(method,
+                t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
+                wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
+            )
+            tbl$Contrast <- ctr_name
+            de_tables[[ctr_name]] <- tbl
+        }
     }
 
     # Build wide summary_df
@@ -260,10 +326,13 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
 
     list(
-        summary_df = summary_df,
-        method     = method,
-        de_tables  = de_tables,
-        de_model   = de_model
+        summary_df        = summary_df,
+        method            = method,
+        de_tables         = de_tables,
+        de_model          = de_model,
+        design            = design,
+        contrast_formulas = contrast_formulas,
+        contrast_matrix   = contrast_matrix
     )
 }
 
