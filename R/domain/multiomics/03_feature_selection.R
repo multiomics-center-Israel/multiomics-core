@@ -18,7 +18,7 @@ select_features_for_integration <- function(mae, de_results = NULL, config) {
     per_omics_n <- cfg$per_omics %||% list()
     min_var_percentile <- cfg$min_var_percentile %||% 50
 
-    omics <- names(MultiAssayExperiment::experiments(mae))
+    omics <- names(mae@ExperimentList)
     selected_features <- list()
     selection_stats <- list()
 
@@ -28,34 +28,9 @@ select_features_for_integration <- function(mae, de_results = NULL, config) {
         # Resolve per-omics top_n (fall back to global default)
         top_n <- per_omics_n[[om]] %||% default_top_n
 
-        # Normalize DE result to a flat data frame (feature_id, logFC, padj)
-        # before passing to select_features_by_de(). Upstream DE objects are
-        # structured lists (RNA: list(dds, tables); prot/metab: list(summary_df,
-        # ...)), not flat data frames, so normalization is always required.
-        de_flat <- NULL
-        if (method %in% c("de", "combined") && !is.null(de_results[[om]])) {
-            de_flat <- tryCatch(
-                normalize_de_for_concordance(de_results[[om]], omics_type = om),
-                error = function(e) {
-                    warning(
-                        "Could not normalize DE results for ", om, ": ", e$message,
-                        ". Falling back to variance-based selection."
-                    )
-                    NULL
-                }
-            )
-        }
-
-        if (method == "de" && !is.null(de_flat)) {
+        if (method == "de" && !is.null(de_results[[om]])) {
             # Select top DE features
-            sel <- select_features_by_de(expr, de_flat, top_n)
-            selected_features[[om]] <- sel$features
-            selection_stats[[om]] <- sel$stats
-
-        } else if (method == "de" && is.null(de_flat)) {
-            # DE normalization failed or no DE results -- fall back to variance
-            message(sprintf("%s: no usable DE results; falling back to variance selection", om))
-            sel <- select_features_by_variance(expr, top_n, min_var_percentile)
+            sel <- select_features_by_de(expr, de_results[[om]], top_n)
             selected_features[[om]] <- sel$features
             selection_stats[[om]] <- sel$stats
 
@@ -67,8 +42,8 @@ select_features_for_integration <- function(mae, de_results = NULL, config) {
 
         } else if (method == "combined") {
             # Combine DE and variance
-            sel_de <- if (!is.null(de_flat)) {
-                select_features_by_de(expr, de_flat, top_n)$features
+            sel_de <- if (!is.null(de_results[[om]])) {
+                select_features_by_de(expr, de_results[[om]], top_n)$features
             } else character(0)
 
             sel_var <- select_features_by_variance(expr, top_n, min_var_percentile)$features
@@ -188,7 +163,7 @@ select_features_by_variance <- function(expr, top_n, min_var_percentile = 50) {
 #' @return Subsetted MAE
 subset_mae_by_features <- function(mae, selected_features) {
 
-    omics <- names(MultiAssayExperiment::experiments(mae))
+    omics <- names(mae@ExperimentList)
 
     for (om in omics) {
         if (om %in% names(selected_features)) {

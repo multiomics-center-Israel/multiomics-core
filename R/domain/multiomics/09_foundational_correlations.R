@@ -706,6 +706,7 @@ compute_sample_rank_correlations <- function(harmonized, common_samples, fc) {
     # Pairwise sample correlations per omics
     pairs <- utils::combn(omics_names, 2, simplify = FALSE)
 
+    n_perm <- 999
     sample_cors <- lapply(pairs, function(pair) {
         omics1 <- pair[1]
         omics2 <- pair[2]
@@ -713,28 +714,42 @@ compute_sample_rank_correlations <- function(harmonized, common_samples, fc) {
         mat1 <- omics_matrices[[omics1]]
         mat2 <- omics_matrices[[omics2]]
 
-        # Correlate sample-sample distances
+        # Correlate sample-sample distance matrices
         dist1 <- as.matrix(dist(t(mat1)))
         dist2 <- as.matrix(dist(t(mat2)))
 
-        mantel_cor <- cor(as.vector(dist1), as.vector(dist2), method = fc$correlation_method)
+        obs_r <- cor(as.vector(dist1), as.vector(dist2), method = fc$correlation_method)
+
+        # Permutation test for significance
+        n_s <- ncol(mat1)
+        perm_r <- vapply(seq_len(n_perm), function(i) {
+            idx <- sample(n_s)
+            cor(as.vector(dist1), as.vector(dist2[idx, idx]), method = fc$correlation_method)
+        }, numeric(1))
+        p_value <- (sum(perm_r >= obs_r) + 1) / (n_perm + 1)
 
         list(
             pair = paste(pair, collapse = "_vs_"),
-            mantel_correlation = mantel_cor
+            mantel_correlation = obs_r,
+            mantel_pvalue = p_value
         )
     })
 
     # Summary
     mantel_cors <- sapply(sample_cors, function(x) x$mantel_correlation)
+    mantel_pvals <- sapply(sample_cors, function(x) x$mantel_pvalue)
     names(mantel_cors) <- sapply(sample_cors, function(x) x$pair)
+    names(mantel_pvals) <- names(mantel_cors)
 
     message("  Sample distance correlations (Mantel): ",
-            paste(names(mantel_cors), "=", round(mantel_cors, 3), collapse = ", "))
+            paste(names(mantel_cors), "=", round(mantel_cors, 3),
+                  " (p=", format(mantel_pvals, digits = 3), ")", collapse = ", "))
 
     list(
         mantel_correlations = mantel_cors,
-        details = sample_cors
+        mantel_pvalues = mantel_pvals,
+        details = sample_cors,
+        distance_matrices = omics_matrices
     )
 }
 
@@ -1097,6 +1112,154 @@ save_sample_concordance_results <- function(results, out_dir) {
 
 #' Plot sample concordance
 plot_sample_concordance <- function(results, metadata, out_dir) {
+    # Plot 0: Mantel test — per-omics sample correlation heatmaps with
+    # dendrograms, plus a summary panel with test statistics
+    sc <- results$sample_rank_cors
+    if (!is.null(sc) && !is.null(sc$mantel_correlations)) {
+        mantel_r <- sc$mantel_correlations
+        mantel_p <- sc$mantel_pvalues
+
+        # Build symmetric matrix of Mantel correlations
+        pair_names <- names(mantel_r)
+        omics_names <- unique(unlist(strsplit(pair_names, "_vs_")))
+        n_omics <- length(omics_names)
+        mat <- matrix(1, nrow = n_omics, ncol = n_omics,
+                       dimnames = list(omics_names, omics_names))
+        pmat <- matrix(0, nrow = n_omics, ncol = n_omics,
+                        dimnames = list(omics_names, omics_names))
+
+        for (i in seq_along(pair_names)) {
+            parts <- strsplit(pair_names[i], "_vs_")[[1]]
+            mat[parts[1], parts[2]] <- mantel_r[i]
+            mat[parts[2], parts[1]] <- mantel_r[i]
+            pmat[parts[1], parts[2]] <- mantel_p[i]
+            pmat[parts[2], parts[1]] <- mantel_p[i]
+        }
+
+        dir.create(file.path(out_dir, "tables"), showWarnings = FALSE, recursive = TRUE)
+
+        # --- Per-omics sample distance/correlation heatmaps with dendrograms ---
+        dist_mats <- sc$distance_matrices
+        if (!is.null(dist_mats) && length(dist_mats) > 0) {
+            for (om_name in names(dist_mats)) {
+                om_mat <- dist_mats[[om_name]]
+                # Compute sample-sample correlation matrix
+                cor_mat <- cor(om_mat, method = "spearman")
+                # Hierarchical clustering for dendrogram
+                hc <- hclust(as.dist(1 - cor_mat), method = "ward.D2")
+
+                out_file <- file.path(out_dir, "plots",
+                                       paste0("mantel_corr_heatmap_", om_name, ".png"))
+
+                if (requireNamespace("ComplexHeatmap", quietly = TRUE)) {
+                    col_fun <- circlize::colorRamp2(
+                        c(-1, 0, 1), c("steelblue", "white", "firebrick")
+                    )
+                    ht <- ComplexHeatmap::Heatmap(
+                        cor_mat,
+                        name = "Spearman r",
+                        col = col_fun,
+                        cluster_rows = hc,
+                        cluster_columns = hc,
+                        show_row_dend = TRUE,
+                        show_column_dend = TRUE,
+                        row_dend_width = grid::unit(25, "mm"),
+                        column_dend_height = grid::unit(25, "mm"),
+                        row_names_gp = grid::gpar(fontsize = 8),
+                        column_names_gp = grid::gpar(fontsize = 8),
+                        column_title = paste0(om_name, " — Sample Correlation Matrix"),
+                        column_title_gp = grid::gpar(fontsize = 12, fontface = "bold"),
+                        cell_fun = function(j, i, x, y, width, height, fill) {
+                            grid::grid.text(
+                                sprintf("%.2f", cor_mat[i, j]),
+                                x, y, gp = grid::gpar(fontsize = 6)
+                            )
+                        }
+                    )
+                    n_samples <- ncol(cor_mat)
+                    plot_size <- max(6, 3 + n_samples * 0.35)
+                    png(out_file, width = plot_size, height = plot_size,
+                        units = "in", res = 150)
+                    ComplexHeatmap::draw(ht)
+                    dev.off()
+                } else {
+                    # Fallback: pheatmap
+                    png(out_file, width = 8, height = 8, units = "in", res = 150)
+                    pheatmap::pheatmap(
+                        cor_mat,
+                        color = colorRampPalette(c("steelblue", "white", "firebrick"))(100),
+                        clustering_method = "ward.D2",
+                        display_numbers = TRUE,
+                        number_format = "%.2f",
+                        fontsize_number = 6,
+                        fontsize_row = 8, fontsize_col = 8,
+                        main = paste0(om_name, " — Sample Correlation Matrix")
+                    )
+                    dev.off()
+                }
+                message("  Saved ", om_name, " correlation heatmap: ", out_file)
+            }
+        }
+
+        # --- Mantel test summary heatmap (existing tile plot, enhanced) ---
+        df_tile <- expand.grid(Omics1 = omics_names, Omics2 = omics_names,
+                               stringsAsFactors = FALSE)
+        df_tile$r <- mapply(function(o1, o2) mat[o1, o2], df_tile$Omics1, df_tile$Omics2)
+        df_tile$p <- mapply(function(o1, o2) pmat[o1, o2], df_tile$Omics1, df_tile$Omics2)
+        df_tile$label <- ifelse(
+            df_tile$Omics1 == df_tile$Omics2, "1.000",
+            sprintf("%.3f\n(p=%s)", df_tile$r,
+                    ifelse(df_tile$p < 0.001, "<0.001", format(round(df_tile$p, 3), nsmall = 3)))
+        )
+
+        # Build test results text for annotation
+        sig_labels <- ifelse(mantel_p < 0.001, "***",
+                      ifelse(mantel_p < 0.01, "**",
+                      ifelse(mantel_p < 0.05, "*", "ns")))
+        results_text <- paste(
+            pair_names, ": r =", sprintf("%.3f", mantel_r),
+            ", p =", sprintf("%.4f", mantel_p), sig_labels,
+            collapse = "\n"
+        )
+
+        p0 <- ggplot2::ggplot(df_tile, ggplot2::aes(x = Omics1, y = Omics2, fill = r)) +
+            ggplot2::geom_tile(color = "white", linewidth = 1) +
+            ggplot2::geom_text(ggplot2::aes(label = label), size = 4, color = "black") +
+            ggplot2::scale_fill_gradient2(
+                low = "steelblue", mid = "white", high = "firebrick",
+                midpoint = 0, limits = c(-1, 1), name = "Mantel r"
+            ) +
+            ggplot2::theme_minimal(base_size = 14) +
+            ggplot2::labs(
+                title = "Sample Distance Concordance (Mantel Test)",
+                subtitle = "Correlation between sample distance matrices (999 permutations)",
+                x = NULL, y = NULL,
+                caption = paste0("Mantel test results:\n", results_text,
+                                 "\nSignificance: *** p<0.001, ** p<0.01, * p<0.05")
+            ) +
+            ggplot2::theme(
+                axis.text.x = ggplot2::element_text(angle = 30, hjust = 1),
+                panel.grid = ggplot2::element_blank(),
+                plot.caption = ggplot2::element_text(hjust = 0, size = 10,
+                                                      face = "italic", lineheight = 1.3)
+            ) +
+            ggplot2::coord_fixed()
+
+        ggplot2::ggsave(file.path(out_dir, "plots", "mantel_test_heatmap.png"),
+                        p0, width = 8, height = 8, dpi = 150)
+        message("  Saved Mantel test heatmap: ", file.path(out_dir, "plots", "mantel_test_heatmap.png"))
+
+        # Save Mantel results as CSV
+        mantel_df <- data.frame(
+            pair = pair_names,
+            mantel_r = mantel_r,
+            mantel_p = mantel_p,
+            stringsAsFactors = FALSE
+        )
+        write.csv(mantel_df, file.path(out_dir, "tables", "mantel_test_results.csv"),
+                  row.names = FALSE)
+    }
+
     # Plot 1: Clustering consistency bar plot
     if (!is.null(results$clustering_consistency)) {
         df <- data.frame(

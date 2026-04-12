@@ -207,7 +207,7 @@ mod_multiomics_commentary <- function(harmonization_res,
     commentary_dir <- file.path(out_dir, "commentary")
 
     commentary_tbl <- tryCatch({
-        generate_all_commentary_multiomics(
+        generate_all_commentary(
             figures_tbl = figures_tbl,
             config = config,
             mae = mae,

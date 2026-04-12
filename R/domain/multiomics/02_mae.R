@@ -1,7 +1,7 @@
 #' Build MultiAssayExperiment from preprocessed omics data
 #'
 #' Creates a unified MAE object with:
-#' - Aligned expression matrices (features in rows, samples in columns)
+#' - Aligned expression matrices (samples in rows, features in columns)
 #' - Sample metadata (colData)
 #' - Feature metadata per assay (rowRanges/rowData)
 #'
@@ -118,17 +118,8 @@ build_mae <- function(inputs, config, gene_protein_mapping = NULL) {
         } else {
             if (!identical(rownames(rd), rownames(expr))) {
                 # Align row_data to expression
-                idx <- match(rownames(expr), rownames(rd))
-                if (all(is.na(idx))) {
-                    warning("No matching features between row_data and expression for '", om,
-                            "'; creating minimal row_data")
-                    rd <- data.frame(feature_id = rownames(expr),
-                                     row.names = rownames(expr),
-                                     stringsAsFactors = FALSE)
-                } else {
-                    rd <- rd[idx, , drop = FALSE]
-                    rownames(rd) <- rownames(expr)
-                }
+                rd <- rd[match(rownames(expr), rownames(rd)), , drop = FALSE]
+                rownames(rd) <- rownames(expr)
             }
         }
 
@@ -216,6 +207,12 @@ harmonize_features_via_mapping <- function(mae, gene_protein_mapping) {
                                   symbols, harmonized_ids)
     }
 
+    # Preserve original IDs in rowData before renaming
+    SummarizedExperiment::rowData(rna_subset)$original_id <- rownames(rna_subset)
+    SummarizedExperiment::rowData(prot_subset)$original_id <- rownames(prot_subset)
+    SummarizedExperiment::rowData(rna_subset)$gene_symbol <- map$gene_symbol
+    SummarizedExperiment::rowData(prot_subset)$gene_symbol <- map$gene_symbol
+
     # Update rownames
     rownames(rna_subset) <- harmonized_ids
     rownames(prot_subset) <- harmonized_ids
@@ -230,4 +227,53 @@ harmonize_features_via_mapping <- function(mae, gene_protein_mapping) {
         mapping = map,
         feature_overlap = nrow(map)
     )
+}
+
+
+#' Build a named vector mapping harmonized IDs to display names
+#'
+#' Extracts original_id / gene_symbol from MAE rowData to create a lookup
+#' vector: names are harmonized IDs (GENE_N), values are display names.
+#' For omics without harmonized IDs (e.g. metabolomics), feature_id is used.
+#'
+#' @param mae MultiAssayExperiment object
+#' @return Named character vector (harmonized_id -> display_name)
+build_feature_name_map <- function(mae) {
+    name_map <- character(0)
+
+    for (om in names(mae@ExperimentList)) {
+        rd <- SummarizedExperiment::rowData(mae[[om]])
+        feat_ids <- rownames(rd)
+
+        # Prefer gene_symbol, fall back to original_id, Name (metabolomics), then feature_id
+        if ("gene_symbol" %in% colnames(rd)) {
+            display <- as.character(rd$gene_symbol)
+            # Fall back to original_id where symbol is missing
+            if ("original_id" %in% colnames(rd)) {
+                missing <- is.na(display) | display == ""
+                display[missing] <- as.character(rd$original_id[missing])
+            }
+        } else if ("original_id" %in% colnames(rd)) {
+            display <- as.character(rd$original_id)
+        } else if ("Name" %in% colnames(rd)) {
+            display <- as.character(rd$Name)
+        } else if ("Metabolite" %in% colnames(rd)) {
+            display <- as.character(rd$Metabolite)
+        } else if ("HMDB" %in% colnames(rd)) {
+            display <- as.character(rd$HMDB)
+        } else if ("feature_id" %in% colnames(rd)) {
+            display <- as.character(rd$feature_id)
+        } else {
+            display <- feat_ids
+        }
+
+        # Final fallback: use rownames for any remaining NAs
+        still_missing <- is.na(display) | display == ""
+        display[still_missing] <- feat_ids[still_missing]
+
+        om_map <- setNames(display, feat_ids)
+        name_map <- c(name_map, om_map)
+    }
+
+    name_map
 }
