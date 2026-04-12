@@ -504,6 +504,22 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
 
     de_merged$concordant <- sign(de_merged$rna_log2FC) == sign(de_merged$protein_log2FC)
 
+    # Annotate transcription factor status (dorothea)
+    de_merged <- tryCatch({
+        regulons <- get_tf_regulons("dorothea")
+        if (!is.null(regulons)) {
+            tf_names <- toupper(unique(regulons$tf))
+            de_merged$is_transcription_factor <- toupper(de_merged$gene_symbol) %in% tf_names
+            n_tf <- sum(de_merged$is_transcription_factor, na.rm = TRUE)
+            message("  ", n_tf, "/", nrow(de_merged),
+                    " RNA-protein concordance genes are known TFs")
+        }
+        de_merged
+    }, error = function(e) {
+        message("  TF annotation skipped: ", e$message)
+        de_merged
+    })
+
     # Compute correlations
     is_sig_union <- is_sig_rna | is_sig_prot
 

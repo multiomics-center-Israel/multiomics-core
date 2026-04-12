@@ -532,7 +532,31 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         return(entrez_df)
 
     } else if (omics_type == "proteomics") {
-        # Protein IDs (UniProt) -> WBGene -> ENTREZID via row_data
+        # Try direct UniProt -> ENTREZID mapping first (works for most organisms)
+        entrez_df <- tryCatch({
+            res <- AnnotationDbi::mapIds(
+                org_db,
+                keys = all_ids,
+                keytype = "UNIPROT",
+                column = "ENTREZID",
+                multiVals = "first"
+            )
+            df <- data.frame(
+                feature_id = names(res),
+                ENTREZID = as.character(res),
+                stringsAsFactors = FALSE
+            )
+            df <- df[!is.na(df$ENTREZID), ]
+            if (nrow(df) > 0) {
+                message("    Mapped ", nrow(df), "/", length(all_ids),
+                        " UniProt IDs to ENTREZID directly")
+            }
+            df
+        }, error = function(e) NULL)
+
+        if (!is.null(entrez_df) && nrow(entrez_df) > 0) return(entrez_df)
+
+        # Fallback: try via row_data WormBase/gene_id columns (C. elegans etc.)
         prot_pre <- harmonization_res$inputs$proteomics
         if (is.null(prot_pre) || is.null(prot_pre$row_data)) {
             message("    No proteomics row_data for ID mapping")
@@ -546,7 +570,6 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
             return(NULL)
         }
 
-        # Build UniProt -> WBGene mapping
         prot_ids <- rownames(prot_pre$expr_work)
         wb_ids <- row_data[[wbgene_col[1]]]
         prot_to_wb <- data.frame(
@@ -558,12 +581,10 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
 
         if (nrow(prot_to_wb) == 0) return(NULL)
 
-        # Map WBGene -> ENTREZID
-        wb_unique <- unique(prot_to_wb$WBGene)
         mapped <- tryCatch({
             res <- AnnotationDbi::mapIds(
                 org_db,
-                keys = wb_unique,
+                keys = unique(prot_to_wb$WBGene),
                 keytype = "ENSEMBL",
                 column = "ENTREZID",
                 multiVals = "first"
@@ -987,11 +1008,17 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 get_organism_db <- function(organism) {
     db_map <- list(
         c_elegans = "org.Ce.eg.db",
+        "Caenorhabditis elegans" = "org.Ce.eg.db",
         human = "org.Hs.eg.db",
+        "Homo sapiens" = "org.Hs.eg.db",
         mouse = "org.Mm.eg.db",
+        "Mus musculus" = "org.Mm.eg.db",
         rat = "org.Rn.eg.db",
+        "Rattus norvegicus" = "org.Rn.eg.db",
         zebrafish = "org.Dr.eg.db",
-        drosophila = "org.Dm.eg.db"
+        "Danio rerio" = "org.Dr.eg.db",
+        drosophila = "org.Dm.eg.db",
+        "Drosophila melanogaster" = "org.Dm.eg.db"
     )
 
     pkg <- db_map[[organism]]
@@ -1013,11 +1040,17 @@ get_organism_db <- function(organism) {
 get_kegg_organism <- function(organism) {
     kegg_map <- list(
         c_elegans = "cel",
+        "Caenorhabditis elegans" = "cel",
         human = "hsa",
+        "Homo sapiens" = "hsa",
         mouse = "mmu",
+        "Mus musculus" = "mmu",
         rat = "rno",
+        "Rattus norvegicus" = "rno",
         zebrafish = "dre",
-        drosophila = "dme"
+        "Danio rerio" = "dre",
+        drosophila = "dme",
+        "Drosophila melanogaster" = "dme"
     )
     kegg_map[[organism]]
 }
@@ -1028,6 +1061,8 @@ get_kegg_organism <- function(organism) {
 #' Tries clusterProfiler::gseKEGG, falls back to ORA if unavailable.
 run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
     # Try clusterProfiler GSEA first
+    # Use lenient cutoff (1.0) to retrieve all results, then filter manually
+    # so we can fall back from padj to pvalue when padj is too strict
     gsea_res <- tryCatch({
         de_mapped$rank_stat <- -log10(de_mapped$pvalue + 1e-300) * sign(de_mapped$log2fc)
         de_mapped <- de_mapped[order(-de_mapped$rank_stat), ]
@@ -1039,12 +1074,12 @@ run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
             keyType = "kegg",
             minGSSize = min_gs,
             maxGSSize = max_gs,
-            pvalueCutoff = pval_cutoff,
+            pvalueCutoff = 1.0,
             verbose = FALSE
         )
         if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
             df <- as.data.frame(res)
-            return(data.frame(
+            out <- data.frame(
                 pathway = df$Description,
                 ID = df$ID,
                 pvalue = df$pvalue,
@@ -1052,7 +1087,16 @@ run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
                 NES = df$NES,
                 setSize = df$setSize,
                 stringsAsFactors = FALSE
-            ))
+            )
+            # Filter: prefer padj, fall back to pvalue < 0.05
+            padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
+            if (nrow(padj_hits) > 0) return(padj_hits)
+            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+            if (nrow(pval_hits) > 0) {
+                message("    GSEA: padj cutoff too strict, using pvalue < 0.05 (",
+                        nrow(pval_hits), " pathways)")
+                return(pval_hits)
+            }
         }
         NULL
     }, error = function(e) {
@@ -1072,7 +1116,7 @@ run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
 #'
 #' Tries clusterProfiler::enrichKEGG, falls back to Fisher's exact test.
 run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
-    # Significant genes (using KEGG IDs)
+    # Significant genes: prefer padj < 0.05, fall back to pvalue < 0.05
     sig_genes <- de_mapped$KEGG_ID[!is.na(de_mapped$padj) & de_mapped$padj < 0.05]
     all_genes <- unique(de_mapped$KEGG_ID[!is.na(de_mapped$KEGG_ID)])
 
@@ -1083,7 +1127,7 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
 
     if (length(sig_genes) < 5) return(NULL)
 
-    # Try clusterProfiler first
+    # Try clusterProfiler first — use lenient cutoff, filter manually after
     ora_res <- tryCatch({
         res <- clusterProfiler::enrichKEGG(
             gene = sig_genes,
@@ -1092,11 +1136,11 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
             keyType = "kegg",
             minGSSize = min_gs,
             maxGSSize = max_gs,
-            pvalueCutoff = pval_cutoff
+            pvalueCutoff = 1.0
         )
         if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
             df <- as.data.frame(res)
-            return(data.frame(
+            out <- data.frame(
                 pathway = df$Description,
                 ID = df$ID,
                 pvalue = df$pvalue,
@@ -1104,7 +1148,16 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
                 GeneRatio = df$GeneRatio,
                 setSize = df$Count,
                 stringsAsFactors = FALSE
-            ))
+            )
+            # Filter: prefer padj, fall back to pvalue < 0.05
+            padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
+            if (nrow(padj_hits) > 0) return(padj_hits)
+            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+            if (nrow(pval_hits) > 0) {
+                message("    ORA: padj cutoff too strict, using pvalue < 0.05 (",
+                        nrow(pval_hits), " pathways)")
+                return(pval_hits)
+            }
         }
         NULL
     }, error = function(e) {
@@ -1266,8 +1319,8 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # Merge pathway p-values for meta-analysis
     merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics)
 
-    # Combine p-values using Fisher's method (only for pathways with >= 2 p-values)
-    meta_results <- fisher_combined_pvalues(merged_pathways)
+    # Combine p-values using Stouffer's method (only for pathways with >= 2 p-values)
+    meta_results <- stouffer_combined_pvalues(merged_pathways)
 
     # Sort by combined p-value
     meta_results <- meta_results[order(meta_results$combined_pval), ]
@@ -1393,7 +1446,7 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
 
 
 #' Combine p-values using Fisher's method
-fisher_combined_pvalues <- function(merged_pathways) {
+stouffer_combined_pvalues <- function(merged_pathways) {
 
     pval_cols <- grep("^pval_", names(merged_pathways), value = TRUE)
 
@@ -1410,14 +1463,21 @@ fisher_combined_pvalues <- function(merged_pathways) {
 
     pval_matrix <- as.matrix(merged_pathways[, pval_cols])
 
-    # Fisher's method: -2 * sum(log(p_i)) ~ chi-squared(2k)
+    # Stouffer's method (Loughin 2004, PMC3653960):
+    #   z_i = Φ^{-1}(p_i)  — small p → large negative z
+    #   Z_S = Σ z_i / sqrt(k)  ~ N(0,1) under H0
+    #   combined p = Φ(Z_S)    — left tail
     combined_pvals <- apply(pval_matrix, 1, function(pvals) {
         pvals <- pvals[!is.na(pvals) & pvals > 0]
         if (length(pvals) == 0) return(NA)
 
-        chi_stat <- -2 * sum(log(pvals))
-        df <- 2 * length(pvals)
-        pchisq(chi_stat, df = df, lower.tail = FALSE)
+        # Clamp to avoid Inf from qnorm(0) or qnorm(1)
+        pvals <- pmax(pvals, .Machine$double.xmin)
+        pvals <- pmin(pvals, 1 - .Machine$double.eps)
+
+        z_scores <- qnorm(pvals)
+        z_combined <- sum(z_scores) / sqrt(length(z_scores))
+        pnorm(z_combined)
     })
 
     n_omics <- rowSums(!is.na(pval_matrix))
@@ -1462,7 +1522,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # Heatmap
     if (requireNamespace("pheatmap", quietly = TRUE)) {
         pheatmap::pheatmap(log_pval_matrix,
-                           cluster_rows = nrow(log_pval_matrix) > 1,
+                           cluster_rows = FALSE,
                            cluster_cols = FALSE,
                            main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
                            color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
@@ -1841,19 +1901,15 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
 
     if (is.null(kegg_org) || is.null(org_db)) return(NULL)
 
-    # Translate GENE_N synthetic IDs to gene_id (WBGene) for ENTREZ mapping.
-    # For both transcriptomics and proteomics, we use gene_id since that maps
-    # to ENTREZ IDs. Proteomics protein_ids (UniProt) don't map cleanly.
-    resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res,
-                                        "transcriptomics")  # always use gene_id
+    # Resolve IDs using the actual omics type
+    resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res, omics_type)
 
-    # Map resolved gene IDs to ENTREZ IDs (always treat as transcriptomics
-    # since we resolved to gene_id/WBGene above)
+    # Map resolved IDs to ENTREZ IDs using the actual omics type
     id_map <- tryCatch(
         map_feature_ids_to_entrez(
             de_tables = list(dummy = data.frame(feature_id = resolved_ids,
                                                  stringsAsFactors = FALSE)),
-            omics_type = "transcriptomics",
+            omics_type = omics_type,
             harmonization_res = harmonization_res,
             org_db = org_db
         ),
@@ -1868,17 +1924,20 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
     entrez_ids <- unique(id_map$ENTREZID[!is.na(id_map$ENTREZID)])
     if (length(entrez_ids) < 3) return(NULL)
 
-    # Build universe from all measured genes (use transcriptomics universe
-    # since gene_id is the common namespace for enrichment)
+    # Build universe from all measured features of the same omics type
     universe_entrez <- NULL
-    pre_data <- harmonization_res$inputs[["transcriptomics"]]
+    om_key <- switch(omics_type,
+                     "transcriptomics" = "transcriptomics",
+                     "proteomics" = "proteomics",
+                     omics_type)
+    pre_data <- harmonization_res$inputs[[om_key]]
     if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
         all_features <- rownames(pre_data$expr_work)
         all_id_map <- tryCatch(
             map_feature_ids_to_entrez(
                 de_tables = list(all = data.frame(feature_id = all_features,
                                                    stringsAsFactors = FALSE)),
-                omics_type = "transcriptomics",
+                omics_type = omics_type,
                 harmonization_res = harmonization_res,
                 org_db = org_db
             ),
