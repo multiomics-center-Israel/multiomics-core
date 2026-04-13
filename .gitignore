@@ -44,6 +44,8 @@ data/
 config/*.yaml
 !config/templates/*.yaml
 
+# bioskills
+bioSkills/
 # Third-party repos (referenced, not bundled)
 claude-scientific-skills/
 
