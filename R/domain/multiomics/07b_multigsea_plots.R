@@ -1028,6 +1028,12 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         de_tables_tmp <- extract_de_tables(de_results[[om]], om, harmonization_res)
         if (!is.null(de_tables_tmp)) all_de_tables[[om]] <- de_tables_tmp
     }
+    # Also extract metabolomics DE tables for per-contrast compound ORA
+    metab_de_tables <- NULL
+    if ("metabolomics" %in% names(de_results)) {
+        metab_de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics",
+                                             harmonization_res)
+    }
     ora_contrast_names <- unique(unlist(lapply(all_de_tables, names)))
 
     if (length(ora_contrast_names) > 1) {
@@ -1047,7 +1053,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
                     harmonization_res = harmonization_res,
                     kegg_org = kegg_org,
                     org_db = org_db,
-                    out_dir = contrast_out
+                    out_dir = contrast_out,
+                    metab_de_tables = metab_de_tables
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1078,10 +1085,11 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 #' @param kegg_org KEGG organism code
 #' @param org_db Organism annotation database
 #' @param out_dir Output directory for this contrast
+#' @param metab_de_tables Metabolomics DE tables (named list per contrast), or NULL
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
-                                           out_dir) {
+                                           out_dir, metab_de_tables = NULL) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1133,7 +1141,40 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om)
     }
 
-    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, NULL)
+    # Run per-contrast metabolomics compound ORA if data is available
+    contrast_metab_ora <- NULL
+    if (!is.null(metab_de_tables)) {
+        # Find matching contrast name (try exact, then fuzzy match)
+        metab_cname <- if (contrast_name %in% names(metab_de_tables)) {
+            contrast_name
+        } else {
+            # Fuzzy: try normalized contrast names
+            norm_cn <- tolower(gsub("[^a-z0-9]", "", contrast_name))
+            metab_norms <- tolower(gsub("[^a-z0-9]", "", names(metab_de_tables)))
+            idx <- match(norm_cn, metab_norms)
+            if (!is.na(idx)) names(metab_de_tables)[idx] else NULL
+        }
+        if (!is.null(metab_cname)) {
+            contrast_metab_ora <- tryCatch({
+                de_list <- metab_de_tables[metab_cname]
+                id_map <- map_metabolite_ids_to_kegg(de_list, harmonization_res)
+                if (!is.null(id_map) && nrow(id_map) > 0) {
+                    full_universe <- unique(id_map$KEGG_CPD[!is.na(id_map$KEGG_CPD)])
+                    de_df <- de_list[[1]]
+                    de_mapped <- merge(de_df, id_map, by = "feature_id")
+                    de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
+                    run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
+                                     universe = full_universe)
+                } else NULL
+            }, error = function(e) {
+                message("    Per-contrast compound ORA failed for ", contrast_name,
+                        ": ", e$message)
+                NULL
+            })
+        }
+    }
+
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, contrast_metab_ora)
     if (!is.null(combined) && nrow(combined) > 0) {
         write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
 
@@ -1211,15 +1252,29 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
 #' Build combined multi-ORA summary table
 #'
 #' Merges pooled ORA with per-omics results into a single table showing
-#' which omics support each pathway.
+#' which omics support each pathway. Uses full outer join so compound-only
+#' pathways from metabolomics are also included.
 build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 
-    if (is.null(pooled_ora) || nrow(pooled_ora) == 0) return(NULL)
+    if ((is.null(pooled_ora) || nrow(pooled_ora) == 0) &&
+        (is.null(metab_ora) || nrow(metab_ora) == 0)) return(NULL)
 
-    summary <- pooled_ora[, c("pathway", "ID", "pvalue", "padj", "Count"), drop = FALSE]
-    colnames(summary)[colnames(summary) == "pvalue"] <- "pooled_pvalue"
-    colnames(summary)[colnames(summary) == "padj"] <- "pooled_padj"
-    colnames(summary)[colnames(summary) == "Count"] <- "pooled_count"
+    # Start from gene-based pooled ORA if available
+    if (!is.null(pooled_ora) && nrow(pooled_ora) > 0) {
+        summary <- pooled_ora[, c("pathway", "ID", "pvalue", "padj", "Count"), drop = FALSE]
+        colnames(summary)[colnames(summary) == "pvalue"] <- "pooled_pvalue"
+        colnames(summary)[colnames(summary) == "padj"] <- "pooled_padj"
+        colnames(summary)[colnames(summary) == "Count"] <- "pooled_count"
+    } else {
+        summary <- data.frame(
+            pathway = character(0), ID = character(0),
+            pooled_pvalue = numeric(0), pooled_padj = numeric(0),
+            pooled_count = integer(0), stringsAsFactors = FALSE
+        )
+    }
+
+    # Add normalized ID column for cross-prefix matching
+    summary$norm_id <- normalize_kegg_pathway_id(summary$ID)
 
     # Add per-omics support columns
     omics_names <- names(per_omics_ora)
@@ -1233,11 +1288,35 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         summary[[paste0(om, "_padj")]] <- om_padj[summary$ID]
     }
 
-    # Add metabolomics if available (join on normalized numeric pathway IDs
-    # since compound ORA uses "map0xxxx" while gene ORA uses "hsa0xxxx")
+    # Add metabolomics via full outer join on normalized pathway IDs
     if (!is.null(metab_ora) && nrow(metab_ora) > 0 && "ID" %in% colnames(metab_ora)) {
-        met_padj <- setNames(metab_ora$padj, normalize_kegg_pathway_id(metab_ora$ID))
-        summary$metabolomics_padj <- met_padj[normalize_kegg_pathway_id(summary$ID)]
+        met_norm <- normalize_kegg_pathway_id(metab_ora$ID)
+        met_padj <- setNames(metab_ora$padj, met_norm)
+        met_pval <- setNames(metab_ora$pvalue, met_norm)
+
+        # Match existing rows
+        summary$metabolomics_padj <- met_padj[summary$norm_id]
+
+        # Find compound-only pathways (not in gene ORA results)
+        new_ids <- setdiff(met_norm, summary$norm_id)
+        if (length(new_ids) > 0) {
+            new_rows <- data.frame(
+                pathway = metab_ora$pathway[match(new_ids, met_norm)],
+                ID = metab_ora$ID[match(new_ids, met_norm)],
+                pooled_pvalue = NA_real_,
+                pooled_padj = NA_real_,
+                pooled_count = NA_integer_,
+                norm_id = new_ids,
+                stringsAsFactors = FALSE
+            )
+            # Add per-omics columns as NA
+            for (om in omics_names) {
+                new_rows[[paste0(om, "_padj")]] <- NA_real_
+            }
+            new_rows$metabolomics_padj <- met_padj[new_ids]
+
+            summary <- rbind(summary, new_rows)
+        }
     }
 
     # Count supporting omics (padj < 0.05)
@@ -1247,7 +1326,12 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         sapply(padj_cols, function(col) !is.na(summary[[col]]) & summary[[col]] < 0.05)
     )
 
-    summary <- summary[order(summary$pooled_pvalue), ]
+    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only
+    summary <- summary[order(is.na(summary$pooled_pvalue), summary$pooled_pvalue,
+                             summary$metabolomics_padj), ]
+
+    # Drop internal helper column
+    summary$norm_id <- NULL
     summary
 }
 

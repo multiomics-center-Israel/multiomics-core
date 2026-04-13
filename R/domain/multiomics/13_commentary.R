@@ -654,7 +654,7 @@ run_openai_commentary <- function(fig, context, config, output_dir) {
 
 
 #' Create placeholder commentary on error
-create_placeholder_commentary_multiomics <- function(figure_id, error_message) {
+create_placeholder_commentary <- function(figure_id, error_message) {
     list(
         figure_id = figure_id,
         title = "Commentary Generation Failed",

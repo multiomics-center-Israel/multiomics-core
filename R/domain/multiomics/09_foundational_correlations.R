@@ -655,6 +655,15 @@ compute_sample_concordance <- function(harmonized, metadata, fc, config, out_dir
                     NULL
                 }
             )
+
+            # 3b. Per-sample within-group vs cross-group distances
+            results$per_sample_group_dist <- tryCatch(
+                compute_per_sample_group_distances(harmonized, common_samples, metadata, condition_col),
+                error = function(e) {
+                    message("  WARNING: Per-sample group distances failed: ", conditionMessage(e))
+                    NULL
+                }
+            )
         }
     }
 
@@ -947,6 +956,177 @@ compute_condition_similarity <- function(harmonized, common_samples, metadata,
         summary = summary_df
     )
 }
+
+#' Compute per-sample within-group vs cross-group distances
+#'
+#' For each sample in each omics, computes the mean Euclidean distance to
+#' other samples in the same condition group (within-group) and to samples
+#' in different groups (cross-group). The ratio or difference reveals
+#' which samples sit clearly within their group vs. ambiguously between groups.
+#'
+#' @param harmonized List of harmonized omics data
+#' @param common_samples Character vector of sample IDs
+#' @param metadata Sample metadata data.frame
+#' @param condition_col Name of condition column
+#' @return List with per_sample_df and summary
+compute_per_sample_group_distances <- function(harmonized, common_samples,
+                                                metadata, condition_col) {
+    message("  Computing per-sample within vs cross-group distances...")
+
+    conditions <- metadata[[condition_col]][match(common_samples, rownames(metadata))]
+    omics_names <- names(harmonized)
+
+    all_rows <- list()
+
+    for (omics_name in omics_names) {
+        mat <- harmonized[[omics_name]]$normalized_matrix[, common_samples, drop = FALSE]
+
+        # Compute sample-sample Euclidean distance matrix
+        dist_mat <- as.matrix(dist(t(mat)))
+
+        for (i in seq_along(common_samples)) {
+            sid <- common_samples[i]
+            cond <- conditions[i]
+            same_idx <- which(conditions == cond & seq_along(conditions) != i)
+            diff_idx <- which(conditions != cond)
+
+            within_dist <- if (length(same_idx) > 0) {
+                mean(dist_mat[i, same_idx], na.rm = TRUE)
+            } else NA_real_
+
+            cross_dist <- if (length(diff_idx) > 0) {
+                mean(dist_mat[i, diff_idx], na.rm = TRUE)
+            } else NA_real_
+
+            all_rows[[length(all_rows) + 1]] <- data.frame(
+                sample = sid,
+                condition = cond,
+                omics = omics_name,
+                within_group_dist = within_dist,
+                cross_group_dist = cross_dist,
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+
+    df <- do.call(rbind, all_rows)
+    rownames(df) <- NULL
+
+    # Compute distance ratio: within / cross
+    # Values < 1 mean sample is closer to its group; > 1 means closer to other groups
+    df$dist_ratio <- df$within_group_dist / df$cross_group_dist
+
+    message("  Per-sample distances computed for ", length(common_samples),
+            " samples x ", length(omics_names), " omics")
+
+    list(per_sample_df = df)
+}
+
+
+#' Plot per-sample within-group vs cross-group distances
+#'
+#' Creates a faceted plot (one panel per omics) showing each sample's
+#' within-group and cross-group mean distances as paired points.
+#'
+#' @param per_sample_result Output from compute_per_sample_group_distances()
+#' @param out_dir Output directory
+plot_per_sample_group_distances <- function(per_sample_result, out_dir) {
+    if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
+
+    df <- per_sample_result$per_sample_df
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+
+    # Pivot to long: one row per sample x omics x distance_type
+    df_long <- rbind(
+        data.frame(
+            sample = df$sample,
+            condition = df$condition,
+            omics = df$omics,
+            distance_type = "Within group",
+            distance = df$within_group_dist,
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            sample = df$sample,
+            condition = df$condition,
+            omics = df$omics,
+            distance_type = "Cross group",
+            distance = df$cross_group_dist,
+            stringsAsFactors = FALSE
+        )
+    )
+
+    # Plot 1: Paired dot plot — lines connecting within vs cross for each sample
+    p1 <- ggplot2::ggplot(df, ggplot2::aes(x = within_group_dist,
+                                            y = cross_group_dist,
+                                            color = condition)) +
+        ggplot2::geom_point(size = 2.5, alpha = 0.7) +
+        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::facet_wrap(~omics, scales = "free") +
+        ggplot2::theme_bw() +
+        ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                       strip.text = ggplot2::element_text(face = "bold")) +
+        ggplot2::labs(
+            title = "Per-Sample Within-Group vs Cross-Group Distance",
+            subtitle = "Points below diagonal = sample closer to its own group",
+            x = "Mean Distance to Same Group",
+            y = "Mean Distance to Other Groups",
+            color = "Condition"
+        )
+
+    # Add sample labels for outliers (ratio > 1 means closer to other group)
+    outliers <- df[!is.na(df$dist_ratio) & df$dist_ratio > 1, ]
+    if (nrow(outliers) > 0 && requireNamespace("ggrepel", quietly = TRUE)) {
+        p1 <- p1 + ggrepel::geom_text_repel(
+            data = outliers,
+            ggplot2::aes(label = sample),
+            size = 2.5, color = "grey30", max.overlaps = 10,
+            segment.color = "grey50", segment.size = 0.3
+        )
+    }
+
+    ggplot2::ggsave(file.path(out_dir, "plots",
+                              "sample_within_vs_cross_group_distance.png"),
+                    p1, width = max(7, 5 * length(unique(df$omics))),
+                    height = 6, dpi = 300)
+
+    # Plot 2: Box plot comparing within vs cross distributions per omics
+    p2 <- ggplot2::ggplot(df_long, ggplot2::aes(x = distance_type,
+                                                  y = distance,
+                                                  fill = distance_type)) +
+        ggplot2::geom_boxplot(alpha = 0.7, outlier.size = 1) +
+        ggplot2::geom_jitter(ggplot2::aes(color = condition),
+                             width = 0.15, size = 1.5, alpha = 0.6) +
+        ggplot2::facet_wrap(~omics, scales = "free_y") +
+        ggplot2::scale_fill_manual(values = c("Within group" = "#4DBBD5",
+                                               "Cross group" = "#E64B35")) +
+        ggplot2::theme_bw() +
+        ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                       strip.text = ggplot2::element_text(face = "bold"),
+                       legend.position = "bottom") +
+        ggplot2::labs(
+            title = "Within-Group vs Cross-Group Sample Distances",
+            subtitle = "Lower within-group distance = better condition separation",
+            x = NULL,
+            y = "Mean Euclidean Distance",
+            fill = "Distance Type",
+            color = "Condition"
+        )
+
+    ggplot2::ggsave(file.path(out_dir, "plots",
+                              "sample_group_distance_boxplot.png"),
+                    p2, width = max(7, 4 * length(unique(df$omics))),
+                    height = 6, dpi = 300)
+
+    # Save table
+    write.csv(df, file.path(out_dir, "tables",
+                            "sample_within_vs_cross_group_distances.csv"),
+              row.names = FALSE)
+
+    message("  Saved per-sample group distance plots and table")
+}
+
 
 #' Compute consensus clustering across omics
 compute_foundational_consensus_clustering <- function(harmonized, common_samples, fc) {
@@ -1305,6 +1485,11 @@ plot_sample_concordance <- function(results, metadata, out_dir) {
 
         ggplot2::ggsave(file.path(out_dir, "plots", "sample_condition_separation.png"),
                         p2, width = 6, height = 5)
+    }
+
+    # Plot 3b: Per-sample within vs cross-group distances
+    if (!is.null(results$per_sample_group_dist)) {
+        plot_per_sample_group_distances(results$per_sample_group_dist, out_dir)
     }
 
     # Plot 3: Discordance distribution
