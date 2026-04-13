@@ -326,8 +326,8 @@ fetch_kegg_via_rest <- function(kegg_code, min_size = 3) {
 
 # ==============================================================================
 # PATHWAY ANALYSIS (fGSEA + ORA + Plots)
-# Moved from R/domain/rnaseq/07_pathway.R — generic DE table interface
-# (FeatureID, log2FoldChange, pvalue, padj, stat) shared by rnaseq and proteomics.
+# Shared pathway helpers used by rnaseq and proteomics pipelines.
+# Expects generic DE table interface (FeatureID, log2FoldChange, pvalue, padj, stat).
 # ==============================================================================
 
 #' Look up GO term names from GO IDs
@@ -479,20 +479,25 @@ run_pathway_analysis <- function(de_tables,
                     )
 
                     fgsea_df <- as.data.frame(fgsea_res)
-                    fgsea_df$contrast <- contrast_name
-                    fgsea_df$database <- db_name
-                    fgsea_df$method <- "fgsea"
 
-                    # Collapse leading edge to comma-separated string
-                    fgsea_df$leadingEdge <- sapply(fgsea_df$leadingEdge, paste, collapse = ",")
+                    if (nrow(fgsea_df) == 0) {
+                        message("    fgsea: no gene set overlap — skipping ", db_name)
+                    } else {
+                        fgsea_df$contrast <- contrast_name
+                        fgsea_df$database <- db_name
+                        fgsea_df$method <- "fgsea"
 
-                    # Add pathway names (GO term names, etc.)
-                    fgsea_df <- add_pathway_names(fgsea_df, db_name, gs)
+                        # Collapse leading edge to comma-separated string
+                        fgsea_df$leadingEdge <- sapply(fgsea_df$leadingEdge, paste, collapse = ",")
 
-                    contrast_results[[paste0(db_name, "_fgsea")]] <- fgsea_df
+                        # Add pathway names (GO term names, etc.)
+                        fgsea_df <- add_pathway_names(fgsea_df, db_name, gs)
 
-                    n_sig <- sum(fgsea_df$padj < 0.05, na.rm = TRUE)
-                    message("    fgsea: ", n_sig, " significant pathways (padj < 0.05)")
+                        contrast_results[[paste0(db_name, "_fgsea")]] <- fgsea_df
+
+                        n_sig <- sum(fgsea_df$padj < 0.05, na.rm = TRUE)
+                        message("    fgsea: ", n_sig, " significant pathways (padj < 0.05)")
+                    }
                 }
 
                 # ---- ORA ----
@@ -511,22 +516,26 @@ run_pathway_analysis <- function(de_tables,
 
                     if (length(sig_up) >= 5) {
                         ora_up <- run_ora(sig_up, gs, background, min_size, max_size)
-                        ora_up$contrast <- contrast_name
-                        ora_up$database <- db_name
-                        ora_up$method <- "ora"
-                        ora_up$direction <- "up"
-                        ora_up <- add_pathway_names(ora_up, db_name, gs)
-                        contrast_results[[paste0(db_name, "_ora_up")]] <- ora_up
+                        if (nrow(ora_up) > 0) {
+                            ora_up$contrast <- contrast_name
+                            ora_up$database <- db_name
+                            ora_up$method <- "ora"
+                            ora_up$direction <- "up"
+                            ora_up <- add_pathway_names(ora_up, db_name, gs)
+                            contrast_results[[paste0(db_name, "_ora_up")]] <- ora_up
+                        }
                     }
 
                     if (length(sig_down) >= 5) {
                         ora_down <- run_ora(sig_down, gs, background, min_size, max_size)
-                        ora_down$contrast <- contrast_name
-                        ora_down$database <- db_name
-                        ora_down$method <- "ora"
-                        ora_down$direction <- "down"
-                        ora_down <- add_pathway_names(ora_down, db_name, gs)
-                        contrast_results[[paste0(db_name, "_ora_down")]] <- ora_down
+                        if (nrow(ora_down) > 0) {
+                            ora_down$contrast <- contrast_name
+                            ora_down$database <- db_name
+                            ora_down$method <- "ora"
+                            ora_down$direction <- "down"
+                            ora_down <- add_pathway_names(ora_down, db_name, gs)
+                            contrast_results[[paste0(db_name, "_ora_down")]] <- ora_down
+                        }
                     }
                 }
             }, error = function(e) {

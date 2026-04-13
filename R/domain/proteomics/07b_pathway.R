@@ -1,7 +1,8 @@
 #' Proteomics Pathway Enrichment
 #'
-#' Bridges proteomics DE results to the shared pathway analysis
-#' (run_pathway_analysis from R/core/09_enrichment.R).
+#' Bridges proteomics DE results to shared pathway analysis functions
+#' defined in R/core/09_enrichment.R (run_pathway_analysis,
+#' save_pathway_results, generate_pathway_plots).
 
 # ==============================================================================
 # DE TABLE EXTRACTION
