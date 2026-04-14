@@ -1304,11 +1304,31 @@ run_cluster_ora <- function(clusters,
         return(list())
     }
 
+    # ------------------------------------------------------------------
+    # Input validation: clusters must be a named atomic vector
+    # ------------------------------------------------------------------
+    if (!is.atomic(clusters) || is.null(names(clusters))) {
+        warning("run_cluster_ora(): clusters must be a named atomic vector ",
+                "(gene IDs as names, cluster labels as values). Got: ",
+                class(clusters)[1])
+        return(list())
+    }
+    # Remove entries with NA names or NA labels
+    valid <- !is.na(names(clusters)) & nzchar(names(clusters)) & !is.na(clusters)
+    if (sum(valid) == 0) {
+        warning("run_cluster_ora(): no valid gene-cluster assignments after cleaning")
+        return(list())
+    }
+    clusters <- clusters[valid]
+
     # Per-cluster enrichment
+    # Legacy: sort(unique(clusters)). Preserve numeric sort for integer labels,
+    # alphabetic sort for character labels.
     allRes0 <- list()
     genes_having_pathway <- unique(TERM2GENE[, 2])
+    cluster_labels <- sort(unique(clusters))
 
-    for (cluster_name in sort(unique(clusters))) {
+    for (cluster_name in cluster_labels) {
         genes_in_cluster <- names(clusters[clusters == cluster_name])
         Genes <- intersect(genes_in_cluster, genes_having_pathway)
 
@@ -1347,21 +1367,21 @@ run_cluster_ora <- function(clusters,
     # Process the enrichment table (fold enrichment, expanded ratios)
     enrichment_table <- process_enrichment_table(allRes@compareClusterResult)
 
+    # Set @fun slot for enrichplot/simplify dispatch (legacy does this before CSV write)
+    # enricher() sets @fun = "enricher" but simplify() and dotplot() dispatch
+    # differently for enrichGO/enrichKEGG
+    if (type == "GO") {
+        allRes@fun <- "enrichGO"
+    } else {
+        allRes@fun <- "enrichKEGG"
+    }
+
     # Write enrichment CSV
     if (!is.null(outDir)) {
         dir.create(outDir, recursive = TRUE, showWarnings = FALSE)
         enrichment_table_file <- file.path(outDir, paste0(file_name, ".csv"))
         write.csv(x = enrichment_table, file = enrichment_table_file,
                   quote = TRUE, row.names = TRUE)
-    }
-
-    # Set @fun slot for enrichplot/simplify dispatch
-    # Legacy patches this because enricher() sets @fun = "enricher"
-    # but simplify() and dotplot() dispatch differently for enrichGO/enrichKEGG
-    if (type == "GO") {
-        allRes@fun <- "enrichGO"
-    } else {
-        allRes@fun <- "enrichKEGG"
     }
 
     # GO simplify
@@ -1432,7 +1452,14 @@ process_enrichment_table <- function(clusterprofiler_results_table) {
 
     et <- clusterprofiler_results_table
 
+    if (nrow(et) == 0) return(et)
+
     # Split GeneRatio "k/n" into two numeric columns
+    if (!"GeneRatio" %in% colnames(et) || !"BgRatio" %in% colnames(et)) {
+        warning("process_enrichment_table: missing GeneRatio or BgRatio columns")
+        return(et)
+    }
+
     gr_parts <- strsplit(as.character(et$GeneRatio), "/")
     et$in_cluster_in_term <- as.numeric(vapply(gr_parts, `[`, character(1), 1))
     et$in_cluster         <- as.numeric(vapply(gr_parts, `[`, character(1), 2))
@@ -1443,13 +1470,16 @@ process_enrichment_table <- function(clusterprofiler_results_table) {
     et$in_genome  <- as.numeric(vapply(bg_parts, `[`, character(1), 2))
 
     # Fold enrichment: (k/n) / (M/N)
+    # Guard against division by zero (produces NaN/Inf)
+    denom <- (et$in_term / et$in_genome)
+    denom[denom == 0] <- NA
     et$Fold_enrichment <- signif(
-        (et$in_cluster_in_term / et$in_cluster) / (et$in_term / et$in_genome),
+        (et$in_cluster_in_term / et$in_cluster) / denom,
         digits = 2
     )
 
     # Truncate geneID for very large gene lists
-    if ("geneID" %in% colnames(et)) {
+    if ("geneID" %in% colnames(et) && "Count" %in% colnames(et)) {
         et$geneID <- ifelse(et$Count <= MAX_NR_GENES_TO_SHOW,
                             et$geneID, text_to_show)
     }
@@ -1498,6 +1528,8 @@ build_gene_lists <- function(de_tables,
                       !is.na(dt$log2FoldChange) &
                       abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
             if (nrow(sig) == 0) next
+            # Deduplicate by FeatureID (keep first occurrence)
+            sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
 
             labels <- ifelse(sig$log2FoldChange > 0, "up", "down")
             names(labels) <- sig$FeatureID
@@ -1511,6 +1543,7 @@ build_gene_lists <- function(de_tables,
                       !is.na(dt$log2FoldChange) &
                       abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
             if (nrow(sig) == 0) next
+            sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
 
             labels <- rep("all", nrow(sig))
             names(labels) <- sig$FeatureID
