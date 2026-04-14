@@ -719,11 +719,23 @@ load_local_pathway_tables <- function(annotation_dir,
             next
         }
 
-        # Read two-column tab files
-        term2gene <- read.delim(gene_file, sep = "\t", header = FALSE,
+        # Read two-column tab files.
+        # Legacy uses read.delim() with default header=TRUE, so files may have headers.
+        # We read with header=TRUE (matching legacy), then fall back to header=FALSE
+        # if the result has fewer than 2 rows (suggesting no header was present).
+        term2gene <- read.delim(gene_file, sep = "\t", header = TRUE,
                                 stringsAsFactors = FALSE, row.names = NULL)
-        term2name <- read.delim(name_file, sep = "\t", header = FALSE,
+        term2name <- read.delim(name_file, sep = "\t", header = TRUE,
                                 stringsAsFactors = FALSE, row.names = NULL)
+        # If header=TRUE produced zero rows, retry without header
+        if (nrow(term2gene) == 0) {
+            term2gene <- read.delim(gene_file, sep = "\t", header = FALSE,
+                                    stringsAsFactors = FALSE, row.names = NULL)
+        }
+        if (nrow(term2name) == 0) {
+            term2name <- read.delim(name_file, sep = "\t", header = FALSE,
+                                    stringsAsFactors = FALSE, row.names = NULL)
+        }
 
         # Validate column count
         if (ncol(term2gene) < 2) {
@@ -831,7 +843,7 @@ rank_by_pval_with_direction <- function(de_table) {
     # Legacy logic: if fc is NA, rank = 0; if fc > 0, rank = pval; else rank = -pval
     # Since we already filtered NA lfc, just apply sign
     df$rank_val <- ifelse(df$lfc > 0, df$neg_log_p, -df$neg_log_p)
-    # Genes with lfc == 0 get rank_val = 0 (sign(0) * anything = 0), matching legacy
+    # Note: lfc == 0 → treated as downregulated (-neg_log_p), matching legacy behavior
     df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
 
     ranks <- df$rank_val
@@ -865,13 +877,9 @@ rank_by_fc <- function(de_table) {
     linear_fc <- ifelse(df$lfc >= 0, 2^df$lfc, -(2^(-df$lfc)))
 
     # Legacy transform: ifelse(fc > 0, fc, -1/fc) then log2
-    # When linear_fc > 0: result = linear_fc (already positive)
-    # When linear_fc < 0: -1/linear_fc = -1/(-x) = 1/x (positive, < 1 for |fc| > 1)
-    # Wait — this needs careful analysis:
-    #   Legacy: fc > 0 → keep fc; fc < 0 → -1/fc
-    #   If fc = -2: -1/(-2) = 0.5, then log2(0.5) = -1
-    #   If fc = 2:  keep 2, then log2(2) = 1
-    # So the legacy transform maps the signed linear FC into a symmetric log2 scale.
+    # Maps signed linear FC into a symmetric log2 scale:
+    #   fc = +2 → log2(2) = 1;  fc = -2 → log2(-1/(-2)) = log2(0.5) = -1
+    # Net effect is equivalent to log2FC, but we apply it to match legacy exactly.
     fc_transformed <- ifelse(linear_fc > 0, linear_fc, -1 / linear_fc)
     df$rank_val <- log2(fc_transformed)
     # Legacy: signif(digits = 4)
