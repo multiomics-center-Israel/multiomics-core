@@ -1057,22 +1057,20 @@ run_gsea_all <- function(ranked_genes,
     }
 
     # ------------------------------------------------------------------
-    # 1. Build flat job list from the nested ranked_genes x local_tables
+    # 1. Build flat job list (lightweight identifiers only — data looked
+    #    up by reference inside the worker to avoid copying large tables
+    #    across serialized futures on Windows/multisession)
     # ------------------------------------------------------------------
     jobs <- list()
     for (ranking_method in names(ranked_genes)) {
         for (contrast in names(ranked_genes[[ranking_method]])) {
-            ranked <- ranked_genes[[ranking_method]][[contrast]]
-            if (length(ranked) == 0) next
+            if (length(ranked_genes[[ranking_method]][[contrast]]) == 0) next
 
             for (db_name in names(local_tables)) {
                 jobs[[length(jobs) + 1]] <- list(
                     ranking_method = ranking_method,
                     contrast       = contrast,
-                    db_name        = db_name,
-                    ranked         = ranked,
-                    term2gene      = local_tables[[db_name]]$TERM2GENE,
-                    term2name      = local_tables[[db_name]]$TERM2NAME
+                    db_name        = db_name
                 )
             }
         }
@@ -1089,19 +1087,23 @@ run_gsea_all <- function(ranked_genes,
     # 2. Run GSEA computation (parallel or sequential)
     # ------------------------------------------------------------------
     run_one_gsea_job <- function(job) {
-        # Pure computation — no file I/O, no message() (avoids interleaved output)
+        # Pure computation — no file I/O, no message() (avoids interleaved output).
+        # Looks up data from ranked_genes / local_tables by identifier.
+        ranked    <- ranked_genes[[job$ranking_method]][[job$contrast]]
+        term2gene <- local_tables[[job$db_name]]$TERM2GENE
+        term2name <- local_tables[[job$db_name]]$TERM2NAME
+
         res <- tryCatch({
             clusterProfiler::GSEA(
-                geneList      = job$ranked,
-                TERM2GENE     = job$term2gene,
-                TERM2NAME     = job$term2name,
+                geneList      = ranked,
+                TERM2GENE     = term2gene,
+                TERM2NAME     = term2name,
                 minGSSize     = 4,
-                maxGSSize     = length(unique(job$term2gene[, 2])),
+                maxGSSize     = length(unique(term2gene[, 2])),
                 pAdjustMethod = pAdjustMethod,
                 pvalueCutoff  = pvalueCutoff
             )
         }, error = function(e) {
-            # Return the error message so the caller can report it
             structure(list(message = e$message), class = "gsea_error")
         })
         list(
@@ -1159,7 +1161,7 @@ run_gsea_all <- function(ranked_genes,
 
         if (is.null(res) || nrow(as.data.frame(res)) == 0) {
             message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                    ": no significant results")
+                    ": no results returned")
             next
         }
 
