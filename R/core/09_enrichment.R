@@ -1252,10 +1252,100 @@ run_gsea_all <- function(ranked_genes,
                     })
                 }
             }
+
+            # ----------------------------------------------------------
+            # Per-pathway GSEA artifacts (Phase 3 — legacy outputs)
+            # ----------------------------------------------------------
+            save_gsea_per_pathway_artifacts(
+                gsea_result = res,
+                res_df      = res_df,
+                output_dir  = gsea_sub_dir
+            )
         }
     }
 
     list(results = results, plot_files = plot_files)
+}
+
+# ==============================================================================
+# PER-PATHWAY GSEA ARTIFACTS (Phase 3 — legacy outputs)
+# ==============================================================================
+
+#' Save per-pathway GSEA artifacts: enrichment plots, core gene CSVs
+#'
+#' For each significant pathway in the GSEA result, produces:
+#'   - GSEA_plots/{pathway_id}.png  (enrichplot::gseaplot2)
+#'   - Excels_core_genes/{pathway_id}.csv  (core enrichment genes with stats)
+#'
+#' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
+#' @param res_df Data.frame version of the result (with padj, pathway, etc.)
+#' @param output_dir Base directory for this db/ranking/contrast combination
+#' @noRd
+save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir) {
+
+    if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
+
+    sig_rows <- res_df[!is.na(res_df$padj) & res_df$padj < 0.05, , drop = FALSE]
+    if (nrow(sig_rows) == 0) return(invisible(NULL))
+
+    # Directories
+    plots_dir <- file.path(output_dir, "GSEA_plots")
+    excel_dir <- file.path(output_dir, "Excels_core_genes")
+    dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(excel_dir, recursive = TRUE, showWarnings = FALSE)
+
+    has_enrichplot <- requireNamespace("enrichplot", quietly = TRUE)
+
+    for (i in seq_len(nrow(sig_rows))) {
+        pathway_id <- sig_rows$ID[i]
+        # Sanitize pathway ID for safe file names
+        safe_id <- gsub("[^a-zA-Z0-9_.-]", "_", pathway_id)
+
+        # --- GSEA plot (enrichplot::gseaplot2) ---
+        if (has_enrichplot) {
+            tryCatch({
+                plot_file <- file.path(plots_dir, paste0(safe_id, ".png"))
+                png(plot_file, width = 800, height = 600, res = 120)
+                print(enrichplot::gseaplot2(gsea_result, geneSetID = pathway_id,
+                                            title = sig_rows$Description[i]))
+                dev.off()
+            }, error = function(e) {
+                tryCatch(dev.off(), error = function(e2) NULL)
+                message("      gseaplot2 failed for ", pathway_id, ": ", e$message)
+            })
+        }
+
+        # --- Core genes extraction and CSV ---
+        core_genes_str <- sig_rows$core_enrichment[i]
+        if (is.null(core_genes_str) || is.na(core_genes_str) ||
+            !nzchar(core_genes_str)) next
+
+        core_genes <- strsplit(core_genes_str, "/")[[1]]
+        core_genes <- trimws(core_genes)
+        core_genes <- core_genes[nzchar(core_genes)]
+
+        if (length(core_genes) == 0) next
+
+        tryCatch({
+            # Build output data.frame: gene ID + stats from the ranked list
+            # The gseaResult@geneList contains the full ranked vector
+            gene_list <- gsea_result@geneList
+            matched_vals <- gene_list[core_genes]
+
+            core_df <- data.frame(
+                gene         = core_genes,
+                rank_value   = as.numeric(matched_vals),
+                stringsAsFactors = FALSE
+            )
+
+            csv_file <- file.path(excel_dir, paste0(safe_id, ".csv"))
+            write.csv(core_df, file = csv_file, row.names = FALSE)
+        }, error = function(e) {
+            message("      Core genes CSV failed for ", pathway_id, ": ", e$message)
+        })
+    }
+
+    invisible(NULL)
 }
 
 # ==============================================================================
