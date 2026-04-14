@@ -94,10 +94,11 @@ pipe_rnaseq <- function() {
         tar_target(
             rna_pathway_res,
             mod_rnaseq_pathway(
-                de_res  = rna_de_res,
-                pre     = rna_batch_corr,
-                config  = config,
-                out_dir = rna_out_dir
+                de_res         = rna_de_res,
+                pre            = rna_batch_corr,
+                config         = config,
+                out_dir        = rna_out_dir,
+                clustering_res = rna_clustering_obj
             )
         ),
         # Executive summary

@@ -4,8 +4,9 @@
 #'
 #' Two modes:
 #'   1. Local enrichment (if config$modes$rna$enrichment$annotation_dir is set):
-#'      Loads precomputed KEGG/GO tables from local files, runs GSEA with
-#'      multiple ranking methods. Cluster-based ORA is deferred to Phase 2.
+#'      Loads precomputed KEGG/GO tables from local files.
+#'      Runs cluster-based ORA (legacy behavior) when clustering results are available.
+#'      Runs GSEA with multiple ranking methods as supplementary analysis.
 #'   2. Online fallback (if annotation_dir is not set):
 #'      Original behavior — organism detection, gene annotation, online gene
 #'      set loading (OrgDb/KEGG/biomaRt), fGSEA + ORA per contrast.
@@ -14,9 +15,10 @@
 #' @param pre     Preprocessed data list (with expr_filt, meta)
 #' @param config  Full pipeline config
 #' @param out_dir Output directory for the RNA mode (e.g. .../rna)
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL
 #' @return List with annotation, pathway_results, and plot_files
 #' @export
-mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
+mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NULL) {
 
     rna_cfg <- config$modes$rna
     pw_cfg  <- rna_cfg$pathway    %||% list()
@@ -57,11 +59,12 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
 
     if (use_local) {
         return(.run_local_enrichment(
-            de_tables    = de_tables,
-            feature_ids  = all_gene_ids,
-            enr_cfg      = enr_cfg,
-            config       = config,
-            out_dir      = out_dir
+            de_tables      = de_tables,
+            feature_ids    = all_gene_ids,
+            enr_cfg        = enr_cfg,
+            config         = config,
+            out_dir        = out_dir,
+            clustering_res = clustering_res
         ))
     }
 
@@ -157,7 +160,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
 
 
 # ==============================================================================
-# LOCAL ENRICHMENT PATH (Phase 1)
+# LOCAL ENRICHMENT PATH
 # ==============================================================================
 
 #' Internal: run enrichment using local precomputed tables
@@ -165,11 +168,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
 #' @param de_tables Named list of DE tables
 #' @param feature_ids All unique feature IDs
 #' @param enr_cfg enrichment config section
-#' @param config Full config (for future Phase 2 clustering access)
+#' @param config Full config
 #' @param out_dir Output directory
+#' @param clustering_res Clustering result from mod_rnaseq_clustering(), or NULL
 #' @return List with annotation, pathway_results, plot_files
 #' @noRd
-.run_local_enrichment <- function(de_tables, feature_ids, enr_cfg, config, out_dir) {
+.run_local_enrichment <- function(de_tables, feature_ids, enr_cfg, config,
+                                  out_dir, clustering_res = NULL) {
 
     message("\n=== Local Enrichment (offline, table-driven) ===\n")
 
@@ -203,18 +208,100 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
         return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
     }
 
-    # ------------------------------------------------------------------
-    # 2. ORA: cluster-based (Phase 2 — deferred)
-    # ------------------------------------------------------------------
-    # Cluster-based ORA requires clustering results which are not yet wired
-    # into this module (pipeline DAG change needed). Emit the agreed warning.
-    message("NOTE: Cluster-based ORA requires clustering results. ",
-            "Enable clustering and wire clustering_res into the pathway module ",
-            "to run ORA (Phase 2). GSEA will proceed.")
+    enrich_dir <- file.path(out_dir, "Enrichment")
+    pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
+    padj_method <- enr_cfg$padj_method   %||% "fdr"
+
+    pathway_results <- list()
+    plot_files      <- list()
 
     # ------------------------------------------------------------------
-    # 3. Build ranked gene lists
+    # 2. Cluster-based ORA (primary legacy behavior)
     # ------------------------------------------------------------------
+    clusters <- .extract_clusters(clustering_res)
+
+    if (!is.null(clusters) && length(clusters) > 0) {
+        message("\n--- Cluster-based ORA ---")
+        message("  ", length(unique(clusters)), " clusters, ",
+                length(clusters), " genes")
+
+        ora_results <- list()
+
+        for (db_name in names(local_tables)) {
+            tbl <- local_tables[[db_name]]
+
+            # Determine type for simplify dispatch: GO or KEGG
+            db_type <- if (grepl("^GO", db_name)) "GO" else "KEGG"
+
+            ora_dir <- file.path(enrich_dir, "ORA", db_name)
+            ora_file_name <- paste0(db_name, "_cluster_ora")
+
+            message("  ORA: ", db_name, " (type=", db_type, ")")
+
+            allRes <- run_cluster_ora(
+                clusters      = clusters,
+                TERM2GENE     = tbl$TERM2GENE,
+                TERM2NAME     = tbl$TERM2NAME,
+                type          = db_type,
+                pvalueCutoff  = pval_cutoff,
+                pAdjustMethod = padj_method,
+                outDir        = ora_dir,
+                file_name     = ora_file_name,
+                maxCategory   = enr_cfg$max_terms_in_dotplot %||% 1000
+            )
+
+            if (length(allRes) == 0) {
+                message("    No significant enrichment")
+                next
+            }
+
+            # allRes is a 4-element list:
+            #   [[1]] compareClusterResult, [[2]] simplified (or NULL),
+            #   [[3]] enrichment_table, [[4]] enrichment_table_simplify (or NULL)
+
+            # Store processed tables in pathway_results for downstream consumers.
+            # Use a structure where the enrichment table (data.frame with padj)
+            # is accessible to collect_pipeline_stats() and extract_enrichment_df().
+            if (!is.null(allRes[[3]]) && nrow(allRes[[3]]) > 0) {
+                ora_df <- allRes[[3]]
+                # Ensure downstream-compatible column names
+                if ("p.adjust" %in% colnames(ora_df) && !"padj" %in% colnames(ora_df)) {
+                    ora_df$padj <- ora_df$p.adjust
+                }
+                if ("Description" %in% colnames(ora_df) && !"pathway" %in% colnames(ora_df)) {
+                    ora_df$pathway <- ora_df$Description
+                }
+                ora_results[[paste0(db_name, "_ora")]] <- ora_df
+            }
+
+            if (!is.null(allRes[[4]]) && nrow(allRes[[4]]) > 0) {
+                simp_df <- allRes[[4]]
+                if ("p.adjust" %in% colnames(simp_df) && !"padj" %in% colnames(simp_df)) {
+                    simp_df$padj <- simp_df$p.adjust
+                }
+                if ("Description" %in% colnames(simp_df) && !"pathway" %in% colnames(simp_df)) {
+                    simp_df$pathway <- simp_df$Description
+                }
+                ora_results[[paste0(db_name, "_ora_simplify")]] <- simp_df
+            }
+
+            n_terms <- if (!is.null(allRes[[3]])) nrow(allRes[[3]]) else 0
+            message("    ", n_terms, " enriched terms")
+        }
+
+        # Store ORA results under a dedicated key in pathway_results
+        if (length(ora_results) > 0) {
+            pathway_results[["cluster_ora"]] <- ora_results
+        }
+    } else {
+        message("NOTE: Cluster-based ORA requires clustering results. ",
+                "Enable clustering in config to run ORA. GSEA will proceed.")
+    }
+
+    # ------------------------------------------------------------------
+    # 3. GSEA (supplementary — multiple ranking methods)
+    # ------------------------------------------------------------------
+    message("\n--- GSEA ---")
     message("Building ranked gene lists...")
     ranked_genes <- build_ranked_gene_lists(de_tables)
 
@@ -224,45 +311,68 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
     message("  Built ", n_total, " ranked lists (",
             n_methods, " methods x ", n_contrasts, " contrasts + any_contrast)")
 
-    # ------------------------------------------------------------------
-    # 4. Run GSEA across all combinations
-    # ------------------------------------------------------------------
-    enrich_dir <- file.path(out_dir, "Enrichment")
-    gsea_dir   <- file.path(enrich_dir, "GSEA")
-
-    pval_cutoff <- enr_cfg$gsea_pvalue_cutoff %||% enr_cfg$pvalue_cutoff %||% 0.05
-    padj_method <- enr_cfg$gsea_padj_method   %||% enr_cfg$padj_method   %||% "fdr"
+    gsea_dir    <- file.path(enrich_dir, "GSEA")
+    gsea_pval   <- enr_cfg$gsea_pvalue_cutoff %||% pval_cutoff
+    gsea_padj   <- enr_cfg$gsea_padj_method   %||% padj_method
     workers     <- enr_cfg$workers %||% 1
 
-    message("Running GSEA (pvalueCutoff=", pval_cutoff,
-            ", pAdjustMethod=", padj_method, ")...")
+    message("Running GSEA (pvalueCutoff=", gsea_pval,
+            ", pAdjustMethod=", gsea_padj, ")...")
 
     gsea_out <- run_gsea_all(
         ranked_genes  = ranked_genes,
         local_tables  = local_tables,
-        pvalueCutoff  = pval_cutoff,
-        pAdjustMethod = padj_method,
+        pvalueCutoff  = gsea_pval,
+        pAdjustMethod = gsea_padj,
         output_dir    = gsea_dir,
         workers       = workers
     )
 
-    pathway_results <- gsea_out$results
-    plot_files      <- gsea_out$plot_files
+    # Merge GSEA results into pathway_results (contrast-keyed)
+    for (contrast in names(gsea_out$results)) {
+        if (is.null(pathway_results[[contrast]])) {
+            pathway_results[[contrast]] <- gsea_out$results[[contrast]]
+        } else {
+            pathway_results[[contrast]] <- c(
+                pathway_results[[contrast]], gsea_out$results[[contrast]]
+            )
+        }
+    }
+    plot_files <- c(plot_files, gsea_out$plot_files)
 
     # ------------------------------------------------------------------
-    # 5. Summary
+    # 4. Summary
     # ------------------------------------------------------------------
     n_result_dfs <- sum(vapply(pathway_results, function(pr) {
-        if (is.list(pr)) length(pr) else 0L
+        if (is.data.frame(pr)) 1L else if (is.list(pr)) length(pr) else 0L
     }, integer(1)))
     message("\n=== Local enrichment complete ===")
-    message("  GSEA result sets: ", n_result_dfs)
+    message("  Result sets: ", n_result_dfs)
     message("  Plot files: ", length(plot_files))
-    message("  ORA: skipped (Phase 2 — requires clustering wiring)")
+    if (is.null(clusters) || length(clusters) == 0) {
+        message("  ORA: skipped (no clustering results)")
+    }
 
     list(
         annotation      = NULL,
         pathway_results = pathway_results,
         plot_files      = plot_files
     )
+}
+
+
+#' Extract cluster assignments from clustering result
+#'
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL
+#' @return Named integer vector (gene IDs -> cluster labels), or NULL
+#' @noRd
+.extract_clusters <- function(clustering_res) {
+    if (is.null(clustering_res)) return(NULL)
+
+    # mod_rnaseq_clustering returns list(plots, files, excel_order, objects)
+    # objects$clusters is a named integer vector
+    clusters <- clustering_res$objects$clusters
+    if (is.null(clusters) || length(clusters) == 0) return(NULL)
+
+    clusters
 }

@@ -1257,3 +1257,202 @@ run_gsea_all <- function(ranked_genes,
 
     list(results = results, plot_files = plot_files)
 }
+
+# ==============================================================================
+# CLUSTER-BASED ORA (Phase 2 — enrichment migration)
+# ==============================================================================
+# Reproduces the legacy Clusters_Enrichment_Test() behavior:
+#   - per-cluster enricher() with minGSSize=0, maxGSSize=10000, qvalueCutoff=1
+#   - merge_result() into compareClusterResult
+#   - GO simplify (cutoff=0.7, by="p.adjust", select_fun=min)
+#   - process_enrichment_table() with fold enrichment
+#   - enrichplot::dotplot() on the merged result
+
+#' Run cluster-based ORA for a single database
+#'
+#' Reproduces legacy Clusters_Enrichment_Test() behavior exactly.
+#'
+#' @param clusters Named vector: gene IDs as names, cluster labels as values.
+#' @param TERM2GENE Two-column data.frame (term ID, gene ID).
+#' @param TERM2NAME Two-column data.frame (term ID, term name).
+#' @param type "KEGG" or "GO". Controls simplify and @fun slot.
+#' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
+#' @param pAdjustMethod P-value adjustment method (default "fdr").
+#' @param outDir Output directory for CSV and dotplot files.
+#' @param file_name Base file name for outputs (no extension).
+#' @param maxCategory Max categories to show in dotplot (default 1000).
+#' @return List of 4 elements (matching legacy):
+#'   [[1]] allRes (compareClusterResult or NULL),
+#'   [[2]] allRes_simplify (compareClusterResult or NULL, GO only),
+#'   [[3]] enrichment_table (data.frame or NULL),
+#'   [[4]] enrichment_table_simplify (data.frame or NULL, GO only).
+#'   Returns list() if no clusters have significant enrichment.
+#' @export
+run_cluster_ora <- function(clusters,
+                            TERM2GENE,
+                            TERM2NAME,
+                            type = "KEGG",
+                            pvalueCutoff = 0.05,
+                            pAdjustMethod = "fdr",
+                            outDir = NULL,
+                            file_name = "enrichment",
+                            maxCategory = 1000) {
+
+    if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+        warning("clusterProfiler required for cluster ORA. ",
+                "Install with: BiocManager::install('clusterProfiler')")
+        return(list())
+    }
+
+    # Per-cluster enrichment
+    allRes0 <- list()
+    genes_having_pathway <- unique(TERM2GENE[, 2])
+
+    for (cluster_name in sort(unique(clusters))) {
+        genes_in_cluster <- names(clusters[clusters == cluster_name])
+        Genes <- intersect(genes_in_cluster, genes_having_pathway)
+
+        if (length(Genes) == 0) next
+
+        res <- tryCatch({
+            clusterProfiler::enricher(
+                Genes,
+                TERM2GENE     = TERM2GENE,
+                TERM2NAME     = TERM2NAME,
+                minGSSize     = 0,
+                maxGSSize     = 10000,
+                pAdjustMethod = pAdjustMethod,
+                pvalueCutoff  = pvalueCutoff,
+                qvalueCutoff  = 1
+            )
+        }, error = function(e) {
+            message("    enricher() failed for cluster ", cluster_name, ": ", e$message)
+            NULL
+        })
+
+        if (!is.null(res) &&
+            nrow(res@result) > 0 &&
+            nrow(res@result[res@result$p.adjust < pvalueCutoff, , drop = FALSE]) > 0) {
+            allRes0[[as.character(cluster_name)]] <- res
+        }
+    }
+
+    if (length(allRes0) == 0) {
+        return(list())
+    }
+
+    # Merge per-cluster results into a compareClusterResult
+    allRes <- clusterProfiler::merge_result(enrichResultList = allRes0)
+
+    # Process the enrichment table (fold enrichment, expanded ratios)
+    enrichment_table <- process_enrichment_table(allRes@compareClusterResult)
+
+    # Write enrichment CSV
+    if (!is.null(outDir)) {
+        dir.create(outDir, recursive = TRUE, showWarnings = FALSE)
+        enrichment_table_file <- file.path(outDir, paste0(file_name, ".csv"))
+        write.csv(x = enrichment_table, file = enrichment_table_file,
+                  quote = TRUE, row.names = TRUE)
+    }
+
+    # Set @fun slot for enrichplot/simplify dispatch
+    # Legacy patches this because enricher() sets @fun = "enricher"
+    # but simplify() and dotplot() dispatch differently for enrichGO/enrichKEGG
+    if (type == "GO") {
+        allRes@fun <- "enrichGO"
+    } else {
+        allRes@fun <- "enrichKEGG"
+    }
+
+    # GO simplify
+    allRes_simplify <- NULL
+    enrichment_table_simplify <- NULL
+
+    if (type == "GO") {
+        allRes_simplify <- tryCatch({
+            clusterProfiler::simplify(
+                allRes,
+                cutoff     = 0.7,
+                by         = "p.adjust",
+                select_fun = min
+            )
+        }, error = function(e) {
+            message("    simplify() failed: ", e$message)
+            NULL
+        })
+
+        if (!is.null(allRes_simplify)) {
+            enrichment_table_simplify <- process_enrichment_table(
+                allRes_simplify@compareClusterResult
+            )
+            if (!is.null(outDir)) {
+                simplify_file <- file.path(outDir, paste0("Simplify_", file_name, ".csv"))
+                write.csv(x = enrichment_table_simplify, file = simplify_file,
+                          quote = FALSE, row.names = TRUE)
+            }
+        }
+    }
+
+    # Dotplot
+    if (!is.null(outDir) && nrow(allRes@compareClusterResult) > 0) {
+        # Legacy font size heuristic
+        font.size <- if (nrow(allRes@compareClusterResult) > 50) 4 else 9
+
+        dot_plot_file <- file.path(outDir, paste0(file_name, ".pdf"))
+        tryCatch({
+            if (requireNamespace("enrichplot", quietly = TRUE)) {
+                p <- enrichplot::dotplot(allRes, showCategory = maxCategory,
+                                         font.size = font.size)
+                ggplot2::ggsave(filename = dot_plot_file, plot = p,
+                                dpi = 600, device = "pdf",
+                                width = 20, height = 20)
+            }
+        }, error = function(e) {
+            message("    Dotplot generation failed: ", e$message)
+        })
+    }
+
+    list(allRes, allRes_simplify, enrichment_table, enrichment_table_simplify)
+}
+
+
+#' Process clusterProfiler results table with fold enrichment
+#'
+#' Port of legacy process_clusterprofiler_results_table().
+#' Expands GeneRatio and BgRatio into numeric components and computes
+#' Fold_enrichment = (in_cluster_in_term / in_cluster) / (in_term / in_genome).
+#'
+#' @param clusterprofiler_results_table Data.frame from
+#'   compareClusterResult@@compareClusterResult or enrichResult@@result
+#' @return Data.frame with expanded ratio columns and Fold_enrichment
+#' @export
+process_enrichment_table <- function(clusterprofiler_results_table) {
+    MAX_NR_GENES_TO_SHOW <- 1000
+    text_to_show <- paste0("Too many to show (>", MAX_NR_GENES_TO_SHOW, ")")
+
+    et <- clusterprofiler_results_table
+
+    # Split GeneRatio "k/n" into two numeric columns
+    gr_parts <- strsplit(as.character(et$GeneRatio), "/")
+    et$in_cluster_in_term <- as.numeric(vapply(gr_parts, `[`, character(1), 1))
+    et$in_cluster         <- as.numeric(vapply(gr_parts, `[`, character(1), 2))
+
+    # Split BgRatio "M/N" into two numeric columns
+    bg_parts <- strsplit(as.character(et$BgRatio), "/")
+    et$in_term    <- as.numeric(vapply(bg_parts, `[`, character(1), 1))
+    et$in_genome  <- as.numeric(vapply(bg_parts, `[`, character(1), 2))
+
+    # Fold enrichment: (k/n) / (M/N)
+    et$Fold_enrichment <- signif(
+        (et$in_cluster_in_term / et$in_cluster) / (et$in_term / et$in_genome),
+        digits = 2
+    )
+
+    # Truncate geneID for very large gene lists
+    if ("geneID" %in% colnames(et)) {
+        et$geneID <- ifelse(et$Count <= MAX_NR_GENES_TO_SHOW,
+                            et$geneID, text_to_show)
+    }
+
+    et
+}
