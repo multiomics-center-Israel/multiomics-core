@@ -309,6 +309,20 @@ build_feature_ids <- function(data_df, id_cfg) {
         return(ids)
     }
 
+    # Auto-detect HMDB ID columns (HMDB_ID, HMDB, hmdb_id)
+    hmdb_col <- intersect(c("HMDB_ID", "HMDB", "hmdb_id"), colnames(data_df))[1]
+    if (!is.na(hmdb_col)) {
+        ids <- as.character(data_df[[hmdb_col]])
+        valid <- !is.na(ids) & nzchar(ids)
+        if (sum(valid) > nrow(data_df) * 0.5) {
+            ids[!valid] <- paste0("feature_", which(!valid))
+            if (anyDuplicated(ids) > 0) {
+                ids <- make.unique(ids, sep = "_")
+            }
+            return(ids)
+        }
+    }
+
     # Construct from Name / mz / RT
     name_col <- id_cfg$name_col %||% "Name"
     mz_col   <- id_cfg$mz_col   %||% "m/z"

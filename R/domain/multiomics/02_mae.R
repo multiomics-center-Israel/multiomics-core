@@ -201,11 +201,18 @@ harmonize_features_via_mapping <- function(mae, gene_protein_mapping) {
 
     # Create harmonized feature IDs (gene symbols if available)
     harmonized_ids <- paste0("GENE_", seq_len(nrow(map)))
-    if ("symbol" %in% colnames(SummarizedExperiment::rowData(rna_subset))) {
+    # Try gene_symbol from mapping table first, then symbol from rowData
+    if ("gene_symbol" %in% colnames(map)) {
+        symbols <- as.character(map$gene_symbol)
+        harmonized_ids <- ifelse(!is.na(symbols) & symbols != "",
+                                  symbols, harmonized_ids)
+    } else if ("symbol" %in% colnames(SummarizedExperiment::rowData(rna_subset))) {
         symbols <- SummarizedExperiment::rowData(rna_subset)$symbol
         harmonized_ids <- ifelse(!is.na(symbols) & symbols != "",
                                   symbols, harmonized_ids)
     }
+    # Ensure uniqueness (duplicate gene symbols get suffixed)
+    harmonized_ids <- make.unique(harmonized_ids, sep = "_")
 
     # Preserve original IDs in rowData before renaming
     SummarizedExperiment::rowData(rna_subset)$original_id <- rownames(rna_subset)
@@ -245,7 +252,8 @@ build_feature_name_map <- function(mae) {
         rd <- SummarizedExperiment::rowData(mae[[om]])
         feat_ids <- rownames(rd)
 
-        # Prefer gene_symbol, fall back to original_id, Name (metabolomics), then feature_id
+        # Prefer gene_symbol, fall back to original_id, Name (metabolomics),
+        # HMDB_ID/HMDB, then feature_id
         if ("gene_symbol" %in% colnames(rd)) {
             display <- as.character(rd$gene_symbol)
             # Fall back to original_id where symbol is missing
@@ -259,6 +267,8 @@ build_feature_name_map <- function(mae) {
             display <- as.character(rd$Name)
         } else if ("Metabolite" %in% colnames(rd)) {
             display <- as.character(rd$Metabolite)
+        } else if ("HMDB_ID" %in% colnames(rd)) {
+            display <- as.character(rd$HMDB_ID)
         } else if ("HMDB" %in% colnames(rd)) {
             display <- as.character(rd$HMDB)
         } else if ("feature_id" %in% colnames(rd)) {

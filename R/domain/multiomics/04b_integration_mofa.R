@@ -26,6 +26,7 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
     mofa_config <- config$modes$multiomics$integration$mofa2 %||% list()
     num_factors <- mofa_config$num_factors %||% 10
     convergence_mode <- mofa_config$convergence_mode %||% "fast"
+    scale_views <- mofa_config$scale_views %||% TRUE
     seed <- mofa_config$seed %||% 42
 
     message("Running MOFA2 integration...")
@@ -94,6 +95,7 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
 
     # Prepare options using MOFA2 API
     data_opts <- MOFA2::get_default_data_options(mofa_obj)
+    data_opts$scale_views <- scale_views
 
     model_opts <- MOFA2::get_default_model_options(mofa_obj)
     model_opts$num_factors <- min(num_factors, ncol(matrices[[1]]) - 1)
@@ -118,19 +120,20 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
 
     if (is.null(mofa_obj)) return(NULL)
 
-    # Run MOFA
+    # Run MOFA — use explicit outfile so we can re-load with all factors
+    mofa_hdf5 <- tempfile(pattern = "mofa_", fileext = ".hdf5")
     message("Training MOFA2 model with ", model_opts$num_factors, " factors...")
     message("  Convergence mode: ", convergence_mode)
     message("  Max iterations: ", train_opts$iter)
     message("  Random seed: ", seed)
 
     mofa_trained <- tryCatch({
-        MOFA2::run_mofa(mofa_obj, use_basilisk = FALSE)
+        MOFA2::run_mofa(mofa_obj, outfile = mofa_hdf5, use_basilisk = FALSE)
     }, error = function(e) {
         message("Error training MOFA model without basilisk: ", e$message)
         message("  Retrying with basilisk environment...")
         tryCatch({
-            MOFA2::run_mofa(mofa_obj, use_basilisk = TRUE)
+            MOFA2::run_mofa(mofa_obj, outfile = mofa_hdf5, use_basilisk = TRUE)
         }, error = function(e2) {
             message("MOFA training failed with basilisk: ", e2$message)
             return(NULL)
@@ -139,7 +142,13 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
 
     if (is.null(mofa_trained)) return(NULL)
 
-    message("MOFA2 training complete successfully")
+    message("MOFA2 training complete — ", mofa_trained@dimensions$K, " active factors")
+
+    # Attach sample metadata to MOFA model so built-in plots can color by covariates
+    meta_df <- as.data.frame(metadata)
+    meta_df$sample <- rownames(meta_df)
+    meta_df$group <- "group1"
+    MOFA2::samples_metadata(mofa_trained) <- meta_df
 
     # Extract results
     mofa_results <- extract_mofa_results(mofa_trained, metadata, config)
@@ -147,16 +156,23 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
     # Build feature name map from MAE rowData for display labels
     feature_name_map <- build_feature_name_map(mae)
 
+    # Build gene-symbol map from DE tables (for proteomics UniProt → gene symbol)
+    gene_symbol_map <- build_gene_symbol_map_from_de(config)
+
     # Create visualizations
     plots <- list()
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
         plots <- create_mofa_plots(mofa_trained, mofa_results, metadata, config,
-                                    out_dir, feature_name_map = feature_name_map)
+                                    out_dir, feature_name_map = feature_name_map,
+                                    gene_symbol_map = gene_symbol_map)
     }
 
+    # Drop the raw MOFA model object — it contains an HDF5 external pointer
+    # that cannot be serialized by {targets}. All useful data (factors, weights,
+    # variance explained) has already been extracted above.
     list(
-        model = mofa_trained,
+        model = NULL,
         factors = mofa_results$factor_df,
         weights = mofa_results$weights,
         variance_explained = mofa_results$var_df,
@@ -281,7 +297,7 @@ extract_top_mofa_features <- function(weights, n_top = 50) {
 #' @param out_dir Output directory
 #' @return List of plot file paths
 create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_dir,
-                              feature_name_map = NULL) {
+                              feature_name_map = NULL, gene_symbol_map = NULL) {
     message("Creating MOFA2 plots...")
 
     condition_col <- config$modes$multiomics$condition_column %||%
@@ -300,19 +316,38 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
         )
     }, error = function(e) message("Failed to create variance heatmap: ", e$message))
 
-    # 2. Factor scatter plots
+    # 2. Factor scatter plots (using MOFA2 built-in plot_factors)
     tryCatch({
         factors <- mofa_results$factors
         if (ncol(factors) >= 2) {
-            p <- plot_mofa_factors(factors, metadata, condition_col, c(1, 2))
+            p <- MOFA2::plot_factors(mofa_model,
+                factors = c(1, 2),
+                color_by = condition_col,
+                dot_size = 3,
+                alpha = 0.8
+            )
             plots$factors_1_2 <- p
             ggplot2::ggsave(
                 file.path(out_dir, "mofa_factors_1_2.png"),
                 plot = p, width = 8, height = 6, dpi = 300
             )
+
+            # Labeled version with sample names
+            p_labeled <- plot_mofa_factors(factors, metadata, condition_col,
+                                           factor_idx = c(1, 2))
+            plots$factors_1_2_labeled <- p_labeled
+            ggplot2::ggsave(
+                file.path(out_dir, "mofa_factors_1_2_labeled.png"),
+                plot = p_labeled, width = 8, height = 6, dpi = 300
+            )
         }
         if (ncol(factors) >= 3) {
-            p <- plot_mofa_factors(factors, metadata, condition_col, c(1, 3))
+            p <- MOFA2::plot_factors(mofa_model,
+                factors = c(1, 3),
+                color_by = condition_col,
+                dot_size = 3,
+                alpha = 0.8
+            )
             plots$factors_1_3 <- p
             ggplot2::ggsave(
                 file.path(out_dir, "mofa_factors_1_3.png"),
@@ -321,7 +356,7 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
         }
     }, error = function(e) message("Failed to create factor plots: ", e$message))
 
-    # 3. Top weights per factor
+    # 3. Top weights per factor (feature IDs as-is)
     tryCatch({
         for (view in names(mofa_results$weights)) {
             p <- plot_mofa_top_weights(mofa_results$weights[[view]], view, n_top = 20,
@@ -333,6 +368,21 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
             )
         }
     }, error = function(e) message("Failed to create weight plots: ", e$message))
+
+    # 4. Gene-symbol weight plot for proteomics (separate tab)
+    tryCatch({
+        if ("proteomics" %in% names(mofa_results$weights) && !is.null(gene_symbol_map) &&
+            length(gene_symbol_map) > 0) {
+            p <- plot_mofa_top_weights(mofa_results$weights[["proteomics"]],
+                                       "proteomics (Gene Symbol)", n_top = 20,
+                                       feature_name_map = gene_symbol_map)
+            plots$top_weights_proteomics_genesymbol <- p
+            ggplot2::ggsave(
+                file.path(out_dir, "mofa_top_weights_proteomics_genesymbol.png"),
+                plot = p, width = 10, height = 8, dpi = 300
+            )
+        }
+    }, error = function(e) message("Failed to create gene-symbol weight plot: ", e$message))
 
     message("MOFA2 plots complete")
     plots
@@ -377,6 +427,43 @@ plot_mofa_factors <- function(factors, metadata, condition_col, factor_idx = c(1
     f1 <- factor_idx[1]
     f2 <- factor_idx[2]
 
+    # Detect single-factor model: if only 1 column or Factor 2 is noise
+    single_factor <- ncol(factors) < 2 ||
+        (f2 <= ncol(factors) &&
+         max(abs(factors[, f2])) < max(abs(factors[, f1])) * 1e-6)
+
+    if (single_factor) {
+        df <- data.frame(
+            Factor1 = factors[, f1],
+            sample_id = rownames(factors),
+            stringsAsFactors = FALSE
+        )
+        if (!is.null(condition_col) && condition_col %in% colnames(metadata)) {
+            df$condition <- metadata[df$sample_id, condition_col]
+        } else {
+            df$condition <- "All"
+        }
+
+        p <- ggplot2::ggplot(df,
+                ggplot2::aes(x = condition, y = Factor1, color = condition)) +
+            ggplot2::geom_jitter(size = 3, alpha = 0.8, width = 0.15) +
+            ggplot2::theme_minimal() +
+            ggplot2::labs(
+                title = "MOFA2: Factor 1 by Condition",
+                x = condition_col,
+                y = paste0("Factor ", f1),
+                color = condition_col
+            )
+
+        if (requireNamespace("ggrepel", quietly = TRUE)) {
+            p <- p + ggrepel::geom_text_repel(
+                ggplot2::aes(label = sample_id),
+                size = 2.8, max.overlaps = 20, show.legend = FALSE
+            )
+        }
+        return(p)
+    }
+
     df <- data.frame(
         Factor1 = factors[, f1],
         Factor2 = factors[, f2],
@@ -390,7 +477,7 @@ plot_mofa_factors <- function(factors, metadata, condition_col, factor_idx = c(1
         df$condition <- "All"
     }
 
-    ggplot2::ggplot(df, ggplot2::aes(x = Factor1, y = Factor2, color = condition)) +
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = Factor1, y = Factor2, color = condition)) +
         ggplot2::geom_point(size = 3, alpha = 0.8) +
         ggplot2::theme_minimal() +
         ggplot2::labs(
@@ -399,6 +486,20 @@ plot_mofa_factors <- function(factors, metadata, condition_col, factor_idx = c(1
             y = paste0("Factor ", f2),
             color = condition_col
         )
+
+    # Add sample labels
+    if (requireNamespace("ggrepel", quietly = TRUE)) {
+        p <- p + ggrepel::geom_text_repel(
+            ggplot2::aes(label = sample_id),
+            size = 2.8, max.overlaps = 20, show.legend = FALSE
+        )
+    } else {
+        p <- p + ggplot2::geom_text(
+            ggplot2::aes(label = sample_id),
+            size = 2.8, vjust = -0.8, show.legend = FALSE
+        )
+    }
+    p
 }
 
 
@@ -888,4 +989,51 @@ plot_mofa_variance <- function(mofa_result, top_n = NULL) {
         )
 
     return(p)
+}
+
+
+#' Build gene symbol map from DE tables
+#'
+#' Reads proteomics DE tables and extracts FeatureID → Genes mapping.
+#' Falls back to an empty named character if no DE tables or no Genes column.
+#'
+#' @param config Full config object
+#' @return Named character vector: names = feature IDs, values = gene symbols
+build_gene_symbol_map_from_de <- function(config) {
+    gene_map <- character(0)
+
+    prot_cfg <- config$modes$proteomics
+    if (is.null(prot_cfg)) return(gene_map)
+
+    de_files <- prot_cfg$files$de_table
+    if (is.null(de_files) || length(de_files) == 0) return(gene_map)
+
+    base_dir <- config$paths$raw %||% "."
+    project_dir <- config$project$dir %||% "."
+
+    for (f in de_files) {
+        fpath <- file.path(project_dir, base_dir, f)
+        if (!file.exists(fpath)) next
+
+        de <- tryCatch(
+            read.delim(fpath, stringsAsFactors = FALSE, nrows = -1),
+            error = function(e) NULL
+        )
+        if (is.null(de)) next
+
+        id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+        if (!id_col %in% colnames(de) || !"Genes" %in% colnames(de)) next
+
+        ids <- as.character(de[[id_col]])
+        genes <- as.character(de[["Genes"]])
+
+        # Only map where gene symbol is non-empty
+        valid <- !is.na(genes) & genes != ""
+        new_map <- setNames(genes[valid], ids[valid])
+        gene_map <- c(gene_map, new_map)
+    }
+
+    # Deduplicate (first occurrence wins)
+    gene_map <- gene_map[!duplicated(names(gene_map))]
+    gene_map
 }

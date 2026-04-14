@@ -1030,8 +1030,37 @@ infer_regulatory_network <- function(harmonized, gene_mapping, mc, config, out_d
                   file.path(out_dir, "tables", "mech_hub_regulators.csv"),
                   row.names = FALSE)
 
+        # Build gene symbol map from feature annotation
+        gene_symbol_map <- NULL
+        omics_used <- if ("transcriptomics" %in% names(harmonized)) "transcriptomics" else "proteomics"
+        anno <- harmonized[[omics_used]]$feature_annotation
+        if (!is.null(anno)) {
+            feat_ids <- rownames(anno)
+            for (col in c("gene_symbol", "Genes", "Gene.Symbol", "symbol")) {
+                if (col %in% colnames(anno)) {
+                    syms <- as.character(anno[[col]])
+                    valid <- !is.na(syms) & syms != "" & syms != feat_ids
+                    if (sum(valid) > 0) {
+                        gene_symbol_map <- setNames(syms, feat_ids)
+                        break
+                    }
+                }
+            }
+        }
+
+        # Fallback: try DE table gene symbol map (proteomics UniProt -> Genes)
+        if (is.null(gene_symbol_map) || sum(!is.na(gene_symbol_map)) == 0) {
+            de_map <- tryCatch(
+                build_gene_symbol_map_from_de(config),
+                error = function(e) NULL
+            )
+            if (!is.null(de_map) && length(de_map) > 0) {
+                gene_symbol_map <- de_map
+            }
+        }
+
         # Visualizations
-        plot_regulatory_network(network, out_dir)
+        plot_regulatory_network(network, out_dir, gene_symbol_map = gene_symbol_map)
     }
 
     return(network)
@@ -1184,7 +1213,10 @@ identify_hub_regulators <- function(edges, mc) {
 }
 
 #' Plot regulatory network
-plot_regulatory_network <- function(network, out_dir) {
+#' @param network Network object with edges, hubs, method
+#' @param out_dir Output directory
+#' @param gene_symbol_map Named character vector: feature_id -> gene_symbol (optional)
+plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
     edges <- network$edges
 
     # Use igraph for visualization
@@ -1198,35 +1230,176 @@ plot_regulatory_network <- function(network, out_dir) {
         directed = TRUE
     )
 
-    # Identify hubs
+    # Identify hubs and compute degree
     if (!is.null(network$hubs)) {
         hub_genes <- network$hubs$gene[network$hubs$is_hub]
         igraph::V(g)$is_hub <- igraph::V(g)$name %in% hub_genes
+    } else {
+        igraph::V(g)$is_hub <- FALSE
+    }
+    node_deg <- igraph::degree(g, mode = "all")
+    is_hub <- igraph::V(g)$is_hub
+
+    # Resolve gene symbols for nodes
+    node_names <- igraph::V(g)$name
+    gene_symbols <- if (!is.null(gene_symbol_map)) {
+        mapped <- gene_symbol_map[node_names]
+        ifelse(!is.na(mapped) & mapped != "" & mapped != node_names,
+               mapped, NA_character_)
+    } else {
+        rep(NA_character_, length(node_names))
+    }
+    has_gene_symbols <- sum(!is.na(gene_symbols)) > length(gene_symbols) * 0.1
+
+    # Compute layout once so both static plots use identical node positions
+    set.seed(42)
+    net_layout <- igraph::layout_with_fr(g)
+
+    # Helper: generate static network PNG
+    .plot_static_network <- function(out_path, use_gene_symbols = FALSE, title_suffix = "") {
+        grDevices::png(out_path, width = 12, height = 12, units = "in", res = 300)
+        tryCatch({
+            v_colors <- ifelse(is_hub, "#d73027", "#4575b4")
+            deg_scaled <- 3 + (node_deg / max(node_deg, 1)) * 10
+
+            # Choose labels
+            if (use_gene_symbols) {
+                display <- ifelse(!is.na(gene_symbols), gene_symbols, node_names)
+            } else {
+                display <- node_names
+            }
+
+            max_labels <- 60
+            n_hub_labels <- sum(is_hub)
+            non_hub_order <- order(node_deg[!is_hub], decreasing = TRUE)
+            n_extra <- min(max_labels - n_hub_labels, length(non_hub_order))
+            top_non_hub_names <- node_names[!is_hub][non_hub_order[seq_len(n_extra)]]
+            show_label <- is_hub | (node_names %in% top_non_hub_names)
+            v_labels <- ifelse(show_label, display, NA)
+            v_label_cex <- ifelse(is_hub, 0.8, 0.55)
+
+            igraph::plot.igraph(
+                g,
+                vertex.size = deg_scaled,
+                vertex.color = v_colors,
+                vertex.label = v_labels,
+                vertex.label.cex = v_label_cex,
+                vertex.label.dist = 0.5,
+                vertex.label.color = "black",
+                edge.arrow.size = 0.3,
+                edge.color = "gray70",
+                layout = net_layout,
+                main = paste0("Regulatory Network (", network$method, ")", title_suffix)
+            )
+            legend("bottomleft",
+                   legend = c("Hub node (high degree)", "Non-hub node",
+                              "Larger node = more connections"),
+                   col = c("#d73027", "#4575b4", NA),
+                   pt.bg = c("#d73027", "#4575b4", NA),
+                   pch = c(21, 21, NA),
+                   pt.cex = c(2.5, 1.5, NA),
+                   cex = 0.9, bty = "n", title = "Legend")
+        }, error = function(e) {
+            message("  Network plot failed: ", e$message)
+        })
+        grDevices::dev.off()
     }
 
-    # Save as PNG
-    grDevices::png(file.path(out_dir, "plots", "mech_regulatory_network.png"),
-                   width = 12, height = 12, units = "in", res = 300)
+    # Static PNG with feature IDs
+    .plot_static_network(file.path(out_dir, "plots", "mech_regulatory_network.png"))
 
-    tryCatch({
-        v_colors <- ifelse(igraph::V(g)$is_hub, "#d73027", "#4575b4")
-
-        igraph::plot.igraph(
-            g,
-            vertex.size = ifelse(igraph::V(g)$is_hub, 8, 4),
-            vertex.color = v_colors,
-            vertex.label = ifelse(igraph::V(g)$is_hub, igraph::V(g)$name, NA),
-            vertex.label.cex = 0.7,
-            edge.arrow.size = 0.3,
-            edge.color = "gray70",
-            layout = igraph::layout_with_fr(g),
-            main = paste0("Regulatory Network (", network$method, ")")
+    # Static PNG with gene symbols (only if symbols are available)
+    if (has_gene_symbols) {
+        .plot_static_network(
+            file.path(out_dir, "plots", "mech_regulatory_network_genesymbol.png"),
+            use_gene_symbols = TRUE,
+            title_suffix = " - Gene Symbols"
         )
-    }, error = function(e) {
-        message("  Network plot failed: ", e$message)
-    })
+        message("  Gene symbol network plot saved")
+    }
 
-    grDevices::dev.off()
+    # --- Interactive visNetwork widget ---
+    tryCatch({
+        if (!requireNamespace("visNetwork", quietly = TRUE)) {
+            message("  visNetwork not available — skipping interactive network")
+            return(invisible(NULL))
+        }
+
+        # Build tooltip with gene symbol if available
+        tooltip_lines <- paste0("<b>", node_names, "</b>")
+        if (has_gene_symbols) {
+            tooltip_lines <- paste0(
+                tooltip_lines, "<br>Gene Symbol: ",
+                ifelse(!is.na(gene_symbols), gene_symbols, "N/A")
+            )
+        }
+        tooltip_lines <- paste0(
+            tooltip_lines, "<br>Degree: ", node_deg, "<br>",
+            ifelse(is_hub, "Hub regulator", "Non-hub")
+        )
+
+        vis_nodes <- data.frame(
+            id = node_names,
+            label = node_names,
+            title = tooltip_lines,
+            color = ifelse(is_hub, "#d73027", "#4575b4"),
+            size = 10 + (node_deg / max(node_deg, 1)) * 30,
+            font.size = ifelse(is_hub, 16, 11),
+            borderWidth = ifelse(is_hub, 3, 1),
+            stringsAsFactors = FALSE
+        )
+
+        vis_edges <- data.frame(
+            from = top_edges$regulator,
+            to = top_edges$target,
+            color = "rgba(150,150,150,0.4)",
+            arrows = "to",
+            width = 0.5,
+            stringsAsFactors = FALSE
+        )
+
+        net <- visNetwork::visNetwork(
+            vis_nodes, vis_edges,
+            main = paste0("Regulatory Network (", network$method, ") - Interactive"),
+            width = "100%", height = "700px"
+        ) |>
+            visNetwork::visPhysics(
+                solver = "forceAtlas2Based",
+                forceAtlas2Based = list(
+                    gravitationalConstant = -50,
+                    centralGravity = 0.005,
+                    springLength = 100,
+                    springConstant = 0.08,
+                    damping = 0.4
+                ),
+                stabilization = list(iterations = 150)
+            ) |>
+            visNetwork::visInteraction(
+                hover = TRUE,
+                tooltipDelay = 100,
+                navigationButtons = TRUE,
+                zoomView = TRUE
+            ) |>
+            visNetwork::visLegend(
+                addNodes = list(
+                    list(label = "Hub (high degree)", shape = "dot",
+                         color = "#d73027", size = 20),
+                    list(label = "Non-hub", shape = "dot",
+                         color = "#4575b4", size = 10)
+                ),
+                useGroups = FALSE,
+                position = "left",
+                width = 0.15
+            )
+
+        # Save as RDS for embedding in report
+        rds_path <- file.path(out_dir, "plots", "mech_regulatory_network_interactive.rds")
+        saveRDS(net, rds_path)
+        message("  Interactive network widget saved: ", rds_path)
+
+    }, error = function(e) {
+        message("  Interactive network creation failed: ", e$message)
+    })
 }
 
 
@@ -2544,6 +2717,12 @@ analyze_protein_metabolite_correlations <- function(harmonized, de_results,
                                                  max_n = 100)
     metab_ids <- select_features_for_correlation(metab_mat, de_results, "metabolomics",
                                                   max_n = 50)
+
+    message("  Selected ", length(prot_ids), " proteins (from ",
+            nrow(prot_mat), " total) and ", length(metab_ids),
+            " metabolites (from ", nrow(metab_mat), " total)")
+    message("  Selection method: DE-significant features if available (pass_any filter), ",
+            "otherwise top variable features (by variance)")
 
     if (length(prot_ids) < 2 || length(metab_ids) < 2) {
         message("  Too few features for correlation analysis. Skipping.")

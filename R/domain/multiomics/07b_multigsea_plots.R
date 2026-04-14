@@ -1021,6 +1021,27 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         NULL
     })
 
+    # 5. Per-omics pathview: top metabolomics pathways + proteomics overlay,
+    #    and top proteomics pathways + metabolomics overlay
+    per_omics_pv <- tryCatch({
+        generate_per_omics_pathview(
+            per_omics_ora = per_omics_ora,
+            metab_ora = metab_ora,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir,
+            top_n = 5
+        )
+    }, error = function(e) {
+        message("  Per-omics pathview failed: ", e$message)
+        NULL
+    })
+    if (!is.null(per_omics_pv)) {
+        plots$pathview_metabolomics_pdf <- per_omics_pv$metabolomics_pdf
+        plots$pathview_proteomics_pdf <- per_omics_pv$proteomics_pdf
+    }
+
     # --- Per-contrast Multi-ORA ---
     # Re-extract DE tables to get per-contrast names, then run ORA per contrast
     all_de_tables <- list()
@@ -1209,7 +1230,7 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
         return(NULL)
     }
 
-    # Try clusterProfiler first
+    # Try clusterProfiler first — use lenient cutoff, filter manually after
     ora_res <- tryCatch({
         res <- clusterProfiler::enrichKEGG(
             gene = sig_genes,
@@ -1218,11 +1239,11 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
             keyType = "kegg",
             minGSSize = 5,
             maxGSSize = 500,
-            pvalueCutoff = pval_cutoff
+            pvalueCutoff = 1.0
         )
         if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
             df <- as.data.frame(res)
-            return(data.frame(
+            out <- data.frame(
                 pathway = df$Description,
                 ID = df$ID,
                 pvalue = df$pvalue,
@@ -1231,7 +1252,16 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
                 Count = df$Count,
                 geneID = df$geneID,
                 stringsAsFactors = FALSE
-            ))
+            )
+            # Filter: prefer padj, fall back to pvalue < 0.05
+            padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
+            if (nrow(padj_hits) > 0) return(padj_hits)
+            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+            if (nrow(pval_hits) > 0) {
+                message("    ", label, ": padj too strict, using pvalue < 0.05 (",
+                        nrow(pval_hits), " pathways)")
+                return(pval_hits)
+            }
         }
         NULL
     }, error = function(e) {
@@ -1276,16 +1306,21 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
     # Add normalized ID column for cross-prefix matching
     summary$norm_id <- normalize_kegg_pathway_id(summary$ID)
 
-    # Add per-omics support columns
+    # Add per-omics support columns (padj and pvalue)
     omics_names <- names(per_omics_ora)
     for (om in omics_names) {
         om_res <- per_omics_ora[[om]]
         if (is.null(om_res) || nrow(om_res) == 0) {
             summary[[paste0(om, "_padj")]] <- NA_real_
+            summary[[paste0(om, "_pvalue")]] <- NA_real_
             next
         }
         om_padj <- setNames(om_res$padj, om_res$ID)
         summary[[paste0(om, "_padj")]] <- om_padj[summary$ID]
+        if ("pvalue" %in% colnames(om_res)) {
+            om_pval <- setNames(om_res$pvalue, om_res$ID)
+            summary[[paste0(om, "_pvalue")]] <- om_pval[summary$ID]
+        }
     }
 
     # Add metabolomics via full outer join on normalized pathway IDs
@@ -1296,6 +1331,7 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 
         # Match existing rows
         summary$metabolomics_padj <- met_padj[summary$norm_id]
+        summary$metabolomics_pvalue <- met_pval[summary$norm_id]
 
         # Find compound-only pathways (not in gene ORA results)
         new_ids <- setdiff(met_norm, summary$norm_id)
@@ -1312,8 +1348,10 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
             # Add per-omics columns as NA
             for (om in omics_names) {
                 new_rows[[paste0(om, "_padj")]] <- NA_real_
+                new_rows[[paste0(om, "_pvalue")]] <- NA_real_
             }
             new_rows$metabolomics_padj <- met_padj[new_ids]
+            new_rows$metabolomics_pvalue <- met_pval[new_ids]
 
             summary <- rbind(summary, new_rows)
         }
@@ -1322,9 +1360,20 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
     # Count supporting omics (padj < 0.05)
     padj_cols <- grep("_padj$", colnames(summary), value = TRUE)
     padj_cols <- setdiff(padj_cols, "pooled_padj")
-    summary$n_omics_support <- rowSums(
-        sapply(padj_cols, function(col) !is.na(summary[[col]]) & summary[[col]] < 0.05)
-    )
+    padj_mat <- sapply(padj_cols, function(col) !is.na(summary[[col]]) & summary[[col]] < 0.05)
+    if (!is.matrix(padj_mat)) padj_mat <- matrix(padj_mat, ncol = length(padj_cols))
+    summary$n_omics_support <- rowSums(padj_mat)
+
+    # Fallback: count support using pvalue < 0.05 when padj is too strict
+    pval_cols <- grep("_pvalue$", colnames(summary), value = TRUE)
+    pval_cols <- setdiff(pval_cols, "pooled_pvalue")
+    if (length(pval_cols) > 0) {
+        pval_mat <- sapply(pval_cols, function(col) !is.na(summary[[col]]) & summary[[col]] < 0.05)
+        if (!is.matrix(pval_mat)) pval_mat <- matrix(pval_mat, ncol = length(pval_cols))
+        summary$n_omics_support_pval <- rowSums(pval_mat)
+    } else {
+        summary$n_omics_support_pval <- summary$n_omics_support
+    }
 
     # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only
     summary <- summary[order(is.na(summary$pooled_pvalue), summary$pooled_pvalue,
@@ -1518,7 +1567,8 @@ plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
 #' @param min_support Minimum n_omics_support to include (default 2)
 #' @return Character path to compiled PDF, or NULL
 generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
-                                        config, out_dir, min_support = 2) {
+                                        config, out_dir, min_support = 2,
+                                        top_n = 5) {
 
     if (!requireNamespace("pathview", quietly = TRUE)) {
         message("  Package 'pathview' not installed. Skipping pathway maps.")
@@ -1527,12 +1577,75 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
 
     if (is.null(combined) || !"n_omics_support" %in% colnames(combined)) return(NULL)
 
-    # Filter pathways with sufficient omics support
-    supported <- combined[combined$n_omics_support >= min_support, ]
+    # Read top_n from config if available
+    pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
+    top_n <- pv_cfg$top_n %||% top_n
+
+    # --- Prioritize pathways supported by both metabolomics AND proteomics ---
+    has_met_padj <- "metabolomics_padj" %in% colnames(combined)
+    has_prot_padj <- "proteomics_padj" %in% colnames(combined)
+    has_met_pval <- "metabolomics_pvalue" %in% colnames(combined)
+    has_prot_pval <- "proteomics_pvalue" %in% colnames(combined)
+
+    supported <- NULL
+
+    # Tier 1: both metabolomics + proteomics padj < 0.05
+    if (has_met_padj && has_prot_padj) {
+        tier1 <- combined[
+            !is.na(combined$metabolomics_padj) & combined$metabolomics_padj < 0.05 &
+            !is.na(combined$proteomics_padj) & combined$proteomics_padj < 0.05, ]
+        if (nrow(tier1) > 0) {
+            message("  Pathview: ", nrow(tier1),
+                    " pathways supported by both metabolomics & proteomics (padj < 0.05)")
+            supported <- tier1
+        }
+    }
+
+    # Tier 2: both metabolomics + proteomics pvalue < 0.05
+    if (is.null(supported) || nrow(supported) == 0) {
+        if (has_met_pval && has_prot_pval) {
+            tier2 <- combined[
+                !is.na(combined$metabolomics_pvalue) & combined$metabolomics_pvalue < 0.05 &
+                !is.na(combined$proteomics_pvalue) & combined$proteomics_pvalue < 0.05, ]
+            if (nrow(tier2) > 0) {
+                message("  Pathview: padj too strict; ", nrow(tier2),
+                        " pathways with metabolomics & proteomics pvalue < 0.05")
+                supported <- tier2
+            }
+        }
+    }
+
+    # Tier 3: general n_omics_support >= min_support (padj-based)
+    if (is.null(supported) || nrow(supported) == 0) {
+        supported <- combined[combined$n_omics_support >= min_support, ]
+    }
+
+    # Tier 4: general pvalue-based support
+    if (nrow(supported) == 0 && "n_omics_support_pval" %in% colnames(combined)) {
+        message("  No pathways with padj-based support >= ", min_support,
+                ", falling back to pvalue < 0.05")
+        supported <- combined[combined$n_omics_support_pval >= min_support, ]
+    }
+
+    # Tier 5: relax to single-omics support with pvalue
+    if (nrow(supported) == 0 && min_support > 1) {
+        message("  No pathways with pvalue-based support >= ", min_support,
+                ", relaxing to single-omics support")
+        if ("n_omics_support_pval" %in% colnames(combined)) {
+            supported <- combined[combined$n_omics_support_pval >= 1, ]
+        } else {
+            supported <- combined[combined$n_omics_support >= 1, ]
+        }
+    }
+
     if (nrow(supported) == 0) {
-        message("  No pathways with >= ", min_support, " omics support for pathview")
+        message("  No pathways with any omics support for pathview")
         return(NULL)
     }
+
+    # Limit to top_n pathways sorted by pooled_pvalue
+    supported <- supported[order(supported$pooled_pvalue, na.last = TRUE), ]
+    supported <- head(supported, top_n)
 
     message("  Generating pathview for ", nrow(supported),
             " pathways (>= ", min_support, " omics support)")
@@ -1634,13 +1747,19 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
                 same.layer = FALSE
             )
 
-            # pathview appends ".multi" suffix for multi-state gene data
-            out_png <- paste0(kegg_org, clean_pid, ".multi_ora.multi.png")
-            if (!file.exists(out_png)) {
-                out_png <- paste0(kegg_org, clean_pid, ".multi_ora.png")
-            }
-            if (file.exists(out_png)) {
-                generated_pngs <- c(generated_pngs, file.path(pv_dir, out_png))
+            # pathview output naming varies: .multi_ora.png, .multi_ora.multi.png,
+            # or with gene/cpd suffixes when same.layer=FALSE
+            candidates <- c(
+                paste0(kegg_org, clean_pid, ".multi_ora.multi.png"),
+                paste0(kegg_org, clean_pid, ".multi_ora.png"),
+                paste0(kegg_org, clean_pid, ".multi_ora.gene.png"),
+                paste0(kegg_org, clean_pid, ".multi_ora.cpd.png")
+            )
+            found <- candidates[file.exists(candidates)]
+            if (length(found) > 0) {
+                # Use absolute paths — we're already in pv_dir via setwd
+                generated_pngs <- c(generated_pngs,
+                                     file.path(pv_dir, found[1]))
                 message("    Pathview: ", pw_name, " (", pid, ")")
             }
         }, error = function(e) {
@@ -1671,4 +1790,269 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         tryCatch(grDevices::dev.off(), error = function(e2) NULL)
         NULL
     })
+}
+
+
+#' Generate pathview plots for top pathways from each omics, overlaying both layers
+#'
+#' Two sets of plots:
+#' 1. Top N metabolomics-enriched pathways with proteomics enzyme logFC overlaid
+#' 2. Top N proteomics-enriched pathways with metabolomics compound logFC overlaid
+#'
+#' @param per_omics_ora Named list of per-omics ORA results
+#' @param metab_ora Metabolomics compound ORA results
+#' @param de_results Named list of DE results per omics
+#' @param harmonization_res Harmonization result
+#' @param config Full config
+#' @param out_dir Output directory
+#' @param top_n Number of top pathways per omics (default 5)
+#' @return List with paths to compiled PDFs
+generate_per_omics_pathview <- function(per_omics_ora, metab_ora, de_results,
+                                        harmonization_res, config, out_dir,
+                                        top_n = 5) {
+
+    if (!requireNamespace("pathview", quietly = TRUE)) {
+        message("  Package 'pathview' not installed. Skipping per-omics pathview.")
+        return(NULL)
+    }
+
+    organism <- config$global$organism %||% "human"
+    kegg_org <- get_kegg_organism(organism)
+    org_db <- get_organism_db(organism)
+    if (is.null(kegg_org)) return(NULL)
+
+    pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
+    top_n <- pv_cfg$top_n %||% top_n
+
+    pv_dir <- file.path(out_dir, "pathview")
+    dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # --- Build proteomics gene logFC vector ---
+    gene_data <- NULL
+    if ("proteomics" %in% names(de_results)) {
+        de_tables <- extract_de_tables(de_results$proteomics, "proteomics",
+                                        harmonization_res)
+        if (!is.null(de_tables) && length(de_tables) > 0) {
+            id_map <- tryCatch(
+                map_feature_ids_to_entrez(de_tables, "proteomics",
+                                           harmonization_res, org_db),
+                error = function(e) NULL
+            )
+            if (!is.null(id_map) && nrow(id_map) > 0) {
+                df <- de_tables[[1]]
+                df_mapped <- merge(df, id_map, by = "feature_id")
+                fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID,
+                                  mean, na.rm = TRUE)
+                gene_data <- as.numeric(fc_arr)
+                names(gene_data) <- names(fc_arr)
+                message("  Pathview: ", length(gene_data),
+                        " proteomics enzymes with logFC")
+            }
+        }
+    }
+
+    # Also try transcriptomics if available
+    if (is.null(gene_data) && "transcriptomics" %in% names(de_results)) {
+        de_tables <- extract_de_tables(de_results$transcriptomics, "transcriptomics",
+                                        harmonization_res)
+        if (!is.null(de_tables) && length(de_tables) > 0) {
+            id_map <- tryCatch(
+                map_feature_ids_to_entrez(de_tables, "transcriptomics",
+                                           harmonization_res, org_db),
+                error = function(e) NULL
+            )
+            if (!is.null(id_map) && nrow(id_map) > 0) {
+                df <- de_tables[[1]]
+                df_mapped <- merge(df, id_map, by = "feature_id")
+                fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID,
+                                  mean, na.rm = TRUE)
+                gene_data <- as.numeric(fc_arr)
+                names(gene_data) <- names(fc_arr)
+                message("  Pathview: ", length(gene_data),
+                        " transcriptomics genes with logFC")
+            }
+        }
+    }
+
+    # --- Build metabolomics compound logFC vector ---
+    cpd_data <- NULL
+    if ("metabolomics" %in% names(de_results)) {
+        de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics",
+                                        harmonization_res)
+        id_map <- tryCatch(
+            map_metabolite_ids_to_kegg(de_tables, harmonization_res),
+            error = function(e) NULL
+        )
+        if (!is.null(id_map) && nrow(id_map) > 0 && length(de_tables) > 0) {
+            df <- de_tables[[1]]
+            df_mapped <- merge(df, id_map, by = "feature_id")
+            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD,
+                              mean, na.rm = TRUE)
+            cpd_data <- as.numeric(cpd_fc)
+            names(cpd_data) <- names(cpd_fc)
+            message("  Pathview: ", length(cpd_data),
+                    " metabolites with logFC")
+        }
+    }
+
+    if (is.null(gene_data) && is.null(cpd_data)) {
+        message("  No logFC data available for per-omics pathview")
+        return(NULL)
+    }
+
+    # Ensure pathview bods dataset is loaded
+    if (!exists("bods", envir = globalenv())) {
+        utils::data("bods", package = "pathview", envir = globalenv())
+    }
+
+    cwd <- getwd()
+    setwd(pv_dir)
+    on.exit(setwd(cwd), add = TRUE)
+
+    results <- list()
+
+    # ------------------------------------------------------------------
+    # Set 1: Top metabolomics pathways with proteomics enzyme overlay
+    # ------------------------------------------------------------------
+    if (!is.null(metab_ora) && nrow(metab_ora) > 0) {
+        # Sort by pvalue, take top_n
+        met_top <- metab_ora[order(metab_ora$pvalue), ]
+        met_top <- head(met_top, top_n)
+
+        message("  Pathview set 1: top ", nrow(met_top),
+                " metabolomics pathways + proteomics overlay")
+
+        met_pngs <- character(0)
+        for (i in seq_len(nrow(met_top))) {
+            pid <- met_top$ID[i]
+            pw_name <- met_top$pathway[i]
+            clean_pid <- normalize_kegg_pathway_id(pid)
+
+            tryCatch({
+                pathview::pathview(
+                    gene.data  = gene_data,
+                    cpd.data   = cpd_data,
+                    pathway.id = clean_pid,
+                    species    = kegg_org,
+                    out.suffix = "metab_top",
+                    kegg.dir   = pv_dir,
+                    keys.align = "y",
+                    match.data = TRUE,
+                    multi.state = FALSE,
+                    same.layer  = TRUE
+                )
+
+                candidates <- c(
+                    paste0(kegg_org, clean_pid, ".metab_top.png"),
+                    paste0(kegg_org, clean_pid, ".metab_top.multi.png")
+                )
+                found <- candidates[file.exists(candidates)]
+                if (length(found) > 0) {
+                    met_pngs <- c(met_pngs, file.path(pv_dir, found[1]))
+                    message("    ", pw_name, " (", pid, ")")
+                }
+            }, error = function(e) {
+                message("    Pathview failed for ", pid, ": ", e$message)
+            })
+        }
+
+        if (length(met_pngs) > 0) {
+            pdf_path <- file.path(out_dir,
+                                   "pathview_top_metabolomics_pathways.pdf")
+            tryCatch({
+                grDevices::pdf(pdf_path, width = 12, height = 8)
+                for (png_file in met_pngs) {
+                    img <- png::readPNG(png_file)
+                    grid::grid.newpage()
+                    grid::grid.raster(img)
+                }
+                grDevices::dev.off()
+                message("  Compiled ", length(met_pngs),
+                        " metabolomics pathview maps into: ",
+                        basename(pdf_path))
+                results$metabolomics_pdf <- pdf_path
+            }, error = function(e) {
+                message("  PDF compilation failed: ", e$message)
+                tryCatch(grDevices::dev.off(), error = function(e2) NULL)
+            })
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # Set 2: Top proteomics pathways with metabolomics compound overlay
+    # ------------------------------------------------------------------
+    prot_ora <- per_omics_ora[["proteomics"]]
+    if (is.null(prot_ora) || nrow(prot_ora) == 0) {
+        prot_ora <- per_omics_ora[["transcriptomics"]]
+    }
+
+    if (!is.null(prot_ora) && nrow(prot_ora) > 0) {
+        prot_top <- prot_ora[order(prot_ora$pvalue), ]
+        prot_top <- head(prot_top, top_n)
+
+        message("  Pathview set 2: top ", nrow(prot_top),
+                " proteomics pathways + metabolomics overlay")
+
+        prot_pngs <- character(0)
+        for (i in seq_len(nrow(prot_top))) {
+            pid <- prot_top$ID[i]
+            pw_name <- prot_top$pathway[i]
+            clean_pid <- normalize_kegg_pathway_id(pid)
+
+            tryCatch({
+                pathview::pathview(
+                    gene.data  = gene_data,
+                    cpd.data   = cpd_data,
+                    pathway.id = clean_pid,
+                    species    = kegg_org,
+                    out.suffix = "prot_top",
+                    kegg.dir   = pv_dir,
+                    keys.align = "y",
+                    match.data = TRUE,
+                    multi.state = FALSE,
+                    same.layer  = TRUE
+                )
+
+                candidates <- c(
+                    paste0(kegg_org, clean_pid, ".prot_top.png"),
+                    paste0(kegg_org, clean_pid, ".prot_top.multi.png")
+                )
+                found <- candidates[file.exists(candidates)]
+                if (length(found) > 0) {
+                    prot_pngs <- c(prot_pngs, file.path(pv_dir, found[1]))
+                    message("    ", pw_name, " (", pid, ")")
+                }
+            }, error = function(e) {
+                message("    Pathview failed for ", pid, ": ", e$message)
+            })
+        }
+
+        if (length(prot_pngs) > 0) {
+            pdf_path <- file.path(out_dir,
+                                   "pathview_top_proteomics_pathways.pdf")
+            tryCatch({
+                grDevices::pdf(pdf_path, width = 12, height = 8)
+                for (png_file in prot_pngs) {
+                    img <- png::readPNG(png_file)
+                    grid::grid.newpage()
+                    grid::grid.raster(img)
+                }
+                grDevices::dev.off()
+                message("  Compiled ", length(prot_pngs),
+                        " proteomics pathview maps into: ",
+                        basename(pdf_path))
+                results$proteomics_pdf <- pdf_path
+            }, error = function(e) {
+                message("  PDF compilation failed: ", e$message)
+                tryCatch(grDevices::dev.off(), error = function(e2) NULL)
+            })
+        }
+    }
+
+    if (length(results) == 0) {
+        message("  No per-omics pathview plots generated")
+        return(NULL)
+    }
+
+    results
 }

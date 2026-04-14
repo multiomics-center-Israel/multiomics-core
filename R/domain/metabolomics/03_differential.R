@@ -65,14 +65,22 @@ load_precomputed_metabolomics_de <- function(config) {
         pval_col <- cn[cn %in% c("raw.pval", "P.Value", "pvalue", "PValue", "p.value")][1]
         pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
 
+        # AveExpr: try common column name variants
+        ave_col <- cn[cn %in% c("AveExpr", "baseMean", "logCPM", "AvgIntensity")][1]
+        ave_vals <- if (!is.na(ave_col)) as.numeric(raw[[ave_col]]) else NA_real_
+
+        # adj.P.Val: try common column name variants
+        padj_col <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "q.value", "p.adjust")][1]
+        padj_vals <- if (!is.na(padj_col)) as.numeric(raw[[padj_col]]) else stats::p.adjust(pval_vals, method = "BH")
+
         tbl <- data.frame(
             feature_id = feat_ids,
             logFC      = logfc_vals,
+            AveExpr    = ave_vals,
             P.Value    = pval_vals,
+            adj.P.Val  = padj_vals,
             stringsAsFactors = FALSE
         )
-        tbl$AveExpr <- NA_real_
-        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
 
         de_tables[[contrast_labels[i]]] <- tbl
         message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),

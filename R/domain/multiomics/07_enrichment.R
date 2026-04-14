@@ -1775,9 +1775,28 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
         feat_df <- top_features[[om]]
         if (is.null(feat_df) || nrow(feat_df) == 0) next
 
-        # Gene-based omics only (not metabolomics for now)
+        # Metabolomics: compound-based ORA instead of gene-based
         if (om == "metabolomics") {
-            message("  Skipping metabolomics loadings enrichment (compound-based)")
+            message("  Running metabolomics loadings enrichment (compound ORA)")
+            components <- unique(feat_df$component)
+            for (comp in components) {
+                comp_feats <- feat_df[feat_df$component == comp, ]
+                comp_feats <- comp_feats[order(-comp_feats$abs_loading), ]
+                top_feat_ids <- head(comp_feats$feature, top_n)
+
+                label <- paste0("DIABLO_metabolomics_", comp)
+                message("  ", label, ": ", length(top_feat_ids), " features")
+
+                metab_enrich <- run_metabolite_loadings_ora(
+                    top_feat_ids, harmonization_res, out_dir, label
+                )
+                if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
+                    metab_enrich$method <- "DIABLO"
+                    metab_enrich$omics <- "metabolomics"
+                    metab_enrich$component <- comp
+                    all_results[[label]] <- metab_enrich
+                }
+            }
             next
         }
 
@@ -1839,7 +1858,27 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 
     for (view in names(weights)) {
         if (view == "metabolomics") {
-            message("  Skipping metabolomics weights enrichment (compound-based)")
+            message("  Running metabolomics weights enrichment (compound ORA)")
+            n_factors <- min(ncol(w), 3)
+            for (k in seq_len(n_factors)) {
+                factor_name <- colnames(w)[k]
+                loadings <- w[, k]
+                ord <- order(abs(loadings), decreasing = TRUE)
+                top_feat_ids <- rownames(w)[head(ord, top_n)]
+
+                label <- paste0("MOFA_metabolomics_", factor_name)
+                message("  ", label, ": ", length(top_feat_ids), " features")
+
+                metab_enrich <- run_metabolite_loadings_ora(
+                    top_feat_ids, harmonization_res, out_dir, label
+                )
+                if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
+                    metab_enrich$method <- "MOFA2"
+                    metab_enrich$view <- "metabolomics"
+                    metab_enrich$factor <- factor_name
+                    all_results[[label]] <- metab_enrich
+                }
+            }
             next
         }
 
@@ -1888,6 +1927,107 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
     write.csv(combined, file.path(out_dir, "mofa_weights_enrichment_all.csv"),
               row.names = FALSE)
     combined
+}
+
+
+#' Run compound ORA for metabolomics loadings/weights
+#'
+#' Maps top metabolomics features to KEGG compound IDs and runs compound ORA.
+#' Used by loadings enrichment for DIABLO and MOFA2.
+#'
+#' @param feature_ids Character vector of top metabolomics feature IDs
+#' @param harmonization_res Harmonization result (for HMDB mapping)
+#' @param out_dir Output directory for CSVs and plots
+#' @param label Label prefix for output files
+#' @return data.frame of enriched pathways, or NULL
+run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label) {
+    # Build a pseudo-DE table: treat all top features as significant
+    de_mapped <- data.frame(
+        feature_id = feature_ids,
+        pvalue = 0.01,
+        padj = 0.01,
+        stringsAsFactors = FALSE
+    )
+
+    # Map feature IDs to KEGG compound IDs
+    # Try via MAE rowData first (Name, HMDB columns)
+    kegg_ids <- NULL
+    mae <- harmonization_res$mae
+    if (!is.null(mae) && "metabolomics" %in% names(mae@ExperimentList)) {
+        rd <- as.data.frame(SummarizedExperiment::rowData(mae[["metabolomics"]]))
+        avail <- intersect(feature_ids, rownames(rd))
+        if (length(avail) > 0 && "KEGG" %in% colnames(rd)) {
+            kegg_ids <- setNames(as.character(rd[avail, "KEGG"]), avail)
+        } else if (length(avail) > 0 && "HMDB" %in% colnames(rd)) {
+            # Try HMDB -> KEGG mapping
+            hmdb_ids <- as.character(rd[avail, "HMDB"])
+            kegg_conv <- tryCatch(
+                map_hmdb_to_kegg_compound(hmdb_ids),
+                error = function(e) NULL
+            )
+            if (!is.null(kegg_conv)) kegg_ids <- setNames(kegg_conv, avail)
+        }
+    }
+
+    # Fallback: recover from original abundance file
+    if (is.null(kegg_ids) || all(is.na(kegg_ids))) {
+        config <- harmonization_res$config %||% list()
+        hmdb_map <- tryCatch(
+            recover_metabolomics_hmdb_ids(config),
+            error = function(e) NULL
+        )
+        if (!is.null(hmdb_map)) {
+            matched <- hmdb_map[feature_ids]
+            valid <- !is.na(matched)
+            if (any(valid)) {
+                hmdb_ids <- matched[valid]
+                kegg_conv <- tryCatch(
+                    map_hmdb_to_kegg_compound(hmdb_ids),
+                    error = function(e) NULL
+                )
+                if (!is.null(kegg_conv)) {
+                    kegg_ids <- setNames(kegg_conv, names(hmdb_ids))
+                }
+            }
+        }
+    }
+
+    if (is.null(kegg_ids) || sum(!is.na(kegg_ids)) < 2) {
+        message("    Could not map enough metabolomics features to KEGG compound IDs")
+        return(NULL)
+    }
+
+    # Merge KEGG compound IDs into DE table
+    de_mapped$KEGG_ID <- kegg_ids[de_mapped$feature_id]
+    de_mapped <- de_mapped[!is.na(de_mapped$KEGG_ID), ]
+
+    if (nrow(de_mapped) < 2) {
+        message("    Too few mapped metabolites for compound ORA (", nrow(de_mapped), ")")
+        return(NULL)
+    }
+
+    enrich_df <- tryCatch(
+        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1),
+        error = function(e) {
+            message("    Compound ORA failed: ", e$message)
+            NULL
+        }
+    )
+
+    if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
+        write.csv(enrich_df,
+                  file.path(out_dir, paste0(label, "_enrichment.csv")),
+                  row.names = FALSE)
+        plot_loadings_enrichment_barplot(
+            enrich_df, label,
+            file.path(out_dir, paste0(label, "_enrichment.png"))
+        )
+        message("    Saved: ", file.path(out_dir, paste0(label, "_enrichment.png")))
+    } else {
+        message("    No enriched metabolomics pathways found for ", label)
+    }
+
+    enrich_df
 }
 
 

@@ -68,6 +68,14 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
         output_dir = out_dir
     )
 
+    # Resolve generic feature IDs (GENE_N, feature_N) to display names
+    feature_name_map <- build_feature_name_map(mae)
+    if (!is.null(feature_comparison) && length(feature_name_map) > 0) {
+        feature_comparison <- resolve_consensus_feature_names(
+            feature_comparison, feature_name_map, out_dir
+        )
+    }
+
     # 3. Identify robust patterns
     robust_patterns <- identify_robust_patterns(
         sample_comparison = sample_comparison,
@@ -591,6 +599,51 @@ compare_feature_importance <- function(integration_results, output_dir) {
     ))
 }
 
+#' Resolve generic feature IDs in consensus results to display names
+#'
+#' Replaces GENE_N / feature_N with actual gene symbols or metabolite names
+#' in the importance matrix, combined table, and re-saves the CSV.
+resolve_consensus_feature_names <- function(feature_comparison, feature_name_map, output_dir) {
+    # Map feature names
+    old_features <- rownames(feature_comparison$importance_matrix)
+    new_features <- ifelse(
+        old_features %in% names(feature_name_map) &
+            !is.na(feature_name_map[old_features]) &
+            feature_name_map[old_features] != "",
+        unname(feature_name_map[old_features]),
+        old_features
+    )
+    new_features <- make.unique(new_features, sep = "_")
+
+    # Update importance matrix rownames
+    rownames(feature_comparison$importance_matrix) <- new_features
+
+    # Update combined table
+    if (!is.null(feature_comparison$combined)) {
+        idx <- match(feature_comparison$combined$feature, old_features)
+        feature_comparison$combined$feature <- ifelse(
+            !is.na(idx), new_features[idx], feature_comparison$combined$feature
+        )
+        # Re-save CSV with resolved names
+        write.csv(feature_comparison$combined,
+                  file.path(output_dir, "feature_importance_comparison.csv"),
+                  row.names = FALSE)
+    }
+
+    # Update per-method feature names
+    for (m in names(feature_comparison$per_method)) {
+        fi <- feature_comparison$per_method[[m]]
+        if (!is.null(fi) && "feature" %in% colnames(fi)) {
+            mapped <- feature_name_map[fi$feature]
+            fi$feature <- ifelse(!is.na(mapped) & mapped != "",
+                                  unname(mapped), fi$feature)
+            feature_comparison$per_method[[m]] <- fi
+        }
+    }
+
+    feature_comparison
+}
+
 #' Get MOFA Feature Importance
 get_mofa_feature_importance <- function(mofa_results) {
     tryCatch({
@@ -1003,12 +1056,24 @@ plot_robust_features <- function(robust_features, feature_comparison, plots_dir)
     # Get importance across methods
     methods <- colnames(feature_comparison$importance_matrix)
 
+    # Rank features within each method (1 = most important) for comparable scale
+    rank_matrix <- apply(feature_comparison$importance_matrix, 2, function(x) {
+        r <- rep(NA_real_, length(x))
+        valid <- !is.na(x)
+        r[valid] <- rank(-x[valid], ties.method = "average")
+        r
+    })
+    rownames(rank_matrix) <- rownames(feature_comparison$importance_matrix)
+    n_total <- colSums(!is.na(feature_comparison$importance_matrix))
+
     plot_data <- lapply(methods, function(m) {
-        idx <- match(top_features$feature, rownames(feature_comparison$importance_matrix))
+        idx <- match(top_features$feature, rownames(rank_matrix))
+        # Express rank as percentile (0% = top, 100% = bottom)
+        pct <- rank_matrix[idx, m] / n_total[m] * 100
         data.frame(
             feature = top_features$feature,
             method = m,
-            importance = feature_comparison$importance_matrix[idx, m],
+            rank_pct = pct,
             stringsAsFactors = FALSE
         )
     })
@@ -1016,15 +1081,17 @@ plot_robust_features <- function(robust_features, feature_comparison, plots_dir)
     plot_df <- do.call(rbind, plot_data)
     plot_df$feature <- factor(plot_df$feature, levels = rev(top_features$feature))
 
-    p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = method, y = feature, fill = importance)) +
+    p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = method, y = feature, fill = rank_pct)) +
         ggplot2::geom_tile() +
-        ggplot2::scale_fill_viridis_c(option = "plasma", na.value = "grey90") +
+        ggplot2::scale_fill_viridis_c(option = "plasma", na.value = "grey90",
+                                       direction = -1,
+                                       labels = function(x) paste0(round(x), "%")) +
         ggplot2::labs(
             title = "Top Robust Features Across Methods",
             subtitle = "Features consistently important in multiple methods",
             x = "Method",
             y = "Feature",
-            fill = "Importance"
+            fill = "Rank\n(percentile)"
         ) +
         ggplot2::theme_minimal() +
         ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
@@ -1041,24 +1108,51 @@ plot_meta_integration <- function(meta_integration, plots_dir) {
 
     factors <- as.data.frame(meta_integration$factors)
     factors$cluster <- factor(meta_integration$clusters)
+    factors$sample_id <- rownames(meta_integration$factors)
 
     # Variance explained
     var_exp <- summary(meta_integration$pca)$importance[2, 1:2] * 100
 
-    p <- ggplot2::ggplot(factors, ggplot2::aes(x = PC1, y = PC2, color = cluster)) +
+    base_aes <- ggplot2::aes(x = PC1, y = PC2, color = cluster)
+    base_labs <- ggplot2::labs(
+        title = "Meta-Integration: Combined Latent Space",
+        subtitle = "PCA of concatenated latent factors from all methods",
+        x = paste0("Meta-PC1 (", round(var_exp[1], 1), "%)"),
+        y = paste0("Meta-PC2 (", round(var_exp[2], 1), "%)"),
+        color = "Cluster"
+    )
+
+    # Unlabeled version
+    p <- ggplot2::ggplot(factors, base_aes) +
         ggplot2::geom_point(size = 3, alpha = 0.7) +
         ggplot2::stat_ellipse(level = 0.95) +
-        ggplot2::labs(
-            title = "Meta-Integration: Combined Latent Space",
-            subtitle = "PCA of concatenated latent factors from all methods",
-            x = paste0("Meta-PC1 (", round(var_exp[1], 1), "%)"),
-            y = paste0("Meta-PC2 (", round(var_exp[2], 1), "%)"),
-            color = "Cluster"
-        ) +
+        base_labs +
         ggplot2::theme_minimal()
 
     fig_path <- file.path(plots_dir, "meta_integration_pca.png")
     ggplot2::ggsave(fig_path, p, width = 8, height = 6)
+
+    # Labeled version (with sample names)
+    p_labeled <- ggplot2::ggplot(factors, base_aes) +
+        ggplot2::geom_point(size = 3, alpha = 0.7) +
+        ggplot2::stat_ellipse(level = 0.95) +
+        base_labs +
+        ggplot2::theme_minimal()
+
+    if (requireNamespace("ggrepel", quietly = TRUE)) {
+        p_labeled <- p_labeled + ggrepel::geom_text_repel(
+            ggplot2::aes(label = sample_id),
+            size = 2.8, max.overlaps = 20, show.legend = FALSE
+        )
+    } else {
+        p_labeled <- p_labeled + ggplot2::geom_text(
+            ggplot2::aes(label = sample_id),
+            size = 2.8, vjust = -0.8, show.legend = FALSE
+        )
+    }
+
+    fig_path_labeled <- file.path(plots_dir, "meta_integration_pca_labeled.png")
+    ggplot2::ggsave(fig_path_labeled, p_labeled, width = 8, height = 6)
 
     return(fig_path)
 }

@@ -31,6 +31,29 @@ preprocess_metabolomics <- function(inputs, config) {
     row_data <- parsed$row_data
     sample_ids <- colnames(expr_raw)
 
+    # Merge external feature annotations if provided (adds HMDB, KEGG, etc.)
+    annot_path <- cfg$files$feature_annotations
+    if (!is.null(annot_path) && nzchar(annot_path)) {
+        abs_annot <- resolve_raw_path(config, annot_path)
+        if (file.exists(abs_annot)) {
+            annot_df <- read_table_auto(abs_annot)
+            # Find join key: feature_id, Name, or first column
+            join_col <- intersect(c("feature_id", "Name"), colnames(annot_df))[1]
+            rd_join <- intersect(c("feature_id", "Name"), colnames(row_data))[1]
+            if (!is.na(join_col) && !is.na(rd_join)) {
+                new_cols <- setdiff(colnames(annot_df), colnames(row_data))
+                if (length(new_cols) > 0) {
+                    annot_sub <- annot_df[, c(join_col, new_cols), drop = FALSE]
+                    row_data <- merge(row_data, annot_sub,
+                                      by.x = rd_join, by.y = join_col,
+                                      all.x = TRUE, sort = FALSE)
+                    message("  Merged ", length(new_cols), " annotation columns from ",
+                            basename(abs_annot))
+                }
+            }
+        }
+    }
+
     assert_numeric_matrix(expr_raw, "metab_expr_raw")
 
     # ---- 2. Build / align metadata ----
@@ -246,32 +269,101 @@ annotate_hmdb_names <- function(row_data, config) {
     }
 
     feat_ids <- as.character(row_data$feature_id)
-    is_hmdb <- grepl("^HMDB[0-9]+$", feat_ids)
+
+    # Detect HMDB IDs: first from feature_id, then from HMDB_ID/HMDB columns
+    hmdb_col <- intersect(c("HMDB_ID", "HMDB", "hmdb_id", "hmdb"), colnames(row_data))[1]
+    if (!is.na(hmdb_col)) {
+        hmdb_ids <- as.character(row_data[[hmdb_col]])
+    } else {
+        hmdb_ids <- feat_ids
+    }
+    is_hmdb <- grepl("^HMDB[0-9]+$", hmdb_ids)
 
     # For non-HMDB IDs, the feature ID is itself a name
     names_out <- ifelse(is_hmdb, NA_character_, feat_ids)
+
+    if (!any(is_hmdb)) {
+        row_data$Name <- names_out
+        return(row_data)
+    }
 
     # Look for bundled lookup table
     proj_dir <- config$project$dir %||% "."
     lookup_path <- file.path(proj_dir, "data", "hmdb_compound_names.tsv")
 
+    lut <- NULL
     if (file.exists(lookup_path)) {
         lookup <- utils::read.delim(lookup_path, stringsAsFactors = FALSE)
         if (all(c("HMDB", "Name") %in% colnames(lookup))) {
             lut <- stats::setNames(lookup$Name, lookup$HMDB)
-            hmdb_ids <- feat_ids[is_hmdb]
-            matched <- lut[hmdb_ids]
-            names_out[is_hmdb] <- ifelse(is.na(matched), hmdb_ids, matched)
-            n_annotated <- sum(!is.na(matched))
-            n_hmdb <- sum(is_hmdb)
-            message(sprintf("metabolomics: annotated %d/%d HMDB features with compound names.",
-                            n_annotated, n_hmdb))
         }
+    }
+
+    if (is.null(lut)) {
+        # No lookup table — try to fetch compound names from HMDB API
+        unique_hmdb <- unique(hmdb_ids[is_hmdb])
+        message(sprintf("metabolomics: no HMDB lookup at %s", lookup_path))
+        message(sprintf("  Fetching compound names for %d unique HMDB IDs from HMDB...",
+                        length(unique_hmdb)))
+        lut <- fetch_hmdb_compound_names(unique_hmdb)
+
+        # Cache for future runs
+        if (length(lut) > 0) {
+            cache_df <- data.frame(HMDB = names(lut), Name = unname(lut),
+                                   stringsAsFactors = FALSE)
+            tryCatch({
+                utils::write.table(cache_df, lookup_path, sep = "\t",
+                                   row.names = FALSE, quote = FALSE)
+                message(sprintf("  Cached %d compound names to %s",
+                                nrow(cache_df), lookup_path))
+            }, error = function(e) {
+                message("  Could not cache lookup: ", conditionMessage(e))
+            })
+        }
+    }
+
+    # Apply lookup
+    if (length(lut) > 0) {
+        matched <- lut[hmdb_ids[is_hmdb]]
+        names_out[is_hmdb] <- ifelse(!is.na(matched), matched, hmdb_ids[is_hmdb])
+        n_annotated <- sum(!is.na(matched))
+        message(sprintf("metabolomics: annotated %d/%d HMDB features with compound names.",
+                        n_annotated, sum(is_hmdb)))
     } else {
-        # No lookup available — use HMDB IDs as-is
-        names_out[is_hmdb] <- feat_ids[is_hmdb]
+        # Fallback: use HMDB IDs as names
+        names_out[is_hmdb] <- hmdb_ids[is_hmdb]
     }
 
     row_data$Name <- names_out
     row_data
+}
+
+
+#' Fetch compound names from HMDB REST API
+#'
+#' @param hmdb_ids Character vector of unique HMDB IDs.
+#' @return Named character vector (HMDB_ID -> compound name).
+fetch_hmdb_compound_names <- function(hmdb_ids) {
+    results <- character(0)
+    n <- length(hmdb_ids)
+
+    for (i in seq_along(hmdb_ids)) {
+        hid <- hmdb_ids[i]
+        if (i %% 50 == 0 || i == n) {
+            message(sprintf("    HMDB lookup: %d/%d ...", i, n))
+        }
+        tryCatch({
+            url <- sprintf("https://hmdb.ca/metabolites/%s.xml", hid)
+            lines <- readLines(url, warn = FALSE, n = 50)
+            xml_text <- paste(lines, collapse = "\n")
+            m <- regmatches(xml_text, regexpr("<name>([^<]+)</name>", xml_text))
+            if (length(m) > 0) {
+                results[hid] <- sub("</name>$", "", sub("^<name>", "", m[1]))
+            }
+            Sys.sleep(0.1)
+        }, error = function(e) NULL)
+    }
+
+    message(sprintf("    HMDB lookup complete: fetched %d/%d names", length(results), n))
+    results
 }

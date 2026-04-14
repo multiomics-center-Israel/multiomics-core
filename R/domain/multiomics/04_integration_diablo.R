@@ -156,8 +156,11 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         ncomp, length(omics)
     ))
 
+    # Drop the raw DIABLO model object — it can be very large and may fail
+    # {targets} serialization. All useful data (scores, loadings, top features)
+    # has already been extracted above.
     list(
-        model = diablo_model,
+        model = NULL,
         sample_scores = sample_scores,
         loadings = loadings,
         top_features = top_features,
@@ -398,9 +401,14 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         # Resolve to original names via rowData
         rd <- as.data.frame(SummarizedExperiment::rowData(mae[[omics_name]]))
         display <- resolve_feature_display_names(rd, avail, omics_name, config)
-        rownames(sub_mat) <- paste0("[", omics_name, "] ", display)
+        display_rownames <- paste0("[", omics_name, "] ", display)
+        rownames(sub_mat) <- display_rownames
         all_expr[[omics_name]] <- sub_mat
         omics_labels <- c(omics_labels, rep(omics_name, nrow(sub_mat)))
+        # Track raw feature ID -> display name for latent heatmap
+        if (!exists("feat_id_to_display")) feat_id_to_display <- character(0)
+        feat_id_to_display <- c(feat_id_to_display,
+                                setNames(display_rownames, avail))
     }
 
     if (length(all_expr) == 0) {
@@ -458,8 +466,7 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         show_annotation_name = FALSE
     )
 
-    # Build heatmap — cluster all features together by distance,
-    # omics type shown as row annotation color
+    # --- Heatmap 1: Euclidean distance clustering (standard) ---
     ht <- ComplexHeatmap::Heatmap(
         combined_z,
         name = "Z-score",
@@ -476,7 +483,6 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         heatmap_legend_param = list(title = "Z-score")
     )
 
-    # Save heatmap
     n_features <- nrow(combined_z)
     plot_height <- max(8, 3 + n_features * 0.18)
     out_png <- file.path(diablo_dir, "diablo_feature_heatmap.png")
@@ -488,8 +494,69 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
     })
     dev.off()
-
     message("DIABLO feature heatmap saved: ", out_png)
+
+    # --- Heatmap 2: Latent space distance clustering ---
+    # Use DIABLO component loadings to compute feature distances in latent space.
+    # This clusters features by their contribution to the DIABLO latent components,
+    # encouraging cross-omics intermixing since features from different omics that
+    # load similarly onto the same components will cluster together.
+    tryCatch({
+        # Build loading matrix from CSV data (feature x component loadings)
+        # Use feat_id_to_display to map raw CSV feature IDs to heatmap rownames
+        latent_mat <- NULL
+        all_hm_features <- rownames(combined_z)
+        for (csv_f in csv_files) {
+            omics_name <- sub("^diablo_top_features_(.*)\\.csv$", "\\1", basename(csv_f))
+            feat_df <- read.csv(csv_f, stringsAsFactors = FALSE)
+            comps <- unique(feat_df$component)
+            for (comp in comps) {
+                comp_df <- feat_df[feat_df$component == comp, ]
+                # Map raw feature IDs to display names used in heatmap
+                display_ids <- feat_id_to_display[comp_df$feature]
+                in_hm <- !is.na(display_ids) & display_ids %in% all_hm_features
+                if (any(in_hm)) {
+                    vals <- setNames(comp_df$loading[in_hm], display_ids[in_hm])
+                    col_name <- paste0(omics_name, "_", comp)
+                    if (is.null(latent_mat)) {
+                        latent_mat <- data.frame(row.names = all_hm_features)
+                    }
+                    latent_mat[[col_name]] <- vals[all_hm_features]
+                }
+            }
+        }
+
+        if (!is.null(latent_mat) && ncol(latent_mat) >= 2) {
+            latent_mat[is.na(latent_mat)] <- 0
+            latent_dist <- dist(as.matrix(latent_mat))
+            latent_clust <- hclust(latent_dist, method = "ward.D2")
+
+            ht_latent <- ComplexHeatmap::Heatmap(
+                combined_z,
+                name = "Z-score",
+                col = col_fun,
+                cluster_rows = latent_clust,
+                cluster_columns = TRUE,
+                show_column_names = FALSE,
+                row_names_side = "right",
+                row_names_gp = grid::gpar(fontsize = 7),
+                left_annotation = row_ha,
+                top_annotation = top_ha,
+                column_title = "DIABLO Features — Latent Space Clustering",
+                column_title_gp = grid::gpar(fontsize = 12, fontface = "bold"),
+                heatmap_legend_param = list(title = "Z-score")
+            )
+
+            out_png_latent <- file.path(diablo_dir, "diablo_feature_heatmap_latent.png")
+            png(out_png_latent, width = 12, height = plot_height, units = "in", res = 150)
+            ComplexHeatmap::draw(ht_latent, merge_legend = TRUE)
+            dev.off()
+            message("DIABLO latent space heatmap saved: ", out_png_latent)
+        }
+    }, error = function(e) {
+        message("Latent space heatmap failed: ", e$message)
+    })
+
     out_png
 }
 
@@ -644,7 +711,7 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
                                 }
                             }
 
-                            # Count pathway frequency to pick top pathways
+                            # Count pathway frequency to pick top pathways for coloring
                             all_pw <- unlist(feat_pathways)
                             pw_counts <- sort(table(all_pw), decreasing = TRUE)
                             top_pw <- names(pw_counts)[seq_len(min(pathway_top_n, length(pw_counts)))]
@@ -659,6 +726,15 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
                                     df$pathway_label[df$feature_id == fid] <- "Other pathway"
                                 }
                             }
+
+                            # Store ALL pathways per feature for dropdown selector
+                            df$.all_pathways <- lapply(df$feature_id, function(fid) {
+                                feat_pathways[[fid]] %||% character(0)
+                            })
+                            # Collect all unique pathway names for dropdown
+                            all_kegg_pathways <- unique(unlist(feat_pathways))
+                            all_kegg_pathways <- names(sort(table(unlist(feat_pathways)),
+                                                            decreasing = TRUE))
                         }
                     } else if (color_by == "GO") {
                         # GO biological process mapping
@@ -725,12 +801,13 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
         }
     }
 
-    # --- Build plotly figure ---
+    # --- Build plotly figure with pathway selector dropdown ---
     omics_shapes <- c(
         transcriptomics = "circle",
         proteomics = "square",
         metabolomics = "diamond"
     )
+    shape_map <- c(circle = 0, square = 1, diamond = 2)
 
     # Hover text
     df$hover <- paste0(
@@ -742,34 +819,95 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
     )
 
     # Assign shape per omics
-    df$shape <- omics_shapes[df$omics]
-    df$shape[is.na(df$shape)] <- "circle"
+    df$shape_name <- omics_shapes[df$omics]
+    df$shape_name[is.na(df$shape_name)] <- "circle"
+
+    # Build a single scatter trace with all points
+    # Assign colors per pathway_label for the default view
+    display_pathways <- unique(df$pathway_label)
+    pw_palette <- if (length(display_pathways) <= 10) {
+        scales::hue_pal()(length(display_pathways))
+    } else {
+        grDevices::colorRampPalette(
+            c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00",
+              "#A65628", "#F781BF", "#999999", "#66C2A5", "#FC8D62")
+        )(length(display_pathways))
+    }
+    names(pw_palette) <- display_pathways
+    df$color <- pw_palette[df$pathway_label]
 
     fig <- plotly::plot_ly(
         data = df,
-        x = ~comp1,
-        y = ~comp2,
+        x = ~comp1, y = ~comp2,
+        text = ~hover, hoverinfo = "text",
+        type = "scatter", mode = "markers",
         color = ~pathway_label,
+        colors = pw_palette,
         symbol = ~omics,
         symbols = unname(omics_shapes[intersect(names(omics_shapes), unique(df$omics))]),
-        text = ~hover,
-        hoverinfo = "text",
-        type = "scatter",
-        mode = "markers",
-        marker = list(size = 8, opacity = 0.8, line = list(width = 0.5, color = "grey30"))
-    ) |>
-        plotly::layout(
-            title = list(
-                text = "DIABLO Loadings (Interactive)",
-                font = list(size = 16)
-            ),
-            xaxis = list(title = "Component 1 Loading", zeroline = TRUE,
-                         zerolinecolor = "grey80"),
-            yaxis = list(title = "Component 2 Loading", zeroline = TRUE,
-                         zerolinecolor = "grey80"),
-            legend = list(title = list(text = "Pathway / Omics")),
-            hovermode = "closest"
+        marker = list(size = 8, opacity = 0.8,
+                      line = list(width = 0.5, color = "grey30"))
+    )
+
+    # Build dropdown buttons for ALL KEGG pathways
+    # Each button highlights features that belong to that pathway
+    dropdown_pathways <- if (exists("all_kegg_pathways") && length(all_kegg_pathways) > 0) {
+        all_kegg_pathways
+    } else {
+        setdiff(display_pathways, c("Unmapped", "Other pathway", "Other GO term"))
+    }
+
+    buttons <- list(
+        list(method = "restyle",
+             args = list(list("marker.opacity" = list(0.8),
+                              "marker.size" = list(8))),
+             label = "All Pathways (reset)")
+    )
+
+    for (pw_name in dropdown_pathways) {
+        # Determine which points belong to this pathway (via .all_pathways)
+        if (".all_pathways" %in% colnames(df)) {
+            in_pathway <- sapply(df$.all_pathways, function(pws) pw_name %in% pws)
+        } else {
+            in_pathway <- df$pathway_label == pw_name
+        }
+
+        opacities <- ifelse(in_pathway, 0.9, 0.05)
+        sizes <- ifelse(in_pathway, 12, 5)
+
+        btn_label <- ifelse(nchar(pw_name) > 45,
+                            paste0(substr(pw_name, 1, 42), "..."),
+                            pw_name)
+        n_feats <- sum(in_pathway)
+        btn_label <- paste0(btn_label, " (", n_feats, ")")
+
+        buttons[[length(buttons) + 1]] <- list(
+            method = "restyle",
+            args = list(list("marker.opacity" = list(opacities),
+                             "marker.size" = list(sizes))),
+            label = btn_label
         )
+    }
+
+    fig <- fig |> plotly::layout(
+        title = list(text = "DIABLO Loadings (Interactive)", font = list(size = 16)),
+        xaxis = list(title = "Component 1 Loading", zeroline = TRUE,
+                     zerolinecolor = "grey80"),
+        yaxis = list(title = "Component 2 Loading", zeroline = TRUE,
+                     zerolinecolor = "grey80"),
+        legend = list(title = list(text = "Pathway / Omics")),
+        hovermode = "closest",
+        updatemenus = list(
+            list(type = "dropdown",
+                 active = 0,
+                 buttons = buttons,
+                 x = 0.0, y = 1.18,
+                 xanchor = "left", yanchor = "top",
+                 bgcolor = "#f8f9fa",
+                 bordercolor = "#cccccc",
+                 font = list(size = 11))
+        )
+    )
 
     # Save as HTML widget
     out_html <- file.path(out_dir, "diablo_loadings_interactive.html")
@@ -779,6 +917,10 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
         selfcontained = TRUE,
         title = "DIABLO Loadings - Interactive"
     )
+
+    # Also save plotly object as RDS for embedding in the report
+    out_rds <- file.path(out_dir, "diablo_loadings_interactive.rds")
+    saveRDS(fig, out_rds)
 
     message("  Interactive DIABLO loadings plot saved: ", out_html)
     out_html
@@ -798,7 +940,7 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
 #' @param label_n Number of top features to label per omics facet
 #' @return Vector of saved PNG paths (one per contrast)
 plot_diablo_loadings_log2fc <- function(diablo_results, de_results, config,
-                                        out_dir, top_n = 50, label_n = 5,
+                                        out_dir, top_n = NULL, label_n = 5,
                                         mae = NULL) {
 
     if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
@@ -823,7 +965,8 @@ plot_diablo_loadings_log2fc <- function(diablo_results, de_results, config,
         comp1 <- load_mat[, 1]
         comp2 <- load_mat[, 2]
         abs_max <- pmax(abs(comp1), abs(comp2))
-        keep_idx <- order(abs_max, decreasing = TRUE)[seq_len(min(top_n, length(abs_max)))]
+        n_keep <- if (is.null(top_n)) length(abs_max) else min(top_n, length(abs_max))
+        keep_idx <- order(abs_max, decreasing = TRUE)[seq_len(n_keep)]
 
         feat_ids <- rownames(load_mat)[keep_idx]
 
@@ -906,7 +1049,7 @@ plot_diablo_loadings_log2fc <- function(diablo_results, de_results, config,
                 ggplot2::aes(x = comp1, y = comp2, color = log2FC_capped)) +
             ggplot2::geom_point(size = 2.5, alpha = 0.7) +
             ggplot2::scale_color_gradient2(
-                low = "#4DBBD5", mid = "white", high = "#E64B35",
+                low = "#2166AC", mid = "#FFFF00", high = "#B2182B",
                 midpoint = 0, name = expression(log[2]~FC),
                 limits = c(-lfc_cap, lfc_cap)
             ) +
@@ -959,7 +1102,7 @@ plot_diablo_loadings_log2fc <- function(diablo_results, de_results, config,
 #' @param label_n Number of top features to label per view facet
 #' @return Vector of saved PNG paths (one per contrast)
 plot_mofa_loadings_log2fc <- function(mofa_results, de_results, config,
-                                      out_dir, top_n = 50, label_n = 5,
+                                      out_dir, top_n = NULL, label_n = 10,
                                       mae = NULL) {
 
     if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
@@ -974,16 +1117,29 @@ plot_mofa_loadings_log2fc <- function(mofa_results, de_results, config,
     # Build harmonized -> original ID mapping for display names and DE matching
     id_map <- build_harmonized_to_original_map(mae, de_results, config)
 
+    # Detect whether Factor 2 carries real signal across all views.
+    # If max |w2| is negligible relative to max |w1| (e.g. 1e-18 vs 0.4),
+    # Factor 2 is numerical noise and the model is effectively single-factor.
+    has_real_factor2 <- FALSE
+    if (all(sapply(weights, ncol) >= 2)) {
+        max_w1 <- max(sapply(weights, function(w) max(abs(w[, 1]))), na.rm = TRUE)
+        max_w2 <- max(sapply(weights, function(w) max(abs(w[, 2]))), na.rm = TRUE)
+        has_real_factor2 <- max_w2 > max_w1 * 1e-6
+    }
+
     # Build weight data frame across views
     df_list <- list()
     for (view in names(weights)) {
         w <- weights[[view]]
-        if (ncol(w) < 2) next
+        if (ncol(w) < 1) next
+
+        # Determine per-view top_n: use all features if top_n is NULL
+        view_top_n <- if (is.null(top_n)) nrow(w) else top_n
 
         w1 <- w[, 1]
-        w2 <- w[, 2]
+        w2 <- if (has_real_factor2) w[, 2] else rep(0, length(w1))
         abs_max <- pmax(abs(w1), abs(w2))
-        keep_idx <- order(abs_max, decreasing = TRUE)[seq_len(min(top_n, length(abs_max)))]
+        keep_idx <- order(abs_max, decreasing = TRUE)[seq_len(min(view_top_n, length(abs_max)))]
 
         feat_ids <- rownames(w)[keep_idx]
 
@@ -1021,7 +1177,8 @@ plot_mofa_loadings_log2fc <- function(mofa_results, de_results, config,
             factor1 = w1[keep_idx],
             factor2 = w2[keep_idx],
             omics = view,
-            stringsAsFactors = FALSE
+            stringsAsFactors = FALSE,
+            row.names = NULL
         )
     }
     if (length(df_list) == 0) return(NULL)
@@ -1078,37 +1235,75 @@ plot_mofa_loadings_log2fc <- function(mofa_results, de_results, config,
         lfc_cap <- max(lfc_cap, 0.5)
         df_sub$log2FC_capped <- pmax(pmin(df_sub$log2FC, lfc_cap), -lfc_cap)
 
+        # Detect single-factor model (all factor2 == 0)
+        single_factor <- all(df_sub$factor2 == 0)
+
         # Select top features per facet for labeling
         df_sub$label <- ""
         for (view in unique(df_sub$omics)) {
             v_idx <- which(df_sub$omics == view)
-            top_idx <- v_idx[order(pmax(abs(df_sub$factor1[v_idx]),
-                                        abs(df_sub$factor2[v_idx])),
-                                   decreasing = TRUE)]
+            if (single_factor) {
+                rank_score <- abs(df_sub$factor1[v_idx]) * abs(df_sub$log2FC[v_idx])
+                top_idx <- v_idx[order(rank_score, decreasing = TRUE)]
+            } else {
+                top_idx <- v_idx[order(pmax(abs(df_sub$factor1[v_idx]),
+                                            abs(df_sub$factor2[v_idx])),
+                                       decreasing = TRUE)]
+            }
             top_idx <- head(top_idx, label_n)
             df_sub$label[top_idx] <- df_sub$display_name[top_idx]
         }
 
-        p <- ggplot2::ggplot(df_sub,
-                ggplot2::aes(x = factor1, y = factor2, color = log2FC_capped)) +
-            ggplot2::geom_point(size = 2.5, alpha = 0.7) +
-            ggplot2::scale_color_gradient2(
-                low = "#4DBBD5", mid = "white", high = "#E64B35",
-                midpoint = 0, name = expression(log[2]~FC),
-                limits = c(-lfc_cap, lfc_cap)
-            ) +
-            ggplot2::facet_wrap(~omics, scales = "free") +
-            ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-            ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
-            ggplot2::theme_bw() +
-            ggplot2::theme(panel.grid = ggplot2::element_blank(),
-                           strip.text = ggplot2::element_text(face = "bold")) +
-            ggplot2::labs(
-                title = "MOFA2 Weights Colored by log2FC",
-                subtitle = contrast,
-                x = "Factor 1 Weight",
-                y = "Factor 2 Weight"
-            )
+        if (single_factor) {
+            # Single-factor: Factor 1 Weight vs log2FC
+            p <- ggplot2::ggplot(df_sub,
+                    ggplot2::aes(x = factor1, y = log2FC_capped,
+                                 color = log2FC_capped)) +
+                ggplot2::geom_point(size = 2.5, alpha = 0.7) +
+                ggplot2::scale_color_gradient2(
+                    low = "#2166AC", mid = "#FFFF00", high = "#B2182B",
+                    midpoint = 0, name = expression(log[2]~FC),
+                    limits = c(-lfc_cap, lfc_cap)
+                ) +
+                ggplot2::facet_wrap(~omics, scales = "free") +
+                ggplot2::geom_hline(yintercept = 0, linetype = "dashed",
+                                    color = "grey60") +
+                ggplot2::geom_vline(xintercept = 0, linetype = "dashed",
+                                    color = "grey60") +
+                ggplot2::theme_bw() +
+                ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                               strip.text = ggplot2::element_text(face = "bold")) +
+                ggplot2::labs(
+                    title = "MOFA2 Factor 1 Weight vs log2FC",
+                    subtitle = contrast,
+                    x = "Factor 1 Weight",
+                    y = expression(log[2]~Fold~Change)
+                )
+        } else {
+            p <- ggplot2::ggplot(df_sub,
+                    ggplot2::aes(x = factor1, y = factor2,
+                                 color = log2FC_capped)) +
+                ggplot2::geom_point(size = 2.5, alpha = 0.7) +
+                ggplot2::scale_color_gradient2(
+                    low = "#2166AC", mid = "#FFFF00", high = "#B2182B",
+                    midpoint = 0, name = expression(log[2]~FC),
+                    limits = c(-lfc_cap, lfc_cap)
+                ) +
+                ggplot2::facet_wrap(~omics, scales = "free") +
+                ggplot2::geom_hline(yintercept = 0, linetype = "dashed",
+                                    color = "grey60") +
+                ggplot2::geom_vline(xintercept = 0, linetype = "dashed",
+                                    color = "grey60") +
+                ggplot2::theme_bw() +
+                ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                               strip.text = ggplot2::element_text(face = "bold")) +
+                ggplot2::labs(
+                    title = "MOFA2 Weights Colored by log2FC",
+                    subtitle = contrast,
+                    x = "Factor 1 Weight",
+                    y = "Factor 2 Weight"
+                )
+        }
 
         if (requireNamespace("ggrepel", quietly = TRUE)) {
             p <- p + ggrepel::geom_text_repel(

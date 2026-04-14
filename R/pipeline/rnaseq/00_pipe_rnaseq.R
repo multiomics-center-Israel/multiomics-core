@@ -24,7 +24,17 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
                 )
             }
         ),
-        tar_target(rna_de_res, mod_rnaseq_de(rna_batch_corr, rna_inputs, config, verbose = TRUE))
+        tar_target(rna_de_res, mod_rnaseq_de(rna_batch_corr, rna_inputs, config, verbose = TRUE)),
+        # Pathway / enrichment analysis (core: multiomics cross-enrichment depends on this)
+        tar_target(
+            rna_pathway_res,
+            mod_rnaseq_pathway(
+                de_res  = rna_de_res,
+                pre     = rna_batch_corr,
+                config  = config,
+                out_dir = rna_out_dir
+            )
+        )
     )
 
     # ---- Single-omics outputs (skipped when multiomics pipeline is active) ----
@@ -92,16 +102,6 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
                 mod_rnaseq_deconvolution(
                     pre     = rna_batch_corr,
                     de_res  = rna_de_res,
-                    config  = config,
-                    out_dir = rna_out_dir
-                )
-            ),
-            # Pathway / enrichment analysis
-            tar_target(
-                rna_pathway_res,
-                mod_rnaseq_pathway(
-                    de_res  = rna_de_res,
-                    pre     = rna_batch_corr,
                     config  = config,
                     out_dir = rna_out_dir
                 )
