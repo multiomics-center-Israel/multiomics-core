@@ -1116,40 +1116,60 @@ run_gsea_all <- function(ranked_genes,
                                           paste0("GSEA_results_", contrast, ".csv"))
                     write.csv(res_df, file = csv_file, row.names = FALSE)
 
-                    # Generate dotplot if significant results exist
+                    # Generate dotplot if significant results exist.
+                    # Primary: enrichplot::dotplot() on the gseaResult object.
+                    # Fallback: basic ggplot2 scatterplot (visual approximation only).
                     if (n_sig >= 3) {
                         plot_file <- file.path(gsea_sub_dir,
                                                paste0("GSEA_dotplot_", contrast, ".png"))
-                        tryCatch({
-                            top_n <- min(20, nrow(res_df))
-                            top <- head(res_df[order(res_df$padj), ], top_n)
-                            top$pathway_label <- substr(top$pathway, 1, 60)
+                        plot_key <- paste0(db_name, "_", ranking_method, "_", contrast)
+                        show_n <- min(20, n_sig)
 
-                            p <- ggplot2::ggplot(
-                                top,
-                                ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
-                            ) +
-                                ggplot2::geom_point(
-                                    ggplot2::aes(size = setSize, color = -log10(padj))
-                                ) +
-                                ggplot2::scale_color_gradient(
-                                    low = "blue", high = "red", name = "-log10(padj)"
-                                ) +
-                                ggplot2::labs(
-                                    title = paste("GSEA:", db_name, "|", ranking_method),
-                                    subtitle = contrast,
-                                    x = "Normalized Enrichment Score",
-                                    y = "",
-                                    size = "Gene Set Size"
-                                ) +
-                                ggplot2::theme_minimal() +
-                                ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+                        plotted <- FALSE
 
-                            ggplot2::ggsave(plot_file, p, width = 10, height = 8)
-                            plot_files[[paste0(db_name, "_", ranking_method, "_", contrast)]] <- plot_file
-                        }, error = function(e) {
-                            message("    Plot generation failed: ", e$message)
-                        })
+                        # Primary: enrichplot::dotplot on gseaResult S4 object
+                        if (requireNamespace("enrichplot", quietly = TRUE)) {
+                            tryCatch({
+                                p <- enrichplot::dotplot(res, showCategory = show_n)
+                                ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                                plot_files[[plot_key]] <- plot_file
+                                plotted <- TRUE
+                            }, error = function(e) {
+                                message("    enrichplot::dotplot() failed: ", e$message,
+                                        " — falling back to ggplot2")
+                            })
+                        }
+
+                        # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
+                        if (!plotted) {
+                            tryCatch({
+                                top <- head(res_df[order(res_df$padj), ], show_n)
+                                top$pathway_label <- substr(top$pathway, 1, 60)
+                                p <- ggplot2::ggplot(
+                                    top,
+                                    ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
+                                ) +
+                                    ggplot2::geom_point(
+                                        ggplot2::aes(size = setSize, color = -log10(padj))
+                                    ) +
+                                    ggplot2::scale_color_gradient(
+                                        low = "blue", high = "red", name = "-log10(padj)"
+                                    ) +
+                                    ggplot2::labs(
+                                        title = paste("GSEA:", db_name, "|", ranking_method),
+                                        subtitle = contrast,
+                                        x = "Normalized Enrichment Score",
+                                        y = "",
+                                        size = "Gene Set Size"
+                                    ) +
+                                    ggplot2::theme_minimal() +
+                                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+                                ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                                plot_files[[plot_key]] <- plot_file
+                            }, error = function(e) {
+                                message("    Fallback plot also failed: ", e$message)
+                            })
+                        }
                     }
                 }
             }
