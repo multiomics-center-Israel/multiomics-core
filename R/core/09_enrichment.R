@@ -1532,7 +1532,14 @@ build_gene_lists <- function(de_tables,
         # Binary patterns (if available)
         # objects$patterns is typically a named vector from binary pattern assignment
         if (!is.null(objs$patterns) && length(objs$patterns) > 0) {
-            gene_lists[["binary_patterns"]][["best"]] <- objs$patterns
+            bin_pattern <- objs$patterns
+            df <- bin_pattern[!is.na(bin_pattern$best_pattern), ]
+            
+            clusters <- setNames(
+              as.character(df$best_pattern),
+              df$feature_id
+            )
+            gene_lists[["binary_patterns"]][["best"]] <- clusters
         }
 
         # Hierarchical clusters (if stored separately in excel_order)
