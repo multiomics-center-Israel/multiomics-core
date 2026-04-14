@@ -658,3 +658,495 @@ generate_pathway_plots <- function(pathway_results, output_dir) {
     message("Generated ", length(plot_files), " pathway plots in ", output_dir)
     plot_files
 }
+
+# ==============================================================================
+# LOCAL PATHWAY TABLE LOADING (Phase 1 — enrichment migration)
+# ==============================================================================
+
+#' Load local precomputed KEGG/GO pathway tables
+#'
+#' Reads TERM2GENE and TERM2NAME data.frames from tab-separated files
+#' in a local annotation directory. No online resources are contacted.
+#'
+#' Expected files under annotation_dir:
+#'   KEGG:  KEGG_pathway2gene.tab, KEGG_pathway2name.tab
+#'   GO:    GO2gene_{BP,MF,CC}.tab, GO2name_{BP,MF,CC}.tab
+#'
+#' Each file is two-column tab-separated (term ID, gene ID or term name).
+#'
+#' @param annotation_dir Path to directory containing the pathway table files
+#' @param databases Character vector of databases to load.
+#'   Valid values: "KEGG", "GO_BP", "GO_MF", "GO_CC"
+#' @param feature_ids Optional character vector of pipeline feature IDs.
+#'   If provided, overlap with TERM2GENE gene columns is checked and warned.
+#' @return Named list where each element is list(TERM2GENE = df, TERM2NAME = df)
+#' @export
+load_local_pathway_tables <- function(annotation_dir,
+                                      databases = c("KEGG", "GO_BP", "GO_MF", "GO_CC"),
+                                      feature_ids = NULL) {
+
+    if (!dir.exists(annotation_dir)) {
+        stop("Annotation directory not found: ", annotation_dir)
+    }
+
+    # Map database names to file pairs
+    file_map <- list(
+        KEGG  = list(gene = "KEGG_pathway2gene.tab", name = "KEGG_pathway2name.tab"),
+        GO_BP = list(gene = "GO2gene_BP.tab",        name = "GO2name_BP.tab"),
+        GO_MF = list(gene = "GO2gene_MF.tab",        name = "GO2name_MF.tab"),
+        GO_CC = list(gene = "GO2gene_CC.tab",        name = "GO2name_CC.tab")
+    )
+
+    result <- list()
+
+    for (db in databases) {
+        if (!db %in% names(file_map)) {
+            warning("Unknown database '", db, "' — skipping. ",
+                    "Valid: ", paste(names(file_map), collapse = ", "))
+            next
+        }
+
+        fmap <- file_map[[db]]
+        gene_file <- file.path(annotation_dir, fmap$gene)
+        name_file <- file.path(annotation_dir, fmap$name)
+
+        if (!file.exists(gene_file)) {
+            warning("TERM2GENE file not found for ", db, ": ", gene_file, " — skipping")
+            next
+        }
+        if (!file.exists(name_file)) {
+            warning("TERM2NAME file not found for ", db, ": ", name_file, " — skipping")
+            next
+        }
+
+        # Read two-column tab files
+        term2gene <- read.delim(gene_file, sep = "\t", header = FALSE,
+                                stringsAsFactors = FALSE, row.names = NULL)
+        term2name <- read.delim(name_file, sep = "\t", header = FALSE,
+                                stringsAsFactors = FALSE, row.names = NULL)
+
+        # Validate column count
+        if (ncol(term2gene) < 2) {
+            warning(db, " TERM2GENE file has fewer than 2 columns: ", gene_file, " — skipping")
+            next
+        }
+        if (ncol(term2name) < 2) {
+            warning(db, " TERM2NAME file has fewer than 2 columns: ", name_file, " — skipping")
+            next
+        }
+
+        # Keep only first two columns, standardize names for clusterProfiler
+        term2gene <- term2gene[, 1:2, drop = FALSE]
+        term2name <- term2name[, 1:2, drop = FALSE]
+        colnames(term2gene) <- c("term", "gene")
+        colnames(term2name) <- c("term", "name")
+
+        # Remove NAs and empty values
+        term2gene <- term2gene[!is.na(term2gene$term) & !is.na(term2gene$gene) &
+                               nzchar(term2gene$term) & nzchar(term2gene$gene), , drop = FALSE]
+        term2name <- term2name[!is.na(term2name$term) & !is.na(term2name$name) &
+                               nzchar(term2name$term) & nzchar(term2name$name), , drop = FALSE]
+
+        if (nrow(term2gene) == 0) {
+            warning(db, " TERM2GENE table is empty after cleaning: ", gene_file, " — skipping")
+            next
+        }
+
+        # Overlap check against pipeline feature IDs
+        if (!is.null(feature_ids) && length(feature_ids) > 0) {
+            genes_in_db <- unique(term2gene$gene)
+            overlap <- length(intersect(genes_in_db, feature_ids))
+            pct <- round(100 * overlap / length(feature_ids), 1)
+            message("  ", db, ": ", nrow(term2gene), " gene-term pairs, ",
+                    length(unique(term2gene$term)), " terms, ",
+                    overlap, "/", length(feature_ids), " features overlap (", pct, "%)")
+            if (pct < 5) {
+                warning(db, ": very low overlap (", pct, "%) between TERM2GENE genes and ",
+                        "pipeline feature IDs. Check that gene ID types match.")
+            }
+        } else {
+            message("  ", db, ": ", nrow(term2gene), " gene-term pairs, ",
+                    length(unique(term2gene$term)), " terms")
+        }
+
+        result[[db]] <- list(TERM2GENE = term2gene, TERM2NAME = term2name)
+    }
+
+    if (length(result) == 0) {
+        warning("No local pathway tables loaded from: ", annotation_dir)
+    }
+
+    result
+}
+
+# ==============================================================================
+# RANKED GENE LIST BUILDERS (Phase 1 — enrichment migration)
+# ==============================================================================
+# These functions build named numeric vectors suitable for clusterProfiler::GSEA().
+# Each implements a specific ranking strategy from the legacy enrichment workflow.
+# Input: per-contrast DE tables from the current pipeline (FeatureID, log2FoldChange, pvalue).
+
+#' Build ranked gene list: -log10(pvalue), no direction
+#'
+#' Ranking value is always positive. Genes with the most significant p-values rank highest.
+#'
+#' @param de_table Data.frame with FeatureID and pvalue columns
+#' @return Named numeric vector (gene IDs as names, ranking values as elements), sorted descending
+rank_by_pval_wo_direction <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$pval), , drop = FALSE]
+    df$rank_val <- -log10(df$pval)
+    # Legacy: replace any NaN/Inf from log10(0) with 0
+    df$rank_val[!is.finite(df$rank_val)] <- 0
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: sign(FC) * -log10(pvalue)
+#'
+#' Signed ranking: positive values = upregulated and significant,
+#' negative values = downregulated and significant.
+#'
+#' @param de_table Data.frame with FeatureID, log2FoldChange, and pvalue columns
+#' @return Named numeric vector sorted descending
+rank_by_pval_with_direction <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        lfc  = de_table$log2FoldChange,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$lfc) & !is.na(df$pval), , drop = FALSE]
+    df$neg_log_p <- -log10(df$pval)
+    # Legacy: replace any NaN/Inf with 0
+    df$neg_log_p[!is.finite(df$neg_log_p)] <- 0
+    # Apply direction: positive LFC -> positive rank, negative LFC -> negative rank
+    # Legacy logic: if fc is NA, rank = 0; if fc > 0, rank = pval; else rank = -pval
+    # Since we already filtered NA lfc, just apply sign
+    df$rank_val <- ifelse(df$lfc > 0, df$neg_log_p, -df$neg_log_p)
+    # Genes with lfc == 0 get rank_val = 0 (sign(0) * anything = 0), matching legacy
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: log2 of signed fold change
+#'
+#' Legacy behavior: converts linear FC via ifelse(fc > 0, fc, -1/fc), then log2,
+#' then signif(digits=4). The current pipeline provides log2FoldChange, so we
+#' recover linear FC first: linearFC = 2^log2FoldChange.
+#'
+#' @param de_table Data.frame with FeatureID, log2FoldChange, and pvalue columns
+#' @return Named numeric vector sorted descending
+rank_by_fc <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        lfc  = de_table$log2FoldChange,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$lfc) & !is.na(df$pval), , drop = FALSE]
+
+    # Recover linear fold change from log2FC
+    # Legacy input is linearFC where: up = positive value > 1, down = negative value (e.g. -2)
+    # Convention: linearFC > 0 means upregulated, linearFC < 0 means downregulated
+    # From log2FC: if lfc >= 0, linearFC = 2^lfc (positive, > 1)
+    #              if lfc < 0,  linearFC = -(2^(-lfc)) = -(1/(2^lfc)) to get negative linear FC
+    # This matches the legacy convention where downregulated genes have negative linearFC.
+    linear_fc <- ifelse(df$lfc >= 0, 2^df$lfc, -(2^(-df$lfc)))
+
+    # Legacy transform: ifelse(fc > 0, fc, -1/fc) then log2
+    # When linear_fc > 0: result = linear_fc (already positive)
+    # When linear_fc < 0: -1/linear_fc = -1/(-x) = 1/x (positive, < 1 for |fc| > 1)
+    # Wait — this needs careful analysis:
+    #   Legacy: fc > 0 → keep fc; fc < 0 → -1/fc
+    #   If fc = -2: -1/(-2) = 0.5, then log2(0.5) = -1
+    #   If fc = 2:  keep 2, then log2(2) = 1
+    # So the legacy transform maps the signed linear FC into a symmetric log2 scale.
+    fc_transformed <- ifelse(linear_fc > 0, linear_fc, -1 / linear_fc)
+    df$rank_val <- log2(fc_transformed)
+    # Legacy: signif(digits = 4)
+    df$rank_val <- signif(df$rank_val, digits = 4)
+
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: minimum p-value across all contrasts
+#'
+#' For each gene, takes the minimum raw p-value across all provided contrasts,
+#' then ranks by -log10(min_pvalue). Always positive (no direction).
+#'
+#' @param de_tables Named list of DE tables (each with FeatureID and pvalue columns)
+#' @return Named numeric vector sorted descending
+rank_by_min_pval_any_contrast <- function(de_tables) {
+    if (length(de_tables) == 0) return(numeric(0))
+
+    # Collect pvalue columns from all contrasts, aligned by gene ID
+    pval_list <- lapply(de_tables, function(dt) {
+        df <- data.frame(
+            gene = dt$FeatureID,
+            pval = dt$pvalue,
+            stringsAsFactors = FALSE
+        )
+        df[!duplicated(df$gene), , drop = FALSE]
+    })
+
+    # Merge all contrasts by gene, keeping all genes (full outer join)
+    merged <- pval_list[[1]]
+    colnames(merged)[2] <- "pval_1"
+    if (length(pval_list) > 1) {
+        for (i in 2:length(pval_list)) {
+            p <- pval_list[[i]]
+            colnames(p)[2] <- paste0("pval_", i)
+            merged <- merge(merged, p, by = "gene", all = TRUE)
+        }
+    }
+
+    # Compute row-wise minimum pvalue (matching legacy: min(x, na.rm = TRUE), NA if all NA)
+    pval_cols <- grep("^pval_", colnames(merged), value = TRUE)
+    if (length(pval_cols) == 1) {
+        min_pval <- merged[[pval_cols]]
+    } else {
+        pval_mat <- as.matrix(merged[, pval_cols, drop = FALSE])
+        min_pval <- apply(pval_mat, 1, function(x) {
+            if (all(is.na(x))) NA else min(x, na.rm = TRUE)
+        })
+    }
+
+    df <- data.frame(
+        gene = merged$gene,
+        min_pval = min_pval,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$min_pval), , drop = FALSE]
+    df$rank_val <- -log10(df$min_pval)
+    df$rank_val[!is.finite(df$rank_val)] <- 0
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build all ranked gene lists for GSEA
+#'
+#' Convenience wrapper that builds all four ranking variants from per-contrast DE tables.
+#'
+#' @param de_tables Named list of DE tables (each with FeatureID, log2FoldChange, pvalue)
+#' @return Nested list: ranking_method -> contrast_name -> named numeric vector.
+#'   The "any_contrast" method has a single entry keyed "any_contrast".
+build_ranked_gene_lists <- function(de_tables) {
+    ranked <- list(
+        pval_wo_direction   = list(),
+        pval_with_direction = list(),
+        fc                  = list()
+    )
+
+    for (contrast in names(de_tables)) {
+        dt <- de_tables[[contrast]]
+        ranked[["pval_wo_direction"]][[contrast]]   <- rank_by_pval_wo_direction(dt)
+        ranked[["pval_with_direction"]][[contrast]] <- rank_by_pval_with_direction(dt)
+        ranked[["fc"]][[contrast]]                  <- rank_by_fc(dt)
+    }
+
+    # Cross-contrast: minimum pvalue across all contrasts
+    ranked[["pval_wo_direction"]][["any_contrast"]] <- rank_by_min_pval_any_contrast(de_tables)
+
+    ranked
+}
+
+# ==============================================================================
+# LOCAL GSEA (Phase 1 — enrichment migration)
+# ==============================================================================
+
+#' Run GSEA using local TERM2GENE/TERM2NAME tables
+#'
+#' Wraps clusterProfiler::GSEA() with the legacy enrichment parameters.
+#' maxGSSize is set to the total number of unique genes in TERM2GENE (legacy behavior).
+#'
+#' @param ranked_genes Named numeric vector (gene IDs as names, ranking metric as values).
+#'   Must be sorted descending.
+#' @param term2gene Two-column data.frame: term ID, gene ID
+#' @param term2name Two-column data.frame: term ID, term name
+#' @param pvalueCutoff Adjusted p-value cutoff (default 0.05)
+#' @param pAdjustMethod P-value adjustment method (default "fdr")
+#' @return gseaResult object, or NULL if GSEA fails or produces no results
+run_gsea_local <- function(ranked_genes,
+                           term2gene,
+                           term2name,
+                           pvalueCutoff = 0.05,
+                           pAdjustMethod = "fdr") {
+
+    if (length(ranked_genes) == 0) {
+        message("    Empty ranked gene list — skipping GSEA")
+        return(NULL)
+    }
+
+    if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+        warning("clusterProfiler package required for GSEA. ",
+                "Install with: BiocManager::install('clusterProfiler')")
+        return(NULL)
+    }
+
+    # Legacy behavior: maxGSSize = total unique genes in the pathway database
+    nr_total_genes <- length(unique(term2gene[, 2]))
+
+    res <- tryCatch({
+        clusterProfiler::GSEA(
+            geneList      = ranked_genes,
+            TERM2GENE     = term2gene,
+            TERM2NAME     = term2name,
+            minGSSize     = 4,
+            maxGSSize     = nr_total_genes,
+            pAdjustMethod = pAdjustMethod,
+            pvalueCutoff  = pvalueCutoff
+        )
+    }, error = function(e) {
+        message("    GSEA failed: ", e$message)
+        NULL
+    })
+
+    res
+}
+
+#' Run GSEA across all ranking methods, contrasts, and databases
+#'
+#' Orchestrator that runs run_gsea_local() for every combination of
+#' ranking method x contrast x database loaded from local tables.
+#'
+#' @param ranked_genes Output of build_ranked_gene_lists()
+#' @param local_tables Output of load_local_pathway_tables()
+#' @param pvalueCutoff Adjusted p-value cutoff
+#' @param pAdjustMethod P-value adjustment method
+#' @param output_dir Directory for GSEA result CSVs
+#' @return Nested list compatible with downstream consumers:
+#'   ranking_method -> contrast -> db_name -> data.frame with padj, NES, etc.
+run_gsea_all <- function(ranked_genes,
+                         local_tables,
+                         pvalueCutoff = 0.05,
+                         pAdjustMethod = "fdr",
+                         output_dir = NULL) {
+
+    if (!is.null(output_dir)) {
+        dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    }
+
+    results <- list()
+    plot_files <- list()
+
+    for (ranking_method in names(ranked_genes)) {
+        for (contrast in names(ranked_genes[[ranking_method]])) {
+            ranked <- ranked_genes[[ranking_method]][[contrast]]
+            if (length(ranked) == 0) next
+
+            for (db_name in names(local_tables)) {
+                tbl <- local_tables[[db_name]]
+                term2gene <- tbl$TERM2GENE
+                term2name <- tbl$TERM2NAME
+
+                message("  GSEA: ", db_name, " | ", ranking_method, " | ", contrast)
+
+                res <- run_gsea_local(
+                    ranked_genes  = ranked,
+                    term2gene     = term2gene,
+                    term2name     = term2name,
+                    pvalueCutoff  = pvalueCutoff,
+                    pAdjustMethod = pAdjustMethod
+                )
+
+                if (is.null(res) || nrow(as.data.frame(res)) == 0) {
+                    message("    No significant results")
+                    next
+                }
+
+                # Convert to data.frame for storage and downstream compatibility
+                res_df <- as.data.frame(res)
+                res_df$contrast <- contrast
+                res_df$database <- db_name
+                res_df$ranking_method <- ranking_method
+
+                # Ensure downstream-required columns exist
+                # clusterProfiler::GSEA produces: ID, Description, setSize, enrichmentScore,
+                # NES, pvalue, p.adjust, qvalue, rank, leading_edge, core_enrichment
+                # Downstream needs "padj" — add as alias for p.adjust
+                if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
+                    res_df$padj <- res_df$p.adjust
+                }
+                # Downstream exec summary looks for "pathway" or "Description"
+                if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
+                    res_df$pathway <- res_df$Description
+                }
+
+                # Store in nested structure
+                result_key <- paste0(db_name, "_gsea_", ranking_method)
+                if (is.null(results[[contrast]])) results[[contrast]] <- list()
+                results[[contrast]][[result_key]] <- res_df
+
+                n_sig <- sum(res_df$padj < 0.05, na.rm = TRUE)
+                message("    ", n_sig, " significant pathways (padj < 0.05)")
+
+                # Save CSV
+                if (!is.null(output_dir)) {
+                    gsea_sub_dir <- file.path(output_dir, db_name,
+                                              paste0("ranking_by_", ranking_method),
+                                              contrast)
+                    dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
+                    csv_file <- file.path(gsea_sub_dir,
+                                          paste0("GSEA_results_", contrast, ".csv"))
+                    write.csv(res_df, file = csv_file, row.names = FALSE)
+
+                    # Generate dotplot if significant results exist
+                    if (n_sig >= 3) {
+                        plot_file <- file.path(gsea_sub_dir,
+                                               paste0("GSEA_dotplot_", contrast, ".png"))
+                        tryCatch({
+                            top_n <- min(20, nrow(res_df))
+                            top <- head(res_df[order(res_df$padj), ], top_n)
+                            top$pathway_label <- substr(top$pathway, 1, 60)
+
+                            p <- ggplot2::ggplot(
+                                top,
+                                ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
+                            ) +
+                                ggplot2::geom_point(
+                                    ggplot2::aes(size = setSize, color = -log10(padj))
+                                ) +
+                                ggplot2::scale_color_gradient(
+                                    low = "blue", high = "red", name = "-log10(padj)"
+                                ) +
+                                ggplot2::labs(
+                                    title = paste("GSEA:", db_name, "|", ranking_method),
+                                    subtitle = contrast,
+                                    x = "Normalized Enrichment Score",
+                                    y = "",
+                                    size = "Gene Set Size"
+                                ) +
+                                ggplot2::theme_minimal() +
+                                ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+
+                            ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                            plot_files[[paste0(db_name, "_", ranking_method, "_", contrast)]] <- plot_file
+                        }, error = function(e) {
+                            message("    Plot generation failed: ", e$message)
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    list(results = results, plot_files = plot_files)
+}

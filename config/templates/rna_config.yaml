@@ -134,6 +134,24 @@ modes:
         cluster_cols: true
 
     # --------------------------------------------------------
+    # Enrichment analysis (local precomputed pathway tables)
+    # --------------------------------------------------------
+    # Set annotation_dir to enable offline enrichment using local KEGG/GO tables.
+    # When set, the pipeline loads TERM2GENE/TERM2NAME from tab-separated files
+    # in the specified directory and runs GSEA with multiple ranking methods.
+    # When not set (or empty), the pipeline falls back to the existing online
+    # gene set loading path (OrgDb, KEGG REST, biomaRt).
+    #
+    # Expected files in annotation_dir:
+    #   KEGG_pathway2gene.tab, KEGG_pathway2name.tab
+    #   GO2gene_BP.tab, GO2name_BP.tab
+    #   GO2gene_MF.tab, GO2name_MF.tab
+    #   GO2gene_CC.tab, GO2name_CC.tab
+    enrichment:
+      annotation_dir: ""                # REQUIRED for local enrichment; path relative to project.dir
+      # databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]   # optional subset
+
+    # --------------------------------------------------------
     # Plotting / QC aesthetics
     # --------------------------------------------------------
     effects:
