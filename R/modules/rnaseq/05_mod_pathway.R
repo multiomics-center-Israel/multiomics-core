@@ -211,91 +211,83 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     enrich_dir <- file.path(out_dir, "Enrichment")
     pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
     padj_method <- enr_cfg$padj_method   %||% "fdr"
+    rna_de_cfg  <- config$modes$rna$de %||% list()
 
     pathway_results <- list()
     plot_files      <- list()
 
     # ------------------------------------------------------------------
-    # 2. Cluster-based ORA (primary legacy behavior)
+    # 2. Build gene_lists and run cluster-based ORA across all methods
     # ------------------------------------------------------------------
-    clusters <- .extract_clusters(clustering_res)
+    # Legacy orchestration: iterate gene_lists[[clust_method]][[clust_round]]
+    # where methods include contrast-derived lists and clustering-derived lists.
+    gene_lists <- build_gene_lists(
+        de_tables      = de_tables,
+        clustering_res = clustering_res,
+        p_cutoff       = rna_de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff     = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
+    )
 
-    if (!is.null(clusters) && length(clusters) > 0) {
+    if (length(gene_lists) > 0) {
         message("\n--- Cluster-based ORA ---")
-        message("  ", length(unique(clusters)), " clusters, ",
-                length(clusters), " genes")
+        n_total_lists <- sum(vapply(gene_lists, length, integer(1)))
+        message("  Gene list methods: ", paste(names(gene_lists), collapse = ", "),
+                " (", n_total_lists, " total)")
 
         ora_results <- list()
 
-        for (db_name in names(local_tables)) {
-            tbl <- local_tables[[db_name]]
+        for (clust_method in names(gene_lists)) {
+            for (clust_round in names(gene_lists[[clust_method]])) {
+                clusters <- gene_lists[[clust_method]][[clust_round]]
+                if (length(clusters) == 0) next
 
-            # Determine type for simplify dispatch: GO or KEGG
-            db_type <- if (grepl("^GO", db_name)) "GO" else "KEGG"
+                message("  Method: ", clust_method, " | Round: ", clust_round,
+                        " (", length(clusters), " genes, ",
+                        length(unique(clusters)), " clusters)")
 
-            ora_dir <- file.path(enrich_dir, "ORA", db_name)
-            ora_file_name <- paste0(db_name, "_cluster_ora")
+                for (db_name in names(local_tables)) {
+                    tbl <- local_tables[[db_name]]
+                    db_type <- if (grepl("^GO", db_name)) "GO" else "KEGG"
 
-            message("  ORA: ", db_name, " (type=", db_type, ")")
+                    ora_dir <- file.path(enrich_dir, "ORA", db_name)
+                    result_file <- paste0(db_name, "_", clust_method, "_", clust_round)
 
-            allRes <- run_cluster_ora(
-                clusters      = clusters,
-                TERM2GENE     = tbl$TERM2GENE,
-                TERM2NAME     = tbl$TERM2NAME,
-                type          = db_type,
-                pvalueCutoff  = pval_cutoff,
-                pAdjustMethod = padj_method,
-                outDir        = ora_dir,
-                file_name     = ora_file_name,
-                maxCategory   = enr_cfg$max_terms_in_dotplot %||% 1000
-            )
+                    message("    ORA: ", db_name)
 
-            if (length(allRes) == 0) {
-                message("    No significant enrichment")
-                next
+                    allRes <- run_cluster_ora(
+                        clusters      = clusters,
+                        TERM2GENE     = tbl$TERM2GENE,
+                        TERM2NAME     = tbl$TERM2NAME,
+                        type          = db_type,
+                        pvalueCutoff  = pval_cutoff,
+                        pAdjustMethod = padj_method,
+                        outDir        = ora_dir,
+                        file_name     = result_file,
+                        maxCategory   = enr_cfg$max_terms_in_dotplot %||% 1000
+                    )
+
+                    if (length(allRes) == 0) {
+                        message("      No significant enrichment")
+                        next
+                    }
+
+                    # Store processed tables for downstream consumers
+                    result_base <- paste0(db_name, "_", clust_method, "_", clust_round)
+                    .store_ora_result(ora_results, allRes[[3]], paste0(result_base, "_ora")) -> ora_results
+                    .store_ora_result(ora_results, allRes[[4]], paste0(result_base, "_ora_simplify")) -> ora_results
+
+                    n_terms <- if (!is.null(allRes[[3]])) nrow(allRes[[3]]) else 0
+                    message("      ", n_terms, " enriched terms")
+                }
             }
-
-            # allRes is a 4-element list:
-            #   [[1]] compareClusterResult, [[2]] simplified (or NULL),
-            #   [[3]] enrichment_table, [[4]] enrichment_table_simplify (or NULL)
-
-            # Store processed tables in pathway_results for downstream consumers.
-            # Use a structure where the enrichment table (data.frame with padj)
-            # is accessible to collect_pipeline_stats() and extract_enrichment_df().
-            if (!is.null(allRes[[3]]) && nrow(allRes[[3]]) > 0) {
-                ora_df <- allRes[[3]]
-                # Ensure downstream-compatible column names
-                if ("p.adjust" %in% colnames(ora_df) && !"padj" %in% colnames(ora_df)) {
-                    ora_df$padj <- ora_df$p.adjust
-                }
-                if ("Description" %in% colnames(ora_df) && !"pathway" %in% colnames(ora_df)) {
-                    ora_df$pathway <- ora_df$Description
-                }
-                ora_results[[paste0(db_name, "_ora")]] <- ora_df
-            }
-
-            if (!is.null(allRes[[4]]) && nrow(allRes[[4]]) > 0) {
-                simp_df <- allRes[[4]]
-                if ("p.adjust" %in% colnames(simp_df) && !"padj" %in% colnames(simp_df)) {
-                    simp_df$padj <- simp_df$p.adjust
-                }
-                if ("Description" %in% colnames(simp_df) && !"pathway" %in% colnames(simp_df)) {
-                    simp_df$pathway <- simp_df$Description
-                }
-                ora_results[[paste0(db_name, "_ora_simplify")]] <- simp_df
-            }
-
-            n_terms <- if (!is.null(allRes[[3]])) nrow(allRes[[3]]) else 0
-            message("    ", n_terms, " enriched terms")
         }
 
-        # Store ORA results under a dedicated key in pathway_results
         if (length(ora_results) > 0) {
             pathway_results[["cluster_ora"]] <- ora_results
         }
     } else {
-        message("NOTE: Cluster-based ORA requires clustering results. ",
-                "Enable clustering in config to run ORA. GSEA will proceed.")
+        message("NOTE: No gene lists available for ORA. ",
+                "Provide DE tables and/or enable clustering. GSEA will proceed.")
     }
 
     # ------------------------------------------------------------------
@@ -349,8 +341,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     message("\n=== Local enrichment complete ===")
     message("  Result sets: ", n_result_dfs)
     message("  Plot files: ", length(plot_files))
-    if (is.null(clusters) || length(clusters) == 0) {
-        message("  ORA: skipped (no clustering results)")
+    if (length(gene_lists) == 0) {
+        message("  ORA: skipped (no gene lists available)")
     }
 
     list(
@@ -361,18 +353,23 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 }
 
 
-#' Extract cluster assignments from clustering result
+#' Store an ORA result table in the ora_results accumulator
 #'
-#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL
-#' @return Named integer vector (gene IDs -> cluster labels), or NULL
+#' Adds downstream-compatible padj and pathway columns.
+#' @param ora_results Current accumulator list
+#' @param df Data.frame from run_cluster_ora(), or NULL
+#' @param key Storage key
+#' @return Updated ora_results list
 #' @noRd
-.extract_clusters <- function(clustering_res) {
-    if (is.null(clustering_res)) return(NULL)
+.store_ora_result <- function(ora_results, df, key) {
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(ora_results)
 
-    # mod_rnaseq_clustering returns list(plots, files, excel_order, objects)
-    # objects$clusters is a named integer vector
-    clusters <- clustering_res$objects$clusters
-    if (is.null(clusters) || length(clusters) == 0) return(NULL)
-
-    clusters
+    if ("p.adjust" %in% colnames(df) && !"padj" %in% colnames(df)) {
+        df$padj <- df$p.adjust
+    }
+    if ("Description" %in% colnames(df) && !"pathway" %in% colnames(df)) {
+        df$pathway <- df$Description
+    }
+    ora_results[[key]] <- df
+    ora_results
 }

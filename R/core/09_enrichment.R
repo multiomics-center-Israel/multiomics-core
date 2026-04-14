@@ -1456,3 +1456,92 @@ process_enrichment_table <- function(clusterprofiler_results_table) {
 
     et
 }
+
+# ==============================================================================
+# GENE LIST BUILDER FOR ORA (legacy orchestration layer)
+# ==============================================================================
+# The legacy enrichment workflow iterates over gene_lists[[clust_method]][[clust_round]],
+# where each entry is a named vector mapping gene IDs to cluster labels.
+# This includes contrast-derived "clusters" (up/down per contrast, all DE per contrast)
+# and actual clustering-derived assignments (partition, hierarchical, binary patterns).
+
+#' Build gene_lists structure for cluster-based ORA
+#'
+#' Constructs a nested list gene_lists[[method]][[round]] where each leaf is
+#' a named character/integer vector (gene IDs as names, cluster labels as values).
+#' This matches the legacy enrichment orchestration structure.
+#'
+#' @param de_tables Named list of per-contrast DE tables
+#'   (each with FeatureID, log2FoldChange, padj columns)
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL
+#' @param p_cutoff Adjusted p-value cutoff for DE significance (default 0.05)
+#' @param lfc_cutoff log2 fold change cutoff for DE significance (default log2(1.5))
+#' @return Named list: method -> round -> named vector (gene ID -> cluster label).
+#'   Returns empty list if no gene lists can be built.
+#' @export
+build_gene_lists <- function(de_tables,
+                             clustering_res = NULL,
+                             p_cutoff = 0.05,
+                             lfc_cutoff = log2(1.5)) {
+
+    gene_lists <- list()
+
+    # ------------------------------------------------------------------
+    # 1. Contrast-based gene lists (always available when DE tables exist)
+    # ------------------------------------------------------------------
+    if (length(de_tables) > 0) {
+
+        # "contrasts": per contrast, genes assigned to "up" or "down"
+        for (cn in names(de_tables)) {
+            dt <- de_tables[[cn]]
+            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
+                      !is.na(dt$log2FoldChange) &
+                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            if (nrow(sig) == 0) next
+
+            labels <- ifelse(sig$log2FoldChange > 0, "up", "down")
+            names(labels) <- sig$FeatureID
+            gene_lists[["contrasts"]][[cn]] <- labels
+        }
+
+        # "contrasts_wo_direction": per contrast, all DE genes in one cluster "all"
+        for (cn in names(de_tables)) {
+            dt <- de_tables[[cn]]
+            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
+                      !is.na(dt$log2FoldChange) &
+                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            if (nrow(sig) == 0) next
+
+            labels <- rep("all", nrow(sig))
+            names(labels) <- sig$FeatureID
+            gene_lists[["contrasts_wo_direction"]][[cn]] <- labels
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 2. Clustering-derived gene lists (when clustering results available)
+    # ------------------------------------------------------------------
+    if (!is.null(clustering_res) && is.list(clustering_res$objects)) {
+        objs <- clustering_res$objects
+
+        # Partition clusters
+        if (!is.null(objs$clusters) && length(objs$clusters) > 0) {
+            gene_lists[["partition"]][["k"]] <- objs$clusters
+        }
+
+        # Binary patterns (if available)
+        # objects$patterns is typically a named vector from binary pattern assignment
+        if (!is.null(objs$patterns) && length(objs$patterns) > 0) {
+            gene_lists[["binary_patterns"]][["best"]] <- objs$patterns
+        }
+
+        # Hierarchical clusters (if stored separately in excel_order)
+        # excel_order$partition_clusters may differ from objects$clusters
+        # when hierarchical ran but partition overwrote objects$clusters.
+        # However the current module overwrites objects$clusters with partition,
+        # so hierarchical cuts are only available if partition did not run.
+        # We don't duplicate — partition already captured above.
+    }
+
+    gene_lists
+}
