@@ -150,6 +150,7 @@ modes:
     enrichment:
       annotation_dir: ""                # REQUIRED for local enrichment; path relative to project.dir
       # databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]   # optional subset
+      # workers: 4                      # parallel GSEA workers (default 1 = sequential; needs future + future.apply)
 
     # --------------------------------------------------------
     # Plotting / QC aesthetics

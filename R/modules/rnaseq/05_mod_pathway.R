@@ -232,6 +232,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
 
     pval_cutoff <- enr_cfg$gsea_pvalue_cutoff %||% enr_cfg$pvalue_cutoff %||% 0.05
     padj_method <- enr_cfg$gsea_padj_method   %||% enr_cfg$padj_method   %||% "fdr"
+    workers     <- enr_cfg$workers %||% 1
 
     message("Running GSEA (pvalueCutoff=", pval_cutoff,
             ", pAdjustMethod=", padj_method, ")...")
@@ -241,7 +242,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
         local_tables  = local_tables,
         pvalueCutoff  = pval_cutoff,
         pAdjustMethod = padj_method,
-        output_dir    = gsea_dir
+        output_dir    = gsea_dir,
+        workers       = workers
     )
 
     pathway_results <- gsea_out$results

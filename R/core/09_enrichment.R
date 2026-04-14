@@ -1034,143 +1034,220 @@ run_gsea_local <- function(ranked_genes,
 #'
 #' Orchestrator that runs run_gsea_local() for every combination of
 #' ranking method x contrast x database loaded from local tables.
+#' Jobs are independent and run in parallel when future.apply is available.
 #'
 #' @param ranked_genes Output of build_ranked_gene_lists()
 #' @param local_tables Output of load_local_pathway_tables()
 #' @param pvalueCutoff Adjusted p-value cutoff
 #' @param pAdjustMethod P-value adjustment method
 #' @param output_dir Directory for GSEA result CSVs
+#' @param workers Number of parallel workers (default 1 = sequential).
+#'   Parallelization uses future::plan(multisession) which is Windows-safe.
 #' @return Nested list compatible with downstream consumers:
-#'   ranking_method -> contrast -> db_name -> data.frame with padj, NES, etc.
+#'   contrast -> db_method_key -> data.frame with padj, NES, etc.
 run_gsea_all <- function(ranked_genes,
                          local_tables,
                          pvalueCutoff = 0.05,
                          pAdjustMethod = "fdr",
-                         output_dir = NULL) {
+                         output_dir = NULL,
+                         workers = 1) {
 
     if (!is.null(output_dir)) {
         dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     }
 
-    results <- list()
-    plot_files <- list()
-
+    # ------------------------------------------------------------------
+    # 1. Build flat job list from the nested ranked_genes x local_tables
+    # ------------------------------------------------------------------
+    jobs <- list()
     for (ranking_method in names(ranked_genes)) {
         for (contrast in names(ranked_genes[[ranking_method]])) {
             ranked <- ranked_genes[[ranking_method]][[contrast]]
             if (length(ranked) == 0) next
 
             for (db_name in names(local_tables)) {
-                tbl <- local_tables[[db_name]]
-                term2gene <- tbl$TERM2GENE
-                term2name <- tbl$TERM2NAME
-
-                message("  GSEA: ", db_name, " | ", ranking_method, " | ", contrast)
-
-                res <- run_gsea_local(
-                    ranked_genes  = ranked,
-                    term2gene     = term2gene,
-                    term2name     = term2name,
-                    pvalueCutoff  = pvalueCutoff,
-                    pAdjustMethod = pAdjustMethod
+                jobs[[length(jobs) + 1]] <- list(
+                    ranking_method = ranking_method,
+                    contrast       = contrast,
+                    db_name        = db_name,
+                    ranked         = ranked,
+                    term2gene      = local_tables[[db_name]]$TERM2GENE,
+                    term2name      = local_tables[[db_name]]$TERM2NAME
                 )
+            }
+        }
+    }
 
-                if (is.null(res) || nrow(as.data.frame(res)) == 0) {
-                    message("    No significant results")
-                    next
+    if (length(jobs) == 0) {
+        return(list(results = list(), plot_files = list()))
+    }
+
+    message("  ", length(jobs), " GSEA jobs to run",
+            if (workers > 1) paste0(" (", workers, " workers)") else " (sequential)")
+
+    # ------------------------------------------------------------------
+    # 2. Run GSEA computation (parallel or sequential)
+    # ------------------------------------------------------------------
+    run_one_gsea_job <- function(job) {
+        # Pure computation — no file I/O, no message() (avoids interleaved output)
+        res <- tryCatch({
+            clusterProfiler::GSEA(
+                geneList      = job$ranked,
+                TERM2GENE     = job$term2gene,
+                TERM2NAME     = job$term2name,
+                minGSSize     = 4,
+                maxGSSize     = length(unique(job$term2gene[, 2])),
+                pAdjustMethod = pAdjustMethod,
+                pvalueCutoff  = pvalueCutoff
+            )
+        }, error = function(e) {
+            # Return the error message so the caller can report it
+            structure(list(message = e$message), class = "gsea_error")
+        })
+        list(
+            ranking_method = job$ranking_method,
+            contrast       = job$contrast,
+            db_name        = job$db_name,
+            gsea_result    = res
+        )
+    }
+
+    use_parallel <- workers > 1 &&
+        requireNamespace("future", quietly = TRUE) &&
+        requireNamespace("future.apply", quietly = TRUE)
+
+    if (use_parallel) {
+        # Save current plan, set multisession, restore on exit
+        old_plan <- future::plan()
+        future::plan(future::multisession, workers = workers)
+        on.exit(future::plan(old_plan), add = TRUE)
+
+        job_results <- future.apply::future_lapply(
+            jobs, run_one_gsea_job,
+            future.seed = TRUE
+        )
+    } else {
+        if (workers > 1) {
+            message("  future/future.apply not available — running sequentially. ",
+                    "Install with: install.packages(c('future', 'future.apply'))")
+        }
+        job_results <- lapply(jobs, function(job) {
+            message("  GSEA: ", job$db_name, " | ", job$ranking_method, " | ", job$contrast)
+            run_one_gsea_job(job)
+        })
+    }
+
+    # ------------------------------------------------------------------
+    # 3. Assemble results and write files (serial, deterministic)
+    # ------------------------------------------------------------------
+    results <- list()
+    plot_files <- list()
+
+    for (jr in job_results) {
+        db_name        <- jr$db_name
+        ranking_method <- jr$ranking_method
+        contrast       <- jr$contrast
+        res            <- jr$gsea_result
+        result_key     <- paste0(db_name, "_gsea_", ranking_method)
+
+        # Handle failed jobs
+        if (inherits(res, "gsea_error")) {
+            message("  GSEA failed: ", db_name, " | ", ranking_method, " | ",
+                    contrast, " — ", res$message)
+            next
+        }
+
+        if (is.null(res) || nrow(as.data.frame(res)) == 0) {
+            message("  ", db_name, " | ", ranking_method, " | ", contrast,
+                    ": no significant results")
+            next
+        }
+
+        # Convert to data.frame for storage and downstream compatibility
+        res_df <- as.data.frame(res)
+        res_df$contrast <- contrast
+        res_df$database <- db_name
+        res_df$ranking_method <- ranking_method
+
+        # Ensure downstream-required columns exist
+        if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
+            res_df$padj <- res_df$p.adjust
+        }
+        if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
+            res_df$pathway <- res_df$Description
+        }
+
+        # Store in nested structure
+        if (is.null(results[[contrast]])) results[[contrast]] <- list()
+        results[[contrast]][[result_key]] <- res_df
+
+        n_sig <- sum(res_df$padj < 0.05, na.rm = TRUE)
+        message("  ", db_name, " | ", ranking_method, " | ", contrast,
+                ": ", n_sig, " significant (padj < 0.05)")
+
+        # Write CSV
+        if (!is.null(output_dir)) {
+            gsea_sub_dir <- file.path(output_dir, db_name,
+                                      paste0("ranking_by_", ranking_method),
+                                      contrast)
+            dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
+            csv_file <- file.path(gsea_sub_dir,
+                                  paste0("GSEA_results_", contrast, ".csv"))
+            write.csv(res_df, file = csv_file, row.names = FALSE)
+
+            # Generate dotplot if significant results exist.
+            # Primary: enrichplot::dotplot() on the gseaResult object.
+            # Fallback: basic ggplot2 scatterplot (visual approximation only).
+            if (n_sig >= 3) {
+                plot_file <- file.path(gsea_sub_dir,
+                                       paste0("GSEA_dotplot_", contrast, ".png"))
+                plot_key <- paste0(db_name, "_", ranking_method, "_", contrast)
+                show_n <- min(20, n_sig)
+
+                plotted <- FALSE
+
+                # Primary: enrichplot::dotplot on gseaResult S4 object
+                if (requireNamespace("enrichplot", quietly = TRUE)) {
+                    tryCatch({
+                        p <- enrichplot::dotplot(res, showCategory = show_n)
+                        ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                        plot_files[[plot_key]] <- plot_file
+                        plotted <- TRUE
+                    }, error = function(e) {
+                        message("    enrichplot::dotplot() failed: ", e$message,
+                                " — falling back to ggplot2")
+                    })
                 }
 
-                # Convert to data.frame for storage and downstream compatibility
-                res_df <- as.data.frame(res)
-                res_df$contrast <- contrast
-                res_df$database <- db_name
-                res_df$ranking_method <- ranking_method
-
-                # Ensure downstream-required columns exist
-                # clusterProfiler::GSEA produces: ID, Description, setSize, enrichmentScore,
-                # NES, pvalue, p.adjust, qvalue, rank, leading_edge, core_enrichment
-                # Downstream needs "padj" — add as alias for p.adjust
-                if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
-                    res_df$padj <- res_df$p.adjust
-                }
-                # Downstream exec summary looks for "pathway" or "Description"
-                if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
-                    res_df$pathway <- res_df$Description
-                }
-
-                # Store in nested structure
-                result_key <- paste0(db_name, "_gsea_", ranking_method)
-                if (is.null(results[[contrast]])) results[[contrast]] <- list()
-                results[[contrast]][[result_key]] <- res_df
-
-                n_sig <- sum(res_df$padj < 0.05, na.rm = TRUE)
-                message("    ", n_sig, " significant pathways (padj < 0.05)")
-
-                # Save CSV
-                if (!is.null(output_dir)) {
-                    gsea_sub_dir <- file.path(output_dir, db_name,
-                                              paste0("ranking_by_", ranking_method),
-                                              contrast)
-                    dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
-                    csv_file <- file.path(gsea_sub_dir,
-                                          paste0("GSEA_results_", contrast, ".csv"))
-                    write.csv(res_df, file = csv_file, row.names = FALSE)
-
-                    # Generate dotplot if significant results exist.
-                    # Primary: enrichplot::dotplot() on the gseaResult object.
-                    # Fallback: basic ggplot2 scatterplot (visual approximation only).
-                    if (n_sig >= 3) {
-                        plot_file <- file.path(gsea_sub_dir,
-                                               paste0("GSEA_dotplot_", contrast, ".png"))
-                        plot_key <- paste0(db_name, "_", ranking_method, "_", contrast)
-                        show_n <- min(20, n_sig)
-
-                        plotted <- FALSE
-
-                        # Primary: enrichplot::dotplot on gseaResult S4 object
-                        if (requireNamespace("enrichplot", quietly = TRUE)) {
-                            tryCatch({
-                                p <- enrichplot::dotplot(res, showCategory = show_n)
-                                ggplot2::ggsave(plot_file, p, width = 10, height = 8)
-                                plot_files[[plot_key]] <- plot_file
-                                plotted <- TRUE
-                            }, error = function(e) {
-                                message("    enrichplot::dotplot() failed: ", e$message,
-                                        " — falling back to ggplot2")
-                            })
-                        }
-
-                        # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
-                        if (!plotted) {
-                            tryCatch({
-                                top <- head(res_df[order(res_df$padj), ], show_n)
-                                top$pathway_label <- substr(top$pathway, 1, 60)
-                                p <- ggplot2::ggplot(
-                                    top,
-                                    ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
-                                ) +
-                                    ggplot2::geom_point(
-                                        ggplot2::aes(size = setSize, color = -log10(padj))
-                                    ) +
-                                    ggplot2::scale_color_gradient(
-                                        low = "blue", high = "red", name = "-log10(padj)"
-                                    ) +
-                                    ggplot2::labs(
-                                        title = paste("GSEA:", db_name, "|", ranking_method),
-                                        subtitle = contrast,
-                                        x = "Normalized Enrichment Score",
-                                        y = "",
-                                        size = "Gene Set Size"
-                                    ) +
-                                    ggplot2::theme_minimal() +
-                                    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
-                                ggplot2::ggsave(plot_file, p, width = 10, height = 8)
-                                plot_files[[plot_key]] <- plot_file
-                            }, error = function(e) {
-                                message("    Fallback plot also failed: ", e$message)
-                            })
-                        }
-                    }
+                # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
+                if (!plotted) {
+                    tryCatch({
+                        top <- head(res_df[order(res_df$padj), ], show_n)
+                        top$pathway_label <- substr(top$pathway, 1, 60)
+                        p <- ggplot2::ggplot(
+                            top,
+                            ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
+                        ) +
+                            ggplot2::geom_point(
+                                ggplot2::aes(size = setSize, color = -log10(padj))
+                            ) +
+                            ggplot2::scale_color_gradient(
+                                low = "blue", high = "red", name = "-log10(padj)"
+                            ) +
+                            ggplot2::labs(
+                                title = paste("GSEA:", db_name, "|", ranking_method),
+                                subtitle = contrast,
+                                x = "Normalized Enrichment Score",
+                                y = "",
+                                size = "Gene Set Size"
+                            ) +
+                            ggplot2::theme_minimal() +
+                            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+                        ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                        plot_files[[plot_key]] <- plot_file
+                    }, error = function(e) {
+                        message("    Fallback plot also failed: ", e$message)
+                    })
                 }
             }
         }
