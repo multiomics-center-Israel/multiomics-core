@@ -296,14 +296,15 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         <div style="font-size:36px;">&#x1F4C4;</div>
         <div>
           <div style="font-weight:600;font-size:15px;">install.bat</div>
-          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">Installs all R packages + creates desktop shortcut</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">Installs R packages + configures wizard + creates desktop shortcut</div>
         </div>
       </div>
 
       <p>This will:</p>
       <ul style="padding-left:20px;margin:8px 0;font-size:14px;color:var(--text-dim);">
         <li>Verify R is installed correctly</li>
-        <li>Install all 398 required R packages (automated, takes ~15 min)</li>
+        <li>Install all 398 required R packages (automated, takes ~15 min first time, seconds on re-run)</li>
+        <li>Ask to configure wizard defaults (which analysis modes, default settings, theme)</li>
         <li>Create a <strong>"Multiomics Pipeline"</strong> shortcut on your desktop</li>
       </ul>
 
@@ -311,6 +312,11 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         <strong>Be patient:</strong> The first-time package install downloads and compiles ~400 packages.
         You'll see lots of text scrolling &mdash; this is normal. Don't close the window until it says
         <em>"Setup complete!"</em>
+      </div>
+
+      <div class="note">
+        <strong>Re-running is safe:</strong> If you run <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">install.bat</code> again later,
+        it skips already-installed packages (takes seconds) and preserves your configuration.
       </div>
 
       <div class="note success">
@@ -381,8 +387,9 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         Open Command Prompt, navigate to the pipeline folder, and run:<br>
         <code>cd %USERPROFILE%\Documents\multiomics-core</code><br>
         <code>git pull</code><br>
-        <code>Rscript -e "renv::restore(prompt=FALSE)"</code><br><br>
-        This pulls the latest code and installs any new packages.
+        <code>install.bat</code><br><br>
+        This pulls the latest code and installs any new packages (skips what's already installed).
+        Your wizard configuration is preserved across updates.
       </div>
     </details>
 
@@ -392,6 +399,15 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         Yes, but you'll need to re-run <code>install.bat</code> to update the desktop shortcut
         to point to the new location. The R packages are stored inside the project folder
         (in <code>renv/library</code>), so they move with it.
+      </div>
+    </details>
+
+    <details>
+      <summary>How do I change the wizard defaults (available modes, theme, etc.)?</summary>
+      <div class="detail-body">
+        Double-click <code>configure_wizard.bat</code> in the pipeline folder.
+        It lets you choose which analysis modes are visible, set default values for all fields,
+        pick the theme, and more. Changes take effect on the next wizard launch.
       </div>
     </details>
   </div>
