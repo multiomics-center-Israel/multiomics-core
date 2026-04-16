@@ -223,38 +223,54 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
     <div class="step-header">
       <div class="step-num">2</div>
       <div class="step-title">Get the Pipeline Code</div>
-      <div class="step-time"><span class="tag tag-manual">manual</span> ~2 min</div>
+      <div class="step-time"><span class="tag tag-manual">manual</span> ~5 min</div>
     </div>
     <div class="step-body">
-      <p>Open <strong>Command Prompt</strong> (press <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter) and run the commands below.</p>
 
-      <p style="margin-top:14px;font-weight:600;font-size:13px;">Where do you want to install the pipeline?</p>
-      <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">Type or paste the folder path below. The commands will update automatically.</p>
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
-        <input type="text" id="install_dir" value="C:\Users\Lab\Documents" placeholder="e.g. C:\Users\Lab\Documents" oninput="updateCloneCmd()"
-          style="flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;">
+      <!-- Sub-step 2a: Install Git -->
+      <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px;">
+        <p style="font-weight:600;font-size:14px;margin-bottom:10px;">Step 2a &mdash; Install Git for Windows</p>
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">Git is needed to download the pipeline code. No account or login required &mdash; just install it.</p>
+        <a href="https://git-scm.com/download/win" target="_blank" style="display:inline-flex;align-items:center;gap:10px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.25);border-radius:10px;padding:12px 20px;text-decoration:none;transition:border-color 0.2s;">
+          <span style="font-size:24px;">&#x1F4E5;</span>
+          <span>
+            <span style="font-size:14px;font-weight:600;color:var(--text);display:block;">Download Git for Windows</span>
+            <span style="font-size:11px;color:var(--text-dim);">git-scm.com &mdash; click the downloaded file and use all default settings</span>
+          </span>
+        </a>
+        <div class="note" style="margin-top:12px;margin-bottom:0;">
+          <strong>During installation:</strong> Just click <em>Next</em> on every screen &mdash; all the defaults are fine.
+          No GitHub account is needed. After installing, <strong>close and re-open Command Prompt</strong> so it picks up the new <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">git</code> command.
+        </div>
       </div>
 
-      <div class="cmd" id="clone_cmd" onclick="copyCmd(this)">
-        <span class="comment">:: Navigate to the chosen directory</span><br>
-        cd /d <span class="highlight" id="cmd_dir">C:\Users\Lab\Documents</span><br><br>
-        <span class="comment">:: Clone the repository</span><br>
-        git clone --branch Dor_branch https://github.com/multiomics-center-Israel/multiomics-core.git multiomics-core
+      <!-- Sub-step 2b: Clone -->
+      <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <p style="font-weight:600;font-size:14px;margin-bottom:10px;">Step 2b &mdash; Download the pipeline</p>
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:10px;">Open <strong>Command Prompt</strong> (press <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter).</p>
+
+        <p style="font-weight:600;font-size:13px;margin-top:14px;">Where do you want to install the pipeline?</p>
+        <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Type the folder path below &mdash; the command will update automatically.</p>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
+          <input type="text" id="install_dir" value="C:\Users\Lab\Documents" placeholder="e.g. C:\Users\Lab\Documents" oninput="updateCloneCmd()"
+            style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;">
+        </div>
+
+        <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">Copy and paste these two lines into Command Prompt:</p>
+        <div class="cmd" id="clone_cmd" onclick="copyCmd(this)">
+          cd /d <span class="highlight" id="cmd_dir">C:\Users\Lab\Documents</span><br>
+          git clone --branch Dor_branch https://github.com/multiomics-center-Israel/multiomics-core.git multiomics-core
+        </div>
+
+        <div class="note" style="margin-bottom:0;">
+          This creates the folder <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;"><span id="full_path_preview">C:\Users\Lab\Documents\multiomics-core</span></code>.
+          No login or password will be asked &mdash; the repository is public.
+        </div>
       </div>
 
-      <div class="note">
-        This will create a folder called <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;"><span id="full_path_preview">C:\Users\Lab\Documents\multiomics-core</span></code>
-      </div>
-
-      <div class="note">
-        <strong>No Git installed?</strong> Download it from
-        <a href="https://git-scm.com/download/win" target="_blank">git-scm.com</a> first.
-        Or &mdash; Dor can copy the entire folder to this computer via USB / network drive instead.
-      </div>
-
-      <div class="note">
-        <strong>Alternative (no git needed):</strong> If Dor copied the <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">multiomics-core</code> folder
-        to this computer directly, just make sure you know where it is and skip to Step 3.
+      <div class="note" style="margin-top:14px;">
+        <strong>Alternative (no git needed):</strong> Dor can also copy the <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">multiomics-core</code> folder
+        to this computer via USB drive or network share. If so, skip straight to Step 3.
       </div>
 
       <div class="checkbox-row" onclick="this.querySelector('input').click()">
