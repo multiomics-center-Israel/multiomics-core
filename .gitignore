@@ -60,6 +60,9 @@ Rplot.png
 # User-specific Claude Code settings
 .claude/settings.local.json
 
+# Local wizard configuration (created by configure_wizard.bat)
+wizard_defaults.json
+
 # Python virtual environments
 .mummichog_venv/
 

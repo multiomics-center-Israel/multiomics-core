@@ -55,9 +55,14 @@ ask_choice <- function(prompt, choices, default = 1) {
 
 # --- Load existing defaults ---------------------------------------------------
 
+template_file <- file.path(getwd(), "wizard_defaults.template.json")
+
 if (file.exists(defaults_file)) {
   cfg <- jsonlite::fromJSON(defaults_file, simplifyVector = TRUE)
   cat("  Loaded existing configuration.\n\n")
+} else if (file.exists(template_file)) {
+  cfg <- jsonlite::fromJSON(template_file, simplifyVector = TRUE)
+  cat("  Loaded defaults from template.\n\n")
 } else {
   cfg <- list(
     theme = "light",
