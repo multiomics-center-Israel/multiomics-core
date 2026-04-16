@@ -226,13 +226,24 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
       <div class="step-time"><span class="tag tag-manual">manual</span> ~2 min</div>
     </div>
     <div class="step-body">
-      <p>Open <strong>Command Prompt</strong> (press <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter) and run:</p>
+      <p>Open <strong>Command Prompt</strong> (press <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter) and run the commands below.</p>
 
-      <div class="cmd" onclick="copyCmd(this)">
-        <span class="comment">:: Choose where to put it (e.g. Documents)</span><br>
-        cd %USERPROFILE%\Documents<br><br>
+      <p style="margin-top:14px;font-weight:600;font-size:13px;">Where do you want to install the pipeline?</p>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">Type or paste the folder path below. The commands will update automatically.</p>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
+        <input type="text" id="install_dir" value="C:\Users\Lab\Documents" placeholder="e.g. C:\Users\Lab\Documents" oninput="updateCloneCmd()"
+          style="flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;">
+      </div>
+
+      <div class="cmd" id="clone_cmd" onclick="copyCmd(this)">
+        <span class="comment">:: Navigate to the chosen directory</span><br>
+        cd /d <span class="highlight" id="cmd_dir">C:\Users\Lab\Documents</span><br><br>
         <span class="comment">:: Clone the repository</span><br>
-        git clone --branch <span class="highlight">Dor_branch</span> <span class="highlight">YOUR_REPO_URL</span> multiomics-core
+        git clone --branch Dor_branch https://github.com/multiomics-center-Israel/multiomics-core.git multiomics-core
+      </div>
+
+      <div class="note">
+        This will create a folder called <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;"><span id="full_path_preview">C:\Users\Lab\Documents\multiomics-core</span></code>
       </div>
 
       <div class="note">
@@ -243,7 +254,7 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
 
       <div class="note">
         <strong>Alternative (no git needed):</strong> If Dor copied the <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">multiomics-core</code> folder
-        to this computer directly, just make sure you know where it is (e.g. <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">C:\Users\Lab\Documents\multiomics-core</code>) and skip to Step 3.
+        to this computer directly, just make sure you know where it is and skip to Step 3.
       </div>
 
       <div class="checkbox-row" onclick="this.querySelector('input').click()">
@@ -388,6 +399,13 @@ function updateProgress() {
   document.getElementById('progress-fill').style.width = pct + '%';
   document.getElementById('progress-label').textContent = done + ' / ' + checks.length + ' steps';
   document.getElementById('summary-done').style.display = (done === checks.length) ? 'block' : 'none';
+}
+
+function updateCloneCmd() {
+  var dir = document.getElementById('install_dir').value.trim() || 'C:\\Users\\Lab\\Documents';
+  document.getElementById('cmd_dir').textContent = dir;
+  var sep = dir.endsWith('\\') ? '' : '\\';
+  document.getElementById('full_path_preview').textContent = dir + sep + 'multiomics-core';
 }
 
 function copyCmd(el) {
