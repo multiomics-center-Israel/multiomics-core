@@ -141,12 +141,12 @@ if ("proteomics" %in% active_modes) {
   de_idx <- ask_choice("DE method:", c("limma (recommended)", "t-test"), default = de_idx)
   prot$prot_de_method <- de_choices[de_idx]
 
-  imp_choices <- c("mixed", "knn", "minprob", "none")
-  imp_labels <- c("Mixed (MinProb + KNN, recommended)", "KNN only", "MinProb only", "None")
-  imp_idx <- which(imp_choices == prot$prot_imputation)
+  imp_choices <- c("perseus", "dep2", "qrilc", "minval", "none")
+  imp_labels <- c("Perseus-style (recommended)", "DEP2 / MinDet", "QRILC (DEP workflow)", "MinVal (floor of minimum)", "None (complete cases)")
+  imp_idx <- which(imp_choices == prot$prot_imp_method)
   if (length(imp_idx) == 0) imp_idx <- 1
   imp_idx <- ask_choice("Imputation method:", imp_labels, default = imp_idx)
-  prot$prot_imputation <- imp_choices[imp_idx]
+  prot$prot_imp_method <- imp_choices[imp_idx]
 
   path_choices <- c("both", "fgsea", "ora", "none")
   path_labels <- c("Both fGSEA + ORA (recommended)", "fGSEA only", "ORA only", "None")
