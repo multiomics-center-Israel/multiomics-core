@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-:: multiomics-core — One-Time Setup
+:: multiomics-core - One-Time Setup
 ::
 :: What this does:
 ::   1. Checks that R is installed
@@ -15,7 +15,7 @@
 
 echo.
 echo ===========================================================
-echo   multiomics-core — Setup
+echo   multiomics-core - Setup
 echo ===========================================================
 echo.
 
@@ -42,6 +42,11 @@ if errorlevel 1 (
 echo [OK] R found:
 Rscript --version 2>&1
 echo.
+
+:: Step 1b: Speed up R startup by disabling renv sandbox
+if not exist "%~dp0.Renviron" (
+    echo RENV_CONFIG_SANDBOX_ENABLED=FALSE> "%~dp0.Renviron"
+)
 
 :: Step 2: Restore renv packages
 echo [2/3] Installing R packages (this may take 10-20 minutes on first run)...
