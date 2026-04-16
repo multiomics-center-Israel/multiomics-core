@@ -11,4 +11,4 @@ scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 WshShell.Popup "Starting multiomics-core wizard..." & vbCrLf & vbCrLf & "Your browser will open shortly. This window will close automatically.", 30, "Multiomics Pipeline", 64
 
 ' Run the wizard with hidden terminal (0 = hidden, False = don't wait)
-WshShell.Run "cmd /c cd /d """ & scriptDir & """ && Rscript run.R --wizard", 0, False
+WshShell.Run "cmd /c cd /d """ & scriptDir & """ && Rscript --vanilla run.R --wizard", 0, False

@@ -13,6 +13,21 @@
 # In RStudio: source("run.R") runs interactively
 # =============================================================================
 
+# --- Fast-start: if launched with --vanilla, add renv library path manually ---
+if (!"renv" %in% loadedNamespaces()) {
+  renv_lib <- list.files(file.path(getwd(), "renv", "library"),
+                          recursive = TRUE, full.names = TRUE, pattern = "^$")
+  # Find the deepest directory containing actual packages
+  lib_dirs <- list.dirs(file.path(getwd(), "renv", "library"), recursive = TRUE)
+  # The renv library path is the one that contains package subdirectories
+  for (d in lib_dirs) {
+    if (file.exists(file.path(d, "jsonlite"))) {
+      .libPaths(c(d, .libPaths()))
+      break
+    }
+  }
+}
+
 # --- Dependency check --------------------------------------------------------
 
 check_dependencies <- function(mode = "cli") {
