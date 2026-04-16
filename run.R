@@ -2994,6 +2994,21 @@ main <- function() {
           ))
         }
 
+        # API: serve wizard defaults
+        if (path == "/api/defaults" && method == "GET") {
+          defaults_path <- file.path(project_dir, "wizard_defaults.json")
+          if (file.exists(defaults_path)) {
+            defaults_json <- paste(readLines(defaults_path, warn = FALSE), collapse = "\n")
+          } else {
+            defaults_json <- "{}"
+          }
+          return(list(
+            status = 200L,
+            headers = c(cors, list("Content-Type" = "application/json")),
+            body = defaults_json
+          ))
+        }
+
         # API: upload file (save to data dir, return path + detected columns)
         if (path == "/api/upload-file" && method == "POST") {
           ct <- req$CONTENT_TYPE %||% ""

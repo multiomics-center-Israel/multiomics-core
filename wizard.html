@@ -2873,15 +2873,19 @@ function toggleTheme() {
   try { localStorage.setItem('wizard-theme', next); } catch(e) {}
 }
 
-// Restore saved theme
+// Restore saved theme (default: light)
 (function() {
   try {
     var saved = localStorage.getItem('wizard-theme');
-    if (saved === 'light') {
+    // Default to light unless user explicitly chose dark
+    if (saved !== 'dark') {
       document.documentElement.setAttribute('data-theme', 'light');
       document.getElementById('theme_toggle').textContent = '\u2600';
     }
-  } catch(e) {}
+  } catch(e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('theme_toggle').textContent = '\u2600';
+  }
 })();
 
 // ============================================================
@@ -3203,6 +3207,91 @@ if (!hasBackend) {
 
 // Build initial pipeline map
 buildPipelineMap();
+
+// ============================================================
+// Load wizard_defaults.json (from backend or inline)
+// ============================================================
+(function loadWizardDefaults() {
+  function applyDefaults(cfg) {
+    if (!cfg) return;
+
+    // Theme
+    if (cfg.theme) {
+      var saved = null;
+      try { saved = localStorage.getItem('wizard-theme'); } catch(e) {}
+      if (!saved) {
+        document.documentElement.setAttribute('data-theme', cfg.theme);
+        document.getElementById('theme_toggle').textContent = cfg.theme === 'dark' ? '\u263E' : '\u2600';
+      }
+    }
+
+    // Available modes: hide buttons for disabled modes
+    if (cfg.available_modes && cfg.available_modes.length > 0) {
+      var modeMap = { rna: 'btn_rna', proteomics: 'btn_prot', metabolomics: 'btn_metab',
+                      lipidomics: 'btn_lipid', multi: 'btn_multi', combination: 'btn_combo' };
+      Object.keys(modeMap).forEach(function(mode) {
+        var btn = document.getElementById(modeMap[mode]);
+        if (btn) btn.style.display = cfg.available_modes.indexOf(mode) >= 0 ? '' : 'none';
+      });
+    }
+
+    // Default mode
+    if (cfg.default_mode) {
+      setMode(cfg.default_mode);
+    }
+
+    // General defaults: set form field values
+    if (cfg.defaults) {
+      Object.keys(cfg.defaults).forEach(function(key) {
+        var el = document.getElementById(key);
+        if (!el) return;
+        var val = cfg.defaults[key];
+        if (el.type === 'checkbox') {
+          el.checked = !!val;
+        } else {
+          el.value = val;
+        }
+      });
+    }
+
+    // Mode-specific defaults
+    if (cfg.mode_defaults) {
+      Object.keys(cfg.mode_defaults).forEach(function(mode) {
+        var modeDefaults = cfg.mode_defaults[mode];
+        if (!modeDefaults) return;
+        Object.keys(modeDefaults).forEach(function(key) {
+          var el = document.getElementById(key);
+          if (!el) return;
+          var val = modeDefaults[key];
+          if (el.type === 'checkbox') {
+            el.checked = !!val;
+          } else {
+            el.value = val;
+          }
+        });
+      });
+    }
+
+    // Re-trigger dependent UI updates
+    toggleImpParams();
+    toggleNonModel();
+    togglePairedOption();
+    toggleMetabEnrichment();
+    buildPipelineMap();
+  }
+
+  // Try loading from backend API
+  if (hasBackend) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/defaults', true);
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        try { applyDefaults(JSON.parse(xhr.responseText)); } catch(e) {}
+      }
+    };
+    xhr.send();
+  }
+})();
 </script>
 
 </body>

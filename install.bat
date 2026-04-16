@@ -67,8 +67,22 @@ echo.
 echo [OK] All packages installed.
 echo.
 
-:: Step 3: Create desktop shortcut
-echo [3/3] Creating desktop shortcut...
+:: Step 3: Configure wizard defaults
+echo [3/4] Configuring wizard defaults...
+echo.
+echo   You can customize which analysis modes are available,
+echo   default settings, theme, etc. for this installation.
+echo.
+set /p CONFIGURE="  Run configuration wizard? [Y/n]: "
+if /i "%CONFIGURE%"=="n" (
+    echo   Skipping - using defaults. Run configure_wizard.bat anytime to change.
+) else (
+    Rscript configure_wizard.R
+)
+echo.
+
+:: Step 4: Create desktop shortcut
+echo [4/4] Creating desktop shortcut...
 cscript //nologo "%~dp0create_shortcut.vbs"
 echo.
 
