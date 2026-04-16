@@ -1,9 +1,13 @@
 @echo off
 :: ============================================================
-:: multiomics-core — Launch Config Wizard
+:: multiomics-core - Launch Config Wizard
 :: Double-click this file to open the wizard in your browser.
 :: ============================================================
 cd /d "%~dp0"
+title Multiomics Pipeline - Loading...
+echo.
+echo   Starting wizard - your browser will open shortly...
+echo.
 Rscript run.R --wizard
 if errorlevel 1 (
     echo.
