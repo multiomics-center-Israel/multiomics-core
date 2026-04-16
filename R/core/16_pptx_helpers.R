@@ -37,9 +37,12 @@ truncate_bl <- function(txt, max_chars = 350) {
 generate_slide_bottom_line <- function(slide_context, stats_json = NULL,
                                        image_path = NULL, config = NULL) {
 
+    # Respect commentary.enabled setting
+    comment_cfg <- config$commentary %||% list()
+    if (!isTRUE(comment_cfg$enabled)) return("")
+
     if (Sys.which("claude") == "") return("")
 
-    comment_cfg <- config$commentary %||% list()
     model <- comment_cfg$claude_code_model %||% "sonnet"
 
     prompt_parts <- paste0(
@@ -78,6 +81,10 @@ PPTX_COL_ACCENT <- "#2563EB"
 PPTX_COL_SUBTLE <- "#6B7280"
 PPTX_COL_UP     <- "#16A34A"
 PPTX_COL_DOWN   <- "#DC2626"
+PPTX_COL_BL_BG  <- "#F0F4FF"
+
+PPTX_SLIDE_W <- 10
+PPTX_SLIDE_H <- 7.5
 
 pptx_fp_title <- function() {
     officer::fp_text(font.size = 20, bold = TRUE, color = PPTX_COL_TITLE,
@@ -94,6 +101,15 @@ pptx_fp_body_bold <- function(sz = 11) {
 }
 
 pptx_fp_label <- function() {
+    officer::fp_text(font.size = 9, color = PPTX_COL_SUBTLE, font.family = "Calibri")
+}
+
+pptx_fp_stat_value <- function(color = PPTX_COL_ACCENT) {
+    officer::fp_text(font.size = 22, bold = TRUE, color = color,
+                      font.family = "Calibri")
+}
+
+pptx_fp_stat_label <- function() {
     officer::fp_text(font.size = 9, color = PPTX_COL_SUBTLE, font.family = "Calibri")
 }
 

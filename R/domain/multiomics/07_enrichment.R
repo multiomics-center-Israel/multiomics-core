@@ -26,6 +26,9 @@ build_per_omics_enrichment <- function(enrichment_results, de_results,
     omics_present <- config$global$omics_present
     kegg_org <- get_kegg_organism(organism)
 
+    # Check for custom KEGG GMT file (for organisms without standard KEGG codes)
+    kegg_gmt_file <- config$modes$multiomics$enrichment$kegg_gmt_file
+
     # Pre-compute KEGG ID conversion once (expensive KEGG REST API call)
     kegg_conv_cache <- NULL
     if (!is.null(kegg_org)) {
@@ -37,23 +40,33 @@ build_per_omics_enrichment <- function(enrichment_results, de_results,
                 NULL
             }
         )
+    } else if (!is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
+        message("  No KEGG organism code for '", organism,
+                "'; will use custom GMT file for gene/protein enrichment")
     }
+
+    # Normalize omics names: config uses "rna" but DE/enrichment results use "transcriptomics"
+    omics_name_map <- c(rna = "transcriptomics")
 
     per_omics <- list()
 
     for (om in omics_present) {
+        # Resolve internal name (e.g. "rna" -> "transcriptomics")
+        om_internal <- if (!is.null(omics_name_map[om]) && !is.na(omics_name_map[om]))
+                           omics_name_map[om] else om
+
         # Check if pre-computed enrichment has usable results
-        precomp <- enrichment_results[[om]]
+        precomp <- enrichment_results[[om_internal]] %||% enrichment_results[[om]]
         precomp_df <- extract_enrichment_df(precomp)
 
         if (!is.null(precomp_df) && nrow(precomp_df) > 0) {
             message("  ", om, ": using pre-computed enrichment (", nrow(precomp_df), " pathways)")
-            per_omics[[om]] <- precomp_df
+            per_omics[[om_internal]] <- precomp_df
             next
         }
 
         # Run enrichment from DE results
-        de_data <- de_results[[om]]
+        de_data <- de_results[[om_internal]] %||% de_results[[om]]
         if (is.null(de_data)) {
             message("  ", om, ": no DE results available, skipping enrichment")
             next
@@ -63,11 +76,11 @@ build_per_omics_enrichment <- function(enrichment_results, de_results,
         enrich_df <- tryCatch(
             run_kegg_enrichment_for_omics(
                 de_data = de_data,
-                omics_type = om,
+                omics_type = om_internal,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 config = config,
-                out_dir = file.path(out_dir, om),
+                out_dir = file.path(out_dir, om_internal),
                 kegg_conv_cache = kegg_conv_cache
             ),
             error = function(e) {
@@ -78,7 +91,7 @@ build_per_omics_enrichment <- function(enrichment_results, de_results,
 
         if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
             message("    Found ", nrow(enrich_df), " enriched pathways")
-            per_omics[[om]] <- enrich_df
+            per_omics[[om_internal]] <- enrich_df
         } else {
             message("    No enriched pathways found")
         }
@@ -170,11 +183,30 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                                            kegg_conv_cache = NULL) {
 
     kegg_org <- get_kegg_organism(organism)
+    kegg_gmt_file <- config$modes$multiomics$enrichment$kegg_gmt_file
 
-    # For gene-based omics, need org_db and kegg_org
+    # For gene-based omics, need org_db and kegg_org (or a custom GMT file)
     if (omics_type != "metabolomics") {
         org_db <- get_organism_db(organism)
         if (is.null(org_db) || is.null(kegg_org)) {
+            # Fallback: use custom KEGG GMT file if available
+            if (!is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
+                message("    No KEGG org code for '", organism,
+                        "'; using custom GMT file for ", omics_type)
+                de_tables <- extract_de_tables(de_data, omics_type, harmonization_res)
+                if (is.null(de_tables) || length(de_tables) == 0) {
+                    message("    No DE tables found for ", omics_type)
+                    return(NULL)
+                }
+                return(run_gmt_fgsea_enrichment(
+                    de_tables = de_tables,
+                    gmt_file = kegg_gmt_file,
+                    omics_type = omics_type,
+                    harmonization_res = harmonization_res,
+                    config = config,
+                    out_dir = out_dir
+                ))
+            }
             message("    Organism annotation not available for: ", organism)
             return(NULL)
         }
@@ -280,7 +312,22 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
         }
     }
 
-    if (length(all_results) == 0) return(NULL)
+    if (length(all_results) == 0) {
+        # Fallback: try custom GMT file if KEGG API produced no results
+        if (omics_type != "metabolomics" &&
+            !is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
+            message("    KEGG API enrichment produced no results; falling back to GMT file")
+            return(run_gmt_fgsea_enrichment(
+                de_tables = de_tables,
+                gmt_file = kegg_gmt_file,
+                omics_type = omics_type,
+                harmonization_res = harmonization_res,
+                config = config,
+                out_dir = out_dir
+            ))
+        }
+        return(NULL)
+    }
 
     combined <- do.call(rbind, all_results)
     rownames(combined) <- NULL
@@ -299,6 +346,15 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
 #' on the actual expression matrix instead.
 extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
     tables <- list()
+
+    # Payload mode: de_data is a flat data frame (de_stats from shiny payload)
+    if (is.data.frame(de_data)) {
+        std <- .standardize_flat_de(de_data, omics_type)
+        if (!is.null(std) && nrow(std) > 0) {
+            tables[["contrast_1"]] <- std
+        }
+        return(tables)
+    }
 
     if (omics_type == "transcriptomics") {
         # RNA-seq: de_data$tables is a named list of data frames
@@ -348,6 +404,50 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
     }
 
     tables
+}
+
+#' Standardize a flat DE data frame (from payload mode) to feature_id, log2fc, pvalue, padj
+.standardize_flat_de <- function(df, omics_type) {
+    # Feature ID
+    id_col <- intersect(c("feature_id", "FeatureID"), colnames(df))[1]
+    if (is.na(id_col)) id_col <- NULL
+    feature_ids <- if (!is.null(id_col)) df[[id_col]] else rownames(df)
+
+    # log2FC: try exact, then pattern, then convert linearFC
+    log2fc <- NULL
+    log2_cols <- grep("^log2FoldChange", colnames(df), value = TRUE)
+    logfc_cols <- grep("^logFC[._]", colnames(df), value = TRUE)
+    linfc_cols <- grep("^linearFC", colnames(df), value = TRUE)
+
+    if (length(log2_cols) > 0) {
+        log2fc <- df[[log2_cols[1]]]
+    } else if (length(logfc_cols) > 0) {
+        log2fc <- df[[logfc_cols[1]]]
+    } else if (length(linfc_cols) > 0) {
+        lfc <- as.numeric(df[[linfc_cols[1]]])
+        log2fc <- ifelse(is.na(lfc) | lfc == 0, NA_real_,
+                         log2(abs(lfc)) * sign(lfc))
+    }
+
+    if (is.null(log2fc)) return(NULL)
+
+    # P-value
+    pval_cols <- grep("^(pvalue|P\\.Value|p\\.value)", colnames(df), value = TRUE)
+    pvalue <- if (length(pval_cols) > 0) as.numeric(df[[pval_cols[1]]]) else NA_real_
+
+    # Adjusted p-value
+    padj_cols <- grep("^(padj|adj\\.P\\.Val|FDR)", colnames(df), value = TRUE)
+    padj <- if (length(padj_cols) > 0) as.numeric(df[[padj_cols[1]]]) else NA_real_
+
+    std <- data.frame(
+        feature_id = feature_ids,
+        log2fc = as.numeric(log2fc),
+        pvalue = pvalue,
+        padj = padj,
+        stringsAsFactors = FALSE
+    )
+    std <- std[!is.na(std$pvalue) & !is.na(std$log2fc), ]
+    if (nrow(std) > 0) return(std) else return(NULL)
 }
 
 
@@ -1050,7 +1150,11 @@ get_kegg_organism <- function(organism) {
         zebrafish = "dre",
         "Danio rerio" = "dre",
         drosophila = "dme",
-        "Drosophila melanogaster" = "dme"
+        "Drosophila melanogaster" = "dme",
+        giardia = "gla",
+        "Giardia lamblia" = "gla",
+        "Giardia intestinalis" = "gla",
+        "Giardia duodenalis" = "gla"
     )
     kegg_map[[organism]]
 }
@@ -1253,6 +1357,273 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
 
 
 # =============================================================================
+# GMT-based KEGG enrichment (for organisms without standard KEGG codes)
+# =============================================================================
+
+#' Load a GMT file into a named list of gene sets
+#'
+#' GMT format: each line is pathway_id<TAB>pathway_name<TAB>gene1<TAB>gene2<TAB>...
+#'
+#' @param gmt_file Path to the GMT file
+#' @return Named list where names are "pathway_id|pathway_name" and values are
+#'   character vectors of gene IDs
+load_gmt_file <- function(gmt_file) {
+    if (!file.exists(gmt_file)) {
+        warning("GMT file not found: ", gmt_file)
+        return(NULL)
+    }
+
+    lines <- readLines(gmt_file, warn = FALSE)
+    lines <- lines[nzchar(trimws(lines))]
+
+    pathways <- list()
+    pathway_names <- list()
+
+    for (line in lines) {
+        fields <- strsplit(line, "\t")[[1]]
+        if (length(fields) < 3) next
+
+        pw_id <- fields[1]
+        pw_name <- fields[2]
+        genes <- fields[3:length(fields)]
+        genes <- genes[nzchar(trimws(genes))]
+
+        pathways[[pw_id]] <- genes
+        pathway_names[[pw_id]] <- pw_name
+    }
+
+    if (length(pathways) == 0) return(NULL)
+
+    message("    Loaded ", length(pathways), " pathways from GMT file")
+    attr(pathways, "pathway_names") <- pathway_names
+    pathways
+}
+
+
+#' Run fgsea enrichment using a custom GMT file
+#'
+#' For organisms without a standard KEGG organism code (e.g. Giardia lamblia),
+#' runs fgsea directly against pathways defined in the GMT file.
+#'
+#' @param de_tables Named list of DE tables (with feature_id, log2fc, pvalue columns)
+#' @param gmt_file Path to the GMT file (pathway_id -> gene IDs)
+#' @param omics_type One of "transcriptomics" or "proteomics"
+#' @param harmonization_res Harmonization result (for proteomics ID mapping)
+#' @param config Full config object
+#' @param out_dir Output directory
+#' @return data.frame with fgsea results, or NULL
+run_gmt_fgsea_enrichment <- function(de_tables, gmt_file, omics_type,
+                                      harmonization_res, config, out_dir) {
+
+    if (!requireNamespace("fgsea", quietly = TRUE)) {
+        message("    fgsea package not available")
+        return(NULL)
+    }
+
+    # Load GMT pathways
+    pathways <- load_gmt_file(gmt_file)
+    if (is.null(pathways) || length(pathways) == 0) {
+        message("    Could not load pathways from GMT file")
+        return(NULL)
+    }
+    pathway_names <- attr(pathways, "pathway_names")
+
+    # For proteomics: build protein_id -> gene_id mapping
+    prot_to_gene <- NULL
+    if (omics_type == "proteomics") {
+        prot_to_gene <- build_protein_to_gene_map(harmonization_res, config)
+        if (is.null(prot_to_gene) || length(prot_to_gene) == 0) {
+            message("    Could not build protein-to-gene mapping for GMT enrichment")
+            return(NULL)
+        }
+        message("    Built protein-to-gene mapping: ", length(prot_to_gene), " entries")
+    }
+
+    enrich_cfg <- config$modes$multiomics$enrichment
+    min_gs <- enrich_cfg$min_set_size %||% 5
+    max_gs <- enrich_cfg$max_set_size %||% 500
+
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    all_results <- list()
+
+    for (contrast_name in names(de_tables)) {
+        de_df <- de_tables[[contrast_name]]
+
+        # Build ranked gene list
+        gene_ids <- de_df$feature_id
+
+        if (omics_type == "proteomics" && !is.null(prot_to_gene)) {
+            # Map protein IDs to gene IDs
+            mapped_genes <- prot_to_gene[gene_ids]
+            valid <- !is.na(mapped_genes)
+            gene_ids <- mapped_genes[valid]
+            de_df <- de_df[valid, ]
+            message("    ", contrast_name, ": mapped ", sum(valid), "/",
+                    length(valid), " proteins to gene IDs")
+        }
+
+        if (length(gene_ids) < 10) {
+            message("    ", contrast_name, ": too few features for GMT enrichment (",
+                    length(gene_ids), ")")
+            next
+        }
+
+        # Rank statistic: signed -log10(p)
+        rank_stat <- -log10(de_df$pvalue + 1e-300) * sign(de_df$log2fc)
+        names(rank_stat) <- gene_ids
+
+        # Remove duplicates (keep highest absolute rank)
+        rank_stat <- rank_stat[!duplicated(names(rank_stat))]
+        rank_stat <- sort(rank_stat, decreasing = TRUE)
+
+        message("    ", contrast_name, ": running fgsea with ", length(rank_stat),
+                " ranked genes against ", length(pathways), " pathways")
+
+        result <- tryCatch({
+            fgsea_res <- fgsea::fgsea(
+                pathways = pathways,
+                stats = rank_stat,
+                minSize = min_gs,
+                maxSize = max_gs,
+                nPermSimple = 10000
+            )
+
+            if (is.null(fgsea_res) || nrow(fgsea_res) == 0) return(NULL)
+
+            # Build output data frame
+            out <- data.frame(
+                pathway = vapply(fgsea_res$pathway, function(pw) {
+                    nm <- pathway_names[[pw]]
+                    if (!is.null(nm) && nzchar(nm)) nm else pw
+                }, character(1)),
+                ID = fgsea_res$pathway,
+                pvalue = fgsea_res$pval,
+                padj = fgsea_res$padj,
+                NES = fgsea_res$NES,
+                ES = fgsea_res$ES,
+                setSize = fgsea_res$size,
+                leading_edge = vapply(fgsea_res$leadingEdge, function(le) {
+                    paste(le, collapse = "/")
+                }, character(1)),
+                stringsAsFactors = FALSE
+            )
+
+            # Keep pathways with nominal p < 0.05
+            out <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+            if (nrow(out) > 0) out <- out[order(out$pvalue), ]
+            out
+        }, error = function(e) {
+            message("    ", contrast_name, " fgsea error: ", e$message)
+            NULL
+        })
+
+        if (!is.null(result) && nrow(result) > 0) {
+            result$contrast <- contrast_name
+            result$omics <- omics_type
+            all_results[[contrast_name]] <- result
+        }
+    }
+
+    if (length(all_results) == 0) return(NULL)
+
+    combined <- do.call(rbind, all_results)
+    rownames(combined) <- NULL
+
+    write.csv(combined, file.path(out_dir, paste0(omics_type, "_gmt_kegg_enrichment.csv")),
+              row.names = FALSE)
+
+    message("    GMT enrichment: ", nrow(combined), " pathways across ",
+            length(all_results), " contrasts")
+    combined
+}
+
+
+#' Build protein ID -> gene ID mapping for organisms like Giardia
+#'
+#' For Giardia, protein IDs are KAE* (UniProt) and gene IDs are GL50803_*.
+#' Looks in proteomics row_data for a gene_id column, or uses the
+#' gene_protein_mapping file from config.
+#'
+#' @param harmonization_res Harmonization result with inputs$proteomics
+#' @param config Full config object
+#' @return Named character vector: names = protein_ids, values = gene_ids
+build_protein_to_gene_map <- function(harmonization_res, config) {
+    prot_pre <- harmonization_res$inputs$proteomics
+
+    # Strategy 0: use gene_protein_mapping from harmonization result
+    gpm <- harmonization_res$gene_protein_mapping
+    if (!is.null(gpm) && is.data.frame(gpm) && nrow(gpm) > 0 &&
+        all(c("gene_id", "protein_id") %in% colnames(gpm))) {
+        message("    Using harmonization gene_protein_mapping (", nrow(gpm), " entries)")
+        return(stats::setNames(gpm$gene_id, gpm$protein_id))
+    }
+
+    # Strategy 0b: try the output CSV file
+    out_dir <- config$paths$out %||% ""
+    proj_dir <- config$project$dir %||% "."
+    run_name <- sprintf("Results_%s_%s", config$project$name, config$project$analysis_round)
+    csv_path <- file.path(proj_dir, out_dir, run_name, "multiomics", "gene_protein_mapping.csv")
+    if (file.exists(csv_path)) {
+        mapping <- utils::read.csv(csv_path, stringsAsFactors = FALSE)
+        if (all(c("gene_id", "protein_id") %in% colnames(mapping)) && nrow(mapping) > 0) {
+            message("    Using gene_protein_mapping.csv (", nrow(mapping), " entries)")
+            return(stats::setNames(mapping$gene_id, mapping$protein_id))
+        }
+    }
+
+    # Strategy 1: use gene_protein_mapping_file from config
+    mapping_file <- config$modes$multiomics$gene_protein_mapping_file
+    if (!is.null(mapping_file) && !is.na(mapping_file) && file.exists(mapping_file)) {
+        mapping <- utils::read.csv(mapping_file, stringsAsFactors = FALSE)
+        if (all(c("gene_id", "protein_id") %in% colnames(mapping))) {
+            message("    Using gene_protein_mapping_file for protein-to-gene mapping")
+            return(stats::setNames(mapping$gene_id, mapping$protein_id))
+        }
+    }
+
+    # Strategy 2: use row_data from proteomics payload
+    if (!is.null(prot_pre) && !is.null(prot_pre$row_data)) {
+        row_data <- prot_pre$row_data
+        prot_ids <- rownames(prot_pre$expr_work)
+
+        # Look for gene_id column (common for Giardia payloads)
+        gene_col <- intersect(
+            c("gene_id", "Gene", "gene_name", "GeneID", "ORF", "locus_tag"),
+            colnames(row_data)
+        )
+
+        if (length(gene_col) > 0) {
+            gene_ids <- as.character(row_data[[gene_col[1]]])
+            valid <- !is.na(gene_ids) & nzchar(gene_ids)
+            if (sum(valid) > 0) {
+                message("    Using row_data$", gene_col[1],
+                        " for protein-to-gene mapping (", sum(valid), " entries)")
+                return(stats::setNames(gene_ids[valid], prot_ids[valid]))
+            }
+        }
+
+        # Strategy 3: try to infer from protein accession patterns
+        # For Giardia, sometimes the protein accession itself contains gene info
+        # e.g., row_data may have a "Cross-reference (GiardiaDB)" column
+        giardia_col <- grep("giardia|GiardiaDB|GL50803", colnames(row_data),
+                            ignore.case = TRUE, value = TRUE)
+        if (length(giardia_col) > 0) {
+            gene_ids <- as.character(row_data[[giardia_col[1]]])
+            valid <- !is.na(gene_ids) & nzchar(gene_ids)
+            if (sum(valid) > 0) {
+                message("    Using row_data$", giardia_col[1],
+                        " for protein-to-gene mapping (", sum(valid), " entries)")
+                return(stats::setNames(gene_ids[valid], prot_ids[valid]))
+            }
+        }
+    }
+
+    NULL
+}
+
+
+# =============================================================================
 # Cross-omics analysis: combine per-omics enrichment
 # =============================================================================
 
@@ -1291,6 +1662,24 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     if (length(pathway_tables) < 2) {
         warning("Insufficient pathway tables for cross-omics enrichment")
         return(NULL)
+    }
+
+    # Normalize pathway names: strip " - mapXXXXX" or " - glaXXXXX" suffixes
+    # so that "Biosynthesis of amino acids - map01230" matches "Biosynthesis of amino acids"
+    .normalize_pw_name <- function(x) {
+        trimws(sub("\\s*-\\s*(map|gla|ko)\\d+$", "", x))
+    }
+
+    for (om in names(pathway_tables)) {
+        pt <- pathway_tables[[om]]
+        pw_col <- if ("pathway" %in% names(pt)) "pathway"
+                  else if ("ID" %in% names(pt)) "ID"
+                  else if ("Description" %in% names(pt)) "Description"
+                  else NULL
+        if (!is.null(pw_col)) {
+            pt[[pw_col]] <- .normalize_pw_name(pt[[pw_col]])
+            pathway_tables[[om]] <- pt
+        }
     }
 
     # Find common pathways across omics

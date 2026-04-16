@@ -131,6 +131,16 @@ pipe_proteomics <- function() {
             )
         ),
 
+        # ---- Protein domain analysis ----
+        tar_target(
+            prot_domain_res,
+            mod_proteomics_domain_analysis(
+                de_res  = prot_de_res,
+                config  = config,
+                out_dir = prot_out_dir
+            )
+        ),
+
         # ---- Advanced statistics ----
         tar_target(
             prot_adv_stats,
@@ -194,6 +204,7 @@ pipe_proteomics <- function() {
             {
                 force(prot_pathway_res)
                 force(prot_ppi_res)
+                force(prot_domain_res)
                 force(prot_adv_stats)
                 force(prot_commentary_file)
                 force(prot_exec_summary)

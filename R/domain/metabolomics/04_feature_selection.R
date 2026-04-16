@@ -324,6 +324,12 @@ plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
         )
     }
 
+    # De-duplicate display names (append feature_id suffix when names collide)
+    if (anyDuplicated(display_names)) {
+        dup_mask <- duplicated(display_names) | duplicated(display_names, fromLast = TRUE)
+        display_names[dup_mask] <- paste0(display_names[dup_mask], " (", top_feats[dup_mask], ")")
+    }
+
     # Shared factor levels — reversed so highest VIP is at the top
     feat_levels <- rev(display_names)
 

@@ -245,8 +245,10 @@ build_feature_name_map <- function(mae) {
         rd <- SummarizedExperiment::rowData(mae[[om]])
         feat_ids <- rownames(rd)
 
-        # Prefer gene_symbol, fall back to original_id, Name (metabolomics), then feature_id
-        if ("gene_symbol" %in% colnames(rd)) {
+        # For transcriptomics: always prefer feature_id (GL50803_xxx) over original_id
+        if (om == "transcriptomics" && "feature_id" %in% colnames(rd)) {
+            display <- as.character(rd$feature_id)
+        } else if ("gene_symbol" %in% colnames(rd)) {
             display <- as.character(rd$gene_symbol)
             # Fall back to original_id where symbol is missing
             if ("original_id" %in% colnames(rd)) {
@@ -255,6 +257,16 @@ build_feature_name_map <- function(mae) {
             }
         } else if ("original_id" %in% colnames(rd)) {
             display <- as.character(rd$original_id)
+            # If original_id is just "feature_N", prefer HMDB or Name instead
+            if (all(grepl("^feature_\\d+$", display, ignore.case = TRUE))) {
+                if ("Name" %in% colnames(rd)) {
+                    display <- as.character(rd$Name)
+                } else if ("HMDB" %in% colnames(rd)) {
+                    display <- as.character(rd$HMDB)
+                } else if ("feature_id" %in% colnames(rd)) {
+                    display <- as.character(rd$feature_id)
+                }
+            }
         } else if ("Name" %in% colnames(rd)) {
             display <- as.character(rd$Name)
         } else if ("Metabolite" %in% colnames(rd)) {
@@ -265,6 +277,37 @@ build_feature_name_map <- function(mae) {
             display <- as.character(rd$feature_id)
         } else {
             display <- feat_ids
+        }
+
+        # If display names look like HMDB IDs, try to resolve to compound names
+        hmdb_mask <- grepl("^HMDB\\d+", display, ignore.case = TRUE)
+        if (any(hmdb_mask)) {
+            # First try Name column in rowData
+            if ("Name" %in% colnames(rd)) {
+                name_vals <- as.character(rd$Name)
+                has_name <- hmdb_mask & !is.na(name_vals) & name_vals != ""
+                display[has_name] <- name_vals[has_name]
+            }
+            # Then try external HMDB lookup table
+            hmdb_lookup_path <- file.path("data", "hmdb_compound_names.tsv")
+            if (!file.exists(hmdb_lookup_path)) {
+                # Try project dir from config if available
+                proj_dir <- Sys.getenv("MULTIOMICS_PROJECT_DIR", unset = getwd())
+                hmdb_lookup_path <- file.path(proj_dir, "data", "hmdb_compound_names.tsv")
+            }
+            still_hmdb <- grepl("^HMDB\\d+$", display, ignore.case = TRUE)
+            if (any(still_hmdb) && file.exists(hmdb_lookup_path)) {
+                hmdb_db <- tryCatch(
+                    read.delim(hmdb_lookup_path, stringsAsFactors = FALSE),
+                    error = function(e) NULL
+                )
+                if (!is.null(hmdb_db) && all(c("HMDB", "Name") %in% colnames(hmdb_db))) {
+                    idx <- match(display[still_hmdb], hmdb_db$HMDB)
+                    resolved <- hmdb_db$Name[idx]
+                    has_resolve <- !is.na(resolved) & resolved != ""
+                    display[which(still_hmdb)[has_resolve]] <- resolved[has_resolve]
+                }
+            }
         }
 
         # Final fallback: use rownames for any remaining NAs

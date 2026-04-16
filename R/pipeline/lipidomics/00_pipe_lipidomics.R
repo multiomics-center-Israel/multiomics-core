@@ -56,6 +56,17 @@ pipe_lipidomics <- function() {
             }
         ),
 
+        # ---- standardized outputs (expr matrices, metadata, annotations) ----
+        tar_target(
+            lipid_standard_outputs,
+            write_lipidomics_outputs(
+                pre     = lipid_pre,
+                config  = config,
+                out_dir = lipid_out_dir
+            ),
+            format = "file"
+        ),
+
         # ---- QC diagnostics (Stage 1) ----
         tar_target(
             lipid_qc_pre_obj,

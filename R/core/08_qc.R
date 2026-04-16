@@ -12,6 +12,22 @@
 compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = FALSE) {
   expr_mat <- as.matrix(expr_mat)
 
+  # Replace Inf/NaN with NA, then drop features that are all-NA or zero-variance
+  expr_mat[!is.finite(expr_mat)] <- NA
+  keep <- apply(expr_mat, 1, function(x) {
+    vals <- x[!is.na(x)]
+    length(vals) >= 2 && stats::var(vals) > 0
+  })
+  expr_mat <- expr_mat[keep, , drop = FALSE]
+
+  # Impute remaining NAs with row medians for PCA (display only)
+  if (any(is.na(expr_mat))) {
+    row_meds <- apply(expr_mat, 1, median, na.rm = TRUE)
+    for (i in which(rowSums(is.na(expr_mat)) > 0)) {
+      expr_mat[i, is.na(expr_mat[i, ])] <- row_meds[i]
+    }
+  }
+
   pca <- stats::prcomp(t(expr_mat), center = center, scale. = scale)
 
   var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
@@ -649,6 +665,12 @@ plot_missingness_heatmap <- function(mat, mnar_class) {
     row_annot <- row_annot[rownames(bin_mat), , drop = FALSE]
   }
 
+  # Guard: pheatmap fails with 'breaks not unique' if all values are identical
+  if (length(unique(as.vector(bin_mat))) < 2) {
+    message("plot_missingness_heatmap: all values identical — skipping")
+    return(NULL)
+  }
+
   pheatmap::pheatmap(
     bin_mat,
     color = c("grey90", "steelblue"),
@@ -696,7 +718,9 @@ qc_missingness_heatmap <- function(mat, miss_stats, out_file) {
   mnar_class <- mnar_class[common]
 
   ph <- plot_missingness_heatmap(mat, mnar_class)
-  save_heatmap_to_file(ph, out_file, width = 2400, height = 1800)
+  if (!is.null(ph)) {
+    save_heatmap_to_file(ph, out_file, width = 2400, height = 1800)
+  }
   invisible(ph)
 }
 

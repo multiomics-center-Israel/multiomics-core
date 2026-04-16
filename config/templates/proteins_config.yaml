@@ -41,7 +41,7 @@ modes:
       sample_map: "proteomics/sample_map.csv"
       metadata:   "proteomics/meta_prot.csv"
       contrasts:  "proteomics/contrasts_prot.csv"
-      peptides:   ""              # optional peptide-level data (stub for future use)
+      peptides:   ""              # optional peptide-level intensity matrix (enables Peptide Explorer in report)
 
     # --------------------------------------------------------
     # Column naming conventions (REQUIRED)
@@ -247,7 +247,7 @@ modes:
     pathway:
       enabled: true
       method: "both"          # "fgsea" | "ora" | "both"
-      databases: ["GO", "KEGG"]
+      databases: ["GO", "KEGG", "Reactome"]  # "all" = GO+KEGG+Reactome; "GO" loads BP+CC+MF; or pick: "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome"
       gmt_file: null          # Custom GMT file for non-model organisms
       min_size: 10
       max_size: 500
@@ -268,6 +268,12 @@ modes:
       string_score_threshold: 400
       active_subnetwork: true
       complex_analysis: true
+
+    # --------------------------------------------------------
+    # Protein domain & functional feature analysis
+    # --------------------------------------------------------
+    domain_analysis:
+      enabled: true               # InterPro/Pfam enrichment + UniProt features
 
     # --------------------------------------------------------
     # Advanced statistics

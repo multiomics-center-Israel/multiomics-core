@@ -187,8 +187,14 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
         excel_order$partition_clusters <- part_res$clusters
         excel_order$partition_k        <- part_res$k
       }
+    } else {
+      message("[rnaseq clustering] Partition clustering skipped (too few features).")
     }
-    
+
+    if (is.null(part_res$clusters)) {
+      # Nothing to plot — skip the rest of the partition block
+    } else {
+
     part_dir <- file.path(part_base_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
     ensure_dir(part_dir)
     
@@ -235,8 +241,9 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = max(6, ceiling(part_res$k / 2) * 3))
       written <- c(written, f_pdf)
     }
+    } # end else (partition has clusters)
   }
-  
+
   # ---- 3) Binary patterns ----
   if (isTRUE(flags$binary_patterns)) {
     bcfg <- cl$steps$binary_patterns %||% list()

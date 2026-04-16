@@ -47,7 +47,7 @@
 pipe_metabolomics <- function(chosen_norm = NULL) {
 
     # -- Validate chosen_norm at plan-definition time --------------------------
-    valid_norms <- c("tss", "median", "pqn", "eigenms")
+    valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced")
     if (!is.null(chosen_norm)) {
         chosen_norm <- tolower(chosen_norm)
         if (!chosen_norm %in% valid_norms) {
@@ -213,6 +213,11 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             mod_met_normalize_eigenms(met_imputed, config = config)
         ),
 
+        tar_target(
+            met_norm_eigenms_forced,
+            mod_met_normalize_eigenms_forced(met_imputed, config = config)
+        ),
+
         # met_norm_comparison: TSV of RSD + PC1 variance for all methods
         # RSD is computed on back-transformed linear values (2^val - pseudocount).
         tar_target(
@@ -295,18 +300,29 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 format = "file"
             ),
 
+            tar_target(
+                met_norm_eigenms_forced_qc,
+                {
+                    .qc_cfg <- met_qc_cfg
+                    mod_met_qc_suite(met_norm_eigenms_forced, stage = "norm_eigenms_forced",
+                                     out_dir = metab_out_dir, config = config)
+                },
+                format = "file"
+            ),
+
             # met_qc_comparison: aggregate benchmark TSV across all QC stages.
             tar_target(
                 met_qc_comparison,
                 mod_met_qc_comparison_table(
-                    log_qc_files      = met_log_qc,
-                    tss_qc_files      = met_norm_tss_qc,
-                    median_qc_files   = met_norm_median_qc,
-                    pqn_qc_files      = met_norm_pqn_qc,
-                    eigenms_qc_files  = met_norm_eigenms_qc,
-                    imputed_data      = met_imputed,
-                    out_dir           = metab_out_dir,
-                    config            = config
+                    log_qc_files              = met_log_qc,
+                    tss_qc_files              = met_norm_tss_qc,
+                    median_qc_files           = met_norm_median_qc,
+                    pqn_qc_files              = met_norm_pqn_qc,
+                    eigenms_qc_files          = met_norm_eigenms_qc,
+                    eigenms_forced_qc_files   = met_norm_eigenms_forced_qc,
+                    imputed_data              = met_imputed,
+                    out_dir                   = metab_out_dir,
+                    config                    = config
                 ),
                 format = "file"
             ),
@@ -320,7 +336,8 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                                            met_norm_tss_qc,
                                            met_norm_median_qc,
                                            met_norm_pqn_qc,
-                                           met_norm_eigenms_qc),
+                                           met_norm_eigenms_qc,
+                                           met_norm_eigenms_forced_qc),
                     config  = config,
                     out_dir = metab_out_dir
                 ),
@@ -340,14 +357,15 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
         tar_target(
             met_corrected,
             mod_met_corrected(
-                norm_tss     = met_norm_tss,
-                norm_median  = met_norm_median,
-                norm_pqn     = met_norm_pqn,
-                logged       = met_log,
-                meta         = met_log$meta,
-                out_dir      = metab_out_dir,
-                config       = config,
-                norm_eigenms = met_norm_eigenms
+                norm_tss            = met_norm_tss,
+                norm_median         = met_norm_median,
+                norm_pqn            = met_norm_pqn,
+                logged              = met_log,
+                meta                = met_log$meta,
+                out_dir             = metab_out_dir,
+                config              = config,
+                norm_eigenms        = met_norm_eigenms,
+                norm_eigenms_forced = met_norm_eigenms_forced
             )
         ),
 
@@ -445,6 +463,16 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             )
         ),
 
+        tar_target(
+            metab_network,
+            mod_metabolomics_network(
+                de_res  = metab_de_res,
+                pre     = metab_pre,
+                config  = config,
+                out_dir = metab_out_dir
+            )
+        ),
+
         # Standardized outputs, final results, Shiny payload, HTML report
         tar_target(
             metab_standard_outputs,
@@ -508,6 +536,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 clustering_res     = metab_clustering_obj,
                 feature_sel_res    = metab_feature_sel_res,
                 enrichment_res     = metab_enrichment_res,
+                network_res        = metab_network,
                 config             = config,
                 out_dir            = metab_out_dir,
                 qc_comparison_file = NULL,
@@ -542,6 +571,18 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 enrichment_res  = metab_enrichment_res,
                 config          = config,
                 out_dir         = metab_out_dir
+            ),
+            format = "file"
+        ),
+
+        # ---- Metabolome overview report ----
+        tar_target(
+            metab_overview,
+            mod_metabolome_overview(
+                pre     = metab_pre,
+                inputs  = metab_inputs,
+                config  = config,
+                out_dir = metab_out_dir
             ),
             format = "file"
         )

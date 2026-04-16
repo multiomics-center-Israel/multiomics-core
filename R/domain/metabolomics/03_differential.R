@@ -207,11 +207,18 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     if (is.list(contrasts)) contrasts <- unlist(contrasts)
 
     mat  <- pre$expr_work
-    # Use pre-scaling (log-transformed) matrix for DE statistical tests.
-    # Autoscaling (mean-center + divide by SD) standardises every feature to
-    # mean=0, SD=1 which distorts within-group variance and produces
-    # uniform p-values.  Autoscaled data is for multivariate methods only.
-    mat_for_test <- pre$expr_log %||% mat
+    # When variance-scaling (auto/pareto/range) is applied, DE tests must use
+    # the pre-scaling matrix (expr_log) because scaling distorts within-group
+    # variance and inflates p-values.  But when scaling is "none" or "center",
+    # expr_work should be used — it contains the chosen normalization (e.g.
+    # EigenMS) which is essential for the test.
+    scaling_used <- pre$info$normalization$scaling %||% "none"
+    if (scaling_used %in% c("auto", "pareto", "range")) {
+        mat_for_test <- pre$expr_log %||% mat
+        message("metabolomics DE: using pre-scaling matrix (expr_log) because scaling = '", scaling_used, "'")
+    } else {
+        mat_for_test <- mat
+    }
     meta <- pre$meta
     assert_numeric_matrix(mat_for_test, "metab_expr_for_test")
 
@@ -260,6 +267,19 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
     # Build wide summary_df
     summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut)
+
+    # Add Name column from row_data$original_id (HMDB → compound name)
+    if (!is.null(pre$row_data) && "original_id" %in% colnames(pre$row_data)) {
+        idx <- match(summary_df$feature_id, rownames(pre$row_data))
+        names_resolved <- pre$row_data$original_id[idx]
+        # Only add if names differ from feature_id (i.e., actually resolved)
+        if (!all(is.na(names_resolved)) && !all(names_resolved == summary_df$feature_id, na.rm = TRUE)) {
+            summary_df$Name <- names_resolved
+            # Move Name to second column
+            cols <- colnames(summary_df)
+            summary_df <- summary_df[, c("feature_id", "Name", setdiff(cols, c("feature_id", "Name")))]
+        }
+    }
 
     message("metabolomics DE complete: ", nrow(summary_df), " features, ",
             sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
@@ -469,13 +489,19 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
         stringsAsFactors = FALSE
     )
 
+    # Name column will be added from row_data after build_de_summary returns
+
     for (ctr in contrast_names) {
         tbl <- de_tables[[ctr]]
 
-        summary_df[[paste0("logFC_", ctr)]]     <- tbl$logFC
-        summary_df[[paste0("AveExpr_", ctr)]]   <- tbl$AveExpr
-        summary_df[[paste0("P.Value_", ctr)]]   <- tbl$P.Value
-        summary_df[[paste0("adj.P.Val_", ctr)]] <- tbl$adj.P.Val
+        # Signed linear FC from logFC (consistent with precomputed loader)
+        lfc <- tbl$logFC
+        linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
+
+        summary_df[[paste0("linearFC.", ctr)]]   <- signif(linear_fc_signed, 3)
+        summary_df[[paste0("AveExpr.", ctr)]]    <- tbl$AveExpr
+        summary_df[[paste0("P.Value.", ctr)]]    <- tbl$P.Value
+        summary_df[[paste0("adj.P.Val.", ctr)]]  <- tbl$adj.P.Val
 
         # Significance flag (uses raw P.Value, not adjusted)
         pass <- as.integer(
@@ -483,11 +509,11 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
             tbl$P.Value < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
-        summary_df[[paste0("pass_", ctr)]] <- pass
+        summary_df[[paste0("pass.", ctr)]] <- pass
     }
 
     # Aggregate pass flag across contrasts
-    pass_cols <- grep("^pass_", colnames(summary_df), value = TRUE)
+    pass_cols <- grep("^pass\\.", colnames(summary_df), value = TRUE)
     summary_df$pass_any_contrast <- as.integer(
         rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE) > 0
     )
@@ -505,12 +531,16 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
 #' @param contrast   Contrast label (e.g. "2024_vs_2013").
 #' @return data.frame suitable for plot_volcano / plot_ma.
 extract_contrast_table <- function(summary_df, contrast) {
+    # Convert linearFC back to logFC for plotting compatibility
+    linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+    logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+
     data.frame(
         feature_id = summary_df$feature_id,
-        logFC      = summary_df[[paste0("logFC_", contrast)]],
-        AveExpr    = summary_df[[paste0("AveExpr_", contrast)]],
-        P.Value    = summary_df[[paste0("P.Value_", contrast)]],
-        adj.P.Val  = summary_df[[paste0("adj.P.Val_", contrast)]],
+        logFC      = logfc,
+        AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+        P.Value    = summary_df[[paste0("P.Value.", contrast)]],
+        adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
         stringsAsFactors = FALSE
     )
 }

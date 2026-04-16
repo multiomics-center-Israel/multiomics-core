@@ -138,26 +138,47 @@ generate_proteomics_executive_summary <- function(de_res,
 #' Extract DE summary stats from proteomics summary_df
 #' @noRd
 get_de_summary_stats_proteomics <- function(summary_df, cfg) {
-    padj_cols <- grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE)
-    if (length(padj_cols) == 0) return(list())
+    # Use pipeline pass columns as the single source of truth for DE counts.
+    # This ensures executive summary, report, interactive panel, and pipeline
+    # summary all show the same numbers.
+    pass_cols <- grep("^pass\\.imputs\\.", colnames(summary_df), value = TRUE)
 
-    padj_cut <- cfg$de$p_cutoff %||% 0.05
-    lfc_cut  <- cfg$de$linear_fc_cutoff %||% 1.5
+    # Fallback: recompute from padj+LFC if no pass columns
+    if (length(pass_cols) == 0) {
+        padj_cols <- grep("^padj\\.imputs\\.", colnames(summary_df), value = TRUE)
+        if (length(padj_cols) == 0) return(list())
+
+        padj_cut <- cfg$de$p_cutoff %||% 0.05
+        lfc_cut  <- cfg$de$linear_fc_cutoff %||% 1.5
+        stats <- list()
+        for (pcol in padj_cols) {
+            cn <- sub("^padj\\.imputs\\.", "", pcol)
+            fc_col <- paste0("linearFC.imputs.", cn)
+            if (!(fc_col %in% colnames(summary_df))) next
+            lfc_vals <- as.numeric(summary_df[[fc_col]])
+            log2fc   <- signed_fc_to_log2(lfc_vals)
+            is_sig   <- !is.na(as.numeric(summary_df[[pcol]])) &
+                        as.numeric(summary_df[[pcol]]) <= padj_cut &
+                        abs(log2fc) >= log2(lfc_cut)
+            n_up   <- sum(is_sig & log2fc > 0, na.rm = TRUE)
+            n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
+            stats[[cn]] <- list(contrast = cn, n_sig = n_up + n_down,
+                text = sprintf("**%s**: %d significant proteins (%d up, %d down)",
+                               cn, n_up + n_down, n_up, n_down))
+        }
+        return(stats)
+    }
 
     stats <- list()
-    for (pcol in padj_cols) {
-        cn <- sub("^padj\\.imputs\\.", "", pcol)
+    for (pcol in pass_cols) {
+        cn <- sub("^pass\\.imputs\\.", "", pcol)
         fc_col <- paste0("linearFC.imputs.", cn)
         if (!(fc_col %in% colnames(summary_df))) next
 
-        padj_vals <- as.numeric(summary_df[[pcol]])
-        lfc_vals  <- as.numeric(summary_df[[fc_col]])
-        log2fc    <- signed_fc_to_log2(lfc_vals)
-
-        is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut &
-                  abs(log2fc) >= log2(lfc_cut)
-        n_up   <- sum(is_sig & log2fc > 0, na.rm = TRUE)
-        n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
+        is_sig <- !is.na(summary_df[[pcol]]) & summary_df[[pcol]] == 1
+        lfc_vals <- as.numeric(summary_df[[fc_col]])
+        n_up   <- sum(is_sig & lfc_vals > 0, na.rm = TRUE)
+        n_down <- sum(is_sig & lfc_vals < 0, na.rm = TRUE)
         n_sig  <- n_up + n_down
 
         stats[[cn]] <- list(

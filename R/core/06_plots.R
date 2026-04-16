@@ -438,8 +438,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   # Prepare plotting data
   df$.logFC <- as.numeric(df[["logFC"]])
 
-  # Y-axis uses raw P-value
-  df$.pval <- as.numeric(df[["P.Value"]])
+  # Y-axis: use adjusted p-value when available, fall back to raw P.Value
+  p_col_vol <- if ("adj.P.Val" %in% colnames(df)) "adj.P.Val" else "P.Value"
+  df$.pval <- as.numeric(df[[p_col_vol]])
   df$.pval_plot <- ifelse(is.na(df$.pval), 1, df$.pval)
   df$.neglog10p <- -log10(pmax(df$.pval_plot, 1e-300))
 
@@ -490,7 +491,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::labs(
       title = title %||% "Volcano plot",
       x = "log2(FC)",
-      y = "-log10(P.Value)"
+      y = sprintf("-log10(%s)", if (p_col_vol == "adj.P.Val") "adj.P.Val" else "P.Value")
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(legend.position = "right")
@@ -515,9 +516,9 @@ plot_ma <- function(de_tbl, cfg, title = NULL, use_adj = TRUE) {
   stopifnot(is.data.frame(de_tbl))
   if (!("logFC" %in% colnames(de_tbl))) stop("plot_ma: de_tbl missing 'logFC' column.")
 
-  # Always use raw P.Value for significance coloring
-  p_col <- "P.Value"
-  if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' column.")
+  # Use adjusted p-value when available, fall back to raw P.Value
+  p_col <- if ("adj.P.Val" %in% colnames(de_tbl)) "adj.P.Val" else "P.Value"
+  if (!(p_col %in% colnames(de_tbl))) stop("plot_ma: need 'P.Value' or 'adj.P.Val' column.")
 
   # A column (already log2 scale from DESeq2/edgeR normalization)
   if ("AveExpr" %in% colnames(de_tbl)) {

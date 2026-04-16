@@ -50,6 +50,8 @@ collect_lipid_pipeline_stats <- function(config, pre, de_res,
     }
 
     # --- DE statistics ---
+    # Single source of truth: use pipeline pass columns (pass.{cn}) from summary_df.
+    # Fallback: recompute from p-value + FC thresholds.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
     de_contrasts <- list()
 
@@ -57,23 +59,44 @@ collect_lipid_pipeline_stats <- function(config, pre, de_res,
     fc_lin <- lipid_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+    if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+        pass_cols <- grep("^pass\\.", names(sdf), value = TRUE)
+        pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+
+        if (length(pass_cols) > 0) {
+            for (pcol in pass_cols) {
+                cn <- sub("^pass\\.", "", pcol)
+                is_sig <- !is.na(sdf[[pcol]]) & sdf[[pcol]] == 1
+                fc_col <- paste0("linearFC.", cn)
+                if (fc_col %in% names(sdf)) {
+                    fc_vals <- as.numeric(sdf[[fc_col]])
+                    up <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                    dn <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+                } else {
+                    up <- 0; dn <- 0
+                }
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(is_sig),
+                    up = up, down = dn, tested = nrow(sdf)
+                )
+                n_de_total <- n_de_total + sum(is_sig)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        }
+    }
+
+    if (length(de_contrasts) == 0 && !is.null(de_res$tables) && length(de_res$tables) > 0) {
         for (cn in names(de_res$tables)) {
             tbl <- de_res$tables[[cn]]
             if (!is.data.frame(tbl)) next
-
             padj_col <- intersect(c("padj", "adj.P.Val", "p.adjusted"), names(tbl))[1]
             lfc_col  <- intersect(c("log2FoldChange", "logFC", "log2FC"), names(tbl))[1]
             if (is.na(padj_col)) next
-
             sig <- !is.na(tbl[[padj_col]]) & tbl[[padj_col]] <= p_cut
-            if (log2_fc > 0 && !is.na(lfc_col)) {
-                sig <- sig & (abs(tbl[[lfc_col]]) >= log2_fc)
-            }
-
+            if (log2_fc > 0 && !is.na(lfc_col)) sig <- sig & (abs(tbl[[lfc_col]]) >= log2_fc)
             up <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] > 0, na.rm = TRUE) else 0
             dn <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] < 0, na.rm = TRUE) else 0
-
             de_contrasts[[cn]] <- list(
                 name = cn, total = sum(sig, na.rm = TRUE),
                 up = up, down = dn, tested = sum(!is.na(tbl[[padj_col]]))

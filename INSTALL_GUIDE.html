@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>multiomics-core &mdash; Installation Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0e17;
+  --surface: #111827;
+  --surface-hover: #1a2332;
+  --border: #1e2d45;
+  --border-focus: #38bdf8;
+  --text: #e2e8f0;
+  --text-dim: #64748b;
+  --accent: #38bdf8;
+  --accent-green: #34d399;
+  --accent-amber: #fbbf24;
+  --accent-red: #f87171;
+  --accent-violet: #a78bfa;
+  --input-bg: #0d1320;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: "DM Sans", sans-serif; min-height: 100vh; line-height: 1.7; }
+
+.container { max-width: 780px; margin: 0 auto; padding: 40px 24px 80px; }
+
+.header { text-align: center; margin-bottom: 48px; }
+.header-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2);
+  border-radius: 100px; padding: 6px 18px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent);
+  margin-bottom: 16px;
+}
+.header-badge .dot { width: 6px; height: 6px; background: var(--accent-green); border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(135deg, #e2e8f0, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
+.header-sub { color: var(--text-dim); font-size: 14px; }
+
+/* Steps */
+.step {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 28px; margin-bottom: 20px; position: relative; transition: border-color 0.2s;
+}
+.step:hover { border-color: rgba(56,189,248,0.3); }
+.step.done { border-color: rgba(52,211,153,0.4); }
+.step-header { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.step-num {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(56,189,248,0.1); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 16px;
+  flex-shrink: 0;
+}
+.step.done .step-num { background: rgba(52,211,153,0.15); color: var(--accent-green); }
+.step-title { font-size: 17px; font-weight: 600; }
+.step-time { margin-left: auto; font-size: 12px; color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
+
+.step-body { padding-left: 50px; }
+.step-body p { margin-bottom: 10px; color: var(--text); font-size: 14px; }
+.step-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(56,189,248,0.3); }
+.step-body a:hover { border-bottom-color: var(--accent); }
+
+.cmd {
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 18px; margin: 12px 0; font-family: "JetBrains Mono", monospace;
+  font-size: 13px; line-height: 1.6; position: relative; overflow-x: auto;
+  cursor: pointer; transition: border-color 0.2s;
+}
+.cmd:hover { border-color: var(--accent); }
+.cmd::after {
+  content: "click to copy"; position: absolute; top: 8px; right: 12px;
+  font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 1px; opacity: 0; transition: opacity 0.2s;
+}
+.cmd:hover::after { opacity: 1; }
+.cmd.copied::after { content: "copied!"; color: var(--accent-green); opacity: 1; }
+.cmd .comment { color: var(--text-dim); }
+.cmd .highlight { color: var(--accent-amber); }
+
+.note {
+  background: rgba(56,189,248,0.05); border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 12px 0;
+  font-size: 13px; color: var(--text-dim);
+}
+.note.warning {
+  background: rgba(251,191,36,0.05); border-left-color: var(--accent-amber);
+}
+.note.success {
+  background: rgba(52,211,153,0.05); border-left-color: var(--accent-green);
+}
+.note strong { color: var(--text); }
+
+.checkbox-row {
+  display: flex; align-items: center; gap: 10px; margin: 8px 0; cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 20px; height: 20px; accent-color: var(--accent-green); cursor: pointer;
+}
+.checkbox-row label { cursor: pointer; font-size: 14px; }
+
+.screenshot-placeholder {
+  background: var(--input-bg); border: 1px dashed var(--border);
+  border-radius: 10px; padding: 30px; text-align: center;
+  color: var(--text-dim); font-size: 13px; margin: 12px 0;
+}
+
+.divider {
+  height: 1px; background: var(--border); margin: 32px 0;
+}
+
+.summary {
+  background: linear-gradient(135deg, rgba(56,189,248,0.05), rgba(167,139,250,0.05));
+  border: 1px solid rgba(56,189,248,0.2); border-radius: 16px;
+  padding: 28px; text-align: center; margin-top: 32px;
+}
+.summary h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+.summary p { color: var(--text-dim); font-size: 14px; margin-bottom: 6px; }
+.summary .big { font-size: 15px; color: var(--text); font-weight: 500; }
+
+/* Progress */
+.progress-bar {
+  width: 100%; height: 6px; background: var(--input-bg); border-radius: 3px;
+  margin: 20px 0 32px; overflow: hidden;
+}
+.progress-fill {
+  height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-green));
+  border-radius: 3px; transition: width 0.5s ease;
+}
+
+.tag {
+  display: inline-block; padding: 2px 10px; border-radius: 4px;
+  font-size: 11px; font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.tag-prereq { background: rgba(251,191,36,0.1); color: var(--accent-amber); }
+.tag-auto { background: rgba(52,211,153,0.1); color: var(--accent-green); }
+.tag-manual { background: rgba(56,189,248,0.1); color: var(--accent); }
+
+/* FAQ */
+details {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  margin: 8px 0; overflow: hidden;
+}
+details[open] { border-color: rgba(56,189,248,0.3); }
+summary {
+  padding: 14px 18px; cursor: pointer; font-weight: 500; font-size: 14px;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+}
+summary::before { content: "+"; font-family: "JetBrains Mono", monospace; color: var(--accent); font-size: 16px; }
+details[open] summary::before { content: "-"; }
+summary::-webkit-details-marker { display: none; }
+details .detail-body { padding: 0 18px 14px; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+details .detail-body code { background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-badge"><span class="dot"></span> Installation Guide</div>
+    <h1>multiomics-core</h1>
+    <p class="header-sub">Technion Multiomics Center &mdash; Analysis Pipeline Setup</p>
+  </div>
+
+  <!-- Progress -->
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;">
+    <span>Progress</span>
+    <span id="progress-label">0 / 3 steps</span>
+  </div>
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+
+  <!-- ============================================ -->
+  <!-- STEP 1 -->
+  <!-- ============================================ -->
+  <div class="step" id="step1">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <div class="step-title">Install R + RTools</div>
+      <div class="step-time"><span class="tag tag-prereq">prerequisite</span> ~10 min</div>
+    </div>
+    <div class="step-body">
+      <p>Download and install both of these (in order):</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;">
+        <a href="https://cran.r-project.org/bin/windows/base/" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
+          <div style="font-size:28px;margin-bottom:6px;">&#x1F4E6;</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);">R 4.5+</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">cran.r-project.org</div>
+        </a>
+        <a href="https://cran.r-project.org/bin/windows/Rtools/" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
+          <div style="font-size:28px;margin-bottom:6px;">&#x1F527;</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);">RTools 4.5</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">cran.r-project.org</div>
+        </a>
+      </div>
+
+      <div class="note warning">
+        <strong>Important during R installation:</strong> Make sure the checkbox
+        <em>"Save version number in registry"</em> is checked (it is by default). This allows
+        Rscript to be found from the command line.
+      </div>
+
+      <p>Install R first, then RTools. Use all default settings &mdash; just click Next through both installers.</p>
+
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox" onchange="updateProgress()">
+        <label>R and RTools are installed</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- STEP 2 -->
+  <!-- ============================================ -->
+  <div class="step" id="step2">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <div class="step-title">Get the Pipeline Code</div>
+      <div class="step-time"><span class="tag tag-manual">manual</span> ~2 min</div>
+    </div>
+    <div class="step-body">
+      <p>Open <strong>Command Prompt</strong> (press <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter) and run:</p>
+
+      <div class="cmd" onclick="copyCmd(this)">
+        <span class="comment">:: Choose where to put it (e.g. Documents)</span><br>
+        cd %USERPROFILE%\Documents<br><br>
+        <span class="comment">:: Clone the repository</span><br>
+        git clone --branch <span class="highlight">Dor_branch</span> <span class="highlight">YOUR_REPO_URL</span> multiomics-core
+      </div>
+
+      <div class="note">
+        <strong>No Git installed?</strong> Download it from
+        <a href="https://git-scm.com/download/win" target="_blank">git-scm.com</a> first.
+        Or &mdash; Dor can copy the entire folder to this computer via USB / network drive instead.
+      </div>
+
+      <div class="note">
+        <strong>Alternative (no git needed):</strong> If Dor copied the <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">multiomics-core</code> folder
+        to this computer directly, just make sure you know where it is (e.g. <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">C:\Users\Lab\Documents\multiomics-core</code>) and skip to Step 3.
+      </div>
+
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox" onchange="updateProgress()">
+        <label>Pipeline code is on this computer</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- STEP 3 -->
+  <!-- ============================================ -->
+  <div class="step" id="step3">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <div class="step-title">Run the Installer</div>
+      <div class="step-time"><span class="tag tag-auto">automated</span> ~15 min (first time)</div>
+    </div>
+    <div class="step-body">
+      <p>Open the <code style="background:var(--input-bg);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">multiomics-core</code> folder and <strong>double-click</strong>:</p>
+
+      <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:20px;margin:12px 0;display:flex;align-items:center;gap:16px;">
+        <div style="font-size:36px;">&#x1F4C4;</div>
+        <div>
+          <div style="font-weight:600;font-size:15px;">install.bat</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">Installs all R packages + creates desktop shortcut</div>
+        </div>
+      </div>
+
+      <p>This will:</p>
+      <ul style="padding-left:20px;margin:8px 0;font-size:14px;color:var(--text-dim);">
+        <li>Verify R is installed correctly</li>
+        <li>Install all 398 required R packages (automated, takes ~15 min)</li>
+        <li>Create a <strong>"Multiomics Pipeline"</strong> shortcut on your desktop</li>
+      </ul>
+
+      <div class="note warning">
+        <strong>Be patient:</strong> The first-time package install downloads and compiles ~400 packages.
+        You'll see lots of text scrolling &mdash; this is normal. Don't close the window until it says
+        <em>"Setup complete!"</em>
+      </div>
+
+      <div class="note success">
+        <strong>After it finishes:</strong> You'll have a desktop icon called <em>"Multiomics Pipeline"</em>.
+        Double-click it any time to launch the wizard in your browser. That's it!
+      </div>
+
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox" onchange="updateProgress()">
+        <label>install.bat completed successfully</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- DONE -->
+  <!-- ============================================ -->
+  <div class="summary" id="summary-done" style="display:none;">
+    <h2>&#x2705; Setup Complete</h2>
+    <p class="big">Double-click the <strong>"Multiomics Pipeline"</strong> icon on your desktop to start.</p>
+    <p style="margin-top:12px;">The wizard will open in your browser. Upload your data files, configure the analysis, and click Run.</p>
+    <p style="margin-top:6px;">For help or issues, contact: <a href="mailto:bioinfo.multiomics@technion.ac.il" style="color:var(--accent);text-decoration:none;">bioinfo.multiomics@technion.ac.il</a></p>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- FAQ -->
+  <!-- ============================================ -->
+  <div class="divider"></div>
+  <div style="margin-bottom:16px;">
+    <div style="font-size:15px;font-weight:600;margin-bottom:12px;">Troubleshooting</div>
+
+    <details>
+      <summary>"Rscript is not recognized" error</summary>
+      <div class="detail-body">
+        R was not added to the system PATH during installation. Fix:<br>
+        1. Open <strong>Start Menu</strong> &rarr; search <strong>"Environment Variables"</strong><br>
+        2. Click <strong>"Edit the system environment variables"</strong><br>
+        3. Click <strong>"Environment Variables"</strong> button<br>
+        4. Under <strong>System variables</strong>, find <code>Path</code>, click Edit<br>
+        5. Add: <code>C:\Program Files\R\R-4.5.2\bin</code> (adjust version number if different)<br>
+        6. Click OK everywhere, then restart Command Prompt and try again
+      </div>
+    </details>
+
+    <details>
+      <summary>Package installation fails with compilation errors</summary>
+      <div class="detail-body">
+        This usually means RTools is not installed or not found. Check:<br>
+        1. Make sure RTools 4.5 is installed (not an older version)<br>
+        2. Open R and run: <code>Sys.which("make")</code> &mdash; it should return a path<br>
+        3. If empty, reinstall RTools and restart your computer<br>
+        4. Run <code>install.bat</code> again
+      </div>
+    </details>
+
+    <details>
+      <summary>The wizard opens but nothing happens when I click "Run"</summary>
+      <div class="detail-body">
+        The "Run Pipeline" button requires the backend server (started by <code>launch_wizard.bat</code>).
+        If you opened the HTML file directly in a browser, the Save/Run buttons won't work &mdash;
+        always launch via the desktop shortcut or <code>launch_wizard.bat</code>.
+      </div>
+    </details>
+
+    <details>
+      <summary>How do I update the pipeline later?</summary>
+      <div class="detail-body">
+        Open Command Prompt, navigate to the pipeline folder, and run:<br>
+        <code>cd %USERPROFILE%\Documents\multiomics-core</code><br>
+        <code>git pull</code><br>
+        <code>Rscript -e "renv::restore(prompt=FALSE)"</code><br><br>
+        This pulls the latest code and installs any new packages.
+      </div>
+    </details>
+
+    <details>
+      <summary>Can I move the folder after installation?</summary>
+      <div class="detail-body">
+        Yes, but you'll need to re-run <code>install.bat</code> to update the desktop shortcut
+        to point to the new location. The R packages are stored inside the project folder
+        (in <code>renv/library</code>), so they move with it.
+      </div>
+    </details>
+  </div>
+
+</div>
+
+<script>
+function updateProgress() {
+  var checks = document.querySelectorAll('.step input[type="checkbox"]');
+  var done = 0;
+  checks.forEach(function(cb, i) {
+    var step = document.getElementById('step' + (i + 1));
+    if (cb.checked) {
+      done++;
+      step.classList.add('done');
+    } else {
+      step.classList.remove('done');
+    }
+  });
+  var pct = Math.round((done / checks.length) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-label').textContent = done + ' / ' + checks.length + ' steps';
+  document.getElementById('summary-done').style.display = (done === checks.length) ? 'block' : 'none';
+}
+
+function copyCmd(el) {
+  var text = el.innerText.replace(/click to copy|copied!/g, '').trim();
+  navigator.clipboard.writeText(text).then(function() {
+    el.classList.add('copied');
+    setTimeout(function() { el.classList.remove('copied'); }, 1500);
+  });
+}
+</script>
+</body>
+</html>

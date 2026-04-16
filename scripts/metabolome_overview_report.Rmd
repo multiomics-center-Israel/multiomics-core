@@ -1,0 +1,497 @@
+---
+title: "Metabolome Overview"
+subtitle: "`r params$project_name`"
+author: "`r params$analyst`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    self_contained: true
+    code_folding: hide
+    fig_width: 10
+    fig_height: 7
+params:
+  data_file: NULL
+  level1_file: NULL
+  level2_file: NULL
+  metadata_file: NULL
+  kegg_mapping_file: NULL
+  project_name: "Metabolomics Project"
+  analyst: "Bioinformatics Core"
+  feature_id_col: "Metabolite"
+  mz_col: "m/z"
+  rt_col: "RT [min]"
+  hmdb_col: "HMDB"
+  kegg_col: "KEGG"
+  formula_col: "Formula"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  out.width = "100%"
+)
+
+library(ggplot2)
+library(DT)
+library(htmltools)
+
+`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0 && !is.na(a[1])) a else b
+
+read_data <- function(path) {
+  if (is.null(path) || !file.exists(path)) return(NULL)
+  ext <- tolower(tools::file_ext(path))
+  if (ext == "csv") {
+    read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  } else if (ext %in% c("tsv", "txt")) {
+    read.delim(path, stringsAsFactors = FALSE, check.names = FALSE)
+  } else if (ext %in% c("xlsx", "xls")) {
+    if (requireNamespace("readxl", quietly = TRUE)) {
+      as.data.frame(readxl::read_excel(path), check.names = FALSE)
+    } else NULL
+  } else if (ext == "rds") {
+    readRDS(path)
+  } else NULL
+}
+
+data_all <- read_data(params$data_file)
+data_l1  <- read_data(params$level1_file)
+meta     <- read_data(params$metadata_file)
+kegg_map <- read_data(params$kegg_mapping_file)
+
+fid_col  <- params$feature_id_col
+mz_col   <- params$mz_col
+rt_col   <- params$rt_col
+hmdb_col <- params$hmdb_col
+kegg_col <- params$kegg_col
+form_col <- params$formula_col
+
+n_total <- if (!is.null(data_all)) nrow(data_all) else 0
+n_l1 <- if (!is.null(data_l1)) nrow(data_l1) else 0
+n_samples <- 0; n_groups <- 0; group_info <- ""
+if (!is.null(meta)) {
+  n_samples <- nrow(meta)
+  if ("Group" %in% colnames(meta)) {
+    groups <- unique(meta$Group)
+    n_groups <- length(groups)
+    group_info <- paste(groups, collapse = ", ")
+  }
+}
+```
+
+# At a Glance
+
+```{r summary-cards, results='asis'}
+n_with_pathway <- 0
+n_pathways <- 0
+if (!is.null(kegg_map)) {
+  n_with_pathway <- length(kegg_map$compound_pathways)
+  n_pathways <- length(kegg_map$pathway_counts)
+}
+
+cat(sprintf('
+<div style="display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0;">
+<div style="flex: 1; min-width: 160px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border-radius: 12px; padding: 20px; text-align: center;">
+  <div style="font-size: 2.5em; font-weight: bold;">%d</div>
+  <div style="font-size: 0.95em; opacity: 0.9;">Metabolites Detected</div>
+</div>
+<div style="flex: 1; min-width: 160px; background: linear-gradient(135deg, #11998e, #38ef7d); color: white; border-radius: 12px; padding: 20px; text-align: center;">
+  <div style="font-size: 2.5em; font-weight: bold;">%d</div>
+  <div style="font-size: 0.95em; opacity: 0.9;">Level 1 (confirmed)</div>
+</div>
+<div style="flex: 1; min-width: 160px; background: linear-gradient(135deg, #FC5C7D, #6A82FB); color: white; border-radius: 12px; padding: 20px; text-align: center;">
+  <div style="font-size: 2.5em; font-weight: bold;">%d</div>
+  <div style="font-size: 0.95em; opacity: 0.9;">Mapped to Pathways</div>
+</div>
+<div style="flex: 1; min-width: 160px; background: linear-gradient(135deg, #f093fb, #f5576c); color: white; border-radius: 12px; padding: 20px; text-align: center;">
+  <div style="font-size: 2.5em; font-weight: bold;">%d</div>
+  <div style="font-size: 0.95em; opacity: 0.9;">KEGG Pathways Covered</div>
+</div>
+</div>
+', n_total, n_l1, n_with_pathway, n_pathways))
+
+if (nzchar(group_info)) {
+  cat(sprintf('<p style="text-align: center; color: #555;">%d samples across %d groups: <strong>%s</strong></p>\n',
+              n_samples, n_groups, group_info))
+}
+```
+
+```{r identification-level, results='asis', fig.height=4}
+if (n_l1 > 0 && n_total > 0) {
+  n_l2_only <- n_total - n_l1
+  level_df <- data.frame(
+    Level = factor(c("Level 1\n(confirmed by standard)", "Level 2\n(putative, high confidence)"),
+                   levels = c("Level 1\n(confirmed by standard)", "Level 2\n(putative, high confidence)")),
+    Count = c(n_l1, n_l2_only),
+    stringsAsFactors = FALSE
+  )
+  level_df$Pct <- round(100 * level_df$Count / n_total, 1)
+  level_df$Label <- paste0(level_df$Count, " (", level_df$Pct, "%)")
+
+  p <- ggplot(level_df, aes(x = Level, y = Count, fill = Level)) +
+    geom_col(width = 0.6) +
+    geom_text(aes(label = Label), vjust = -0.5, size = 5, fontface = "bold") +
+    scale_fill_manual(values = c("#38ef7d", "#6A82FB")) +
+    labs(title = "Metabolite Identification Confidence",
+         subtitle = "MSI classification: Level 1 = matched to authentic standard; Level 2 = putative based on MS/MS spectral match",
+         x = NULL, y = "Number of metabolites") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+          axis.text.x = element_text(size = 12)) +
+    ylim(0, max(level_df$Count) * 1.15)
+  print(p)
+
+  cat('<p style="text-align: center; font-size: 0.9em; color: #555; font-style: italic;">Level 1 identifications are validated against authentic chemical standards run on the same instrument. Level 2 identifications are based on accurate mass and MS/MS spectral library matching.</p>\n')
+}
+```
+
+# Biological Pathway Coverage {.tabset}
+
+```{r pathway-overview, results='asis'}
+if (is.null(kegg_map) || length(kegg_map$pathway_counts) == 0) {
+  cat("<p><em>No KEGG pathway mapping available. Run with --kegg_mapping to enable.</em></p>\n")
+}
+```
+
+## Top Pathways
+
+```{r pathway-barplot, fig.height=9}
+if (!is.null(kegg_map) && length(kegg_map$pathway_counts) > 0) {
+  pw_counts <- kegg_map$pathway_counts
+  pw_names  <- kegg_map$pathway_names
+
+  # Skip mega-overview pathways, show specific ones
+  skip_pws <- c("map01100", "map01110", "map01120", "map01060")
+  pw_counts <- pw_counts[!names(pw_counts) %in% skip_pws]
+
+  top_n <- min(25, length(pw_counts))
+  top_pws <- head(pw_counts, top_n)
+
+  pw_df <- data.frame(
+    pathway = names(top_pws),
+    count = as.integer(top_pws),
+    stringsAsFactors = FALSE
+  )
+  pw_df$name <- vapply(pw_df$pathway, function(p) {
+    n <- pw_names[p]
+    if (is.null(n) || is.na(n) || !nzchar(n)) p else n
+  }, character(1))
+  pw_df$label <- paste0(pw_df$name, " (", pw_df$count, ")")
+
+  p <- ggplot(pw_df, aes(x = reorder(name, count), y = count, fill = count)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(label = count), hjust = -0.3, size = 3.5) +
+    coord_flip() +
+    scale_fill_gradient(low = "#b8daff", high = "#0056b3") +
+    labs(title = "KEGG Pathways Represented in the Detected Metabolome",
+         subtitle = paste0(length(kegg_map$compound_pathways), " metabolites mapped to ", length(kegg_map$pathway_counts), " pathways"),
+         x = NULL, y = "Number of metabolites in pathway") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+          axis.text.y = element_text(size = 9)) +
+    ylim(0, max(pw_df$count) * 1.1)
+  print(p)
+
+  cat('<p style="text-align: center; font-size: 0.9em; color: #555; font-style: italic;">Overview pathways (Metabolic pathways, Biosynthesis of secondary metabolites) excluded for clarity. Each bar shows how many detected metabolites participate in that pathway.</p>\n')
+}
+```
+
+## Pathway Categories
+
+```{r pathway-categories, fig.height=7}
+if (!is.null(kegg_map) && length(kegg_map$pathway_counts) > 0) {
+  pw_counts <- kegg_map$pathway_counts
+  pw_names  <- kegg_map$pathway_names
+
+  # Categorize pathways by KEGG numbering
+  categorize_pathway <- function(pw_id) {
+    num <- as.integer(gsub("map", "", pw_id))
+    if (is.na(num)) return("Other")
+    if (num >= 100 & num < 200) return("Amino acid metabolism")
+    if (num >= 200 & num < 300) return("Nucleotide metabolism")
+    if (num >= 300 & num < 400) return("Carbohydrate metabolism")
+    if (num >= 400 & num < 500) return("Energy metabolism")
+    if (num >= 500 & num < 600) return("Lipid metabolism")
+    if (num >= 600 & num < 700) return("Cofactor & vitamin metabolism")
+    if (num >= 700 & num < 800) return("Glycan metabolism")
+    if (num >= 900 & num < 1000) return("Terpenoid & polyketide metabolism")
+    if (num >= 1000 & num < 1100) return("Other secondary metabolites")
+    if (num >= 1100 & num < 1300) return("Global & overview")
+    if (num >= 2000 & num < 3000) return("Signaling & transport")
+    if (num >= 4000 & num < 5000) return("Cellular processes")
+    if (num >= 5000 & num < 6000) return("Human diseases")
+    "Other"
+  }
+
+  # Remove global/overview pathways
+  specific_pws <- names(pw_counts)[!names(pw_counts) %in% c("map01100", "map01110", "map01120")]
+  cat_list <- vapply(specific_pws, categorize_pathway, character(1))
+  cat_df <- data.frame(Category = cat_list, stringsAsFactors = FALSE)
+  cat_df <- cat_df[cat_df$Category != "Global & overview", , drop = FALSE]
+  cat_counts <- sort(table(cat_df$Category), decreasing = TRUE)
+  cat_plot <- data.frame(
+    Category = names(cat_counts),
+    Count = as.integer(cat_counts),
+    stringsAsFactors = FALSE
+  )
+
+  p <- ggplot(cat_plot, aes(x = reorder(Category, Count), y = Count, fill = Category)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(label = Count), hjust = -0.3, size = 4) +
+    coord_flip() +
+    scale_fill_brewer(palette = "Set3") +
+    labs(title = "Pathway Categories Represented",
+         subtitle = "Number of distinct KEGG pathways per biological category",
+         x = NULL, y = "Number of pathways") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666")) +
+    ylim(0, max(cat_plot$Count) * 1.15)
+  print(p)
+}
+```
+
+## Full Pathway Table
+
+```{r pathway-table}
+if (!is.null(kegg_map) && length(kegg_map$pathway_counts) > 0) {
+  pw_counts <- kegg_map$pathway_counts
+  pw_names  <- kegg_map$pathway_names
+
+  pw_table <- data.frame(
+    Pathway_ID = names(pw_counts),
+    Pathway = vapply(names(pw_counts), function(p) {
+      n <- pw_names[p]; if (is.null(n) || is.na(n)) p else n
+    }, character(1)),
+    Metabolites = as.integer(pw_counts),
+    stringsAsFactors = FALSE
+  )
+  pw_table <- pw_table[order(-pw_table$Metabolites), ]
+
+  DT::datatable(
+    pw_table,
+    caption = paste0(nrow(pw_table), " KEGG pathways with detected metabolites"),
+    extensions = "Buttons",
+    options = list(
+      scrollX = TRUE, pageLength = 20, dom = "Bfrtip",
+      buttons = list(
+        list(extend = "csv", filename = "pathway_coverage"),
+        list(extend = "excel", filename = "pathway_coverage")
+      )
+    ),
+    rownames = FALSE, filter = "top",
+    class = "compact stripe hover"
+  )
+}
+```
+
+# Most Abundant Metabolites
+
+```{r top-abundant, fig.height=9}
+if (!is.null(data_all) && fid_col %in% colnames(data_all)) {
+  # Find sample columns (numeric, not annotation)
+  annot_cols <- c(fid_col, mz_col, rt_col, "Reference Ion", "Calc. MW",
+                  form_col, "Annot. DeltaMass [ppm]", hmdb_col, kegg_col, "CAS")
+  sample_cols <- setdiff(colnames(data_all), annot_cols)
+  # Keep only numeric columns
+  sample_cols <- sample_cols[vapply(data_all[sample_cols], function(x) is.numeric(type.convert(as.character(x), as.is=TRUE)), logical(1))]
+
+  if (length(sample_cols) > 0) {
+    mat <- as.matrix(data_all[, sample_cols])
+    mode(mat) <- "numeric"
+    mean_intensity <- rowMeans(mat, na.rm = TRUE)
+
+    top_df <- data.frame(
+      Metabolite = as.character(data_all[[fid_col]]),
+      Mean_Intensity = mean_intensity,
+      stringsAsFactors = FALSE
+    )
+    top_df <- top_df[order(-top_df$Mean_Intensity), ]
+    top_30 <- head(top_df, 30)
+
+    p <- ggplot(top_30, aes(x = reorder(Metabolite, Mean_Intensity), y = Mean_Intensity / 1e6)) +
+      geom_col(fill = "#667eea", width = 0.7) +
+      coord_flip() +
+      labs(title = "Top 30 Most Abundant Metabolites",
+           subtitle = "Mean intensity across all samples (millions)",
+           x = NULL, y = "Mean Intensity (x10^6)") +
+      theme_minimal() +
+      theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+            plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+            axis.text.y = element_text(size = 8))
+    print(p)
+  }
+}
+```
+
+# Complete Metabolite Catalog
+
+```{r metabolite-table}
+if (!is.null(data_all)) {
+  show_cols <- c(fid_col, hmdb_col, kegg_col, form_col, mz_col, rt_col)
+  show_cols <- intersect(show_cols, colnames(data_all))
+
+  display_df <- data_all[, show_cols, drop = FALSE]
+
+  # Add identification level
+  if (!is.null(data_l1) && fid_col %in% colnames(data_l1)) {
+    l1_ids <- as.character(data_l1[[fid_col]])
+    display_df$Level <- ifelse(as.character(data_all[[fid_col]]) %in% l1_ids, "Level 1", "Level 2")
+    display_df <- display_df[, c("Level", show_cols)]
+  }
+
+  # Add pathway count per metabolite
+  if (!is.null(kegg_map) && kegg_col %in% colnames(data_all)) {
+    kegg_ids_data <- as.character(data_all[[kegg_col]])
+    n_pathways_per <- vapply(kegg_ids_data, function(kid) {
+      if (is.na(kid) || !kid %in% names(kegg_map$compound_pathways)) return(0L)
+      length(kegg_map$compound_pathways[[kid]])
+    }, integer(1))
+    display_df$Pathways <- n_pathways_per
+  }
+
+  # Add mean intensity
+  annot_cols <- c(fid_col, mz_col, rt_col, "Reference Ion", "Calc. MW",
+                  form_col, "Annot. DeltaMass [ppm]", hmdb_col, kegg_col, "CAS")
+  sample_cols <- setdiff(colnames(data_all), annot_cols)
+  if (length(sample_cols) > 0) {
+    mat <- as.matrix(data_all[, sample_cols])
+    mode(mat) <- "numeric"
+    display_df$Mean_Intensity <- round(rowMeans(mat, na.rm = TRUE), 0)
+  }
+
+  DT::datatable(
+    display_df,
+    caption = paste0("All ", nrow(display_df), " detected metabolites — searchable and exportable"),
+    extensions = "Buttons",
+    filter = "top",
+    options = list(
+      scrollX = TRUE, pageLength = 25, dom = "Bfrtip",
+      buttons = list(
+        list(extend = "csv", filename = "metabolite_catalog"),
+        list(extend = "excel", filename = "metabolite_catalog")
+      ),
+      order = list(list(which(colnames(display_df) == "Mean_Intensity") - 1, "desc"))
+    ),
+    rownames = FALSE,
+    class = "compact stripe hover"
+  )
+}
+```
+
+# Group-Specific Metabolites
+
+Metabolites that are **predominantly detected in only one experimental group** or show **extreme fold changes** (>10x) between groups. These may represent metabolites produced by the symbiont, host immune responses, or metabolic pathways uniquely activated by the presence/absence of bacteria.
+
+> **Note:** "Absent" means the intensity was reported as zero by Compound Discoverer (below detection limit). This does not necessarily mean the metabolite is truly absent — it may be present below the instrument's sensitivity. Cross-validation with proteomics data is recommended before drawing conclusions.
+
+```{r group-specific, results='asis'}
+if (!is.null(data_all) && !is.null(meta) && "Group" %in% colnames(meta)) {
+
+  # Identify sample columns present in both data and metadata
+  sample_ids <- meta$Sample[!meta$is_QC %in% TRUE]  # exclude QC/Pool
+  sample_cols <- intersect(sample_ids, colnames(data_all))
+
+  if (length(sample_cols) >= 4) {
+
+    grp_labels <- meta$Group[match(sample_cols, meta$Sample)]
+    grp_levels <- unique(grp_labels[!is.na(grp_labels) & grp_labels != "Pool"])
+
+    if (length(grp_levels) == 2) {
+      g1_name <- grp_levels[1]; g2_name <- grp_levels[2]
+      g1_cols <- sample_cols[grp_labels == g1_name]
+      g2_cols <- sample_cols[grp_labels == g2_name]
+
+      results <- data.frame(
+        Metabolite = character(), Mean_Group1 = numeric(), Mean_Group2 = numeric(),
+        Fold_Change = numeric(), Zeros_Group1 = integer(), Zeros_Group2 = integer(),
+        Pattern = character(), stringsAsFactors = FALSE
+      )
+
+      for (i in seq_len(nrow(data_all))) {
+        met_name <- data_all[[fid_col]][i]
+        v1 <- as.numeric(data_all[i, g1_cols])
+        v2 <- as.numeric(data_all[i, g2_cols])
+        z1 <- sum(v1 == 0, na.rm = TRUE)
+        z2 <- sum(v2 == 0, na.rm = TRUE)
+        m1 <- mean(v1[v1 > 0], na.rm = TRUE)
+        m2 <- mean(v2[v2 > 0], na.rm = TRUE)
+        if (is.nan(m1)) m1 <- 0
+        if (is.nan(m2)) m2 <- 0
+        if (m1 == 0 && m2 == 0) next
+
+        fc <- if (m1 > 0 && m2 > 0) m2 / m1 else if (m2 > 0) Inf else 0
+
+        pattern <- ""
+        if (z1 >= 2 & z2 == 0) {
+          pattern <- paste0("Predominantly absent in ", g1_name, " (potential symbiont marker)")
+        } else if (z2 >= 2 & z1 == 0) {
+          pattern <- paste0("Predominantly absent in ", g2_name)
+        } else if (is.finite(fc) && fc >= 10) {
+          pattern <- sprintf("Strongly elevated in %s (%.0fx)", g2_name, fc)
+        } else if (is.finite(fc) && fc <= 0.1) {
+          pattern <- sprintf("Strongly reduced in %s (%.0fx lower)", g2_name, 1/fc)
+        }
+
+        if (nzchar(pattern)) {
+          results <- rbind(results, data.frame(
+            Metabolite = met_name, Mean_Group1 = round(m1, 0),
+            Mean_Group2 = round(m2, 0), Fold_Change = round(fc, 1),
+            Zeros_Group1 = z1, Zeros_Group2 = z2,
+            Pattern = pattern, stringsAsFactors = FALSE
+          ))
+        }
+      }
+
+      colnames(results)[2:3] <- paste0("Mean_", c(g1_name, g2_name))
+      colnames(results)[5:6] <- paste0("Zeros_", c(g1_name, g2_name))
+      results <- results[order(-results$Fold_Change), ]
+
+      if (nrow(results) > 0) {
+        cat(sprintf("\n**%d metabolites** with group-specific patterns detected:\n\n", nrow(results)))
+
+        # Split by pattern type
+        absent_in_g1 <- results[grepl("absent in.*No_bac|absent in.*wo|symbiont", results$Pattern, ignore.case = TRUE), ]
+        absent_in_g2 <- results[grepl("absent in.*with_bac|absent in.*w ", results$Pattern, ignore.case = TRUE), ]
+        elevated <- results[grepl("Strongly elevated", results$Pattern), ]
+        reduced <- results[grepl("Strongly reduced", results$Pattern), ]
+
+        DT::datatable(
+          results,
+          caption = sprintf("Metabolites with extreme group differences (%s vs %s)", g1_name, g2_name),
+          extensions = "Buttons",
+          options = list(
+            scrollX = TRUE, pageLength = 25, dom = "Bfrtip",
+            buttons = list(
+              list(extend = "csv", filename = "group_specific_metabolites"),
+              list(extend = "excel", filename = "group_specific_metabolites")
+            ),
+            order = list(list(3, "desc"))
+          ),
+          rownames = FALSE,
+          class = "compact stripe hover"
+        )
+      } else {
+        cat("\nNo metabolites with extreme group-specific patterns detected.\n")
+      }
+    }
+  }
+}
+```
+
+---
+
+<p style="text-align:center; color:grey; font-size:0.9em;">
+Metabolome Overview Report | Generated `r format(Sys.time(), '%Y-%m-%d %H:%M')`
+</p>

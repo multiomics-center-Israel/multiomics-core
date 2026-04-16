@@ -191,6 +191,44 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   .container { padding: 20px 12px 60px; }
   h1 { font-size: 24px; }
 }
+
+/* ── Pipeline Flowchart ── */
+.pipeline-map { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; margin-top: 28px; display: none; }
+.pipeline-map.visible { display: block; }
+.pipeline-map .section-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
+.pipeline-map-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
+.pipeline-canvas { position: relative; overflow-x: auto; overflow-y: visible; min-height: 120px; padding: 16px 0; }
+.pipeline-canvas svg.pipe-svg { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 0; }
+.pipe-col { display: inline-flex; flex-direction: column; align-items: center; gap: 10px; vertical-align: top; position: relative; z-index: 1; }
+.pipe-node {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--input-bg); border: 1.5px solid var(--border); border-radius: 10px;
+  padding: 8px 14px; font-size: 12px; font-family: "DM Sans", sans-serif; font-weight: 500;
+  color: var(--text); white-space: nowrap; cursor: default; position: relative;
+  transition: border-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+.pipe-node .pipe-icon { font-size: 15px; flex-shrink: 0; }
+.pipe-node:hover { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56,189,248,0.1); }
+.pipe-node.core { border-color: var(--accent-wet); background: rgba(56,189,248,0.06); }
+.pipe-node.qc { border-color: var(--accent-green); background: rgba(52,211,153,0.06); }
+.pipe-node.stat { border-color: var(--accent-violet); background: rgba(167,139,250,0.06); }
+.pipe-node.output { border-color: var(--accent-amber); background: rgba(251,191,36,0.06); }
+.pipe-node.disabled { opacity: 0.35; border-style: dashed; }
+.pipe-node .pipe-toggle {
+  width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 11px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  margin-left: 4px; transition: all 0.15s; line-height: 1;
+}
+.pipe-node .pipe-toggle:hover { border-color: var(--accent-red); color: var(--accent-red); background: rgba(248,113,113,0.1); }
+.pipe-node.disabled .pipe-toggle:hover { border-color: var(--accent-green); color: var(--accent-green); background: rgba(52,211,153,0.1); }
+.pipe-legend { display: flex; gap: 18px; margin-top: 16px; flex-wrap: wrap; }
+.pipe-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
+.pipe-legend-dot { width: 10px; height: 10px; border-radius: 3px; border: 1.5px solid; }
+.pipe-legend-dot.core { border-color: var(--accent-wet); background: rgba(56,189,248,0.15); }
+.pipe-legend-dot.qc { border-color: var(--accent-green); background: rgba(52,211,153,0.15); }
+.pipe-legend-dot.stat { border-color: var(--accent-violet); background: rgba(167,139,250,0.15); }
+.pipe-legend-dot.output { border-color: var(--accent-amber); background: rgba(251,191,36,0.15); }
 </style>
 </head>
 <body>
@@ -398,7 +436,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 <div class="section mode-section mode-rna active" id="sec_rna_sample_exclusion">
   <div class="section-title"><span class="num">04b</span> Sample Exclusion <span class="mode-tag mode-tag-rna">RNA</span></div>
   <p class="hint">Optionally exclude samples from analysis (e.g., outliers). Upload metadata above to see samples.</p>
-  <div id="rna_sample_exclusion_list" style="padding:8px;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;min-height:32px;">Upload metadata to see samples.</div>
+  <div id="rna_sample_exclusion_list" style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);min-height:32px;">Upload metadata to see samples.</div>
 </div>
 
 <!-- 4. Column Mapping — Proteomics -->
@@ -436,7 +474,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 <div class="section mode-section mode-prot" id="sec_prot_sample_exclusion">
   <div class="section-title"><span class="num">04b</span> Sample Exclusion <span class="mode-tag mode-tag-prot">PROT</span></div>
   <p class="hint">Optionally exclude samples from analysis (e.g., outliers). Upload metadata above to see samples.</p>
-  <div id="prot_sample_exclusion_list" style="padding:8px;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;min-height:32px;">Upload metadata to see samples.</div>
+  <div id="prot_sample_exclusion_list" style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);min-height:32px;">Upload metadata to see samples.</div>
 </div>
 
 <!-- 5. Methods — RNA -->
@@ -720,7 +758,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 <div class="section mode-section mode-metab" id="sec_metab_sample_exclusion">
   <div class="section-title"><span class="num">04b</span> Sample Exclusion <span class="mode-tag mode-tag-metab">METAB</span></div>
   <p class="hint">Optionally exclude samples from analysis (e.g., outliers). Upload metadata above to see samples.</p>
-  <div id="metab_sample_exclusion_list" style="padding:8px;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;min-height:32px;">Upload metadata to see samples.</div>
+  <div id="metab_sample_exclusion_list" style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);min-height:32px;">Upload metadata to see samples.</div>
 </div>
 
 <!-- 5. Methods — Metabolomics -->
@@ -852,7 +890,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 <div class="section mode-section mode-lipid" id="sec_lipid_sample_exclusion">
   <div class="section-title"><span class="num">04b</span> Sample Exclusion <span class="mode-tag" style="background:#16a085;">LIPID</span></div>
   <p class="hint">Optionally exclude samples from analysis (e.g., outliers). Upload metadata above to see samples.</p>
-  <div id="lipid_sample_exclusion_list" style="padding:8px;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;min-height:32px;">Upload metadata to see samples.</div>
+  <div id="lipid_sample_exclusion_list" style="padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);min-height:32px;">Upload metadata to see samples.</div>
 </div>
 
 <!-- 5. Methods — Lipidomics -->
@@ -1152,6 +1190,19 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <button class="btn btn-lg" id="btn_download" onclick="downloadYAML()" style="display:none;">Download Config</button>
   <button class="btn btn-success btn-lg" id="btn_save" onclick="saveConfig()">Save Config</button>
   <button class="btn btn-run btn-lg" id="btn_run" onclick="runPipeline()">Run Pipeline</button>
+</div>
+
+<!-- Pipeline Flowchart -->
+<div class="pipeline-map" id="pipeline_map">
+  <div class="section-title"><span class="icon">&#9776;</span> Pipeline Overview</div>
+  <div class="pipeline-map-sub">Live preview of your analysis pipeline. Click the toggle on optional steps to enable/disable them.</div>
+  <div class="pipeline-canvas" id="pipeline_canvas"></div>
+  <div class="pipe-legend">
+    <span class="pipe-legend-item"><span class="pipe-legend-dot core"></span> Core processing</span>
+    <span class="pipe-legend-item"><span class="pipe-legend-dot qc"></span> Quality control</span>
+    <span class="pipe-legend-item"><span class="pipe-legend-dot stat"></span> Statistical / ML</span>
+    <span class="pipe-legend-item"><span class="pipe-legend-dot output"></span> Output / Report</span>
+  </div>
 </div>
 
 <!-- YAML Preview -->
@@ -1660,7 +1711,7 @@ function updateContrastBuilder(prefix) {
 
   var groupSel = document.getElementById(prefix + '_group_col');
   var groupCol = groupSel ? groupSel.value : '';
-  var metaKey = prefix === 'prot' ? 'prot_metadata' : (prefix === 'metab' ? 'metab_metadata' : 'rna_metadata');
+  var metaKey = prefix === 'prot' ? 'prot_metadata' : (prefix === 'metab' ? 'metab_metadata' : (prefix === 'lipid' ? 'lipid_metadata' : 'rna_metadata'));
   var data = metadataRows[metaKey];
 
   if (!data || !groupCol || !data.header.length) {
@@ -1883,8 +1934,9 @@ function generateRNAYaml() {
   yaml += '      enabled: ' + yamlBool(pathwayEnabled) + '\n';
   yaml += '      method: ' + yamlStr(pathwayMethod) + '\n';
   yaml += '      gmt_file: ' + customGmt + '\n';
-  yaml += '      databases:\n        - "GO"\n        - "KEGG"\n';
+  yaml += '      databases:\n        - "GO"\n        - "KEGG"\n        - "Reactome"\n';
   yaml += '      min_size: 10\n      max_size: 500\n';
+  yaml += '      cluster_threshold: 0.7\n';
 
   yaml += '\n    commentary:\n';
   yaml += '      enabled: ' + yamlBool(commentaryEnabled) + '\n';
@@ -2060,6 +2112,7 @@ function generateProtYaml() {
 
   yaml += '\n    clustering:\n';
   yaml += '      enabled: ' + yamlBool(checked('prot_clustering')) + '\n';
+  yaml += '      group_col: ' + yamlStr(groupCol) + '\n';
   yaml += '      de_source: "any_contrast"\n      min_groups: 2\n';
   yaml += '      steps:\n        hierarchical:\n          enabled: true\n          distance: "euclidean"\n          linkage: "complete"\n';
   yaml += '        partition:\n          enabled: true\n          algorithm: "hclust"\n          k_max: 20\n';
@@ -2128,11 +2181,15 @@ function generateProtYaml() {
   yaml += '\n    pathway:\n';
   yaml += '      enabled: ' + yamlBool(pathwayEnabled) + '\n';
   yaml += '      method: ' + yamlStr(pathwayMethod) + '\n';
-  yaml += '      databases: ["GO", "KEGG"]\n';
+  yaml += '      databases: ["GO", "KEGG", "Reactome"]\n';
   yaml += '      gmt_file: ' + customGmt + '\n';
   yaml += '      min_size: 10\n      max_size: 500\n';
   yaml += '      gsea_ranking: ' + yamlStr(gseaRanking) + '\n';
   yaml += '      pathway_volcano: ' + yamlBool(pathwayVolcano) + '\n';
+  yaml += '      cluster_threshold: 0.7\n';
+
+  yaml += '\n    domain_analysis:\n';
+  yaml += '      enabled: true\n';
 
   yaml += '\n    ppi:\n';
   yaml += '      enabled: ' + yamlBool(checked('prot_ppi')) + '\n';
@@ -2520,6 +2577,26 @@ function generateMultiomicsYaml() {
   yaml += '\n    enrichment:\n      run_enrichment: true\n      multigsea:\n        run_multigsea: true\n';
   yaml += '\n    consensus:\n      compare_methods: true\n';
 
+  // Organism & global
+  var org = v('organism') || 'human';
+  var omicsLayers = [];
+  if (v('mo_rna_path'))   omicsLayers.push('"rna"');
+  if (v('mo_prot_path'))  omicsLayers.push('"proteomics"');
+  if (v('mo_metab_path')) omicsLayers.push('"metabolomics"');
+  if (v('mo_lipid_path')) omicsLayers.push('"lipidomics"');
+  if (omicsLayers.length === 0) omicsLayers = ['"rna"', '"proteomics"'];
+  yaml += '\nglobal:\n';
+  yaml += '  organism: ' + yamlStr(org) + '\n';
+  yaml += '  omics_present: [' + omicsLayers.join(', ') + ']\n';
+
+  // Commentary
+  var commentaryOn = checked('commentary_enabled');
+  yaml += '\n  commentary:\n';
+  yaml += '    enabled: ' + commentaryOn + '\n';
+  if (commentaryOn) {
+    yaml += '    backend: ' + yamlStr(v('commentary_backend') || 'claude') + '\n';
+  }
+
   yaml += '\nparams:\n  seed: 1\n';
   return yaml;
 }
@@ -2567,6 +2644,22 @@ function getComboYamls() {
   if (document.getElementById('combo_metab').checked) { yamls.push(generateMetaboYaml()); labels.push('Metabolomics'); }
   if (document.getElementById('combo_lipid').checked) { yamls.push(generateLipidYaml()); labels.push('Lipidomics'); }
   return { yamls: yamls, label: labels.join(' + ') };
+}
+
+function validateForm() {
+  var errors = [];
+  var name = v('project_name');
+  if (!name || !name.trim()) errors.push('Project name is required');
+  if (currentMode !== 'multi' && currentMode !== 'combination') {
+    var prefix = currentMode === 'proteomics' ? 'prot' : (currentMode === 'metabolomics' ? 'metab' : (currentMode === 'lipidomics' ? 'lipid' : 'rna'));
+    var groupCol = v(prefix + '_group_col');
+    if (!groupCol) errors.push('Group column is not selected — upload metadata first');
+  }
+  if (errors.length > 0) {
+    alert('Please fix before generating:\n\n- ' + errors.join('\n- '));
+    return false;
+  }
+  return true;
 }
 
 function getCurrentYaml() {
@@ -2645,6 +2738,7 @@ function getAutoContrastsCSV_prot() {
 // Download (browser-only, always works)
 // ============================================================
 function downloadYAML() {
+  if (!validateForm()) return;
   var yaml = getCurrentYaml();
   var filename = getConfigFilename();
   var blob = new Blob([yaml], { type: 'text/yaml' });
@@ -2791,6 +2885,305 @@ function toggleTheme() {
 })();
 
 // ============================================================
+// Pipeline Flowchart
+// ============================================================
+
+/**
+ * Pipeline DAG definitions per mode.
+ * Each node: { id, label, icon, cat (core|qc|stat|output), after:[parentIds],
+ *              optional:true/false, toggleId: formCheckboxId to sync with }
+ * "after" defines parent edges. Nodes with same depth are laid out in columns.
+ */
+var pipelineDefs = {
+
+  rna: [
+    { id:'raw',       label:'Raw counts',         icon:'\uD83D\uDCC4', cat:'core',   after:[] },
+    { id:'filter',    label:'Gene filtering',      icon:'\uD83D\uDD0D', cat:'core',   after:['raw'] },
+    { id:'norm',      label:'Normalization',       icon:'\u2696',       cat:'core',   after:['filter'] },
+    { id:'pca',       label:'PCA',                 icon:'\uD83D\uDCC8', cat:'qc',     after:['norm'] },
+    { id:'de',        label:'Differential expr.',   icon:'\uD83E\uDDEA', cat:'stat',   after:['norm'] },
+    { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
+    { id:'pathway',   label:'Pathway analysis',    icon:'\uD83D\uDEE4', cat:'stat',   after:['de'],   optional:true, toggleId:'rna_pathway', checkFn:function(){ return v('rna_pathway') !== 'none'; } },
+    { id:'cluster',   label:'Clustering',          icon:'\uD83E\uDDE9', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_clustering' },
+    { id:'batch',     label:'Batch correction',    icon:'\uD83D\uDD27', cat:'core',   after:['norm'], optional:true, toggleId:'rna_batch_corr' },
+    { id:'deconv',    label:'Deconvolution',       icon:'\uD83E\uDDEC', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_deconv' },
+    { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
+    { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
+  ],
+
+  proteomics: [
+    { id:'raw',       label:'Raw intensities',     icon:'\uD83D\uDCC4', cat:'core',   after:[] },
+    { id:'contam',    label:'Remove contaminants', icon:'\uD83D\uDEAB', cat:'core',   after:['raw'],  optional:true, toggleId:'prot_remove_contaminants' },
+    { id:'filt',      label:'Filter missing',      icon:'\uD83D\uDD0D', cat:'core',   after:['contam'] },
+    { id:'norm',      label:'Normalization',       icon:'\u2696',       cat:'core',   after:['filt'] },
+    { id:'imp',       label:'Imputation',          icon:'\uD83E\uDDF1', cat:'core',   after:['norm'] },
+    { id:'pca',       label:'PCA',                 icon:'\uD83D\uDCC8', cat:'qc',     after:['imp'] },
+    { id:'corr',      label:'Correlation heatmap', icon:'\uD83D\uDFE6', cat:'qc',     after:['imp'],  optional:true, toggleId:'report_show_correlation' },
+    { id:'dist',      label:'Distance heatmap',    icon:'\uD83D\uDFE9', cat:'qc',     after:['imp'],  optional:true, toggleId:'report_show_distance' },
+    { id:'density',   label:'Density plot',        icon:'\uD83C\uDF0A', cat:'qc',     after:['imp'],  optional:true, toggleId:'report_show_density' },
+    { id:'impqc',     label:'Imputation QC',       icon:'\u2705',       cat:'qc',     after:['imp'],  optional:true, toggleId:'report_show_imputation_qc' },
+    { id:'de',        label:'Differential expr.',   icon:'\uD83E\uDDEA', cat:'stat',   after:['imp'] },
+    { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
+    { id:'heatmap',   label:'Expr. heatmap',       icon:'\uD83D\uDD25', cat:'output', after:['de'],   optional:true, toggleId:'report_show_expr_heatmap' },
+    { id:'venn',      label:'Venn diagram',        icon:'\u26AA',       cat:'qc',     after:['imp'],  optional:true, toggleId:'report_show_venn' },
+    { id:'gsea',      label:'Pathway / GSEA',      icon:'\uD83D\uDEE4', cat:'stat',   after:['de'],   optional:true, toggleId:'prot_pathway', checkFn:function(){ return v('prot_pathway') !== 'none'; } },
+    { id:'pvol',      label:'Pathway volcano',     icon:'\uD83C\uDF0B', cat:'output', after:['gsea'], optional:true, toggleId:'prot_pathway_volcano' },
+    { id:'cluster',   label:'Clustering',          icon:'\uD83E\uDDE9', cat:'stat',   after:['imp'],  optional:true, toggleId:'prot_clustering' },
+    { id:'ppi',       label:'PPI network',         icon:'\uD83D\uDD17', cat:'stat',   after:['de'],   optional:true, toggleId:'prot_ppi' },
+    { id:'advstat',   label:'Advanced stats',      icon:'\uD83D\uDCCA', cat:'stat',   after:['de'],   optional:true, toggleId:'prot_adv_stats' },
+    { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
+    { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
+  ],
+
+  metabolomics: [
+    { id:'raw',       label:'Raw data',            icon:'\uD83D\uDCC4', cat:'core',   after:[] },
+    { id:'norm',      label:'Normalization',       icon:'\u2696',       cat:'core',   after:['raw'] },
+    { id:'transform', label:'Transformation',      icon:'\uD83D\uDD04', cat:'core',   after:['norm'] },
+    { id:'scale',     label:'Scaling',             icon:'\uD83D\uDCCF', cat:'core',   after:['transform'], optional:true, checkFn:function(){ return v('metab_scaling') !== 'none'; } },
+    { id:'pca',       label:'PCA',                 icon:'\uD83D\uDCC8', cat:'qc',     after:['scale'] },
+    { id:'de',        label:'Differential expr.',   icon:'\uD83E\uDDEA', cat:'stat',   after:['scale'] },
+    { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
+    { id:'rf',        label:'Random Forest',       icon:'\uD83C\uDF32', cat:'stat',   after:['scale'], optional:true, toggleId:'metab_rf' },
+    { id:'plsda',     label:'PLS-DA',              icon:'\uD83C\uDFAF', cat:'stat',   after:['scale'], optional:true, toggleId:'metab_plsda' },
+    { id:'enrich',    label:'Pathway enrichment',  icon:'\uD83D\uDEE4', cat:'stat',   after:['de'],   optional:true, toggleId:'metab_enrichment' },
+    { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
+    { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
+  ],
+
+  lipidomics: [
+    { id:'raw',       label:'Raw data',            icon:'\uD83D\uDCC4', cat:'core',   after:[] },
+    { id:'norm',      label:'Normalization',       icon:'\u2696',       cat:'core',   after:['raw'] },
+    { id:'transform', label:'Transformation',      icon:'\uD83D\uDD04', cat:'core',   after:['norm'] },
+    { id:'scale',     label:'Scaling',             icon:'\uD83D\uDCCF', cat:'core',   after:['transform'], optional:true, checkFn:function(){ return v('lipid_scaling') !== 'none'; } },
+    { id:'pca',       label:'PCA',                 icon:'\uD83D\uDCC8', cat:'qc',     after:['scale'] },
+    { id:'de',        label:'Differential expr.',   icon:'\uD83E\uDDEA', cat:'stat',   after:['scale'] },
+    { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
+    { id:'rf',        label:'Random Forest',       icon:'\uD83C\uDF32', cat:'stat',   after:['scale'], optional:true, toggleId:'lipid_rf' },
+    { id:'plsda',     label:'PLS-DA',              icon:'\uD83C\uDFAF', cat:'stat',   after:['scale'], optional:true, toggleId:'lipid_plsda' },
+    { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
+    { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
+  ],
+
+  multi: [
+    { id:'layers',    label:'Omics layers',        icon:'\uD83D\uDCC2', cat:'core',   after:[] },
+    { id:'feat',      label:'Feature selection',   icon:'\uD83D\uDD0D', cat:'core',   after:['layers'] },
+    { id:'diablo',    label:'DIABLO',              icon:'\uD83D\uDD25', cat:'stat',   after:['feat'], optional:true, toggleId:'mo_diablo' },
+    { id:'snf',       label:'SNF clustering',      icon:'\uD83D\uDD17', cat:'stat',   after:['feat'], optional:true, toggleId:'mo_snf' },
+    { id:'mofa',      label:'MOFA2',               icon:'\uD83E\uDDE9', cat:'stat',   after:['feat'], optional:true, toggleId:'mo_mofa2' },
+    { id:'enrich',    label:'Enrichment',          icon:'\uD83D\uDEE4', cat:'stat',   after:['diablo','snf','mofa'] },
+    { id:'consensus', label:'Consensus',           icon:'\u2696',       cat:'output', after:['diablo','snf','mofa'] },
+    { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['enrich','consensus'] }
+  ]
+};
+
+// Track user overrides (nodes explicitly toggled from the flowchart)
+var pipeOverrides = {};
+
+function isNodeEnabled(node) {
+  // Explicit override from the flowchart takes priority
+  if (pipeOverrides[node.id] !== undefined) return pipeOverrides[node.id];
+  if (!node.optional) return true;
+  // Custom check function (e.g., select != 'none')
+  if (node.checkFn) return node.checkFn();
+  // Sync with form checkbox
+  if (node.toggleId) {
+    var el = document.getElementById(node.toggleId);
+    if (el) return el.checked;
+  }
+  return true;
+}
+
+function togglePipeNode(mode, nodeId) {
+  var defs = pipelineDefs[mode];
+  if (!defs) return;
+  var node = defs.find(function(n){ return n.id === nodeId; });
+  if (!node || !node.optional) return;
+
+  var wasEnabled = isNodeEnabled(node);
+  pipeOverrides[nodeId] = !wasEnabled;
+
+  // Sync back to the form checkbox
+  if (node.toggleId) {
+    var el = document.getElementById(node.toggleId);
+    if (el && el.type === 'checkbox') {
+      el.checked = !wasEnabled;
+      // Trigger dependent visibility
+      if (node.toggleId === 'metab_enrichment') toggleMetabEnrichment();
+      if (node.toggleId === 'prot_remove_contaminants') {}  // no conditional
+    }
+  }
+
+  buildPipelineMap();
+}
+
+/**
+ * Compute column (depth) for each node via BFS from roots.
+ * Returns { nodeId: depth }
+ */
+function computeDepths(nodes) {
+  var depths = {};
+  var byId = {};
+  nodes.forEach(function(n){ byId[n.id] = n; depths[n.id] = 0; });
+
+  // Topological pass — each node's depth = max(parent depths) + 1
+  var changed = true;
+  var safety = 0;
+  while (changed && safety < 50) {
+    changed = false;
+    safety++;
+    nodes.forEach(function(n) {
+      var parents = (n.after || []).filter(function(pid){ return byId[pid]; });
+      if (parents.length === 0) return;
+      var maxP = Math.max.apply(null, parents.map(function(pid){ return depths[pid]; }));
+      var want = maxP + 1;
+      if (want > depths[n.id]) { depths[n.id] = want; changed = true; }
+    });
+  }
+  return depths;
+}
+
+function buildPipelineMap() {
+  var canvas = document.getElementById('pipeline_canvas');
+  var container = document.getElementById('pipeline_map');
+  if (!canvas || !container) return;
+
+  var mode = currentMode;
+  // For combination mode, pick the first active sub-mode
+  if (mode === 'combination') {
+    if (checked('combo_prot')) mode = 'proteomics';
+    else if (checked('combo_rna')) mode = 'rna';
+    else if (checked('combo_metab')) mode = 'metabolomics';
+    else if (checked('combo_lipid')) mode = 'lipidomics';
+    else { container.classList.remove('visible'); return; }
+  }
+
+  var defs = pipelineDefs[mode];
+  if (!defs) { container.classList.remove('visible'); return; }
+
+  container.classList.add('visible');
+
+  // Filter: keep enabled nodes + always keep non-optional, but show disabled optional ones too
+  var activeIds = {};
+  defs.forEach(function(n){ activeIds[n.id] = true; });
+
+  // Compute depths
+  var depths = computeDepths(defs);
+  var maxDepth = Math.max.apply(null, defs.map(function(n){ return depths[n.id]; }));
+
+  // Group by depth
+  var columns = [];
+  for (var d = 0; d <= maxDepth; d++) columns.push([]);
+  defs.forEach(function(n){ columns[depths[n.id]].push(n); });
+
+  // Layout constants
+  var colWidth = 160;
+  var nodeH = 36;
+  var nodeGap = 10;
+  var padLeft = 20;
+  var padTop = 20;
+
+  // Compute positions
+  var positions = {};
+  columns.forEach(function(col, ci) {
+    var totalH = col.length * nodeH + (col.length - 1) * nodeGap;
+    var startY = padTop + (Math.max(5, columns.reduce(function(m,c){ return Math.max(m, c.length); }, 0)) * (nodeH + nodeGap) - totalH) / 2;
+    col.forEach(function(n, ri) {
+      positions[n.id] = {
+        x: padLeft + ci * colWidth,
+        y: startY + ri * (nodeH + nodeGap),
+        w: colWidth - 20,
+        h: nodeH
+      };
+    });
+  });
+
+  var totalW = padLeft * 2 + (maxDepth + 1) * colWidth;
+  var totalH = padTop * 2 + Math.max.apply(null, columns.map(function(c){ return c.length; })) * (nodeH + nodeGap);
+
+  // Build SVG arrows
+  var svgLines = '';
+  defs.forEach(function(n) {
+    var enabled = isNodeEnabled(n);
+    (n.after || []).forEach(function(pid) {
+      if (!positions[pid] || !positions[n.id]) return;
+      var parentEnabled = true;
+      var pNode = defs.find(function(d){ return d.id === pid; });
+      if (pNode) parentEnabled = isNodeEnabled(pNode);
+
+      var from = positions[pid];
+      var to = positions[n.id];
+      var x1 = from.x + from.w;
+      var y1 = from.y + from.h / 2;
+      var x2 = to.x;
+      var y2 = to.y + to.h / 2;
+      var cpx = (x1 + x2) / 2;
+      var opacity = (enabled && parentEnabled) ? 0.5 : 0.15;
+      var color = 'var(--text-dim)';
+      svgLines += '<path d="M' + x1 + ' ' + y1 + ' C' + cpx + ' ' + y1 + ' ' + cpx + ' ' + y2 + ' ' + x2 + ' ' + y2 + '" ' +
+        'stroke="' + color + '" stroke-width="1.5" fill="none" opacity="' + opacity + '" ' +
+        'marker-end="url(#arrowhead' + (enabled && parentEnabled ? '' : '-dim') + ')"/>';
+    });
+  });
+
+  var svg = '<svg class="pipe-svg" width="' + totalW + '" height="' + totalH + '" xmlns="http://www.w3.org/2000/svg">' +
+    '<defs>' +
+    '<marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">' +
+    '<polygon points="0 0, 8 3, 0 6" fill="var(--text-dim)" opacity="0.5"/></marker>' +
+    '<marker id="arrowhead-dim" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">' +
+    '<polygon points="0 0, 8 3, 0 6" fill="var(--text-dim)" opacity="0.15"/></marker>' +
+    '</defs>' + svgLines + '</svg>';
+
+  // Build node HTML
+  var nodesHtml = '';
+  defs.forEach(function(n) {
+    var pos = positions[n.id];
+    if (!pos) return;
+    var enabled = isNodeEnabled(n);
+    var cls = 'pipe-node ' + n.cat + (enabled ? '' : ' disabled');
+    var toggleBtn = '';
+    if (n.optional) {
+      var sym = enabled ? '\u00D7' : '\u002B';
+      toggleBtn = ' <button class="pipe-toggle" onclick="togglePipeNode(\'' + mode + '\',\'' + n.id + '\')" title="' +
+        (enabled ? 'Disable this step' : 'Enable this step') + '">' + sym + '</button>';
+    }
+    nodesHtml += '<div class="' + cls + '" style="position:absolute;left:' + pos.x + 'px;top:' + pos.y + 'px;width:' + pos.w + 'px;height:' + pos.h + 'px;">' +
+      '<span class="pipe-icon">' + n.icon + '</span>' +
+      '<span>' + n.label + '</span>' +
+      toggleBtn + '</div>';
+  });
+
+  canvas.innerHTML = svg + nodesHtml;
+  canvas.style.width = totalW + 'px';
+  canvas.style.height = totalH + 'px';
+}
+
+// ── Wire up live updates ──
+// Debounce helper
+var _pipeTimer = null;
+function schedulePipeUpdate() {
+  clearTimeout(_pipeTimer);
+  _pipeTimer = setTimeout(buildPipelineMap, 150);
+}
+
+// Listen to all form changes within the container
+document.querySelector('.container').addEventListener('change', schedulePipeUpdate);
+document.querySelector('.container').addEventListener('input', schedulePipeUpdate);
+
+// Also hook into setMode
+var _origSetMode = setMode;
+setMode = function(mode) {
+  pipeOverrides = {};
+  _origSetMode(mode);
+  buildPipelineMap();
+};
+
+var _origUpdateCombo = updateComboLayers;
+updateComboLayers = function() {
+  _origUpdateCombo();
+  buildPipelineMap();
+};
+
+// ============================================================
 // Init
 // ============================================================
 toggleImpParams();
@@ -2807,6 +3200,9 @@ if (!hasBackend) {
   document.getElementById('btn_save').style.display = 'none';
   document.getElementById('btn_run').style.display = 'none';
 }
+
+// Build initial pipeline map
+buildPipelineMap();
 </script>
 
 </body>

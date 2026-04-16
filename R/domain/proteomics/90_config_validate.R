@@ -98,6 +98,22 @@ validate_proteomics_config <- function(cfg) {
         }
     }
 
+    # 4c. Pathway databases validation
+    if (!is.null(cfg$pathway$databases)) {
+        valid_dbs <- c("all", "GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+        for (db in cfg$pathway$databases) {
+            if (!db %in% valid_dbs) {
+                warning("Unknown pathway database '", db, "'. Valid options: ",
+                        paste(valid_dbs, collapse = ", "))
+            }
+        }
+    }
+
+    # 4d. Domain analysis validation
+    if (!is.null(cfg$domain_analysis)) {
+        assert_scalar_bool(cfg$domain_analysis$enabled, "domain_analysis$enabled", allow_null = TRUE)
+    }
+
     # 5. PPI validation
     ppi <- cfg$ppi
     if (!is.null(ppi)) {

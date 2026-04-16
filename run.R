@@ -8,9 +8,26 @@
 #   Rscript run.R --config path.yaml # Run with existing config
 #   Rscript run.R                    # Re-run last config (with caching)
 #   Rscript run.R --fresh            # Full re-run (invalidate cache)
+#   Rscript run.R --help             # Show this help message
 #
 # In RStudio: source("run.R") runs interactively
 # =============================================================================
+
+# --- Dependency check --------------------------------------------------------
+
+check_dependencies <- function(mode = "cli") {
+  core_pkgs <- c("yaml", "jsonlite", "targets")
+  wizard_pkgs <- c("httpuv", "later")
+  pkgs <- if (mode == "wizard") c(core_pkgs, wizard_pkgs) else core_pkgs
+
+  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing) > 0) {
+    cat("\n  Missing required packages: ", paste(missing, collapse = ", "), "\n")
+    cat("  Install with:  renv::restore()  or  install.packages(c(",
+        paste0('"', missing, '"', collapse = ", "), "))\n\n")
+    stop("Missing dependencies. See above.", call. = FALSE)
+  }
+}
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -692,11 +709,19 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
 
   # Copy input files
+  if (is.null(counts_path)) {
+    cat("  ERROR: No valid counts file provided. Cannot set up project.\n")
+    return(invisible(NULL))
+  }
   counts_dest <- file.path("rna", basename(counts_path))
   file.copy(counts_path, file.path(project_dir, "data", tolower(project_name), counts_dest),
             overwrite = TRUE)
   cat(sprintf("  Copied counts -> data/%s/%s\n", tolower(project_name), counts_dest))
 
+  if (is.null(metadata_path)) {
+    cat("  ERROR: No valid metadata file provided. Cannot set up project.\n")
+    return(invisible(NULL))
+  }
   meta_dest <- file.path("rna", basename(metadata_path))
   file.copy(metadata_path, file.path(project_dir, "data", tolower(project_name), meta_dest),
             overwrite = TRUE)
@@ -908,14 +933,14 @@ params:
   # Inject technical_report block if extracted
   if (!is.null(tech_report_fields)) {
     escape_yaml <- function(s) gsub('"', '\\"', nna(s), fixed = TRUE)
-    tech_yaml <- sprintf(
-      '    technical_report:\n      facility: "%s"\n      library_prep: "%s"\n      sequencing: "%s"\n      upstream_bioinformatics: "%s"\n      upstream_de_note: "%s"\n      acknowledgment: "%s"\n',
-      escape_yaml(tech_report_fields$facility),
-      escape_yaml(tech_report_fields$library_prep),
-      escape_yaml(tech_report_fields$sequencing),
-      escape_yaml(tech_report_fields$upstream_bioinformatics),
-      escape_yaml(nna(tech_report_fields$upstream_de_note)),
-      escape_yaml(nna(tech_report_fields$acknowledgment))
+    tech_yaml <- paste0(
+      '    technical_report:\n',
+      '      facility: "', escape_yaml(tech_report_fields$facility), '"\n',
+      '      library_prep: "', escape_yaml(tech_report_fields$library_prep), '"\n',
+      '      sequencing: "', escape_yaml(tech_report_fields$sequencing), '"\n',
+      '      upstream_bioinformatics: "', escape_yaml(tech_report_fields$upstream_bioinformatics), '"\n',
+      '      upstream_de_note: "', escape_yaml(nna(tech_report_fields$upstream_de_note)), '"\n',
+      '      acknowledgment: "', escape_yaml(nna(tech_report_fields$acknowledgment)), '"\n'
     )
     config_yaml <- sub("    commentary:", paste0(tech_yaml, "\n    commentary:"), config_yaml)
   }
@@ -1628,14 +1653,14 @@ params:
   # Inject technical_report block if extracted
   if (!is.null(tech_report_fields)) {
     escape_yaml <- function(s) gsub('"', '\\"', nna(s), fixed = TRUE)
-    tech_yaml <- sprintf(
-      '    technical_report:\n      facility: "%s"\n      sample_prep: "%s"\n      ms_acquisition: "%s"\n      search_engine: "%s"\n      search_parameters: "%s"\n      acknowledgment: "%s"\n',
-      escape_yaml(nna(tech_report_fields$facility)),
-      escape_yaml(nna(tech_report_fields$sample_prep)),
-      escape_yaml(nna(tech_report_fields$ms_acquisition)),
-      escape_yaml(nna(tech_report_fields$search_engine)),
-      escape_yaml(nna(tech_report_fields$search_parameters)),
-      escape_yaml(nna(tech_report_fields$acknowledgment))
+    tech_yaml <- paste0(
+      '    technical_report:\n',
+      '      facility: "', escape_yaml(nna(tech_report_fields$facility)), '"\n',
+      '      sample_prep: "', escape_yaml(nna(tech_report_fields$sample_prep)), '"\n',
+      '      ms_acquisition: "', escape_yaml(nna(tech_report_fields$ms_acquisition)), '"\n',
+      '      search_engine: "', escape_yaml(nna(tech_report_fields$search_engine)), '"\n',
+      '      search_parameters: "', escape_yaml(nna(tech_report_fields$search_parameters)), '"\n',
+      '      acknowledgment: "', escape_yaml(nna(tech_report_fields$acknowledgment)), '"\n'
     )
     config_yaml <- sub("    commentary:", paste0(tech_yaml, "\n    commentary:"), config_yaml)
   }
@@ -1650,15 +1675,52 @@ params:
 
 wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
 
+  # Data input mode: single table vs multi-level directory
+  cat("\n--- [METAB] Input Mode ---\n")
+  cat("Compound Discoverer exports separate tables per identification level.\n")
+  cat("You can either provide a single (possibly pre-merged) table,\n")
+  cat("or point to a folder containing one file per level.\n\n")
+  input_mode_idx <- ask_choice("How is your data organized?",
+    c("Single table (one file, possibly pre-merged levels)",
+      "Multi-level folder (one file per level, pipeline merges them)"),
+    default = 1)
+  is_multi_level <- (input_mode_idx == 2)
+
   # Data files
   cat("\n--- [METAB] Data Files ---\n")
   cat("Provide ABSOLUTE paths to your input files.\n\n")
 
-  data_path <- ask("Path to metabolomics data file (CD export or processed table, CSV/TSV/XLSX)")
-  data_path <- validate_file(data_path, "Metabolomics data file")
-  if (is.null(data_path)) {
-    data_path <- ask("Please re-enter the metabolomics data file path")
+  data_path <- NULL
+  data_dir_path <- NULL
+  level_pattern <- "\\.xlsx$"
+
+  if (is_multi_level) {
+    data_dir_path <- ask("Path to folder containing level files (one file per level)")
+    if (!dir.exists(data_dir_path)) {
+      cat(sprintf("  WARNING: Directory not found: %s\n", data_dir_path))
+      data_dir_path <- ask("Please re-enter the folder path")
+    }
+    if (dir.exists(data_dir_path)) {
+      data_dir_path <- normalizePath(data_dir_path)
+      level_files <- list.files(data_dir_path, pattern = level_pattern)
+      # Exclude Excel temp/lock files (~$...)
+      level_files <- level_files[!grepl("^~\\$", level_files)]
+      if (length(level_files) == 0) {
+        cat("  No .xlsx files found. Trying CSV/TSV...\n")
+        level_pattern <- "\\.(csv|tsv|txt)$"
+        level_files <- list.files(data_dir_path, pattern = level_pattern)
+        level_files <- level_files[!grepl("^~\\$", level_files)]
+      }
+      cat(sprintf("  Found %d level file(s): %s\n", length(level_files),
+                  paste(level_files, collapse = ", ")))
+    }
+  } else {
+    data_path <- ask("Path to metabolomics data file (CD export or processed table, CSV/TSV/XLSX)")
     data_path <- validate_file(data_path, "Metabolomics data file")
+    if (is.null(data_path)) {
+      data_path <- ask("Please re-enter the metabolomics data file path")
+      data_path <- validate_file(data_path, "Metabolomics data file")
+    }
   }
 
   metadata_path <- ask("Path to metadata file (sample info, CSV/TSV — or 'none')", "none")
@@ -1668,13 +1730,17 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     metadata_path <- validate_file(metadata_path, "Metadata file")
   }
 
-  # Input format
+  # Input format (for single file, or per-level file format in multi-level)
   cat("\n--- [METAB] Input Format ---\n")
+  if (is_multi_level) {
+    cat("Each level file in the folder will be parsed with the selected format.\n")
+  }
   format_idx <- ask_choice("What format is your data file?",
     c("Compound Discoverer raw export (Area: columns)",
       "Already-processed wide table (clean sample columns)"),
     default = 1)
-  input_format <- c("cd_raw", "processed_wide")[format_idx]
+  input_format <- if (is_multi_level) "multi_level" else c("cd_raw", "processed_wide")[format_idx]
+  level_file_format <- c("cd_raw", "processed_wide")[format_idx]
 
   # Column detection & mapping
   cat("\n--- [METAB] Column Detection ---\n")
@@ -1683,12 +1749,22 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   mz_col <- "m/z"
   rt_col <- "RT [min]"
 
-  if (!is.null(data_path)) {
-    data_cols <- detect_columns(data_path)
+  # For multi-level, use the first file in the directory for column detection
+  detect_path <- data_path
+  if (is_multi_level && !is.null(data_dir_path) && dir.exists(data_dir_path)) {
+    lf <- list.files(data_dir_path, pattern = level_pattern, full.names = TRUE)
+    if (length(lf) > 0) {
+      detect_path <- lf[1]
+      cat(sprintf("  (Using first level file for column detection: %s)\n", basename(detect_path)))
+    }
+  }
+
+  if (!is.null(detect_path)) {
+    data_cols <- detect_columns(detect_path)
     cat("Data file columns: ", paste(head(data_cols, 8), collapse = ", "),
         if (length(data_cols) > 8) "..." else "", "\n")
 
-    if (input_format == "processed_wide") {
+    if (level_file_format == "processed_wide") {
       cat("\nFor processed_wide format, specify the feature ID column.\n")
       feature_id_col <- ask("Feature ID column (or 'null' to construct from Name/mz/RT)", data_cols[1])
       if (tolower(feature_id_col) == "null") feature_id_col <- "null"
@@ -1717,8 +1793,23 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     generated_contrasts <- wizard_build_contrasts(metadata_path, group_col)
   }
 
-  # Normalization
+  # --- QC Review vs Full Analysis (ask early to skip unnecessary questions) ---
+  cat("\n--- [METAB] Run Mode ---\n")
+  cat("QC Review mode runs all normalizations (TSS, Median, PQN, EigenMS),\n")
+  cat("compares them, and produces a QC summary report. No DE or downstream.\n")
+  cat("Use this first to pick the best normalization, then re-run with Full Analysis.\n\n")
+  run_mode_idx <- ask_choice("Run mode:",
+    c("QC Review — compare normalizations, no DE (recommended first run)",
+      "Full Analysis — use selected normalization, run DE + everything"),
+    default = 1)
+  qc_only <- (run_mode_idx == 1)
+
+  # Normalization — always needed (QC compares methods, Full uses the chosen one)
   cat("\n--- [METAB] Normalization ---\n")
+  if (qc_only) {
+    cat("QC mode will compare multiple normalization methods automatically.\n")
+    cat("Pick a default normalization (used if you later switch to Full mode).\n\n")
+  }
   norm_idx <- ask_choice("Sample normalization method:",
     c("PQN — Probabilistic Quotient Normalization (recommended)",
       "Median centering",
@@ -1744,65 +1835,96 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     default = 1)
   scaling <- c("none", "auto", "pareto", "range")[scaling_idx]
 
-  # DE method & cutoffs
-  cat("\n--- [METAB] Differential Expression ---\n")
-  de_method_idx <- ask_choice("DE method:",
-    c("Limma — moderated t-test (recommended)",
-      "Welch t-test (unequal variance)",
-      "Student t-test (equal variance, MetaboAnalyst default)",
-      "Wilcoxon rank-sum test (non-parametric)"),
-    default = 1)
-  de_method <- c("limma", "t_test", "t_test_equal", "wilcoxon")[de_method_idx]
-
-  p_cutoff <- as.numeric(ask("Adjusted p-value cutoff", "0.05"))
-  fc_cutoff <- as.numeric(ask("Linear fold-change cutoff", "1.5"))
-
-  # Feature selection
-  cat("\n--- [METAB] Feature Selection ---\n")
-  run_rf <- ask_yn("Run Random Forest feature importance?", TRUE)
-  run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
-
-  # Enrichment
-  cat("\n--- [METAB] Pathway Enrichment ---\n")
-  run_enrichment <- ask_yn("Enable pathway enrichment analysis?", FALSE)
-  gmt_file <- "null"
-  if (run_enrichment) {
-    gmt_ans <- ask("Path to GMT file for pathway analysis (or 'none')", "none")
-    if (tolower(gmt_ans) != "none") {
-      gmt_path <- validate_file(gmt_ans, "GMT file")
-      if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
-    }
-  }
-
-  # AI Commentary
-  cat("\n--- [METAB] AI Commentary ---\n")
-  cat("Generate AI-powered interpretation for each figure in the report?\n")
-  commentary_idx <- ask_choice("Commentary backend:",
-    c("None (data-driven fallback only)",
-      "Claude Code (uses your subscription, no API key needed)",
-      "Claude API (requires ANTHROPIC_API_KEY)",
-      "OpenAI API (requires OPENAI_API_KEY)"),
-    default = 1)
-  commentary_backends <- c("none", "claude-code", "claude", "openai")
-  commentary_backend <- commentary_backends[commentary_idx]
-  commentary_enabled <- commentary_backend != "none"
-
-  # --- PowerPoint ---
-  generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
-
-  # --- QC Review vs Full Analysis ---
-  cat("\n--- [METAB] Run Mode ---\n")
-  cat("QC Review mode runs all normalizations (TSS, Median, PQN), compares them,\n")
-  cat("and produces a QC summary report. No DE or downstream analysis.\n")
-  cat("Use this first to pick the best normalization, then re-run in Full mode.\n\n")
-  run_mode_idx <- ask_choice("Run mode:",
-    c("QC Review — compare normalizations, no DE (recommended first run)",
-      "Full Analysis — use selected normalization, run DE + everything"),
-    default = 1)
-  qc_only <- (run_mode_idx == 1)
-
-  # For full mode, chosen_norm maps from the normalization selected above
   chosen_norm <- if (qc_only) "null" else sprintf('"%s"', sample_norm)
+
+  # --- Defaults for QC-only (skip downstream questions) ---
+  de_method <- "limma"
+  p_cutoff <- 0.05
+  fc_cutoff <- 1.5
+  run_rf <- FALSE
+  run_plsda <- FALSE
+  selected_organism <- "Homo sapiens"
+  kegg_org_code <- "hsa"
+  run_enrichment <- FALSE
+  gmt_file <- "null"
+  run_mummichog <- FALSE
+  commentary_enabled <- FALSE
+  commentary_backend <- "none"
+  generate_pptx <- FALSE
+
+  if (!qc_only) {
+    # DE method & cutoffs
+    cat("\n--- [METAB] Differential Expression ---\n")
+    de_method_idx <- ask_choice("DE method:",
+      c("Limma — moderated t-test (recommended)",
+        "Welch t-test (unequal variance)",
+        "Student t-test (equal variance, MetaboAnalyst default)",
+        "Wilcoxon rank-sum test (non-parametric)"),
+      default = 1)
+    de_method <- c("limma", "t_test", "t_test_equal", "wilcoxon")[de_method_idx]
+
+    p_cutoff <- as.numeric(ask("Adjusted p-value cutoff", "0.05"))
+    fc_cutoff <- as.numeric(ask("Linear fold-change cutoff", "1.5"))
+
+    # Feature selection
+    cat("\n--- [METAB] Feature Selection ---\n")
+    run_rf <- ask_yn("Run Random Forest feature importance?", TRUE)
+    run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
+
+    # Organism
+    cat("\n--- [METAB] Organism ---\n")
+    cat("Used for mummichog pathway analysis (KEGG organism-specific models).\n\n")
+    org_idx <- ask_choice("Which organism does your data come from?",
+      c("Human (Homo sapiens)",
+        "Mouse (Mus musculus)",
+        "Rat (Rattus norvegicus)",
+        "Zebrafish (Danio rerio)",
+        "C. elegans (Caenorhabditis elegans)",
+        "Other (type KEGG organism code, e.g. 'ame' for honey bee)"),
+      default = 1)
+
+    # Latin names -> KEGG organism codes for mummichog
+    kegg_codes <- c("hsa", "mmu", "rno", "dre", "cel", "other")
+    organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus",
+                        "Danio rerio", "Caenorhabditis elegans", "other")
+    selected_organism <- organism_names[org_idx]
+    kegg_org_code <- kegg_codes[org_idx]
+
+    if (kegg_org_code == "other") {
+      selected_organism <- ask("Organism name (e.g. 'Apis mellifera')")
+      kegg_org_code <- ask("KEGG organism code (e.g. 'ame' — see https://www.kegg.jp/kegg/catalog/org_list.html)")
+    }
+
+    # Enrichment
+    cat("\n--- [METAB] Pathway Enrichment ---\n")
+    run_enrichment <- ask_yn("Enable pathway enrichment analysis?", FALSE)
+    gmt_file <- "null"
+    run_mummichog <- FALSE
+    if (run_enrichment) {
+      gmt_ans <- ask("Path to GMT file for pathway analysis (or 'none')", "none")
+      if (tolower(gmt_ans) != "none") {
+        gmt_path <- validate_file(gmt_ans, "GMT file")
+        if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
+      }
+      run_mummichog <- ask_yn(sprintf("Enable mummichog pathway analysis? (uses KEGG %s model)", kegg_org_code), FALSE)
+    }
+
+    # AI Commentary
+    cat("\n--- [METAB] AI Commentary ---\n")
+    cat("Generate AI-powered interpretation for each figure in the report?\n")
+    commentary_idx <- ask_choice("Commentary backend:",
+      c("None (data-driven fallback only)",
+        "Claude Code (uses your subscription, no API key needed)",
+        "Claude API (requires ANTHROPIC_API_KEY)",
+        "OpenAI API (requires OPENAI_API_KEY)"),
+      default = 1)
+    commentary_backends <- c("none", "claude-code", "claude", "openai")
+    commentary_backend <- commentary_backends[commentary_idx]
+    commentary_enabled <- commentary_backend != "none"
+
+    # --- PowerPoint ---
+    generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
+  }
 
   # Copy data into project structure
   cat("\n--- [METAB] Setting Up Project ---\n")
@@ -1810,10 +1932,27 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   data_dir <- file.path(project_dir, "data", tolower(project_name), "metabolomics")
   dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
 
-  data_dest <- file.path("metabolomics", basename(data_path))
-  file.copy(data_path, file.path(project_dir, "data", tolower(project_name), data_dest),
-            overwrite = TRUE)
-  cat(sprintf("  Copied data file -> data/%s/%s\n", tolower(project_name), data_dest))
+  data_dest <- ""
+  data_dir_dest <- ""
+
+  if (is_multi_level) {
+    # Copy entire level folder into project
+    data_dir_dest <- file.path("metabolomics", "levels")
+    dest_levels <- file.path(project_dir, "data", tolower(project_name), data_dir_dest)
+    dir.create(dest_levels, recursive = TRUE, showWarnings = FALSE)
+    level_files <- list.files(data_dir_path, pattern = level_pattern, full.names = TRUE)
+    level_files <- level_files[!grepl("^~\\$", basename(level_files))]  # skip Excel temp files
+    for (lf in level_files) {
+      file.copy(lf, file.path(dest_levels, basename(lf)), overwrite = TRUE)
+    }
+    cat(sprintf("  Copied %d level files -> data/%s/%s/\n",
+                length(level_files), tolower(project_name), data_dir_dest))
+  } else {
+    data_dest <- file.path("metabolomics", basename(data_path))
+    file.copy(data_path, file.path(project_dir, "data", tolower(project_name), data_dest),
+              overwrite = TRUE)
+    cat(sprintf("  Copied data file -> data/%s/%s\n", tolower(project_name), data_dest))
+  }
 
   meta_dest <- ""
   if (!is.null(metadata_path)) {
@@ -1830,7 +1969,8 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     contrasts_yaml <- paste0("      contrasts:\n",
       paste(sprintf('        - "%s"', contrast_strings), collapse = "\n"), "\n")
   } else {
-    contrasts_yaml <- '      contrasts:\n        - "treated - control"\n'
+    contrasts_yaml <- ""  # let pipeline auto-generate from metadata groups
+    cat("  No contrasts defined. Pipeline will auto-generate all pairwise contrasts at runtime.\n")
   }
 
   # Generate config YAML
@@ -1839,6 +1979,44 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   dir.create(file.path(project_dir, "config"), showWarnings = FALSE)
 
   feature_id_yaml <- if (feature_id_col == "null") "null" else paste0('"', feature_id_col, '"')
+
+  # Build files section depending on input mode
+  if (is_multi_level) {
+    files_yaml <- sprintf('    files:\n      data_dir: "%s"\n      metadata: "%s"',
+                          data_dir_dest, meta_dest)
+    # Double backslashes for YAML: R string "\\.xlsx$" -> YAML needs "\\\\.xlsx$"
+    yaml_safe_pattern <- gsub("\\\\", "\\\\\\\\", level_pattern)
+    input_yaml <- sprintf('    input:\n      format: "multi_level"\n      level_pattern: "%s"\n      level_format: "%s"\n      sheet: null',
+                          yaml_safe_pattern, level_file_format)
+  } else {
+    files_yaml <- sprintf('    files:\n      data: "%s"\n      metadata: "%s"',
+                          data_dest, meta_dest)
+    input_yaml <- sprintf('    input:\n      format: "%s"\n      sheet: null',
+                          input_format)
+  }
+
+  # Build mummichog section
+  mummichog_yaml <- ""
+  if (run_mummichog) {
+    mummichog_yaml <- sprintf('
+      mummichog:
+        enabled: true
+        organisms:
+          - %s
+        p_cutoff: 0.05
+        tolerance_ppm: 10
+        n_permutations: 100
+        ionization_mode: null', kegg_org_code)
+  }
+
+  # Build preprocessing section (with relaxed thresholds for multi-level)
+  if (is_multi_level) {
+    preproc_yaml <- sprintf(
+      '    preprocessing:\n      chosen_norm: %s\n      feat_missing_threshold: 0.80\n      sample_missing_threshold: 0.99',
+      chosen_norm)
+  } else {
+    preproc_yaml <- sprintf('    preprocessing:\n      chosen_norm: %s', chosen_norm)
+  }
 
   config_yaml <- sprintf('# Auto-generated by run.R wizard
 # Project: %s
@@ -1857,16 +2035,11 @@ paths:
 modes:
   metabolomics:
 
-    preprocessing:
-      chosen_norm: %s
+%s
 
-    input:
-      format: "%s"
-      sheet: null
+%s
 
-    files:
-      data: "%s"
-      metadata: "%s"
+%s
 
     parsing:
       cd_area_prefix: "Area:"
@@ -1878,6 +2051,8 @@ modes:
       mz_col: "%s"
       rt_col: "%s"
       annotation_cols: null
+
+    organism: "%s"
 
     normalization:
       input_already_normalized: %s
@@ -1930,7 +2105,7 @@ modes:
       run_enrichment: %s
       libraries: []
       gmt_file: %s
-      mapping_file: null
+      mapping_file: null%s
 
     commentary:
       enabled: %s
@@ -1947,10 +2122,11 @@ params:
 ',
     project_name, Sys.Date(), project_dir, project_name, round, analyst,
     tolower(project_name), tolower(project_name),
-    chosen_norm,
-    input_format,
-    data_dest, meta_dest,
+    preproc_yaml,
+    input_yaml,
+    files_yaml,
     feature_id_yaml, name_col, mz_col, rt_col,
+    selected_organism,
     tolower(sample_norm == "none"),
     sample_norm, transform, scaling,
     sample_col, group_col,
@@ -1959,7 +2135,7 @@ params:
     p_cutoff, p_cutoff, fc_cutoff,
     tolower(run_rf),
     tolower(run_plsda),
-    tolower(run_enrichment), gmt_file,
+    tolower(run_enrichment), gmt_file, mummichog_yaml,
     tolower(commentary_enabled), commentary_backend,
     tolower(generate_pptx)
   )
@@ -2142,7 +2318,8 @@ wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
     contrasts_yaml <- paste0("      contrasts:\n",
       paste(sprintf('        - "%s"', contrast_strings), collapse = "\n"), "\n")
   } else {
-    contrasts_yaml <- '      contrasts:\n        - "treated - control"\n'
+    contrasts_yaml <- ""  # let pipeline auto-generate from metadata groups
+    cat("  No contrasts defined. Pipeline will auto-generate all pairwise contrasts at runtime.\n")
   }
 
   # Generate config YAML
@@ -2276,16 +2453,28 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
     cat("Leave blank to skip a layer (at least 2 required).\n\n")
 
     rna_cfg <- ask("RNA-seq config YAML path (or blank to skip)", "")
-    if (nzchar(rna_cfg)) layer_configs$rna <- normalizePath(rna_cfg, mustWork = TRUE)
+    if (nzchar(rna_cfg)) {
+      rna_cfg <- validate_file(rna_cfg, "RNA-seq config")
+      if (!is.null(rna_cfg)) layer_configs$rna <- rna_cfg
+    }
 
     prot_cfg <- ask("Proteomics config YAML path (or blank to skip)", "")
-    if (nzchar(prot_cfg)) layer_configs$proteomics <- normalizePath(prot_cfg, mustWork = TRUE)
+    if (nzchar(prot_cfg)) {
+      prot_cfg <- validate_file(prot_cfg, "Proteomics config")
+      if (!is.null(prot_cfg)) layer_configs$proteomics <- prot_cfg
+    }
 
     metab_cfg <- ask("Metabolomics config YAML path (or blank to skip)", "")
-    if (nzchar(metab_cfg)) layer_configs$metabolomics <- normalizePath(metab_cfg, mustWork = TRUE)
+    if (nzchar(metab_cfg)) {
+      metab_cfg <- validate_file(metab_cfg, "Metabolomics config")
+      if (!is.null(metab_cfg)) layer_configs$metabolomics <- metab_cfg
+    }
 
     lipid_cfg <- ask("Lipidomics config YAML path (or blank to skip)", "")
-    if (nzchar(lipid_cfg)) layer_configs$lipidomics <- normalizePath(lipid_cfg, mustWork = TRUE)
+    if (nzchar(lipid_cfg)) {
+      lipid_cfg <- validate_file(lipid_cfg, "Lipidomics config")
+      if (!is.null(lipid_cfg)) layer_configs$lipidomics <- lipid_cfg
+    }
 
     if (length(layer_configs) < 2) {
       stop("Multi-omics integration requires at least 2 omics layers. Got: ",
@@ -2574,7 +2763,15 @@ run_pipeline <- function(config_path, fresh = FALSE) {
   config_path <- normalizePath(config_path, mustWork = TRUE)
   cat(sprintf("\n  Config: %s\n", config_path))
 
-  # Set environment variable for _targets.R
+  # Copy config to project root config.yaml so _targets.R always finds it.
+  # This avoids callr subprocess env-var propagation issues.
+  cfg_tmp <- yaml::read_yaml(config_path)
+  proj_dir <- cfg_tmp$project$dir %||% getwd()
+  root_config <- file.path(proj_dir, "config.yaml")
+  if (normalizePath(config_path) != normalizePath(root_config, mustWork = FALSE)) {
+    file.copy(config_path, root_config, overwrite = TRUE)
+    cat(sprintf("  Linked config -> %s\n", root_config))
+  }
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
 
   if (fresh) {
@@ -2705,13 +2902,24 @@ main <- function() {
   args <- commandArgs(trailingOnly = TRUE)
   project_dir <- getwd()
 
+  if ("--help" %in% args || "-h" %in% args) {
+    cli_header()
+    cat("Usage:\n")
+    cat("  Rscript run.R --wizard           # Open HTML wizard in browser (GUI)\n")
+    cat("  Rscript run.R --new              # Interactive wizard for new project (CLI)\n")
+    cat("  Rscript run.R --config path.yaml # Run with existing config\n")
+    cat("  Rscript run.R                    # Re-run last config (with caching)\n")
+    cat("  Rscript run.R --fresh            # Full re-run (invalidate cache)\n")
+    cat("  Rscript run.R --help             # Show this help message\n\n")
+    return(invisible())
+  }
+
   if ("--wizard" %in% args) {
+    check_dependencies("wizard")
+
     # Serve HTML wizard via httpuv with API backend
     wizard_path <- file.path(project_dir, "wizard.html")
     if (!file.exists(wizard_path)) stop("wizard.html not found in ", project_dir)
-
-    if (!requireNamespace("httpuv", quietly = TRUE))
-      stop("httpuv package required for --wizard. Install with: renv::install('httpuv')")
 
     cli_header()
     cat("--- Config Wizard (browser) ---\n\n")
@@ -2802,8 +3010,9 @@ main <- function() {
                         body = '{"error":"No file uploaded"}'))
           }
 
-          # Save file
-          sub_dir <- file.path(project_dir, "data", tolower(proj_name), mode)
+          # Save file — sanitize project name to match YAML path generation
+          proj_name_safe <- gsub("[^a-zA-Z0-9_-]", "", tolower(proj_name))
+          sub_dir <- file.path(project_dir, "data", proj_name_safe, mode)
           dir.create(sub_dir, recursive = TRUE, showWarnings = FALSE)
           dest <- file.path(sub_dir, file_part$filename)
           writeLines(file_part$data, dest)
@@ -2928,6 +3137,7 @@ main <- function() {
     return(invisible(NULL))
 
   } else if ("--new" %in% args) {
+    check_dependencies("cli")
     # Interactive wizard
     config_path <- wizard_new_project(project_dir)
     cat("\n")
@@ -2992,6 +3202,10 @@ main <- function() {
           cat(sprintf("  %d) %s\n", i, basename(configs[i])))
         }
         idx <- as.integer(ask("Choose config", "1"))
+        if (is.na(idx) || idx < 1 || idx > length(configs)) {
+          cat("  Invalid selection. Using config 1.\n")
+          idx <- 1
+        }
         run_pipeline(configs[idx])
 
       } else if (choice == 3) {

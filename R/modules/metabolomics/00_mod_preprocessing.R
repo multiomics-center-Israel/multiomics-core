@@ -13,6 +13,41 @@
 #   R/core/06_plots.R                      (qc_missingness_heatmap via 08_qc.R)
 
 
+#' Detect QC pool sample names from metadata
+#'
+#' Looks for samples where is_QC == TRUE/1/"yes", or Group/sample_type contains
+#' "Pool"/"QC", or sample name starts with "Pool".
+#'
+#' @param meta     Metadata data.frame.
+#' @param cfg_mode metabolomics mode config.
+#' @return Character vector of pool sample names (may be empty).
+.detect_pool_samples <- function(meta, cfg_mode) {
+    sample_col <- cfg_mode$effects$samples %||% "sample_id"
+    ids <- as.character(meta[[sample_col]])
+
+    # Check is_QC column
+    if ("is_QC" %in% colnames(meta)) {
+        qc_flag <- meta$is_QC
+        is_pool <- !is.na(qc_flag) & (qc_flag %in% c(TRUE, 1, "1", "yes", "Yes", "TRUE"))
+        if (any(is_pool)) return(ids[is_pool])
+    }
+
+    # Check group/condition column for "Pool" or "QC"
+    group_col <- cfg_mode$effects$color %||% cfg_mode$de$condition_column
+    if (!is.null(group_col) && group_col %in% colnames(meta)) {
+        grp <- as.character(meta[[group_col]])
+        is_pool <- grepl("(?i)^(pool|qc)", grp)
+        if (any(is_pool)) return(ids[is_pool])
+    }
+
+    # Fallback: sample names starting with "Pool"
+    is_pool <- grepl("(?i)^pool", ids)
+    if (any(is_pool)) return(ids[is_pool])
+
+    character(0)
+}
+
+
 # ==============================================================================
 # mod_met_raw — load, parse, apply sample filter, align metadata
 # ==============================================================================
@@ -86,13 +121,25 @@ mod_met_raw <- function(inp, config) {
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
 
   # Apply optional sample filter (QC/blank exclusion)
+  # If exclude_after_norm is true, only remove blanks now; QC/named samples
+  # are kept for normalization and removed later (in met_corrected).
   rules <- get_sample_filter_rules_metab(cfg)
+  exclude_after_norm <- isTRUE(cfg$sample_filter$exclude_after_norm)
   if (!is.null(rules)) {
-    keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
+    if (exclude_after_norm) {
+      # Phase 1: only exclude blanks; keep QC/pool for normalization
+      blanks_only_rules <- rules
+      blanks_only_rules$exclude_qc <- FALSE
+      blanks_only_rules$exclude_samples <- NULL
+      keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, blanks_only_rules, sample_col)
+    } else {
+      keep_ids <- apply_sample_filter_metab(colnames(expr_raw), meta, rules, sample_col)
+    }
     if (length(keep_ids) < ncol(expr_raw)) {
       message(sprintf(
-        "mod_met_raw: sample filter removed %d sample(s); retaining %d.",
-        ncol(expr_raw) - length(keep_ids), length(keep_ids)
+        "mod_met_raw: sample filter removed %d sample(s); retaining %d.%s",
+        ncol(expr_raw) - length(keep_ids), length(keep_ids),
+        if (exclude_after_norm) " (QC/pools kept for normalization)" else ""
       ))
       expr_raw <- expr_raw[, keep_ids, drop = FALSE]
       meta     <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
@@ -171,6 +218,10 @@ mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
 
   qc_missingness_heatmap(raw$expr_raw, miss_stats$stats_df, out_file)
 
+  # Return file path if plot was saved, otherwise create a placeholder
+  if (!file.exists(out_file)) {
+    writeLines("No missingness heatmap generated (insufficient variation).", out_file)
+  }
   out_file
 }
 
@@ -230,13 +281,32 @@ mod_met_imputed <- function(filtered, config) {
   knn_k    <- as.integer(pre_cfg$knn_k  %||% 10L)
   epsilon  <- pre_cfg$epsilon %||% 1e-8
 
+  mat_in <- filtered$mat
+
+  # Optional: convert zeros to half-minimum per feature before imputation
+  # This replicates the approach used by NOREVA / Ifat Abramovich
+  zero_handling <- tolower(pre_cfg$zero_handling %||% "keep")
+  if (zero_handling == "halfmin") {
+    n_zeros <- sum(mat_in == 0, na.rm = TRUE)
+    if (n_zeros > 0) {
+      mat_in[mat_in == 0] <- NA
+      for (i in seq_len(nrow(mat_in))) {
+        na_mask <- is.na(mat_in[i, ])
+        if (any(na_mask) && !all(na_mask)) {
+          mat_in[i, na_mask] <- min(mat_in[i, !na_mask], na.rm = TRUE) / 2
+        }
+      }
+      message(sprintf("mod_met_imputed: converted %d zeros to half-minimum values.", n_zeros))
+    }
+  }
+
   miss_stats_filt <- classify_missingness(
-    filtered$mat,
+    mat_in,
     mnar_cor_threshold = -abs(mnar_thr)
   )
 
   result <- impute_metabolomics(
-    mat        = filtered$mat,
+    mat        = mat_in,
     miss_stats = miss_stats_filt,
     knn_k      = knn_k,
     epsilon    = epsilon
@@ -355,7 +425,8 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 #'
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               logged, meta, out_dir, config,
-                              norm_eigenms = NULL) {
+                              norm_eigenms = NULL,
+                              norm_eigenms_forced = NULL) {
   cfg_mode <- config$modes$metabolomics
   pre_cfg  <- cfg_mode$preprocessing %||% list()
   norm_cfg <- cfg_mode$normalization  %||% list()
@@ -363,13 +434,41 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   chosen_norm <- tolower(pre_cfg$chosen_norm)
 
   chosen_mat <- switch(chosen_norm,
-    tss     = norm_tss$mat,
-    median  = norm_median$mat,
-    pqn     = norm_pqn$mat,
-    eigenms = if (!is.null(norm_eigenms)) norm_eigenms$mat else stop("EigenMS target not available"),
+    tss            = norm_tss$mat,
+    median         = norm_median$mat,
+    pqn            = norm_pqn$mat,
+    eigenms        = if (!is.null(norm_eigenms)) norm_eigenms$mat else stop("EigenMS target not available"),
+    eigenms_forced = if (!is.null(norm_eigenms_forced)) norm_eigenms_forced$mat else stop("EigenMS_forced target not available"),
     stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
-                 "Valid options: tss, median, pqn, eigenms.", chosen_norm))
+                 "Valid options: tss, median, pqn, eigenms, eigenms_forced.", chosen_norm))
   )
+
+  # Apply scaling if configured
+  scaling_method <- tolower(norm_cfg$scaling %||% "none")
+  if (scaling_method != "none") {
+    message(sprintf("mod_met_corrected: applying '%s' scaling", scaling_method))
+    chosen_mat <- scale_metab(chosen_mat, method = scaling_method)
+  }
+
+  # Phase 2 of sample filter: remove QC/pool samples AFTER normalization
+  # (only when exclude_after_norm = true)
+  if (isTRUE(cfg_mode$sample_filter$exclude_after_norm)) {
+    rules <- get_sample_filter_rules_metab(cfg_mode)
+    if (!is.null(rules)) {
+      sample_col <- cfg_mode$effects$samples %||% "sample_id"
+      all_ids <- colnames(chosen_mat)
+      keep_ids <- apply_sample_filter_metab(all_ids, meta, rules, sample_col)
+      if (length(keep_ids) < length(all_ids)) {
+        removed <- setdiff(all_ids, keep_ids)
+        message(sprintf(
+          "mod_met_corrected: post-normalization filter removed %d sample(s): %s",
+          length(removed), paste(removed, collapse = ", ")
+        ))
+        chosen_mat <- chosen_mat[, keep_ids, drop = FALSE]
+        meta <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
+      }
+    }
+  }
 
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)
   final_mat    <- drift_result$mat
@@ -400,7 +499,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   norm_info <- list(
     sample_norm   = chosen_norm,
     transform     = norm_cfg$transform %||% "log2",
-    scaling       = "none",
+    scaling       = scaling_method,
     chosen_norm   = chosen_norm,
     drift_applied = drift_result$applied
   )
@@ -435,9 +534,37 @@ mod_met_normalize_linear <- function(data, method, config) {
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
 
+  # PQN reference samples: use config$normalization$pqn_reference to specify
+  # which sample(s) to use as the reference spectrum (e.g. a QC pool).
+  # Options: a sample name, "pools" (auto-detect from is_QC/Pool columns),
+  #          "median_pool" (middle pool by injection order), or null (default: all).
+  pqn_ref <- norm_cfg$pqn_reference %||% NULL
+  ref_samples <- NULL
+  if (method == "pqn" && !is.null(pqn_ref)) {
+    if (tolower(pqn_ref) == "pools") {
+      # Auto-detect pool samples from metadata
+      ref_samples <- .detect_pool_samples(data$meta, config$modes$metabolomics)
+      if (length(ref_samples) > 0) {
+        message(sprintf("norm_pqn: using %d pool sample(s) as reference: %s",
+                        length(ref_samples), paste(ref_samples, collapse = ", ")))
+      }
+    } else if (tolower(pqn_ref) == "median_pool") {
+      pools <- .detect_pool_samples(data$meta, config$modes$metabolomics)
+      if (length(pools) > 0) {
+        # Pick the middle pool (by position in metadata / injection order)
+        mid_idx <- ceiling(length(pools) / 2)
+        ref_samples <- pools[mid_idx]
+        message(sprintf("norm_pqn: using median pool '%s' as single reference", ref_samples))
+      }
+    } else {
+      # Treat as explicit sample name(s)
+      ref_samples <- unlist(strsplit(as.character(pqn_ref), ",\\s*"))
+    }
+  }
+
   mat_norm <- switch(method,
     tss = norm_total_sum(data$mat),
-    pqn = norm_pqn(data$mat),
+    pqn = norm_pqn(data$mat, ref_samples = ref_samples),
     stop(
       "mod_met_normalize_linear: 'method' must be \"tss\" or \"pqn\"; got \"",
       method, "\".  Use mod_met_normalize_log() for median normalization."
@@ -480,12 +607,60 @@ mod_met_normalize_eigenms <- function(data, config) {
   }
 
   mat_norm <- norm_eigenms(data$mat, groups = groups)
+  eigenms_info <- attr(mat_norm, "eigenms_info")
   mat_log  <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
 
   list(
-    mat      = mat_log,
-    meta     = data$meta,
-    row_data = data$row_data
+    mat          = mat_log,
+    meta         = data$meta,
+    row_data     = data$row_data,
+    eigenms_info = eigenms_info
+  )
+}
+
+
+# ==============================================================================
+# mod_met_normalize_eigenms_forced — Forced EigenMS (NOREVA-style)
+# ==============================================================================
+
+#' Apply forced EigenMS normalization then log2 transformation
+#'
+#' Forces removal of eigentrends without statistical significance testing.
+#' This replicates the NOREVA/Ifat Abramovich approach.
+#'
+#' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
+#' @param config Full pipeline config list.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+mod_met_normalize_eigenms_forced <- function(data, config) {
+  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  pseudocount <- norm_cfg$pseudocount %||% 1
+
+  cfg_mode  <- config$modes$metabolomics
+  group_col <- cfg_mode$effects$color %||% cfg_mode$de$condition_column %||% "sample_type"
+  groups <- if (!is.null(data$meta) && group_col %in% colnames(data$meta)) {
+    as.character(data$meta[[group_col]])
+  } else {
+    NULL
+  }
+
+  # Forced EigenMS operates on log2 scale (like Ifat's pipeline)
+  pre_cfg <- config$modes$metabolomics$preprocessing %||% list()
+  n_forced <- pre_cfg$n_eigentrends_forced
+  # If user specified an explicit count, convert to fraction of samples
+  pct <- if (!is.null(n_forced) && is.numeric(n_forced)) {
+    n_forced / ncol(data$mat)
+  } else {
+    0.2  # default: 20% of samples
+  }
+  mat_log  <- transform_metab(data$mat, method = "log2", pseudocount = pseudocount)
+  mat_norm <- norm_eigenms_forced(mat_log, groups = groups, pct_eigentrends = pct)
+  eigenms_info <- attr(mat_norm, "eigenms_info")
+
+  list(
+    mat          = mat_norm,
+    meta         = data$meta,
+    row_data     = data$row_data,
+    eigenms_info = eigenms_info
   )
 }
 

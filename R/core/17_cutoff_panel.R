@@ -162,7 +162,11 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   }
 
   // --- Classify a point ---
-  function classify(logFC, pval, lfcCut, pCut) {
+  // When passFlag is available (imputation-consensus pipelines), a point must
+  // also have passFlag===1 to be called significant.  This keeps the
+  // interactive counts consistent with pipeline results at default thresholds.
+  function classify(logFC, pval, lfcCut, pCut, passFlag) {
+    if (passFlag !== undefined && passFlag !== null && passFlag !== 1) return "NS";
     if (pval !== null && !isNaN(pval) && pval <= pCut &&
         Math.abs(logFC) >= lfcCut) {
       return logFC > 0 ? "Up" : "Down";
@@ -195,7 +199,8 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
       var lfc_i = data.logFC[i];
       if (lfc_i === null || isNaN(lfc_i)) continue;
       var pval_i = getPval(data, i);
-      var dir = classify(lfc_i, pval_i, currentLfc, currentPval);
+      var pf_i = (data.passFlag && data.passFlag[i] !== undefined) ? data.passFlag[i] : undefined;
+      var dir = classify(lfc_i, pval_i, currentLfc, currentPval, pf_i);
       groups[dir].push(i);
     }
 
@@ -309,15 +314,16 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
     for (var plotId in window.__cutoffPlots) {
       var reg = window.__cutoffPlots[plotId];
       var counts = rebuildPlot(plotId);
-      totalUp   += counts.up;
-      totalDown += counts.down;
 
       var cname = reg.contrast || "";
       if (cname) {
         if (!contrastCounts[cname]) contrastCounts[cname] = { up: 0, down: 0 };
+        // Only count volcano plots to avoid double-counting (MA has same data)
         if (reg.plotType === "volcano") {
           contrastCounts[cname].up   += counts.up;
           contrastCounts[cname].down += counts.down;
+          totalUp   += counts.up;
+          totalDown += counts.down;
         }
       }
     }
@@ -417,6 +423,17 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
     js_adjPval <- jsonlite::toJSON(as.numeric(df$adjPval), auto_unbox = FALSE, na = "null")
   }
 
+  # Optional imputation-consensus pass flag (proteomics: pass.imputs column).
+  # When present, the cutoff panel ANDs this flag with the slider thresholds
+  # so that interactive counts stay consistent with pipeline results.
+  js_passFlag <- "null"
+  if ("passFlag" %in% names(df)) {
+    # Convert to 1/0/null for JS
+    pf <- df$passFlag
+    pf_num <- ifelse(is.na(pf), NA_real_, ifelse(pf == 1 | pf == TRUE, 1, 0))
+    js_passFlag <- jsonlite::toJSON(as.numeric(pf_num), auto_unbox = FALSE, na = "null")
+  }
+
   js_ycap <- if (is.null(ycap)) "null" else as.character(ycap)
 
   sprintf('
@@ -434,13 +451,14 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
       pval: %s,
       avgExpr: %s,
       avgExprLabel: %s,
-      adjPval: %s
+      adjPval: %s,
+      passFlag: %s
     }
   };
 })();
 </script>',
     plot_id, plot_type, entity_label, contrast, js_ycap,
-    js_name, js_logFC, js_pval, js_avgExpr, js_avgExprLabel, js_adjPval)
+    js_name, js_logFC, js_pval, js_avgExpr, js_avgExprLabel, js_adjPval, js_passFlag)
 }
 
 

@@ -427,21 +427,55 @@ plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
         if (length(feat_ids) == 0) next
 
         # Resolve to original names if map is available
+        # Strip view suffix first (MOFA appends _viewname for shared features)
+        stripped_ids <- sub("_(transcriptomics|proteomics|metabolomics)$", "", feat_ids)
         display_names <- if (!is.null(feature_name_map)) {
+            # Try both full and stripped IDs
             mapped <- feature_name_map[feat_ids]
-            # MOFA may append _viewname suffix for duplicates; try stripping it
             still_na <- is.na(mapped)
             if (any(still_na)) {
-                stripped <- sub("_(transcriptomics|proteomics|metabolomics)$", "", feat_ids[still_na])
-                mapped[still_na] <- feature_name_map[stripped]
+                mapped[still_na] <- feature_name_map[stripped_ids[still_na]]
             }
-            ifelse(is.na(mapped), feat_ids, mapped)
+            ifelse(is.na(mapped), stripped_ids, mapped)
         } else {
-            feat_ids
+            stripped_ids
         }
 
         # Guard against NA/empty display names
         display_names[is.na(display_names) | display_names == ""] <- feat_ids[is.na(display_names) | display_names == ""]
+
+        # For transcriptomics: ensure GL IDs are shown (not KAE protein IDs)
+        if (grepl("transcriptomics", view_name, ignore.case = TRUE)) {
+            # Strip suffix and look up feature_id from the name map's original keys
+            stripped_ids <- sub("_(transcriptomics|proteomics|metabolomics)$", "", feat_ids)
+            # If display shows KAE (protein IDs), try to resolve to GL IDs
+            is_protein_id <- grepl("^KAE", display_names)
+            if (any(is_protein_id) && !is.null(feature_name_map)) {
+                # The feature_name_map maps GENE_xxx to display names
+                # For transcriptomics, we want feature_id (GL IDs) from rowData
+                # Just use stripped_ids as fallback (GENE_xxx without suffix)
+                display_names[is_protein_id] <- stripped_ids[is_protein_id]
+            }
+            # Also fix any remaining GENE_xxx
+            still_generic <- grepl("^GENE_\\d+$", display_names)
+            if (any(still_generic)) {
+                display_names[still_generic] <- stripped_ids[still_generic]
+            }
+        }
+
+        # For any view: strip GENE_xxx_viewname suffix
+        still_generic <- grepl("^GENE_\\d+_", display_names)
+        if (any(still_generic)) {
+            display_names[still_generic] <- sub("_(transcriptomics|proteomics|metabolomics)$", "",
+                                                 display_names[still_generic])
+        }
+
+        # Truncate long metabolite names to first 25 chars
+        long_names <- nchar(display_names) > 25
+        if (any(long_names)) {
+            display_names[long_names] <- paste0(substr(display_names[long_names], 1, 22), "...")
+        }
+
         # Make unique to avoid factor() issues with duplicates
         display_names <- make.unique(display_names, sep = " ")
 

@@ -52,6 +52,24 @@ tryCatch({
 
 # Helper function for downloadable DT tables
 make_dt <- function(df, caption = NULL, pageLength = 15) {
+    # Format p-value/padj columns to scientific notation
+    pval_cols <- grep("^(pval|padj|p\\.val|adj\\.p\\.val|p_value|p\\.adjust|fdr|pvalue)$",
+                      colnames(df), ignore.case = TRUE)
+    for (col_idx in pval_cols) {
+        vals <- df[[col_idx]]
+        if (is.numeric(vals)) {
+            df[[col_idx]] <- ifelse(is.na(vals), NA_character_,
+                                     ifelse(vals < 0.001, sprintf("%.2e", vals),
+                                            sprintf("%.4f", vals)))
+        }
+    }
+
+    # Round other numeric columns to 3 decimal places
+    num_cols <- setdiff(which(vapply(df, is.numeric, logical(1))), pval_cols)
+    for (col_idx in num_cols) {
+        df[[col_idx]] <- round(df[[col_idx]], 3)
+    }
+
     DT::datatable(
         df,
         caption = caption,
@@ -180,6 +198,17 @@ cfg <- yaml::read_yaml(config_path)
 prot_cfg <- cfg$modes$proteomics
 report_cfg <- prot_cfg$report %||% list()  # new report-level parameters
 
+# Resolve project.dir to absolute path (handles "." which is relative to repo root, not Rmd location)
+proj_dir_resolved <- cfg$project$dir
+if (is.null(proj_dir_resolved) || proj_dir_resolved == "." || proj_dir_resolved == "") {
+    candidate <- normalizePath(run_dir, mustWork = FALSE)
+    for (.i in 1:6) {
+        if (dir.exists(file.path(candidate, "R")) && dir.exists(file.path(candidate, "config"))) break
+        candidate <- dirname(candidate)
+    }
+    proj_dir_resolved <- candidate
+}
+
 # QC plot visibility flags (all default TRUE except distance heatmap)
 show_pca      <- report_cfg$show_pca %||% TRUE
 show_density  <- report_cfg$show_density %||% TRUE
@@ -219,22 +248,27 @@ intro_bg    <- report_cfg$introduction_background %||% ""
 intro_aim   <- report_cfg$introduction_aim %||% ""
 user_notes  <- cfg$project$user_notes %||% ""
 
-has_intro <- any(nzchar(trimws(c(intro_text, intro_bg, intro_aim, user_notes))))
+# Project summary HTML (generated from technical report / user notes)
+summary_file <- file.path(prot_dir, "project_summary.html")
+has_summary_file <- file.exists(summary_file)
+
+has_intro <- any(nzchar(trimws(c(intro_text, intro_bg, intro_aim, user_notes)))) || has_summary_file
 
 if (has_intro) {
     cat("# Introduction\n\n")
 
-    # Main intro text (or legacy user_notes)
-    body_text <- if (nzchar(trimws(intro_text))) intro_text else user_notes
-    if (nzchar(trimws(body_text))) {
-        summary_file <- file.path(run_dir, "proteomics", "project_summary.html")
-        if (file.exists(summary_file)) {
-            cat(paste(readLines(summary_file, warn = FALSE), collapse = "\n"))
-        } else {
+    # Project summary (from technical report / AI blend) takes priority
+    if (has_summary_file) {
+        cat(paste(readLines(summary_file, warn = FALSE), collapse = "\n"))
+        cat("\n\n")
+    } else {
+        # Fallback: render user_notes or intro text as styled block
+        body_text <- if (nzchar(trimws(intro_text))) intro_text else user_notes
+        if (nzchar(trimws(body_text))) {
             notes_html <- gsub("\n", "<br>\n", htmltools::htmlEscape(trimws(body_text)))
             cat(sprintf("<div style='background:#f8f9fa; border-left:4px solid #4a90d9; padding:16px 20px; border-radius:6px; margin-bottom:20px; font-size:14px; line-height:1.7; color:#333;'>%s</div>\n", notes_html))
+            cat("\n")
         }
-        cat("\n")
     }
 
     if (nzchar(trimws(intro_bg))) {
@@ -253,7 +287,7 @@ if (has_intro) {
 design_file <- report_cfg$experimental_design_file %||% ""
 has_design_file <- nzchar(trimws(design_file))
 
-meta_file_ed <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
+meta_file_ed <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 has_meta_ed <- file.exists(meta_file_ed)
 
 if (has_design_file || has_meta_ed) {
@@ -301,7 +335,7 @@ make_dt(proj, "Analysis Parameters")
 ## Experimental Design
 
 ```{r params-design}
-meta_file <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
+meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
     meta <- read.csv(meta_file, stringsAsFactors = FALSE)
     group_col <- prot_cfg$effects$color %||% "Condition"
@@ -348,7 +382,7 @@ make_dt(settings, "Pipeline Settings")
 ## Contrasts
 
 ```{r params-contrasts}
-contrasts_file <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$contrasts)
+contrasts_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$contrasts)
 if (file.exists(contrasts_file)) {
     contrasts <- read.csv(contrasts_file, stringsAsFactors = FALSE)
     make_dt(contrasts, "Contrasts")
@@ -365,7 +399,7 @@ if (file.exists(contrasts_file)) {
 tech <- prot_cfg$technical_report
 
 meta_ts <- tryCatch(
-    read.csv(file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata),
+    read.csv(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata),
              stringsAsFactors = FALSE),
     error = function(e) NULL
 )
@@ -465,15 +499,24 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
     cat("<div style='margin: 12px 0;'>\n")
     cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
     for (cn in contrast_names) {
-        padj_col <- paste0("padj.imputs.", cn)
+        pass_col <- paste0("pass.imputs.", cn)
         lfc_col <- paste0("linearFC.imputs.", cn)
-        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+        padj_col <- paste0("padj.imputs.", cn)
+        n_up <- n_down <- NULL
+        if (pass_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            is_sig <- !is.na(de_data[[pass_col]]) & de_data[[pass_col]] == 1
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            n_up <- sum(is_sig & lfc_vals > 0, na.rm = TRUE)
+            n_down <- sum(is_sig & lfc_vals < 0, na.rm = TRUE)
+        } else if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
             log2fc <- signed_fc_to_log2(lfc_vals)
             is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
+        }
+        if (!is.null(n_up)) {
             cat(sprintf("<li><strong>%s</strong>: %d DE proteins (%d up, %d down)</li>\n",
                         cn, n_up + n_down, n_up, n_down))
         }
@@ -720,7 +763,7 @@ if (!is.null(default_img_uri)) {
 </div>
 
 <script>
-var embeddedProtPcaImages = `r if (length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"`;
+var embeddedProtPcaImages = `r if (exists("pca_data_map") && length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"`;
 
 function updateProtPCAPlot(n_top) {
     var img = document.getElementById("pca_prot_image");
@@ -1036,7 +1079,7 @@ if (nzchar(trimws(full_results_link))) {
 
 Differential expression analysis identifies features with statistically significant abundance changes between experimental conditions. Results are corrected for multiple testing to control the false discovery rate.
 
-```{r de-summary}
+```{r de-summary, results='asis'}
 if (!is.null(de_data) && length(contrast_names) > 0) {
     padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
     lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
@@ -1045,20 +1088,32 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 
     de_counts_list <- list()
     for (cn in contrast_names) {
-        padj_col <- paste0("padj.imputs.", cn)
+        pass_col <- paste0("pass.imputs.", cn)
         lfc_col <- paste0("linearFC.imputs.", cn)
-        if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+        padj_col <- paste0("padj.imputs.", cn)
+
+        if (pass_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            # Imputation pipeline: use consensus pass column for consistency
+            # with executive summary (pass_any_contrast) and Excel exports
+            is_sig <- !is.na(de_data[[pass_col]]) & de_data[[pass_col]] == 1
+            lfc_vals <- as.numeric(de_data[[lfc_col]])
+            n_up <- sum(is_sig & lfc_vals > 0, na.rm = TRUE)
+            n_down <- sum(is_sig & lfc_vals < 0, na.rm = TRUE)
+        } else if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
+            # Non-imputation fallback: use padj + linearFC thresholds directly
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
             log2fc <- signed_fc_to_log2(lfc_vals)
             is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
-            de_counts_list[[cn]] <- data.frame(
-                Contrast = cn, Up = n_up, Down = n_down, Total = n_up + n_down,
-                stringsAsFactors = FALSE
-            )
+        } else {
+            next
         }
+        de_counts_list[[cn]] <- data.frame(
+            Contrast = cn, Up = n_up, Down = n_down, Total = sum(is_sig),
+            stringsAsFactors = FALSE
+        )
     }
 
     if (length(de_counts_list) > 0) {
@@ -1385,11 +1440,15 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
     # Include both raw p-value and adjusted p-value if available
     pval_col <- paste0("pvalue.imputs.", contrast)
     raw_pval <- if (pval_col %in% names(df)) as.numeric(df[[pval_col]]) else plot_df$padj
+    # Imputation-consensus pass flag — ensures interactive counts match pipeline
+    pass_col <- paste0("pass.imputs.", contrast)
+    pass_flag <- if (pass_col %in% names(df)) as.numeric(df[[pass_col]]) else NULL
     reg_df <- data.frame(name = as.character(plot_df$protein),
                          logFC = plot_df$logFC,
                          pval = raw_pval,
                          adjPval = plot_df$padj,
                          stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df)
 }
 ```
@@ -1583,7 +1642,17 @@ if (length(ma_files) > 0) {
 MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.
 
 ```{r ma-interactive-setup, include=FALSE}
-make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+# Load expression data from final_results.tsv for MA plot (has per-sample columns)
+ma_expr_df <- NULL
+ma_final_file <- file.path(datasets_dir, "final_results.tsv")
+if (file.exists(ma_final_file)) {
+    ma_expr_df <- tryCatch(
+        read.delim(ma_final_file, stringsAsFactors = FALSE, check.names = FALSE),
+        error = function(e) NULL
+    )
+}
+
+make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
     padj_col <- paste0("padj.imputs.", contrast)
     lfc_col <- paste0("linearFC.imputs.", contrast)
     if (!(padj_col %in% names(df)) || !(lfc_col %in% names(df))) return(NULL)
@@ -1591,14 +1660,35 @@ make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
     gene_col <- if ("Genes" %in% names(df)) "Genes" else if (id_col %in% names(df)) id_col else names(df)[1]
 
-    # Calculate baseMean from numeric non-stat columns
-    stat_patterns <- "^(padj|pvalue|linearFC|upDown|pass|FeatureID|Protein\\.Names|Genes|First\\.Protein)"
-    expr_cols <- names(df)[!grepl(stat_patterns, names(df))]
-    expr_cols <- expr_cols[sapply(df[expr_cols], is.numeric)]
+    # Get per-sample expression columns for baseMean calculation
+    # Use expr_df (final_results.tsv) if available, otherwise try df itself
+    src <- if (!is.null(expr_df) && id_col %in% names(expr_df)) expr_df else df
+
+    # Primary: match columns to metadata sample IDs (most reliable)
+    expr_cols <- character(0)
+    if (exists("meta_df_exp") && !is.null(meta_df_exp) && exists("sample_col_exp")) {
+        meta_ids <- as.character(meta_df_exp[[sample_col_exp]])
+        expr_cols <- intersect(meta_ids, names(src))
+    }
+    # Fallback: exclude known stat columns, keep numeric
+    if (length(expr_cols) == 0) {
+        stat_patterns <- "^(padj|pvalue|linearFC|linearRatio|upDown|pass|sum\\.pass|n_pass|manual_cutoffs|FeatureID|Protein\\.Names|Genes|First\\.Protein)"
+        expr_cols <- names(src)[!grepl(stat_patterns, names(src))]
+        expr_cols <- expr_cols[vapply(src[expr_cols], is.numeric, logical(1))]
+    }
 
     if (length(expr_cols) == 0) return(NULL)
-    baseMean <- rowMeans(as.matrix(df[, expr_cols, drop = FALSE]), na.rm = TRUE)
 
+    # If using expr_df, align rows to df by id_col
+    if (!identical(src, df) && id_col %in% names(src)) {
+        m <- match(df[[id_col]], src[[id_col]])
+        baseMean <- rowMeans(as.matrix(src[m, expr_cols, drop = FALSE]), na.rm = TRUE)
+    } else {
+        baseMean <- rowMeans(as.matrix(src[, expr_cols, drop = FALSE]), na.rm = TRUE)
+    }
+
+    # Expression values are already log2-transformed, so baseMean is the
+    # average log2 intensity — use directly as the A axis (no extra log)
     plot_df <- data.frame(
         protein = df[[gene_col]],
         logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
@@ -1607,34 +1697,37 @@ make_ma_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
         stringsAsFactors = FALSE
     )
     plot_df <- plot_df[!is.na(plot_df$baseMean) & plot_df$baseMean > 0, ]
-    plot_df$log10baseMean <- log10(plot_df$baseMean)
     plot_df$Direction <- ifelse(
         !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
         ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
     )
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
-    p <- ggplot(plot_df, aes(x = log10baseMean, y = logFC, color = Direction,
+    p <- ggplot(plot_df, aes(x = baseMean, y = logFC, color = Direction,
                               text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
-                                           "\nbaseMean: ", round(baseMean, 1),
+                                           "\nMean log2 intensity: ", round(baseMean, 2),
                                            "\npadj: ", signif(padj, 3)))) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
         geom_hline(yintercept = 0, color = "black", linewidth = 0.3) +
-        labs(title = title, x = "log10(Mean Intensity)", y = "log2 Fold Change") +
+        labs(title = title, x = "Mean log2 Intensity", y = "log2 Fold Change") +
         theme_minimal()
     widget <- ggplotly(p, tooltip = "text")
     pval_col <- paste0("pvalue.imputs.", contrast)
     raw_pval <- if (pval_col %in% names(df)) as.numeric(df[[pval_col]]) else plot_df$padj
-    # Match raw_pval to filtered plot_df rows
-    raw_pval_filt <- raw_pval[!is.na(baseMean) & baseMean > 0]
+    # Match raw_pval and pass flag to filtered plot_df rows
+    keep_mask <- !is.na(baseMean) & baseMean > 0
+    raw_pval_filt <- raw_pval[keep_mask]
+    pass_col <- paste0("pass.imputs.", contrast)
+    pass_flag <- if (pass_col %in% names(df)) as.numeric(df[[pass_col]])[keep_mask] else NULL
     reg_df <- data.frame(name = as.character(plot_df$protein),
                          logFC = plot_df$logFC,
                          pval = raw_pval_filt,
                          adjPval = plot_df$padj,
-                         avgExpr = plot_df$log10baseMean,
+                         avgExpr = plot_df$baseMean,
                          stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df)
 }
 ```
@@ -1648,7 +1741,7 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 
         cat(sprintf("\n#### %s\n\n", contrast_clean))
 
-        ma_res <- make_ma_plotly_prot(de_data, cn, prot_cfg$de$p_cutoff %||% 0.05,
+        ma_res <- make_ma_plotly_prot(de_data, ma_expr_df, cn, prot_cfg$de$p_cutoff %||% 0.05,
                                   log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
         if (!is.null(ma_res)) {
             p <- ma_res$widget
@@ -1696,7 +1789,7 @@ explorer_ready <- FALSE
 explorer_json_str <- "{}"
 
 # Load expression data: use final_results.tsv which has per-sample columns + annotations
-meta_file_exp <- file.path(cfg$project$dir, cfg$paths$raw, prot_cfg$files$metadata)
+meta_file_exp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
@@ -1776,7 +1869,7 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
         groups = sample_groups_exp,
         expr = expr_matrix_list
     )
-    explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = FALSE)
+    explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = TRUE)
     explorer_ready <- TRUE
 }
 ```
@@ -2014,6 +2107,362 @@ document.addEventListener("click", function(e) {
 
 ```{r protein-explorer-fallback, eval=!explorer_ready, results='asis'}
 cat("*Protein expression explorer not available. Normalized expression matrix not found.*\n")
+```
+
+## Peptide Expression Explorer
+
+The peptide explorer allows you to search for a protein and view the expression of its individual peptides across experimental groups. This provides insight into peptide-level variability, potential isoform-specific effects, and data quality at the peptide level.
+
+```{r peptide-explorer-data, include=FALSE}
+peptide_ready <- FALSE
+peptide_json_str <- "{}"
+
+# Load peptide data if available in config
+peptide_file_path <- NULL
+if (!is.null(prot_cfg$files$peptides) && nzchar(prot_cfg$files$peptides)) {
+    peptide_file_path <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$peptides)
+    if (!file.exists(peptide_file_path)) peptide_file_path <- NULL
+}
+
+# Also check for peptide file in datasets directory
+if (is.null(peptide_file_path)) {
+    pep_candidates <- list.files(datasets_dir, pattern = "peptide", full.names = TRUE, ignore.case = TRUE)
+    if (length(pep_candidates) > 0) peptide_file_path <- pep_candidates[1]
+}
+
+peptide_df <- NULL
+if (!is.null(peptide_file_path) && file.exists(peptide_file_path)) {
+    peptide_df <- tryCatch({
+        if (grepl("\\.tsv$|\\.tab$|\\.txt$", peptide_file_path, ignore.case = TRUE)) {
+            read.delim(peptide_file_path, stringsAsFactors = FALSE, check.names = FALSE)
+        } else {
+            read.csv(peptide_file_path, stringsAsFactors = FALSE, check.names = FALSE)
+        }
+    }, error = function(e) NULL)
+}
+
+if (!is.null(peptide_df) && !is.null(meta_df_exp) && nrow(peptide_df) > 0) {
+    # Auto-detect protein ID column in peptide data
+    pep_protein_col <- NULL
+    for (cand in c("Protein.Group", "Protein.Ids", "Protein.ID", "Protein",
+                    "Leading.razor.protein", "Master.Protein.Accessions",
+                    "ProteinID", "Protein.Accession")) {
+        if (cand %in% colnames(peptide_df)) { pep_protein_col <- cand; break }
+    }
+
+    # Auto-detect peptide sequence column
+    pep_seq_col <- NULL
+    for (cand in c("Stripped.Sequence", "Peptide.Sequence", "Sequence",
+                    "Modified.Sequence", "Annotated.Sequence", "Peptide")) {
+        if (cand %in% colnames(peptide_df)) { pep_seq_col <- cand; break }
+    }
+
+    if (!is.null(pep_protein_col) && !is.null(pep_seq_col)) {
+        meta_sample_ids_pep <- as.character(meta_df_exp[[sample_col_exp]])
+        pep_expr_cols <- intersect(meta_sample_ids_pep, colnames(peptide_df))
+
+        # DIA-NN raw path column mapping: extract numeric prefix from raw file paths
+        # e.g., "D:\...\Seq93724_DIA_480Ex2.raw" -> match "93724" to "93724_prot-OXY-1A"
+        if (length(pep_expr_cols) == 0) {
+            raw_path_cols <- grep("\\.(raw|mzML|d)$", colnames(peptide_df),
+                                   value = TRUE, ignore.case = TRUE)
+            if (length(raw_path_cols) > 0) {
+                # Extract numeric ID from raw file name (handles both original
+                # backslash paths and R-mangled dot paths like D..DIANN.projects...)
+                # Strategy: find the last Seq/seq prefix followed by digits, or
+                # extract the first 4+ digit number after the last separator
+                raw_nums <- vapply(raw_path_cols, function(col) {
+                    # Try Seq<digits> pattern first
+                    m <- regmatches(col, regexpr("[Ss]eq(\\d{4,})", col))
+                    if (length(m) > 0) return(sub("[Ss]eq", "", m[1]))
+                    # Fallback: last 4+ digit group in the string
+                    digits <- regmatches(col, gregexpr("\\d{4,}", col))[[1]]
+                    if (length(digits) > 0) return(digits[length(digits)])
+                    return(col)  # no match
+                }, character(1))
+                meta_nums <- sub("^(\\d+).*$", "\\1", meta_sample_ids_pep)
+                # Build mapping: raw_path_col -> metadata SampleID
+                pep_col_map <- setNames(character(length(raw_path_cols)), raw_path_cols)
+                for (i in seq_along(raw_nums)) {
+                    match_idx <- which(meta_nums == raw_nums[i])
+                    if (length(match_idx) == 1) {
+                        pep_col_map[raw_path_cols[i]] <- meta_sample_ids_pep[match_idx]
+                    }
+                }
+                mapped_cols <- pep_col_map[nzchar(pep_col_map)]
+                if (length(mapped_cols) >= 2) {
+                    # Rename columns in peptide_df
+                    col_idx <- match(names(mapped_cols), colnames(peptide_df))
+                    colnames(peptide_df)[col_idx] <- unname(mapped_cols)
+                    pep_expr_cols <- unname(mapped_cols)
+                    message("Peptide Explorer: mapped ", length(mapped_cols),
+                            " DIA-NN raw columns to sample IDs")
+                }
+            }
+        }
+
+        if (length(pep_expr_cols) >= 2) {
+            # Build sample -> group mapping
+            if (sample_col_exp %in% names(meta_df_exp) && group_col_exp %in% names(meta_df_exp)) {
+                pep_group_map <- setNames(as.character(meta_df_exp[[group_col_exp]]),
+                                           meta_df_exp[[sample_col_exp]])
+                pep_sample_groups <- as.character(pep_group_map[pep_expr_cols])
+                pep_sample_groups[is.na(pep_sample_groups)] <- "Unknown"
+            } else {
+                pep_sample_groups <- rep("All", length(pep_expr_cols))
+            }
+
+            # Build protein -> peptide mapping
+            proteins_with_peptides <- unique(peptide_df[[pep_protein_col]])
+            # Take first protein in group (handle semicolon-separated)
+            peptide_df$.prot_first <- vapply(peptide_df[[pep_protein_col]], function(x) {
+                trimws(strsplit(as.character(x), ";")[[1]][1])
+            }, character(1))
+
+            # Map protein IDs to display names (gene symbols)
+            pep_protein_display <- unique(peptide_df$.prot_first)
+            if (!is.null(de_data) && "Genes" %in% names(de_data)) {
+                id_col_pep <- prot_cfg$de_table$id_col %||% "FeatureID"
+                if (id_col_pep %in% names(de_data)) {
+                    gene_map_pep <- setNames(de_data$Genes, de_data[[id_col_pep]])
+                    mapped_pep <- gene_map_pep[pep_protein_display]
+                    has_map_pep <- !is.na(mapped_pep) & nzchar(mapped_pep)
+                    pep_display_map <- setNames(pep_protein_display, pep_protein_display)
+                    pep_display_map[has_map_pep] <- paste0(mapped_pep[has_map_pep],
+                                                            " (", pep_protein_display[has_map_pep], ")")
+                } else {
+                    pep_display_map <- setNames(pep_protein_display, pep_protein_display)
+                }
+            } else {
+                pep_display_map <- setNames(pep_protein_display, pep_protein_display)
+            }
+
+            # Aggregate precursors to peptide level (mean intensity per protein+sequence)
+            peptide_df$.display <- unname(pep_display_map[peptide_df$.prot_first])
+            na_display <- is.na(peptide_df$.display)
+            peptide_df$.display[na_display] <- peptide_df$.prot_first[na_display]
+
+            agg_key <- paste(peptide_df$.display, peptide_df[[pep_seq_col]], sep = "|||")
+            agg_expr <- aggregate(
+                peptide_df[, pep_expr_cols, drop = FALSE],
+                by = list(.key = agg_key),
+                FUN = function(x) mean(x, na.rm = TRUE)
+            )
+            agg_parts <- strsplit(agg_expr$.key, "\\|\\|\\|")
+            agg_protein <- vapply(agg_parts, `[`, character(1), 1)
+            agg_sequence <- vapply(agg_parts, `[`, character(1), 2)
+
+            # Log2-transform raw intensities for display (peptide data from
+            # DIA-NN pr_matrix is raw unnormalized intensity, not log2)
+            for (ec in pep_expr_cols) {
+                v <- agg_expr[[ec]]
+                agg_expr[[ec]] <- ifelse(is.na(v) | v <= 0, NA_real_, log2(v))
+            }
+
+            # Build JSON
+            pep_entries <- lapply(seq_len(nrow(agg_expr)), function(i) {
+                list(
+                    protein = agg_protein[i],
+                    sequence = agg_sequence[i],
+                    expr = round(as.numeric(agg_expr[i, pep_expr_cols]), 3)
+                )
+            })
+
+            peptide_explorer_data <- list(
+                proteins = sort(unique(agg_protein)),
+                peptides = pep_entries,
+                samples = pep_expr_cols,
+                groups = pep_sample_groups
+            )
+
+            peptide_json_str <- jsonlite::toJSON(peptide_explorer_data, auto_unbox = TRUE)
+            peptide_ready <- TRUE
+        }
+    }
+}
+```
+
+```{r peptide-explorer-ui, eval=peptide_ready, results='asis'}
+cat('
+<div style="margin: 15px 0 20px 0;">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+<label for="pep_protein_input" style="font-weight: bold; white-space: nowrap;">Search protein:</label>
+<div style="position: relative; flex: 1; max-width: 400px;">
+<input type="text" id="pep_protein_input" placeholder="Start typing a protein name..."
+  autocomplete="off"
+  style="padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; width: 100%; font-size: 14px; box-sizing: border-box;"
+  oninput="pepAutocomplete(this)" onkeydown="pepAutoKey(event)">
+<div id="pep_ac" style="position: absolute; top: 100%; left: 0; width: 100%; max-height: 220px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 6px 6px; z-index: 1000; display: none; box-shadow: 0 4px 8px rgba(0,0,0,0.12);"></div>
+</div>
+<button onclick="showPeptides()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Show Peptides</button>
+<button onclick="clearPeptidePlot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear</button>
+</div>
+<div id="pep_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
+</div>
+<div id="pep_container" style="width: 100%; min-height: 500px; margin-bottom: 10px;"></div>
+<div id="pep_export_bar" style="display: none; margin-bottom: 20px; gap: 8px; align-items: center;">
+  <span style="font-size: 0.85em; color: #555; margin-right: 4px;">Export:</span>
+  <button onclick="exportPepPlot(\'svg\')" style="padding: 5px 14px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">SVG</button>
+  <button onclick="exportPepPlot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
+</div>
+')
+```
+
+```{r peptide-explorer-js, eval=peptide_ready, results='asis'}
+cat('<script>\nvar pepData = ')
+cat(peptide_json_str)
+cat(';\n')
+cat(sprintf('var pepGroupLabel = "%s";\n', group_col_exp))
+cat('
+var pepAcIndex = -1;
+
+function pepAutocomplete(el) {
+    var acDiv = document.getElementById("pep_ac");
+    var val = el.value.trim().toLowerCase();
+    acDiv.innerHTML = ""; pepAcIndex = -1;
+    if (val.length < 1) { acDiv.style.display = "none"; return; }
+    var matches = [];
+    for (var i = 0; i < pepData.proteins.length; i++) {
+        if (pepData.proteins[i].toLowerCase().indexOf(val) !== -1) {
+            matches.push(pepData.proteins[i]);
+            if (matches.length >= 20) break;
+        }
+    }
+    if (matches.length === 0) { acDiv.style.display = "none"; return; }
+    matches.forEach(function(m) {
+        var item = document.createElement("div");
+        item.textContent = m;
+        item.style.cssText = "padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0;";
+        item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+        item.onmouseleave = function() { this.style.background = "white"; };
+        item.onclick = function() { document.getElementById("pep_protein_input").value = m; acDiv.style.display = "none"; showPeptides(); };
+        acDiv.appendChild(item);
+    });
+    acDiv.style.display = "block";
+}
+
+function pepAutoKey(e) {
+    var acDiv = document.getElementById("pep_ac");
+    var items = acDiv.children;
+    if (items.length === 0) { if (e.key === "Enter") showPeptides(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); pepAcIndex = Math.min(pepAcIndex + 1, items.length - 1); for (var i = 0; i < items.length; i++) items[i].style.background = i === pepAcIndex ? "#e9ecef" : "white"; }
+    else if (e.key === "ArrowUp") { e.preventDefault(); pepAcIndex = Math.max(pepAcIndex - 1, 0); for (var i = 0; i < items.length; i++) items[i].style.background = i === pepAcIndex ? "#e9ecef" : "white"; }
+    else if (e.key === "Enter") { e.preventDefault(); if (pepAcIndex >= 0) items[pepAcIndex].click(); else showPeptides(); }
+}
+
+function showPeptides() {
+    var input = document.getElementById("pep_protein_input");
+    var val = input.value.trim();
+    if (!val) return;
+    var valLower = val.toLowerCase();
+
+    // Find matching protein
+    var protName = null;
+    for (var i = 0; i < pepData.proteins.length; i++) {
+        if (pepData.proteins[i].toLowerCase() === valLower) { protName = pepData.proteins[i]; break; }
+    }
+    if (!protName) {
+        for (var i = 0; i < pepData.proteins.length; i++) {
+            if (pepData.proteins[i].toLowerCase().indexOf(valLower) !== -1) { protName = pepData.proteins[i]; break; }
+        }
+    }
+    if (!protName) { document.getElementById("pep_info").textContent = "Protein not found: " + val; return; }
+
+    document.getElementById("pep_ac").style.display = "none";
+
+    // Collect peptides for this protein
+    var peptides = [];
+    for (var i = 0; i < pepData.peptides.length; i++) {
+        if (pepData.peptides[i].protein === protName) {
+            peptides.push(pepData.peptides[i]);
+        }
+    }
+
+    if (peptides.length === 0) {
+        document.getElementById("pep_info").textContent = "No peptides found for: " + protName;
+        return;
+    }
+
+    var groups = pepData.groups;
+    var samples = pepData.samples;
+    var uniqueGroups = [];
+    groups.forEach(function(g) { if (uniqueGroups.indexOf(g) === -1) uniqueGroups.push(g); });
+    var colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"];
+
+    var traces = [];
+    uniqueGroups.forEach(function(g, gi) {
+        var xVals = [], yVals = [], sampleTexts = [];
+        peptides.forEach(function(pep) {
+            var seq = pep.sequence.length > 20 ? pep.sequence.substring(0, 17) + "..." : pep.sequence;
+            for (var i = 0; i < pep.expr.length; i++) {
+                if (groups[i] === g && pep.expr[i] !== null && !isNaN(pep.expr[i])) {
+                    xVals.push(seq);
+                    yVals.push(pep.expr[i]);
+                    sampleTexts.push(samples[i] + "\\n" + pep.sequence);
+                }
+            }
+        });
+        traces.push({
+            x: xVals, y: yVals, type: "box", name: g,
+            boxpoints: "all", jitter: 0.4, pointpos: 0,
+            text: sampleTexts,
+            hovertemplate: "%{x}<br>%{text}<br>Intensity: %{y:.3f}<extra>" + g + "</extra>",
+            marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
+            line: { color: colors[gi % colors.length] },
+            fillcolor: colors[gi % colors.length] + "33"
+        });
+    });
+
+    var pepNames = peptides.map(function(p) {
+        return p.sequence.length > 20 ? p.sequence.substring(0, 17) + "..." : p.sequence;
+    });
+
+    var containerH = Math.max(500, 350 + peptides.length * 25);
+    var layout = {
+        title: { text: protName + " — Peptide Expression (" + peptides.length + " peptides)", font: { size: 15 } },
+        yaxis: { title: "Raw Intensity (log2)" },
+        xaxis: { title: "Peptide Sequence", categoryorder: "array", categoryarray: pepNames,
+                 tickangle: -45, tickfont: { size: 10, family: "monospace" } },
+        showlegend: true,
+        legend: { title: { text: pepGroupLabel } },
+        boxmode: "group",
+        margin: { t: 50, b: 160, l: 70, r: 30 },
+        boxgap: 0.15, boxgroupgap: 0.1
+    };
+
+    document.getElementById("pep_container").style.height = containerH + "px";
+    Plotly.newPlot("pep_container", traces, layout, { responsive: true });
+
+    document.getElementById("pep_info").innerHTML =
+        "<strong>" + protName + "</strong>: " + peptides.length + " peptides detected";
+    document.getElementById("pep_export_bar").style.display = "flex";
+}
+
+function clearPeptidePlot() {
+    Plotly.purge("pep_container");
+    document.getElementById("pep_info").textContent = "";
+    document.getElementById("pep_export_bar").style.display = "none";
+}
+
+function exportPepPlot(format) {
+    var container = document.getElementById("pep_container");
+    if (!container || !container.data) return;
+    var name = document.getElementById("pep_protein_input").value || "peptides";
+    if (format === "svg") Plotly.downloadImage(container, {format: "svg", width: 1400, height: 900, filename: "peptide_expr_" + name});
+    else Plotly.downloadImage(container, {format: "png", width: 2800, height: 1800, scale: 3, filename: "peptide_expr_" + name});
+}
+
+document.addEventListener("click", function(e) {
+    var acDiv = document.getElementById("pep_ac");
+    var input = document.getElementById("pep_protein_input");
+    if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
+});
+</script>
+')
+```
+
+```{r peptide-explorer-fallback, eval=!peptide_ready, results='asis'}
+cat("*Peptide expression explorer not available. No peptide-level data file was provided in the configuration (`files.peptides`). To enable this feature, provide a peptide intensity matrix (e.g., from DIA-NN or MaxQuant) in the config file.*\n")
 ```
 
 ---
@@ -2699,6 +3148,174 @@ if (file.exists(comm_file)) {
     cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Network communities detected by graph clustering algorithms. Communities represent densely connected subnetworks that may correspond to functional protein modules or complexes.</em></p>\n")
     comm <- read.csv(comm_file, stringsAsFactors = FALSE)
     make_dt(comm, caption = "Network Communities")
+}
+```
+
+## STRING Functional Enrichment {.tabset}
+
+STRING provides functional enrichment analysis across multiple annotation categories — including disease associations, tissue expression, subcellular compartments, and literature references — directly from the protein interaction network.
+
+```{r string-enrich-setup, include=FALSE}
+string_enrich_dir <- file.path(ppi_dir, "string_enrichment")
+has_string_enrich <- dir.exists(string_enrich_dir) &&
+    length(list.files(string_enrich_dir, pattern = "\\.csv$")) > 0
+```
+
+```{r string-enrich-tables, eval=has_string_enrich, results='asis'}
+string_files <- list.files(string_enrich_dir, pattern = "^string_.*\\.csv$", full.names = TRUE)
+# Exclude the full combined file
+string_files <- string_files[!grepl("_full\\.csv$", string_files)]
+
+if (length(string_files) > 0) {
+    # Priority order for display
+    priority_cats <- c("DISEASES", "TISSUES", "COMPARTMENTS", "Reactome",
+                       "KEGG", "Process", "Component", "Function",
+                       "PMID", "InterPro", "Pfam", "Keyword")
+
+    # Sort files by priority
+    file_labels <- gsub("^string_|\\.csv$", "", basename(string_files))
+    file_order <- match(file_labels, priority_cats)
+    file_order[is.na(file_order)] <- 100
+    string_files <- string_files[order(file_order)]
+
+    for (sf in string_files) {
+        label <- gsub("^string_|\\.csv$", "", basename(sf))
+        label_clean <- gsub("_", " ", label)
+
+        df <- tryCatch(read.csv(sf, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (is.null(df) || nrow(df) == 0) next
+
+        # Filter to FDR < 0.05
+        fdr_col <- intersect(c("fdr", "FDR", "p_value", "pvalue"), colnames(df))
+        if (length(fdr_col) > 0) {
+            sig <- df[!is.na(df[[fdr_col[1]]]) & df[[fdr_col[1]]] < 0.05, ]
+        } else {
+            sig <- df
+        }
+        if (nrow(sig) == 0) next
+
+        cat(sprintf("\n### %s (%d)\n\n", label_clean, nrow(sig)))
+
+        # Select display columns
+        show_cols <- intersect(
+            c("term", "description", "number_of_genes", "fdr",
+              "inputGenes", "preferredNames", "category"),
+            colnames(sig)
+        )
+        if (length(show_cols) == 0) show_cols <- colnames(sig)[1:min(6, ncol(sig))]
+
+        print(htmltools::tagList(make_dt(
+            head(sig[, show_cols, drop = FALSE], 30),
+            paste("STRING", label_clean)
+        )))
+        cat("\n\n")
+    }
+} else {
+    cat("No STRING functional enrichment results available.\n")
+}
+```
+
+```{r string-enrich-skip, eval=!has_string_enrich && has_ppi, results='asis'}
+cat("STRING functional enrichment was not generated. This may be due to API connectivity issues or too few mapped proteins.\n")
+```
+
+---
+
+# Protein Domain & Functional Feature Analysis
+
+```{r domain-setup, include=FALSE}
+domain_dir <- file.path(prot_dir, "domain_analysis")
+has_domains <- dir.exists(domain_dir) && (
+    length(list.files(domain_dir, pattern = "\\.csv$")) > 0 ||
+    length(list.files(file.path(domain_dir, "plots"), pattern = "\\.png$")) > 0
+)
+```
+
+```{r domain-skip, eval=!has_domains, results='asis'}
+cat("Protein domain analysis was not performed. This analysis identifies enriched InterPro/Pfam domains and UniProt functional features (binding sites, active sites, PTMs) among differentially expressed proteins.\n")
+```
+
+```{r domain-intro, eval=has_domains, results='asis'}
+cat("Protein domain and functional feature analysis identifies structural and functional motifs enriched among differentially expressed proteins. This reveals whether specific protein families, binding domains, or post-translational modification sites are over-represented in the DE set — complementing pathway-level enrichment with protein-level structural insights.\n\n")
+```
+
+## Domain Enrichment {.tabset}
+
+```{r domain-enrichment, eval=has_domains, results='asis'}
+domain_enrich_file <- file.path(domain_dir, "domain_enrichment.csv")
+if (file.exists(domain_enrich_file)) {
+    enr <- read.csv(domain_enrich_file, stringsAsFactors = FALSE)
+    sig_enr <- enr[!is.na(enr$padj) & enr$padj < 0.05, ]
+
+    if (nrow(sig_enr) > 0) {
+        # Split by database (InterPro vs Pfam)
+        for (db in unique(sig_enr$database)) {
+            db_df <- sig_enr[sig_enr$database == db, ]
+            db_df <- db_df[order(db_df$padj), ]
+
+            cat(sprintf("\n### %s (%d significant)\n\n", db, nrow(db_df)))
+            show_cols <- intersect(
+                c("domain_id", "domain_description", "domain_size", "overlap",
+                  "pvalue", "padj", "odds_ratio", "genes"),
+                colnames(db_df)
+            )
+            print(htmltools::tagList(make_dt(
+                head(db_df[, show_cols, drop = FALSE], 30),
+                paste("Enriched", db, "Domains")
+            )))
+            cat("\n\n")
+        }
+    } else {
+        cat("\n### Results\n\nNo significantly enriched domains (padj < 0.05) detected.\n\n")
+    }
+} else {
+    cat("\n### Results\n\nDomain enrichment results not available.\n\n")
+}
+```
+
+## Domain Enrichment Plot
+
+```{r domain-dotplot, eval=has_domains, results='asis'}
+dotplot_file <- file.path(domain_dir, "plots", "domain_enrichment_dotplot.png")
+if (file.exists(dotplot_file)) {
+    cat(sprintf("![Domain Enrichment](%s)\n\n", dotplot_file))
+    figure_legend("Dotplot of significantly enriched protein domains among DE proteins. Dot size reflects the number of DE proteins carrying the domain; color distinguishes InterPro from Pfam annotations.")
+}
+```
+
+## UniProt Functional Features {.tabset}
+
+UniProt functional annotations include binding sites (ligand/metal/DNA binding), active sites (catalytic residues), post-translational modifications (phosphorylation, glycosylation), and functional domains. These annotations highlight specific molecular functions affected by the observed expression changes.
+
+```{r uniprot-features, eval=has_domains, results='asis'}
+features_file <- file.path(domain_dir, "uniprot_features.csv")
+if (file.exists(features_file)) {
+    feat <- read.csv(features_file, stringsAsFactors = FALSE)
+    if (nrow(feat) > 0 && "feature_type" %in% colnames(feat)) {
+        for (ft in unique(feat$feature_type)) {
+            ft_df <- feat[feat$feature_type == ft, ]
+            cat(sprintf("\n### %s (%d)\n\n", ft, nrow(ft_df)))
+            print(htmltools::tagList(make_dt(
+                head(ft_df, 50),
+                paste("UniProt", ft, "Annotations")
+            )))
+            cat("\n\n")
+        }
+    } else {
+        cat("\n### Results\n\nNo UniProt functional features retrieved.\n\n")
+    }
+} else {
+    cat("\n### Results\n\nUniProt feature data not available.\n\n")
+}
+```
+
+## Feature Type Summary
+
+```{r feature-barchart, eval=has_domains, results='asis'}
+barchart_file <- file.path(domain_dir, "plots", "feature_type_barchart.png")
+if (file.exists(barchart_file)) {
+    cat(sprintf("![Feature Types](%s)\n\n", barchart_file))
+    figure_legend("Distribution of UniProt functional feature types among DE proteins. Shows the relative prevalence of binding sites, active sites, PTMs, domains, and other structural/functional annotations.")
 }
 ```
 

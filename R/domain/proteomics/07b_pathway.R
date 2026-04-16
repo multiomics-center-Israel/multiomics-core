@@ -195,7 +195,7 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # ------------------------------------------------------------------
     # Load gene sets (using SYMBOL keytype — proteomics IDs are gene symbols)
     # ------------------------------------------------------------------
-    databases <- pw_cfg$databases %||% c("GO", "KEGG")
+    databases <- pw_cfg$databases %||% c("GO", "KEGG", "Reactome")
     gmt_file  <- pw_cfg$gmt_file
 
     gene_sets <- tryCatch(
@@ -263,13 +263,19 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
             db_name <- res_df$database[1]
             if (is.null(db_name)) db_name <- sub("_.*$", "", analysis_name)
 
+            # Resolve correct GO ontology for semantic clustering
+            cluster_ont <- "BP"
+            if (grepl("GO_CC", db_name, ignore.case = TRUE)) cluster_ont <- "CC"
+            else if (grepl("GO_MF", db_name, ignore.case = TRUE)) cluster_ont <- "MF"
+
             clustered <- tryCatch(
                 cluster_enrichment_terms(
                     enrichment_df = res_df,
                     database = db_name,
                     gene_sets = gene_sets[[db_name]],
                     organism = organism,
-                    threshold = cluster_threshold
+                    threshold = cluster_threshold,
+                    ont = cluster_ont
                 ),
                 error = function(e) {
                     message("Clustering failed for ", contrast_name, "/", analysis_name, ": ", e$message)

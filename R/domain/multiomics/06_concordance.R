@@ -8,9 +8,47 @@
 #' @return data.frame with feature_id, logFC, padj columns
 normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
 
-    # Already a flat data frame with expected columns
+    # Already a flat data frame — normalize column names
     if (is.data.frame(de_res)) {
-        if (!"feature_id" %in% names(de_res)) de_res$feature_id <- rownames(de_res)
+        if (!"feature_id" %in% names(de_res)) {
+            id_col <- intersect(c("FeatureID", "gene_id", "protein_id"), names(de_res))[1]
+            if (!is.na(id_col)) de_res$feature_id <- de_res[[id_col]]
+            else de_res$feature_id <- rownames(de_res)
+        }
+        # Ensure logFC column exists
+        if (!"logFC" %in% names(de_res)) {
+            lfc_col <- intersect(c("log2FoldChange", "log2FC"), names(de_res))[1]
+            if (!is.na(lfc_col)) {
+                de_res$logFC <- de_res[[lfc_col]]
+            } else {
+                # Pattern match for suffixed columns
+                log2_cols <- grep("^log2FoldChange", names(de_res), value = TRUE)
+                logfc_cols <- grep("^logFC[._]", names(de_res), value = TRUE)
+                if (length(log2_cols) > 0) {
+                    de_res$logFC <- de_res[[log2_cols[1]]]
+                } else if (length(logfc_cols) > 0) {
+                    de_res$logFC <- de_res[[logfc_cols[1]]]
+                } else {
+                    # Convert signed linearFC to logFC
+                    linfc_cols <- grep("^linearFC", names(de_res), value = TRUE)
+                    if (length(linfc_cols) > 0) {
+                        lfc <- as.numeric(de_res[[linfc_cols[1]]])
+                        de_res$logFC <- ifelse(is.na(lfc) | lfc == 0, NA_real_,
+                                               log2(abs(lfc)) * sign(lfc))
+                    }
+                }
+            }
+        }
+        # Ensure padj column exists
+        if (!"padj" %in% names(de_res)) {
+            padj_col <- intersect(c("adj.P.Val", "FDR", "p.adjust"), names(de_res))[1]
+            if (!is.na(padj_col)) {
+                de_res$padj <- de_res[[padj_col]]
+            } else {
+                padj_cols <- grep("^(padj|adj\\.P\\.Val)", names(de_res), value = TRUE)
+                if (length(padj_cols) > 0) de_res$padj <- de_res[[padj_cols[1]]]
+            }
+        }
         return(de_res)
     }
 
@@ -48,9 +86,9 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
         padj_cols <- grep("^(padj\\.imputs\\.|padj\\.|adj\\.P\\.Val\\.)", names(df), value = TRUE)
 
         if (length(lfc_cols) == 0) {
-            # Try metabolomics naming: logFC_contrast
-            lfc_cols <- grep("^logFC_", names(df), value = TRUE)
-            padj_cols <- grep("^adj\\.P\\.Val_", names(df), value = TRUE)
+            # Try metabolomics naming: linearFC.contrast
+            lfc_cols <- grep("^linearFC\\.", names(df), value = TRUE)
+            padj_cols <- grep("^adj\\.P\\.Val\\.", names(df), value = TRUE)
         }
 
         if (length(lfc_cols) == 0) {
@@ -58,11 +96,12 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
                  paste(head(names(df), 20), collapse = ", "))
         }
 
-        lfc_vals <- df[[lfc_cols[1]]]
+        lfc_vals <- as.numeric(df[[lfc_cols[1]]])
         # Convert linearFC (signed fold change) to log2FC
+        # linearFC convention: positive = up, negative = down (e.g., -1.5 = 1.5x down)
         if (grepl("^linearFC", lfc_cols[1])) {
-            lfc_vals <- ifelse(lfc_vals >= 0, log2(pmax(lfc_vals, 1e-10)),
-                               -log2(pmax(abs(lfc_vals), 1e-10)))
+            lfc_vals <- ifelse(is.na(lfc_vals) | lfc_vals == 0, NA_real_,
+                               log2(abs(lfc_vals)) * sign(lfc_vals))
         }
 
         padj_vals <- if (length(padj_cols) > 0) df[[padj_cols[1]]] else NA_real_

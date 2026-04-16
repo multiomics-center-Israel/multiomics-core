@@ -22,7 +22,7 @@ cat("   Done sourcing.\n\n")
 
 # ---- 2. Load config ----
 cat("2. Loading config...\n")
-config <- load_config("test_lipidomics_config.yaml")
+config <- load_config(testthat::test_path("fixtures", "test_lipidomics_config.yaml"))
 cat("   Config loaded. Modes:", paste(names(config$modes), collapse = ", "), "\n\n")
 
 # ---- 3. Validate config ----

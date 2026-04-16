@@ -47,85 +47,90 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
     }
 
     # --- DE statistics ---
-    # Proteomics DE uses wide-format summary_df with padj.imputs.ContrastName
-    # and linearFC.imputs.ContrastName columns
+    # Single source of truth: use pipeline pass columns (pass.imputs.{cn} or
+    # {cn}_pass or pass.{cn}) which encode the pipeline's significance decision.
+    # Fallback: recompute from padj + FC thresholds.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
     de_contrasts <- list()
 
     p_cut  <- prot_cfg$de$p_cutoff %||% 0.05
     fc_lin <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+    if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+
+        # Try pass columns first (single source of truth)
+        pass_cols <- grep("^pass\\.imputs\\.", names(sdf), value = TRUE)
+
+        if (length(pass_cols) > 0) {
+            for (pcol in pass_cols) {
+                cn <- sub("^pass\\.imputs\\.", "", pcol)
+                fc_col <- paste0("linearFC.imputs.", cn)
+                if (!(fc_col %in% names(sdf))) next
+
+                is_sig <- !is.na(sdf[[pcol]]) & sdf[[pcol]] == 1
+                fc_vals <- as.numeric(sdf[[fc_col]])
+                up <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                dn <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(is_sig),
+                    up = up, down = dn,
+                    tested = sum(!is.na(sdf[[paste0("padj.imputs.", cn)]]))
+                )
+                n_de_total <- n_de_total + sum(is_sig)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        } else {
+            # Fallback: recompute from padj + linearFC
+            padj_cols <- grep("^padj\\.imputs\\.", names(sdf), value = TRUE)
+            if (length(padj_cols) == 0) padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
+
+            for (pc in padj_cols) {
+                cn <- sub("^padj\\.imputs\\.", "", sub("^padj\\.", "", pc))
+                lfc_col <- paste0("linearFC.imputs.", cn)
+                if (!(lfc_col %in% names(sdf))) lfc_col <- paste0("linearFC.", cn)
+                if (!(lfc_col %in% names(sdf))) next
+
+                fc_vals <- as.numeric(sdf[[lfc_col]])
+                log2fc <- ifelse(is.na(fc_vals) | fc_vals == 0, NA_real_,
+                                 log2(abs(fc_vals)) * sign(fc_vals))
+                sig <- !is.na(as.numeric(sdf[[pc]])) & as.numeric(sdf[[pc]]) <= p_cut &
+                       !is.na(log2fc) & abs(log2fc) >= log2(fc_lin)
+                up <- sum(sig & log2fc > 0, na.rm = TRUE)
+                dn <- sum(sig & log2fc < 0, na.rm = TRUE)
+
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(sig, na.rm = TRUE),
+                    up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                )
+                n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        }
+    } else if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+        # Direct DE tables (per-contrast) — fallback for non-summary_df pipelines
         for (cn in names(de_res$tables)) {
             tbl <- de_res$tables[[cn]]
             if (!is.data.frame(tbl) || !("padj" %in% names(tbl))) next
+            fc_col <- intersect(c("linearFC", "log2FoldChange"), names(tbl))[1]
+            if (is.na(fc_col)) next
 
-            sig <- !is.na(tbl$padj) & tbl$padj <= p_cut
-
-            # Proteomics uses linearFC (not log2FoldChange)
-            fc_col <- if ("linearFC" %in% names(tbl)) "linearFC"
-                      else if ("log2FoldChange" %in% names(tbl)) "log2FoldChange"
-                      else NULL
-
-            if (!is.null(fc_col)) {
-                if (fc_col == "linearFC") {
-                    sig <- sig & (abs(tbl[[fc_col]]) >= fc_lin | (1 / abs(tbl[[fc_col]])) <= (1 / fc_lin))
-                    up <- sum(sig & tbl[[fc_col]] > 1, na.rm = TRUE)
-                    dn <- sum(sig & tbl[[fc_col]] < 1, na.rm = TRUE)
-                } else {
-                    log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
-                    if (log2_fc > 0) sig <- sig & (abs(tbl[[fc_col]]) >= log2_fc)
-                    up <- sum(sig & tbl[[fc_col]] >= log2_fc, na.rm = TRUE)
-                    dn <- sum(sig & tbl[[fc_col]] <= -log2_fc, na.rm = TRUE)
-                }
+            if (fc_col == "linearFC") {
+                fc_vals <- as.numeric(tbl[[fc_col]])
+                log2fc <- ifelse(is.na(fc_vals) | fc_vals == 0, NA_real_,
+                                 log2(abs(fc_vals)) * sign(fc_vals))
             } else {
-                up <- 0; dn <- 0
+                log2fc <- as.numeric(tbl[[fc_col]])
             }
+            sig <- !is.na(tbl$padj) & tbl$padj <= p_cut &
+                   !is.na(log2fc) & abs(log2fc) >= log2(fc_lin)
+            up <- sum(sig & log2fc > 0, na.rm = TRUE)
+            dn <- sum(sig & log2fc < 0, na.rm = TRUE)
 
             de_contrasts[[cn]] <- list(
                 name = cn, total = sum(sig, na.rm = TRUE),
-                up = up %||% 0, down = dn %||% 0, tested = sum(!is.na(tbl$padj))
-            )
-            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
-            n_de_up <- n_de_up + (up %||% 0); n_de_down <- n_de_down + (dn %||% 0)
-        }
-    } else if (!is.null(de_res$summary_df)) {
-        sdf <- de_res$summary_df
-
-        # Try proteomics-style columns first: padj.imputs.ContrastName
-        padj_cols <- grep("^padj\\.imputs\\.", names(sdf), value = TRUE)
-        if (length(padj_cols) == 0) {
-            padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
-        }
-
-        for (pc in padj_cols) {
-            cn <- sub("^padj\\.imputs\\.", "", sub("^padj\\.", "", pc))
-
-            # Look for linearFC columns
-            lfc_col <- paste0("linearFC.imputs.", cn)
-            if (!(lfc_col %in% names(sdf))) {
-                lfc_col <- paste0("linearFC.", cn)
-            }
-            l2fc_col <- paste0("log2FoldChange.", cn)
-
-            if (lfc_col %in% names(sdf)) {
-                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
-                sig <- sig & (abs(sdf[[lfc_col]]) >= fc_lin | (1 / abs(sdf[[lfc_col]])) <= (1 / fc_lin))
-                up <- sum(sig & sdf[[lfc_col]] > 1, na.rm = TRUE)
-                dn <- sum(sig & sdf[[lfc_col]] < 1, na.rm = TRUE)
-            } else if (l2fc_col %in% names(sdf)) {
-                log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
-                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
-                if (log2_fc > 0) sig <- sig & (abs(sdf[[l2fc_col]]) >= log2_fc)
-                up <- sum(sig & sdf[[l2fc_col]] > 0, na.rm = TRUE)
-                dn <- sum(sig & sdf[[l2fc_col]] < 0, na.rm = TRUE)
-            } else {
-                next
-            }
-
-            de_contrasts[[cn]] <- list(
-                name = cn, total = sum(sig, na.rm = TRUE),
-                up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                up = up, down = dn, tested = sum(!is.na(tbl$padj))
             )
             n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
             n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn

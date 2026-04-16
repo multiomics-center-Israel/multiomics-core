@@ -399,6 +399,39 @@ read_multi_level_dir <- function(dir_path, pattern = "\\.xlsx$", sheet = NULL) {
 }
 
 
+#' Normalize CD-raw column names to clean sample IDs
+#'
+#' Strips "Area: " / "Norm. Area: " prefixes and ".raw (Fnn)" suffixes
+#' from data.frame column names. Only touches columns that match the
+#' CD-raw pattern; annotation columns are left untouched.
+#'
+#' @param df data.frame with possibly mixed column name styles.
+#' @return data.frame with cleaned column names.
+.normalize_cd_area_colnames <- function(df) {
+    cn <- colnames(df)
+    # Pattern: optional "Norm. " + "Area: " prefix, then sample name,
+    # then optional ".raw" + optional " (Fnn)" suffix
+    cd_pattern <- "^(Norm[.]\\s*)?Area:\\s*(.+?)([.]raw)?\\s*(\\(F\\d+\\))?$"
+    is_cd <- grepl(cd_pattern, cn, perl = TRUE)
+    if (!any(is_cd)) return(df)
+
+    clean <- sub(cd_pattern, "\\2", cn, perl = TRUE)
+    # Only apply to columns that matched, keep annotation columns unchanged
+    cn[is_cd] <- trimws(clean[is_cd])
+    colnames(df) <- cn
+
+    # Drop blank/procedure blank columns that may only appear in CD-raw levels
+    blank_cols <- grepl("(?i)^(procedure[_]?)?blank", cn)
+    if (any(blank_cols)) {
+        message("  Dropping ", sum(blank_cols), " blank column(s): ",
+                paste(cn[blank_cols], collapse = ", "))
+        df <- df[, !blank_cols, drop = FALSE]
+    }
+
+    df
+}
+
+
 #' Parse a multi-level directory input into the canonical contract
 #'
 #' Dispatches each per-level data frame to \code{parse_cd_raw()} or
@@ -421,11 +454,15 @@ parse_multi_level <- function(level_data_list, cfg, meta) {
 
     level_names <- names(level_data_list)
 
-    # Parse each level file with the shared per-file format
+    # Parse each level file with the shared per-file format.
+    # Some levels may have CD-raw style column names (e.g.
+    # "Norm. Area: Sample.raw (F1)") even when level_format = "processed_wide".
+    # Normalize these columns to clean sample names before parsing.
     parsed_levels <- lapply(level_data_list, function(item) {
+        df <- .normalize_cd_area_colnames(item$data_df)
         switch(level_format,
-            cd_raw         = parse_cd_raw(item$data_df, cfg),
-            processed_wide = parse_processed_wide(item$data_df, cfg, meta),
+            cd_raw         = parse_cd_raw(df, cfg),
+            processed_wide = parse_processed_wide(df, cfg, meta),
             stop("parse_multi_level: unsupported level_format '", level_format, "'")
         )
     })
@@ -660,7 +697,33 @@ build_feature_ids <- function(data_df, id_cfg) {
         raw_names <- ifelse(is.na(raw_names) | raw_names == "",
                             make_rt_mz_ids(), raw_names)
         ids <- make.unique(raw_names, sep = "_dup")
-        attr(ids, "original_id") <- make_rt_mz_ids()
+        orig <- make_rt_mz_ids()
+
+        # Resolve HMDB IDs to compound names if original_id is just "feature_N"
+        if (all(grepl("^feature_\\d+$", orig[!is.na(orig)]))) {
+            hmdb_lookup <- file.path("data", "hmdb_compound_names.tsv")
+            if (!file.exists(hmdb_lookup)) {
+                hmdb_lookup <- file.path(getwd(), "data", "hmdb_compound_names.tsv")
+            }
+            if (file.exists(hmdb_lookup)) {
+                hmdb_db <- tryCatch(
+                    read.delim(hmdb_lookup, stringsAsFactors = FALSE),
+                    error = function(e) NULL
+                )
+                if (!is.null(hmdb_db) && all(c("HMDB", "Name") %in% colnames(hmdb_db))) {
+                    idx <- match(ids, hmdb_db$HMDB)
+                    resolved <- hmdb_db$Name[idx]
+                    has_name <- !is.na(resolved) & resolved != ""
+                    orig[has_name] <- resolved[has_name]
+                    # Keep HMDB ID for unresolved
+                    orig[!has_name] <- ids[!has_name]
+                    message("  Resolved ", sum(has_name), "/", length(ids),
+                            " HMDB IDs to compound names")
+                }
+            }
+        }
+
+        attr(ids, "original_id") <- orig
         return(ids)
     }
 

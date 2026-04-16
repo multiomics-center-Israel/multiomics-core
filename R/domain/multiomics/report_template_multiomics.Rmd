@@ -151,6 +151,17 @@ rna_prot_dir     <- file.path(run_dir, "rna_protein_correlation")
 multigsea_dir    <- file.path(run_dir, "multigsea")
 commentary_dir   <- file.path(run_dir, "commentary")
 
+# Extended analysis directories
+feature_network_dir  <- file.path(run_dir, "feature_network")
+concordance_dir      <- file.path(run_dir, "concordance")
+consensus_base_dir   <- file.path(run_dir, "consensus")
+consensus_dir        <- file.path(consensus_base_dir, "consensus")
+stability_dir        <- file.path(consensus_base_dir, "stability")
+foundational_base_dir <- file.path(run_dir, "foundational")
+foundational_dir     <- file.path(foundational_base_dir, "foundational")
+mechanistic_base_dir <- file.path(run_dir, "mechanistic")
+mechanistic_dir      <- file.path(mechanistic_base_dir, "mechanistic")
+
 # Load commentary if available
 commentary <- NULL
 has_commentary <- FALSE
@@ -174,13 +185,33 @@ has_mofa        <- dir.exists(mofa_dir) && length(list.files(mofa_dir, "\\.png$"
 has_integration <- has_diablo || has_snf || has_mofa
 has_enrichment  <- dir.exists(enrichment_dir) && length(list.files(enrichment_dir, "\\.png$|\\.csv$")) > 0
 has_transcriptomics <- "transcriptomics" %in% (cfg$global$omics_present %||% character(0)) ||
+    "rna" %in% (cfg$global$omics_present %||% character(0)) ||
     !is.null(cfg$modes$rna)
-has_rna_prot    <- has_transcriptomics &&
+has_proteomics <- "proteomics" %in% (cfg$global$omics_present %||% character(0)) ||
+    !is.null(cfg$modes$proteomics)
+has_metabolomics <- "metabolomics" %in% (cfg$global$omics_present %||% character(0)) ||
+    !is.null(cfg$modes$metabolomics)
+has_rna_prot    <- has_transcriptomics && has_proteomics &&
     dir.exists(file.path(rna_prot_dir, "plots")) &&
     length(list.files(file.path(rna_prot_dir, "plots"), "\\.png$")) > 0
 has_multigsea   <- dir.exists(multigsea_dir) && length(list.files(multigsea_dir, "\\.png$")) > 0
 has_loadings_enrich <- dir.exists(loadings_enrich_dir) &&
     length(list.files(loadings_enrich_dir, "\\.png$", recursive = TRUE)) > 0
+has_feature_network <- dir.exists(file.path(feature_network_dir, "plots")) &&
+    length(list.files(file.path(feature_network_dir, "plots"), "\\.png$")) > 0
+has_concordance     <- dir.exists(concordance_dir) &&
+    length(list.files(concordance_dir, "\\.png$|\\.csv$")) > 0
+has_consensus       <- dir.exists(consensus_dir) &&
+    (length(list.files(file.path(consensus_dir, "plots"), "\\.png$")) > 0 ||
+     length(list.files(consensus_dir, "\\.csv$")) > 0)
+has_stability       <- dir.exists(stability_dir) &&
+    length(list.files(file.path(stability_dir, "plots"), "\\.png$")) > 0
+has_foundational    <- dir.exists(foundational_dir) &&
+    (length(list.files(file.path(foundational_dir, "plots"), "\\.png$")) > 0 ||
+     length(list.files(foundational_dir, "\\.csv$")) > 0)
+has_mechanistic     <- dir.exists(mechanistic_dir) &&
+    (length(list.files(file.path(mechanistic_dir, "plots"), "\\.png$")) > 0 ||
+     length(list.files(mechanistic_dir, "\\.csv$")) > 0)
 
 # Load gene-protein mapping if available
 mapping_file <- file.path(run_dir, "gene_protein_mapping.csv")
@@ -249,12 +280,39 @@ kable(settings, col.names = c("Parameter", "Value"))
 
 ```{r params-omics}
 omics_modes <- setdiff(names(cfg$modes), "multiomics")
-omics_tbl <- data.frame(
-    Omics = omics_modes,
-    Configured = "Yes",
-    stringsAsFactors = FALSE
-)
-kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
+# In payload mode, get omics from global$omics_present or payload_paths
+if (length(omics_modes) == 0) {
+    omics_modes <- cfg$global$omics_present %||%
+                   names(cfg$modes$multiomics$payload_paths) %||%
+                   harmonization$omics_available
+}
+if (length(omics_modes) > 0) {
+    omics_tbl <- data.frame(
+        Omics = omics_modes,
+        Configured = "Yes",
+        stringsAsFactors = FALSE
+    )
+    kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
+} else {
+    cat("No individual omics modes configured (payload mode).\n")
+}
+```
+
+## Feature ID Mapping {.unnumbered}
+
+```{r feature-mapping-table, results='asis'}
+# Show GENE_xxx to GL/KAE mapping if MAE has harmonized features
+mapping_csv <- file.path(run_dir, "gene_protein_mapping.csv")
+if (file.exists(mapping_csv)) {
+    gpm <- read.csv(mapping_csv, stringsAsFactors = FALSE)
+    if (nrow(gpm) > 0) {
+        cat("The integration pipeline harmonizes features across omics layers using internal IDs (GENE\\_1, GENE\\_2, etc.). The table below maps these to the original gene and protein identifiers.\n\n")
+        display_cols <- intersect(c("gene_id", "protein_id", "gene_symbol", "mapping_source"), colnames(gpm))
+        make_dt(gpm[, display_cols, drop = FALSE],
+                caption = "Gene-Protein Feature ID Mapping",
+                pageLength = 10)
+    }
+}
 ```
 
 ---
@@ -279,7 +337,9 @@ figure_legend("Distribution of per-gene RNA-protein Pearson correlations across 
 render_commentary("rna_protein_concordance")
 ```
 
-## DE Scatter (All Contrasts)
+## DE Scatter (All Contrasts) {.tabset}
+
+### Static
 
 ```{r rna-prot-de-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")
@@ -291,6 +351,53 @@ if (file.exists(p)) {
 ```{r rna-prot-de-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
 figure_legend("RNA vs protein differential expression scatter plot per contrast. Each point is a gene/protein pair. Diagonal concordance indicates matching fold-change direction; off-diagonal points suggest post-transcriptional regulation.")
 render_commentary("rna_protein_de_scatter")
+```
+
+### Interactive
+
+```{r rna-prot-de-interactive, eval=has_transcriptomics && has_rna_prot, results='asis'}
+conc_csv <- file.path(run_dir, "concordance", "concordance_transcriptomics_vs_proteomics.csv")
+if (file.exists(conc_csv)) {
+    conc <- read.csv(conc_csv, stringsAsFactors = FALSE)
+    conc <- conc[is.finite(conc$logFC_rna) & is.finite(conc$logFC_prot), ]
+
+    # Build label from available columns
+    conc$label <- if ("gene_symbol" %in% colnames(conc)) conc$gene_symbol
+                  else if ("gene_id" %in% colnames(conc)) conc$gene_id
+                  else if ("protein_id" %in% colnames(conc)) conc$protein_id
+                  else rownames(conc)
+    conc$label[is.na(conc$label) | conc$label == ""] <- "unknown"
+
+    cols <- c("concordant" = "#2ca02c", "discordant" = "#d62728",
+              "rna_only" = "#1f77b4", "protein_only" = "#ff7f0e", "not_sig" = "#cccccc")
+
+    p <- plotly::plot_ly(
+        data = conc,
+        x = ~logFC_rna, y = ~logFC_prot,
+        text = ~paste0(label, "\nRNA log2FC: ", round(logFC_rna, 2),
+                       "\nProtein log2FC: ", round(logFC_prot, 2),
+                       "\nConcordance: ", concordance),
+        color = ~concordance,
+        colors = cols,
+        type = "scatter", mode = "markers",
+        hoverinfo = "text",
+        marker = list(size = 5, opacity = 0.6)
+    ) %>%
+        plotly::layout(
+            title = "RNA vs Protein Fold Changes (Interactive)",
+            xaxis = list(title = "RNA log2FC", zeroline = TRUE),
+            yaxis = list(title = "Protein log2FC", zeroline = TRUE),
+            shapes = list(
+                list(type = "line", x0 = -5, x1 = 5, y0 = 0, y1 = 0,
+                     line = list(color = "grey", dash = "dash")),
+                list(type = "line", x0 = 0, x1 = 0, y0 = -5, y1 = 5,
+                     line = list(color = "grey", dash = "dash"))
+            )
+        )
+    print(htmltools::tagList(p))
+} else {
+    cat("*Concordance data not available for interactive plot.*\n")
+}
 ```
 
 ## Per-Contrast DE Details {.tabset}
@@ -371,6 +478,455 @@ if (file.exists(p)) {
 ```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
 figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
 render_commentary("translation_efficiency_scatter")
+```
+
+## RNA-Protein Concordance Visualization {.tabset}
+
+```{r conc-viz-setup, include=FALSE}
+# Load concordance CSV for visualization section
+conc_csv_path <- file.path(concordance_dir, "concordance_transcriptomics_vs_proteomics.csv")
+has_conc_viz <- file.exists(conc_csv_path)
+conc_df <- NULL
+if (has_conc_viz) {
+    conc_df <- tryCatch(read.csv(conc_csv_path, stringsAsFactors = FALSE), error = function(e) NULL)
+    has_conc_viz <- !is.null(conc_df) && nrow(conc_df) > 0
+}
+if (has_conc_viz) {
+    library(patchwork)
+    library(forcats)
+    # Derive significance flags using padj < 0.05
+    conc_df$sig_prot_flag <- !is.na(conc_df$padj_prot) & conc_df$padj_prot < 0.05
+    conc_df$sig_rna_flag  <- !is.na(conc_df$padj_rna) & conc_df$padj_rna < 0.05
+    # Trend labels for protein
+    conc_df$prot_trend <- ifelse(!conc_df$sig_prot_flag, "Not sig",
+                          ifelse(conc_df$logFC_prot > 0, "Up", "Down"))
+    # RNA change labels
+    conc_df$rna_change <- ifelse(!conc_df$sig_rna_flag, "Not sig",
+                          ifelse(conc_df$logFC_rna > 0, "Up", "Down"))
+    # Gene label for plots — use gene_symbol if available, else gene_id
+    conc_df$gene_label <- if ("gene_symbol" %in% colnames(conc_df)) conc_df$gene_symbol
+                          else if ("gene_id" %in% colnames(conc_df)) conc_df$gene_id
+                          else conc_df$protein_id
+}
+```
+
+```{r conc-viz-note, eval=!has_conc_viz, results='asis'}
+cat("*No RNA-protein concordance data found. This analysis requires both transcriptomics and proteomics differential expression results.*\n")
+```
+
+### Lollipop Plots {.tabset}
+
+```{r conc-lollipop-all, eval=has_conc_viz, results='asis', fig.width=12, fig.height=10}
+tryCatch({
+    # Filter to significant proteins
+    sig_prot <- conc_df[conc_df$sig_prot_flag, ]
+    if (nrow(sig_prot) > 200) {
+        sig_prot <- sig_prot[order(-abs(sig_prot$logFC_prot)), ][1:100, ]
+    }
+    if (nrow(sig_prot) > 0) {
+        sig_prot$gene_label_f <- forcats::fct_reorder(sig_prot$gene_label, sig_prot$logFC_prot)
+        prot_colors <- c("Up" = "springgreen4", "Down" = "violetred", "Not sig" = "gray60")
+        rna_colors  <- c("Up" = "lightgreen", "Down" = "lightcoral", "Not sig" = "gray60")
+
+        p_top <- ggplot(sig_prot, aes(x = gene_label_f, y = logFC_prot, color = prot_trend)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_prot), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = prot_colors, name = "Trend") +
+            labs(y = "Protein log2FC", x = NULL, title = "All Significant Proteins") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                  panel.grid.major.x = element_blank())
+
+        p_bot <- ggplot(sig_prot, aes(x = gene_label_f, y = logFC_rna, color = rna_change)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_rna), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = rna_colors, name = "RNA Change") +
+            labs(y = "RNA log2FC", x = "Gene (sorted by protein logFC)") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 6),
+                  panel.grid.major.x = element_blank())
+
+        print(p_top / p_bot)
+    } else {
+        cat("*No significant proteins found (padj < 0.05).*\n")
+    }
+}, error = function(e) cat(sprintf("*Lollipop plot (All) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-lollipop-all-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Lollipop plot of all significant proteins (padj < 0.05). Top panel: protein log2 fold-change sorted by magnitude, colored by direction. Bottom panel: corresponding RNA log2 fold-change for the same genes, preserving protein order.")
+```
+
+```{r conc-lollipop-up, eval=has_conc_viz, results='asis', fig.width=12, fig.height=10}
+tryCatch({
+    up_prot <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot > 0, ]
+    if (nrow(up_prot) > 0) {
+        up_prot$gene_label_f <- forcats::fct_reorder(up_prot$gene_label, up_prot$logFC_prot)
+        prot_colors <- c("Up" = "springgreen4", "Down" = "violetred", "Not sig" = "gray60")
+        rna_colors  <- c("Up" = "lightgreen", "Down" = "lightcoral", "Not sig" = "gray60")
+
+        p_top <- ggplot(up_prot, aes(x = gene_label_f, y = logFC_prot, color = prot_trend)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_prot), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = prot_colors, name = "Trend") +
+            labs(y = "Protein log2FC", x = NULL, title = "Upregulated Proteins") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                  panel.grid.major.x = element_blank())
+
+        p_bot <- ggplot(up_prot, aes(x = gene_label_f, y = logFC_rna, color = rna_change)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_rna), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = rna_colors, name = "RNA Change") +
+            labs(y = "RNA log2FC", x = "Gene (sorted by protein logFC)") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 6),
+                  panel.grid.major.x = element_blank())
+
+        print(p_top / p_bot)
+    } else {
+        cat("*No significantly upregulated proteins found.*\n")
+    }
+}, error = function(e) cat(sprintf("*Lollipop plot (Up) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-lollipop-up-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Lollipop plot of significantly upregulated proteins (logFC > 0, padj < 0.05). Bottom panel shows corresponding RNA fold-changes to reveal concordance or discordance at the transcript level.")
+```
+
+```{r conc-lollipop-down, eval=has_conc_viz, results='asis', fig.width=12, fig.height=10}
+tryCatch({
+    down_prot <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot < 0, ]
+    if (nrow(down_prot) > 0) {
+        down_prot$gene_label_f <- forcats::fct_reorder(down_prot$gene_label, down_prot$logFC_prot)
+        prot_colors <- c("Up" = "springgreen4", "Down" = "violetred", "Not sig" = "gray60")
+        rna_colors  <- c("Up" = "lightgreen", "Down" = "lightcoral", "Not sig" = "gray60")
+
+        p_top <- ggplot(down_prot, aes(x = gene_label_f, y = logFC_prot, color = prot_trend)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_prot), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = prot_colors, name = "Trend") +
+            labs(y = "Protein log2FC", x = NULL, title = "Downregulated Proteins") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                  panel.grid.major.x = element_blank())
+
+        p_bot <- ggplot(down_prot, aes(x = gene_label_f, y = logFC_rna, color = rna_change)) +
+            geom_segment(aes(xend = gene_label_f, y = 0, yend = logFC_rna), linewidth = 0.5) +
+            geom_point(size = 2) +
+            scale_color_manual(values = rna_colors, name = "RNA Change") +
+            labs(y = "RNA log2FC", x = "Gene (sorted by protein logFC)") +
+            theme_minimal(base_size = 11) +
+            theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 6),
+                  panel.grid.major.x = element_blank())
+
+        print(p_top / p_bot)
+    } else {
+        cat("*No significantly downregulated proteins found.*\n")
+    }
+}, error = function(e) cat(sprintf("*Lollipop plot (Down) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-lollipop-down-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Lollipop plot of significantly downregulated proteins (logFC < 0, padj < 0.05). Bottom panel shows corresponding RNA fold-changes to assess post-transcriptional regulation.")
+```
+
+### Pie Charts {.tabset}
+
+```{r conc-pie-up, eval=has_conc_viz, results='asis', fig.width=7, fig.height=7}
+tryCatch({
+    up_prot <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot > 0, ]
+    if (nrow(up_prot) > 0) {
+        pie_data <- data.frame(table(up_prot$rna_change))
+        colnames(pie_data) <- c("Category", "Count")
+        pie_data$Pct <- round(100 * pie_data$Count / sum(pie_data$Count), 1)
+        pie_data$Label <- paste0(pie_data$Category, "\n", pie_data$Count, " (", pie_data$Pct, "%)")
+        pie_colors <- c("Up" = "green3", "Down" = "red3", "Not sig" = "gray70")
+
+        p <- ggplot(pie_data, aes(x = 2, y = Count, fill = Category)) +
+            geom_bar(stat = "identity", width = 1, color = "white") +
+            coord_polar("y", start = 0) +
+            scale_fill_manual(values = pie_colors) +
+            xlim(0.5, 2.5) +
+            geom_text(aes(label = Label), position = position_stack(vjust = 0.5), size = 3.5) +
+            labs(title = "Upregulated Proteins: RNA status") +
+            theme_void(base_size = 12) +
+            theme(legend.position = "bottom")
+
+        print(p)
+    } else {
+        cat("*No significantly upregulated proteins found.*\n")
+    }
+}, error = function(e) cat(sprintf("*Pie chart (Up) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-pie-up-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Donut chart showing the RNA change status for significantly upregulated proteins (padj < 0.05). Green = RNA also upregulated, Red = RNA downregulated, Gray = RNA not significantly changed.")
+```
+
+```{r conc-pie-down, eval=has_conc_viz, results='asis', fig.width=7, fig.height=7}
+tryCatch({
+    down_prot <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot < 0, ]
+    if (nrow(down_prot) > 0) {
+        pie_data <- data.frame(table(down_prot$rna_change))
+        colnames(pie_data) <- c("Category", "Count")
+        pie_data$Pct <- round(100 * pie_data$Count / sum(pie_data$Count), 1)
+        pie_data$Label <- paste0(pie_data$Category, "\n", pie_data$Count, " (", pie_data$Pct, "%)")
+        pie_colors <- c("Up" = "green3", "Down" = "red3", "Not sig" = "gray70")
+
+        p <- ggplot(pie_data, aes(x = 2, y = Count, fill = Category)) +
+            geom_bar(stat = "identity", width = 1, color = "white") +
+            coord_polar("y", start = 0) +
+            scale_fill_manual(values = pie_colors) +
+            xlim(0.5, 2.5) +
+            geom_text(aes(label = Label), position = position_stack(vjust = 0.5), size = 3.5) +
+            labs(title = "Downregulated Proteins: RNA status") +
+            theme_void(base_size = 12) +
+            theme(legend.position = "bottom")
+
+        print(p)
+    } else {
+        cat("*No significantly downregulated proteins found.*\n")
+    }
+}, error = function(e) cat(sprintf("*Pie chart (Down) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-pie-down-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Donut chart showing the RNA change status for significantly downregulated proteins (padj < 0.05). Red = RNA also downregulated, Green = RNA upregulated, Gray = RNA not significantly changed.")
+```
+
+### Stacked Bar
+
+```{r conc-stacked-bar, eval=has_conc_viz, results='asis', fig.width=8, fig.height=5}
+tryCatch({
+    # Classify each gene into concordance categories
+    conc_df$conc_category <- ifelse(
+        conc_df$sig_prot_flag & conc_df$sig_rna_flag &
+            sign(conc_df$logFC_prot) == sign(conc_df$logFC_rna), "Concordant",
+    ifelse(
+        conc_df$sig_prot_flag & conc_df$sig_rna_flag &
+            sign(conc_df$logFC_prot) != sign(conc_df$logFC_rna), "Discordant",
+    ifelse(
+        conc_df$sig_prot_flag & !conc_df$sig_rna_flag, "Protein only",
+    ifelse(
+        !conc_df$sig_prot_flag & conc_df$sig_rna_flag, "RNA only",
+        "Not sig"))))
+
+    bar_data <- data.frame(table(conc_df$conc_category))
+    colnames(bar_data) <- c("Category", "Count")
+    bar_data$Category <- factor(bar_data$Category,
+        levels = c("Concordant", "Discordant", "Protein only", "RNA only", "Not sig"))
+    bar_colors <- c("Concordant" = "green4", "Discordant" = "red3",
+                    "Protein only" = "orange", "RNA only" = "steelblue", "Not sig" = "gray70")
+
+    p <- ggplot(bar_data, aes(x = "All Features", y = Count, fill = Category)) +
+        geom_bar(stat = "identity", width = 0.6, color = "white") +
+        geom_text(aes(label = Count), position = position_stack(vjust = 0.5), size = 3.5) +
+        scale_fill_manual(values = bar_colors) +
+        labs(y = "Number of features", x = NULL,
+             title = "RNA-Protein Concordance Summary") +
+        theme_minimal(base_size = 12) +
+        theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+    print(p)
+}, error = function(e) cat(sprintf("*Stacked bar could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-stacked-bar-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Stacked bar chart summarizing RNA-protein concordance across all features. Concordant = both significant in the same direction; Discordant = both significant in opposite directions; Protein only = protein significant but RNA not; RNA only = RNA significant but protein not; Not sig = neither significant.")
+```
+
+### Volcano Overlay {.tabset}
+
+```{r conc-volcano-prot, eval=has_conc_viz, results='asis', fig.width=9, fig.height=7}
+tryCatch({
+    vdf <- conc_df[!is.na(conc_df$padj_prot) & conc_df$padj_prot > 0, ]
+    if (nrow(vdf) > 0) {
+        vdf$neg_log10_padj <- -log10(vdf$padj_prot)
+        prot_colors <- c("Up" = "springgreen4", "Down" = "violetred", "Not sig" = "gray70")
+
+        p <- ggplot(vdf, aes(x = logFC_prot, y = neg_log10_padj, color = prot_trend)) +
+            geom_point(alpha = 0.6, size = 1.5) +
+            scale_color_manual(values = prot_colors, name = "Protein Trend") +
+            geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray40") +
+            labs(x = "Protein log2FC", y = "-log10(padj)",
+                 title = "Protein Volcano (colored by protein significance)") +
+            theme_minimal(base_size = 12)
+
+        print(p)
+    }
+}, error = function(e) cat(sprintf("*Volcano (protein) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-volcano-prot-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Standard protein volcano plot colored by protein significance status. Dashed line indicates padj = 0.05 threshold.")
+```
+
+```{r conc-volcano-rna-overlay, eval=has_conc_viz, results='asis', fig.width=9, fig.height=7}
+tryCatch({
+    vdf <- conc_df[!is.na(conc_df$padj_prot) & conc_df$padj_prot > 0, ]
+    if (nrow(vdf) > 0) {
+        vdf$neg_log10_padj <- -log10(vdf$padj_prot)
+        rna_colors <- c("Up" = "lightgreen", "Down" = "lightcoral", "Not sig" = "gray70")
+
+        p <- ggplot(vdf, aes(x = logFC_prot, y = neg_log10_padj, color = rna_change)) +
+            geom_point(alpha = 0.6, size = 1.5) +
+            scale_color_manual(values = rna_colors, name = "RNA Change") +
+            geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "gray40") +
+            labs(x = "Protein log2FC", y = "-log10(padj)",
+                 title = "Protein Volcano (colored by RNA change status)") +
+            theme_minimal(base_size = 12)
+
+        print(p)
+    }
+}, error = function(e) cat(sprintf("*Volcano (RNA overlay) could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-volcano-rna-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Protein volcano plot with points colored by RNA change status. This overlay reveals whether protein-level changes are supported by corresponding transcript-level changes.")
+```
+
+### Venn Diagram
+
+```{r conc-venn, eval=has_conc_viz, results='asis', fig.width=7, fig.height=6}
+tryCatch({
+    gene_col <- intersect(c("gene_symbol", "gene_id", "protein_id"), colnames(conc_df))[1]
+    sig_rna_genes  <- conc_df[[gene_col]][conc_df$sig_rna_flag]
+    sig_prot_genes <- conc_df[[gene_col]][conc_df$sig_prot_flag]
+
+    # Try ggVennDiagram first, fall back to basic ggplot
+    if (requireNamespace("ggVennDiagram", quietly = TRUE)) {
+        gene_list <- list("Significant RNA" = sig_rna_genes,
+                          "Significant Protein" = sig_prot_genes)
+        p <- ggVennDiagram::ggVennDiagram(gene_list, label_alpha = 0) +
+            scale_fill_gradient(low = "white", high = "steelblue") +
+            labs(title = "Overlap of Significant Features") +
+            theme(legend.position = "none")
+        print(p)
+    } else {
+        # Simple text-based summary as fallback
+        n_rna_only  <- length(setdiff(sig_rna_genes, sig_prot_genes))
+        n_prot_only <- length(setdiff(sig_prot_genes, sig_rna_genes))
+        n_both      <- length(intersect(sig_rna_genes, sig_prot_genes))
+        venn_df <- data.frame(
+            Region = c("RNA only", "Both", "Protein only"),
+            Count  = c(n_rna_only, n_both, n_prot_only)
+        )
+        p <- ggplot(venn_df, aes(x = Region, y = Count, fill = Region)) +
+            geom_col(width = 0.6) +
+            geom_text(aes(label = Count), vjust = -0.3, size = 5) +
+            scale_fill_manual(values = c("RNA only" = "steelblue", "Both" = "purple3",
+                                          "Protein only" = "orange")) +
+            labs(title = "Overlap of Significant Features (padj < 0.05)",
+                 y = "Number of genes") +
+            theme_minimal(base_size = 12) +
+            theme(legend.position = "none")
+        print(p)
+    }
+}, error = function(e) cat(sprintf("*Venn diagram could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-venn-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Venn diagram showing the overlap between genes with significant RNA changes and genes with significant protein changes (padj < 0.05). The intersection highlights genes regulated at both levels.")
+```
+
+### Correlation Scatter
+
+```{r conc-scatter, eval=has_conc_viz, results='asis', fig.width=8, fig.height=7}
+tryCatch({
+    sdf <- conc_df[!is.na(conc_df$logFC_rna) & !is.na(conc_df$logFC_prot), ]
+    if (nrow(sdf) > 2) {
+        r_val <- cor(sdf$logFC_rna, sdf$logFC_prot, use = "complete.obs")
+
+        # Concordance status for coloring
+        sdf$conc_status <- ifelse(
+            sdf$sig_prot_flag & sdf$sig_rna_flag &
+                sign(sdf$logFC_prot) == sign(sdf$logFC_rna), "Concordant",
+        ifelse(
+            sdf$sig_prot_flag & sdf$sig_rna_flag &
+                sign(sdf$logFC_prot) != sign(sdf$logFC_rna), "Discordant",
+        ifelse(
+            sdf$sig_prot_flag | sdf$sig_rna_flag, "One sig only",
+            "Not sig")))
+
+        scatter_colors <- c("Concordant" = "green4", "Discordant" = "red3",
+                            "One sig only" = "orange", "Not sig" = "gray70")
+
+        p <- ggplot(sdf, aes(x = logFC_rna, y = logFC_prot, color = conc_status)) +
+            geom_point(alpha = 0.5, size = 1.5) +
+            geom_smooth(method = "lm", se = TRUE, color = "black", linewidth = 0.7, linetype = "dashed") +
+            scale_color_manual(values = scatter_colors, name = "Status") +
+            annotate("text", x = Inf, y = Inf, label = sprintf("Pearson r = %.3f", r_val),
+                     hjust = 1.1, vjust = 1.5, size = 5, fontface = "bold") +
+            labs(x = "RNA log2FC", y = "Protein log2FC",
+                 title = "RNA vs Protein Fold-Change Correlation") +
+            theme_minimal(base_size = 12)
+
+        print(p)
+    } else {
+        cat("*Insufficient data for correlation scatter.*\n")
+    }
+}, error = function(e) cat(sprintf("*Correlation scatter could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-scatter-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Scatter plot of RNA log2 fold-change vs protein log2 fold-change with Pearson correlation. Points are colored by concordance status. The dashed line shows the linear regression fit.")
+```
+
+### mHG Enrichment Test
+
+```{r conc-mhg, eval=has_conc_viz, results='asis'}
+tryCatch({
+    if (requireNamespace("mHG", quietly = TRUE)) {
+        library(mHG)
+
+        # --- Upregulated proteins: is RNA sig enriched at the top? ---
+        up_df <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot > 0, ]
+        up_df <- up_df[order(-up_df$logFC_prot), ]
+        up_binary <- as.integer(up_df$sig_rna_flag)
+
+        mhg_up <- NULL
+        if (length(up_binary) > 2 && sum(up_binary) > 0) {
+            mhg_up <- tryCatch(mHG::mHG.test(up_binary), error = function(e) NULL)
+        }
+
+        # --- Downregulated proteins: is RNA sig enriched at the top? ---
+        down_df <- conc_df[conc_df$sig_prot_flag & conc_df$logFC_prot < 0, ]
+        down_df <- down_df[order(down_df$logFC_prot), ]
+        down_binary <- as.integer(down_df$sig_rna_flag)
+
+        mhg_down <- NULL
+        if (length(down_binary) > 2 && sum(down_binary) > 0) {
+            mhg_down <- tryCatch(mHG::mHG.test(down_binary), error = function(e) NULL)
+        }
+
+        # Build results table
+        results <- data.frame(
+            Direction = c("Upregulated proteins", "Downregulated proteins"),
+            N_proteins = c(nrow(up_df), nrow(down_df)),
+            N_RNA_sig = c(sum(up_binary), sum(down_binary)),
+            mHG_stat = c(
+                if (!is.null(mhg_up)) sprintf("%.4e", mhg_up$mHG) else "N/A",
+                if (!is.null(mhg_down)) sprintf("%.4e", mhg_down$mHG) else "N/A"
+            ),
+            mHG_pvalue = c(
+                if (!is.null(mhg_up)) sprintf("%.4e", mhg_up$p.value) else "N/A",
+                if (!is.null(mhg_down)) sprintf("%.4e", mhg_down$p.value) else "N/A"
+            ),
+            stringsAsFactors = FALSE
+        )
+
+        cat("\n#### mHG Enrichment Results\n\n")
+        cat("Testing whether RNA-significant genes are enriched among the most extreme protein fold-changes.\n\n")
+        print(knitr::kable(results, align = "lcccc"))
+    } else {
+        cat("*mHG package is not available. Install with `BiocManager::install('mHG')` to enable this analysis.*\n")
+    }
+}, error = function(e) cat(sprintf("*mHG enrichment test could not be generated: %s*\n", e$message)))
+```
+
+```{r conc-mhg-legend, eval=has_conc_viz, results='asis'}
+figure_legend("Minimum hypergeometric (mHG) enrichment test results. For upregulated proteins (sorted by descending logFC) and downregulated proteins (sorted by ascending logFC), the test assesses whether RNA-significant genes are enriched at the top of the ranked list. A significant p-value indicates that protein fold-change magnitude is predictive of RNA significance.")
 ```
 
 ---
@@ -645,6 +1201,11 @@ cat("*No cross-omics enrichment results found. Enrichment analysis requires path
 # Show per-omics enrichment barplots
 omics_barplots <- list.files(enrichment_dir, pattern = "_top_pathways\\.png$", full.names = TRUE)
 if (length(omics_barplots) > 0) {
+    # Deduplicate: if both "rna" and "transcriptomics" exist, keep "transcriptomics"
+    bp_names <- gsub("_top_pathways\\.png$", "", basename(omics_barplots))
+    if ("rna" %in% bp_names && "transcriptomics" %in% bp_names) {
+        omics_barplots <- omics_barplots[bp_names != "rna"]
+    }
     cat("\n### Per-Omics Pathway Enrichment {.unnumbered}\n\n")
     for (i in seq_along(omics_barplots)) {
         bp <- omics_barplots[i]
@@ -699,14 +1260,27 @@ if (file.exists(p)) {
 }
 ```
 
+```{r enrichment-top10, eval=has_enrichment, results='asis'}
+meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
+if (file.exists(meta_file)) {
+    meta_tbl <- read.csv(meta_file, stringsAsFactors = FALSE)
+    # Top 10 sorted by n_omics desc then combined_pval asc
+    top10 <- meta_tbl[order(-meta_tbl$n_omics, meta_tbl$combined_pval), ]
+    top10 <- head(top10, 10)
+    cat("\n### Top 10 Cross-Omics Pathways {.unnumbered}\n\n")
+    knitr::kable(top10, row.names = FALSE, digits = 3,
+                 caption = "Top 10 pathways prioritized by number of omics layers (n_omics) and combined p-value")
+}
+```
+
 ```{r enrichment-table, eval=has_enrichment}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
     meta_tbl <- read.csv(meta_file, stringsAsFactors = FALSE)
     make_dt(
-        head(meta_tbl, 200),
-        caption = "Cross-Omics Pathway Meta-Analysis (Fisher combined p-values)",
-        pageLength = 15
+        meta_tbl,
+        caption = "Cross-Omics Pathway Meta-Analysis (combined p-values)",
+        pageLength = 6
     )
 }
 ```
@@ -918,13 +1492,90 @@ figure_legend("DIABLO variable loadings plot. Top contributing features from eac
 render_commentary("diablo_variable_plot")
 ```
 
-```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
-int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
-if (file.exists(int_html)) {
-    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
-    cat(sprintf('<iframe src="%s" width="100%%" height="650" frameborder="0" style="border:1px solid #ddd; border-radius:4px;"></iframe>\n\n', int_html))
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
+### Circos Plot {.tabset .unnumbered}
+
+#### Static
+
+```{r diablo-circos-plot, eval=has_diablo}
+p <- file.path(diablo_dir, "diablo_circos_plot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
 }
+```
+
+#### Interactive
+
+```{r diablo-circos-interactive, eval=has_diablo, results='asis'}
+circos_csv <- file.path(diablo_dir, "diablo_circos_correlations.csv")
+if (file.exists(circos_csv)) {
+    edges <- read.csv(circos_csv, stringsAsFactors = FALSE)
+    edges <- edges[order(abs(edges$weight), decreasing = TRUE), ]
+    edges <- head(edges, 80)
+    p <- plotly::plot_ly(
+        x = edges$from, y = edges$to, z = edges$weight,
+        text = paste0(edges$from, " [", edges$from_omics, "] \u2014 ",
+                      edges$to, " [", edges$to_omics, "]",
+                      "\nWeight: ", round(edges$weight, 3)),
+        type = "heatmap", hoverinfo = "text",
+        colorscale = list(c(0, "#f7fbff"), c(1, "#08306b"))
+    ) %>%
+        plotly::layout(
+            title = "Cross-Omics Feature Correlations (DIABLO)",
+            xaxis = list(title = "", tickangle = 45, tickfont = list(size = 8)),
+            yaxis = list(title = "", tickfont = list(size = 8)),
+            margin = list(b = 120, l = 120)
+        )
+    print(htmltools::tagList(p))
+} else {
+    cat("*Circos correlation CSV not available for interactive plot.*\n")
+}
+```
+
+### Interactive Loadings Plot {.tabset .unnumbered}
+
+#### Static
+
+```{r diablo-variable-static2, eval=has_diablo}
+vp <- file.path(diablo_dir, "diablo_variable_plot.png")
+if (file.exists(vp)) {
+    knitr::include_graphics(vp)
+}
+```
+
+#### Interactive
+
+```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
+loadings_csv <- file.path(diablo_dir, "diablo_variable_loadings.csv")
+if (file.exists(loadings_csv)) {
+    ld <- read.csv(loadings_csv, stringsAsFactors = FALSE)
+    omics_col <- intersect(c("view", "omics", "block"), colnames(ld))[1]
+    if (all(c("comp1", "comp2", "feature") %in% colnames(ld)) && !is.na(omics_col)) {
+        ld$omics_layer <- ld[[omics_col]]
+        p <- plotly::plot_ly(
+            data = ld,
+            x = ~comp1, y = ~comp2,
+            text = ~paste0(feature, " [", omics_layer, "]"),
+            color = ~omics_layer,
+            type = "scatter", mode = "markers",
+            hoverinfo = "text",
+            marker = list(size = 8, opacity = 0.7)
+        ) %>%
+            plotly::layout(
+                title = "DIABLO Variable Loadings (Interactive)",
+                xaxis = list(title = "Component 1"),
+                yaxis = list(title = "Component 2")
+            )
+        print(htmltools::tagList(p))
+    } else {
+        cat("*Loadings CSV columns not in expected format.*\n")
+    }
+} else {
+    cat("*Loadings CSV not available for interactive plot.*\n")
+}
+```
+
+```{r diablo-loadings-interactive-legend, eval=has_diablo, results='asis'}
+figure_legend("Interactive DIABLO loadings plot. Features are colored by omics type. Hover for feature details.")
 ```
 
 ```{r diablo-feature-heatmap, eval=has_diablo, results='asis'}
@@ -1117,7 +1768,7 @@ if (length(mofa_lfc_plots) > 0) {
 ## Loadings-Based Pathway Enrichment {.tabset}
 
 ```{r loadings-enrich-note, eval=!has_loadings_enrich, results='asis'}
-cat("*No loadings-based enrichment results available. DIABLO/MOFA2 may not have been configured or enrichment may have failed.*\n")
+cat("*Loadings-based enrichment requires a standard organism annotation database (org.db). For non-model organisms like Giardia, loadings enrichment is not available. See the Cross-Omics Pathway Comparison section for GMT-based enrichment results.*\n")
 ```
 
 ```{r loadings-enrich-diablo, eval=has_loadings_enrich, results='asis'}
@@ -1207,6 +1858,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("Proportion of the RNA effect on phenotype that is mediated through protein levels. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating — the sequential ignorability assumption (no unmeasured confounders) is untestable.")
     render_commentary("mediation_proportion")
+} else {
+    cat("*Mediation analysis requires a continuous phenotype/outcome variable in the sample metadata. Not available for this dataset (binary condition only).*\n\n")
 }
 ```
 
@@ -1255,6 +1908,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("Protein -> Metabolite -> Phenotype mediation. Tests whether each protein's effect on the phenotype is mediated through its best-correlated metabolite. Does not require RNA-seq — uses proteomics + metabolomics directly. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating.")
     render_commentary("prot_metab_mediation")
+} else {
+    cat("*Protein-metabolite mediation requires a continuous phenotype/outcome variable. Not available for binary conditions.*\n\n")
 }
 ```
 
@@ -1292,9 +1947,24 @@ pm_pairs <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant
 if (file.exists(pm_pairs)) {
     df <- read.csv(pm_pairs, stringsAsFactors = FALSE)
     if (nrow(df) > 0) {
+        # Resolve HMDB IDs to metabolite names
+        if ("metabolite" %in% colnames(df)) {
+            proj_dir <- cfg$project$dir %||% "/home/multiomics-core"
+            hmdb_lookup <- file.path(proj_dir, "data", "hmdb_compound_names.tsv")
+            if (file.exists(hmdb_lookup)) {
+                hmdb_db <- tryCatch(read.delim(hmdb_lookup, stringsAsFactors = FALSE),
+                                    error = function(e) NULL)
+                if (!is.null(hmdb_db) && all(c("HMDB", "Name") %in% colnames(hmdb_db))) {
+                    idx <- match(df$metabolite, hmdb_db$HMDB)
+                    resolved <- hmdb_db$Name[idx]
+                    has_name <- !is.na(resolved) & resolved != ""
+                    df$metabolite_name <- ifelse(has_name, resolved, df$metabolite)
+                }
+            }
+        }
         # Reorder columns: annotation columns first, drop abs_cor (redundant)
-        display_cols <- c("protein", "gene_symbol", "metabolite", "correlation",
-                          "padj", "ec_number", "enzyme_metabolite_link",
+        display_cols <- c("protein", "gene_symbol", "metabolite_name", "metabolite",
+                          "correlation", "padj", "ec_number", "enzyme_metabolite_link",
                           "is_transcription_factor")
         display_cols <- intersect(display_cols, colnames(df))
         df_display <- df[, display_cols, drop = FALSE]
@@ -1314,6 +1984,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("Multi-layer mediation testing whether protein effects on phenotype are mediated through metabolite levels. Each bar shows the proportion of the protein effect carried through the most correlated metabolite. This extends causal inference across all three omics layers but compounds confounding assumptions — interpret as hypothesis-generating.")
     render_commentary("multilayer_mediation")
+} else {
+    cat("*Multi-layer mediation requires a continuous phenotype/outcome variable. Not available for binary conditions.*\n\n")
 }
 ```
 
@@ -1368,6 +2040,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("Transcription factor activity inferred from target gene expression using dorothea/decoupleR regulons. Rows are TFs; columns are samples. Activity is estimated as the weighted mean of target expression, accounting for mode of regulation.")
     render_commentary("tf_activity")
+} else {
+    cat("*TF activity inference requires dorothea/decoupleR regulons for the organism. Not available for non-model organisms (e.g., Giardia lamblia).*\n\n")
 }
 ```
 
@@ -1387,6 +2061,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("PROGENy pathway activity inferred from proteomics data using decoupleR weighted mean. Rows are pathways; columns are samples. PROGENy uses perturbation-derived pathway-gene weights to estimate signaling pathway activity from protein abundance.")
     render_commentary("pathway_activity")
+} else {
+    cat("*PROGENy pathway activity requires human/mouse gene annotations. Not available for non-model organisms.*\n\n")
 }
 ```
 
@@ -1416,6 +2092,8 @@ if (file.exists(p)) {
     knitr::include_graphics(p)
     figure_legend("Co-expression network inferred using GENIE3/ARACNe/correlation from the available omics data (gene expression or protein abundance). Edges represent predicted co-regulatory relationships (association-based, not causal). Hub nodes with many connections are highlighted in red.")
     render_commentary("regulatory_network")
+} else {
+    cat("*Regulatory network not generated for this dataset.*\n\n")
 }
 ```
 

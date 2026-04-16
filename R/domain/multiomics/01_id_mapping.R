@@ -105,6 +105,15 @@ extract_gene_symbols <- function(row_data, rna_cfg) {
         return(as.character(row_data[[gene_id_col]]))
     }
 
+    # Fallback: use feature_id column or rownames (payload mode)
+    if ("feature_id" %in% colnames(row_data)) {
+        return(as.character(row_data$feature_id))
+    }
+
+    # Last resort: use rownames as gene symbols
+    rn <- rownames(row_data)
+    if (!is.null(rn) && length(rn) > 0) return(rn)
+
     NULL
 }
 
@@ -118,6 +127,10 @@ extract_protein_symbols <- function(row_data, prot_cfg) {
         genes <- as.character(row_data$Genes)
         # Handle multi-gene proteins: take first gene
         genes <- sapply(strsplit(genes, ";"), function(x) trimws(x[1]))
+        # Handle "GL50803_xxx | gene_name" format (pipe-separated)
+        genes <- sapply(strsplit(genes, "\\|"), function(x) trimws(x[1]))
+        # Remove empty strings
+        genes[genes == "" | genes == "NA"] <- NA
         return(genes)
     }
 

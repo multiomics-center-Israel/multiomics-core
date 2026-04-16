@@ -59,3 +59,19 @@ Rplot.png
 
 # User-specific Claude Code settings
 .claude/settings.local.json
+
+# Python virtual environments
+.mummichog_venv/
+
+# Windows zone identifier files
+*:Zone.Identifier
+
+# Temporary discussion/review reports
+MERGE_DISCUSSION_REPORT.*
+PR*_report.html
+
+# Local targets state
+_targets.yaml
+
+# Test output artifacts
+tests/testthat/test_outputs/

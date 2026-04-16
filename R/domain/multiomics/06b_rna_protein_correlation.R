@@ -29,7 +29,14 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
     message("Running RNA-Protein correlation analysis...")
 
     # Convert MAE to legacy format for easier access
-    mae_data <- .mae_to_legacy(mae, de_results, gene_protein_mapping)
+    mae_data <- tryCatch(
+        .mae_to_legacy(mae, de_results, gene_protein_mapping),
+        error = function(e) {
+            warning("MAE conversion failed: ", e$message, ". Using minimal legacy structure.")
+            list(mae = mae, harmonized_omics = list(), metadata = data.frame(),
+                 common_samples = colnames(mae), gene_mapping = NULL)
+        }
+    )
 
     # Create output directories if specified
     if (!is.null(out_dir)) {
@@ -44,6 +51,26 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
     rna_mat <- mae_data$harmonized_omics$transcriptomics$normalized_matrix
     prot_mat <- mae_data$harmonized_omics$proteomics$normalized_matrix
     gene_mapping <- mae_data$gene_mapping
+
+    # Fallback: load gene_mapping from CSV if not available from MAE
+    if (is.null(gene_mapping) && !is.null(out_dir)) {
+        gpm_csv <- file.path(dirname(out_dir), "gene_protein_mapping.csv")
+        if (file.exists(gpm_csv)) {
+            gpm <- read.csv(gpm_csv, stringsAsFactors = FALSE)
+            if (all(c("gene_id", "protein_id") %in% colnames(gpm))) {
+                rna_rows <- data.frame(omics = "transcriptomics",
+                    feature_id = gpm$gene_id,
+                    gene_symbol = gpm$gene_symbol %||% gpm$gene_id,
+                    stringsAsFactors = FALSE)
+                prot_rows <- data.frame(omics = "proteomics",
+                    feature_id = gpm$protein_id,
+                    gene_symbol = gpm$gene_symbol %||% gpm$protein_id,
+                    stringsAsFactors = FALSE)
+                gene_mapping <- rbind(rna_rows, prot_rows)
+                message("  Loaded gene_mapping from CSV: ", nrow(gpm), " pairs")
+            }
+        }
+    }
 
     cor_df <- NULL
     summary_stats <- list(
@@ -180,17 +207,35 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 
     # Fall back to extracted single-table if precomputed not available
     if (length(rna_de_tables) == 0) {
+        # Try from mae_data first
         rna_obj <- mae_data$harmonized_omics$transcriptomics
-        rna_de <- rna_obj$de_table %||% rna_obj$da_table
-        if (!is.null(rna_de) && !all(grepl("^\\d+$", head(rna_de$feature_id, 20)))) {
-            rna_de_tables <- list(contrast_1 = rna_de)
+        rna_de <- if (!is.null(rna_obj)) {
+            rna_obj$de_table %||% rna_obj$da_table %||% rna_obj$de_stats
+        } else NULL
+        # If that failed, try from de_results directly (payload mode)
+        if (is.null(rna_de) && !is.null(de_results)) {
+            rna_de <- de_results$transcriptomics %||% de_results$rna
+        }
+        if (!is.null(rna_de)) {
+            rna_de <- .normalize_de_file_columns(rna_de)
+            if (!is.null(rna_de) && "log2FC" %in% colnames(rna_de)) {
+                rna_de_tables <- list(contrast_1 = rna_de)
+            }
         }
     }
     if (length(prot_de_tables) == 0) {
         prot_obj <- mae_data$harmonized_omics$proteomics
-        prot_de <- prot_obj$da_table %||% prot_obj$de_table
-        if (!is.null(prot_de) && !all(grepl("^\\d+$", head(prot_de$feature_id, 20)))) {
-            prot_de_tables <- list(contrast_1 = prot_de)
+        prot_de <- if (!is.null(prot_obj)) {
+            prot_obj$da_table %||% prot_obj$de_table %||% prot_obj$de_stats
+        } else NULL
+        if (is.null(prot_de) && !is.null(de_results)) {
+            prot_de <- de_results$proteomics
+        }
+        if (!is.null(prot_de)) {
+            prot_de <- .normalize_de_file_columns(prot_de)
+            if (!is.null(prot_de) && "log2FC" %in% colnames(prot_de)) {
+                prot_de_tables <- list(contrast_1 = prot_de)
+            }
         }
     }
 
@@ -304,18 +349,56 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         }
     }
 
-    # log2FC
+    # log2FC — try exact matches first, then pattern matches
     if (!"log2FC" %in% colnames(df)) {
         fc_candidates <- c("log2FoldChange", "logFC", "log2fc")
         found_fc <- intersect(fc_candidates, colnames(df))
-        if (length(found_fc) > 0) df$log2FC <- df[[found_fc[1]]]
+        if (length(found_fc) > 0) {
+            df$log2FC <- df[[found_fc[1]]]
+        } else {
+            # Pattern match for columns like "log2FoldChange.contrast_name"
+            log2_cols <- grep("^log2FoldChange\\.", colnames(df), value = TRUE)
+            logfc_cols <- grep("^logFC[._]", colnames(df), value = TRUE)
+            if (length(log2_cols) > 0) {
+                df$log2FC <- df[[log2_cols[1]]]
+            } else if (length(logfc_cols) > 0) {
+                df$log2FC <- df[[logfc_cols[1]]]
+            } else {
+                # Last resort: convert linearFC to log2FC
+                linfc_cols <- grep("^linearFC", colnames(df), value = TRUE)
+                if (length(linfc_cols) > 0) {
+                    lfc <- df[[linfc_cols[1]]]
+                    # Signed linearFC: negative = downregulated
+                    df$log2FC <- ifelse(lfc >= 0, log2(pmax(lfc, 1e-10)),
+                                        -log2(pmax(abs(lfc), 1e-10)))
+                }
+            }
+        }
     }
 
     # padj
     if (!"padj" %in% colnames(df)) {
         padj_candidates <- c("adj.P.Val", "FDR", "p.adjust", "qvalue")
         found_padj <- intersect(padj_candidates, colnames(df))
-        if (length(found_padj) > 0) df$padj <- df[[found_padj[1]]]
+        if (length(found_padj) > 0) {
+            df$padj <- df[[found_padj[1]]]
+        } else {
+            # Pattern match for suffixed columns
+            padj_cols <- grep("^(padj|adj\\.P\\.Val|FDR)[._]", colnames(df), value = TRUE)
+            if (length(padj_cols) > 0) df$padj <- df[[padj_cols[1]]]
+        }
+    }
+
+    # pvalue
+    if (!"pvalue" %in% colnames(df)) {
+        pval_candidates <- c("P.Value", "PValue", "p.value")
+        found_pval <- intersect(pval_candidates, colnames(df))
+        if (length(found_pval) > 0) {
+            df$pvalue <- df[[found_pval[1]]]
+        } else {
+            pval_cols <- grep("^(pvalue|P\\.Value|p\\.value)[._]", colnames(df), value = TRUE)
+            if (length(pval_cols) > 0) df$pvalue <- df[[pval_cols[1]]]
+        }
     }
 
     df
@@ -661,9 +744,12 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
         id_col <- if ("FeatureID" %in% colnames(df)) "FeatureID" else if ("ID" %in% colnames(df)) "ID" else NULL
 
         if (length(fc_cols) > 0 && !is.null(id_col)) {
+            lfc <- df[[fc_cols[1]]]
             out <- data.frame(
                 feature_id = df[[id_col]],
-                log2FC = log2(df[[fc_cols[1]]]),
+                log2FC = ifelse(lfc >= 0,
+                                log2(pmax(lfc, 1e-10)),
+                                -log2(pmax(abs(lfc), 1e-10))),
                 stringsAsFactors = FALSE
             )
             if (length(padj_cols) > 0) out$padj <- df[[padj_cols[1]]]
@@ -700,6 +786,24 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
         found <- intersect(fc_candidates, colnames(df))
         if (length(found) > 0) {
             df$log2FC <- df[[found[1]]]
+        } else {
+            # Pattern match for suffixed columns like "log2FoldChange.contrast_name"
+            log2_cols <- grep("^log2FoldChange", colnames(df), value = TRUE)
+            logfc_cols <- grep("^logFC[._]", colnames(df), value = TRUE)
+            if (length(log2_cols) > 0) {
+                df$log2FC <- df[[log2_cols[1]]]
+            } else if (length(logfc_cols) > 0) {
+                df$log2FC <- df[[logfc_cols[1]]]
+            } else {
+                # Convert signed linearFC to log2FC
+                linfc_cols <- grep("^linearFC", colnames(df), value = TRUE)
+                if (length(linfc_cols) > 0) {
+                    lfc <- df[[linfc_cols[1]]]
+                    df$log2FC <- ifelse(lfc >= 0,
+                                        log2(pmax(lfc, 1e-10)),
+                                        -log2(pmax(abs(lfc), 1e-10)))
+                }
+            }
         }
     }
 

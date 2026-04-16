@@ -533,6 +533,11 @@ run_partition_clustering <- function(z_expr, config) {
 #' @export
 get_clustering_group_col <- function(cfg, meta) {
   group_col <- cfg$clustering$group_col
+  # Fall back to the main group/condition column used for DE
+  if (is.null(group_col) || !nzchar(group_col)) {
+    group_col <- cfg$effects$color %||% cfg$effects$group %||%
+                 cfg$de$condition_column %||% NULL
+  }
   if (is.null(group_col) || !nzchar(group_col)) {
     stop("clustering$group_col is required but missing or empty. ",
          "Set it in the config under clustering: group_col: \"<column_name>\"")
@@ -545,6 +550,33 @@ get_clustering_group_col <- function(cfg, meta) {
   }
   group_col
 }
+
+
+#' Build heatmap column annotation from config effects
+#'
+#' Returns a character vector of metadata column names to use for heatmap
+#' column annotations, or NULL if none configured.
+#'
+#' @param meta data.frame of sample metadata
+#' @param cfg  Mode config (e.g. \code{config$modes$rna})
+#' @return Character vector of column names, or NULL
+#' @export
+build_heatmap_annotation_col <- function(meta, cfg) {
+    # Explicit heatmap annotations from config
+    annot_cols <- cfg$effects$heatmap_annotations
+    if (!is.null(annot_cols)) {
+        annot_cols <- intersect(unlist(annot_cols), colnames(meta))
+        if (length(annot_cols) > 0) return(annot_cols)
+    }
+    # Default: use the group/color column
+    group_col <- cfg$effects$color %||% cfg$effects$group %||%
+                 cfg$clustering$group_col %||% NULL
+    if (!is.null(group_col) && group_col %in% colnames(meta)) {
+        return(group_col)
+    }
+    NULL
+}
+
 
 # ---- Clustering guards ----
 
@@ -757,8 +789,14 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
   # Configuration parameters
   k_fixed <- cl_cfg$k
-  k_max <- cl_cfg$k_max %||% 20
+  k_max <- min(cl_cfg$k_max %||% 20, nrow(z_gm) - 1)
   nstart <- cl_cfg$nstart %||% 25
+
+  # Not enough features for partition clustering
+  if (k_max < 2) {
+    message("[partition clustering] Only ", nrow(z_gm), " features — too few for partition clustering, skipping.")
+    return(list(clusters = NULL, group_means = gm, k = NA))
+  }
 
   clusters <- NULL
   final_k <- NULL

@@ -53,7 +53,7 @@ tryCatch({
 
 # Helper function for downloadable DT tables
 make_dt <- function(df, caption = NULL, pageLength = 15) {
-    DT::datatable(
+    tbl <- DT::datatable(
         df,
         caption = caption,
         extensions = 'Buttons',
@@ -68,6 +68,14 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
         ),
         rownames = FALSE
     )
+    # Format p-value columns in scientific notation
+    num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P|PValue|FDR|combined_p)"
+    pval_cols <- grep(pval_pat, num_cols, ignore.case = TRUE, value = TRUE)
+    other_cols <- setdiff(num_cols, pval_cols)
+    if (length(other_cols) > 0) tbl <- DT::formatRound(tbl, columns = other_cols, digits = 3)
+    if (length(pval_cols) > 0) tbl <- DT::formatSignif(tbl, columns = pval_cols, digits = 3)
+    tbl
 }
 
 # Paths
@@ -190,6 +198,12 @@ if (file.exists(final_results_file)) {
             de_data$GeneName <- ifelse(
                 !is.na(anno_match_setup$symbol) & anno_match_setup$symbol != anno_match_setup$gene_id,
                 anno_match_setup$symbol,
+                de_data$gene_id_clean
+            )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_data$GeneLabel <- ifelse(
+                de_data$GeneName != de_data$gene_id_clean,
+                paste0(de_data$GeneName, " (", de_data$gene_id_clean, ")"),
                 de_data$gene_id_clean
             )
         }
@@ -1261,6 +1275,22 @@ if (file.exists(final_results_file)) {
                 anno_match_vol$symbol,
                 de_data$gene_id_clean
             )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_data$GeneLabel <- ifelse(
+                de_data$GeneName != de_data$gene_id_clean,
+                paste0(de_data$GeneName, " (", de_data$gene_id_clean, ")"),
+                de_data$gene_id_clean
+            )
+        } else {
+            de_data$GeneLabel <- de_data[[1]]
+        }
+    } else {
+        # No annotation file — use raw gene IDs
+        id_col_vol2 <- if ("Gene" %in% names(de_data)) "Gene" else if ("FeatureID" %in% names(de_data)) "FeatureID" else NULL
+        if (!is.null(id_col_vol2)) {
+            de_data$gene_id_clean <- gsub("^Gene:", "", de_data[[id_col_vol2]])
+            de_data$GeneName <- de_data$gene_id_clean
+            de_data$GeneLabel <- de_data$gene_id_clean
         }
     }
 }
@@ -1271,8 +1301,11 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     padj_col <- grep(paste0("padj\\.", contrast), names(df), value = TRUE)[1]
     if (is.na(lfc_col) || is.na(padj_col)) return(NULL)
 
+    # Use GeneLabel (GeneName + gene_id) for display if available
+    gene_label <- if ("GeneLabel" %in% names(df)) df$GeneLabel else if ("GeneName" %in% names(df)) df$GeneName else df[[1]]
+
     plot_df <- data.frame(
-        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        gene = gene_label,
         logFC = as.numeric(df[[lfc_col]]),
         padj = as.numeric(df[[padj_col]]),
         stringsAsFactors = FALSE
@@ -1302,11 +1335,17 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     # Include both raw and adjusted p-values for cutoff panel
     pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
     raw_pval <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else plot_df$padj
+    # Pipeline pass flag — single source of truth for DE counts
+    pass_col <- paste0(contrast, "_pass")
+    pass_flag <- if (pass_col %in% names(df)) {
+        as.numeric(df[[pass_col]] %in% c(TRUE, 1))
+    } else NULL
     reg_df <- data.frame(name = as.character(plot_df$gene),
                          logFC = plot_df$logFC,
                          pval = raw_pval,
                          adjPval = plot_df$padj,
                          stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df, ycap = ycap_v)
 }
 
@@ -1604,8 +1643,11 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
     # Calculate mean expression per gene
     baseMean <- rowMeans(as.matrix(df[, expr_cols, drop = FALSE]), na.rm = TRUE)
 
+    # Use GeneLabel (GeneName + gene_id) for display if available
+    gene_label <- if ("GeneLabel" %in% names(df)) df$GeneLabel else if ("GeneName" %in% names(df)) df$GeneName else df[[1]]
+
     plot_df <- data.frame(
-        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        gene = gene_label,
         logFC = as.numeric(df[[lfc_col]]),
         padj = as.numeric(df[[padj_col]]),
         baseMean = baseMean,
@@ -1643,12 +1685,17 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
     # Filter to same rows as plot_df
     valid_rows <- !is.na(baseMean) & baseMean > 0
     raw_pval_filt <- raw_pval_all[valid_rows]
+    pass_col <- paste0(contrast, "_pass")
+    pass_flag <- if (pass_col %in% names(df)) {
+        as.numeric(df[[pass_col]] %in% c(TRUE, 1))[valid_rows]
+    } else NULL
     reg_df <- data.frame(name = as.character(plot_df$gene),
                          logFC = plot_df$logFC,
                          pval = raw_pval_filt,
                          adjPval = plot_df$padj,
                          avgExpr = plot_df$log10baseMean,
                          stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df)
 }
 ```
@@ -1888,11 +1935,17 @@ if (file.exists(de_summary_file)) {
                 anno_match$symbol,
                 de_summary_full$gene_id_clean
             )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_summary_full$GeneLabel <- ifelse(
+                de_summary_full$GeneName != de_summary_full$gene_id_clean,
+                paste0(de_summary_full$GeneName, " (", de_summary_full$gene_id_clean, ")"),
+                de_summary_full$gene_id_clean
+            )
             de_summary_full$gene_id_clean <- NULL
             cols <- names(de_summary_full)
             id_idx <- which(cols == id_col)
-            new_order <- c(cols[1:id_idx], "GeneName",
-                           setdiff(cols[(id_idx + 1):length(cols)], "GeneName"))
+            new_order <- c(cols[1:id_idx], "GeneName", "GeneLabel",
+                           setdiff(cols[(id_idx + 1):length(cols)], c("GeneName", "GeneLabel")))
             de_summary_full <- de_summary_full[, new_order]
         }
     }
@@ -2016,7 +2069,7 @@ meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAs
 group_col_exp <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
 
 if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
-    # Build gene display names
+    # Build gene display names: "GeneName (gene_id)" for unique identification
     gene_ids_exp <- rownames(norm_expr_exp)
     gene_display_exp <- gsub("^Gene:", "", gene_ids_exp)
 
@@ -2026,7 +2079,8 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
         anno_exp <- read.csv(anno_file_exp, stringsAsFactors = FALSE)
         symbols_exp <- anno_exp$symbol[match(gene_display_exp, anno_exp$gene_id)]
         has_sym <- !is.na(symbols_exp) & symbols_exp != gene_display_exp
-        gene_display_exp[has_sym] <- symbols_exp[has_sym]
+        # Use "GeneName (gene_id)" format for genes with a symbol
+        gene_display_exp[has_sym] <- paste0(symbols_exp[has_sym], " (", gene_display_exp[has_sym], ")")
     }
 
     # Build sample -> group mapping
@@ -2352,32 +2406,58 @@ Expression heatmap of top differentially expressed genes. Select the number of g
 # Load normalized expression data
 norm_expr_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
 norm_expr <- NULL
-if (file.exists(norm_expr_file) && !is.null(de_summary_full)) {
+# Load expression matrix regardless of de_summary_full — we can fall back to de_data
+if (file.exists(norm_expr_file)) {
     norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
+}
+
+# Build heatmap DE source: prefer de_summary_full, fall back to de_data
+heatmap_de_source <- de_summary_full
+if (is.null(heatmap_de_source) && !is.null(de_data)) {
+    # Build from final_results: sort by min padj, filter to DE genes only
+    heatmap_de_source <- de_data
+    padj_cols_hm <- grep("^padj\\.", names(heatmap_de_source), value = TRUE)
+    if (length(padj_cols_hm) > 0) {
+        heatmap_de_source$min_padj <- apply(heatmap_de_source[, padj_cols_hm, drop = FALSE], 1, min, na.rm = TRUE)
+        # Filter to pass_any if available
+        pass_col_hm <- grep("pass_any", names(heatmap_de_source), value = TRUE)[1]
+        if (!is.na(pass_col_hm)) {
+            heatmap_de_source <- heatmap_de_source[heatmap_de_source[[pass_col_hm]] == TRUE, ]
+        }
+        heatmap_de_source <- heatmap_de_source[order(heatmap_de_source$min_padj), ]
+    }
 }
 
 # Function to create heatmap for top N genes
 make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
-    if (is.null(expr_mat) || is.null(de_df)) return(NULL)
+    if (is.null(expr_mat) || is.null(de_df) || nrow(de_df) == 0) return(NULL)
 
     # Get top N gene IDs
     top_genes <- head(de_df, n_genes)
-    id_col <- if ("Gene" %in% names(top_genes)) "Gene" else names(top_genes)[1]
+    id_col <- if ("Gene" %in% names(top_genes)) "Gene" else if ("FeatureID" %in% names(top_genes)) "FeatureID" else names(top_genes)[1]
     gene_ids <- as.character(top_genes[[id_col]])
 
-    # Match to expression matrix
+    # Match to expression matrix (try both raw and cleaned IDs)
     gene_ids_clean <- gsub("^Gene:", "", gene_ids)
-    matched_idx <- which(rownames(expr_mat) %in% gene_ids | rownames(expr_mat) %in% gene_ids_clean)
+    rn <- rownames(expr_mat)
+    rn_clean <- gsub("^Gene:", "", rn)
+    matched_idx <- which(rn %in% gene_ids | rn %in% gene_ids_clean | rn_clean %in% gene_ids | rn_clean %in% gene_ids_clean)
 
     if (length(matched_idx) < 2) return(NULL)
 
     mat <- as.matrix(expr_mat[matched_idx, , drop = FALSE])
 
-    # Use gene names if available
-    if ("GeneName" %in% names(top_genes)) {
-        name_map <- setNames(top_genes$GeneName, gsub("^Gene:", "", top_genes[[id_col]]))
-        new_names <- name_map[rownames(mat)]
+    # Use GeneLabel (GeneName + gene_id) if available, otherwise GeneName
+    label_col <- if ("GeneLabel" %in% names(top_genes)) "GeneLabel" else if ("GeneName" %in% names(top_genes)) "GeneName" else NULL
+    if (!is.null(label_col)) {
+        name_map <- setNames(top_genes[[label_col]], gsub("^Gene:", "", top_genes[[id_col]]))
+        rn_mat_clean <- gsub("^Gene:", "", rownames(mat))
+        new_names <- name_map[rn_mat_clean]
         new_names[is.na(new_names)] <- rownames(mat)[is.na(new_names)]
+        # Ensure unique row names for pheatmap
+        if (any(duplicated(new_names))) {
+            new_names <- make.unique(new_names, sep = " #")
+        }
         rownames(mat) <- new_names
     }
 
@@ -2428,16 +2508,18 @@ group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
 ### Top 10
 
 ```{r heatmap-top10, fig.height=6, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(10, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source) > 0) {
+    tryCatch({
+        hm <- make_top_de_heatmap(10, norm_expr, heatmap_de_source, meta_df, group_col)
+        if (!is.null(hm)) print(hm)
+    }, error = function(e) cat("Heatmap error:", e$message))
 } else {
-    cat("Expression matrix not available.")
+    cat("Expression matrix or DE results not available.")
 }
 ```
 
 ```{r legend-heatmap-top10, results='asis', echo=FALSE}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 10 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
@@ -2445,14 +2527,14 @@ if (!is.null(norm_expr) && !is.null(de_summary_full)) {
 ### Top 50
 
 ```{r heatmap-top50, fig.height=8, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(50, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(50, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
 
 ```{r legend-heatmap-top50, results='asis', echo=FALSE}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 50 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
@@ -2460,14 +2542,14 @@ if (!is.null(norm_expr) && !is.null(de_summary_full)) {
 ### Top 100
 
 ```{r heatmap-top100, fig.height=10, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(100, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(100, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
 
 ```{r legend-heatmap-top100, results='asis', echo=FALSE}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 100 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
@@ -2475,14 +2557,14 @@ if (!is.null(norm_expr) && !is.null(de_summary_full)) {
 ### Top 200
 
 ```{r heatmap-top200, fig.height=12, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(200, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(200, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
 
 ```{r legend-heatmap-top200, results='asis', echo=FALSE}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 200 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
@@ -2490,19 +2572,19 @@ if (!is.null(norm_expr) && !is.null(de_summary_full)) {
 ### All DE
 
 ```{r heatmap-all, fig.height=14, fig.width=10}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
-    n_all <- nrow(de_summary_full)
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    n_all <- nrow(heatmap_de_source)
     if (n_all > 500) {
         cat(sprintf("Showing top 500 of %d DE genes (full heatmap too large).\n\n", n_all))
         n_all <- 500
     }
-    hm <- make_top_de_heatmap(n_all, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+    hm <- make_top_de_heatmap(n_all, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
 
 ```{r legend-heatmap-all, results='asis', echo=FALSE}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of all significantly differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```

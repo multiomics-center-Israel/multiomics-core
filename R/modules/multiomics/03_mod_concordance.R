@@ -44,6 +44,19 @@ mod_multiomics_concordance <- function(de_results, harmonization_res, config, ou
         }
 
         message("Concordance analysis complete")
+
+        # Generate concordance visualization plots
+        for (om_pair in names(concordance_res$concordance)) {
+            tbl <- concordance_res$concordance[[om_pair]]$concordance_table %||%
+                   concordance_res$concordance[[om_pair]]$merged
+            if (!is.null(tbl) && nrow(tbl) > 0) {
+                viz_dir <- file.path(out_dir, paste0("viz_", om_pair))
+                tryCatch(
+                    plot_concordance_visualization(tbl, viz_dir),
+                    error = function(e) warning("Concordance visualization failed: ", e$message)
+                )
+            }
+        }
     }
 
     concordance_res

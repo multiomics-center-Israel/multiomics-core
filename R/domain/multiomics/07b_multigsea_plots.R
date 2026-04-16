@@ -59,18 +59,31 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
         if (is.null(res1) || is.null(res2)) next
 
-        # Standardize 'term' column helper
+        # Standardize 'term' column helper — prefer pathway name columns,
+        # fall back to ID, and resolve numeric rownames via pathway/Description
         get_term_col <- function(df) {
-            if ("term" %in% colnames(df)) {
-                return(df$term)
+            candidates <- c("term", "ID", "Description", "pathway")
+            for (col in candidates) {
+                if (col %in% colnames(df)) {
+                    vals <- as.character(df[[col]])
+                    # Reject columns where all values are pure numeric
+                    # (these are just row indices, not real terms)
+                    if (!all(grepl("^\\d+$", vals[!is.na(vals)]))) {
+                        return(vals)
+                    }
+                }
             }
-            if ("ID" %in% colnames(df)) {
-                return(df$ID)
+            # Last resort: rownames, but if they look numeric try harder
+            rn <- rownames(df)
+            if (all(grepl("^\\d+$", rn[!is.na(rn)]))) {
+                # Try pathway or Description even if they were skipped
+                for (col in c("pathway", "Description", "ID")) {
+                    if (col %in% colnames(df)) {
+                        return(as.character(df[[col]]))
+                    }
+                }
             }
-            if ("Description" %in% colnames(df)) {
-                return(df$Description)
-            }
-            return(rownames(df))
+            return(rn)
         }
 
         res1$term <- get_term_col(res1)
@@ -369,10 +382,24 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                                       p_thresh = 0.05, out_dir) {
 
     get_term_col <- function(df) {
-        if ("term" %in% colnames(df)) return(df$term)
-        if ("ID" %in% colnames(df)) return(df$ID)
-        if ("Description" %in% colnames(df)) return(df$Description)
-        return(rownames(df))
+        candidates <- c("term", "ID", "Description", "pathway")
+        for (col in candidates) {
+            if (col %in% colnames(df)) {
+                vals <- as.character(df[[col]])
+                if (!all(grepl("^\\d+$", vals[!is.na(vals)]))) {
+                    return(vals)
+                }
+            }
+        }
+        rn <- rownames(df)
+        if (all(grepl("^\\d+$", rn[!is.na(rn)]))) {
+            for (col in c("pathway", "Description", "ID")) {
+                if (col %in% colnames(df)) {
+                    return(as.character(df[[col]]))
+                }
+            }
+        }
+        return(rn)
     }
 
     res1$term <- get_term_col(res1)
@@ -499,10 +526,22 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
         res <- per_omics[[om]]
         if (is.null(res) || !is.data.frame(res)) next
 
-        # Find term column
+        # Find term column (skip columns that are all-numeric row indices)
         term_col <- NULL
-        for (tc in c("term", "ID", "Description")) {
-            if (tc %in% colnames(res)) { term_col <- tc; break }
+        for (tc in c("term", "ID", "Description", "pathway")) {
+            if (tc %in% colnames(res)) {
+                vals <- as.character(res[[tc]])
+                if (!all(grepl("^\\d+$", vals[!is.na(vals)]))) {
+                    term_col <- tc
+                    break
+                }
+            }
+        }
+        if (is.null(term_col)) {
+            # Accept any available column as last resort
+            for (tc in c("pathway", "Description", "ID", "term")) {
+                if (tc %in% colnames(res)) { term_col <- tc; break }
+            }
         }
         if (is.null(term_col)) next
 
@@ -828,9 +867,13 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     kegg_org <- get_kegg_organism(organism)
     org_db <- get_organism_db(organism)
 
-    if (is.null(kegg_org) || is.null(org_db)) {
-        message("Multi-ORA: organism annotation not available for ", organism)
+    kegg_gmt_file <- config$modes$multiomics$enrichment$kegg_gmt_file
+    if (is.null(kegg_org) && is.null(kegg_gmt_file)) {
+        message("Multi-ORA: no KEGG organism code or GMT file available for ", organism)
         return(NULL)
+    }
+    if (is.null(org_db)) {
+        message("Multi-ORA: no org.db for ", organism, "; using GMT-based approach")
     }
 
     # --- Collect per-omics significant KEGG gene IDs ---
@@ -843,35 +886,65 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         de_tables <- extract_de_tables(de_data, om, harmonization_res)
         if (is.null(de_tables) || length(de_tables) == 0) next
 
-        # Map to ENTREZ IDs
-        id_map <- tryCatch(
-            map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
-            error = function(e) NULL
-        )
-        if (is.null(id_map) || nrow(id_map) == 0) next
+        if (!is.null(org_db)) {
+            # Standard path: map to ENTREZ IDs via org.db
+            id_map <- tryCatch(
+                map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
+                error = function(e) NULL
+            )
+            if (is.null(id_map) || nrow(id_map) == 0) next
 
-        # Collect significant features (padj < 0.05 in any contrast)
-        sig_ids <- character(0)
-        all_ids <- character(0)
-        for (nm in names(de_tables)) {
-            df <- de_tables[[nm]]
-            df_mapped <- merge(df, id_map, by = "feature_id")
-            all_ids <- c(all_ids, df_mapped$ENTREZID)
-
-            sig <- df_mapped$ENTREZID[!is.na(df_mapped$padj) & df_mapped$padj < 0.05]
-            if (length(sig) < 5) {
-                sig <- df_mapped$ENTREZID[!is.na(df_mapped$pvalue) & df_mapped$pvalue < 0.05]
+            sig_ids <- character(0)
+            all_ids <- character(0)
+            for (nm in names(de_tables)) {
+                df <- de_tables[[nm]]
+                df_mapped <- merge(df, id_map, by = "feature_id")
+                all_ids <- c(all_ids, df_mapped$ENTREZID)
+                sig <- df_mapped$ENTREZID[!is.na(df_mapped$padj) & df_mapped$padj < 0.05]
+                if (length(sig) < 5) {
+                    sig <- df_mapped$ENTREZID[!is.na(df_mapped$pvalue) & df_mapped$pvalue < 0.05]
+                }
+                sig_ids <- c(sig_ids, sig)
             }
-            sig_ids <- c(sig_ids, sig)
-        }
+            sig_ids <- unique(sig_ids[!is.na(sig_ids)])
+            all_ids <- unique(all_ids[!is.na(all_ids)])
+        } else {
+            # GMT fallback: use gene IDs directly (no ENTREZ conversion)
+            # For proteomics, map KAE -> GL via gene_protein_mapping
+            prot_to_gene <- NULL
+            if (om == "proteomics") {
+                prot_to_gene <- build_protein_to_gene_map(harmonization_res, config)
+            }
 
-        sig_ids <- unique(sig_ids[!is.na(sig_ids)])
-        all_ids <- unique(all_ids[!is.na(all_ids)])
+            sig_ids <- character(0)
+            all_ids <- character(0)
+            fc_list <- list()  # Store fold changes for pathview
+            for (nm in names(de_tables)) {
+                df <- de_tables[[nm]]
+                gene_ids <- df$feature_id
+                if (om == "proteomics" && !is.null(prot_to_gene)) {
+                    mapped <- prot_to_gene[gene_ids]
+                    valid <- !is.na(mapped)
+                    gene_ids <- mapped[valid]
+                    df <- df[valid, ]
+                }
+                all_ids <- c(all_ids, gene_ids)
+                sig_mask <- !is.na(df$padj) & df$padj < 0.05
+                if (sum(sig_mask) < 5) sig_mask <- !is.na(df$pvalue) & df$pvalue < 0.05
+                sig_ids <- c(sig_ids, gene_ids[sig_mask])
+                # Store FC for pathview
+                fc <- setNames(df$log2fc, gene_ids)
+                fc_list[[nm]] <- fc[!is.na(fc)]
+            }
+            sig_ids <- unique(sig_ids[!is.na(sig_ids)])
+            all_ids <- unique(all_ids[!is.na(all_ids)])
+        }
 
         if (length(sig_ids) > 0) {
             per_omics_sig[[om]] <- sig_ids
             per_omics_universe[[om]] <- all_ids
-            message("  ", om, ": ", length(sig_ids), " sig / ", length(all_ids), " total ENTREZ IDs")
+            if (exists("fc_list")) attr(per_omics_sig[[om]], "fc") <- fc_list
+            message("  ", om, ": ", length(sig_ids), " sig / ", length(all_ids), " total gene IDs")
         }
     }
 
@@ -886,7 +959,24 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     message("  Pooled: ", length(pooled_sig), " sig / ", length(pooled_universe),
             " universe genes across ", length(per_omics_sig), " omics")
 
-    # Convert ENTREZID to KEGG gene IDs
+    # GMT-based fallback: skip ENTREZ conversion, run ORA with GMT, generate pathview
+    if (is.null(org_db) && !is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
+        message("  Using GMT-based ORA and pathview (no org.db)")
+        gmt_ora_res <- .run_gmt_ora_and_pathview(
+            per_omics_sig = per_omics_sig,
+            pooled_sig = pooled_sig,
+            pooled_universe = pooled_universe,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            gmt_file = kegg_gmt_file,
+            kegg_org = kegg_org,
+            config = config,
+            out_dir = out_dir
+        )
+        return(gmt_ora_res)
+    }
+
+    # Standard path: Convert ENTREZID to KEGG gene IDs
     kegg_conv <- convert_entrez_to_kegg(pooled_universe, kegg_org)
     if (is.null(kegg_conv)) {
         message("Multi-ORA: KEGG ID conversion failed")
@@ -1671,4 +1761,154 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         tryCatch(grDevices::dev.off(), error = function(e2) NULL)
         NULL
     })
+}
+
+
+#' GMT-based ORA + pathview fallback for non-model organisms
+.run_gmt_ora_and_pathview <- function(per_omics_sig, pooled_sig, pooled_universe,
+                                       de_results, harmonization_res,
+                                       gmt_file, kegg_org, config, out_dir) {
+
+    pathways <- load_gmt_file(gmt_file)
+    if (is.null(pathways) || length(pathways) == 0) return(NULL)
+    pathway_names <- attr(pathways, "pathway_names") %||% names(pathways)
+
+    # Fisher's exact test ORA per pathway
+    ora_results <- data.frame(
+        pathway_id = character(0), pathway = character(0),
+        pvalue = numeric(0), padj = numeric(0),
+        n_sig_in_pathway = integer(0), n_pathway = integer(0),
+        n_sig_total = integer(0), n_universe = integer(0),
+        stringsAsFactors = FALSE
+    )
+
+    for (pw_id in names(pathways)) {
+        pw_genes <- pathways[[pw_id]]
+        sig_in_pw <- sum(pooled_sig %in% pw_genes)
+        n_pw <- sum(pooled_universe %in% pw_genes)
+        if (n_pw < 3) next
+
+        # Fisher's exact test (one-sided, enrichment)
+        mat <- matrix(c(
+            sig_in_pw,
+            length(pooled_sig) - sig_in_pw,
+            n_pw - sig_in_pw,
+            length(pooled_universe) - length(pooled_sig) - n_pw + sig_in_pw
+        ), nrow = 2)
+        mat[mat < 0] <- 0
+
+        ft <- tryCatch(fisher.test(mat, alternative = "greater"), error = function(e) NULL)
+        if (is.null(ft)) next
+
+        pw_name <- pathway_names[[pw_id]] %||% pw_id
+        ora_results <- rbind(ora_results, data.frame(
+            pathway_id = pw_id, pathway = pw_name,
+            pvalue = ft$p.value, padj = NA,
+            n_sig_in_pathway = sig_in_pw, n_pathway = n_pw,
+            n_sig_total = length(pooled_sig), n_universe = length(pooled_universe),
+            stringsAsFactors = FALSE
+        ))
+    }
+
+    if (nrow(ora_results) == 0) {
+        message("  GMT ORA: no pathways tested")
+        return(NULL)
+    }
+
+    ora_results$padj <- p.adjust(ora_results$pvalue, method = "BH")
+    ora_results <- ora_results[order(ora_results$pvalue), ]
+
+    message("  GMT ORA: ", sum(ora_results$padj < 0.05), " significant pathways (padj < 0.05)")
+
+    # Save ORA results
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    write.csv(ora_results, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
+
+    # --- Generate pathview maps for top pathways ---
+    # Note: pathview only works for organisms in its built-in 'bods' database
+    pv_supported <- FALSE
+    if (requireNamespace("pathview", quietly = TRUE)) {
+        bods <- tryCatch({ data(bods, package = "pathview", envir = environment()); bods },
+                         error = function(e) NULL)
+        if (!is.null(bods) && !is.null(kegg_org)) {
+            pv_supported <- any(grepl(kegg_org, bods[, 3]))
+        }
+    }
+    if (!pv_supported) {
+        message("  Pathview: organism '", kegg_org, "' not in pathview database. ",
+                "Pathway maps not available for non-model organisms.")
+    }
+    if (pv_supported) {
+        pathview_dir <- file.path(out_dir, "pathview")
+        dir.create(pathview_dir, recursive = TRUE, showWarnings = FALSE)
+
+        # Collect fold changes from all gene-based omics
+        all_fc <- numeric(0)
+        prot_to_gene <- build_protein_to_gene_map(harmonization_res, config)
+
+        for (om in names(de_results)) {
+            if (om == "metabolomics") next
+            de_tables <- extract_de_tables(de_results[[om]], om, harmonization_res)
+            if (is.null(de_tables) || length(de_tables) == 0) next
+            for (nm in names(de_tables)) {
+                df <- de_tables[[nm]]
+                gene_ids <- df$feature_id
+                if (om == "proteomics" && !is.null(prot_to_gene)) {
+                    mapped <- prot_to_gene[gene_ids]
+                    valid <- !is.na(mapped)
+                    gene_ids <- mapped[valid]
+                    df <- df[valid, ]
+                }
+                fc <- setNames(df$log2fc, gene_ids)
+                all_fc <- c(all_fc, fc[!is.na(fc)])
+            }
+        }
+        # Deduplicate: keep highest |FC|
+        all_fc <- all_fc[!duplicated(names(all_fc))]
+
+        # Generate pathview for top shared pathways (padj < 0.1 or top 5)
+        top_pw <- head(ora_results[ora_results$n_sig_in_pathway >= 2, ], 10)
+        if (nrow(top_pw) == 0) top_pw <- head(ora_results, 5)
+
+        pv_files <- character(0)
+        old_wd <- getwd()
+        setwd(pathview_dir)
+        for (i in seq_len(nrow(top_pw))) {
+            pw_id <- top_pw$pathway_id[i]
+            # Extract numeric KEGG pathway ID (e.g., gla00010 -> 00010)
+            pw_num <- sub("^(gla|map|ko)", "", pw_id)
+
+            tryCatch({
+                # For non-model organisms: prefix gene IDs with org code
+                # pathview expects "gla:GL50803_xxx" format for KEGG IDs
+                kegg_fc <- all_fc
+                needs_prefix <- !grepl(paste0("^", kegg_org, ":"), names(kegg_fc))
+                names(kegg_fc)[needs_prefix] <- paste0(kegg_org, ":", names(kegg_fc)[needs_prefix])
+
+                pv <- pathview::pathview(
+                    gene.data = kegg_fc,
+                    pathway.id = pw_num,
+                    species = kegg_org,
+                    gene.idtype = "kegg",
+                    out.suffix = "multi_ora",
+                    kegg.native = TRUE,
+                    same.layer = FALSE
+                )
+                pv_file <- paste0(kegg_org, pw_num, ".multi_ora.png")
+                if (file.exists(pv_file)) {
+                    pv_files <- c(pv_files, pv_file)
+                    message("  Pathview: ", top_pw$pathway[i], " -> ", pv_file)
+                }
+            }, error = function(e) {
+                message("  Pathview failed for ", pw_id, ": ", e$message)
+            })
+        }
+        setwd(old_wd)
+
+        if (length(pv_files) > 0) {
+            message("  Pathview: ", length(pv_files), " maps generated")
+        }
+    }
+
+    list(ora_results = ora_results, out_dir = out_dir)
 }

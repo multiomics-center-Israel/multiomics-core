@@ -23,18 +23,19 @@
 #'                (required for eigenms; ignored by other methods).
 #' @return Normalized numeric matrix (same dimensions).
 normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL,
-                              groups = NULL) {
+                              groups = NULL, ref_samples = NULL) {
     method <- tolower(method)
     assert_one_of(method, "sample_norm",
-                  c("none", "sum", "median", "pqn", "eigenms", "is"))
+                  c("none", "sum", "median", "pqn", "eigenms", "eigenms_forced", "is"))
 
     switch(method,
-        none    = mat,
-        sum     = norm_total_sum(mat),
-        median  = norm_median(mat),
-        pqn     = norm_pqn(mat),
-        eigenms = norm_eigenms(mat, groups),
-        is      = norm_internal_standard(mat, ref_col, row_data),
+        none           = mat,
+        sum            = norm_total_sum(mat),
+        median         = norm_median(mat),
+        pqn            = norm_pqn(mat, ref_samples = ref_samples),
+        eigenms        = norm_eigenms(mat, groups),
+        eigenms_forced = norm_eigenms_forced(mat, groups),
+        is             = norm_internal_standard(mat, ref_col, row_data),
         stop("Unknown sample normalization method: ", method)
     )
 }
@@ -69,18 +70,47 @@ norm_median <- function(mat) {
 #' Probabilistic Quotient Normalization (PQN)
 #'
 #' 1. Perform median normalization first.
-#' 2. Compute reference spectrum (median across samples per feature).
+#' 2. Compute reference spectrum:
+#'    - If \code{ref_samples} is provided, use the median of those samples
+#'      (e.g. QC pools) as the reference spectrum.
+#'    - Otherwise, use the median across all samples.
 #' 3. For each sample, compute quotients (sample / reference) and take the median.
 #' 4. Divide each sample by its median quotient.
 #'
 #' Features where the reference is 0 or NA are excluded from the quotient
 #' calculation (they cannot inform sample-level scaling).
-norm_pqn <- function(mat) {
+#'
+#' @param mat          Numeric matrix (features x samples).
+#' @param ref_samples  Optional character vector of sample (column) names to use
+#'                     as the reference spectrum. If a single sample is given, that
+#'                     sample's values are used directly. If multiple, their median
+#'                     per feature is used. If NULL (default), the median across
+#'                     all samples is used.
+#' @return Normalized numeric matrix (same dimensions).
+#'
+#' @references Dieterle F et al. (2006) Anal Chem 78:4281-4290.
+norm_pqn <- function(mat, ref_samples = NULL) {
     # Step 1: initial median normalization
     mat_mn <- norm_median(mat)
 
-    # Step 2: reference spectrum (feature-wise medians across samples)
-    ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
+    # Step 2: reference spectrum
+    if (!is.null(ref_samples)) {
+        ref_cols <- intersect(ref_samples, colnames(mat_mn))
+        if (length(ref_cols) == 0) {
+            warning("norm_pqn: none of ref_samples found in data columns; ",
+                    "falling back to median of all samples.")
+            ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
+        } else if (length(ref_cols) == 1) {
+            message(sprintf("norm_pqn: using single reference sample '%s'", ref_cols))
+            ref <- mat_mn[, ref_cols]
+        } else {
+            message(sprintf("norm_pqn: using median of %d reference samples (%s)",
+                            length(ref_cols), paste(ref_cols, collapse = ", ")))
+            ref <- apply(mat_mn[, ref_cols, drop = FALSE], 1, stats::median, na.rm = TRUE)
+        }
+    } else {
+        ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
+    }
 
     # Exclude features with zero/NA reference — they produce Inf quotients
     ref_ok <- is.finite(ref) & ref != 0
@@ -149,9 +179,12 @@ norm_eigenms <- function(mat, groups = NULL) {
     n_eigentrends <- rv$h.c
     message(sprintf("norm_eigenms (ProteoMM): found %d significant eigentrend(s)",
                     n_eigentrends))
+    # Store eigentrend count as attribute for downstream reporting
+    attr_info <- list(n_eigentrends = n_eigentrends, method = "ProteoMM_bootstrap")
 
     if (n_eigentrends == 0) {
         message("norm_eigenms: no significant systematic bias detected — returning original data.")
+        attr(mat, "eigenms_info") <- attr_info
         return(mat)
     }
 
@@ -168,6 +201,7 @@ norm_eigenms <- function(mat, groups = NULL) {
     if (nrow(mat_norm) == nrow(mat)) {
         rownames(mat_norm) <- rownames(mat)
         colnames(mat_norm) <- colnames(mat)
+        attr(mat_norm, "eigenms_info") <- attr_info
         return(mat_norm)
     }
 
@@ -183,7 +217,86 @@ norm_eigenms <- function(mat, groups = NULL) {
         message(sprintf("norm_eigenms: ProteoMM normalized %d/%d features; %d kept original values.",
                         n_kept, nrow(mat), nrow(mat) - n_kept))
     }
+    attr(mat_out, "eigenms_info") <- attr_info
     mat_out
+}
+
+
+#' EigenMS normalization — forced eigentrend removal (NOREVA-style)
+#'
+#' Unlike the ProteoMM version which uses bootstrap parallel analysis to
+#' determine the number of significant eigentrends, this implementation forces
+#' removal of a fixed number of eigentrends (default: 20% of samples, minimum 1).
+#' This is the approach used in NOREVA (Liang et al., 2020) and by the Technion
+#' metabolomics unit (Ifat Abramovich).
+#'
+#' WARNING: This method does not test whether the eigentrends are statistically
+#' significant. It may remove real biological variation in addition to technical
+#' bias. Use with caution and compare results to the ProteoMM version.
+#'
+#' References:
+#'   Karpievitch YV et al. (2014) PLoS ONE — EigenMS for metabolomics.
+#'   Liang et al. (2020) Nature Protocols — NOREVA.
+#'
+#' @param mat    Numeric matrix (features x samples), log-scale.
+#' @param groups Character/factor vector of group labels per sample.
+#' @param pct_eigentrends Fraction of samples to use as eigentrend count (default 0.2).
+#' @return Normalized numeric matrix (same dimensions).
+norm_eigenms_forced <- function(mat, groups = NULL, pct_eigentrends = 0.2) {
+    if (is.null(groups)) {
+        warning("norm_eigenms_forced: groups not provided — falling back to PQN.")
+        return(norm_pqn(mat))
+    }
+
+    groups <- as.factor(groups)
+    if (length(groups) != ncol(mat)) {
+        stop("norm_eigenms_forced: length(groups) must equal ncol(mat)")
+    }
+
+    n_features <- nrow(mat)
+    n_samples  <- ncol(mat)
+
+    # Transpose to samples x metabolites for lm fitting
+    m <- t(mat)
+
+    residuals_m <- matrix(NA_real_, n_samples, n_features)
+    fitted_m    <- matrix(NA_real_, n_samples, n_features)
+
+    for (j in seq_len(n_features)) {
+        y <- m[, j]
+        if (any(is.na(y))) next
+        fit <- stats::lm(y ~ groups)
+        residuals_m[, j] <- stats::resid(fit)
+        fitted_m[, j]    <- stats::fitted(fit)
+    }
+
+    ok_cols <- which(colSums(is.na(residuals_m)) == 0)
+    if (length(ok_cols) < 2) {
+        warning("norm_eigenms_forced: too few complete features; returning original.")
+        return(mat)
+    }
+
+    R <- residuals_m[, ok_cols]
+    svd_res <- svd(R)
+
+    # Force removal of n_bias eigentrends (20% of samples, min 1)
+    n_bias <- max(1L, round(pct_eigentrends * n_samples))
+    n_bias <- min(n_bias, length(svd_res$d) - 1L)
+
+    message(sprintf("norm_eigenms_forced: forcing removal of %d eigentrend(s) from %d samples",
+                    n_bias, n_samples))
+
+    U_bias <- svd_res$u[, seq_len(n_bias), drop = FALSE]
+    R_corrected <- R - U_bias %*% (t(U_bias) %*% R)
+
+    result <- m
+    result[, ok_cols] <- fitted_m[, ok_cols] + R_corrected
+
+    # Transpose back to features x samples
+    out <- t(result)
+    attr(out, "eigenms_info") <- list(n_eigentrends = n_bias, method = "forced_SVD",
+                                      pct_eigentrends = pct_eigentrends)
+    out
 }
 
 

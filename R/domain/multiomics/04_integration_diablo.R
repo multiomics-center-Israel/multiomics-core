@@ -121,6 +121,53 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         })
         dev.off()
 
+        # Circos plot (correlations between omics) — use sparse model for speed
+        plots$circos_plot <- file.path(out_dir, "diablo_circos_plot.png")
+        png(plots$circos_plot, width = 1400, height = 1400, res = 120)
+        tryCatch({
+            # Fit a sparse DIABLO model (block.splsda) with keepX to select
+            # a manageable number of features per block for circosPlot.
+            # The non-sparse block.plsda model hangs circosPlot on 300+ features.
+            keepX_per_block <- cfg$circos_keepX %||% 20L
+            data_blocks <- setdiff(diablo_model$names$blocks, "Y")
+            keepX_list <- lapply(data_blocks, function(b)
+                rep(min(keepX_per_block,
+                        length(diablo_model$names$colnames[[b]])),
+                    ncomp))
+            names(keepX_list) <- data_blocks
+
+            message("  Fitting sparse DIABLO (block.splsda) for circos plot ",
+                    "(keepX = ", keepX_per_block, " per block per component)...")
+
+            sparse_model <- mixOmics::block.splsda(
+                X = data_list,
+                Y = Y,
+                ncomp = ncomp,
+                design = design,
+                keepX = keepX_list
+            )
+
+            # Ensure Y is a factor for circosPlot color handling
+            if (!is.factor(sparse_model$Y)) {
+                sparse_model$Y <- as.factor(sparse_model$Y)
+            }
+
+            # Set up colors for blocks and correlations
+            n_blocks <- length(data_blocks)
+            block_colors <- grDevices::hcl.colors(n_blocks, palette = "Dark 3")
+
+            mixOmics::circosPlot(sparse_model,
+                                  cutoff = 0.7,
+                                  line = TRUE,
+                                  size.labels = 1.5,
+                                  color.blocks = block_colors,
+                                  color.cor = c("#B2182B", "#2166AC"))
+        }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("Circos plot failed:", e$message), cex = 1.2)
+        })
+        dev.off()
+
         message("  DIABLO plots saved to: ", out_dir)
     }
 

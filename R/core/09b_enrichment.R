@@ -55,6 +55,11 @@ load_gene_sets <- function(organism,
                            annotation = NULL,
                            target_id_type = "ensembl") {
 
+    # Expand "all" shorthand to all supported databases
+    if ("all" %in% pathway_database) {
+        pathway_database <- c("GO", "KEGG", "Reactome")
+    }
+
     gene_sets <- list()
     org_info <- get_organism_info(organism)
 
@@ -141,17 +146,16 @@ load_gene_sets <- function(organism,
 
     if (org_info$supported) {
 
-        # GO terms via OrgDb
-        if ("GO" %in% pathway_database) {
+        # GO terms via OrgDb — split by ontology (BP, CC, MF)
+        # Accept "GO" (loads all 3 ontologies separately) or specific "GO_BP", "GO_CC", "GO_MF"
+        go_requested <- any(grepl("^GO", pathway_database))
+        if (go_requested) {
             tryCatch({
                 if (!is.na(org_info$orgdb) && requireNamespace(org_info$orgdb, quietly = TRUE)) {
                     orgdb <- getExportedValue(org_info$orgdb, org_info$orgdb)
 
-                    # Use SYMBOL keytype for proteomics (gene symbols),
-                    # ENSEMBL keytype for RNA-seq (Ensembl gene IDs)
                     go_keytype <- if (target_id_type == "symbol") "SYMBOL" else "ENSEMBL"
 
-                    # Verify the keytype is available in this OrgDb
                     available_keytypes <- AnnotationDbi::keytypes(orgdb)
                     if (!go_keytype %in% available_keytypes) {
                         message("Keytype '", go_keytype, "' not available in OrgDb. ",
@@ -159,23 +163,123 @@ load_gene_sets <- function(organism,
                         go_keytype <- "ENSEMBL"
                     }
 
-                    go_bp <- AnnotationDbi::select(
+                    go_all <- AnnotationDbi::select(
                         orgdb,
                         keys = AnnotationDbi::keys(orgdb, keytype = go_keytype),
-                        columns = c(go_keytype, "GO"),
+                        columns = c(go_keytype, "GO", "ONTOLOGY"),
                         keytype = go_keytype
                     )
+                    go_all <- go_all[!is.na(go_all$GO) & !is.na(go_all$ONTOLOGY), ]
 
-                    go_bp <- go_bp[!is.na(go_bp$GO), ]
-                    go_sets <- split(go_bp[[go_keytype]], go_bp$GO)
-                    go_sets <- go_sets[lengths(go_sets) >= 10 & lengths(go_sets) <= 500]
+                    # Determine which GO ontologies to load
+                    if ("GO" %in% pathway_database) {
+                        go_onts <- c("BP", "CC", "MF")
+                    } else {
+                        go_onts <- sub("^GO_", "", grep("^GO_", pathway_database, value = TRUE))
+                    }
 
-                    gene_sets$GO <- go_sets
-                    message("Loaded ", length(go_sets), " GO gene sets (keytype: ",
-                            go_keytype, ")")
+                    for (ont in go_onts) {
+                        go_sub <- go_all[go_all$ONTOLOGY == ont, ]
+                        if (nrow(go_sub) == 0) next
+                        go_sets <- split(go_sub[[go_keytype]], go_sub$GO)
+                        go_sets <- go_sets[lengths(go_sets) >= 10 & lengths(go_sets) <= 500]
+                        gs_name <- paste0("GO_", ont)
+                        gene_sets[[gs_name]] <- go_sets
+                        message("Loaded ", length(go_sets), " ", gs_name,
+                                " gene sets (keytype: ", go_keytype, ")")
+                    }
                 }
             }, error = function(e) {
                 warning("Failed to load GO terms: ", e$message)
+            })
+        }
+
+        # Reactome pathways via ReactomePA
+        if ("Reactome" %in% pathway_database) {
+            tryCatch({
+                if (requireNamespace("ReactomePA", quietly = TRUE)) {
+                    orgdb <- getExportedValue(org_info$orgdb, org_info$orgdb)
+
+                    # ReactomePA needs Entrez IDs — build gene set lists keyed by target_id_type
+                    all_keys <- AnnotationDbi::keys(orgdb, keytype = if (target_id_type == "symbol") "SYMBOL" else "ENSEMBL")
+                    id_map <- tryCatch(
+                        AnnotationDbi::select(orgdb,
+                            keys = all_keys,
+                            keytype = if (target_id_type == "symbol") "SYMBOL" else "ENSEMBL",
+                            columns = c(if (target_id_type == "symbol") "SYMBOL" else "ENSEMBL", "ENTREZID")),
+                        error = function(e) NULL
+                    )
+
+                    if (!is.null(id_map) && nrow(id_map) > 0) {
+                        id_map <- id_map[!is.na(id_map$ENTREZID), ]
+                        entrez_to_target <- setNames(
+                            id_map[[if (target_id_type == "symbol") "SYMBOL" else "ENSEMBL"]],
+                            id_map$ENTREZID
+                        )
+
+                        # Fetch Reactome pathway-gene mappings
+                        reactome_organism <- gsub(" ", "_", organism)
+                        reactome_db <- tryCatch(
+                            ReactomePA:::get_Reactome_Env(),
+                            error = function(e) NULL
+                        )
+                        if (is.null(reactome_db)) {
+                            # Fallback: use enrichPathway on a dummy gene to trigger DB download,
+                            # then extract the gene sets
+                            reactome_gene2path <- tryCatch({
+                                rpa <- reactome.db::reactomeEXTID2PATHID
+                                rpa_df <- AnnotationDbi::toTable(rpa)
+                                rpa_df
+                            }, error = function(e) NULL)
+                        } else {
+                            reactome_gene2path <- tryCatch(
+                                AnnotationDbi::toTable(reactome_db),
+                                error = function(e) NULL
+                            )
+                        }
+
+                        # Build Reactome gene sets from reactome.db directly
+                        reactome_sets <- tryCatch({
+                            if (requireNamespace("reactome.db", quietly = TRUE)) {
+                                path2ext <- AnnotationDbi::toTable(reactome.db::reactomePATHID2EXTID)
+                                path2name <- AnnotationDbi::toTable(reactome.db::reactomePATHID2NAME)
+                                # Filter to organism
+                                org_key <- organism
+                                path2name_org <- path2name[grepl(org_key, path2name$path_name, ignore.case = TRUE), ]
+                                if (nrow(path2name_org) == 0) path2name_org <- path2name
+                                path2ext_org <- path2ext[path2ext$DB_ID %in% path2name_org$DB_ID, ]
+
+                                # Map Entrez to target ID type
+                                path2ext_org$target_id <- entrez_to_target[path2ext_org$gene_id]
+                                path2ext_org <- path2ext_org[!is.na(path2ext_org$target_id), ]
+
+                                # Create named gene sets
+                                r_sets <- split(path2ext_org$target_id, path2ext_org$DB_ID)
+                                r_sets <- r_sets[lengths(r_sets) >= 10 & lengths(r_sets) <= 500]
+
+                                # Use pathway names instead of IDs
+                                name_map <- setNames(path2name_org$path_name, path2name_org$DB_ID)
+                                name_map <- sub(paste0("^", org_key, ": "), "", name_map)
+                                new_names <- name_map[names(r_sets)]
+                                has_name <- !is.na(new_names) & nzchar(new_names)
+                                names(r_sets)[has_name] <- new_names[has_name]
+                                r_sets
+                            } else NULL
+                        }, error = function(e) {
+                            message("reactome.db extraction failed: ", e$message)
+                            NULL
+                        })
+
+                        if (!is.null(reactome_sets) && length(reactome_sets) > 0) {
+                            gene_sets$Reactome <- reactome_sets
+                            message("Loaded ", length(reactome_sets), " Reactome pathways")
+                        }
+                    }
+                } else {
+                    message("ReactomePA not installed. Install with: BiocManager::install('ReactomePA')")
+                }
+            }, error = function(e) {
+                warning("Failed to load Reactome pathways: ", e$message)
             })
         }
 

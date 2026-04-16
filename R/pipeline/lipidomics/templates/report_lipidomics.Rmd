@@ -53,12 +53,14 @@ make_contrast_label <- function(contrast_str) {
 }
 
 extract_contrast_table <- function(summary_df, contrast) {
+  linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+  logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
   data.frame(
     feature_id = summary_df$feature_id,
-    logFC      = summary_df[[paste0("logFC_", contrast)]],
-    AveExpr    = summary_df[[paste0("AveExpr_", contrast)]],
-    P.Value    = summary_df[[paste0("P.Value_", contrast)]],
-    adj.P.Val  = summary_df[[paste0("adj.P.Val_", contrast)]],
+    logFC      = logfc,
+    AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+    P.Value    = summary_df[[paste0("P.Value.", contrast)]],
+    adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
     stringsAsFactors = FALSE
   )
 }
@@ -939,6 +941,12 @@ if (!is.null(de_contrasts)) {
           adjPval = ctr_tbl$adj.P.Val,
           stringsAsFactors = FALSE
         )
+        pass_col_l <- paste0("pass.", ctr_label)
+        if (!is.null(de_res$summary_df) && pass_col_l %in% names(de_res$summary_df)) {
+          pf <- as.numeric(de_res$summary_df[[pass_col_l]])
+          pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
+          vol_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
+        }
         cat(cutoff_register_plot(
           paste0("volcano_plot_", vol_cid),
           vol_reg_df, "volcano", "Lipid", ctr
@@ -1131,6 +1139,12 @@ if (!is.null(de_contrasts)) {
             adjPval = ctr_tbl$adj.P.Val,
             stringsAsFactors = FALSE
           )
+          pass_col_l <- paste0("pass.", ctr_label)
+          if (!is.null(de_res$summary_df) && pass_col_l %in% names(de_res$summary_df)) {
+            pf <- as.numeric(de_res$summary_df[[pass_col_l]])
+            pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
+            ma_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
+          }
           cat(cutoff_register_plot(
             paste0("ma_plot_", ma_cid),
             ma_reg_df, "ma", "Lipid", ctr

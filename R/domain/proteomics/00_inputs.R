@@ -1,6 +1,6 @@
 #' Load proteomics inputs
 #' @param config list as returned by load_config()
-#' @return list (protein, sample_map, meta, contrasts, engine, ...)
+#' @return list (protein, sample_map, meta, contrasts, engine, peptides, ...)
 load_proteomics_inputs <- function(config) {
     inputs <- load_omics_inputs(config, mode = "proteomics")
 
@@ -11,6 +11,15 @@ load_proteomics_inputs <- function(config) {
         message("[load_proteomics_inputs] Using preprocessed_protein as protein matrix")
         inputs$protein <- inputs$preprocessed_protein
         inputs$source_type <- "preprocessed"
+    }
+
+    # --- Peptide-level data (optional) ---
+    # load_omics_inputs() already loads files$peptides when the path is a
+    # non-empty string.  If the config key is missing or blank the generic
+    # loader skips it, so inputs$peptides will be NULL – that is fine.
+    if (!is.null(inputs$peptides)) {
+        message(sprintf("[load_proteomics_inputs] Peptide data loaded: %d rows x %d cols",
+                        nrow(inputs$peptides), ncol(inputs$peptides)))
     }
 
     inputs

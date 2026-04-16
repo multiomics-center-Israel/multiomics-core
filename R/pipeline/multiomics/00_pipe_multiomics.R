@@ -18,7 +18,19 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_harmonization,
             {
-                # Check if at least 2 omics pipelines have run
+                # Payload mode: load from pre-computed shiny RDS files
+                if (identical(config$modes$multiomics$input_mode, "outputs")) {
+                    inputs <- load_multiomics_inputs(config)
+                    return(mod_multiomics_harmonization(
+                        config = config,
+                        rna_pre = inputs$transcriptomics,
+                        prot_pre = inputs$proteomics,
+                        metab_pre = inputs$metabolomics,
+                        out_dir = multiomics_out_dir
+                    ))
+                }
+
+                # Standard mode: use targets from individual pipelines
                 available_omics <- character(0)
                 rna_data <- if (exists("rna_pre")) rna_pre else NULL
                 prot_data <- if (exists("prot_pre")) prot_pre else NULL
@@ -51,8 +63,29 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_de_results,
             {
+                # Ensure config is resolved before proceeding
+                cfg <- config
                 de_list <- list()
 
+                # Payload mode: extract DE stats from loaded payloads
+                if (identical(cfg$modes$multiomics$input_mode, "outputs")) {
+                    payload_paths <- cfg$modes$multiomics$payload_paths
+                    key_to_omics <- c(rna = "transcriptomics", proteomics = "proteomics",
+                                      metabolomics = "metabolomics")
+                    for (key in names(payload_paths)) {
+                        path <- payload_paths[[key]]
+                        if (!is.null(path) && file.exists(path)) {
+                            payload <- readRDS(path)
+                            if (!is.null(payload$de_stats)) {
+                                omics_name <- key_to_omics[[key]] %||% key
+                                de_list[[omics_name]] <- payload$de_stats
+                            }
+                        }
+                    }
+                    return(if (length(de_list) == 0) NULL else de_list)
+                }
+
+                # Standard mode
                 if (exists("rna_de_res") && !is.null(rna_de_res)) {
                     de_list$transcriptomics <- rna_de_res
                 }
@@ -73,8 +106,31 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_enrichment_results,
             {
+                # Ensure config dependency
+                cfg <- config
                 enrich_list <- list()
 
+                # Payload mode: extract enrichment from payloads if available
+                if (identical(cfg$modes$multiomics$input_mode, "outputs")) {
+                    payload_paths <- cfg$modes$multiomics$payload_paths
+                    key_to_omics <- c(rna = "transcriptomics", proteomics = "proteomics",
+                                      metabolomics = "metabolomics")
+                    for (key in names(payload_paths)) {
+                        path <- payload_paths[[key]]
+                        if (!is.null(path) && file.exists(path)) {
+                            payload <- readRDS(path)
+                            # Try common enrichment field names
+                            enrich <- payload$enrichment_gsea %||% payload$pathway_res %||% NULL
+                            if (!is.null(enrich)) {
+                                omics_name <- key_to_omics[[key]] %||% key
+                                enrich_list[[omics_name]] <- enrich
+                            }
+                        }
+                    }
+                    return(if (length(enrich_list) == 0) NULL else enrich_list)
+                }
+
+                # Standard mode
                 if (exists("rna_pathway_res") && !is.null(rna_pathway_res)) {
                     enrich_list$transcriptomics <- rna_pathway_res
                 }

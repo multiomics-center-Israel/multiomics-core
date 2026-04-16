@@ -47,8 +47,8 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
     }
 
     # --- DE statistics ---
-    # Extract from de_res$tables (per-contrast data frames with padj, log2FoldChange)
-    # or from de_res$summary_df (wide format with padj.ContrastName columns)
+    # Single source of truth: use pipeline pass columns ({cn}_pass) which encode
+    # the pipeline's significance decision. Fallback: recompute from padj + FC.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
     de_contrasts <- list()
 
@@ -56,46 +56,68 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
     fc_lin <- rna_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
-        # Primary path: per-contrast tables (each has padj, log2FoldChange)
+    if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+
+        # Try pass columns first (single source of truth)
+        pass_cols <- grep("_pass$", names(sdf), value = TRUE)
+        pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+
+        if (length(pass_cols) > 0) {
+            for (pcol in pass_cols) {
+                cn <- sub("_pass$", "", pcol)
+                is_sig <- !is.na(sdf[[pcol]]) & sdf[[pcol]] %in% c(TRUE, 1)
+                fc_col <- paste0("log2FoldChange.", cn)
+                if (!(fc_col %in% names(sdf))) fc_col <- paste0("linearFC.", cn)
+                if (fc_col %in% names(sdf)) {
+                    fc_vals <- as.numeric(sdf[[fc_col]])
+                    up <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                    dn <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+                } else {
+                    up <- 0; dn <- 0
+                }
+                padj_col <- paste0("padj.", cn)
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(is_sig),
+                    up = up, down = dn,
+                    tested = if (padj_col %in% names(sdf)) sum(!is.na(sdf[[padj_col]])) else sum(is_sig)
+                )
+                n_de_total <- n_de_total + sum(is_sig)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        } else {
+            # Fallback: recompute from padj + LFC
+            padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
+            for (pc in padj_cols) {
+                cn <- sub("^padj\\.", "", pc)
+                lcol <- paste0("log2FoldChange.", cn)
+                if (!(lcol %in% names(sdf))) next
+                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
+                if (log2_fc > 0) sig <- sig & (abs(sdf[[lcol]]) >= log2_fc)
+                up <- sum(sig & sdf[[lcol]] > 0, na.rm = TRUE)
+                dn <- sum(sig & sdf[[lcol]] < 0, na.rm = TRUE)
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(sig, na.rm = TRUE),
+                    up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                )
+                n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        }
+    } else if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+        # Direct DE tables — fallback for non-summary_df pipelines
         for (cn in names(de_res$tables)) {
             tbl <- de_res$tables[[cn]]
             if (!is.data.frame(tbl) || !("padj" %in% names(tbl))) next
-
             sig <- !is.na(tbl$padj) & tbl$padj <= p_cut
             if (log2_fc > 0 && "log2FoldChange" %in% names(tbl)) {
                 sig <- sig & (abs(tbl$log2FoldChange) >= log2_fc)
             }
-
-            up <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange > 0, na.rm = TRUE) else NA
-            dn <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange < 0, na.rm = TRUE) else NA
-
+            up <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange > 0, na.rm = TRUE) else 0
+            dn <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange < 0, na.rm = TRUE) else 0
             de_contrasts[[cn]] <- list(
                 name = cn, total = sum(sig, na.rm = TRUE),
-                up = up %||% 0, down = dn %||% 0, tested = sum(!is.na(tbl$padj))
-            )
-            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
-            n_de_up <- n_de_up + (up %||% 0); n_de_down <- n_de_down + (dn %||% 0)
-        }
-    } else if (!is.null(de_res$summary_df)) {
-        # Fallback: wide-format summary_df (padj.ContrastName columns)
-        sdf <- de_res$summary_df
-        padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
-
-        for (pc in padj_cols) {
-            cn <- sub("^padj\\.", "", pc)
-            lcol <- paste0("log2FoldChange.", cn)
-            if (!(lcol %in% names(sdf))) next
-
-            sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
-            if (log2_fc > 0) sig <- sig & (abs(sdf[[lcol]]) >= log2_fc)
-
-            up <- sum(sig & sdf[[lcol]] > 0, na.rm = TRUE)
-            dn <- sum(sig & sdf[[lcol]] < 0, na.rm = TRUE)
-
-            de_contrasts[[cn]] <- list(
-                name = cn, total = sum(sig, na.rm = TRUE),
-                up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                up = up, down = dn, tested = sum(!is.na(tbl$padj))
             )
             n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
             n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
