@@ -2880,19 +2880,13 @@ function loadExampleData() {
       document.getElementById('analyst').value      = d.analyst;
       document.getElementById('round').value        = d.round;
 
-      // 3. Organism + commentary: keep demo self-contained (no Claude CLI, no network)
+      // 3. Organism (must be a Latin binomial — matches <option value=...>) + commentary off.
+      // All other analyses (pathway, PPI, etc.) keep their defaults on: if organism + net
+      // are available they run; if not, the pipeline now degrades gracefully (see Rmd guards).
       var orgSel = document.getElementById('organism');
       if (orgSel) { orgSel.value = 'Homo sapiens'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
       var commSel = document.getElementById('commentary_backend');
       if (commSel) commSel.value = 'none';
-
-      // Disable analyses that need network / organism-specific databases
-      // (pathway, PPI, domain). The example is still a full DE + QC + report run.
-      var pathwaySel = document.getElementById('prot_pathway');
-      if (pathwaySel) { pathwaySel.value = 'none'; if (typeof toggleGseaRanking === 'function') toggleGseaRanking(); }
-      var ppiBox = document.getElementById('prot_ppi');        if (ppiBox) ppiBox.checked = false;
-      var advBox = document.getElementById('prot_adv_stats');  if (advBox) advBox.checked = true;
-      var clusBox = document.getElementById('prot_clustering'); if (clusBox) clusBox.checked = false;
 
       // 4. File paths (basename only — YAML builder prefixes with 'proteomics/')
       document.getElementById('prot_protein_path').value    = d.protein.path;
