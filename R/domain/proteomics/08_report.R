@@ -69,6 +69,57 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
     # Render into the parent results directory
     out_html <- file.path(parent_dir, "report_proteomics.html")
 
+    # Ensure any stale report / stub from a previous run is gone so the
+    # post-render existence check is meaningful (not fooled by leftovers).
+    if (file.exists(out_html)) try(file.remove(out_html), silent = TRUE)
+
+    # On Windows, `Rscript --vanilla` strips RSTUDIO_PANDOC and the user's PATH
+    # may not include pandoc. Probe common install locations and register the
+    # first hit with rmarkdown so the render succeeds.
+    ensure_pandoc_available <- function() {
+        if (isTRUE(rmarkdown::pandoc_available(version = "1.12.3"))) return(TRUE)
+
+        candidates <- character(0)
+        if (.Platform$OS.type == "windows") {
+            pf   <- Sys.getenv("ProgramFiles",       "C:/Program Files")
+            pf86 <- Sys.getenv("ProgramFiles(x86)",  "C:/Program Files (x86)")
+            lad  <- Sys.getenv("LOCALAPPDATA",       file.path(Sys.getenv("USERPROFILE"), "AppData/Local"))
+            candidates <- c(
+                file.path(pf,   "RStudio", "resources", "app", "bin", "quarto", "bin", "tools"),
+                file.path(pf,   "RStudio", "resources", "app", "bin", "pandoc"),
+                file.path(pf,   "RStudio", "bin", "quarto", "bin", "tools"),
+                file.path(pf,   "RStudio", "bin", "pandoc"),
+                file.path(pf86, "RStudio", "bin", "pandoc"),
+                file.path(pf,   "Pandoc"),
+                file.path(pf86, "Pandoc"),
+                file.path(lad,  "Pandoc"),
+                file.path(Sys.getenv("APPDATA"), "..", "Local", "Pandoc")
+            )
+        } else {
+            candidates <- c("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+        }
+        candidates <- candidates[dir.exists(candidates)]
+
+        for (d in candidates) {
+            exe <- if (.Platform$OS.type == "windows") "pandoc.exe" else "pandoc"
+            if (file.exists(file.path(d, exe))) {
+                tryCatch({
+                    rmarkdown::find_pandoc(dir = d)
+                    if (isTRUE(rmarkdown::pandoc_available(version = "1.12.3"))) {
+                        message("Using pandoc from: ", d)
+                        return(TRUE)
+                    }
+                }, error = function(e) NULL)
+            }
+        }
+        FALSE
+    }
+
+    if (!ensure_pandoc_available()) {
+        warning("pandoc >= 1.12.3 not found. Install pandoc or RStudio Desktop, ",
+                "or set RSTUDIO_PANDOC to a folder containing pandoc.exe.")
+    }
+
     message("Rendering proteomics report to: ", out_html)
 
     render_err      <- NULL
@@ -105,21 +156,35 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
                    err_log)
         message("Full render error + traceback saved to: ", err_log)
 
+        # Diagnose common root causes for a friendlier stub message.
+        err_msg <- render_err %||% "(not captured)"
+        hint <- if (grepl("pandoc", err_msg, ignore.case = TRUE)) {
+            paste0("<p><strong>Likely fix:</strong> pandoc is not installed or not on PATH. ",
+                   "Install <a href='https://pandoc.org/installing.html'>Pandoc</a>, ",
+                   "or install RStudio Desktop (which bundles pandoc), then re-run the pipeline.</p>")
+        } else if (grepl("HTTP|network|connection|Ensembl|biomart", err_msg, ignore.case = TRUE)) {
+            paste0("<p><strong>Likely fix:</strong> a network-dependent step (biomaRt / STRING / KEGG) could not reach the internet. ",
+                   "Check connectivity or disable pathway/PPI and re-run.</p>")
+        } else {
+            paste0("<p>Full traceback saved to <code>report_proteomics_error.log</code> in this folder.</p>")
+        }
+
         stub <- paste0(
             "<!doctype html><html><head><meta charset='utf-8'>",
             "<title>Proteomics Report (partial)</title>",
             "<style>body{font-family:system-ui,sans-serif;max-width:780px;margin:40px auto;padding:0 20px;color:#222}",
             "h1{color:#b91c1c}code{background:#f3f4f6;padding:2px 6px;border-radius:3px;font-size:0.95em}",
-            "pre{background:#0d1220;color:#e7eefc;padding:14px;border-radius:6px;overflow-x:auto;font-size:13px}",
+            "pre{background:#0d1220;color:#e7eefc;padding:14px;border-radius:6px;overflow-x:auto;font-size:13px;white-space:pre-wrap}",
             ".box{background:#fef3c7;border-left:4px solid #d97706;padding:14px 18px;border-radius:4px;margin:18px 0}",
+            "a{color:#2563eb}",
             "</style></head><body>",
             "<h1>Proteomics report did not render</h1>",
             "<div class='box'>The pipeline finished, but the HTML report template failed to render. ",
             "All upstream analysis outputs (CSV tables, plots, PPTX, payloads) are still available under ",
             "the results directory.</div>",
+            hint,
             "<p><strong>Render error:</strong></p>",
-            "<pre>", htmltools::htmlEscape(render_err %||% "(not captured)"), "</pre>",
-            "<p>Full traceback saved to <code>report_proteomics_error.log</code> in this folder.</p>",
+            "<pre>", htmltools::htmlEscape(err_msg), "</pre>",
             "</body></html>"
         )
         writeLines(stub, out_html)
