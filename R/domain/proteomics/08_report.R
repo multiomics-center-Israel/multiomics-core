@@ -71,20 +71,25 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
 
     message("Rendering proteomics report to: ", out_html)
 
-    render_err <- NULL
+    render_err      <- NULL
+    render_err_full <- NULL
     tryCatch({
         rmarkdown::render(
             input       = dest_rmd,
             output_file = out_html,
             output_dir  = parent_dir,
-            quiet       = TRUE,
+            quiet       = FALSE,  # surface inner knitr errors to the pipeline log
             envir       = new.env(parent = globalenv())
         )
     }, error = function(e) {
-        render_err <<- e$message
-        warning("Proteomics report rendering failed: ", e$message,
-                "\nTemplate: ", dest_rmd,
-                "\nCheck the Rmd for errors.")
+        render_err      <<- e$message
+        render_err_full <<- paste(c(e$message,
+                                     capture.output(traceback(max.lines = 40))),
+                                   collapse = "\n")
+        # Print to the live pipeline log so the user can see WHY it failed.
+        message("\n==== Proteomics Rmd render ERROR ====")
+        message(e$message)
+        message("====================================\n")
     })
 
     # Fallback: if the render did not produce an output file (a setup chunk or
@@ -93,11 +98,19 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
     if (!file.exists(out_html)) {
         warning("Proteomics report rendering did not produce output file.",
                 if (!is.null(render_err)) paste0(" Cause: ", render_err) else "")
+
+        # Drop the full error + traceback next to the stub so the user can send it.
+        err_log <- file.path(parent_dir, "report_proteomics_error.log")
+        writeLines(render_err_full %||% (render_err %||% "(error not captured)"),
+                   err_log)
+        message("Full render error + traceback saved to: ", err_log)
+
         stub <- paste0(
             "<!doctype html><html><head><meta charset='utf-8'>",
             "<title>Proteomics Report (partial)</title>",
             "<style>body{font-family:system-ui,sans-serif;max-width:780px;margin:40px auto;padding:0 20px;color:#222}",
             "h1{color:#b91c1c}code{background:#f3f4f6;padding:2px 6px;border-radius:3px;font-size:0.95em}",
+            "pre{background:#0d1220;color:#e7eefc;padding:14px;border-radius:6px;overflow-x:auto;font-size:13px}",
             ".box{background:#fef3c7;border-left:4px solid #d97706;padding:14px 18px;border-radius:4px;margin:18px 0}",
             "</style></head><body>",
             "<h1>Proteomics report did not render</h1>",
@@ -106,8 +119,7 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
             "the results directory.</div>",
             "<p><strong>Render error:</strong></p>",
             "<pre>", htmltools::htmlEscape(render_err %||% "(not captured)"), "</pre>",
-            "<p>Re-run with a valid organism and internet access to restore network-dependent sections. ",
-            "Contact the multiomics-core maintainers if the error persists.</p>",
+            "<p>Full traceback saved to <code>report_proteomics_error.log</code> in this folder.</p>",
             "</body></html>"
         )
         writeLines(stub, out_html)
