@@ -14,18 +14,25 @@
 # =============================================================================
 
 # --- Fast-start: if launched with --vanilla, add renv library path manually ---
+# Also propagate the library path + disable renv's autoloader in any child
+# R process the pipeline spawns (callr, parallel::makeCluster, etc.). Without
+# this, each subprocess re-runs renv::load() and spends ~27 s scanning the
+# project for dependencies — on Windows this caused pathway analysis to
+# balloon from ~5 min to ~12 min.
 if (!"renv" %in% loadedNamespaces()) {
-  renv_lib <- list.files(file.path(getwd(), "renv", "library"),
-                          recursive = TRUE, full.names = TRUE, pattern = "^$")
-  # Find the deepest directory containing actual packages
   lib_dirs <- list.dirs(file.path(getwd(), "renv", "library"), recursive = TRUE)
-  # The renv library path is the one that contains package subdirectories
   for (d in lib_dirs) {
     if (file.exists(file.path(d, "jsonlite"))) {
       .libPaths(c(d, .libPaths()))
       break
     }
   }
+  # Export current library paths so grandchild R processes find packages
+  # without having to activate renv themselves.
+  Sys.setenv(
+    R_LIBS                           = paste(.libPaths(), collapse = .Platform$path.sep),
+    RENV_CONFIG_AUTOLOADER_ENABLED   = "FALSE"
+  )
 }
 
 # --- Dependency check --------------------------------------------------------
