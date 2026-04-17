@@ -2939,9 +2939,12 @@ main <- function() {
     cli_header()
     cat("--- Config Wizard (browser) ---\n\n")
 
-    # State: will be set by /api/run-pipeline to trigger pipeline after server stops
+    # State: pipeline child process handle + log path for live-tailing
     .wizard_state <- new.env(parent = emptyenv())
     .wizard_state$run_config <- NULL
+    .wizard_state$child      <- NULL
+    .wizard_state$log_path   <- NULL
+    .wizard_state$config_path <- NULL
 
     # Find available port
     port <- 8080L
@@ -3065,6 +3068,46 @@ main <- function() {
                       body = resp))
         }
 
+        # API: load example proteomics dataset (returns paths + columns for auto-fill)
+        if (path == "/api/load-example" && method == "GET") {
+          ex_dir <- file.path(project_dir, "data", "example_proteomics", "proteomics")
+          if (!dir.exists(ex_dir)) {
+            return(list(status = 404L, headers = c(cors,
+                          list("Content-Type" = "application/json")),
+                        body = '{"error":"Example dataset missing. Run data/example_proteomics/proteomics/generate_example.R"}'))
+          }
+
+          read_header <- function(fn) {
+            fp <- file.path(ex_dir, fn)
+            if (!file.exists(fp)) return(list(path = fn, columns = character(0), text = ""))
+            txt  <- paste(readLines(fp, warn = FALSE), collapse = "\n")
+            first <- strsplit(txt, "\r?\n")[[1]][1]
+            sep <- if (grepl("\t", first)) "\t" else ","
+            cols <- trimws(gsub('["\']', '', strsplit(first, sep)[[1]]))
+            list(path = fn, columns = cols, text = txt)
+          }
+
+          resp_obj <- list(
+            project_name  = "example_proteomics",
+            analyst       = "Example Run",
+            round         = "A01",
+            organism      = "human",
+            mode          = "proteomics",
+            protein       = read_header("protein_matrix.csv"),
+            metadata      = read_header("metadata.csv"),
+            sample_map    = read_header("sample_map.csv"),
+            contrasts     = read_header("contrasts.csv")
+          )
+          # Strip metadata text only for non-metadata files to keep response small
+          resp_obj$protein$text    <- NULL
+          resp_obj$sample_map$text <- NULL
+          resp_obj$contrasts$text  <- NULL
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
+        }
+
         # API: save config (write YAML to config/)
         if (path == "/api/save-config" && method == "POST") {
           body_raw <- req$rook.input$read()
@@ -3090,7 +3133,7 @@ main <- function() {
                       body = resp))
         }
 
-        # API: run pipeline (save config, signal server to stop, then run)
+        # API: run pipeline (launch as background child, keep server alive for log streaming)
         if (path == "/api/run-pipeline" && method == "POST") {
           body_raw <- req$rook.input$read()
           body <- jsonlite::fromJSON(rawToChar(body_raw))
@@ -3104,23 +3147,139 @@ main <- function() {
           config_path <- file.path(config_dir, filename)
           writeLines(yaml_content, config_path)
 
-          cat(sprintf("  Config saved: %s\n", config_path))
-          cat("  Pipeline will start after wizard closes...\n")
+          # Reject if a run is already in progress (keeps UI state sane).
+          if (!is.null(.wizard_state$child) && .wizard_state$child$is_alive()) {
+            return(list(status = 409L,
+                        headers = c(cors, list("Content-Type" = "application/json")),
+                        body = '{"error":"A pipeline run is already in progress."}'))
+          }
 
-          # Signal to run after server stops
-          .wizard_state$run_config <- config_path
-          .wizard_state$run_fresh <- fresh
+          # Fresh log for this run.
+          logs_dir <- file.path(project_dir, "logs")
+          dir.create(logs_dir, showWarnings = FALSE)
+          ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
+          log_path <- file.path(logs_dir, sprintf("wizard_run_%s.log", ts))
+          file.create(log_path)
 
-          # Schedule server stop (after response is sent)
-          later::later(function() { httpuv::stopAllServers() }, 0.5)
+          if (!requireNamespace("processx", quietly = TRUE)) {
+            return(list(status = 500L,
+                        headers = c(cors, list("Content-Type" = "application/json")),
+                        body = '{"error":"processx package missing. Run install.bat."}'))
+          }
+
+          r_args <- c("--vanilla", "run.R", "--config", config_path)
+          if (isTRUE(fresh)) r_args <- c(r_args, "--fresh")
+
+          child <- processx::process$new(
+            command = "Rscript",
+            args    = r_args,
+            stdout  = log_path,
+            stderr  = "2>&1",
+            wd      = project_dir,
+            cleanup = TRUE
+          )
+
+          .wizard_state$child       <- child
+          .wizard_state$log_path    <- log_path
+          .wizard_state$config_path <- config_path
+
+          cat(sprintf("  Pipeline launched (pid=%d), logging to %s\n",
+                      child$get_pid(), log_path))
 
           resp <- jsonlite::toJSON(list(
-            message = "Pipeline starting... check your terminal."
+            message  = "Pipeline started",
+            log_url  = "/api/log",
+            status_url = "/api/run-status",
+            pid      = child$get_pid()
           ), auto_unbox = TRUE)
 
           return(list(status = 200L,
                       headers = c(cors, list("Content-Type" = "application/json")),
                       body = resp))
+        }
+
+        # API: tail the current run's log from a byte offset
+        if (path == "/api/log" && method == "GET") {
+          lp <- .wizard_state$log_path
+          if (is.null(lp) || !file.exists(lp)) {
+            return(list(status = 200L,
+                        headers = c(cors, list("Content-Type" = "application/json")),
+                        body = '{"text":"","offset":0,"done":false,"alive":false}'))
+          }
+          qs <- req$QUERY_STRING %||% ""
+          off <- 0L
+          m <- regmatches(qs, regexpr("offset=\\d+", qs))
+          if (length(m) > 0) off <- as.integer(sub("offset=", "", m))
+
+          sz <- file.info(lp)$size
+          if (is.na(sz)) sz <- 0L
+          text <- ""
+          if (sz > off) {
+            con <- file(lp, "rb")
+            on.exit(try(close(con), silent = TRUE), add = TRUE)
+            seek(con, where = off, origin = "start")
+            raw_bytes <- readBin(con, what = "raw", n = sz - off)
+            text <- rawToChar(raw_bytes)
+          }
+          alive <- !is.null(.wizard_state$child) && .wizard_state$child$is_alive()
+          resp <- jsonlite::toJSON(list(
+            text   = text,
+            offset = sz,
+            alive  = alive,
+            done   = !alive
+          ), auto_unbox = TRUE)
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # API: run status (alive + exit code + report path if we can find one)
+        if (path == "/api/run-status" && method == "GET") {
+          ch <- .wizard_state$child
+          if (is.null(ch)) {
+            return(list(status = 200L,
+                        headers = c(cors, list("Content-Type" = "application/json")),
+                        body = '{"alive":false,"started":false}'))
+          }
+          alive <- ch$is_alive()
+          exit_code <- NA
+          if (!alive) {
+            exit_code <- tryCatch(ch$get_exit_status(), error = function(e) NA)
+          }
+
+          # Best-effort locate a report HTML in outputs dir if run finished
+          report_path <- NA_character_
+          if (!alive && !is.null(.wizard_state$config_path)) {
+            cfg <- tryCatch(yaml::read_yaml(.wizard_state$config_path),
+                            error = function(e) NULL)
+            if (!is.null(cfg)) {
+              out_base <- file.path(cfg$project$dir %||% project_dir,
+                                    cfg$paths$out %||% "outputs")
+              hits <- list.files(out_base, pattern = "report_.*\\.html$",
+                                 recursive = TRUE, full.names = TRUE)
+              if (length(hits) > 0) {
+                report_path <- hits[which.max(file.mtime(hits))]
+              }
+            }
+          }
+
+          resp <- jsonlite::toJSON(list(
+            started   = TRUE,
+            alive     = alive,
+            exit_code = if (is.na(exit_code)) NULL else exit_code,
+            report    = if (is.na(report_path)) NULL else report_path
+          ), auto_unbox = TRUE, null = "null")
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # API: shutdown the wizard server (called by client when user clicks Close)
+        if (path == "/api/shutdown" && method == "POST") {
+          later::later(function() { httpuv::stopAllServers() }, 0.3)
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = '{"message":"shutting down"}'))
         }
 
         # 404 for anything else
@@ -3157,11 +3316,20 @@ main <- function() {
     )
     httpuv::stopAllServers()
 
-    # If run was requested, execute pipeline
+    # If an older-flow run_config was queued (pre-background runs), honor it.
     if (!is.null(.wizard_state$run_config)) {
       cat("\n")
       run_pipeline(.wizard_state$run_config,
                    fresh = isTRUE(.wizard_state$run_fresh))
+    }
+
+    # If a background child is still running when the server stops, wait for it.
+    if (!is.null(.wizard_state$child) && .wizard_state$child$is_alive()) {
+      cat("\n  Pipeline still running in background. Waiting for it to finish...\n")
+      cat(sprintf("  Live log: %s\n", .wizard_state$log_path))
+      .wizard_state$child$wait()
+      cat(sprintf("  Pipeline exited with code %s.\n",
+                  .wizard_state$child$get_exit_status()))
     }
 
     return(invisible(NULL))

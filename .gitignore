@@ -37,8 +37,11 @@ reports/
 *.tar.gz
 *.zip
 
-# Local data (do not commit)
-data/
+# Local data (do not commit) — ignore contents, not the dir itself,
+# so subdirectory exceptions (below) can be re-included.
+data/*
+# Exception: ship a tiny synthetic dataset for the wizard "Load Example" demo
+!data/example_proteomics/
 
 # Project-specific configs (use config/templates/ as reference)
 config/*.yaml

@@ -242,6 +242,14 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="header-badge"><span class="dot"></span> Config Wizard</div>
   <h1>multiomics-core</h1>
   <div class="header-sub">Generate a pipeline configuration file for your analysis</div>
+  <div style="margin-top:14px;">
+    <button type="button" class="btn btn-primary" id="btn_load_example"
+            onclick="loadExampleData()"
+            title="Fills all fields with a bundled synthetic proteomics dataset. Ready to Run.">
+      &#9733; Load Example Dataset (Proteomics)
+    </button>
+    <span class="hint" style="margin-left:10px;">First time? Click to try a ~10 sec demo run with built-in data.</span>
+  </div>
 </div>
 
 <!-- 1. Project Info -->
@@ -1210,6 +1218,27 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
 
 <div id="run_hint" style="text-align:center;margin-top:24px;font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;">
 </div>
+
+<!-- Live-run log overlay (hidden until Run clicked) -->
+<div id="run_overlay" style="display:none;position:fixed;inset:0;background:rgba(6,10,18,0.88);z-index:9999;align-items:center;justify-content:center;padding:24px;">
+  <div style="background:#0d1220;color:#e7eefc;border:1px solid #22324f;border-radius:10px;width:min(960px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.5);">
+    <div style="padding:16px 20px;border-bottom:1px solid #22324f;display:flex;align-items:center;gap:12px;">
+      <span id="run_spinner" style="display:inline-block;width:16px;height:16px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 0.9s linear infinite;"></span>
+      <span id="run_status_title" style="font-weight:600;font-size:16px;font-family:'DM Sans',system-ui,sans-serif;">Pipeline running...</span>
+      <span id="run_elapsed" style="margin-left:auto;font-size:12px;color:#8ea0b8;font-family:'JetBrains Mono',monospace;">0s</span>
+    </div>
+    <div style="padding:8px 20px;font-size:12px;color:#8ea0b8;font-family:'DM Sans',system-ui,sans-serif;">
+      You can leave this window open — the run continues in the background. All output from the analysis appears below.
+    </div>
+    <pre id="run_log" style="flex:1;overflow-y:auto;margin:0;padding:14px 20px;font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;line-height:1.55;background:#060a12;color:#c3d0e3;white-space:pre-wrap;word-break:break-word;min-height:320px;max-height:60vh;"></pre>
+    <div style="padding:14px 20px;border-top:1px solid #22324f;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+      <button type="button" id="run_open_report" class="btn btn-success" style="display:none;" onclick="openReport()">Open Report</button>
+      <button type="button" id="run_open_folder" class="btn" style="display:none;" onclick="copyReportPath()">Copy Report Path</button>
+      <button type="button" id="run_close_btn" class="btn" onclick="closeRunOverlay()">Hide (run keeps going)</button>
+    </div>
+  </div>
+</div>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 
 <!-- Toast notification -->
 <div class="toast" id="toast"></div>
@@ -2831,34 +2860,222 @@ function saveConfig() {
 }
 
 // ============================================================
-// Run Pipeline (via backend — saves config, closes wizard, runs in terminal)
+// Load Example Dataset (bundled synthetic proteomics data)
 // ============================================================
+function loadExampleData() {
+  var btn = document.getElementById('btn_load_example');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  fetch('/api/load-example')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast(d.error, 'error', 8000); return; }
+
+      // 1. Switch to Proteomics mode
+      setMode('proteomics');
+
+      // 2. Project info
+      document.getElementById('project_name').value = d.project_name;
+      document.getElementById('analyst').value      = d.analyst;
+      document.getElementById('round').value        = d.round;
+
+      // 3. Organism + commentary: keep demo self-contained (no Claude CLI needed)
+      var orgSel = document.getElementById('organism');
+      if (orgSel) { orgSel.value = 'human'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
+      var commSel = document.getElementById('commentary_backend');
+      if (commSel) commSel.value = 'none';
+
+      // 4. File paths (basename only — YAML builder prefixes with 'proteomics/')
+      document.getElementById('prot_protein_path').value    = d.protein.path;
+      document.getElementById('prot_metadata_path').value   = d.metadata.path;
+      document.getElementById('prot_sample_map_path').value = d.sample_map.path;
+      document.getElementById('prot_contrasts_path').value  = d.contrasts.path;
+
+      // 5. Populate column dropdowns via the standard path
+      function apply(prefix, info) {
+        if (!info || !info.columns || info.columns.length === 0) return;
+        detectedColumns[prefix] = info.columns;
+        var colsDiv = document.getElementById(prefix + '_cols');
+        if (colsDiv) {
+          colsDiv.textContent = 'Detected ' + info.columns.length + ' columns: ' +
+            info.columns.slice(0, 8).join(', ') + (info.columns.length > 8 ? '...' : '');
+          colsDiv.classList.add('visible');
+        }
+        var statusDiv = document.getElementById(prefix + '_status');
+        if (statusDiv) { statusDiv.textContent = 'Loaded: ' + info.path; statusDiv.className = 'upload-status visible success'; }
+        populateSelects(prefix, info.columns);
+      }
+      apply('prot_protein',    d.protein);
+      apply('prot_metadata',   d.metadata);
+      apply('prot_sample_map', d.sample_map);
+      apply('prot_contrasts',  d.contrasts);
+
+      // 6. Parse metadata rows (for contrast builder + sample exclusion panel)
+      if (d.metadata.text) {
+        var lines = d.metadata.text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+        if (lines.length >= 2) {
+          var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+          var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+          var rows = [];
+          for (var i = 1; i < lines.length; i++) {
+            var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+            var row = {};
+            for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+            rows.push(row);
+          }
+          metadataRows['prot_metadata'] = { header: header, rows: rows };
+        }
+      }
+
+      // 7. Pick sensible defaults for id_columns (user can change)
+      function setSel(id, val) { var s = document.getElementById(id); if (s) s.value = val; }
+      setSel('prot_protein_id_col', 'Protein.Group');
+      setSel('prot_sample_col',     'SampleID');
+      setSel('prot_group_col',      'Condition');
+
+      if (typeof updateContrastBuilder === 'function') updateContrastBuilder('prot');
+      if (typeof populateSampleExclusion === 'function') populateSampleExclusion('prot');
+
+      showToast('Example dataset loaded. Scroll down and click Run Pipeline.', 'success', 8000);
+      btn.textContent = '\u2713 Example Loaded';
+      setTimeout(function() {
+        btn.textContent = '\u2605 Load Example Dataset (Proteomics)';
+        btn.disabled = false;
+      }, 3000);
+    })
+    .catch(function(err) {
+      showToast('Failed to load example: ' + err.message, 'error', 8000);
+      btn.textContent = '\u2605 Load Example Dataset (Proteomics)';
+      btn.disabled = false;
+    });
+}
+
+// ============================================================
+// Run Pipeline (launches as background child; live log in overlay)
+// ============================================================
+var _runState = { offset: 0, startTs: 0, poller: null, elapsedTimer: null,
+                  reportPath: null, done: false };
+
 function runPipeline() {
-  if (!confirm('This will save the config and start the pipeline.\nThe wizard will close and progress will show in your terminal.\n\nContinue?')) return;
+  if (!confirm('This will save the config and start the pipeline.\nProgress will appear in a window above the form.\n\nContinue?')) return;
 
   var yaml = getCurrentYaml();
   var filename = getConfigFilename();
 
   document.getElementById('btn_run').disabled = true;
   document.getElementById('btn_run').textContent = 'Starting...';
-  showToast('Sending to pipeline...', 'info', 10000);
 
   fetch('/api/run-pipeline', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ yaml: yaml, filename: filename, fresh: true })
   })
-  .then(function(r) { return r.json(); })
+  .then(function(r) {
+    if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || ('HTTP ' + r.status)); });
+    return r.json();
+  })
   .then(function(data) {
-    document.getElementById('btn_run').textContent = 'Pipeline Running...';
-    showToast('Pipeline started! Check your terminal for progress.', 'success', 30000);
-    document.getElementById('run_hint').innerHTML = '<span style="color:var(--accent-green);font-size:14px;">Pipeline is running in your terminal. You can close this tab.</span>';
+    // Show the live-log overlay and begin polling.
+    _runState.offset = 0;
+    _runState.done = false;
+    _runState.reportPath = null;
+    _runState.startTs = Date.now();
+    document.getElementById('run_log').textContent = '';
+    document.getElementById('run_open_report').style.display = 'none';
+    document.getElementById('run_open_folder').style.display = 'none';
+    document.getElementById('run_status_title').textContent = 'Pipeline running...';
+    document.getElementById('run_spinner').style.display = 'inline-block';
+    document.getElementById('run_overlay').style.display = 'flex';
+
+    // Elapsed ticker
+    if (_runState.elapsedTimer) clearInterval(_runState.elapsedTimer);
+    _runState.elapsedTimer = setInterval(function() {
+      var sec = Math.floor((Date.now() - _runState.startTs) / 1000);
+      var m = Math.floor(sec / 60), s = sec % 60;
+      document.getElementById('run_elapsed').textContent =
+        (m > 0 ? m + 'm ' : '') + s + 's';
+    }, 1000);
+
+    // Start polling log
+    pollRunLog();
   })
   .catch(function(err) {
-    // Connection will drop because the server shuts down — that's expected
-    document.getElementById('btn_run').textContent = 'Pipeline Running...';
-    document.getElementById('run_hint').innerHTML = '<span style="color:var(--accent-green);font-size:14px;">Pipeline is running in your terminal. You can close this tab.</span>';
+    document.getElementById('btn_run').disabled = false;
+    document.getElementById('btn_run').textContent = 'Run Pipeline';
+    showToast('Failed to start pipeline: ' + err.message, 'error', 10000);
   });
+}
+
+function pollRunLog() {
+  if (_runState.poller) { clearTimeout(_runState.poller); _runState.poller = null; }
+
+  fetch('/api/log?offset=' + _runState.offset)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.text && d.text.length > 0) {
+        var pre = document.getElementById('run_log');
+        var atBottom = (pre.scrollTop + pre.clientHeight + 24) >= pre.scrollHeight;
+        pre.textContent += d.text;
+        if (atBottom) pre.scrollTop = pre.scrollHeight;
+      }
+      if (typeof d.offset === 'number') _runState.offset = d.offset;
+
+      if (d.done && !_runState.done) {
+        // Give the file system a moment, then check for report
+        setTimeout(onRunFinished, 400);
+      } else {
+        _runState.poller = setTimeout(pollRunLog, 1000);
+      }
+    })
+    .catch(function() {
+      // Server may have gone away (user closed). Stop polling.
+      _runState.poller = setTimeout(pollRunLog, 3000);
+    });
+}
+
+function onRunFinished() {
+  _runState.done = true;
+  if (_runState.elapsedTimer) { clearInterval(_runState.elapsedTimer); _runState.elapsedTimer = null; }
+  document.getElementById('run_spinner').style.display = 'none';
+
+  fetch('/api/run-status').then(function(r) { return r.json(); }).then(function(s) {
+    var ok = (s.exit_code === 0 || s.exit_code === '0');
+    if (ok) {
+      document.getElementById('run_status_title').textContent = 'Pipeline finished';
+    } else {
+      document.getElementById('run_status_title').textContent =
+        'Pipeline exited with code ' + (s.exit_code !== undefined ? s.exit_code : '?');
+    }
+    if (s.report) {
+      _runState.reportPath = s.report;
+      document.getElementById('run_open_report').style.display = '';
+      document.getElementById('run_open_folder').style.display = '';
+    }
+    document.getElementById('btn_run').disabled = false;
+    document.getElementById('btn_run').textContent = 'Run Pipeline';
+  });
+}
+
+function openReport() {
+  if (!_runState.reportPath) return;
+  // Browsers block file:// from http:// origin — copy to clipboard as a fallback
+  var url = 'file:///' + _runState.reportPath.replace(/\\/g, '/').replace(/^\//, '');
+  var w = window.open(url, '_blank');
+  if (!w) copyReportPath();
+}
+
+function copyReportPath() {
+  if (!_runState.reportPath) return;
+  navigator.clipboard.writeText(_runState.reportPath).then(function() {
+    showToast('Report path copied. Paste into browser or file explorer.', 'success', 8000);
+  }, function() {
+    prompt('Report path:', _runState.reportPath);
+  });
+}
+
+function closeRunOverlay() {
+  document.getElementById('run_overlay').style.display = 'none';
 }
 
 // ============================================================
