@@ -193,12 +193,10 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
     sample_col <- cfg$effects$samples %||% "sample_id"
 
-    mat  <- pre$expr_work
-    # Use pre-scaling (log-transformed) matrix for DE statistical tests.
-    # Autoscaling (mean-center + divide by SD) standardises every feature to
-    # mean=0, SD=1 which distorts within-group variance and produces
-    # uniform p-values.  Autoscaled data is for multivariate methods only.
-    mat_for_test <- pre$expr_log %||% mat
+    # Use the current DE-ready metabolomics matrix.
+    # In the current pipeline this is expr_work
+    # (normalized + transformed + optional drift correction; no feature scaling).
+    mat_for_test <- pre$expr_work
     meta <- pre$meta
     assert_numeric_matrix(mat_for_test, "metab_expr_for_test")
 
@@ -211,7 +209,6 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     mat_for_test <- bio$mat
     meta         <- bio$meta
     condition    <- bio$condition
-    mat          <- mat[, colnames(mat_for_test), drop = FALSE]
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
