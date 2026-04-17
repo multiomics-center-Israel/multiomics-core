@@ -67,6 +67,18 @@ echo.
 echo [OK] All packages installed.
 echo.
 
+:: Step 2b: Ensure pandoc is available (for HTML report rendering)
+echo [2b/4] Checking pandoc...
+Rscript --vanilla tools\install_pandoc.R
+if errorlevel 1 (
+    echo.
+    echo [WARNING] pandoc could not be installed automatically.
+    echo The pipeline will still run but the HTML report will be a stub.
+    echo Install pandoc manually later: https://pandoc.org/installing.html
+    echo.
+)
+echo.
+
 :: Step 3: Configure wizard defaults
 echo [3/4] Configuring wizard defaults...
 echo.

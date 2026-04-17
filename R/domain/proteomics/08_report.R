@@ -79,12 +79,15 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
     ensure_pandoc_available <- function() {
         if (isTRUE(rmarkdown::pandoc_available(version = "1.12.3"))) return(TRUE)
 
-        candidates <- character(0)
+        # Repo-bundled location (written by tools/install_pandoc.R) always comes first.
+        proj_dir <- config$project$dir %||% getwd()
+        candidates <- file.path(proj_dir, "tools", "pandoc")
         if (.Platform$OS.type == "windows") {
             pf   <- Sys.getenv("ProgramFiles",       "C:/Program Files")
             pf86 <- Sys.getenv("ProgramFiles(x86)",  "C:/Program Files (x86)")
             lad  <- Sys.getenv("LOCALAPPDATA",       file.path(Sys.getenv("USERPROFILE"), "AppData/Local"))
             candidates <- c(
+                candidates,
                 file.path(pf,   "RStudio", "resources", "app", "bin", "quarto", "bin", "tools"),
                 file.path(pf,   "RStudio", "resources", "app", "bin", "pandoc"),
                 file.path(pf,   "RStudio", "bin", "quarto", "bin", "tools"),
@@ -92,11 +95,10 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
                 file.path(pf86, "RStudio", "bin", "pandoc"),
                 file.path(pf,   "Pandoc"),
                 file.path(pf86, "Pandoc"),
-                file.path(lad,  "Pandoc"),
-                file.path(Sys.getenv("APPDATA"), "..", "Local", "Pandoc")
+                file.path(lad,  "Pandoc")
             )
         } else {
-            candidates <- c("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+            candidates <- c(candidates, "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
         }
         candidates <- candidates[dir.exists(candidates)]
 
