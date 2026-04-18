@@ -906,8 +906,15 @@ run_meta_integration <- function(integration_results, mae_data, config, output_d
     # Extract meta-factors
     meta_factors <- meta_pca$x[, 1:min(5, ncol(meta_pca$x)), drop = FALSE]
 
-    # Cluster on meta-factors
-    best_k <- choose_optimal_k(meta_factors)
+    # Cluster on meta-factors — prefer config n_clusters if specified
+    config_k <- config$modes$multiomics$integration$snf$n_clusters
+    if (!is.null(config_k) && is.numeric(config_k) && config_k >= 2) {
+        best_k <- as.integer(config_k)
+        message("  Using config n_clusters = ", best_k, " for meta-integration")
+    } else {
+        best_k <- choose_optimal_k(meta_factors)
+        message("  Optimal k = ", best_k, " (silhouette method)")
+    }
     meta_clusters <- kmeans(meta_factors, centers = best_k, nstart = 25)$cluster
 
     # Association with condition

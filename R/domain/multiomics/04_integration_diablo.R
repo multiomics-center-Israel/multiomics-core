@@ -101,7 +101,8 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         tryCatch({
             mixOmics::plotIndiv(diablo_model, comp = c(1, 2), group = Y,
                                 ind.names = FALSE, legend = TRUE,
-                                title = "DIABLO Sample Scores")
+                                title = "DIABLO Sample Scores",
+                                cex = 2)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
@@ -150,6 +151,26 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
     # Extract top features per component
     top_features <- extract_diablo_top_features(diablo_model, top_n = 50,
                                                  feature_name_map = feature_name_map)
+
+    # Circos plot — requires the live model, must happen before dropping it
+    if (!is.null(out_dir)) {
+        circos_path <- file.path(out_dir, "diablo_circos.png")
+        tryCatch({
+            circos_cutoff <- cfg$circos_cutoff %||% 0.7
+            png(circos_path, width = 10, height = 10, units = "in", res = 200)
+            mixOmics::circosPlot(diablo_model, cutoff = circos_cutoff,
+                                 line = TRUE,
+                                 color.blocks = NULL,
+                                 size.variables = 0.5)
+            dev.off()
+            plots$circos <- circos_path
+            message("  DIABLO circos plot saved")
+        }, error = function(e) {
+            tryCatch(dev.off(), error = function(e2) NULL)
+            warning("DIABLO circos plot failed: ", e$message)
+            if (file.exists(circos_path)) file.remove(circos_path)
+        })
+    }
 
     message(sprintf(
         "DIABLO integration complete: %d components, %d omics layers",
@@ -393,7 +414,20 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
             next
         }
 
-        expr_mat <- SummarizedExperiment::assay(mae[[omics_name]], "expr")
+        # Try "expr" assay first, fall back to first available assay
+        expr_mat <- tryCatch(
+            SummarizedExperiment::assay(mae[[omics_name]], "expr"),
+            error = function(e) {
+                avail <- SummarizedExperiment::assayNames(mae[[omics_name]])
+                if (length(avail) > 0) {
+                    message("  '", omics_name, "' has no 'expr' assay, using '", avail[1], "'")
+                    SummarizedExperiment::assay(mae[[omics_name]], avail[1])
+                } else {
+                    NULL
+                }
+            }
+        )
+        if (is.null(expr_mat)) next
         avail <- intersect(top_feat, rownames(expr_mat))
         if (length(avail) == 0) next
 
@@ -658,8 +692,48 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
                 if (length(entrez_map) > 0) {
                     valid <- entrez_map[!is.na(entrez_map) & entrez_map != ""]
 
+                    # If IDs are not numeric ENTREZ IDs (e.g. WormBase WBGene*),
+                    # convert them to ENTREZ IDs using AnnotationDbi
+                    if (length(valid) > 0 && !all(grepl("^\\d+$", head(valid, 20)))) {
+                        message("  Converting non-ENTREZ gene IDs to ENTREZ IDs...")
+                        entrez_conv <- tryCatch({
+                            # Try common ID types (WORMBASE for C. elegans WBGene IDs)
+                            for (kt in c("WORMBASE", "ENSEMBL", "SYMBOL", "ALIAS", "GENENAME")) {
+                                conv <- tryCatch(
+                                    suppressMessages(AnnotationDbi::select(
+                                        org_db,
+                                        keys = unique(valid),
+                                        keytype = kt,
+                                        columns = "ENTREZID"
+                                    )),
+                                    error = function(e) NULL
+                                )
+                                if (!is.null(conv) && sum(!is.na(conv$ENTREZID)) > 0) {
+                                    message("  Mapped via ", kt, ": ",
+                                            sum(!is.na(conv$ENTREZID)), " / ",
+                                            length(unique(valid)), " IDs")
+                                    # Build feature_id -> ENTREZ mapping
+                                    conv_map <- setNames(conv$ENTREZID, conv[[kt]])
+                                    new_valid <- character(0)
+                                    for (fid in names(valid)) {
+                                        eid <- conv_map[valid[fid]]
+                                        if (!is.na(eid)) {
+                                            new_valid[fid] <- eid
+                                        }
+                                    }
+                                    return(new_valid)
+                                }
+                            }
+                            NULL
+                        }, error = function(e) NULL)
+
+                        if (!is.null(entrez_conv) && length(entrez_conv) > 0) {
+                            valid <- entrez_conv
+                        }
+                    }
+
                     if (color_by == "pathway") {
-                        # KEGG pathway mapping
+                        # KEGG pathway mapping: try AnnotationDbi first, KEGGREST fallback
                         kegg_map <- tryCatch({
                             AnnotationDbi::select(
                                 org_db,
@@ -667,13 +741,76 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
                                 keytype = "ENTREZID",
                                 columns = "PATH"
                             )
-                        }, error = function(e) NULL)
+                        }, error = function(e) {
+                            message("  AnnotationDbi PATH column not available: ", e$message)
+                            NULL
+                        })
+
+                        kegg_org <- tryCatch(get_kegg_organism(organism),
+                                              error = function(e) NULL)
+
+                        # Fallback: use KEGGREST to map genes to pathways
+                        if ((is.null(kegg_map) || nrow(kegg_map) == 0 ||
+                             all(is.na(kegg_map$PATH))) && !is.null(kegg_org)) {
+                            message("  Falling back to KEGGREST for gene-pathway mapping")
+                            kegg_map <- tryCatch({
+                                # Get all gene -> pathway links for this organism
+                                gene_pw <- KEGGREST::keggLink("pathway", kegg_org)
+                                if (length(gene_pw) == 0) return(NULL)
+
+                                # gene_pw: named vector, names = "cel:12345", values = "path:cel00010"
+                                kegg_gene_ids <- sub(paste0("^", kegg_org, ":"), "", names(gene_pw))
+                                path_ids <- sub("^path:", "", gene_pw)
+
+                                # Try direct match first (valid contains ENTREZ IDs)
+                                matched <- kegg_gene_ids %in% unique(valid)
+
+                                # If no direct match, try converting NCBI gene IDs
+                                if (sum(matched) == 0) {
+                                    message("  Direct ENTREZ match failed, trying KEGG conversion...")
+                                    # Get KEGG gene ID -> NCBI gene ID mapping
+                                    kegg_to_ncbi <- tryCatch({
+                                        conv <- KEGGREST::keggConv("ncbi-geneid", kegg_org)
+                                        if (length(conv) > 0) {
+                                            # conv: named "cel:12345" -> "ncbi-geneid:172889"
+                                            kids <- sub(paste0("^", kegg_org, ":"), "", names(conv))
+                                            nids <- sub("^ncbi-geneid:", "", conv)
+                                            setNames(nids, kids)
+                                        } else NULL
+                                    }, error = function(e) NULL)
+
+                                    if (!is.null(kegg_to_ncbi)) {
+                                        # Map KEGG gene IDs to NCBI/ENTREZ IDs
+                                        ncbi_ids <- kegg_to_ncbi[kegg_gene_ids]
+                                        matched <- !is.na(ncbi_ids) & ncbi_ids %in% unique(valid)
+                                        # Use NCBI IDs for the ENTREZID column
+                                        if (sum(matched) > 0) {
+                                            kegg_gene_ids <- ncbi_ids
+                                        }
+                                    }
+                                }
+
+                                if (sum(matched) > 0) {
+                                    message("  KEGGREST matched ", sum(matched),
+                                            " gene-pathway associations")
+                                    data.frame(
+                                        ENTREZID = kegg_gene_ids[matched],
+                                        PATH = path_ids[matched],
+                                        stringsAsFactors = FALSE
+                                    )
+                                } else {
+                                    message("  KEGGREST: no gene-pathway matches found")
+                                    NULL
+                                }
+                            }, error = function(e) {
+                                message("  KEGGREST gene-pathway fallback failed: ", e$message)
+                                NULL
+                            })
+                        }
 
                         if (!is.null(kegg_map) && nrow(kegg_map) > 0) {
                             kegg_map <- kegg_map[!is.na(kegg_map$PATH), ]
                             # Map KEGG IDs to pathway names
-                            kegg_org <- tryCatch(get_kegg_organism(organism),
-                                                  error = function(e) NULL)
                             if (!is.null(kegg_org)) {
                                 pathway_names <- tryCatch({
                                     plist <- clusterProfiler::download_KEGG(kegg_org, keggType = "KEGG")
@@ -797,7 +934,64 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
                 }
             }
 
-            # Metabolomics features stay as "Unmapped"
+            # Map metabolomics features to pathways via KEGG compound IDs
+            if ("metabolomics" %in% omics && color_by == "pathway" &&
+                !is.null(kegg_org) && requireNamespace("KEGGREST", quietly = TRUE)) {
+                metab_feats <- df[df$omics == "metabolomics", ]
+                if (nrow(metab_feats) > 0) {
+                    tryCatch({
+                        # Try to resolve HMDB/compound IDs from MAE rowData
+                        metab_kegg_ids <- character(0)
+                        if ("metabolomics" %in% names(mae)) {
+                            mrd <- as.data.frame(SummarizedExperiment::rowData(mae[["metabolomics"]]))
+                            kegg_col <- intersect(c("KEGG_CPD", "KEGG", "kegg_id", "KEGG_ID"), colnames(mrd))
+                            if (length(kegg_col) > 0) {
+                                avail <- intersect(metab_feats$feature_id, rownames(mrd))
+                                ids <- as.character(mrd[avail, kegg_col[1]])
+                                metab_kegg_ids <- setNames(ids, avail)
+                                metab_kegg_ids <- metab_kegg_ids[!is.na(metab_kegg_ids) & metab_kegg_ids != ""]
+                            }
+                        }
+
+                        if (length(metab_kegg_ids) > 0) {
+                            # Map KEGG compounds to pathways
+                            cpd_pw <- KEGGREST::keggLink("pathway", "compound")
+                            if (length(cpd_pw) > 0) {
+                                cpd_ids <- sub("^cpd:", "", names(cpd_pw))
+                                path_ids <- sub("^path:map", paste0(kegg_org), cpd_pw)
+                                path_ids <- sub("^path:", "", path_ids)
+
+                                for (fid in names(metab_kegg_ids)) {
+                                    kid <- metab_kegg_ids[fid]
+                                    matched_paths <- path_ids[cpd_ids == kid]
+                                    if (length(matched_paths) > 0 && exists("pathway_names") &&
+                                        !is.null(pathway_names)) {
+                                        pnames <- pathway_names[matched_paths]
+                                        pnames <- pnames[!is.na(pnames)]
+                                        if (length(pnames) > 0) {
+                                            if (!exists("feat_pathways")) feat_pathways <- list()
+                                            feat_pathways[[fid]] <- c(feat_pathways[[fid]], unname(pnames))
+                                            # Assign label
+                                            if (exists("top_pw")) {
+                                                matched_top <- intersect(pnames, top_pw)
+                                                if (length(matched_top) > 0) {
+                                                    df$pathway_label[df$feature_id == fid] <- matched_top[1]
+                                                } else {
+                                                    df$pathway_label[df$feature_id == fid] <- "Other pathway"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                message("  Mapped ", sum(df$pathway_label[df$omics == "metabolomics"] != "Unmapped"),
+                                        " / ", nrow(metab_feats), " metabolomics features to pathways")
+                            }
+                        }
+                    }, error = function(e) {
+                        message("  Metabolomics pathway mapping failed: ", e$message)
+                    })
+                }
+            }
         }
     }
 
@@ -1462,28 +1656,48 @@ recover_proteomics_ids <- function(rd, de_res, config = NULL) {
 #' @param de_results Named list of DE results per omics
 #' @return Character vector of contrast names
 get_contrast_names_from_de <- function(de_results) {
+    # Collect contrast names from ALL omics and pick the best set.
+    # Different omics may encode contrasts differently (e.g. "1.56ppm vs. 0ppm"
+    # from proteomics summary_df columns vs "1.56ppm_vs_0ppm" from RNA table
+    # names). We prefer the set with the most contrasts and normalize format.
+    best_names <- NULL
+    best_n <- 0
+
     for (om in names(de_results)) {
         de <- de_results[[om]]
         if (is.null(de)) next
 
+        nms <- NULL
+
         # RNA-seq: list(tables = named list of per-contrast DFs)
         if (!is.null(de$tables) && is.list(de$tables)) {
             nms <- names(de$tables)
-            if (length(nms) > 0) return(nms)
         }
 
         # Proteomics/metabolomics: summary_df with wide logFC columns
-        if (!is.null(de$summary_df) && is.data.frame(de$summary_df)) {
-            lfc_cols <- grep("^(linearFC\\.imputs\\.|logFC\\.|log2FoldChange\\.|logFC_)",
-                             names(de$summary_df), value = TRUE)
-            if (length(lfc_cols) > 0) {
-                contrasts <- sub("^(linearFC\\.imputs\\.|logFC\\.|log2FoldChange\\.|logFC_)",
-                                 "", lfc_cols)
-                return(contrasts)
+        if (is.null(nms) || length(nms) == 0) {
+            if (!is.null(de$summary_df) && is.data.frame(de$summary_df)) {
+                lfc_cols <- grep("^(linearFC\\.imputs\\.|logFC\\.|log2FoldChange\\.|logFC_)",
+                                 names(de$summary_df), value = TRUE)
+                if (length(lfc_cols) > 0) {
+                    nms <- sub("^(linearFC\\.imputs\\.|logFC\\.|log2FoldChange\\.|logFC_)",
+                               "", lfc_cols)
+                }
             }
         }
+
+        if (!is.null(nms) && length(nms) > best_n) {
+            best_names <- nms
+            best_n <- length(nms)
+        }
     }
-    "contrast_1"
+
+    if (is.null(best_names)) return("contrast_1")
+
+    # Normalize: ensure consistent "X vs Y" format for deduplication
+    # Remove leading/trailing whitespace, normalize "vs." / "vs" variations
+    best_names <- trimws(best_names)
+    unique(best_names)
 }
 
 

@@ -435,7 +435,17 @@ has_multi_ora <- dir.exists(multi_ora_dir) && length(list.files(multi_ora_dir, "
 ## Multi-ORA (Combined Cross-Omics ORA) {.tabset .unnumbered}
 
 ```{r multi-ora-note, eval=!has_multi_ora, results='asis'}
-cat("*No Multi-ORA results found.*\n")
+ora_issues_file <- file.path(multi_ora_dir, "multi_ora_issues.txt")
+if (file.exists(ora_issues_file)) {
+    issues <- readLines(ora_issues_file)
+    cat("**Multi-ORA did not complete.** The following issues were encountered:\n\n")
+    for (iss in issues) {
+        cat(sprintf("- %s\n", iss))
+    }
+    cat("\n*This is often caused by KEGG REST API timeouts or network issues. Re-running the pipeline may resolve it.*\n\n")
+} else {
+    cat("*No Multi-ORA results found.*\n")
+}
 ```
 
 ### All Contrasts (Pooled) {.unnumbered}
@@ -581,17 +591,30 @@ cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layer
 ```
 
 ```{r pathview-plots, eval=has_pathview, results='asis'}
-pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora\\.(multi\\.)?png$", full.names = TRUE))
-cat("KEGG pathway maps for **", length(pv_pngs),
-    "** pathways enriched in >= 2 omics layers. Gene nodes are colored by logFC ",
-    "(transcriptomics and/or proteomics); compound nodes are colored by metabolomics logFC.\n\n")
+pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$", full.names = TRUE))
+cat("KEGG pathway maps for pathways enriched in >= 2 omics layers, shown **per contrast**. ",
+    "Gene nodes are colored by logFC (transcriptomics and/or proteomics); ",
+    "compound nodes are colored by metabolomics logFC.\n\n")
 cat(sprintf("[Download compiled PDF](%s)\n\n", pathview_pdf))
+
+# Group PNGs by contrast (extracted from filename suffix)
 for (pv_png in pv_pngs) {
-    pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora\\.png$", "", basename(pv_png)))
-    cat(sprintf("\n### Pathway %s {.unnumbered}\n\n", pw_id))
-    cat(sprintf("![Pathway %s](%s)\n\n", pw_id, pv_png))
+    bn <- basename(pv_png)
+    # Extract pathway ID and contrast from filename
+    # e.g. "cel00053.multi_ora_X1.56ppm.vs..0ppm.multi.png"
+    pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora.*$", "", bn))
+    contrast_part <- sub("^.*\\.multi_ora_?", "", bn)
+    contrast_part <- sub("\\.(multi\\.)?png$", "", contrast_part)
+    contrast_label <- gsub("\\.", " ", contrast_part)
+    if (nzchar(contrast_label)) {
+        label <- paste0("Pathway ", pw_id, " (", contrast_label, ")")
+    } else {
+        label <- paste0("Pathway ", pw_id)
+    }
+    cat(sprintf("\n### %s {.unnumbered}\n\n", label))
+    cat(sprintf("![%s](%s)\n\n", label, pv_png))
 }
-figure_legend("KEGG pathway maps generated with pathview. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.")
+figure_legend("KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.")
 render_commentary("multi_ora_pathview")
 ```
 
@@ -730,7 +753,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers.")
+    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
@@ -873,16 +896,9 @@ mantel_corr_heatmaps <- list.files(
 has_corr_heatmaps <- length(mantel_corr_heatmaps) > 0
 ```
 
-```{r clustering-consistency, eval=has_clustering, results='asis'}
-cat("## Clustering Consistency\n\n")
-knitr::include_graphics(clustering_consistency_plot)
-figure_legend("Adjusted Rand Index (ARI) and Normalized Mutual Information (NMI) comparing unsupervised sample clusters between omics pairs. Values near 1 indicate identical clustering structure.")
-```
-
-```{r condition-separation, eval=has_separation, results='asis'}
-cat("## Condition Separation\n\n")
-knitr::include_graphics(condition_separation_plot)
-figure_legend("Within-condition vs between-condition sample similarity per omics layer. Positive separation indicates that samples from the same experimental group are more similar than samples from different groups.")
+```{r clustering-consistency, eval=FALSE, results='asis'}
+# Removed: Clustering Consistency and Condition Separation plots
+# were not informative for this analysis
 ```
 
 ```{r group-dist-setup, include=FALSE}
@@ -954,6 +970,21 @@ figure_legend("DIABLO variable loadings plot. Top contributing features from eac
 render_commentary("diablo_variable_plot")
 ```
 
+```{r diablo-circos, eval=has_diablo, results='asis'}
+circos_path <- file.path(diablo_dir, "diablo_circos.png")
+if (file.exists(circos_path)) {
+    cat("\n### Cross-Omics Circos Plot {.unnumbered}\n\n")
+    knitr::include_graphics(circos_path)
+}
+```
+
+```{r diablo-circos-legend, eval=has_diablo, results='asis'}
+if (file.exists(file.path(diablo_dir, "diablo_circos.png"))) {
+    figure_legend("DIABLO circos plot showing cross-omics feature correlations. Sectors represent omics layers; bar heights show DIABLO loading magnitude (component 1). Chords connect feature pairs with absolute Pearson correlation above the cutoff. Red chords indicate positive correlation; blue chords indicate negative correlation. Chord intensity and width scale with correlation strength.")
+    render_commentary("diablo_circos")
+}
+```
+
 ```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
 int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
 int_rds <- file.path(diablo_dir, "diablo_loadings_interactive.rds")
@@ -1001,9 +1032,15 @@ if (file.exists(hm) && has_latent_hm) {
 lfc_plots <- list.files(diablo_dir, pattern = "diablo_loadings_log2fc_.*\\.png$", full.names = TRUE)
 if (length(lfc_plots) > 0) {
     cat("\n### Loadings Colored by log2FC {.unnumbered}\n\n")
+    # Deduplicate: normalize contrast labels and keep only unique contrasts
+    seen_contrasts <- character(0)
     for (lp in lfc_plots) {
         contrast_label <- gsub("diablo_loadings_log2fc_|\\.png$", "", basename(lp))
         contrast_label <- gsub("\\.", " ", contrast_label)
+        # Normalize for dedup: collapse whitespace, lowercase comparison key
+        dedup_key <- tolower(gsub("\\s+", "", contrast_label))
+        if (dedup_key %in% seen_contrasts) next
+        seen_contrasts <- c(seen_contrasts, dedup_key)
         cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
         cat(sprintf("![DIABLO Loadings log2FC - %s](%s)\n\n", contrast_label, lp))
     }
@@ -1049,7 +1086,7 @@ if (file.exists(p)) {
 ```
 
 ```{r snf-silhouette-legend, eval=has_snf, results='asis'}
-figure_legend("SNF cluster silhouette plot. Silhouette width quantifies how well each sample fits its assigned cluster. Values near 1 indicate good clustering; values near 0 or negative suggest misclassification.")
+figure_legend("SNF cluster silhouette plot. Silhouette width measures how well each sample matches its assigned cluster compared to the nearest alternative cluster. **Interpretation:** values close to **+1** indicate the sample is well-matched to its cluster and poorly matched to neighboring clusters (strong clustering). Values near **0** mean the sample sits on the boundary between two clusters. **Negative** values indicate the sample may be misclassified and would fit better in the neighboring cluster. The average silhouette width across all samples summarizes overall clustering quality: > 0.7 = strong structure, 0.5--0.7 = reasonable structure, 0.25--0.5 = weak structure, < 0.25 = no substantial structure. This metric can guide the choice of the number of clusters (K) and help identify outlier samples that do not conform to any group.")
 render_commentary("snf_silhouette")
 ```
 
@@ -1163,9 +1200,13 @@ if (length(main_files) > 0) {
 mofa_lfc_plots <- list.files(mofa_dir, pattern = "mofa_loadings_log2fc_.*\\.png$", full.names = TRUE)
 if (length(mofa_lfc_plots) > 0) {
     cat("\n### Weights Colored by log2FC {.unnumbered}\n\n")
+    seen_contrasts <- character(0)
     for (lp in mofa_lfc_plots) {
         contrast_label <- gsub("mofa_loadings_log2fc_|\\.png$", "", basename(lp))
         contrast_label <- gsub("\\.", " ", contrast_label)
+        dedup_key <- tolower(gsub("\\s+", "", contrast_label))
+        if (dedup_key %in% seen_contrasts) next
+        seen_contrasts <- c(seen_contrasts, dedup_key)
         cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
         cat(sprintf("![MOFA2 Weights log2FC - %s](%s)\n\n", contrast_label, lp))
     }
@@ -1297,18 +1338,8 @@ if (has_meta_pca || has_meta_pca_labeled) {
 }
 ```
 
-## Method Agreement {.unnumbered}
-
-```{r consensus-method-agreement, eval=has_consensus, results='asis'}
-agree_plot <- file.path(consensus_dir, "plots", "method_agreement_heatmap.png")
-if (file.exists(agree_plot)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r method-agree-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        agree_plot
-    ), quiet = TRUE))
-    figure_legend("Sample clustering agreement between integration methods, measured by Adjusted Rand Index (ARI) and Normalized Mutual Information (NMI). Higher values indicate more consistent sample groupings across methods.")
-    render_commentary("method_agreement")
-}
+```{r consensus-method-agreement, eval=FALSE}
+# Removed: Method Agreement section was not informative
 ```
 
 ## Feature Importance Correlation {.unnumbered}
@@ -1422,7 +1453,7 @@ if (file.exists(p)) {
     figure_legend("Proportion of the RNA effect on phenotype that is mediated through protein levels. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating — the sequential ignorability assumption (no unmeasured confounders) is untestable.")
     render_commentary("mediation_proportion")
 } else {
-    cat("*RNA -> Protein -> Phenotype mediation not available. Requires both transcriptomics and proteomics data with significant associations.*\n\n")
+    cat("*RNA -> Protein -> Phenotype mediation not available. Requires both transcriptomics and proteomics data with >= 10 common samples and the `mediation` R package.*\n\n")
 }
 ```
 
@@ -1537,7 +1568,12 @@ if (file.exists(cosmos_plot)) {
     figure_legend("COSMOS causal network connecting deregulated transcription factors to metabolites through known signaling and metabolic interactions.")
     render_commentary("cosmos_network")
 } else {
-    cat("*COSMOS causal network was not generated. Requires transcription factor activity estimation from transcriptomics DE results, plus cosmosR, CARNIVAL, and decoupleR packages.*\n\n")
+    organism <- cfg$global$organism %||% "unknown"
+    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
+        cat("*COSMOS causal network was not generated. Requires TF activity estimation plus cosmosR, CARNIVAL, and decoupleR packages.*\n\n")
+    } else {
+        cat(sprintf("*COSMOS causal network is not available for %s. COSMOS requires human or mouse prior knowledge networks.*\n\n", organism))
+    }
 }
 ```
 
@@ -1572,7 +1608,12 @@ if (file.exists(p)) {
     figure_legend("Transcription factor activity inferred from target gene expression using dorothea/decoupleR regulons.")
     render_commentary("tf_activity")
 } else {
-    cat("*TF activity inference not available. Requires transcriptomics expression data for TF activity estimation (via decoupleR/dorothea).*\n\n")
+    organism <- cfg$global$organism %||% "unknown"
+    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
+        cat("*TF activity inference not available. Requires transcriptomics expression data and the decoupleR/dorothea package.*\n\n")
+    } else {
+        cat(sprintf("*TF activity inference is not available for %s. Dorothea TF regulons only cover human and mouse.*\n\n", organism))
+    }
 }
 ```
 
@@ -1599,7 +1640,12 @@ if (file.exists(p)) {
     figure_legend("PROGENy pathway activity inferred from proteomics data using decoupleR weighted mean.")
     render_commentary("pathway_activity")
 } else {
-    cat("*Pathway activity estimation via PROGENy was not available. This may be due to missing PROGENy regulon data for this organism or the decoupleR package not being installed.*\n\n")
+    organism <- cfg$global$organism %||% "unknown"
+    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
+        cat("*Pathway activity estimation via PROGENy was not available. The decoupleR package may not be installed.*\n\n")
+    } else {
+        cat(sprintf("*PROGENy pathway activity is not available for %s. PROGENy only supports human and mouse.*\n\n", organism))
+    }
 }
 ```
 

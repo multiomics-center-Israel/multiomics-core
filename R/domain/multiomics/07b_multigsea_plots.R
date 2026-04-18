@@ -824,6 +824,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # Track errors/warnings for reporting in HTML
+    .ora_issues <- character(0)
+
     organism <- config$global$organism
     kegg_org <- get_kegg_organism(organism)
     org_db <- get_organism_db(organism)
@@ -846,9 +849,19 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         # Map to ENTREZ IDs
         id_map <- tryCatch(
             map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
-            error = function(e) NULL
+            error = function(e) {
+                msg <- paste0(om, " ENTREZ ID mapping failed: ", e$message)
+                message("  Multi-ORA: ", msg)
+                .ora_issues <<- c(.ora_issues, msg)
+                NULL
+            }
         )
-        if (is.null(id_map) || nrow(id_map) == 0) next
+        if (is.null(id_map) || nrow(id_map) == 0) {
+            msg <- paste0(om, " produced no ENTREZ mappings")
+            message("  Multi-ORA: ", msg, ", skipping")
+            .ora_issues <<- c(.ora_issues, msg)
+            next
+        }
 
         # Collect significant features (padj < 0.05 in any contrast)
         sig_ids <- character(0)
@@ -877,6 +890,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     if (length(per_omics_sig) == 0) {
         message("Multi-ORA: no gene-based omics produced significant features")
+        .ora_issues <- c(.ora_issues, "No gene-based omics produced significant ENTREZ features")
+        writeLines(.ora_issues, file.path(out_dir, "multi_ora_issues.txt"))
         return(NULL)
     }
 
@@ -887,9 +902,20 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             " universe genes across ", length(per_omics_sig), " omics")
 
     # Convert ENTREZID to KEGG gene IDs
-    kegg_conv <- convert_entrez_to_kegg(pooled_universe, kegg_org)
+    kegg_conv <- tryCatch(
+        convert_entrez_to_kegg(pooled_universe, kegg_org),
+        error = function(e) {
+            msg <- paste0("KEGG API error during ENTREZ-to-KEGG conversion: ", e$message)
+            message("  Multi-ORA: ", msg)
+            .ora_issues <<- c(.ora_issues, msg)
+            NULL
+        }
+    )
     if (is.null(kegg_conv)) {
-        message("Multi-ORA: KEGG ID conversion failed")
+        message("Multi-ORA: KEGG ID conversion failed (possible KEGG API timeout)")
+        .ora_issues <- c(.ora_issues, "KEGG ID conversion failed — KEGG REST API may be unavailable")
+        # Save issues and return
+        writeLines(.ora_issues, file.path(out_dir, "multi_ora_issues.txt"))
         return(NULL)
     }
 
@@ -967,7 +993,14 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     if (is.null(combined) || nrow(combined) == 0) {
         message("Multi-ORA: no enriched pathways found")
+        .ora_issues <- c(.ora_issues, "No enriched pathways found after ORA")
+        writeLines(.ora_issues, file.path(out_dir, "multi_ora_issues.txt"))
         return(NULL)
+    }
+
+    # Save any accumulated issues (even on success, partial issues are useful)
+    if (length(.ora_issues) > 0) {
+        writeLines(.ora_issues, file.path(out_dir, "multi_ora_issues.txt"))
     }
 
     # Write results
@@ -1659,64 +1692,48 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     pv_dir <- file.path(out_dir, "pathview")
     dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
 
-    # --- Build gene logFC matrix (transcriptomics + proteomics) ---
-    gene_fc_list <- list()
+    # --- Build per-contrast gene logFC and compound logFC ---
+    # Extract DE tables and ID maps once per omics
+    gene_de_tables <- list()
+    gene_id_maps <- list()
     for (om in intersect(c("transcriptomics", "proteomics"), names(de_results))) {
         de_tables <- extract_de_tables(de_results[[om]], om, harmonization_res)
         if (is.null(de_tables) || length(de_tables) == 0) next
-
         id_map <- tryCatch(
             map_feature_ids_to_entrez(de_tables, om, harmonization_res, org_db),
             error = function(e) NULL
         )
         if (is.null(id_map) || nrow(id_map) == 0) next
-
-        # Take first contrast; merge logFC with Entrez IDs
-        df <- de_tables[[1]]
-        df_mapped <- merge(df, id_map, by = "feature_id")
-        fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID, mean, na.rm = TRUE)
-        fc_vec <- as.numeric(fc_arr)
-        names(fc_vec) <- names(fc_arr)
-        gene_fc_list[[om]] <- fc_vec
+        gene_de_tables[[om]] <- de_tables
+        gene_id_maps[[om]] <- id_map
     }
 
-    gene_data <- NULL
-    if (length(gene_fc_list) == 2) {
-        all_genes <- unique(c(names(gene_fc_list[[1]]), names(gene_fc_list[[2]])))
-        gene_data <- matrix(NA, nrow = length(all_genes), ncol = 2,
-                            dimnames = list(all_genes, names(gene_fc_list)))
-        for (i in seq_along(gene_fc_list)) {
-            fc <- gene_fc_list[[i]]
-            gene_data[names(fc), i] <- fc
-        }
-    } else if (length(gene_fc_list) == 1) {
-        gene_data <- gene_fc_list[[1]]
-    }
-
-    # --- Build compound logFC vector (metabolomics) ---
-    cpd_data <- NULL
+    metab_de_tables <- NULL
+    metab_id_map <- NULL
     if ("metabolomics" %in% names(de_results)) {
-        de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics",
-                                        harmonization_res)
-        id_map <- tryCatch(
-            map_metabolite_ids_to_kegg(de_tables, harmonization_res),
+        metab_de_tables <- extract_de_tables(de_results$metabolomics, "metabolomics",
+                                              harmonization_res)
+        metab_id_map <- tryCatch(
+            map_metabolite_ids_to_kegg(metab_de_tables, harmonization_res),
             error = function(e) NULL
         )
-        if (!is.null(id_map) && nrow(id_map) > 0 && length(de_tables) > 0) {
-            df <- de_tables[[1]]
-            df_mapped <- merge(df, id_map, by = "feature_id")
-            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD, mean, na.rm = TRUE)
-            cpd_data <- as.numeric(cpd_fc)
-            names(cpd_data) <- names(cpd_fc)
+    }
+
+    # Determine contrast names (from first omics with multiple contrasts)
+    contrast_names <- NULL
+    for (om in names(gene_de_tables)) {
+        nms <- names(gene_de_tables[[om]])
+        if (!is.null(nms) && length(nms) > 0) {
+            contrast_names <- nms
+            break
         }
     }
-
-    if (is.null(gene_data) && is.null(cpd_data)) {
-        message("  No logFC data available for pathview")
-        return(NULL)
+    if (is.null(contrast_names)) {
+        # Fallback to metabolomics contrast names
+        if (!is.null(metab_de_tables)) contrast_names <- names(metab_de_tables)
     }
+    if (is.null(contrast_names)) contrast_names <- "contrast_1"
 
-    # --- Run pathview per pathway ---
     # pathview requires its 'bods' dataset in the global environment
     if (!exists("bods", envir = globalenv())) {
         utils::data("bods", package = "pathview", envir = globalenv())
@@ -1726,64 +1743,127 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     setwd(pv_dir)
     on.exit(setwd(cwd), add = TRUE)
 
-    generated_pngs <- character(0)
+    all_generated_pngs <- list()
 
-    for (i in seq_len(nrow(supported))) {
-        pid <- supported$ID[i]
-        pw_name <- supported$pathway[i]
-        clean_pid <- normalize_kegg_pathway_id(pid)
+    for (ci in seq_along(contrast_names)) {
+        contrast <- contrast_names[ci]
+        safe_contrast <- make.names(contrast)
+        message("  Pathview for contrast: ", contrast)
 
-        tryCatch({
-            pathview::pathview(
-                gene.data  = gene_data,
-                cpd.data   = cpd_data,
-                pathway.id = clean_pid,
-                species    = kegg_org,
-                out.suffix = "multi_ora",
-                kegg.dir   = pv_dir,
-                keys.align = "y",
-                match.data = TRUE,
-                multi.state = !is.null(dim(gene_data)) && ncol(gene_data) > 1,
-                same.layer = FALSE
-            )
+        # Build gene logFC for this contrast
+        gene_fc_list <- list()
+        for (om in names(gene_de_tables)) {
+            de_tbl <- gene_de_tables[[om]]
+            idx <- min(ci, length(de_tbl))
+            df <- de_tbl[[idx]]
+            df_mapped <- merge(df, gene_id_maps[[om]], by = "feature_id")
+            fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID, mean, na.rm = TRUE)
+            fc_vec <- as.numeric(fc_arr)
+            names(fc_vec) <- names(fc_arr)
+            gene_fc_list[[om]] <- fc_vec
+        }
 
-            # pathview output naming varies: .multi_ora.png, .multi_ora.multi.png,
-            # or with gene/cpd suffixes when same.layer=FALSE
-            candidates <- c(
-                paste0(kegg_org, clean_pid, ".multi_ora.multi.png"),
-                paste0(kegg_org, clean_pid, ".multi_ora.png"),
-                paste0(kegg_org, clean_pid, ".multi_ora.gene.png"),
-                paste0(kegg_org, clean_pid, ".multi_ora.cpd.png")
-            )
-            found <- candidates[file.exists(candidates)]
-            if (length(found) > 0) {
-                # Use absolute paths — we're already in pv_dir via setwd
-                generated_pngs <- c(generated_pngs,
-                                     file.path(pv_dir, found[1]))
-                message("    Pathview: ", pw_name, " (", pid, ")")
+        gene_data <- NULL
+        if (length(gene_fc_list) == 2) {
+            all_genes <- unique(c(names(gene_fc_list[[1]]), names(gene_fc_list[[2]])))
+            gene_data <- matrix(NA, nrow = length(all_genes), ncol = 2,
+                                dimnames = list(all_genes, names(gene_fc_list)))
+            for (i in seq_along(gene_fc_list)) {
+                fc <- gene_fc_list[[i]]
+                gene_data[names(fc), i] <- fc
             }
-        }, error = function(e) {
-            message("    Pathview failed for ", pid, ": ", e$message)
-        })
+        } else if (length(gene_fc_list) == 1) {
+            gene_data <- gene_fc_list[[1]]
+        }
+
+        # Build compound logFC for this contrast
+        cpd_data <- NULL
+        if (!is.null(metab_id_map) && nrow(metab_id_map) > 0 &&
+            !is.null(metab_de_tables) && length(metab_de_tables) > 0) {
+            idx <- min(ci, length(metab_de_tables))
+            df <- metab_de_tables[[idx]]
+            df_mapped <- merge(df, metab_id_map, by = "feature_id")
+            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD, mean, na.rm = TRUE)
+            cpd_data <- as.numeric(cpd_fc)
+            names(cpd_data) <- names(cpd_fc)
+        }
+
+        if (is.null(gene_data) && is.null(cpd_data)) next
+
+        # Run pathview per pathway for this contrast
+        out_suffix <- paste0("multi_ora_", safe_contrast)
+        contrast_pngs <- character(0)
+
+        for (i in seq_len(nrow(supported))) {
+            pid <- supported$ID[i]
+            pw_name <- supported$pathway[i]
+            clean_pid <- normalize_kegg_pathway_id(pid)
+
+            tryCatch({
+                pathview::pathview(
+                    gene.data  = gene_data,
+                    cpd.data   = cpd_data,
+                    pathway.id = clean_pid,
+                    species    = kegg_org,
+                    out.suffix = out_suffix,
+                    kegg.dir   = pv_dir,
+                    keys.align = "y",
+                    match.data = TRUE,
+                    multi.state = !is.null(dim(gene_data)) && ncol(gene_data) > 1,
+                    same.layer = FALSE
+                )
+
+                candidates <- c(
+                    paste0(kegg_org, clean_pid, ".", out_suffix, ".multi.png"),
+                    paste0(kegg_org, clean_pid, ".", out_suffix, ".png")
+                )
+                found <- candidates[file.exists(candidates)]
+                if (length(found) > 0) {
+                    contrast_pngs <- c(contrast_pngs, file.path(pv_dir, found[1]))
+                    message("    Pathview: ", pw_name, " (", pid, ")")
+                }
+            }, error = function(e) {
+                message("    Pathview failed for ", pid, ": ", e$message)
+            })
+        }
+
+        if (length(contrast_pngs) > 0) {
+            all_generated_pngs[[contrast]] <- contrast_pngs
+        }
     }
 
-    if (length(generated_pngs) == 0) {
+    if (length(all_generated_pngs) == 0) {
         message("  No pathview plots generated")
         return(NULL)
     }
 
-    # --- Compile into a single PDF ---
+    # --- Compile into a single PDF with contrast labels ---
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
-        for (png_file in generated_pngs) {
-            img <- png::readPNG(png_file)
+        for (contrast in names(all_generated_pngs)) {
+            pngs <- all_generated_pngs[[contrast]]
+            # Title page for this contrast
             grid::grid.newpage()
-            grid::grid.raster(img)
+            grid::grid.text(
+                paste0("Contrast: ", contrast),
+                gp = grid::gpar(fontsize = 24, fontface = "bold")
+            )
+            for (png_file in pngs) {
+                img <- png::readPNG(png_file)
+                grid::grid.newpage()
+                # Add contrast label at top
+                grid::grid.text(
+                    contrast, x = 0.5, y = 0.98,
+                    gp = grid::gpar(fontsize = 10, col = "grey40")
+                )
+                grid::grid.raster(img, y = 0.48, height = 0.92)
+            }
         }
         grDevices::dev.off()
-        message("  Compiled ", length(generated_pngs), " pathview maps into: ",
-                basename(pdf_path))
+        total <- sum(lengths(all_generated_pngs))
+        message("  Compiled ", total, " pathview maps (",
+                length(all_generated_pngs), " contrasts) into: ", basename(pdf_path))
         pdf_path
     }, error = function(e) {
         message("  PDF compilation failed: ", e$message)

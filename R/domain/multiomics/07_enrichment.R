@@ -1857,6 +1857,7 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
     all_results <- list()
 
     for (view in names(weights)) {
+        w <- weights[[view]]
         if (view == "metabolomics") {
             message("  Running metabolomics weights enrichment (compound ORA)")
             n_factors <- min(ncol(w), 3)
@@ -1882,7 +1883,6 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
             next
         }
 
-        w <- weights[[view]]
         n_factors <- min(ncol(w), 3)  # Top 3 factors
 
         for (k in seq_len(n_factors)) {
@@ -2044,8 +2044,9 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
     # Resolve IDs using the actual omics type
     resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res, omics_type)
 
-    # Map resolved IDs to ENTREZ IDs using the actual omics type
-    id_map <- tryCatch(
+    # Map ALL features to ENTREZ (needed for both query and universe)
+    # Then filter to only the query features for the enrichment test
+    full_id_map <- tryCatch(
         map_feature_ids_to_entrez(
             de_tables = list(dummy = data.frame(feature_id = resolved_ids,
                                                  stringsAsFactors = FALSE)),
@@ -2059,9 +2060,11 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
         }
     )
 
-    if (is.null(id_map) || nrow(id_map) == 0) return(NULL)
+    if (is.null(full_id_map) || nrow(full_id_map) == 0) return(NULL)
 
-    entrez_ids <- unique(id_map$ENTREZID[!is.na(id_map$ENTREZID)])
+    # Filter to only the query features (top-N loadings)
+    query_map <- full_id_map[full_id_map$feature_id %in% resolved_ids, ]
+    entrez_ids <- unique(query_map$ENTREZID[!is.na(query_map$ENTREZID)])
     if (length(entrez_ids) < 3) return(NULL)
 
     # Build universe from all measured features of the same omics type

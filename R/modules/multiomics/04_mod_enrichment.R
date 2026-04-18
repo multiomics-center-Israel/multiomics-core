@@ -81,6 +81,50 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # --- Per-contrast enrichment output ---
     # Save per-contrast barplots, tables, and cross-omics comparison in
     # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
+
+    # Normalize contrast names across omics so they aggregate correctly.
+    # Different omics may encode the same contrast differently (e.g.,
+    # "1.56ppm_vs_0ppm" from RNA vs "1.56ppm vs. 0ppm" from proteomics).
+    # Normalize: collapse to lowercase, remove spaces/dots around "vs",
+    # then group by normalized key and use the first original name.
+    .normalize_contrast_key <- function(x) {
+        x <- tolower(trimws(x))
+        x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
+        x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
+        x
+    }
+
+    # Collect all contrast names and build a canonical mapping
+    all_raw_contrasts <- unique(unlist(lapply(per_omics, function(df) {
+        if (is.data.frame(df) && "contrast" %in% colnames(df)) df$contrast
+        else NULL
+    })))
+
+    if (length(all_raw_contrasts) > 0) {
+        norm_keys <- .normalize_contrast_key(all_raw_contrasts)
+        # For each unique normalized key, pick the first raw name as canonical
+        canonical_map <- setNames(character(0), character(0))
+        for (i in seq_along(all_raw_contrasts)) {
+            nk <- norm_keys[i]
+            if (!nk %in% names(canonical_map)) {
+                canonical_map[nk] <- all_raw_contrasts[i]
+            }
+        }
+        # Build raw -> canonical mapping
+        raw_to_canonical <- setNames(
+            canonical_map[norm_keys],
+            all_raw_contrasts
+        )
+
+        # Replace contrast column in each per_omics data frame
+        for (om in names(per_omics)) {
+            df <- per_omics[[om]]
+            if (is.data.frame(df) && "contrast" %in% colnames(df)) {
+                per_omics[[om]]$contrast <- raw_to_canonical[df$contrast]
+            }
+        }
+    }
+
     contrast_names <- unique(unlist(lapply(per_omics, function(df) {
         if (is.data.frame(df) && "contrast" %in% colnames(df)) df$contrast
         else NULL

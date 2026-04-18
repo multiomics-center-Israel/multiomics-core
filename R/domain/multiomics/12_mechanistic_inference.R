@@ -670,6 +670,15 @@ plot_rna_protein_regulation <- function(results, out_dir) {
 infer_tf_activity <- function(transcriptomics, mc, config, out_dir = NULL) {
     message("Inferring transcription factor activity...")
 
+    # Check organism support — dorothea regulons only cover human and mouse
+    organism <- config$global$organism %||% "human"
+    supported_organisms <- c("human", "homo_sapiens", "mouse", "mus_musculus")
+    if (!tolower(organism) %in% supported_organisms) {
+        message("  TF activity inference not available for '", organism,
+                "' (dorothea regulons only cover human and mouse). Skipping.")
+        return(NULL)
+    }
+
     # Check if decoupleR or dorothea is available
     has_decoupler <- requireNamespace("decoupleR", quietly = TRUE)
     has_dorothea <- requireNamespace("dorothea", quietly = TRUE)
@@ -1059,8 +1068,16 @@ infer_regulatory_network <- function(harmonized, gene_mapping, mc, config, out_d
             }
         }
 
+        # Build omics source map: feature_id -> omics layer name
+        omics_source_map <- setNames(
+            rep(omics_used, length(top_genes)),
+            top_genes
+        )
+
         # Visualizations
-        plot_regulatory_network(network, out_dir, gene_symbol_map = gene_symbol_map)
+        plot_regulatory_network(network, out_dir,
+                                gene_symbol_map = gene_symbol_map,
+                                omics_source_map = omics_source_map)
     }
 
     return(network)
@@ -1216,7 +1233,9 @@ identify_hub_regulators <- function(edges, mc) {
 #' @param network Network object with edges, hubs, method
 #' @param out_dir Output directory
 #' @param gene_symbol_map Named character vector: feature_id -> gene_symbol (optional)
-plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
+#' @param omics_source_map Named character vector: feature_id -> omics layer (optional)
+plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL,
+                                    omics_source_map = NULL) {
     edges <- network$edges
 
     # Use igraph for visualization
@@ -1325,7 +1344,7 @@ plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
             return(invisible(NULL))
         }
 
-        # Build tooltip with gene symbol if available
+        # Build tooltip with gene symbol and omics source if available
         tooltip_lines <- paste0("<b>", node_names, "</b>")
         if (has_gene_symbols) {
             tooltip_lines <- paste0(
@@ -1333,11 +1352,21 @@ plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
                 ifelse(!is.na(gene_symbols), gene_symbols, "N/A")
             )
         }
+        # Add omics source information
+        if (!is.null(omics_source_map)) {
+            omics_labels <- omics_source_map[node_names]
+            omics_labels[is.na(omics_labels)] <- network$network_type %||% "unknown"
+            tooltip_lines <- paste0(tooltip_lines, "<br>Omics: ", omics_labels)
+        } else if (!is.null(network$network_type)) {
+            tooltip_lines <- paste0(tooltip_lines, "<br>Omics: ", network$network_type)
+        }
         tooltip_lines <- paste0(
             tooltip_lines, "<br>Degree: ", node_deg, "<br>",
             ifelse(is_hub, "Hub regulator", "Non-hub")
         )
 
+        # Use the same layout as the static plot (scaled for visNetwork coords)
+        layout_scale <- 200
         vis_nodes <- data.frame(
             id = node_names,
             label = node_names,
@@ -1346,6 +1375,8 @@ plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
             size = 10 + (node_deg / max(node_deg, 1)) * 30,
             font.size = ifelse(is_hub, 16, 11),
             borderWidth = ifelse(is_hub, 3, 1),
+            x = net_layout[, 1] * layout_scale,
+            y = -net_layout[, 2] * layout_scale,
             stringsAsFactors = FALSE
         )
 
@@ -1363,17 +1394,7 @@ plot_regulatory_network <- function(network, out_dir, gene_symbol_map = NULL) {
             main = paste0("Regulatory Network (", network$method, ") - Interactive"),
             width = "100%", height = "700px"
         ) |>
-            visNetwork::visPhysics(
-                solver = "forceAtlas2Based",
-                forceAtlas2Based = list(
-                    gravitationalConstant = -50,
-                    centralGravity = 0.005,
-                    springLength = 100,
-                    springConstant = 0.08,
-                    damping = 0.4
-                ),
-                stabilization = list(iterations = 150)
-            ) |>
+            visNetwork::visPhysics(enabled = FALSE) |>
             visNetwork::visInteraction(
                 hover = TRUE,
                 tooltipDelay = 100,
@@ -1451,7 +1472,8 @@ run_mediation_analysis <- function(harmonized, metadata, gene_mapping, mc, confi
     ))
 
     if (length(common_samples) < 20) {
-        message("  Insufficient samples for mediation. Skipping.")
+        message("  Insufficient samples for mediation (need >= 20, have ",
+                length(common_samples), "). Skipping.")
         return(NULL)
     }
 
@@ -2074,6 +2096,15 @@ run_protein_metabolite_mediation <- function(harmonized, metadata, mc, config,
 infer_pathway_activity_proteomics <- function(proteomics_data, mc, config,
                                                out_dir = NULL) {
     message("Inferring pathway activity from proteomics (PROGENy)...")
+
+    # Check organism support — PROGENy only covers human and mouse
+    organism <- config$global$organism %||% "human"
+    supported_organisms <- c("human", "homo_sapiens", "mouse", "mus_musculus")
+    if (!tolower(organism) %in% supported_organisms) {
+        message("  PROGENy pathway activity not available for '", organism,
+                "' (only human and mouse are supported). Skipping.")
+        return(NULL)
+    }
 
     if (!requireNamespace("decoupleR", quietly = TRUE)) {
         message("  decoupleR not available. Skipping pathway activity.")

@@ -29,11 +29,17 @@ load_precomputed_metabolomics_de <- function(config) {
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
 
-    # Derive contrast labels from file names
-    contrast_labels <- vapply(de_files, function(f) {
-        bn <- tools::file_path_sans_ext(basename(f))
-        sub("^de_", "", bn)
-    }, character(1), USE.NAMES = FALSE)
+    # Use config contrasts if available, fall back to file name derivation
+    config_contrasts <- de_cfg$contrasts
+    if (!is.null(config_contrasts) && length(config_contrasts) == length(de_files)) {
+        contrast_labels <- config_contrasts
+    } else {
+        # Derive contrast labels from file names (fallback)
+        contrast_labels <- vapply(de_files, function(f) {
+            bn <- tools::file_path_sans_ext(basename(f))
+            sub("^de_", "", bn)
+        }, character(1), USE.NAMES = FALSE)
+    }
 
     de_tables <- list()
     for (i in seq_along(de_files)) {
