@@ -6,6 +6,14 @@
 :: ============================================================
 cd /d "%~dp0"
 title Multiomics Pipeline - Loading...
+
+:: If the bundled portable pandoc is present, point rmarkdown at it.
+:: This avoids "error 127" when the install path contains spaces, since
+:: RSTUDIO_PANDOC gets propagated verbatim and rmarkdown quotes it properly.
+if exist "%~dp0tools\pandoc\pandoc.exe" (
+    set "RSTUDIO_PANDOC=%~dp0tools\pandoc"
+)
+
 echo.
 echo   Starting wizard - your browser will open shortly...
 echo.
