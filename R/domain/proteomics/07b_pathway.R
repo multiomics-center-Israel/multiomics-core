@@ -171,11 +171,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     annotation_df <- NULL
     if (!isTRUE(ann_cfg$skip_annotation)) {
         all_gene_ids <- unique(unlist(lapply(de_tables, function(x) x$FeatureID)))
+        # Resolve relative custom_mapping_file against paths.raw
+        resolved_custom <- ann_cfg$custom_mapping_file
+        if (!is.null(resolved_custom) && nzchar(resolved_custom) &&
+            !grepl("^([A-Za-z]:|/|\\\\)", resolved_custom)) {
+            resolved_custom <- resolve_raw_path(config, resolved_custom)
+        }
         anno_config <- list(
             organism = organism,
             annotation = list(
                 skip_annotation = FALSE,
-                custom_mapping_file = ann_cfg$custom_mapping_file,
+                custom_mapping_file = resolved_custom,
                 id_type = ann_cfg$id_type %||% "auto",
                 fallback_chain = c("custom", "biomart", "orgdb", "keggrest")
             )
@@ -197,6 +203,10 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # ------------------------------------------------------------------
     databases <- pw_cfg$databases %||% c("GO", "KEGG", "Reactome")
     gmt_file  <- pw_cfg$gmt_file
+    if (!is.null(gmt_file) && nzchar(gmt_file) &&
+        !grepl("^([A-Za-z]:|/|\\\\)", gmt_file)) {
+        gmt_file <- resolve_raw_path(config, gmt_file)
+    }
 
     gene_sets <- tryCatch(
         load_gene_sets(organism        = organism,

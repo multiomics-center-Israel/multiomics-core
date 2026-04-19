@@ -3,12 +3,16 @@
 #' @param row_data Data frame of feature annotations
 #' @param cfg Proteomics mode config
 #' @return Updated row_data with gene names and descriptions filled in
-apply_custom_annotation <- function(row_data, cfg) {
+apply_custom_annotation <- function(row_data, cfg, config = NULL) {
   ann_cfg <- cfg$annotation %||% list()
   mapping_file <- ann_cfg$custom_mapping_file
-  if (is.null(mapping_file) || !nzchar(mapping_file) || !file.exists(mapping_file)) {
-    return(row_data)
+  if (is.null(mapping_file) || !nzchar(mapping_file)) return(row_data)
+  # Resolve relative paths against paths.raw (e.g. "proteomics/x.csv" →
+  # "data/<project>/proteomics/x.csv") so the lookup matches the wizard layout.
+  if (!is.null(config) && !grepl("^([A-Za-z]:|/|\\\\)", mapping_file)) {
+    mapping_file <- resolve_raw_path(config, mapping_file)
   }
+  if (!file.exists(mapping_file)) return(row_data)
   
   protein_id_col <- cfg$id_columns$protein_id
   mapping <- read.csv(mapping_file, stringsAsFactors = FALSE)
@@ -146,7 +150,7 @@ get_proteomics_expression_matrix <- function(inputs, config) {
     
     # Feature annotations (row_data)
     row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
-    row_data <- apply_custom_annotation(row_data, cfg)
+    row_data <- apply_custom_annotation(row_data, cfg, config)
     
   } else {
     stop(sprintf("Unsupported proteomics engine: %s", cfg$engine))
