@@ -214,11 +214,23 @@ if (is.null(proj_dir_resolved) || proj_dir_resolved == "." || proj_dir_resolved 
 
 # QC plot visibility flags (all default TRUE except distance heatmap)
 show_pca      <- report_cfg$show_pca %||% TRUE
+show_umap     <- report_cfg$show_umap %||% TRUE
+show_pca_3d   <- report_cfg$show_pca_3d %||% TRUE
+show_pca_subsets <- report_cfg$show_pca_subsets %||% TRUE
 show_density  <- report_cfg$show_density %||% TRUE
 show_distance <- report_cfg$show_distance %||% FALSE   # disabled per facility feedback
 show_correlation <- report_cfg$show_correlation %||% TRUE
 show_expression_heatmap <- report_cfg$show_expression_heatmap %||% TRUE
 show_imputation_qc <- report_cfg$show_imputation_qc %||% TRUE
+show_outlier_detection <- report_cfg$show_outlier_detection %||% TRUE
+show_ma_plots <- report_cfg$show_ma_plots %||% TRUE
+show_top_de_heatmaps <- report_cfg$show_top_de_heatmaps %||% TRUE
+show_protein_explorer <- report_cfg$show_protein_explorer %||% TRUE
+show_peptide_explorer <- report_cfg$show_peptide_explorer %||% TRUE
+show_technical_summary <- report_cfg$show_technical_summary %||% TRUE
+show_executive_summary <- report_cfg$show_executive_summary %||% TRUE
+show_methods <- report_cfg$show_methods %||% TRUE
+show_session_info <- report_cfg$show_session_info %||% TRUE
 force_pca <- report_cfg$force_pca %||% FALSE
 
 # Load DE summary data (used in multiple sections)
@@ -396,9 +408,11 @@ if (file.exists(contrasts_file)) {
 
 ---
 
-# Technical Summary
+```{r technical-summary-heading, eval=show_technical_summary, results='asis'}
+cat("# Technical Summary\n\n")
+```
 
-```{r technical-summary, results='asis'}
+```{r technical-summary, eval=show_technical_summary, results='asis'}
 tech <- prot_cfg$technical_report
 
 meta_ts <- tryCatch(
@@ -449,9 +463,11 @@ cat(sprintf("- **PPI:** %s\n", if (isTRUE(prot_cfg$ppi$enabled)) "STRING" else "
 
 ---
 
-# Executive Summary
+```{r executive-summary-heading, eval=show_executive_summary, results='asis'}
+cat("# Executive Summary\n\n")
+```
 
-```{r executive-summary, results='asis'}
+```{r executive-summary, eval=show_executive_summary, results='asis'}
 exec_summary_path <- file.path(prot_dir, "executive_summary.md")
 exec_available <- file.exists(exec_summary_path)
 
@@ -823,11 +839,11 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 }
 ```
 
-```{r pca-3d-heading, eval=show_pca_section, results='asis'}
+```{r pca-3d-heading, eval=show_pca_section && show_pca_3d, results='asis'}
 cat("### 3D Interactive\n")
 ```
 
-```{r pca-3d-link, eval=show_pca_section, results='asis'}
+```{r pca-3d-link, eval=show_pca_section && show_pca_3d, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
     cat(sprintf('<p><a href="proteomics/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">Open 3D PCA (new tab)</a></p>'))
@@ -836,11 +852,11 @@ if (file.exists(pca3d_file)) {
 }
 ```
 
-```{r umap-heading, eval=show_pca_section, results='asis'}
+```{r umap-heading, eval=show_pca_section && show_umap, results='asis'}
 cat("### UMAP\n")
 ```
 
-```{r umap, eval=show_pca_section, fig.cap="UMAP embedding of protein expression"}
+```{r umap, eval=show_pca_section && show_umap, fig.cap="UMAP embedding of protein expression"}
 umap_file <- file.path(diag_dir, "UMAP.png")
 if (file.exists(umap_file)) {
     knitr::include_graphics(umap_file)
@@ -849,17 +865,17 @@ if (file.exists(umap_file)) {
 }
 ```
 
-```{r legend-umap, eval=show_pca_section, results='asis'}
+```{r legend-umap, eval=show_pca_section && show_umap, results='asis'}
 if (file.exists(file.path(diag_dir, "UMAP.png"))) {
     figure_legend("Uniform Manifold Approximation and Projection (UMAP) of imputed protein expression data. UMAP preserves local structure and may reveal non-linear groupings not apparent in PCA.")
 }
 ```
 
-```{r commentary-umap, eval=show_pca_section, results='asis'}
+```{r commentary-umap, eval=show_pca_section && show_umap, results='asis'}
 render_commentary("umap_plot")
 ```
 
-```{r pca-subsets, eval=show_pca_section, results='asis'}
+```{r pca-subsets, eval=show_pca_section && show_pca_subsets, results='asis'}
 subset_pngs <- list.files(diag_dir, pattern = "^PCA_.*\\.png$", full.names = TRUE)
 standard_pat <- "^PCA_(PC1\\.vs\\.PC[23](_labeled)?|top[0-9]+)\\.png$"
 subset_pngs <- subset_pngs[!grepl(standard_pat, basename(subset_pngs))]
@@ -1029,11 +1045,12 @@ figure_legend("Unsupervised hierarchical clustering heatmap based on the top mos
 render_commentary("expr_heatmap")
 ```
 
-## Outlier Detection
+```{r outlier-heading, eval=show_outlier_detection, results='asis'}
+cat("## Outlier Detection\n\n")
+cat("Outlier detection identifies samples with expression profiles that deviate substantially from their experimental group. Samples flagged as outliers may indicate technical failures, mislabeling, or genuine biological differences that warrant further investigation.\n\n")
+```
 
-Outlier detection identifies samples with expression profiles that deviate substantially from their experimental group. Samples flagged as outliers may indicate technical failures, mislabeling, or genuine biological differences that warrant further investigation.
-
-```{r outlier-detection, results='asis'}
+```{r outlier-detection, eval=show_outlier_detection, results='asis'}
 outlier_file <- file.path(diag_dir, "outlier_report.csv")
 if (file.exists(outlier_file)) {
     outlier_df <- read.csv(outlier_file, stringsAsFactors = FALSE)
@@ -1636,11 +1653,11 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
-## MA Plots {.tabset}
+```{r ma-plots-heading, eval=show_ma_plots, results='asis'}
+cat("## MA Plots {.tabset}\n\n### Static {.tabset}\n\n")
+```
 
-### Static {.tabset}
-
-```{r ma-plots-static, results='asis'}
+```{r ma-plots-static, eval=show_ma_plots, results='asis'}
 ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
 if (length(ma_files) > 0) {
     for (mf in ma_files) {
@@ -1656,11 +1673,12 @@ if (length(ma_files) > 0) {
 }
 ```
 
-### Interactive {.tabset}
+```{r ma-interactive-heading, eval=show_ma_plots, results='asis'}
+cat("### Interactive {.tabset}\n\n")
+cat("MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.\n\n")
+```
 
-MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.
-
-```{r ma-interactive-setup, include=FALSE}
+```{r ma-interactive-setup, eval=show_ma_plots, include=FALSE}
 # Load expression data from final_results.tsv for MA plot (has per-sample columns)
 ma_expr_df <- NULL
 ma_final_file <- file.path(datasets_dir, "final_results.tsv")
@@ -1751,7 +1769,7 @@ make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut 
 }
 ```
 
-```{r ma-interactive, results='asis', fig.height=6}
+```{r ma-interactive, eval=show_ma_plots, results='asis', fig.height=6}
 if (!is.null(de_data) && length(contrast_names) > 0) {
     for (i in seq_along(contrast_names)) {
         cn <- contrast_names[i]
@@ -1780,9 +1798,11 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
-## Top DE Heatmaps {.tabset}
+```{r top-de-heatmaps-heading, eval=show_top_de_heatmaps, results='asis'}
+cat("## Top DE Heatmaps {.tabset}\n\n")
+```
 
-```{r top-de-heatmaps, results='asis'}
+```{r top-de-heatmaps, eval=show_top_de_heatmaps, results='asis'}
 heatmap_files <- list.files(qc_post_dir, pattern = "^heatmap_top.*\\.png$", full.names = TRUE)
 if (length(heatmap_files) > 0) {
     # Parse contrast names and sizes
@@ -1799,11 +1819,12 @@ if (length(heatmap_files) > 0) {
 }
 ```
 
-## Protein Expression Explorer
+```{r protein-explorer-heading, eval=show_protein_explorer, results='asis'}
+cat("## Protein Expression Explorer\n\n")
+cat("The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.\n\n")
+```
 
-The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.
-
-```{r protein-explorer-data, include=FALSE}
+```{r protein-explorer-data, eval=show_protein_explorer, include=FALSE}
 explorer_ready <- FALSE
 explorer_json_str <- "{}"
 
@@ -1893,7 +1914,7 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
 }
 ```
 
-```{r protein-explorer-ui, eval=explorer_ready, results='asis'}
+```{r protein-explorer-ui, eval=show_protein_explorer && explorer_ready, results='asis'}
 cat('
 <div style="margin: 15px 0 20px 0;">
 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -1920,7 +1941,7 @@ cat('
 ')
 ```
 
-```{r protein-explorer-js, eval=explorer_ready, results='asis'}
+```{r protein-explorer-js, eval=show_protein_explorer && explorer_ready, results='asis'}
 cat('<script>\nvar geneExprData = ')
 cat(explorer_json_str)
 cat(';\n')
@@ -2124,15 +2145,16 @@ document.addEventListener("click", function(e) {
 ')
 ```
 
-```{r protein-explorer-fallback, eval=!explorer_ready, results='asis'}
+```{r protein-explorer-fallback, eval=show_protein_explorer && !explorer_ready, results='asis'}
 cat("*Protein expression explorer not available. Normalized expression matrix not found.*\n")
 ```
 
-## Peptide Expression Explorer
+```{r peptide-explorer-heading, eval=show_peptide_explorer, results='asis'}
+cat("## Peptide Expression Explorer\n\n")
+cat("The peptide explorer allows you to search for a protein and view the expression of its individual peptides across experimental groups. This provides insight into peptide-level variability, potential isoform-specific effects, and data quality at the peptide level.\n\n")
+```
 
-The peptide explorer allows you to search for a protein and view the expression of its individual peptides across experimental groups. This provides insight into peptide-level variability, potential isoform-specific effects, and data quality at the peptide level.
-
-```{r peptide-explorer-data, include=FALSE}
+```{r peptide-explorer-data, eval=show_peptide_explorer, include=FALSE}
 peptide_ready <- FALSE
 peptide_json_str <- "{}"
 
@@ -2301,7 +2323,7 @@ if (!is.null(peptide_df) && !is.null(meta_df_exp) && nrow(peptide_df) > 0) {
 }
 ```
 
-```{r peptide-explorer-ui, eval=peptide_ready, results='asis'}
+```{r peptide-explorer-ui, eval=show_peptide_explorer && peptide_ready, results='asis'}
 cat('
 <div style="margin: 15px 0 20px 0;">
 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -2327,7 +2349,7 @@ cat('
 ')
 ```
 
-```{r peptide-explorer-js, eval=peptide_ready, results='asis'}
+```{r peptide-explorer-js, eval=show_peptide_explorer && peptide_ready, results='asis'}
 cat('<script>\nvar pepData = ')
 cat(peptide_json_str)
 cat(';\n')
@@ -2480,7 +2502,7 @@ document.addEventListener("click", function(e) {
 ')
 ```
 
-```{r peptide-explorer-fallback, eval=!peptide_ready, results='asis'}
+```{r peptide-explorer-fallback, eval=show_peptide_explorer && !peptide_ready, results='asis'}
 cat("*Peptide expression explorer not available. No peptide-level data file was provided in the configuration (`files.peptides`). To enable this feature, provide a peptide intensity matrix (e.g., from DIA-NN or MaxQuant) in the config file.*\n")
 ```
 
@@ -3471,9 +3493,11 @@ make_dt(files_tbl, "Key Output Files")
 
 ---
 
-# Methods
+```{r methods-heading, eval=show_methods, results='asis'}
+cat("# Methods\n\n")
+```
 
-```{r methods-text, results='asis'}
+```{r methods-text, eval=show_methods, results='asis'}
 imp_method <- prot_cfg$imputation$method %||% "none"
 de_method <- prot_cfg$de$method %||% "limma"
 padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
@@ -3540,9 +3564,11 @@ de_method, padj_cut, lfc_cut
 cat("\n</div>\n")
 ```
 
-## Statistical Analysis
+```{r methods-statistical-heading, eval=show_methods, results='asis'}
+cat("## Statistical Analysis\n\n")
+```
 
-```{r methods-statistical-analysis, results='asis'}
+```{r methods-statistical-analysis, eval=show_methods, results='asis'}
 # Parameterized statistical analysis subsection for the Methods section.
 # If report_cfg$stats_section_text is non-empty, print it verbatim;
 # otherwise auto-generate from pipeline config values.
@@ -3589,9 +3615,11 @@ if (nzchar(trimws(stats_section_text))) {
 
 ---
 
-# Session Info
+```{r session-info-heading, eval=show_session_info, results='asis'}
+cat("# Session Info\n\n")
+```
 
-```{r session-info, comment=""}
+```{r session-info, eval=show_session_info, comment=""}
 si_file <- file.path(run_dir, "execution_info", "sessionInfo.txt")
 if (file.exists(si_file)) {
     si <- readLines(si_file)

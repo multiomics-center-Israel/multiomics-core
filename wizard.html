@@ -1182,13 +1182,30 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <textarea id="report_disclaimer" rows="2" placeholder="e.g. Results are provided for research purposes only..."></textarea>
   </div>
   <div style="margin-top:14px;">
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;font-weight:600;">QC plots</div>
     <div class="toggle-row"><input type="checkbox" id="report_show_pca" checked><label class="toggle-label" for="report_show_pca">PCA plot</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_umap" checked><label class="toggle-label" for="report_show_umap">UMAP</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_pca_3d" checked><label class="toggle-label" for="report_show_pca_3d">3D interactive PCA</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_pca_subsets" checked><label class="toggle-label" for="report_show_pca_subsets">PCA subsets</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_density" checked><label class="toggle-label" for="report_show_density">Density plot</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_distance"><label class="toggle-label" for="report_show_distance">Distance heatmap</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_correlation" checked><label class="toggle-label" for="report_show_correlation">Correlation plot</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_expr_heatmap" checked><label class="toggle-label" for="report_show_expr_heatmap">Expression heatmap</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_imputation_qc" checked><label class="toggle-label" for="report_show_imputation_qc">Imputation QC</label></div>
     <div class="toggle-row"><input type="checkbox" id="report_show_venn"><label class="toggle-label" for="report_show_venn">Identified proteins Venn diagram</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_outlier" checked><label class="toggle-label" for="report_show_outlier">Outlier detection</label></div>
+
+    <div style="font-size:12px;color:var(--text-dim);margin:12px 0 6px;font-weight:600;">DE plots</div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_ma_plots" checked><label class="toggle-label" for="report_show_ma_plots">MA plots</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_top_de_heatmaps" checked><label class="toggle-label" for="report_show_top_de_heatmaps">Top DE heatmaps</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_protein_explorer" checked><label class="toggle-label" for="report_show_protein_explorer">Protein expression explorer</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_peptide_explorer" checked><label class="toggle-label" for="report_show_peptide_explorer">Peptide expression explorer</label></div>
+
+    <div style="font-size:12px;color:var(--text-dim);margin:12px 0 6px;font-weight:600;">Report sections</div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_tech_summary" checked><label class="toggle-label" for="report_show_tech_summary">Technical Summary</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_exec_summary" checked><label class="toggle-label" for="report_show_exec_summary">Executive Summary</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_methods" checked><label class="toggle-label" for="report_show_methods">Methods</label></div>
+    <div class="toggle-row"><input type="checkbox" id="report_show_session_info" checked><label class="toggle-label" for="report_show_session_info">Session Info</label></div>
   </div>
 </div>
 
@@ -2172,12 +2189,24 @@ function generateProtYaml() {
   var expectedProteins = v('report_expected_proteins');
   if (expectedProteins) yaml += '      expected_proteins_file: ' + yamlStr(expectedProteins) + '\n';
   yaml += '      show_pca: ' + yamlBool(checked('report_show_pca')) + '\n';
+  yaml += '      show_umap: ' + yamlBool(checked('report_show_umap')) + '\n';
+  yaml += '      show_pca_3d: ' + yamlBool(checked('report_show_pca_3d')) + '\n';
+  yaml += '      show_pca_subsets: ' + yamlBool(checked('report_show_pca_subsets')) + '\n';
   yaml += '      show_density: ' + yamlBool(checked('report_show_density')) + '\n';
   yaml += '      show_distance: ' + yamlBool(checked('report_show_distance')) + '\n';
   yaml += '      show_correlation: ' + yamlBool(checked('report_show_correlation')) + '\n';
   yaml += '      show_expression_heatmap: ' + yamlBool(checked('report_show_expr_heatmap')) + '\n';
   yaml += '      show_imputation_qc: ' + yamlBool(checked('report_show_imputation_qc')) + '\n';
   yaml += '      show_identified_proteins_venn: ' + yamlBool(checked('report_show_venn')) + '\n';
+  yaml += '      show_outlier_detection: ' + yamlBool(checked('report_show_outlier')) + '\n';
+  yaml += '      show_ma_plots: ' + yamlBool(checked('report_show_ma_plots')) + '\n';
+  yaml += '      show_top_de_heatmaps: ' + yamlBool(checked('report_show_top_de_heatmaps')) + '\n';
+  yaml += '      show_protein_explorer: ' + yamlBool(checked('report_show_protein_explorer')) + '\n';
+  yaml += '      show_peptide_explorer: ' + yamlBool(checked('report_show_peptide_explorer')) + '\n';
+  yaml += '      show_technical_summary: ' + yamlBool(checked('report_show_tech_summary')) + '\n';
+  yaml += '      show_executive_summary: ' + yamlBool(checked('report_show_exec_summary')) + '\n';
+  yaml += '      show_methods: ' + yamlBool(checked('report_show_methods')) + '\n';
+  yaml += '      show_session_info: ' + yamlBool(checked('report_show_session_info')) + '\n';
   yaml += '      force_pca: false\n';
   var disclaimer = v('report_disclaimer');
   if (disclaimer) yaml += '      disclaimer_text: |\n' + disclaimer.split('\n').map(function(l) { return '        ' + l; }).join('\n') + '\n';
