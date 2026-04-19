@@ -84,7 +84,7 @@ modes:
         epsilon: 1.0e-8
 
     # ==============================================================================
-    # Normalization & scaling (interpretation layer)
+    # Normalization & scaling (legacy reference — see preprocessing.chosen_norm)
     # ==============================================================================
     normalization:
 
@@ -98,7 +98,8 @@ modes:
       #   - TSS (total sum scaling)
       #   - Median normalization (log shift)
       #   - PQN
-      # chosen_norm (above) decides which one is used downstream
+      # The active normalization choice is controlled by
+      # preprocessing.chosen_norm (above), not by this field.
       sample_norm: "pqn"
 
       # ---- Transformation ----
@@ -106,14 +107,11 @@ modes:
       transform: "log2"
 
       # ---- Scaling ----
-      # IMPORTANT:
-      # Currently NOT applied in preprocessing pipeline.
-      # Intended for:
-      #   - QC / reporting layer
-      #   - downstream modeling (future)
-      #
+      # Feature scaling is not applied in the current metabolomics
+      # preprocessing and DE analysis path.
+      # This field is retained for backward compatibility only.
       # Options: "none" | "auto" | "pareto" | "range"
-      scaling: "pareto"
+      scaling: "none"
 
       # ---- Log pseudocount ----
       pseudocount: 1
