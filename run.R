@@ -3055,7 +3055,11 @@ main <- function() {
           sub_dir <- file.path(project_dir, "data", proj_name_safe, mode)
           dir.create(sub_dir, recursive = TRUE, showWarnings = FALSE)
           dest <- file.path(sub_dir, file_part$filename)
-          writeLines(file_part$data, dest)
+          # Write in binary mode to preserve exact bytes — writeLines in text
+          # mode on Windows doubles \r\n into \r\r\n, corrupting large CSVs.
+          con <- file(dest, "wb")
+          writeBin(charToRaw(file_part$data), con)
+          close(con)
 
           # Detect columns from first line
           first_line <- strsplit(file_part$data, "\r?\n")[[1]][1]
@@ -3113,6 +3117,39 @@ main <- function() {
           return(list(status = 200L,
                       headers = c(cors, list("Content-Type" = "application/json")),
                       body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
+        }
+
+        # API: list saved configs
+        if (path == "/api/list-configs" && method == "GET") {
+          config_dir <- file.path(project_dir, "config")
+          files <- if (dir.exists(config_dir)) {
+            list.files(config_dir, pattern = "\\.ya?ml$", full.names = FALSE)
+          } else character(0)
+          resp <- jsonlite::toJSON(list(configs = files), auto_unbox = TRUE)
+          if (length(files) == 0) resp <- '{"configs":[]}'
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
+        # API: load a saved config (returns raw YAML text)
+        if (path == "/api/load-config" && method == "GET") {
+          qs <- req$QUERY_STRING %||% ""
+          fname <- sub(".*filename=([^&]+).*", "\\1", qs)
+          if (!nzchar(fname) || grepl("/|\\\\|\\.\\.", fname)) {
+            return(list(status = 400L, headers = cors,
+                        body = '{"error":"Invalid filename"}'))
+          }
+          config_path <- file.path(project_dir, "config", utils::URLdecode(fname))
+          if (!file.exists(config_path)) {
+            return(list(status = 404L, headers = cors,
+                        body = '{"error":"Config not found"}'))
+          }
+          yaml_text <- paste(readLines(config_path, warn = FALSE), collapse = "\n")
+          resp <- jsonlite::toJSON(list(yaml = yaml_text), auto_unbox = TRUE)
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
         }
 
         # API: save config (write YAML to config/)
