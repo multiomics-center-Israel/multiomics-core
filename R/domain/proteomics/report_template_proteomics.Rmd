@@ -859,6 +859,22 @@ if (file.exists(file.path(diag_dir, "UMAP.png"))) {
 render_commentary("umap_plot")
 ```
 
+```{r pca-subsets, eval=show_pca_section, results='asis'}
+subset_pngs <- list.files(diag_dir, pattern = "^PCA_.*\\.png$", full.names = TRUE)
+standard_pat <- "^PCA_(PC1\\.vs\\.PC[23](_labeled)?|top[0-9]+)\\.png$"
+subset_pngs <- subset_pngs[!grepl(standard_pat, basename(subset_pngs))]
+if (length(subset_pngs) > 0) {
+    cat("### Subsets\n\n")
+    cat("PCA computed on user-defined subsets of samples (configured via the wizard's *PCA Subsets* section). Each plot below uses PC1 vs PC2 restricted to the listed conditions.\n\n")
+    for (f in subset_pngs) {
+        subset_name <- sub("^PCA_(.*)\\.png$", "\\1", basename(f))
+        img_uri <- knitr::image_uri(f)
+        cat(sprintf("#### %s\n\n", subset_name))
+        cat(sprintf('<img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA subset: %s" />\n\n', img_uri, subset_name))
+    }
+}
+```
+
 ```{r density-heading, eval=show_density, results='asis'}
 cat("## Protein Distribution\n")
 ```
