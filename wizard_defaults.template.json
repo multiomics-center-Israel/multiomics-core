@@ -13,7 +13,7 @@
     "organism": "human",
     "generate_pptx": true,
     "commentary_enabled": false,
-    "commentary_backend": "claude"
+    "commentary_backend": "none"
   },
 
   "mode_defaults": {

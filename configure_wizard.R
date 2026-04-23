@@ -74,7 +74,7 @@ if (file.exists(defaults_file)) {
       organism = "human",
       generate_pptx = TRUE,
       commentary_enabled = FALSE,
-      commentary_backend = "claude"
+      commentary_backend = "none"
     ),
     mode_defaults = list(
       rna = list(),

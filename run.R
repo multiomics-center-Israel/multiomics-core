@@ -3119,6 +3119,30 @@ main <- function() {
                       body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
         }
 
+        # API: open a local file with the OS default handler (for report HTML)
+        if (path == "/api/open-file" && method == "POST") {
+          body_raw <- req$rook.input$read()
+          body <- jsonlite::fromJSON(rawToChar(body_raw))
+          target <- body$path
+          if (is.null(target) || !nzchar(target) || !file.exists(target)) {
+            return(list(status = 404L, headers = cors,
+                        body = '{"error":"File not found"}'))
+          }
+          ok <- tryCatch({
+            if (.Platform$OS.type == "windows") {
+              shell.exec(target)
+            } else {
+              cmd <- if (Sys.info()[["sysname"]] == "Darwin") "open" else "xdg-open"
+              system2(cmd, shQuote(target), wait = FALSE)
+            }
+            TRUE
+          }, error = function(e) FALSE)
+          resp <- jsonlite::toJSON(list(opened = ok), auto_unbox = TRUE)
+          return(list(status = if (ok) 200L else 500L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = resp))
+        }
+
         # API: list saved configs
         if (path == "/api/list-configs" && method == "GET") {
           config_dir <- file.path(project_dir, "config")

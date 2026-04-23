@@ -579,7 +579,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="field-row">
     <div class="field">
       <label>Multi-imputation</label>
-      <input type="checkbox" id="prot_multi_imp" checked>
+      <input type="checkbox" id="prot_multi_imp">
       <span class="hint">Run 10 iterations, require 8/10 consensus for DE significance</span>
     </div>
   </div>
@@ -649,11 +649,11 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="field-row">
     <div class="field">
       <label>Linear fold-change cutoff <span class="hint">(1 = no filter)</span></label>
-      <input type="number" id="prot_fc_cutoff" value="1.5" step="0.1" min="1">
+      <input type="number" id="prot_fc_cutoff" value="1.5" step="0.1" min="1" oninput="syncFCFromLinear('prot')">
     </div>
     <div class="field">
-      <label>&nbsp;</label>
-      <div style="display:flex;gap:16px;padding-top:4px;"><!-- spacer --></div>
+      <label>log<sub>2</sub> fold-change cutoff <span class="hint">(auto-synced)</span></label>
+      <input type="number" id="prot_log2fc_cutoff" value="0.585" step="0.01" min="0" oninput="syncFCFromLog2('prot')">
     </div>
   </div>
 
@@ -681,7 +681,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <div class="toggle-row"><input type="checkbox" id="prot_pathway_volcano" checked><label class="toggle-label" for="prot_pathway_volcano">Pathway volcano plot</label></div>
     <div class="toggle-row"><input type="checkbox" id="prot_clustering"><label class="toggle-label" for="prot_clustering">Clustering</label></div>
     <div class="toggle-row"><input type="checkbox" id="prot_ppi" checked><label class="toggle-label" for="prot_ppi">PPI network analysis (STRING)</label></div>
-    <div class="toggle-row"><input type="checkbox" id="prot_adv_stats" checked><label class="toggle-label" for="prot_adv_stats">Advanced statistics (effect sizes, power)</label></div>
+    <div class="toggle-row"><input type="checkbox" id="prot_adv_stats"><label class="toggle-label" for="prot_adv_stats">Advanced statistics (effect sizes, power)</label></div>
   </div>
 </div>
 
@@ -1089,7 +1089,14 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   </div>
   <div class="field">
     <label>Technical report / log file path <span class="hint">(optional, DOCX/PDF/log for AI summary)</span></label>
-    <input type="text" id="tech_report_file" placeholder="/path/to/facility_report.docx or leave empty">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input type="text" id="tech_report_file" placeholder="/path/to/facility_report.docx or leave empty" style="flex:1;">
+      <label class="btn" style="padding:8px 14px;font-size:13px;margin:0;cursor:pointer;">
+        Upload
+        <input type="file" accept=".docx,.pdf,.log,.txt" style="display:none;" onchange="uploadTechReport(this)">
+      </label>
+    </div>
+    <div id="tech_report_status" class="upload-status"></div>
   </div>
 </div>
 
@@ -1403,6 +1410,30 @@ function showToast(msg, type, duration) {
 // ============================================================
 // File upload (via backend) or local column detection (fallback)
 // ============================================================
+function uploadTechReport(fileInput) {
+  var file = fileInput.files[0];
+  if (!file) return;
+  var statusDiv = document.getElementById('tech_report_status');
+  if (!hasBackend) {
+    if (statusDiv) { statusDiv.textContent = 'Type the path manually — upload needs the backend running.'; statusDiv.className = 'upload-status visible error'; }
+    return;
+  }
+  var formData = new FormData();
+  formData.append('file', file);
+  formData.append('project_name', v('project_name') || 'project');
+  formData.append('mode', 'proteomics');
+  formData.append('file_role', 'tech_report');
+  if (statusDiv) { statusDiv.textContent = 'Uploading...'; statusDiv.className = 'upload-status visible success'; }
+  fetch('/api/upload-file', { method: 'POST', body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { if (statusDiv) { statusDiv.textContent = 'Error: ' + d.error; statusDiv.className = 'upload-status visible error'; } return; }
+      document.getElementById('tech_report_file').value = d.path;
+      if (statusDiv) { statusDiv.textContent = 'Uploaded: ' + d.path; statusDiv.className = 'upload-status visible success'; }
+    })
+    .catch(function(e) { if (statusDiv) { statusDiv.textContent = 'Upload failed: ' + e.message; statusDiv.className = 'upload-status visible error'; } });
+}
+
 function uploadFile(fileInput, prefix, mode, fileRole) {
   var file = fileInput.files[0];
   if (!file) return;
@@ -1555,6 +1586,18 @@ function populateSelects(prefix, cols) {
 function toggleFixedCPM() {
   var field = document.getElementById('rna_fixed_cpm_field');
   field.classList.toggle('visible', document.getElementById('rna_filter_mode').value === 'fixed');
+}
+
+// Keep linear FC and log2 FC inputs in sync (one derives from the other).
+function syncFCFromLinear(prefix) {
+  var lin = parseFloat(document.getElementById(prefix + '_fc_cutoff').value);
+  var l2  = document.getElementById(prefix + '_log2fc_cutoff');
+  if (l2 && !isNaN(lin) && lin > 0) l2.value = (Math.log(lin) / Math.LN2).toFixed(3);
+}
+function syncFCFromLog2(prefix) {
+  var l2v = parseFloat(document.getElementById(prefix + '_log2fc_cutoff').value);
+  var lin = document.getElementById(prefix + '_fc_cutoff');
+  if (lin && !isNaN(l2v) && l2v >= 0) lin.value = Math.pow(2, l2v).toFixed(3);
 }
 
 function toggleImpParams() {
@@ -3160,10 +3203,20 @@ function onRunFinished() {
 
 function openReport() {
   if (!_runState.reportPath) return;
-  // Browsers block file:// from http:// origin — copy to clipboard as a fallback
-  var url = 'file:///' + _runState.reportPath.replace(/\\/g, '/').replace(/^\//, '');
-  var w = window.open(url, '_blank');
-  if (!w) copyReportPath();
+  // Prefer backend open (OS default handler) — browsers block file:// from http:// origin.
+  fetch('/api/open-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: _runState.reportPath })
+  }).then(function(r) {
+    if (r.ok) { showToast('Opening report...', 'success'); return; }
+    // Fallback: try window.open, then clipboard copy
+    var url = 'file:///' + _runState.reportPath.replace(/\\/g, '/').replace(/^\//, '');
+    if (!window.open(url, '_blank')) copyReportPath();
+  }).catch(function() {
+    var url = 'file:///' + _runState.reportPath.replace(/\\/g, '/').replace(/^\//, '');
+    if (!window.open(url, '_blank')) copyReportPath();
+  });
 }
 
 function copyReportPath() {
