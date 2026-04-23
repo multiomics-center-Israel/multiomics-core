@@ -742,7 +742,9 @@ choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
     cmat[is.na(cmat)] <- 0
     d <- stats::as.dist(1 - cmat)
     hc <- stats::hclust(d, method = "ward.D2")
-    list(cluster = stats::cutree(hc, k = k))
+    # clusGap bootstraps may yield an hc with fewer leaves than requested k
+    k_safe <- min(k, length(hc$order))
+    list(cluster = stats::cutree(hc, k = k_safe))
   }
   
   gap <- cluster::clusGap(mat_fg, FUNcluster = hclust_func, K.max = k_max, B = B)
@@ -837,7 +839,14 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
       }
     }
 
-    # 4. Cut the tree
+    # 4. Cut the tree (clamp k to tree size - 1 in case maxSE/gap returns too high)
+    # When k >= n we'd get trivial singleton clusters, which downstream plots
+    # (pheatmap with scale="row") can't handle gracefully. Cap at n-1.
+    final_k <- min(as.integer(final_k), length(hc$order) - 1L)
+    if (final_k < 2L) {
+      message("[partition clustering] Computed k < 2 after clamping — skipping partition.")
+      return(list(clusters = NULL, group_means = gm, k = NA))
+    }
     clusters <- stats::cutree(hc, k = final_k)
   } else {
     # === Modern Style: Partitioning (PAM / K-means) ===

@@ -760,6 +760,15 @@ resolve_name <- function(fid) {
   }
 }
 
+# Truncate long labels for plot axes / heatmap rows so a single huge IUPAC
+# name does not stretch the plot area. Table/hover values keep the full name.
+truncate_label <- function(x, max_len = 40) {
+  x <- as.character(x)
+  long <- !is.na(x) & nchar(x) > max_len
+  x[long] <- paste0(substr(x[long], 1, max_len - 1), "\u2026")
+  x
+}
+
 # Build norm intensity y-label
 norm_y_label_report <- "Normalized intensity"
 ni_r <- pre$info$normalization
@@ -1490,12 +1499,12 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
       mat_z <- t(scale(t(mat_hm)))
       mat_z[is.na(mat_z)] <- 0
 
-      # Use display names for rows
+      # Use display names for rows (truncated so long IUPAC names don't shift the plot)
       row_labels <- vapply(rownames(mat_z), function(fid) {
         nm <- hm_label_map[fid]
         if (!is.na(nm) && nzchar(nm)) nm else fid
       }, character(1), USE.NAMES = FALSE)
-      rownames(mat_z) <- row_labels
+      rownames(mat_z) <- truncate_label(row_labels, max_len = 40)
 
       cat(sprintf("\n## Top %d\n\n", n_top))
 
@@ -1543,7 +1552,7 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
         nm <- hm_label_map[fid]
         if (!is.na(nm) && nzchar(nm)) nm else fid
       }, character(1), USE.NAMES = FALSE)
-      rownames(mat_z_all) <- row_labels_all
+      rownames(mat_z_all) <- truncate_label(row_labels_all, max_len = 40)
 
       cat(sprintf("\n## All DE (%d)\n\n", n_all))
 

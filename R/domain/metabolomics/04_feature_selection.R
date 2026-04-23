@@ -8,6 +8,18 @@
 # Reuses: assert_numeric_matrix, %||%
 
 
+# ==== HELPERS ================================================================
+
+# Truncate long labels for plot axes so a single huge IUPAC name does not
+# stretch the whole panel. Used by plot_rf_importance and plot_plsda_vip.
+.trunc_label <- function(x, max_len = 40) {
+    x <- as.character(x)
+    long <- !is.na(x) & nchar(x) > max_len
+    x[long] <- paste0(substr(x[long], 1, max_len - 1), "\u2026")
+    x
+}
+
+
 # ==== RANDOM FOREST ==========================================================
 
 # ---- public entry point -----------------------------------------------------
@@ -113,6 +125,8 @@ run_metabolomics_rf <- function(pre, config) {
 #' @return ggplot object.
 plot_rf_importance <- function(imp_df, top_n = 20) {
     top_df <- utils::head(imp_df, top_n)
+    # Truncate long compound names so the y-axis doesn't get stretched
+    top_df$feature_id <- .trunc_label(top_df$feature_id, 40)
     top_df$feature_id <- factor(top_df$feature_id,
                                  levels = rev(top_df$feature_id))
 
@@ -329,6 +343,9 @@ plot_plsda_vip <- function(plsda_res, top_n = 15, colors = NULL) {
         dup_mask <- duplicated(display_names) | duplicated(display_names, fromLast = TRUE)
         display_names[dup_mask] <- paste0(display_names[dup_mask], " (", top_feats[dup_mask], ")")
     }
+
+    # Truncate long compound names so the y-axis doesn't get stretched
+    display_names <- .trunc_label(display_names, 40)
 
     # Shared factor levels — reversed so highest VIP is at the top
     feat_levels <- rev(display_names)

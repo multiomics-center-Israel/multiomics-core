@@ -202,9 +202,8 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     if (!is.null(prof)) {
       f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
       grp_col_name <- cfg$clustering$group_col %||% "Group"
-      p_prof <- plot_cluster_profiles_legacy_style(
-        group_means = part_res$group_means,
-        clusters = part_res$clusters,
+      p_prof <- plot_cluster_profiles(
+        prof_df = prof,
         x_label = grp_col_name
       )
       

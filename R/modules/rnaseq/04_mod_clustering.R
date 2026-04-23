@@ -61,7 +61,18 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
   ))
   
   # ---- build annotation_col for heatmaps using effects ----
-  annot_col <- build_heatmap_annotation_col(pre$meta, cfg)
+  # build_heatmap_annotation_col returns column name(s); pheatmap needs a
+  # data.frame keyed by sample ID. Convert here so downstream heatmap calls
+  # (partition, binary) can pass this through unchanged.
+  annot_col_names <- build_heatmap_annotation_col(pre$meta, cfg)
+  annot_col <- NULL
+  if (!is.null(annot_col_names) && length(annot_col_names) > 0) {
+    sample_col <- cfg$effects$samples
+    if (!is.null(sample_col) && sample_col %in% colnames(pre$meta)) {
+      annot_col <- pre$meta[, annot_col_names, drop = FALSE]
+      rownames(annot_col) <- as.character(pre$meta[[sample_col]])
+    }
+  }
   
   # Rebuild summary_df to identify DE features
   summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, cfg$de), 
@@ -233,9 +244,8 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     prof <- build_cluster_profiles(part_res$group_means, part_res$clusters, part_res$k)
     if (!is.null(prof)) {
       f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-      p_prof <- plot_cluster_profiles_legacy_style(
-        group_means = part_res$group_means,
-        clusters = part_res$clusters,
+      p_prof <- plot_cluster_profiles(
+        prof_df = prof,
         x_label = cfg$clustering$group_col %||% "Group"
       )
       ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = max(6, ceiling(part_res$k / 2) * 3))
