@@ -18,9 +18,10 @@
 #' @return Raw HTML string (use cat(...) in an asis chunk)
 cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
                                default_ptype = "padj") {
-  lfc_r  <- round(default_lfc, 4)
-  p_r    <- signif(default_p, 4)
-  ptype  <- match.arg(default_ptype, c("pval", "padj"))
+  lfc_r    <- round(default_lfc, 4)
+  linfc_r  <- round(2 ^ default_lfc, 4)
+  p_r      <- signif(default_p, 4)
+  ptype    <- match.arg(default_ptype, c("pval", "padj"))
   pval_checked <- if (ptype == "pval") "checked" else ""
   padj_checked <- if (ptype == "padj") "checked" else ""
 
@@ -78,6 +79,11 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 #cutoff-panel .cp-summary .de-up   { color: #cf222e; font-weight: 600; }
 #cutoff-panel .cp-summary .de-down { color: #0969da; font-weight: 600; }
 #cutoff-panel .cp-summary .de-total { font-weight: 600; color: #24292f; }
+#cutoff-panel .cp-note {
+  margin: 12px 0 0 0; padding: 8px 12px;
+  font-size: 12px; color: #57606a; font-style: italic;
+  background: #fff8e1; border-left: 3px solid #f0b429; border-radius: 4px;
+}
 </style>
 
 <div id="cutoff-panel">
@@ -98,11 +104,16 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 <label>log2FC threshold</label>
 <input type="number" id="cp-lfc-num" min="0" max="10" step="0.1" value="', lfc_r, '">
 </div>
+<div class="cp-field">
+<label>Linear FC threshold</label>
+<input type="number" id="cp-linfc-num" min="1" max="1024" step="0.1" value="', linfc_r, '">
+</div>
 </div>
 <div class="cp-actions">
 <button class="cp-reset" onclick="window.__cutoffReset()">Reset to defaults</button>
 <span class="cp-summary" id="cp-global-summary"></span>
 </div>
+<p class="cp-note">Note: All primary analyses (DE tables, enrichment, exports) use the cutoffs configured at pipeline run-time. Adjusting the controls here only affects the interactive Volcano / MA plots and the live counts above.</p>
 </div>
 
 <script>
@@ -121,17 +132,36 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   var debounceTimer = null;
 
   // --- DOM refs ---
-  var lfcNum, pvalNum;
+  var lfcNum, linfcNum, pvalNum;
+
+  // --- Sync helpers between log2FC and linear FC fields ---
+  function syncLinearFromLog() {
+    if (linfcNum) linfcNum.value = Math.pow(2, currentLfc).toFixed(3);
+  }
+  function syncLogFromLinear() {
+    if (lfcNum) lfcNum.value = (Math.log(currentLfc) / Math.LN2).toFixed(3);
+  }
 
   function initControls() {
     lfcNum   = document.getElementById("cp-lfc-num");
+    linfcNum = document.getElementById("cp-linfc-num");
     pvalNum  = document.getElementById("cp-pval-num");
     if (!lfcNum) return;
 
     lfcNum.addEventListener("input", function() {
       currentLfc = parseFloat(this.value) || 0;
+      syncLinearFromLog();
       debouncedUpdate();
     });
+    if (linfcNum) {
+      linfcNum.addEventListener("input", function() {
+        var lin = parseFloat(this.value);
+        if (!isFinite(lin) || lin <= 0) return;
+        currentLfc = Math.log(lin) / Math.LN2;
+        syncLogFromLinear();
+        debouncedUpdate();
+      });
+    }
     pvalNum.addEventListener("input", function() {
       currentPval = parseFloat(this.value) || 0.05;
       debouncedUpdate();
@@ -365,6 +395,7 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
     if (lfcNum) {
       lfcNum.value  = currentLfc;
       pvalNum.value = currentPval < 0.01 ? currentPval : currentPval;
+      syncLinearFromLog();
     }
     // Reset radio buttons
     var radios = document.querySelectorAll("input[name=\'cp-ptype\']");
