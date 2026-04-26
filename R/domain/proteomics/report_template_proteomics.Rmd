@@ -989,11 +989,11 @@ figure_legend("Kernel density estimates of per-sample protein expression distrib
 render_commentary("density_plot")
 ```
 
-```{r boxplot-tab-heading, eval=show_density, results='asis'}
+```{r boxplot-tab-heading, eval=show_density && !has_imputation, results='asis'}
 cat("### Boxplot\n")
 ```
 
-```{r distribution-boxplot, eval=show_density, fig.cap="Protein expression boxplot"}
+```{r distribution-boxplot, eval=show_density && !has_imputation, fig.cap="Protein expression boxplot"}
 bp <- file.path(diag_dir, "imputed_boxplot.png")
 if (file.exists(bp)) {
     knitr::include_graphics(bp)
@@ -1002,8 +1002,8 @@ if (file.exists(bp)) {
 }
 ```
 
-```{r legend-distribution-boxplot, eval=show_density, results='asis'}
-figure_legend("Per-sample boxplots of protein expression after normalization (and imputation if enabled). Boxes show the interquartile range. Aligned medians and IQR widths across samples indicate successful normalization.")
+```{r legend-distribution-boxplot, eval=show_density && !has_imputation, results='asis'}
+figure_legend("Per-sample boxplots of protein expression after normalization. Boxes show the interquartile range. Aligned medians and IQR widths across samples indicate successful normalization.")
 ```
 
 ```{r imp-hist-tab-heading, eval=has_imputation, results='asis'}

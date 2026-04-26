@@ -135,15 +135,16 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   var lfcNum, linfcNum, pvalNum;
 
   // --- Sync helpers between |log2FC| and Linear FC fields ---
-  // Both fields express a magnitude threshold:
-  //   |log2FC| = log2(linearFC)   (always positive when linearFC >= 1)
+  // currentLfc is the |log2FC| magnitude (always >= 0). The two helpers
+  // simply mirror currentLfc into the corresponding input box — they do
+  // NOT recompute, since the input handlers already converted/clamped.
+  //   |log2FC| = log2(linearFC)   (always >= 0 when linearFC >= 1)
   //   linearFC = 2^|log2FC|       (always >= 1)
-  // Linear FC < 1 makes no sense as a threshold — clamp to 1.
   function syncLinearFromLog() {
     if (linfcNum) linfcNum.value = Math.pow(2, Math.abs(currentLfc)).toFixed(3);
   }
   function syncLogFromLinear() {
-    if (lfcNum) lfcNum.value = (Math.log(Math.max(currentLfc, 1)) / Math.LN2).toFixed(3);
+    if (lfcNum) lfcNum.value = Math.abs(currentLfc).toFixed(3);
   }
 
   function initControls() {
