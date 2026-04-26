@@ -416,12 +416,16 @@ cat("</div>\n")
 
 ```{r technical-metadata-table-metab, results='asis'}
 # Technical metadata table — what ran, and feature counts before/after filtering.
-.tm_n_before <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw)
-                else if (!is.null(pre$info$n_features_before)) pre$info$n_features_before
-                else NA_integer_
-.tm_n_after  <- if (!is.null(pre$expr_work)) nrow(pre$expr_work)
-                else if (!is.null(pre$info$n_features_after)) pre$info$n_features_after
-                else NA_integer_
+.tm_n_before <- {
+    if (!is.null(pre$expr_raw)) nrow(pre$expr_raw)
+    else if (!is.null(pre$info$n_features_before)) pre$info$n_features_before
+    else NA_integer_
+}
+.tm_n_after <- {
+    if (!is.null(pre$expr_work)) nrow(pre$expr_work)
+    else if (!is.null(pre$info$n_features_after)) pre$info$n_features_after
+    else NA_integer_
+}
 
 .tm_steps <- list(
     list(label = "Filtering",
