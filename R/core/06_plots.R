@@ -139,7 +139,8 @@ plot_sample_correlation_heatmap <- function(expr_mat,
     method = method
   )
 
-  if (is.null(colors)) colors <- get_heatmap_colors(255)
+  # High correlation = darker color (diagonal = 1 = darkest).
+  if (is.null(colors)) colors <- get_heatmap_colors(255, reverse = FALSE)
   if (is.null(main)) {
     main <- sprintf("Sample correlation heatmap (%s)", method)
   }
@@ -161,9 +162,9 @@ plot_sample_correlation_heatmap <- function(expr_mat,
       )
       breaks <- unique(q_breaks)
 
-      # Regenerate colors to match breaks
+      # Regenerate colors to match breaks (high corr = dark)
       if (length(breaks) > 2) {
-        colors <- get_heatmap_colors(length(breaks) - 1)
+        colors <- get_heatmap_colors(length(breaks) - 1, reverse = FALSE)
       }
     }
   }
@@ -639,8 +640,18 @@ build_imputation_long_df <- function(expr_mat, imputed_flag) {
   list(raw = df_raw, plot = df_plot)
 }
 #' Standard Blue heatmap palette (DRY helper)
-get_heatmap_colors <- function(n = 255) {
-  grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Blues")))(n)
+#'
+#' Returns a Blues palette of length \code{n}.
+#' \describe{
+#'   \item{\code{reverse = TRUE} (default)}{dark-to-light. Use for distance
+#'         heatmaps where SMALL values mean MORE similar (dark = similar).}
+#'   \item{\code{reverse = FALSE}}{light-to-dark. Use for correlation heatmaps
+#'         where LARGE values mean MORE similar (dark = similar, diagonal = darkest).}
+#' }
+get_heatmap_colors <- function(n = 255, reverse = TRUE) {
+  pal <- RColorBrewer::brewer.pal(9, "Blues")
+  if (reverse) pal <- rev(pal)
+  grDevices::colorRampPalette(pal)(n)
 }
 
 wrap_clustering_heatmap <- function(expr_mat, meta, cfg,

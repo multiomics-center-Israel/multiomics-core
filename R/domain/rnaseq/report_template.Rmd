@@ -1004,7 +1004,22 @@ render_commentary("sample_distance")
 
 ## Expression Heatmaps {.tabset}
 
-Expression heatmaps display the relative abundance of features across samples, with hierarchical clustering grouping features and/or samples by expression similarity. They reveal global expression patterns, condition-specific signatures, and potential outlier samples.
+Expression heatmaps display the relative abundance of features across samples. The tabs below show the same matrix with progressively more clustering applied — comparing them reveals whether clustering meaningfully reorganises the structure.
+
+### Without Clustering
+
+```{r expr-heatmap-uncl, fig.cap="Sample expression heatmap (rows and columns unclustered)"}
+p_uncl <- file.path(diag_dir, "samples_rna_heatmap_unclustered.png")
+if (file.exists(p_uncl)) {
+    knitr::include_graphics(p_uncl)
+} else {
+    cat("*Unclustered expression heatmap not available.*")
+}
+```
+
+```{r legend-expr-heatmap-uncl, results='asis', echo=FALSE}
+figure_legend("Sample expression heatmap with rows and columns left in their original order. Useful as a baseline before applying hierarchical clustering.")
+```
 
 ### With Clustering
 
@@ -1021,7 +1036,7 @@ figure_legend("Unsupervised hierarchical clustering heatmap based on the top mos
 render_commentary("expr_heatmap")
 ```
 
-### Without Column Clustering
+### Rows Clustered Only
 
 ```{r expr-heatmap-nocol, fig.cap="Expression heatmap — without column clustering"}
 p <- file.path(diag_dir, "samples_rna_heatmap_wo_col.png")
@@ -1029,7 +1044,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-expr-heatmap-nocol, results='asis', echo=FALSE}
-figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the clustered version above.")
+figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the fully clustered version above.")
 ```
 
 ---

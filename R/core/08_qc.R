@@ -457,7 +457,8 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster_cols = TRUE) {
+wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
+                            cluster_cols = TRUE, cluster_rows = TRUE) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
@@ -473,7 +474,7 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster
     annotation_col = annot,
     title = paste0("QC: Sample ", stage, " Expression"),
     max_rows = 2000,
-    cluster_rows = TRUE,
+    cluster_rows = cluster_rows,
     cluster_cols = cluster_cols
   )
 

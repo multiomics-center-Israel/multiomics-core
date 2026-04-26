@@ -164,6 +164,14 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_hm_nocol)
     plots$heatmap_nocol <- hm_nocol
 
+    # Unclustered version (rows + cols both unordered) for "before clustering" view
+    f_hm_uncl <- file.path(out_qc, "samples_protein_heatmap_unclustered.png")
+    hm_uncl <- wrap_qc_heatmap(pre$expr_imp_single, pre$meta, cfg, stage = stage,
+                                out_file = f_hm_uncl,
+                                cluster_cols = FALSE, cluster_rows = FALSE)
+    files <- c(files, f_hm_uncl)
+    plots$heatmap_unclustered <- hm_uncl
+
     # ---------- Extract PCA objects from plot attributes ----------
     # PCA plot p12 has attributes attached by qc_pca_scatter
     pca_obj <- attr(p12, "pca_result")
