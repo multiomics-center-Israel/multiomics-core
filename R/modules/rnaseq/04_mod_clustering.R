@@ -218,12 +218,13 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     feats <- names(part_res$clusters)
     valid_feats <- intersect(feats, rownames(expr_mat))
     mat_ord <- expr_mat[order(part_res$clusters[valid_feats], valid_feats), , drop = FALSE]
-    
+
+    clusters_ordered <- part_res$clusters[rownames(mat_ord)]
     annot_row <- data.frame(
-      Cluster = factor(paste0("C", part_res$clusters[rownames(mat_ord)])),
+      Cluster = factor(paste0("C", clusters_ordered)),
       row.names = rownames(mat_ord)
     )
-    
+
     f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
     p_part <- plot_heatmap_core(
       expr_mat       = mat_ord,
@@ -233,24 +234,33 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       scale_rows     = TRUE,
       cluster_rows   = FALSE,
       cluster_cols   = FALSE,
-      max_rows       = NULL
+      max_rows       = NULL,
+      gaps_row       = compute_cluster_gaps(clusters_ordered)
     )
-    
+
     plots$partition_heatmap <- p_part
     save_heatmap_to_file(p_part, f_hm)
     written <- c(written, f_hm)
-    
-    # (3) cluster profiles
-    prof <- build_cluster_profiles(part_res$group_means, part_res$clusters, part_res$k)
-    if (!is.null(prof)) {
-      f_pdf <- file.path(part_dir, "cluster_profiles.pdf")
-      p_prof <- plot_cluster_profiles(
-        prof_df = prof,
-        x_label = cfg$clustering$group_col %||% "Group"
-      )
-      ggplot2::ggsave(f_pdf, plot = p_prof, width = 10, height = max(6, ceiling(part_res$k / 2) * 3))
-      written <- c(written, f_pdf)
-    }
+
+    # (3) Per-cluster heatmaps
+    per_clust_hm_files <- save_per_cluster_heatmaps(
+      expr_mat       = expr_mat,
+      clusters       = part_res$clusters,
+      annotation_col = annot_col,
+      out_dir        = part_dir
+    )
+    written <- c(written, per_clust_hm_files)
+
+    # (4) Cluster profile outputs (per-cluster PNGs + multi-panel grid PDF)
+    prof_out <- save_cluster_profile_outputs(
+      expr_mat = expr_mat,
+      meta     = pre$meta,
+      clusters = part_res$clusters,
+      cfg      = cfg,
+      out_dir  = part_dir
+    )
+    written <- c(written, prof_out$files)
+    plots$cluster_profiles <- prof_out$plots
     } # end else (partition has clusters)
   }
 
