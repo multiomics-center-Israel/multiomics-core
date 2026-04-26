@@ -61,7 +61,7 @@ if (!is.null(qc_file) &&
     bench,
     caption = paste0(
       "Normalization QC Benchmark — ",
-      "raw_linear (met_imputed) → log → norm_*. ",
+      "raw_linear (met_filtered) → log → norm_*. ",
       "Median RSD on linear scale; lower is better. ",
       "pca_pc1_delta = PC1 gain vs log stage."
     ),

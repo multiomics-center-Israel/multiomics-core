@@ -804,7 +804,7 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
   dir.create(comp_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(comp_dir, "normalization_qc_benchmark.tsv")
 
-  # ---- raw_linear row: RSD on met_imputed (linear scale; no back-transform) --
+  # ---- raw_linear row: RSD on met_filtered (linear scale; no back-transform) --
   # The data is already on linear scale, so SD/|mean| is computed directly.
   # rsd_backtransform_exact = TRUE because no back-transformation is needed.
   # pseudocount_used = 0 because the matrix has not been log-transformed.

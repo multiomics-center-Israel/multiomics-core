@@ -189,73 +189,29 @@ mod_met_filtered <- function(raw, config) {
 }
 
 
-# ==============================================================================
-# mod_met_imputed — MNAR (min/2) + MAR (KNN) imputation
-# ==============================================================================
-
-#' Impute missing values (MNAR -> min/2, MAR -> KNN)
-#'
-#' @param filtered   List returned by \code{mod_met_filtered()}.
-#' @param config     Full pipeline config list.
-#' @return list with: \code{mat}, \code{imputed_flag}, \code{meta},
-#'   \code{row_data}, \code{info}.
-#'
-mod_met_imputed <- function(filtered, config) {
-  pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-  mnar_thr <- pre_cfg$mnar_threshold %||% 0.3
-  knn_k    <- as.integer(pre_cfg$knn_k  %||% 10L)
-  epsilon  <- pre_cfg$epsilon %||% 1e-8
-
-  miss_stats_filt <- classify_missingness(
-    filtered$mat,
-    mnar_cor_threshold = -abs(mnar_thr)
-  )
-
-  result <- impute_metabolomics(
-    mat        = filtered$mat,
-    miss_stats = miss_stats_filt,
-    knn_k      = knn_k,
-    epsilon    = epsilon
-  )
-
-  message(sprintf(
-    "mod_met_imputed: MNAR=%d, MAR=%d, skipped=%d, all-missing=%d.",
-    result$info$n_mnar, result$info$n_mar,
-    result$info$n_skipped, result$info$n_all_missing
-  ))
-
-  list(
-    mat          = result$mat_imputed,
-    imputed_flag = result$imputed_flag,
-    meta         = filtered$meta,
-    row_data     = filtered$row_data,
-    info         = result$info
-  )
-}
-
 
 # ==============================================================================
 # mod_met_log — log2 transformation
 # ==============================================================================
 
-#' Apply log2 transformation to the imputed matrix
+#' Apply log2 transformation to the filtered matrix
 #'
-#' @param imputed List returned by \code{mod_met_imputed()}.
+#' @param filtered List returned by \code{mod_met_filtered()}.
 #' @param config  Full pipeline config list.
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}.
 #'
-mod_met_log <- function(imputed, config) {
+mod_met_log <- function(filtered, config) {
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   method      <- norm_cfg$transform   %||% "log2"
   pseudocount <- norm_cfg$pseudocount %||% 1
 
-  mat_log <- transform_metab(imputed$mat, method = method,
+  mat_log <- transform_metab(filtered$mat, method = method,
                              pseudocount = pseudocount)
 
   list(
     mat      = mat_log,
-    meta     = imputed$meta,
-    row_data = imputed$row_data
+    meta     = filtered$meta,
+    row_data = filtered$row_data
   )
 }
 
@@ -399,7 +355,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 
 #' Normalize a linear-scale matrix then apply log2 transformation
 #'
-#' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
+#' @param data   List returned by \code{mod_met_filtered()} (Linear scale).
 #' @param method Character: \code{"tss"} or \code{"pqn"}.
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
@@ -408,10 +364,39 @@ mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
+  
+  pre_cfg <- config$modes$metabolomics$preprocessing %||% list()
+  dc_cfg  <- pre_cfg$drift_correction %||% list()
+  qc_col  <- dc_cfg$qc_flag_col %||% "is_QC"
+  
+  qc_idx <- NULL
+  
+  if (method == "pqn") {
+    meta <- data$meta
+    
+    if (is.null(meta) || !qc_col %in% colnames(meta)) {
+      warning(sprintf(
+        "mod_met_normalize_linear: QC flag column '%s' not found; PQN will use all samples as reference.",
+        qc_col
+      ))
+    } else {
+      qc_flag <- isTRUE_vec(meta[[qc_col]])
+      idx <- which(qc_flag)
+      
+      if (length(idx) >= 2L) {
+        qc_idx <- idx
+      } else {
+        warning(sprintf(
+          "mod_met_normalize_linear: QC flag column '%s' has fewer than 2 QC samples; PQN will use all samples as reference.",
+          qc_col
+        ))
+      }
+    }
+  }
 
   mat_norm <- switch(method,
     tss = norm_total_sum(data$mat),
-    pqn = norm_pqn(data$mat),
+    pqn = norm_pqn(data$mat, qc_idx = qc_idx),
     stop(
       "mod_met_normalize_linear: 'method' must be \"tss\" or \"pqn\"; got \"",
       method, "\".  Use mod_met_normalize_log() for median normalization."
