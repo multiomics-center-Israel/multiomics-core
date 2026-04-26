@@ -953,22 +953,18 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 }
 ```
 
-### 3D Interactive
-
-An interactive 3D PCA plot is available:
+### 3D Interactive PCA
 
 ```{r pca-3d-link, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
-    cat(sprintf('<p><a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
+    cat('<div style="margin: 20px 0; padding: 20px 24px; border-left: 4px solid #0969da; background: #ddf4ff; border-radius: 6px;">\n')
+    cat('<p style="color: #0550ae; font-weight: 600; font-size: 1.05em; margin-top: 0; margin-bottom: 8px;">Explore sample separation in three dimensions.</p>\n')
+    cat('<p style="color: #0a3069; font-size: 0.95em; margin-bottom: 14px;">The interactive 3D PCA plot below shows sample separation along PC1, PC2, and PC3. Rotate, zoom, and hover over points to explore clustering structure.</p>\n')
+    cat('<a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="display: inline-block; padding: 10px 20px; background: #0969da; color: #fff; font-weight: 600; text-decoration: none; border-radius: 6px; font-size: 1em;">Open Interactive 3D PCA &rarr;</a>\n')
+    cat('</div>\n')
 } else {
     cat("*3D PCA plot not available.*")
-}
-```
-
-```{r legend-pca-3d, results='asis', echo=FALSE}
-if (file.exists(file.path(diag_dir, "PCA_3D.html"))) {
-    figure_legend("Interactive 3D PCA plot showing sample separation along PC1, PC2, and PC3. Rotate the plot to explore sample clustering in three dimensions.")
 }
 ```
 
