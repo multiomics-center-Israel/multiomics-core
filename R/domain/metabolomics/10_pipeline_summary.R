@@ -518,19 +518,31 @@ generate_metab_summary_body_r <- function(stats) {
     step1 <- build_metab_step_html(1, "\U0001F4E5", "Data Import", "phase-input", "input",
         input_desc, c(stats$methods$input_format))
 
-    # Step 2: Feature Filtering
-    filt_desc <- "Low-abundance and unreliable features removed. Features retained based on detection frequency across samples."
+    # Step 2: Feature Filtering — render dynamically based on whether
+    # filtering actually changed the feature count.
+    n_before <- stats$filtering$features_before %||% 0
+    n_after  <- stats$filtering$features_after  %||% 0
+    filtering_ran <- n_before > 0 && n_after > 0 && n_before != n_after
     filt_stats <- ""
-    if (stats$filtering$features_before > 0 && stats$filtering$features_after > 0) {
+    if (filtering_ran) {
+        filt_desc <- "Low-abundance and unreliable features removed. Features retained based on detection frequency across samples."
         filt_stats <- build_metab_stats_row(
             list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
             list(arrow = TRUE),
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0),
                  margin = "8px", color = "var(--text)"))
+        filt_tags <- c("detection filter")
+    } else if (n_before > 0) {
+        filt_desc <- sprintf("No filtering applied; all %s features retained for downstream analysis.",
+                             format(n_before, big.mark = ","))
+        filt_tags <- c("no filtering")
+    } else {
+        filt_desc <- "Filtering step was skipped."
+        filt_tags <- c("no filtering")
     }
     step2 <- build_metab_step_html(2, "\U0001F50D", "Feature Filtering", "phase-filter", "processing",
-        filt_desc, c("detection filter"), filt_stats)
+        filt_desc, filt_tags, filt_stats)
 
     # Step 3: Normalization
     # Human-readable normalization method names

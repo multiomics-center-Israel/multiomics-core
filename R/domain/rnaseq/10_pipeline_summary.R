@@ -594,21 +594,32 @@ generate_summary_body_r <- function(stats) {
     # -- Downstream --
     s_down <- '      <div class="section-label">Downstream Analysis <span class="team-badge team-multiomics">Multi-omics Core</span></div>\n'
 
-    # Filtering
-    filt_desc <- switch(stats$methods$filtering_mode,
-        "adaptive" = "Adaptive density-based threshold (KDE on log2-CPM) selects optimal CPM cutoff. Genes passing in at least one biological group are retained.",
-        "deseq2_only" = "DESeq2 independent filtering applied. Low-count genes removed by DESeq2&rsquo;s automatic threshold.",
-        "fixed" = "Fixed CPM threshold applied. Genes above threshold in at least one group retained.",
-        "Gene filtering applied to remove lowly expressed genes.")
+    # Filtering — render dynamically based on whether filtering changed the gene count.
+    n_before <- stats$filtering$genes_before %||% 0
+    n_after  <- stats$filtering$genes_after  %||% 0
+    filtering_ran <- n_before > 0 && n_after > 0 && n_before != n_after
     filt_stats <- ""
-    if (stats$filtering$genes_before > 0 && stats$filtering$genes_after > 0) {
+    if (filtering_ran) {
+        filt_desc <- switch(stats$methods$filtering_mode,
+            "adaptive" = "Adaptive density-based threshold (KDE on log2-CPM) selects optimal CPM cutoff. Genes passing in at least one biological group are retained.",
+            "deseq2_only" = "DESeq2 independent filtering applied. Low-count genes removed by DESeq2&rsquo;s automatic threshold.",
+            "fixed" = "Fixed CPM threshold applied. Genes above threshold in at least one group retained.",
+            "Gene filtering applied to remove lowly expressed genes.")
         filt_stats <- build_stats_row(
             list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
             list(arrow = TRUE),
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0), margin = "8px", color = "var(--text)"))
+        filt_tags <- c(stats$methods$filtering_mode)
+    } else if (n_before > 0) {
+        filt_desc <- sprintf("No filtering applied; all %s genes retained for downstream analysis.",
+                             format(n_before, big.mark = ","))
+        filt_tags <- c("no filtering")
+    } else {
+        filt_desc <- "Filtering step was skipped."
+        filt_tags <- c("no filtering")
     }
-    step5 <- build_step_html(5, "\U0001F50D", "Gene Filtering", "phase-filter", "downstream", filt_desc, c(stats$methods$filtering_mode), filt_stats)
+    step5 <- build_step_html(5, "\U0001F50D", "Gene Filtering", "phase-filter", "downstream", filt_desc, filt_tags, filt_stats)
 
     # Normalization
     nm <- stats$methods$normalization

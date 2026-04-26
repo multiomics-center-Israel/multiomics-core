@@ -615,18 +615,30 @@ generate_proteomics_summary_body_r <- function(stats) {
     # -- Downstream Analysis --
     s_down <- '      <div class="section-label">Downstream Analysis <span class="team-badge team-multiomics">Multi-omics Core</span></div>\n'
 
-    # Step 5: Protein Filtering
-    filt_desc <- "Proteins filtered by minimum observation count across biological replicates. Proteins detected in fewer than the required number of samples per condition are removed."
+    # Step 5: Protein Filtering — render dynamically based on whether
+    # filtering actually changed the protein count.
+    n_before <- stats$filtering$proteins_before %||% 0
+    n_after  <- stats$filtering$proteins_after  %||% 0
+    filtering_ran <- n_before > 0 && n_after > 0 && n_before != n_after
     filt_stats <- ""
-    if (stats$filtering$proteins_before > 0 && stats$filtering$proteins_after > 0) {
+    if (filtering_ran) {
+        filt_desc <- "Proteins filtered by minimum observation count across biological replicates. Proteins detected in fewer than the required number of samples per condition are removed."
         filt_stats <- prot_build_stats_row(
             list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
             list(arrow = TRUE),
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0), margin = "8px", color = "var(--text)"))
+        filt_tags <- c("min-count filter")
+    } else if (n_before > 0) {
+        filt_desc <- sprintf("No filtering applied; all %s proteins retained for downstream analysis.",
+                             format(n_before, big.mark = ","))
+        filt_tags <- c("no filtering")
+    } else {
+        filt_desc <- "Filtering step was skipped."
+        filt_tags <- c("no filtering")
     }
     step5 <- prot_build_step_html(5, "\U0001F50D", "Protein Filtering", "phase-filter", "downstream", filt_desc,
-                                   c("min-count filter"), filt_stats)
+                                   filt_tags, filt_stats)
 
     # Step 6: Normalization & Imputation
     nm <- stats$methods$normalization

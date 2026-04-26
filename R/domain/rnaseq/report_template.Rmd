@@ -601,16 +601,71 @@ if (nzchar(trimws(exec_md_raw)) && trimws(exec_md_raw) != "No summary available.
 cat("</div>\n")
 ```
 
+```{r technical-metadata-table-rna, results='asis'}
+# Technical metadata table — what ran, and gene counts before/after filtering.
+.tm_n_before <- if (!is.null(raw_counts <- tryCatch({
+    f <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
+    if (nzchar(rna_cfg$files$counts %||% "") && file.exists(f) && !dir.exists(f)) {
+        read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
+    } else NULL
+}, error = function(e) NULL))) nrow(raw_counts) else NA_integer_
+
+.tm_n_after <- if (!is.null(filt_counts <- tryCatch({
+    f <- file.path(datasets_dir, "rna_counts_filtered.tsv")
+    if (file.exists(f) && !dir.exists(f)) {
+        read.delim(f, stringsAsFactors = FALSE, check.names = FALSE)
+    } else NULL
+}, error = function(e) NULL))) nrow(filt_counts) else NA_integer_
+
+.tm_steps <- list(
+    list(label = "Filtering",
+         ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
+    list(label = "Normalization",
+         ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
+    list(label = "Differential expression",
+         ran   = !is.null(de_res) && !is.null(de_res$summary_df)),
+    list(label = "Cell-type deconvolution",
+         ran   = isTRUE(rna_cfg$deconvolution$enabled)),
+    list(label = "Pathway enrichment",
+         ran   = isTRUE(rna_cfg$pathway$enabled))
+)
+.tm_steps_str <- paste(vapply(.tm_steps, function(s) {
+    sprintf("%s: %s", s$label, if (isTRUE(s$ran)) "yes" else "skipped")
+}, character(1)), collapse = "<br>")
+
+.tm_fmt_n <- function(n) if (is.na(n)) "n/a" else format(n, big.mark = ",")
+
+cat('<table style="margin: 16px 0 24px 0; border-collapse: collapse; width: 100%; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; font-size: 14px;">\n')
+cat('<thead><tr style="background: #f6f8fa; color: #24292f;">\n')
+cat('<th style="text-align:left; padding: 10px 14px; border-bottom: 1px solid #d0d7de;">Technical metadata</th>\n')
+cat('<th style="text-align:left; padding: 10px 14px; border-bottom: 1px solid #d0d7de;">Value</th>\n')
+cat('</tr></thead><tbody>\n')
+
+.tm_row <- function(k, v) cat(sprintf(
+    '<tr><td style="padding: 8px 14px; border-bottom: 1px solid #eaecef; font-weight: 600; color: #24292f;">%s</td><td style="padding: 8px 14px; border-bottom: 1px solid #eaecef; color: #57606a;">%s</td></tr>\n',
+    k, v))
+
+.tm_row("Analysis steps performed", .tm_steps_str)
+.tm_row("Genes before filtering", .tm_fmt_n(.tm_n_before))
+.tm_row("Genes after filtering",  .tm_fmt_n(.tm_n_after))
+if (!is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before > 0) {
+    .tm_row("Retained", sprintf("%.1f%%", 100 * .tm_n_after / .tm_n_before))
+}
+.tm_row("DE method",
+        sprintf("%s (padj &le; %s, |linear FC| &ge; %s)",
+                toupper(rna_cfg$de$method %||% "DESeq2"),
+                signif(rna_cfg$de$p_cutoff %||% 0.05, 3),
+                rna_cfg$de$linear_fc_cutoff %||% 1.5))
+cat('</tbody></table>\n')
+```
+
 ---
 
 # Quality Control — Pre-DE
 
 ## Gene Filtering
 
-Lowly expressed genes were removed using the auto-filtering strategy described above.
-The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
-
-Low-abundance features with insufficient signal are removed to reduce noise and improve statistical power. The filtering threshold balances retaining biologically relevant features against eliminating measurement noise.
+Counts before and after the filtering rule defined under *Analysis Parameters → Filtering Strategy*.
 
 ```{r filter-stats}
 # Read raw and filtered counts to get gene numbers
