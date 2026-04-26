@@ -61,37 +61,56 @@ norm_median <- function(mat) {
     sweep(mat, 2, scale_factors, FUN = "*")
 }
 
-
 #' Probabilistic Quotient Normalization (PQN)
 #'
-#' 1. Perform median normalization first.
-#' 2. Compute reference spectrum (median across samples per feature).
-#' 3. For each sample, compute quotients (sample / reference) and take the median.
-#' 4. Divide each sample by its median quotient.
+#' Applies PQN after an initial median normalization step.
+#' The reference spectrum is defined as the feature-wise median across samples.
 #'
-#' Features where the reference is 0 or NA are excluded from the quotient
-#' calculation (they cannot inform sample-level scaling).
-norm_pqn <- function(mat) {
-    # Step 1: initial median normalization
-    mat_mn <- norm_median(mat)
-
-    # Step 2: reference spectrum (feature-wise medians across samples)
+#' Procedure:
+#' 1. Apply median normalization.
+#' 2. Compute the reference spectrum as the feature-wise median across samples.
+#' 3. For each sample, calculate quotients relative to the reference.
+#' 4. Use the sample's median quotient as a scaling factor.
+#' 5. Divide each sample by this factor.
+#'
+#' Features with zero, missing, or non-finite reference values are excluded
+#' from quotient calculation.
+norm_pqn <- function(mat, qc_idx = NULL) {
+  # Step 1: initial median normalization
+  mat_mn <- norm_median(mat)
+  
+  # Step 2: reference spectrum
+  if (!is.null(qc_idx)) {
+    # Use QC samples as reference
+    ref <- apply(mat_mn[, qc_idx, drop = FALSE], 1, stats::median, na.rm = TRUE)
+  } else {
+    # Fallback: use all samples
     ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
-
-    # Exclude features with zero/NA reference — they produce Inf quotients
-    ref_ok <- is.finite(ref) & ref != 0
-    if (!any(ref_ok)) {
-        warning("norm_pqn: all reference values are 0 or NA; returning median-normalized data.")
-        return(mat_mn)
-    }
-
-    # Step 3 & 4: per-sample quotient normalization (using valid features only)
-    quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1,
-                       ref[ref_ok], FUN = "/")
-    med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
-    med_quotients[!is.finite(med_quotients) | med_quotients == 0] <- 1
-
-    sweep(mat_mn, 2, med_quotients, FUN = "/")
+  }
+  
+  # Exclude features with invalid reference values
+  ref_ok <- is.finite(ref) & abs(ref) > .Machine$double.eps
+  if (!any(ref_ok)) {
+    warning("norm_pqn: all reference values are zero, missing, or non-finite; returning median-normalized data.")
+    return(mat_mn)
+  }
+  
+  # Step 3: compute sample/reference quotients
+  quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1, ref[ref_ok], FUN = "/")
+  
+  # Step 4: estimate sample-specific scaling factors
+  med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
+  bad <- !is.finite(med_quotients) | med_quotients == 0
+  if (any(bad)) {
+    warning(sprintf(
+      "norm_pqn: %d sample(s) had invalid median quotient; using scale factor 1.",
+      sum(bad)
+    ))
+    med_quotients[bad] <- 1
+  }
+  
+  # Step 5: apply PQN scaling
+  sweep(mat_mn, 2, med_quotients, FUN = "/")
 }
 
 
@@ -213,39 +232,39 @@ scale_metab <- function(mat, method = "none") {
 
 
 # ==== PIPELINE WRAPPER ========================================================
-
-#' Apply full normalization pipeline: sample_norm → transform → scaling
-#'
-#' @param mat         Numeric matrix (features x samples).
-#' @param norm_cfg    normalization config section.
-#' @param row_data    data.frame (for IS normalization only).
-#' @return list(expr_norm, applied) where applied records what was done.
-apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL) {
-    sample_norm <- norm_cfg$sample_norm %||% "none"
-    transform   <- norm_cfg$transform   %||% "none"
-    scaling     <- norm_cfg$scaling     %||% "none"
-    pseudocount <- norm_cfg$pseudocount %||% 1
-
-    # IS-specific config
-    is_ref_col <- norm_cfg$is_ref_col %||% NULL
-
-    # Step 1: sample normalization
-    mat <- normalize_samples(mat, method = sample_norm,
-                             ref_col = is_ref_col, row_data = row_data)
-
-    # Step 2: transformation
-    mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
-
-    # Step 3: scaling
-    mat <- scale_metab(mat, method = scaling)
-
-    list(
-        expr_norm = mat,
-        applied = list(
-            sample_norm = sample_norm,
-            transform   = transform,
-            scaling     = scaling,
-            pseudocount = if (transform != "none") pseudocount else NA
-        )
-    )
-}
+#' 
+#' #' Apply full normalization pipeline: sample_norm → transform → scaling
+#' #'
+#' #' @param mat         Numeric matrix (features x samples).
+#' #' @param norm_cfg    normalization config section.
+#' #' @param row_data    data.frame (for IS normalization only).
+#' #' @return list(expr_norm, applied) where applied records what was done.
+#' apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL) {
+#'     sample_norm <- norm_cfg$sample_norm %||% "none"
+#'     transform   <- norm_cfg$transform   %||% "none"
+#'     scaling     <- norm_cfg$scaling     %||% "none"
+#'     pseudocount <- norm_cfg$pseudocount %||% 1
+#' 
+#'     # IS-specific config
+#'     is_ref_col <- norm_cfg$is_ref_col %||% NULL
+#' 
+#'     # Step 1: sample normalization
+#'     mat <- normalize_samples(mat, method = sample_norm,
+#'                              ref_col = is_ref_col, row_data = row_data)
+#' 
+#'     # Step 2: transformation
+#'     mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
+#' 
+#'     # Step 3: scaling
+#'     mat <- scale_metab(mat, method = scaling)
+#' 
+#'     list(
+#'         expr_norm = mat,
+#'         applied = list(
+#'             sample_norm = sample_norm,
+#'             transform   = transform,
+#'             scaling     = scaling,
+#'             pseudocount = if (transform != "none") pseudocount else NA
+#'         )
+#'     )
+#' }

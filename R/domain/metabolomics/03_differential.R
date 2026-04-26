@@ -264,15 +264,8 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
                                                  levels = design)
         colnames(contrast_matrix) <- names(contrast_formulas)
 
-        # -- Defensive NA imputation --
-        mat_imp <- mat_for_test
-        for (i in seq_len(nrow(mat_imp))) {
-            nas <- is.na(mat_imp[i, ])
-            if (any(nas)) mat_imp[i, nas] <- mean(mat_imp[i, !nas], na.rm = TRUE)
-        }
-
         # -- Single fit for all contrasts --
-        fit  <- limma::lmFit(mat_imp, design)
+        fit  <- limma::lmFit(mat_for_test, design)
         fit2 <- limma::contrasts.fit(fit, contrast_matrix)
         # treat() tests against an LFC threshold (different null hypothesis
         # from eBayes); intentionally kept for metabolomics
@@ -331,71 +324,6 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         contrast_formulas = contrast_formulas,
         contrast_matrix   = contrast_matrix
     )
-}
-
-
-# ---- limma -----------------------------------------------------------------
-
-#' Run limma on a single contrast
-#'
-#' @param mat           Numeric matrix (features x samples).
-#' @param condition     Factor of conditions.
-#' @param contrast_str  Character: safe contrast formula (e.g. "TreatmentA - Control").
-#' @param mat_for_fc    Optional pre-scaling matrix for logFC override.
-#' @param lfc_threshold Numeric: minimum log2-FC for \code{limma::treat()}
-#'   (default 0 = no threshold, equivalent to eBayes).
-#' @param robust        Logical: use robust empirical Bayes in \code{treat()}.
-#' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val
-de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL,
-                     lfc_threshold = 0, robust = FALSE) {
-    if (!requireNamespace("limma", quietly = TRUE)) {
-        stop("Package 'limma' is required for limma DE.")
-    }
-
-    # Defensive NA guard — input is normally NA-free after met_* imputation,
-    # but protects against edge cases (external matrices, future formats).
-    mat_imp <- mat
-    for (i in seq_len(nrow(mat_imp))) {
-        nas <- is.na(mat_imp[i, ])
-        if (any(nas)) mat_imp[i, nas] <- mean(mat_imp[i, !nas], na.rm = TRUE)
-    }
-
-    design <- stats::model.matrix(~ 0 + condition)
-    raw_levels <- levels(condition)
-    safe_levels <- make.names(raw_levels)
-    colnames(design) <- safe_levels
-
-    fit <- limma::lmFit(mat_imp, design)
-    contrast_matrix <- limma::makeContrasts(contrasts = contrast_str,
-                                             levels = design)
-    fit2 <- limma::contrasts.fit(fit, contrast_matrix)
-    fit2 <- limma::treat(fit2, lfc = lfc_threshold, robust = robust)
-
-    tt <- limma::topTreat(fit2, number = Inf, sort.by = "none")
-
-    res <- data.frame(
-        feature_id = rownames(tt),
-        logFC      = tt$logFC,
-        AveExpr    = tt$AveExpr,
-        statistic  = tt$t,
-        P.Value    = tt$P.Value,
-        adj.P.Val  = tt$adj.P.Val,
-        stringsAsFactors = FALSE
-    )
-
-    # Override logFC from pre-scaling matrix if provided
-    if (!is.null(mat_for_fc) && !identical(mat, mat_for_fc)) {
-        parts <- trimws(strsplit(contrast_str, "-")[[1]])
-        idx_B <- which(condition == raw_levels[match(parts[1], safe_levels)])
-        idx_A <- which(condition == raw_levels[match(parts[2], safe_levels)])
-        for (i in seq_len(nrow(mat_for_fc))) {
-            res$logFC[i] <- mean(mat_for_fc[i, idx_B], na.rm = TRUE) -
-                            mean(mat_for_fc[i, idx_A], na.rm = TRUE)
-        }
-    }
-
-    attr(res, "fit") <- fit2
-    res
 }
 
 

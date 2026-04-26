@@ -905,46 +905,6 @@ compute_cluster_gaps <- function(clusters_ordered) {
   cumsum(rl$lengths[-length(rl$lengths)])
 }
 
-#' Build cluster profile data frame from z-scored group means
-#'
-#' Computes per-cluster mean and SD of z-scored group means. Handles empty
-#' clusters and NA group names safely.
-#'
-#' @param z_group_means Matrix (features x groups) of z-scored group means
-#' @param clusters Named integer vector mapping feature IDs to cluster numbers
-#' @param k Number of clusters
-#' @return Data frame with columns: cluster, group, mean, sd, n_features.
-#'         Returns NULL if all clusters are empty.
-build_cluster_profiles <- function(z_group_means, clusters, k) {
-  clv <- clusters[rownames(z_group_means)]
-  groups <- colnames(z_group_means)
-
-  prof_list <- lapply(seq_len(k), function(ci) {
-    rows <- which(clv == ci)
-    sub <- z_group_means[rows, , drop = FALSE]
-    if (nrow(sub) == 0) {
-      return(NULL)
-    }
-    data.frame(
-      cluster = ci,
-      group = groups,
-      mean = colMeans(sub, na.rm = TRUE),
-      sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-      n_features = nrow(sub),
-      stringsAsFactors = FALSE
-    )
-  })
-
-  prof_list <- Filter(Negate(is.null), prof_list)
-  if (length(prof_list) == 0) {
-    return(NULL)
-  }
-
-  prof <- do.call(rbind, prof_list)
-  if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
-  prof
-}
-
 #' Write cluster data in exact legacy format
 #' Columns: Name (Sample), Group, Exp (Absolute Expression)
 #' Summary File Columns: Cluster, Group, Mean, SE, Mean_SE.y, Mean_SE.ymin, Mean_SE.ymax

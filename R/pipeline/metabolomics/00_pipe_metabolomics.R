@@ -15,8 +15,7 @@
 # ── Scale Contract ────────────────────────────────────────────────────────────
 #
 #   met_raw      (Linear)
-#     └─ met_filtered   (Linear)
-#          └─ met_imputed (Linear) ─────────────────────────────┐
+#          └─ met_filtered (Linear) ─────────────────────────────┐
 #               └─ met_log (Log2)                               │ (linear feed)
 #                    ├─ met_norm_median  (Log2, log-shift)      │
 #                    │                                          │
@@ -160,25 +159,18 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             mod_met_filtered(met_raw, config)
         ),
 
-        # met_imputed: MNAR → min/2, MAR → KNN
-        # Scale: Linear  ← canonical pre-log linear target for TSS / PQN
-        tar_target(
-            met_imputed,
-            mod_met_imputed(met_filtered, config)
-        ),
-
         # met_log: log2 transform (pseudocount from config)
         # Scale: Log2  ← canonical pre-norm log target for Median
         tar_target(
             met_log,
-            mod_met_log(met_imputed, config)
+            mod_met_log(met_filtered, config)
         ),
 
         # ── Normalization targets ─────────────────────────────────────────
         #
         # Scale Contract enforcement:
         #   TSS and PQN are multiplicative operations → must receive Linear input.
-        #   Both are wired from met_imputed (Linear); mod_met_normalize_linear()
+        #   Both are wired from met_filtered (Linear); mod_met_normalize_linear()
         #   applies normalization first, then log2-transforms the result.
         #
         #   Median normalization on Log2 data is a log-shift (subtraction), not
@@ -187,7 +179,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
 
         tar_target(
             met_norm_tss,
-            mod_met_normalize_linear(met_imputed, method = "tss", config = config)
+            mod_met_normalize_linear(met_filtered, method = "tss", config = config)
         ),
 
         tar_target(
@@ -197,7 +189,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
 
         tar_target(
             met_norm_pqn,
-            mod_met_normalize_linear(met_imputed, method = "pqn", config = config)
+            mod_met_normalize_linear(met_filtered, method = "pqn", config = config)
         ),
 
         # met_norm_comparison: TSV of RSD + PC1 variance for all three methods
@@ -280,7 +272,6 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                     tss_qc_files    = met_norm_tss_qc,
                     median_qc_files = met_norm_median_qc,
                     pqn_qc_files    = met_norm_pqn_qc,
-                    imputed_data    = met_imputed,
                     out_dir         = metab_out_dir,
                     config          = config
                 ),

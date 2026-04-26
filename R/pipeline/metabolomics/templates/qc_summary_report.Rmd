@@ -205,7 +205,7 @@ qc_files <- params$qc_suite_files %||% character(0)
 > **Purpose:** Review normalization method performance before interpreting
 > differential expression and enrichment results. The **Benchmark** tab summarizes
 > **RSD (Relative Standard Deviation)** per group and **PC1 variance** across
-> normalization stages, starting from the raw linear baseline (`met_imputed`).
+> normalization stages, starting from the raw linear baseline (`met_filtered`).
 > RSD reflects the relative variability of feature intensities within a group and
 > is used here as a measure of technical stability. In particular, **QC samples**
 > are expected to show low variability; therefore, effective normalization should
