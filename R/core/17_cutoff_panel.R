@@ -101,7 +101,7 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 <input type="number" id="cp-pval-num" min="0.0001" max="1" step="0.005" value="', p_r, '">
 </div>
 <div class="cp-field">
-<label>log2FC threshold</label>
+<label>|log2FC| threshold</label>
 <input type="number" id="cp-lfc-num" min="0" max="10" step="0.1" value="', lfc_r, '">
 </div>
 <div class="cp-field">
@@ -134,12 +134,16 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   // --- DOM refs ---
   var lfcNum, linfcNum, pvalNum;
 
-  // --- Sync helpers between log2FC and linear FC fields ---
+  // --- Sync helpers between |log2FC| and Linear FC fields ---
+  // Both fields express a magnitude threshold:
+  //   |log2FC| = log2(linearFC)   (always positive when linearFC >= 1)
+  //   linearFC = 2^|log2FC|       (always >= 1)
+  // Linear FC < 1 makes no sense as a threshold — clamp to 1.
   function syncLinearFromLog() {
-    if (linfcNum) linfcNum.value = Math.pow(2, currentLfc).toFixed(3);
+    if (linfcNum) linfcNum.value = Math.pow(2, Math.abs(currentLfc)).toFixed(3);
   }
   function syncLogFromLinear() {
-    if (lfcNum) lfcNum.value = (Math.log(currentLfc) / Math.LN2).toFixed(3);
+    if (lfcNum) lfcNum.value = (Math.log(Math.max(currentLfc, 1)) / Math.LN2).toFixed(3);
   }
 
   function initControls() {
@@ -149,7 +153,8 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
     if (!lfcNum) return;
 
     lfcNum.addEventListener("input", function() {
-      currentLfc = parseFloat(this.value) || 0;
+      var v = parseFloat(this.value);
+      currentLfc = isFinite(v) ? Math.abs(v) : 0;
       syncLinearFromLog();
       debouncedUpdate();
     });
@@ -157,7 +162,9 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
       linfcNum.addEventListener("input", function() {
         var lin = parseFloat(this.value);
         if (!isFinite(lin) || lin <= 0) return;
-        currentLfc = Math.log(lin) / Math.LN2;
+        // Threshold semantics: linearFC < 1 is meaningless; clamp.
+        var linClamped = Math.max(lin, 1);
+        currentLfc = Math.log(linClamped) / Math.LN2;
         syncLogFromLinear();
         debouncedUpdate();
       });

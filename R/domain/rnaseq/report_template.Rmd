@@ -623,7 +623,7 @@ cat("</div>\n")
     list(label = "Normalization",
          ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
     list(label = "Differential expression",
-         ran   = !is.null(de_res) && !is.null(de_res$summary_df)),
+         ran   = !is.null(de_data) && nrow(de_data) > 0),
     list(label = "Cell-type deconvolution",
          ran   = isTRUE(rna_cfg$deconvolution$enabled)),
     list(label = "Pathway enrichment",

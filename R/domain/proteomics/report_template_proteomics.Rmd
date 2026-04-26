@@ -219,7 +219,7 @@ show_pca_3d    <- report_cfg$show_pca_3d %||% TRUE
 show_pca_subsets <- report_cfg$show_pca_subsets %||% TRUE
 show_pca_topvar  <- report_cfg$show_pca_topvar %||% FALSE  # generated but hidden by default
 show_density  <- report_cfg$show_density %||% TRUE
-show_distance <- report_cfg$show_distance %||% FALSE   # disabled per facility feedback
+show_distance <- report_cfg$show_distance %||% TRUE   # show alongside correlation in Sample Similarity
 show_correlation <- report_cfg$show_correlation %||% TRUE
 show_expression_heatmap <- report_cfg$show_expression_heatmap %||% TRUE
 show_imputation_qc <- report_cfg$show_imputation_qc %||% TRUE
@@ -297,39 +297,8 @@ if (has_intro) {
 ```
 
 ```{r experimental-design-section, results='asis'}
-# Experimental design subsection — shown when a design file/link is provided
-# or when metadata is available.  Provides a sample-name key.
-design_file <- report_cfg$experimental_design_file %||% ""
-has_design_file <- nzchar(trimws(design_file))
-
-meta_file_ed <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
-has_meta_ed <- file.exists(meta_file_ed)
-
-if (has_design_file || has_meta_ed) {
-    cat("## Experimental Design\n\n")
-
-    # Link / file reference
-    if (has_design_file) {
-        if (grepl("^https?://", design_file)) {
-            cat(sprintf("Full experimental design: [%s](%s)\n\n", design_file, design_file))
-        } else if (file.exists(design_file)) {
-            cat(sprintf("Design file: `%s`\n\n", design_file))
-        } else {
-            cat(sprintf("Design file reference: `%s`\n\n", design_file))
-        }
-    }
-
-    # Always show a sample-name key table from metadata
-    if (has_meta_ed) {
-        meta_ed <- read.csv(meta_file_ed, stringsAsFactors = FALSE)
-        cat("**Sample key:**\n\n")
-        print(htmltools::tagList(make_dt(meta_ed, "Sample Metadata")))
-        cat("\n\n")
-    }
-} else if (has_intro) {
-    cat("## Experimental Design\n\n")
-    cat("*No experimental design file was provided. Add `report.experimental_design_file` to the config to include one.*\n\n")
-}
+# Standalone Experimental Design block intentionally suppressed; the sample-key
+# table is rendered inside the Analysis Parameters > Experimental Design tab.
 ```
 
 # Analysis Parameters {.tabset}
@@ -349,7 +318,7 @@ make_dt(proj, "Analysis Parameters")
 
 ## Experimental Design
 
-```{r params-design}
+```{r params-design, results='asis'}
 meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
     meta <- read.csv(meta_file, stringsAsFactors = FALSE)
@@ -358,8 +327,27 @@ if (file.exists(meta_file)) {
     if (group_col %in% names(meta)) {
         design_tbl <- as.data.frame(table(meta[[group_col]]))
         colnames(design_tbl) <- c("Group", "n (replicates)")
-        make_dt(design_tbl, "Experimental Design")
+        cat("**Replicates per group:**\n\n")
+        print(htmltools::tagList(make_dt(design_tbl, "Replicates per group")))
+        cat("\n\n")
     }
+
+    # Optional design file/link (replaces the previous standalone block)
+    design_file <- report_cfg$experimental_design_file %||% ""
+    if (nzchar(trimws(design_file))) {
+        if (grepl("^https?://", design_file)) {
+            cat(sprintf("Full experimental design: [%s](%s)\n\n", design_file, design_file))
+        } else if (file.exists(design_file)) {
+            cat(sprintf("Design file: `%s`\n\n", design_file))
+        } else {
+            cat(sprintf("Design file reference: `%s`\n\n", design_file))
+        }
+    }
+
+    # Sample-key datatable (full metadata)
+    cat("**Sample key:**\n\n")
+    print(htmltools::tagList(make_dt(meta, "Sample Metadata")))
+    cat("\n\n")
 }
 ```
 
@@ -547,6 +535,21 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 if (exec_available) {
     exec_md_raw <- paste(readLines(exec_summary_path, warn = FALSE), collapse = "\n")
     exec_md_raw <- gsub("^##?\\s*Executive\\s*Summary\\s*\n+", "", exec_md_raw)
+
+    # Drop verbose / redundant lines that already appear in dedicated downstream
+    # sections (avoids duplication in the Executive Summary panel):
+    #   - Top DE proteins list  -> shown in DE Results / volcano sections
+    #   - PPI network counts    -> shown in PPI Network Analysis
+    #   - Top hub proteins list -> shown in Hub Proteins table
+    .lines <- strsplit(exec_md_raw, "\n", fixed = TRUE)[[1]]
+    .drop_pat <- "(?i)(top de proteins|top hub proteins|ppi network)"
+    # Also drop any indented continuation line that follows a dropped header
+    keep <- rep(TRUE, length(.lines))
+    for (i in seq_along(.lines)) {
+        if (grepl(.drop_pat, .lines[i], perl = TRUE)) keep[i] <- FALSE
+    }
+    exec_md_raw <- paste(.lines[keep], collapse = "\n")
+
     if (nzchar(trimws(exec_md_raw)) && trimws(exec_md_raw) != "No summary available.") {
         cat("<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #dee2e6;'>\n")
         cat(exec_md_raw, "\n")
@@ -559,27 +562,46 @@ cat("</div>\n")
 
 ```{r technical-metadata-table, results='asis'}
 # Technical metadata table — what ran, and feature counts before/after filtering.
+.tm_n_after <- if (!is.null(de_data)) nrow(de_data) else NA_integer_
+
+# Try to count raw proteins from the source file (best-effort; may be NA for
+# preprocessed inputs).
+.tm_n_before <- NA_integer_
+.tm_raw_path <- tryCatch({
+    raw_rel <- prot_cfg$files$protein %||% prot_cfg$files$preprocessed_protein %||% ""
+    if (nzchar(raw_rel)) file.path(proj_dir_resolved, cfg$paths$raw, raw_rel) else ""
+}, error = function(e) "")
+if (nzchar(.tm_raw_path) && file.exists(.tm_raw_path)) {
+    .tm_n_before <- tryCatch({
+        sep <- if (grepl("\\.tsv$", .tm_raw_path, ignore.case = TRUE)) "\t" else ","
+        nrow(read.delim(.tm_raw_path, sep = sep, stringsAsFactors = FALSE,
+                         check.names = FALSE))
+    }, error = function(e) NA_integer_)
+}
+
 .tm_steps <- list(
     list(label = "Filtering",
-         ran   = !is.null(de_data) || file.exists(file.path(prot_dir, "filtering_stats.csv"))),
+         ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
     list(label = "Imputation",
          ran   = (tolower(prot_cfg$imputation$method %||% "none") != "none")),
     list(label = "Normalization",
-         ran   = (tolower(prot_cfg$normalization$method %||% prot_cfg$normalization %||% "none") != "none")),
+         ran   = (tolower(prot_cfg$normalization$method %||% "none") != "none")),
     list(label = "Differential expression",
-         ran   = !is.null(de_res) && !is.null(de_res$summary_df)),
+         ran   = !is.null(de_data) && nrow(de_data) > 0),
     list(label = "Clustering",
          ran   = isTRUE(prot_cfg$clustering$enabled)),
     list(label = "Pathway enrichment",
-         ran   = isTRUE(prot_cfg$pathway$enabled))
+         ran   = isTRUE(prot_cfg$pathway$enabled)),
+    list(label = "PPI network",
+         ran   = isTRUE(prot_cfg$ppi$enabled)),
+    list(label = "Advanced statistics",
+         ran   = isTRUE(prot_cfg$advanced_stats$enabled))
 )
 .tm_steps_str <- paste(vapply(.tm_steps, function(s) {
     sprintf("%s: %s", s$label, if (isTRUE(s$ran)) "yes" else "skipped")
 }, character(1)), collapse = "<br>")
 
-.tm_n_before <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA_integer_
-.tm_n_after  <- if (!is.null(pre$expr_imp_single)) nrow(pre$expr_imp_single) else NA_integer_
-.tm_fmt_n    <- function(n) if (is.na(n)) "n/a" else format(n, big.mark = ",")
+.tm_fmt_n <- function(n) if (is.na(n)) "n/a" else format(n, big.mark = ",")
 
 cat('<table style="margin: 16px 0 24px 0; border-collapse: collapse; width: 100%; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; font-size: 14px;">\n')
 cat('<thead><tr style="background: #f6f8fa; color: #24292f;">\n')
@@ -637,24 +659,27 @@ if (nzchar(trimws(raw_loc)) || nzchar(trimws(analysis_loc))) {
 
 ### Filtering Statistics
 
-Low-abundance features with insufficient signal are removed to reduce noise and improve statistical power. The filtering threshold balances retaining biologically relevant features against eliminating measurement noise.
-
 ```{r filtering-stats, results='asis'}
-# Try to load filtering stats from pre-computed file or compute inline
+# Compact summary table only — full strategy/threshold rationale lives
+# in the Technical Metadata Table at the top of the report.
 filt_stats_file <- file.path(prot_dir, "filtering_stats.csv")
+rows <- list()
 if (file.exists(filt_stats_file)) {
     filt_stats <- read.csv(filt_stats_file, stringsAsFactors = FALSE)
     for (i in seq_len(nrow(filt_stats))) {
-        cat(sprintf("**%s:** %s\n\n", filt_stats$metric[i], filt_stats$value[i]))
+        rows[[length(rows) + 1L]] <- c(filt_stats$metric[i], filt_stats$value[i])
     }
 } else if (!is.null(de_data)) {
-    n_quantified <- nrow(de_data)
-    cat(sprintf("**Proteins in final dataset:** %s\n\n", format(n_quantified, big.mark = ",")))
-
+    rows[[length(rows) + 1L]] <- c("Proteins in final dataset",
+                                    format(nrow(de_data), big.mark = ","))
     imp_method <- prot_cfg$imputation$method %||% "none"
     if (tolower(imp_method) != "none") {
-        cat(sprintf("**Imputation method:** %s\n\n", imp_method))
+        rows[[length(rows) + 1L]] <- c("Imputation method", imp_method)
     }
+}
+if (length(rows) > 0) {
+    fs_df <- do.call(rbind, lapply(rows, function(r) data.frame(Metric = r[1], Value = r[2], stringsAsFactors = FALSE)))
+    print(htmltools::tagList(make_dt(fs_df, "Filtering Statistics")))
 }
 ```
 
@@ -923,7 +948,7 @@ render_commentary("umap_plot")
 
 ```{r pca-subsets, eval=show_pca_section && show_pca_subsets, results='asis'}
 subset_pngs <- list.files(diag_dir, pattern = "^PCA_.*\\.png$", full.names = TRUE)
-standard_pat <- "^PCA_(PC1\\.vs\\.PC[23](_labeled)?|top[0-9]+)\\.png$"
+standard_pat <- "^PCA_(PC1\\.vs\\.PC[23](_labeled)?|top[0-9]+(_labeled)?)\\.png$"
 subset_pngs <- subset_pngs[!grepl(standard_pat, basename(subset_pngs))]
 if (length(subset_pngs) > 0) {
     cat("### Subsets\n\n")
@@ -937,9 +962,14 @@ if (length(subset_pngs) > 0) {
 }
 ```
 
+```{r imputation-check, include=FALSE}
+imp_method <- prot_cfg$imputation$method %||% "none"
+has_imputation <- tolower(imp_method) != "none" && isTRUE(show_imputation_qc)
+```
+
 ```{r distribution-heading, eval=show_density, results='asis'}
-cat("## Protein Distribution {.tabset}\n\n")
-cat("Density and boxplot views of per-sample protein expression after the same preprocessing (normalization + imputation if enabled). Consistent shapes/medians indicate successful normalization.\n\n")
+cat("## Protein Distribution & Imputation QC {.tabset}\n\n")
+cat("Density and boxplot views of per-sample protein expression after the same preprocessing (normalization + imputation if enabled). When imputation is enabled, additional tabs show observed-vs-imputed distributions.\n\n")
 ```
 
 ```{r density-tab-heading, eval=show_density, results='asis'}
@@ -976,46 +1006,16 @@ if (file.exists(bp)) {
 figure_legend("Per-sample boxplots of protein expression after normalization (and imputation if enabled). Boxes show the interquartile range. Aligned medians and IQR widths across samples indicate successful normalization.")
 ```
 
-```{r imputation-check, include=FALSE}
-imp_method <- prot_cfg$imputation$method %||% "none"
-has_imputation <- tolower(imp_method) != "none" && isTRUE(show_imputation_qc)
-```
-
-```{r imputation-heading, eval=has_imputation, results='asis'}
-cat("## Imputation QC {.tabset}\n")
-```
-
-```{r imputation-section, eval=has_imputation, results='asis'}
-cat("Imputation was performed using the **", imp_method, "** method.\n\n")
-
+```{r imp-hist-tab-heading, eval=has_imputation, results='asis'}
+cat("### Imputation Histograms\n")
+cat(sprintf("Imputation method: **%s**.\n\n", imp_method))
 if (tolower(imp_method) == "perseus") {
     imp_w <- prot_cfg$imputation$width %||% 0.3
     imp_s <- prot_cfg$imputation$downshift %||% 1.8
-    imp_n <- prot_cfg$imputation$n_imputations %||% 1
-    imp_min <- prot_cfg$imputation$min_passed %||% 1
-
-    cat("#### How Perseus-style imputation works\n\n")
-    cat("Missing values in label-free proteomics are often *missing not at random* (MNAR): ",
-        "they arise because the protein abundance is below the instrument's detection limit. ",
-        "Perseus-style imputation models these missing values by drawing random intensities ",
-        "from a **downshifted normal distribution** relative to each sample's observed values.\n\n")
-    cat("For each sample, the imputed values are drawn from:\n\n")
-    cat(sprintf("- **Mean** = sample mean - %.1f x sample SD (downshift)\n", imp_s))
-    cat(sprintf("- **SD** = %.1f x sample SD (width)\n\n", imp_w))
-    cat("This places imputed values in the low-abundance tail of the distribution, ",
-        "consistent with the MNAR assumption. ",
-        "The narrow width (relative to the observed distribution) prevents imputed values ",
-        "from inflating variance estimates.\n\n")
-    if (imp_n > 1) {
-        cat(sprintf("To account for imputation uncertainty, the procedure is repeated **%d times** ", imp_n))
-        cat("and differential expression is computed on each imputed dataset independently. ",
-            "Final p-values and fold changes are aggregated across imputations.\n\n")
-    }
-    cat(sprintf("Only proteins detected in at least **%d sample(s)** per group were retained for analysis.\n\n", imp_min))
+    cat(sprintf("Imputed values drawn from a downshifted normal distribution (downshift = %s SD, width = %s SD).\n\n",
+                imp_s, imp_w))
 }
 ```
-
-### Imputation Histograms
 
 ```{r imp-hist, eval=has_imputation, fig.cap="Imputed vs original intensity distributions"}
 imp_w <- prot_cfg$imputation$width %||% "NA"
@@ -1028,11 +1028,13 @@ if (file.exists(f_imp)) knitr::include_graphics(f_imp)
 figure_legend("Histograms comparing the distribution of observed (blue) and imputed (red) protein intensities per sample. Imputed values should appear as a low-abundance shoulder distinct from the observed distribution.")
 ```
 
-```{r commentary-imp-hist, results='asis'}
+```{r commentary-imp-hist, eval=has_imputation, results='asis'}
 render_commentary("imputation_histogram")
 ```
 
-### Boxplot After Imputation
+```{r imp-box-tab-heading, eval=has_imputation, results='asis'}
+cat("### Boxplot After Imputation\n")
+```
 
 ```{r imp-boxplot, eval=has_imputation, fig.cap="Expression boxplot after imputation"}
 f_box <- file.path(diag_dir, "imputed_boxplot.png")
@@ -1242,6 +1244,12 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
+```{r de-overlap-cond, include=FALSE}
+.show_overlap <- !is.null(de_data) && length(contrast_names) >= 2
+```
+
+`r if (!.show_overlap) "<!--"`
+
 ## DE Protein Overlap {.tabset}
 
 ### All DE Proteins
@@ -1380,6 +1388,8 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
     }
 }
 ```
+
+`r if (!.show_overlap) "-->"`
 
 ```{r identified-proteins-venn, results='asis', fig.height=6, fig.width=10}
 # Venn diagram of all identified proteins per sample/condition (pre-imputation)
@@ -2735,18 +2745,16 @@ if (length(ora_files) > 0) {
 }
 ```
 
-## Clustered Enrichment (Redundancy-Reduced) {.tabset}
-
-Enrichment results often contain many similar terms (e.g., "ribosome biogenesis", "large ribosomal subunit assembly", "small ribosomal subunit assembly"). Semantic clustering groups related terms into clusters and selects a single representative per cluster, revealing a broader functional landscape. For GO terms, clustering uses semantic similarity ([rrvgo](https://bioconductor.org/packages/rrvgo/)); for KEGG/custom databases, it uses Jaccard similarity on shared genes.
-
 ```{r clustered-setup, include=FALSE}
 clustered_dir <- file.path(enrich_dir, "clustered")
 has_clustered <- dir.exists(clustered_dir) && length(list.files(clustered_dir, pattern = "\\.csv$")) > 0
 ```
 
-```{r clustered-skip, eval=!has_clustered && has_enrichment, results='asis'}
-cat("Clustered enrichment results are not available. To enable clustering, install the `rrvgo` package (`BiocManager::install('rrvgo')`).\n")
-```
+`r if (!has_clustered) "<!--"`
+
+## Clustered Enrichment (Redundancy-Reduced) {.tabset}
+
+Enrichment results often contain many similar terms (e.g., "ribosome biogenesis", "large ribosomal subunit assembly", "small ribosomal subunit assembly"). Semantic clustering groups related terms into clusters and selects a single representative per cluster, revealing a broader functional landscape. For GO terms, clustering uses semantic similarity ([rrvgo](https://bioconductor.org/packages/rrvgo/)); for KEGG/custom databases, it uses Jaccard similarity on shared genes.
 
 ```{r clustered-method-note, eval=has_clustered, results='asis'}
 cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Enrichment terms clustered by semantic similarity (GO) or gene overlap (KEGG/custom). Each row represents a cluster of related terms. The representative term is the most significant member. \"Members\" lists other terms merged into the cluster.</em></p>\n")
@@ -2809,6 +2817,8 @@ for (pp in cl_pngs) {
 ```{r clustered-dotplots-skip, eval=has_clustered && !has_clustered_plots, results='asis'}
 cat("Clustered dotplots could not be generated.\n")
 ```
+
+`r if (!has_clustered) "-->"`
 
 ## Pathway Dotplots {.tabset}
 
@@ -3261,15 +3271,17 @@ if (file.exists(comm_file)) {
 }
 ```
 
-## STRING Functional Enrichment {.tabset}
-
-STRING provides functional enrichment analysis across multiple annotation categories — including disease associations, tissue expression, subcellular compartments, and literature references — directly from the protein interaction network.
-
 ```{r string-enrich-setup, include=FALSE}
 string_enrich_dir <- file.path(ppi_dir, "string_enrichment")
 has_string_enrich <- dir.exists(string_enrich_dir) &&
     length(list.files(string_enrich_dir, pattern = "\\.csv$")) > 0
 ```
+
+`r if (!has_string_enrich) "<!--"`
+
+## STRING Functional Enrichment {.tabset}
+
+STRING provides functional enrichment analysis across multiple annotation categories — including disease associations, tissue expression, subcellular compartments, and literature references — directly from the protein interaction network.
 
 ```{r string-enrich-tables, eval=has_string_enrich, results='asis'}
 string_files <- list.files(string_enrich_dir, pattern = "^string_.*\\.csv$", full.names = TRUE)
@@ -3325,13 +3337,9 @@ if (length(string_files) > 0) {
 }
 ```
 
-```{r string-enrich-skip, eval=!has_string_enrich && has_ppi, results='asis'}
-cat("STRING functional enrichment was not generated. This may be due to API connectivity issues or too few mapped proteins.\n")
-```
+`r if (!has_string_enrich) "-->"`
 
 ---
-
-# Protein Domain & Functional Feature Analysis
 
 ```{r domain-setup, include=FALSE}
 domain_dir <- file.path(prot_dir, "domain_analysis")
@@ -3341,9 +3349,9 @@ has_domains <- dir.exists(domain_dir) && (
 )
 ```
 
-```{r domain-skip, eval=!has_domains, results='asis'}
-cat("Protein domain analysis was not performed. This analysis identifies enriched InterPro/Pfam domains and UniProt functional features (binding sites, active sites, PTMs) among differentially expressed proteins.\n")
-```
+`r if (!has_domains) "<!--"`
+
+# Protein Domain & Functional Feature Analysis
 
 ```{r domain-intro, eval=has_domains, results='asis'}
 cat("Protein domain and functional feature analysis identifies structural and functional motifs enriched among differentially expressed proteins. This reveals whether specific protein families, binding domains, or post-translational modification sites are over-represented in the DE set — complementing pathway-level enrichment with protein-level structural insights.\n\n")
@@ -3429,9 +3437,7 @@ if (file.exists(barchart_file)) {
 }
 ```
 
----
-
-# Advanced Statistics
+`r if (!has_domains) "-->"`
 
 ```{r adv-stats-setup, include=FALSE}
 has_adv_stats <- dir.exists(adv_stats_dir) && (
@@ -3441,13 +3447,11 @@ has_adv_stats <- dir.exists(adv_stats_dir) && (
 adv_stats_enabled <- isTRUE(prot_cfg$advanced_stats$enabled)
 ```
 
-```{r adv-stats-skip, eval=!has_adv_stats, results='asis'}
-if (!adv_stats_enabled) {
-    cat("Advanced statistics was disabled. Enable with `advanced_stats.enabled: true`.\n")
-} else {
-    cat("Advanced statistics was enabled but produced no results.\n")
-}
-```
+`r if (!has_adv_stats) "<!--"`
+
+---
+
+# Advanced Statistics
 
 ```{r adv-stats-intro, eval=has_adv_stats, results='asis'}
 cat("Advanced statistical analyses provide supplementary metrics including effect size confidence intervals, robust regression estimates, and statistical power calculations. These complement the primary differential expression results by quantifying uncertainty and detection sensitivity.\n\n")
@@ -3505,6 +3509,8 @@ if (file.exists(mtc_file)) {
     make_dt(mtc, caption = "Multiple Testing Correction Comparison")
 }
 ```
+
+`r if (!has_adv_stats) "-->"`
 
 ---
 
