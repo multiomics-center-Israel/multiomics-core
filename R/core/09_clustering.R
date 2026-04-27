@@ -724,26 +724,32 @@ choose_k_silhouette <- function(mat_fg, algorithm = c("pam", "kmeans"), k_max = 
   best_k
 }
 
+# Single source of truth for the gene x gene distance used by every
+# hclust-based path in this pipeline. Ward.D2 is mathematically defined for
+# Euclidean distances (variance-minimization interpretation), so we pair them
+# here and reuse the helper from both the main hclust branch and clusGap().
+build_clustering_distance <- function(mat) {
+  stats::dist(mat, method = "euclidean")
+}
+
 #' Choose k by gap statistic
 #'
-#' Uses cluster::clusGap() with hclust (Pearson correlation + Ward.D2) to find
+#' Uses cluster::clusGap() with hclust (Euclidean distance + Ward.D2) to find
 #' optimal k. Matches Neat_RNA-Seq behavior: firstSEmax with SE.factor=1.
 #'
 #' @param mat_fg Feature x group z-scored matrix
 #' @param k_max Maximum K to test (default 20)
-#' @param B Number of bootstrap samples (default 10)
+#' @param B Number of bootstrap samples (default 100)
 #' @return integer k
-choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
+choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 100) {
   stopifnot(is.matrix(mat_fg))
   n <- nrow(mat_fg)
   if (n < 2) stop("choose_k_gap_statistic: need at least 2 features")
   k_max <- min(as.integer(k_max), n - 1L)
   if (k_max < 2) return(2L)
-  
+
   hclust_func <- function(x, k) {
-    cmat <- stats::cor(t(x), use = "pairwise.complete.obs")
-    cmat[is.na(cmat)] <- 0
-    d <- stats::as.dist(1 - cmat)
+    d <- build_clustering_distance(x)
     hc <- stats::hclust(d, method = "ward.D2")
     list(cluster = stats::cutree(hc, k = k))
   }
@@ -758,12 +764,35 @@ choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
 
 #' Perform partition clustering on DE features using group means (legacy-like)
 #'
+#' Two normalization scopes are supported via cl_cfg$zscore_scope:
+#'   - "groups" (default, legacy): build group means first, then z-score the
+#'     gene x group matrix. Backward-compatible.
+#'   - "samples" (recommended for K = 2-4 groups): z-score the gene x sample
+#'     matrix first, then build group means and feed them directly to
+#'     clustering. Per-gene SD estimated from K group means is unstable when K
+#'     is small; sample-level z-scoring uses many more observations and gives
+#'     a noise-aware weighting.
+#'
+#' Under "samples", the matrix in $z_group_means is no longer row-scaled to
+#' unit variance — noisier genes carry smaller magnitudes by design. Callers
+#' that plot $z_group_means assuming row-unit variance (e.g. fixed [-2, +2]
+#' color scale) should be reviewed before switching scope.
+#'
 #' @param expr_mat features x samples (imputed)
 #' @param meta sample metadata
-#' @param cfg mode config (uses effects + clustering$steps$partition)
+#' @param cfg mode config (uses effects + clustering$steps$partition).
+#'   Recognized keys under clustering$steps$partition: algorithm, k, k_max,
+#'   k_method, gap_B, nstart, distance, min_variance (variance units, default
+#'   0 -> only fully constant rows are dropped), zscore_scope ("groups" |
+#'   "samples"), seed (overrides the function-arg default).
 #' @param de_features feature IDs to include
-#' @return list(k, clusters_named, group_means, z_group_means)
-perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_features) {
+#' @param seed integer reproducibility seed for clusGap / kmeans (default
+#'   1L). cl_cfg$seed wins over this default. Kept for reproducibility even
+#'   though cluster::pam() is deterministic in this implementation.
+#' @return list(algorithm, k, clusters, group_means, z_group_means, seed,
+#'   zscore_scope). $group_means always holds raw group means; $z_group_means
+#'   holds whatever matrix was fed to clustering for the chosen scope.
+perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_features, seed = 1L) {
   stopifnot(is.character(de_features))
   expr_mat <- as.matrix(expr_mat)
 
@@ -775,20 +804,69 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     stop("Partition clustering requested but config$modes$<mode>$clustering$steps$partition$enabled is FALSE")
   }
 
+  # Reproducibility: cl_cfg$seed wins over the function-arg default.
+  seed <- cl_cfg$seed %||% seed
+  set.seed(seed)
+
   # Default algorithm is now hclust to match legacy, but supports others
   alg <- tolower(cl_cfg$algorithm %||% "hclust")
   if (!(alg %in% c("pam", "kmeans", "hclust"))) stop("partition$algorithm must be 'pam', 'kmeans' or 'hclust'")
 
+  zscore_scope <- tolower(cl_cfg$zscore_scope %||% "groups")
+  if (!(zscore_scope %in% c("groups", "samples"))) {
+    stop("partition$zscore_scope must be 'groups' or 'samples'")
+  }
+  min_var <- cl_cfg$min_variance %||% 0
+
   # feature x sample subset
   x <- expr_mat[feats, , drop = FALSE]
 
-  # group means: feature x group
-  gm_obj <- build_group_means_from_effects(x, meta, cfg)
-  gm <- gm_obj$group_means
+  # Drop low-variance rows. Variance, not SD; threshold is also in variance
+  # units so the comparison is unit-consistent. zscore_rows()'s row_sds == 0
+  # safety net stays intact for other callers.
+  filter_low_var <- function(m) {
+    vars <- apply(m, 1, stats::var, na.rm = TRUE)
+    vars[is.na(vars)] <- 0
+    keep <- vars > min_var
+    n_dropped <- sum(!keep)
+    if (n_dropped > 0) {
+      dropped_ids <- rownames(m)[!keep]
+      message(sprintf(
+        "partition clustering: dropped %d low-variance features (min_variance = %g)",
+        n_dropped, min_var
+      ))
+      if (length(dropped_ids) > 0) {
+        message(sprintf("  first dropped: %s",
+                        paste(utils::head(dropped_ids, 5), collapse = ", ")))
+      }
+    }
+    m[keep, , drop = FALSE]
+  }
 
-  # z-score across groups (row-wise)
-  # This scales the patterns so we focus on trends, not intensity
-  z_gm <- zscore_rows(gm)
+  if (zscore_scope == "samples") {
+    # Recommended for small K: estimate per-gene SD across all samples.
+    x <- filter_low_var(x)
+    if (nrow(x) < 2) stop("Partition clustering: <2 features after variance filter")
+
+    # group_means slot keeps raw expression semantics (un-z-scored), consistent
+    # with the "groups" scope. Avoids leaking z-scored values into any future
+    # downstream caller that reads $group_means.
+    gm_raw_obj <- build_group_means_from_effects(x, meta, cfg)
+    gm <- gm_raw_obj$group_means
+
+    # z-scored samples -> group means -> fed to clustering. No second z-score
+    # on the group-means matrix (that would undo the noise-aware weighting).
+    x_z <- zscore_rows(x)
+    gm_z_obj <- build_group_means_from_effects(x_z, meta, cfg)
+    z_gm <- gm_z_obj$group_means
+  } else {
+    # Default "groups": legacy behavior — group means first, then z-score.
+    gm_obj <- build_group_means_from_effects(x, meta, cfg)
+    gm <- gm_obj$group_means
+    gm <- filter_low_var(gm)
+    if (nrow(gm) < 2) stop("Partition clustering: <2 features after variance filter")
+    z_gm <- zscore_rows(gm)
+  }
 
   # Configuration parameters
   k_fixed <- cl_cfg$k
@@ -797,20 +875,16 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
   clusters <- NULL
   final_k <- NULL
+  hc <- NULL
+  dist_mat <- NULL
 
-  # --- Logic Split based on Algorithm ---
+  # --- Determine final_k (no fitting yet) ---
 
   if (alg == "hclust") {
-    # === Legacy Style: Hierarchical Clustering ===
-
-    # 1. Distance: Pearson Correlation (1 - cor)
-    #    We use t(z_gm) because cor() works on columns
-    dist_mat <- as.dist(1 - cor(t(z_gm)))
-
-    # 2. Linkage: Ward.D2 (Minimizes variance within clusters)
+    # Single source of truth for the distance, paired with Ward.D2 (Euclidean).
+    dist_mat <- build_clustering_distance(z_gm)
     hc <- stats::hclust(dist_mat, method = "ward.D2")
 
-    # 3. Determine K (if not fixed)
     if (!is.null(k_fixed)) {
       final_k <- as.integer(k_fixed)
     } else {
@@ -818,42 +892,43 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
       if (k_method == "gap") {
         # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
-        gap_B <- cl_cfg$gap_B %||% 10
+        gap_B <- cl_cfg$gap_B %||% 100
         final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
       } else {
-        # Default: Silhouette on hierarchical tree cuts
-        sil_width <- numeric(k_max)
-
-        for (i in 2:k_max) {
-          ct <- stats::cutree(hc, k = i)
+        # Silhouette on hierarchical tree cuts: explicit k -> score table,
+        # no magic offsets.
+        sil_table <- vapply(2:k_max, function(i) {
+          ct  <- stats::cutree(hc, k = i)
           sil <- cluster::silhouette(ct, dist_mat)
-          sil_width[i] <- mean(sil[, 3])
-        }
-
-        final_k <- which.max(sil_width[-1]) + 1
+          mean(sil[, "sil_width"], na.rm = TRUE)
+        }, numeric(1))
+        names(sil_table) <- as.character(2:k_max)
+        final_k <- as.integer(names(sil_table)[which.max(sil_table)])
       }
     }
-
-    # 4. Cut the tree
-    clusters <- stats::cutree(hc, k = final_k)
   } else {
-    # === Modern Style: Partitioning (PAM / K-means) ===
-
+    # PAM / K-means
     if (is.null(k_fixed)) {
       final_k <- choose_k_silhouette(z_gm, algorithm = alg, k_max = k_max, nstart = nstart)
     } else {
       final_k <- as.integer(k_fixed)
     }
+  }
 
-    if (final_k < 2) stop("partition$k must be >= 2")
+  # Single point of validation, fires for every branch (incl. k_fixed = 1).
+  if (is.null(final_k) || final_k < 2) stop("partition$k must be >= 2")
 
-    if (alg == "pam") {
-      res <- cluster::pam(z_gm, k = final_k, metric = cl_cfg$distance %||% "euclidean")
-      clusters <- res$clustering
-    } else { # kmeans
-      res <- stats::kmeans(z_gm, centers = final_k, nstart = nstart)
-      clusters <- res$cluster
-    }
+  # --- Fit clusters ---
+
+  if (alg == "hclust") {
+    # hc and dist_mat are reused from the k-determination block above.
+    clusters <- stats::cutree(hc, k = final_k)
+  } else if (alg == "pam") {
+    res <- cluster::pam(z_gm, k = final_k, metric = cl_cfg$distance %||% "euclidean")
+    clusters <- res$clustering
+  } else { # kmeans
+    res <- stats::kmeans(z_gm, centers = final_k, nstart = nstart)
+    clusters <- res$cluster
   }
 
   # Ensure names are set correctly (with defensive check)
@@ -871,7 +946,9 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     k = final_k,
     clusters = clusters,
     group_means = gm,
-    z_group_means = z_gm
+    z_group_means = z_gm,
+    seed = seed,
+    zscore_scope = zscore_scope
   )
 }
 
