@@ -73,7 +73,9 @@ plot_sample_distance_heatmap <- function(expr_mat,
   mat <- as.matrix(sampleDists)
 
   if (is.null(colors)) {
-    colors <- get_heatmap_colors(255)
+    # Light-to-dark Blues: small distance = light, large distance = dark
+    # (Apr 2026 reviewer feedback — invert the legacy palette).
+    colors <- get_heatmap_colors(255, reverse = FALSE)
   }
   if (is.null(main)) main <- sprintf("Sample distance heatmap (%s)", dist_method)
 

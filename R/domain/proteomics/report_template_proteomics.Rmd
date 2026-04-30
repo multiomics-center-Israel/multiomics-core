@@ -1067,7 +1067,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-dist-heatmap, eval=show_distance, results='asis'}
-figure_legend("Euclidean distance matrix of imputed protein expression values. Darker colors indicate smaller distances (higher similarity). Samples from the same experimental group should cluster together.")
+figure_legend("Euclidean distance matrix of imputed protein expression values. Darker colors indicate larger distances (less similar samples). Samples from the same experimental group should cluster together with smaller (lighter) inter-sample distances.")
 ```
 
 ```{r commentary-distance, eval=show_distance, results='asis'}
@@ -1102,31 +1102,31 @@ render_commentary("sample_correlation")
 
 ```{r expr-heatmap-heading, eval=show_expression_heatmap, results='asis'}
 cat("## Expression Heatmap {.tabset}\n\n")
-cat("Expression heatmaps display the relative abundance of features across samples. The two views below show the same matrix before and after hierarchical clustering — comparing them helps reveal whether clustering meaningfully reorganises the structure.\n\n")
+cat("Both views below cluster proteins (rows) by expression similarity. They differ only in whether the samples (columns) are also clustered — comparing them helps reveal whether sample clustering meaningfully reorganises the experimental groups.\n\n")
 ```
 
 ```{r expr-heatmap-uncl-heading, eval=show_expression_heatmap, results='asis'}
-cat("### Without Clustering\n")
+cat("### Without Samples Clustering\n")
 ```
 
-```{r expr-heatmap-uncl, eval=show_expression_heatmap, fig.cap="Sample expression heatmap (rows and columns unclustered)"}
-p_uncl <- file.path(diag_dir, "samples_protein_heatmap_unclustered.png")
-if (file.exists(p_uncl)) {
-    knitr::include_graphics(p_uncl)
+```{r expr-heatmap-uncl, eval=show_expression_heatmap, fig.cap="Sample expression heatmap (rows clustered, sample order preserved)"}
+p_wo_col <- file.path(diag_dir, "samples_protein_heatmap_wo_col.png")
+if (file.exists(p_wo_col)) {
+    knitr::include_graphics(p_wo_col)
 } else {
-    cat("*Unclustered expression heatmap not available.*")
+    cat("*Expression heatmap (no sample clustering) not available.*")
 }
 ```
 
 ```{r legend-expr-heatmap-uncl, eval=show_expression_heatmap, results='asis'}
-figure_legend("Sample expression heatmap with rows and columns left in their original order. Useful as a baseline before applying hierarchical clustering.")
+figure_legend("Expression heatmap with proteins (rows) clustered hierarchically; samples (columns) kept in their input order. Useful for inspecting sample-by-sample variation without imposing a sample dendrogram.")
 ```
 
 ```{r expr-heatmap-cl-heading, eval=show_expression_heatmap, results='asis'}
-cat("### With Clustering\n")
+cat("### With Samples Clustering\n")
 ```
 
-```{r expr-heatmap-cl, eval=show_expression_heatmap, fig.cap="Sample expression heatmap (top variable proteins)"}
+```{r expr-heatmap-cl, eval=show_expression_heatmap, fig.cap="Sample expression heatmap (rows + samples clustered)"}
 p <- file.path(diag_dir, "samples_protein_heatmap.png")
 if (file.exists(p)) knitr::include_graphics(p)
 ```

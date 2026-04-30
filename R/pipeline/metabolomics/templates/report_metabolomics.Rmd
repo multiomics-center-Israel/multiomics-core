@@ -810,7 +810,7 @@ if (!is.null(qc_res$files)) {
       cat(sprintf("![Sample Distance Heatmap -- %s](%s){width=100%%}\n\n",
                   sub$tab, sub$path))
       figure_legend(sprintf(
-        "Sample distance heatmap based on Euclidean distances between normalized metabolite profiles (%s). Darker colors indicate more similar samples.",
+        "Sample distance heatmap based on Euclidean distances between normalized metabolite profiles (%s). Darker colors indicate larger distances (less similar samples).",
         tolower(sub$tab)))
       render_commentary(sub$cid)
     }

@@ -1067,7 +1067,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-dist-heatmap, results='asis', echo=FALSE}
-figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate smaller distances (higher similarity). Samples from the same experimental group are expected to cluster together with smaller inter-sample distances.")
+figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate larger distances (less similar samples). Samples from the same experimental group are expected to cluster together with smaller (lighter) inter-sample distances.")
 ```
 
 ```{r commentary-distance, results='asis'}
