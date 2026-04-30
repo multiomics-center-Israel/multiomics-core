@@ -219,11 +219,14 @@ show_pca_3d    <- report_cfg$show_pca_3d %||% TRUE
 show_pca_subsets <- report_cfg$show_pca_subsets %||% TRUE
 show_pca_topvar  <- report_cfg$show_pca_topvar %||% FALSE  # generated but hidden by default
 show_density  <- report_cfg$show_density %||% TRUE
-show_distance <- report_cfg$show_distance %||% TRUE   # show alongside correlation in Sample Similarity
-show_correlation <- report_cfg$show_correlation %||% TRUE
+show_distance <- report_cfg$show_distance %||% TRUE
+# Correlation heatmap dropped from report after Apr 2026 reviewer feedback
+# (still produced in the pipeline). Override with `report.show_correlation: true`.
+show_correlation <- report_cfg$show_correlation %||% FALSE
 show_expression_heatmap <- report_cfg$show_expression_heatmap %||% TRUE
 show_imputation_qc <- report_cfg$show_imputation_qc %||% TRUE
-show_ma_plots <- report_cfg$show_ma_plots %||% TRUE
+# Default-off after April 2026 reviewer feedback (Michal/Vered): keep volcano only.
+show_ma_plots <- report_cfg$show_ma_plots %||% FALSE
 show_top_de_heatmaps <- report_cfg$show_top_de_heatmaps %||% TRUE
 show_protein_explorer <- report_cfg$show_protein_explorer %||% TRUE
 show_peptide_explorer <- report_cfg$show_peptide_explorer %||% TRUE
@@ -1499,20 +1502,59 @@ if (!is.null(de_data)) {
 ### Static {.tabset}
 
 ```{r volcano-plots-static, results='asis'}
-volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
+# Per-contrast static volcano: show padj + raw-pval variants as sub-tabs.
+# Default tab matches the cutoff-panel default (`default_ptype` in cutoff_panel_html).
+volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*_padj\\.png$",
+                            full.names = TRUE)
 padj_cut_vol <- prot_cfg$de$p_cutoff %||% 0.05
-lfc_cut_vol <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+lfc_cut_vol  <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+default_ptype_vol <- "padj"  # matches cutoff_panel_html(default_ptype = "padj") above
 if (length(volcano_files) > 0) {
-    for (vf in volcano_files) {
-        cn <- gsub("^volcano_|\\.png$", "", basename(vf))
-        contrast_clean <- gsub("_", " ", cn)
-        cat(sprintf("\n#### %s\n\n", contrast_clean))
-        cat(sprintf("![Volcano -- %s](%s)\n\n", contrast_clean, vf))
-        figure_legend(sprintf("Volcano plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s).", contrast_clean, padj_cut_vol, lfc_cut_vol))
-        render_commentary(paste0("volcano_", cn))
+    for (vf_padj in volcano_files) {
+        suffix <- gsub("^volcano_|_padj\\.png$", "", basename(vf_padj))
+        # suffix may include "<contrast>_<de_source>" for proteomics (e.g. "A_vs_B_summary")
+        contrast_clean <- gsub("_", " ", suffix)
+        vf_pval <- sub("_padj\\.png$", "_pval.png", vf_padj)
+        cat(sprintf("\n#### %s {.tabset}\n\n", contrast_clean))
+
+        # Order tabs so the configured default p-value type renders first
+        order_ptypes <- if (default_ptype_vol == "padj") c("padj", "pval") else c("pval", "padj")
+        for (pt in order_ptypes) {
+            tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+            vf <- if (pt == "padj") vf_padj else vf_pval
+            if (file.exists(vf)) {
+                cat(sprintf("\n##### %s\n\n", tab_label))
+                cat(sprintf("![Volcano -- %s -- %s](%s)\n\n",
+                            contrast_clean, tab_label, vf))
+                figure_legend(sprintf(
+                    "Volcano plot for the %s contrast (y-axis: -log10 %s). Red: significantly up-regulated; blue: significantly down-regulated (cutoff p &le; %s, |FC| &ge; %s).",
+                    contrast_clean,
+                    if (pt == "padj") "adjusted P-value" else "raw P-value",
+                    padj_cut_vol, lfc_cut_vol))
+            }
+        }
+        render_commentary(paste0("volcano_", suffix))
     }
 } else {
-    cat("No volcano plots found.\n")
+    # Backwards-compat: fall back to legacy single volcano if pipeline did not
+    # yet produce padj/pval variants
+    legacy_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$",
+                               full.names = TRUE)
+    legacy_files <- legacy_files[!grepl("_(padj|pval)\\.png$", legacy_files)]
+    if (length(legacy_files) > 0) {
+        for (vf in legacy_files) {
+            cn <- gsub("^volcano_|\\.png$", "", basename(vf))
+            contrast_clean <- gsub("_", " ", cn)
+            cat(sprintf("\n#### %s\n\n", contrast_clean))
+            cat(sprintf("![Volcano -- %s](%s)\n\n", contrast_clean, vf))
+            figure_legend(sprintf(
+                "Volcano plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s).",
+                contrast_clean, padj_cut_vol, lfc_cut_vol))
+            render_commentary(paste0("volcano_", cn))
+        }
+    } else {
+        cat("No volcano plots found.\n")
+    }
 }
 ```
 
@@ -2589,35 +2631,92 @@ cat("*Peptide expression explorer not available. No peptide-level data file was 
 
 ```{r clustering-check, include=FALSE}
 clustering_enabled <- isTRUE(prot_cfg$clustering$enabled)
-```
 
-```{r clustering-header, eval=clustering_enabled, results='asis'}
-cat("# Clustering\n\n")
-cat("Clustering was performed on differentially expressed proteins.\n\n")
-```
+# ---- Discover clustering outputs on disk (independent of in-memory results) ----
+hier_dir   <- file.path(clustering_dir, "Hierarchical")
+part_root  <- file.path(clustering_dir, "Partition_clustering")
+binary_dir <- file.path(clustering_dir, "Binary_patterns")
 
-```{r clustering-hierarchical, eval=clustering_enabled, results='asis', fig.cap="Hierarchical clustering heatmap"}
-hm_file <- file.path(clustering_dir, "hierarchical_heatmap.png")
-if (file.exists(hm_file)) {
-    cat("## Hierarchical Clustering\n\n")
-    cat(sprintf("![Hierarchical clustering](%s)\n\n", hm_file))
+hier_hm <- file.path(hier_dir, "Hierarchical_DE_heatmap.png")
+
+# Partition: <Partition_clustering>/<Partition_clustering_<k>_clusters>/
+part_subdirs <- if (dir.exists(part_root)) {
+  list.dirs(part_root, recursive = FALSE)
+} else character(0)
+part_subdir <- if (length(part_subdirs) > 0) part_subdirs[1] else NA_character_
+part_hm     <- if (!is.na(part_subdir)) file.path(part_subdir, "Partition_clustering_heatmap.png") else NA_character_
+
+# Per-cluster profile PNGs (cluster_profiles_clusterN.png)
+part_profile_pngs <- if (!is.na(part_subdir) && dir.exists(part_subdir)) {
+  list.files(part_subdir, pattern = "^cluster_profiles_cluster[0-9]+\\.png$",
+             full.names = TRUE)
+} else character(0)
+
+# Sort by numeric cluster number
+if (length(part_profile_pngs) > 0) {
+  ord <- order(as.integer(sub(".*cluster([0-9]+)\\.png$", "\\1",
+                              basename(part_profile_pngs))))
+  part_profile_pngs <- part_profile_pngs[ord]
 }
+
+# Binary patterns: Heatmap_<pattern>.png per pattern
+binary_pngs <- if (dir.exists(binary_dir)) {
+  list.files(binary_dir, pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+} else character(0)
+
+has_hier   <- file.exists(hier_hm)
+has_part   <- !is.na(part_hm) && file.exists(part_hm)
+has_binary <- length(binary_pngs) > 0
+clustering_show <- clustering_enabled && (has_hier || has_part || has_binary)
 ```
 
-```{r clustering-partition, eval=clustering_enabled, results='asis'}
-part_hm <- file.path(clustering_dir, "partition_heatmap.png")
-part_profiles <- file.path(clustering_dir, "partition_profiles.png")
-if (file.exists(part_hm) || file.exists(part_profiles)) {
-    cat("## Partition Clustering {.tabset}\n\n")
-    if (file.exists(part_hm)) {
-        cat("### Heatmap\n\n")
-        cat(sprintf("![Partition heatmap](%s)\n\n", part_hm))
-    }
-    if (file.exists(part_profiles)) {
-        cat("### Cluster Profiles\n\n")
-        cat(sprintf("![Partition profiles](%s)\n\n", part_profiles))
-    }
+```{r clustering-header, eval=clustering_show, results='asis'}
+cat("# Clustering {.tabset}\n\n")
+cat("Clustering was performed on the differentially expressed proteins. Each method below answers a different question:\n\n")
+cat("- **Hierarchical** — bottom-up tree built from feature-by-feature distances; reveals nested groupings.\n")
+cat("- **Partition** — splits features into a chosen number of clusters with similar expression trajectories across groups.\n")
+cat("- **Binary patterns** — assigns each feature to an on/off (1/0) pattern across groups based on correlation.\n\n")
+```
+
+```{r clustering-hier, eval=clustering_show && has_hier, results='asis'}
+cat("## Hierarchical\n\n")
+cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm))
+figure_legend("Hierarchical clustering heatmap of differentially expressed proteins (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+render_commentary("clustering_hierarchical")
+```
+
+```{r clustering-partition, eval=clustering_show && has_part, results='asis'}
+cat("## Partition {.tabset}\n\n")
+
+# 1. Heatmap first
+cat("### Heatmap\n\n")
+cat(sprintf("![Partition clustering heatmap](%s){width=100%%}\n\n", part_hm))
+figure_legend("Partition clustering heatmap. Rows are grouped by cluster (gaps separate clusters); within-cluster ordering follows the feature similarity.")
+
+# 2. Per-cluster expression profiles (sub-tabs, one per cluster)
+if (length(part_profile_pngs) > 0) {
+  cat("\n### Cluster Profiles {.tabset}\n\n")
+  for (pf in part_profile_pngs) {
+    k <- sub(".*cluster([0-9]+)\\.png$", "\\1", basename(pf))
+    cat(sprintf("\n#### Cluster %s\n\n", k))
+    cat(sprintf("![Cluster %s expression profile](%s){width=80%%}\n\n", k, pf))
+    figure_legend(sprintf(
+      "Mean (±SE) expression profile across experimental groups for proteins in cluster %s.", k))
+  }
 }
+render_commentary("clustering_partition")
+```
+
+```{r clustering-binary, eval=clustering_show && has_binary, results='asis'}
+cat("## Binary Patterns {.tabset}\n\n")
+for (bf in binary_pngs) {
+  pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+  cat(sprintf("\n### Pattern %s\n\n", pat))
+  cat(sprintf("![Binary pattern %s](%s){width=100%%}\n\n", pat, bf))
+  figure_legend(sprintf(
+    "Heatmap of features assigned to binary on/off pattern '%s' across experimental groups (correlation-based assignment).", pat))
+}
+render_commentary("clustering_binary")
 ```
 
 ---

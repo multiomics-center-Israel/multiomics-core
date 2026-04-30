@@ -253,12 +253,16 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     } else {
         # Default: adaptive KDE
         plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
+        af <- cfg$filtering$auto_filter %||% list()
         fr <- run_auto_filter_pipeline(
             cpm_mat     = norm_for_filter,
             meta        = meta2,
             sample_col  = sample_col,
             group_col   = group_col,
-            output_plot = plot_path
+            output_plot = plot_path,
+            min_limit   = af$min      %||% 0.5,
+            max_limit   = af$max      %||% 2.0,
+            fallback    = af$fallback %||% 1.0
         )
         keep_vec <- fr$keep_vec
         thr <- fr$used_threshold

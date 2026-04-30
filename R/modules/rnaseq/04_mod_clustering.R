@@ -55,24 +55,24 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
   
   # ---- decide which steps to run ----
   flags <- clustering_run_flags(pre, cfg)
+  # Hierarchical clustering is intentionally excluded for RNA-seq (Apr 2026
+  # reviewer guidance — DE gene lists are typically too large for the
+  # dendrogram to be readable).  Restore by explicitly setting
+  # cfg$clustering$steps$hierarchical$enabled: true AND
+  # cfg$clustering$rna_force_hierarchical: true in the YAML.
+  if (!isTRUE(cl$rna_force_hierarchical %||% FALSE)) {
+    flags$hierarchical <- FALSE
+  }
   message(sprintf(
     "[rnaseq clustering] Flags: hierarchical=%s, partition=%s, binary=%s",
     flags$hierarchical, flags$partition, flags$binary_patterns
   ))
   
   # ---- build annotation_col for heatmaps using effects ----
-  # build_heatmap_annotation_col returns column name(s); pheatmap needs a
-  # data.frame keyed by sample ID. Convert here so downstream heatmap calls
-  # (partition, binary) can pass this through unchanged.
-  annot_col_names <- build_heatmap_annotation_col(pre$meta, cfg)
-  annot_col <- NULL
-  if (!is.null(annot_col_names) && length(annot_col_names) > 0) {
-    sample_col <- cfg$effects$samples
-    if (!is.null(sample_col) && sample_col %in% colnames(pre$meta)) {
-      annot_col <- pre$meta[, annot_col_names, drop = FALSE]
-      rownames(annot_col) <- as.character(pre$meta[[sample_col]])
-    }
-  }
+  # build_heatmap_annotation_col() now returns a data.frame keyed by sample
+  # ID (or NULL), ready to pass straight to pheatmap.
+  annot_col <- build_heatmap_annotation_col(pre$meta, cfg)
+  if (!is.null(annot_col) && !is.data.frame(annot_col)) annot_col <- NULL
   
   # Rebuild summary_df to identify DE features
   summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, cfg$de), 

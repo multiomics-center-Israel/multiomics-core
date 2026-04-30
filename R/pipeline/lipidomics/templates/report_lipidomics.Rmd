@@ -254,6 +254,13 @@ render_commentary <- function(figure_id) {
 # ---------------------------------------------------------------------------
 cfg      <- params$config
 lipid_cfg <- cfg$modes$lipidomics
+
+# Section visibility flags (default-off for MA + p-value distribution after
+# Apr 2026 reviewer feedback; toggle on via report_sections in config).
+.lip_rs        <- lipid_cfg$report_sections %||% list()
+.lip_de_subs   <- .lip_rs$de %||% list()
+show_de_ma_lip       <- isTRUE(.lip_de_subs$ma %||% FALSE)
+show_de_pvalhist_lip <- isTRUE(.lip_de_subs$pval_hist %||% FALSE)
 ```
 
 ```{r force-dependencies, include=FALSE}
@@ -509,49 +516,71 @@ make_dt(module_status, "Module Status", pageLength = 10)
 
 ## PCA {.tabset}
 
-### Static
+```{r qc-pca-helpers-lip, include=FALSE}
+.pick_pca_key_lip <- function(plots, axes_prefix, subset = c("with_qc", "no_qc")) {
+  subset <- match.arg(subset)
+  keys <- grep(paste0("^", axes_prefix), names(plots), value = TRUE)
+  if (subset == "no_qc") keys <- keys[grepl("_noQC$", keys)]
+  else                   keys <- keys[!grepl("_noQC$", keys)]
+  if (length(keys) == 0) NA_character_ else keys[1]
+}
+
+.pca_has_noqc_lip <- any(grepl("_noQC$", names(qc_res$plots %||% list())))
+.pca_subsets_lip <- if (.pca_has_noqc_lip) {
+  list(list(tab = "With QC samples",    sub = "with_qc"),
+       list(tab = "Without QC samples", sub = "no_qc"))
+} else {
+  list(list(tab = "All samples", sub = "with_qc"))
+}
+```
+
+### Static {.tabset}
 
 ```{r qc-pca, fig.width=9, fig.height=7, results='asis'}
 if (!is.null(qc_res$plots)) {
-  # Find the primary PCA plot (no _noQC, no extra color suffix)
-  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
-  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
-  if (!is.na(pca_main)) {
-    safe_print_plot(qc_res$plots[[pca_main]])
-    figure_legend("Principal Component Analysis (PCA) of normalized lipidomics data, showing sample separation along PC1 and PC2. Each point represents one sample, colored by experimental group.")
-    render_commentary("pca_plot")
-  }
-
-  pca13_keys <- grep("^pca_1_3", names(qc_res$plots), value = TRUE)
-  pca13_main <- pca13_keys[!grepl("_noQC$", pca13_keys)][1]
-  if (!is.na(pca13_main)) {
-    safe_print_plot(qc_res$plots[[pca13_main]])
-    figure_legend("PCA projection onto PC1 vs PC3, capturing additional variance beyond the first two components.")
-    render_commentary("pca_plot_13")
+  for (sub in .pca_subsets_lip) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      safe_print_plot(qc_res$plots[[pca_main]])
+      figure_legend(sprintf(
+        "PCA of normalized lipidomics data (PC1 vs PC2) — %s. Each point represents one sample, colored by experimental group.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_plot", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
+    pca13_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      safe_print_plot(qc_res$plots[[pca13_main]])
+      figure_legend(sprintf(
+        "PCA projection onto PC1 vs PC3 — %s. Captures additional variance beyond the first two components.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_plot_13", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
   }
 }
 ```
 
-### With Sample Names
+### With Sample Names {.tabset}
 
 ```{r qc-pca-labeled, fig.width=9, fig.height=7, results='asis'}
 if (!is.null(qc_res$plots)) {
-  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
-  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
-  if (!is.na(pca_main)) {
-    p <- qc_res$plots[[pca_main]]
-    if ("sample" %in% colnames(p$data)) {
-      p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
-      safe_print_plot(p_lab)
+  for (sub in .pca_subsets_lip) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      p <- qc_res$plots[[pca_main]]
+      if ("sample" %in% colnames(p$data)) {
+        p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p_lab)
+      }
     }
-  }
-  pca13_keys <- grep("^pca_1_3", names(qc_res$plots), value = TRUE)
-  pca13_main <- pca13_keys[!grepl("_noQC$", pca13_keys)][1]
-  if (!is.na(pca13_main)) {
-    p13 <- qc_res$plots[[pca13_main]]
-    if ("sample" %in% colnames(p13$data)) {
-      p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
-      safe_print_plot(p13_lab)
+    pca13_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      p13 <- qc_res$plots[[pca13_main]]
+      if ("sample" %in% colnames(p13$data)) {
+        p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p13_lab)
+      }
     }
   }
 }
@@ -649,25 +678,47 @@ if (!is.null(qc_res$plots)) {
 }
 ```
 
-## Heatmaps
+## Heatmaps {.tabset}
 
 ```{r qc-heatmaps, out.width="100%", results='asis'}
+# Distance heatmap only (correlation heatmap intentionally omitted from the
+# report after Apr 2026 reviewer feedback — pipeline still writes it to disk).
+# Tabs split by sample subset when QC samples exist.
 if (!is.null(qc_res$files)) {
-  # Find heatmap PNGs from file list
-  dist_hits <- qc_res$files[grepl("sample_distance_heatmap\\.png$", basename(qc_res$files), ignore.case = TRUE)]
-  dist_hits <- dist_hits[file.exists(dist_hits)]
-  if (length(dist_hits) > 0) {
-    cat(sprintf("![Sample Distance Heatmap](%s){width=100%%}\n\n", dist_hits[1]))
-    figure_legend("Sample distance heatmap based on Euclidean distances between normalized lipid profiles. Darker colors indicate more similar samples.")
-    render_commentary("sample_distance")
+  fnames <- basename(qc_res$files)
+  dist_with <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap.png"]
+  dist_no   <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap_noQC.png"]
+
+  hm_subsets <- list()
+  if (length(dist_with) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = if (length(dist_no) > 0) "With QC samples" else "All samples",
+      path = dist_with[1],
+      cid  = "sample_distance"
+    )
+  }
+  if (length(dist_no) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = "Without QC samples",
+      path = dist_no[1],
+      cid  = "sample_distance_noQC"
+    )
   }
 
-  cor_hits <- qc_res$files[grepl("sample_correlation_heatmap\\.png$", basename(qc_res$files), ignore.case = TRUE)]
-  cor_hits <- cor_hits[file.exists(cor_hits)]
-  if (length(cor_hits) > 0) {
-    cat(sprintf("\n![Sample Correlation Heatmap](%s){width=100%%}\n\n", cor_hits[1]))
-    figure_legend("Pearson correlation heatmap across all samples. High within-group correlation (warm colors) indicates good replicate consistency.")
-    render_commentary("sample_correlation")
+  if (length(hm_subsets) == 0) {
+    cat("*No sample distance heatmap available.*\n\n")
+  } else {
+    for (sub in hm_subsets) {
+      cat(sprintf("\n### %s\n\n", sub$tab))
+      cat(sprintf("![Sample Distance Heatmap -- %s](%s){width=100%%}\n\n",
+                  sub$tab, sub$path))
+      figure_legend(sprintf(
+        "Sample distance heatmap based on Euclidean distances between normalized lipid profiles (%s). Darker colors indicate more similar samples.",
+        tolower(sub$tab)))
+      render_commentary(sub$cid)
+    }
   }
 }
 ```
@@ -880,15 +931,47 @@ if (!is.null(de_contrasts)) {
     # ================================================================
     cat("\n## Volcano: ", ctr, " {.tabset}\n\n", sep = "")
 
-    # -- Static Volcano --
-    vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"), basename(de_res$files))]
-    vol_png <- vol_png[file.exists(vol_png)]
-    if (length(vol_png) > 0) {
-      cat("### Static\n\n")
-      cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
-      figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a lipid; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
+    # -- Static Volcano (sub-tabbed by p-value type) --
+    # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
+    default_ptype_lip <- "pval"
+    vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
+                                       basename(de_res$files))]
+    vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
+                                       basename(de_res$files))]
+    vol_padj_png <- vol_padj_png[file.exists(vol_padj_png)]
+    vol_pval_png <- vol_pval_png[file.exists(vol_pval_png)]
+
+    if (length(vol_padj_png) > 0 || length(vol_pval_png) > 0) {
+      cat("### Static {.tabset}\n\n")
+      order_ptypes <- if (default_ptype_lip == "padj") c("padj", "pval") else c("pval", "padj")
+      for (pt in order_ptypes) {
+        png_path <- if (pt == "padj") vol_padj_png else vol_pval_png
+        tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+        if (length(png_path) > 0) {
+          cat(sprintf("#### %s\n\n", tab_label))
+          cat(sprintf("\n![Volcano: %s -- %s](%s){width=100%%}\n\n",
+                      ctr, tab_label, png_path[1]))
+          figure_legend(paste0(
+            "Volcano plot for contrast ", ctr,
+            " (y-axis: -log10 ",
+            if (pt == "padj") "adjusted P-value" else "raw P-value", "). ",
+            "Coloured points exceed both fold-change and significance thresholds."
+          ))
+        }
+      }
       render_commentary(paste0("volcano_", ctr_label))
       cat("\n\n")
+    } else {
+      vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"),
+                                    basename(de_res$files))]
+      vol_png <- vol_png[file.exists(vol_png)]
+      if (length(vol_png) > 0) {
+        cat("### Static\n\n")
+        cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
+        figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a lipid; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
+        render_commentary(paste0("volcano_", ctr_label))
+        cat("\n\n")
+      }
     }
 
     # -- Interactive Volcano (matching proteomics pattern) --
@@ -1073,11 +1156,12 @@ if (!is.null(de_contrasts)) {
     }
 
     # ================================================================
-    # MA PLOT
+    # MA PLOT  (default-off after Apr 2026 reviewer feedback;
+    #           toggle via report_sections$de$ma: true to restore)
     # ================================================================
     ma_png <- de_res$files[grepl(paste0("MA_", ctr_label, "\\.png$"), basename(de_res$files))]
     ma_png <- ma_png[file.exists(ma_png)]
-    if (length(ma_png) > 0) {
+    if (show_de_ma_lip && length(ma_png) > 0) {
       cat("\n## MA Plot: ", ctr, " {.tabset}\n\n", sep = "")
 
       cat("### Static\n\n")
@@ -1268,11 +1352,12 @@ if (!is.null(de_contrasts)) {
     }
 
     # ================================================================
-    # P-VALUE DISTRIBUTION
+    # P-VALUE DISTRIBUTION  (default-off after Apr 2026 reviewer feedback;
+    #                        toggle via report_sections$de$pval_hist: true)
     # ================================================================
     phist_png <- de_res$files[grepl(paste0("pvalue_hist_", ctr_label, "\\.png$"), basename(de_res$files))]
     phist_png <- phist_png[file.exists(phist_png)]
-    if (length(phist_png) > 0) {
+    if (show_de_pvalhist_lip && length(phist_png) > 0) {
       cat("\n## P-value Distribution: ", ctr, "\n\n", sep = "")
       cat(sprintf("\n![P-value Distribution: %s](%s){width=85%%}\n\n", ctr, phist_png[1]))
       figure_legend(paste0("Distribution of raw p-values for contrast ", ctr, ". A uniform distribution suggests no differential signal; enrichment near zero indicates true positives."))
@@ -1748,6 +1833,20 @@ if (!is.null(class_res$plots$class_absolute)) {
 ```
 
 ## Chain Saturation
+
+Lipids are grouped by the number of carbon-carbon double bonds (DB) in their fatty acyl chains:
+
+- **SFA — Saturated Fatty Acids (0 DB):** no double bonds; chains pack tightly, increasing membrane rigidity and contributing to lipid storage.
+- **MUFA — Monounsaturated Fatty Acids (1 DB):** a single double bond introduces a kink that increases membrane fluidity; common in dietary oils (e.g. oleic acid).
+- **PUFA — Polyunsaturated Fatty Acids (2+ DB):** multiple double bonds further increase fluidity and serve as precursors for signaling lipids (eicosanoids, resolvins). Includes essential omega-3 and omega-6 fatty acids.
+
+**Biological interpretation of shifts between groups:**
+
+| Category | ↑ Increase typically reflects | ↓ Decrease typically reflects |
+|----------|-------------------------------|-------------------------------|
+| **SFA**  | Greater membrane rigidity; active de novo lipogenesis; pro-inflammatory signaling (e.g. palmitate → TLR4); commonly seen with high-fat diet, lipotoxicity, insulin resistance. | Increased membrane fluidity; reduced lipogenic flux; generally a metabolically healthier profile. |
+| **MUFA** | Elevated SCD1 (Δ9-desaturase) activity converting SFA → MUFA; adaptive / cytoprotective response to lipid stress; oleic-acid-rich (Mediterranean-style) diets; anti-inflammatory tendency. | Reduced desaturation capacity; possible accumulation of toxic SFA species. |
+| **PUFA** | Larger pool of essential fatty acids and signaling-lipid precursors (eicosanoids, resolvins); higher membrane fluidity; ω-3-driven shifts often anti-inflammatory; greater susceptibility to lipid peroxidation. | Reduced essential FA availability or dietary deficiency; smaller signaling-lipid pool; reduced membrane fluidity; possible oxidative losses. |
 
 ```{r class-chain-saturation, fig.width=10, fig.height=7, results='asis'}
 if (!is.null(class_res$plots$chain_saturation)) {

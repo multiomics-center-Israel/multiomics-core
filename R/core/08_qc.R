@@ -193,26 +193,80 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
 
-  plt <- plotly::plot_ly(
-    data = scores,
-    x = ~PC1,
-    y = ~PC2,
-    z = ~PC3,
-    type = "scatter3d",
-    mode = "markers",
-    color = if (!is.null(color_col)) scores[[color_col]] else NULL,
-    symbol = if (!is.null(shape_col) && shape_col %in% colnames(scores)) scores[[shape_col]] else NULL,
-    text = hover_text,
-    hoverinfo = "text"
-  )|>
-    plotly::layout(
+  has_shape <- !is.null(shape_col) && shape_col %in% colnames(scores)
+
+  if (has_shape) {
+    # Dual-legend layout: build the color trace, then add a second set of
+    # invisible-marker traces purely to populate a separate "Shape" legend.
+    # This works in any plotly.js version (no reliance on multi-legend feature).
+    plt <- plotly::plot_ly(
+      data = scores,
+      x = ~PC1,
+      y = ~PC2,
+      z = ~PC3,
+      type = "scatter3d",
+      mode = "markers",
+      color = scores[[color_col]],
+      symbol = scores[[shape_col]],
+      text = hover_text,
+      hoverinfo = "text",
+      legendgroup = ~scores[[color_col]],
+      legendgrouptitle = list(text = paste0("<b>", color_col, "</b>"))
+    )
+
+    # Append shape-only legend entries (markers off-screen, but legend visible)
+    shape_levels <- unique(scores[[shape_col]])
+    plotly_symbols <- c("circle", "square", "diamond", "cross", "x",
+                        "circle-open", "square-open", "diamond-open")
+    for (i in seq_along(shape_levels)) {
+      plt <- plotly::add_trace(
+        plt,
+        x = NA, y = NA, z = NA,
+        type = "scatter3d", mode = "markers",
+        marker = list(
+          size = 8, color = "grey40",
+          symbol = plotly_symbols[((i - 1) %% length(plotly_symbols)) + 1]
+        ),
+        name = as.character(shape_levels[i]),
+        legendgroup = paste0("__shape_", shape_levels[i]),
+        legendgrouptitle = list(text = paste0("<b>", shape_col, "</b>")),
+        showlegend = TRUE,
+        hoverinfo = "skip",
+        inherit = FALSE
+      )
+    }
+
+    plt <- plotly::layout(
+      plt,
       scene = list(
         xaxis = list(title = pc_labels[1]),
         yaxis = list(title = pc_labels[2]),
         zaxis = list(title = pc_labels[3])
       ),
-      title = "3D PCA: PC1 vs PC2 vs PC3"
+      title = "3D PCA: PC1 vs PC2 vs PC3",
+      legend = list(groupclick = "togglegroup", tracegroupgap = 12)
     )
+  } else {
+    plt <- plotly::plot_ly(
+      data = scores,
+      x = ~PC1,
+      y = ~PC2,
+      z = ~PC3,
+      type = "scatter3d",
+      mode = "markers",
+      color = if (!is.null(color_col)) scores[[color_col]] else NULL,
+      text = hover_text,
+      hoverinfo = "text"
+    ) |>
+      plotly::layout(
+        scene = list(
+          xaxis = list(title = pc_labels[1]),
+          yaxis = list(title = pc_labels[2]),
+          zaxis = list(title = pc_labels[3])
+        ),
+        title = "3D PCA: PC1 vs PC2 vs PC3"
+      )
+  }
 
   if (!is.null(out_file)) {
     # Check if pandoc is available for self-contained HTML

@@ -182,6 +182,13 @@ render_commentary <- function(figure_id) {
 cfg <- yaml::read_yaml(config_path)
 rna_cfg <- cfg$modes$rna
 
+# Section visibility flags (default-off for MA + p-value distribution after
+# Apr 2026 reviewer feedback; toggle on via report_sections in config).
+.rna_rs        <- rna_cfg$report_sections %||% list()
+.rna_de_subs   <- .rna_rs$de %||% list()
+show_de_ma_rna       <- isTRUE(.rna_de_subs$ma %||% FALSE)
+show_de_pvalhist_rna <- isTRUE(.rna_de_subs$pval_hist %||% FALSE)
+
 # Load DE data (used in multiple sections)
 final_results_file <- file.path(datasets_dir, "final_results.tsv")
 de_data <- NULL
@@ -1023,22 +1030,32 @@ if (file.exists(pca3d_file)) {
 }
 ```
 
-## Sample Similarity {.tabset}
+## Sample Similarity
 
-Pairwise sample correlation and distance metrics assess overall reproducibility within and between experimental groups. High within-group correlation and clear between-group separation indicate good data quality and a detectable biological signal.
+Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal.
 
-### Correlation Heatmap
+```{r corr-heatmap-config, include=FALSE}
+# Correlation heatmap dropped from report after Apr 2026 reviewer feedback
+# (still produced in the pipeline). Override with
+# `report_sections.qc.correlation_heatmap: true`.
+.rna_qc_subs <- .rna_rs$qc %||% list()
+show_corr_heatmap_rna <- isTRUE(.rna_qc_subs$correlation_heatmap %||% FALSE)
+```
 
-```{r corr-heatmap, fig.cap="Sample-to-sample correlation heatmap"}
+```{r corr-heatmap-heading, eval=show_corr_heatmap_rna, results='asis'}
+cat("### Correlation Heatmap\n\n")
+```
+
+```{r corr-heatmap, eval=show_corr_heatmap_rna, fig.cap="Sample-to-sample correlation heatmap"}
 p <- file.path(diag_dir, "sample_correlation_heatmap.png")
 if (file.exists(p)) knitr::include_graphics(p)
 ```
 
-```{r legend-corr-heatmap, results='asis', echo=FALSE}
+```{r legend-corr-heatmap, eval=show_corr_heatmap_rna, results='asis', echo=FALSE}
 figure_legend("Pairwise Pearson correlation heatmap of normalized expression profiles. Higher correlation values (warmer colors) indicate greater transcriptomic similarity between samples. Within-group correlations should be higher than between-group correlations.")
 ```
 
-```{r commentary-correlation, results='asis'}
+```{r commentary-correlation, eval=show_corr_heatmap_rna, results='asis'}
 render_commentary("sample_correlation")
 ```
 
@@ -1415,23 +1432,55 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     list(widget = widget, plot_df = reg_df, ycap = ycap_v)
 }
 
-volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
-contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
+# Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
+# Fall back to legacy single-file scheme if the pipeline has not regenerated yet.
+volcano_padj_files <- list.files(qc_post_dir, pattern = "^volcano_.*_padj\\.png$",
+                                  full.names = TRUE)
+if (length(volcano_padj_files) > 0) {
+    contrast_names <- gsub("^volcano_|_padj\\.png$", "", basename(volcano_padj_files))
+    volcano_files  <- volcano_padj_files
+} else {
+    volcano_files  <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$",
+                                  full.names = TRUE)
+    contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
+}
 ```
 
 ### Static {.tabset}
 
 ```{r volcano-static, results='asis'}
 padj_cut_vol <- rna_cfg$de$p_cutoff %||% 0.05
-lfc_cut_vol <- rna_cfg$de$linear_fc_cutoff %||% 1.5
-if (length(volcano_files) > 0) {
-    for (i in seq_along(volcano_files)) {
-        vf <- volcano_files[i]
-        cn <- contrast_names[i]
+lfc_cut_vol  <- rna_cfg$de$linear_fc_cutoff %||% 1.5
+default_ptype_rna <- "padj"  # matches cutoff_panel_html(default_ptype = "padj")
+if (length(contrast_names) > 0) {
+    for (cn in contrast_names) {
         contrast_clean <- gsub("_", " ", cn)
-        cat(sprintf("\n#### %s\n\n", contrast_clean))
-        cat(sprintf("![Volcano — %s](%s)\n\n", contrast_clean, vf))
-        figure_legend(sprintf("Volcano plot for the %s contrast. Each point represents a gene; the x-axis shows log2 fold change and the y-axis shows -log10 adjusted p-value. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s). Dashed lines indicate significance thresholds.", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        vf_padj <- file.path(qc_post_dir, sprintf("volcano_%s_padj.png", cn))
+        vf_pval <- file.path(qc_post_dir, sprintf("volcano_%s_pval.png", cn))
+        vf_legacy <- file.path(qc_post_dir, sprintf("volcano_%s.png", cn))
+
+        cat(sprintf("\n#### %s {.tabset}\n\n", contrast_clean))
+
+        if (file.exists(vf_padj) || file.exists(vf_pval)) {
+            order_ptypes <- if (default_ptype_rna == "padj") c("padj", "pval") else c("pval", "padj")
+            for (pt in order_ptypes) {
+                tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+                vf <- if (pt == "padj") vf_padj else vf_pval
+                if (file.exists(vf)) {
+                    cat(sprintf("\n##### %s\n\n", tab_label))
+                    cat(sprintf("![Volcano -- %s -- %s](%s)\n\n",
+                                contrast_clean, tab_label, vf))
+                    figure_legend(sprintf(
+                        "Volcano plot for the %s contrast (y-axis: -log10 %s). Red: significantly up-regulated; blue: significantly down-regulated (cutoff p &le; %s, |FC| &ge; %s).",
+                        contrast_clean,
+                        if (pt == "padj") "adjusted P-value" else "raw P-value",
+                        padj_cut_vol, lfc_cut_vol))
+                }
+            }
+        } else if (file.exists(vf_legacy)) {
+            cat(sprintf("![Volcano -- %s](%s)\n\n", contrast_clean, vf_legacy))
+            figure_legend(sprintf("Volcano plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s).", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        }
         render_commentary(paste0("volcano_", cn))
     }
 } else {
@@ -1664,13 +1713,13 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
-## MA Plots {.tabset}
+```{r ma-section-heading, eval=show_de_ma_rna, results='asis'}
+cat("## MA Plots {.tabset}\n\n")
+cat("MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.\n\n")
+cat("### Static {.tabset}\n\n")
+```
 
-MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.
-
-### Static {.tabset}
-
-```{r ma-plots-static, results='asis'}
+```{r ma-plots-static, eval=show_de_ma_rna, results='asis'}
 ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
 if (length(ma_files) > 0) {
     for (mf in ma_files) {
@@ -1686,11 +1735,12 @@ if (length(ma_files) > 0) {
 }
 ```
 
-### Interactive {.tabset}
+```{r ma-interactive-heading, eval=show_de_ma_rna, results='asis'}
+cat("### Interactive {.tabset}\n\n")
+cat("Enter gene names to highlight them on the plot (comma-separated).\n\n")
+```
 
-Enter gene names to highlight them on the plot (comma-separated).
-
-```{r ma-interactive-setup, include=FALSE}
+```{r ma-interactive-setup, eval=show_de_ma_rna, include=FALSE}
 # Function to create interactive MA plot with gene highlighting
 make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
     lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", contrast), names(df), value = TRUE)[1]
@@ -1766,7 +1816,7 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
 }
 ```
 
-```{r ma-interactive, results='asis', fig.height=6}
+```{r ma-interactive, eval=show_de_ma_rna, results='asis', fig.height=6}
 if (!is.null(de_data) && length(contrast_names) > 0) {
     for (i in seq_along(contrast_names)) {
         cn <- contrast_names[i]
@@ -2656,6 +2706,83 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 ```
 
 ---
+
+```{r clustering-discover-rna, include=FALSE}
+# ---- Discover clustering outputs on disk for RNA-seq ----
+# Hierarchical is intentionally excluded for RNA-seq (per Apr 2026 reviewer
+# guidance — too dense to be informative on whole-transcriptome DE lists).
+clustering_root_rna <- file.path(run_dir, "rna", "Clustering")
+part_root_rna  <- file.path(clustering_root_rna, "Partition_clustering")
+binary_dir_rna <- file.path(clustering_root_rna, "Binary_patterns")
+
+part_subdirs_rna <- if (dir.exists(part_root_rna)) {
+  list.dirs(part_root_rna, recursive = FALSE)
+} else character(0)
+part_subdir_rna <- if (length(part_subdirs_rna) > 0) part_subdirs_rna[1] else NA_character_
+part_hm_rna     <- if (!is.na(part_subdir_rna)) file.path(part_subdir_rna, "Partition_clustering_heatmap.png") else NA_character_
+
+part_profile_pngs_rna <- if (!is.na(part_subdir_rna) && dir.exists(part_subdir_rna)) {
+  list.files(part_subdir_rna, pattern = "^cluster_profiles_cluster[0-9]+\\.png$",
+             full.names = TRUE)
+} else character(0)
+if (length(part_profile_pngs_rna) > 0) {
+  ord <- order(as.integer(sub(".*cluster([0-9]+)\\.png$", "\\1",
+                              basename(part_profile_pngs_rna))))
+  part_profile_pngs_rna <- part_profile_pngs_rna[ord]
+}
+
+binary_pngs_rna <- if (dir.exists(binary_dir_rna)) {
+  list.files(binary_dir_rna, pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+} else character(0)
+
+clustering_enabled_rna <- isTRUE(rna_cfg$clustering$enabled)
+has_part_rna   <- !is.na(part_hm_rna) && file.exists(part_hm_rna)
+has_binary_rna <- length(binary_pngs_rna) > 0
+clustering_show_rna <- clustering_enabled_rna && (has_part_rna || has_binary_rna)
+```
+
+```{r clustering-header-rna, eval=clustering_show_rna, results='asis'}
+cat("# Clustering {.tabset}\n\n")
+cat("Clustering was performed on the differentially expressed genes. Each method below answers a different question:\n\n")
+cat("- **Partition** — splits genes into clusters with similar expression trajectories across groups.\n")
+cat("- **Binary patterns** — assigns each gene to an on/off (1/0) pattern across groups based on correlation.\n\n")
+cat("*Hierarchical clustering is omitted for RNA-seq — DE gene lists are typically too large for the dendrogram to be readable.*\n\n")
+```
+
+```{r clustering-partition-rna, eval=clustering_show_rna && has_part_rna, results='asis'}
+cat("## Partition {.tabset}\n\n")
+cat("### Heatmap\n\n")
+cat(sprintf("![Partition clustering heatmap](%s){width=100%%}\n\n", part_hm_rna))
+figure_legend("Partition clustering heatmap. Rows are grouped by cluster (gaps separate clusters); within-cluster ordering follows the feature similarity.")
+
+if (length(part_profile_pngs_rna) > 0) {
+  cat("\n### Cluster Profiles {.tabset}\n\n")
+  for (pf in part_profile_pngs_rna) {
+    k <- sub(".*cluster([0-9]+)\\.png$", "\\1", basename(pf))
+    cat(sprintf("\n#### Cluster %s\n\n", k))
+    cat(sprintf("![Cluster %s expression profile](%s){width=80%%}\n\n", k, pf))
+    figure_legend(sprintf(
+      "Mean (±SE) expression profile across experimental groups for genes in cluster %s.", k))
+  }
+}
+render_commentary("clustering_partition")
+```
+
+```{r clustering-binary-rna, eval=clustering_show_rna && has_binary_rna, results='asis'}
+cat("## Binary Patterns {.tabset}\n\n")
+for (bf in binary_pngs_rna) {
+  pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+  cat(sprintf("\n### Pattern %s\n\n", pat))
+  cat(sprintf("![Binary pattern %s](%s){width=100%%}\n\n", pat, bf))
+  figure_legend(sprintf(
+    "Heatmap of genes assigned to binary on/off pattern '%s' across experimental groups.", pat))
+}
+render_commentary("clustering_binary")
+```
+
+```{r clustering-divider-rna, eval=clustering_show_rna, results='asis'}
+cat("\n---\n\n")
+```
 
 # Cell Type Deconvolution
 

@@ -504,6 +504,20 @@ if (!is.null(class_res$plots$class_absolute)) {
 
 ## Chain Saturation
 
+Lipids are grouped by the number of carbon-carbon double bonds (DB) in their fatty acyl chains:
+
+- **SFA — Saturated Fatty Acids (0 DB):** no double bonds; chains pack tightly, increasing membrane rigidity and contributing to lipid storage.
+- **MUFA — Monounsaturated Fatty Acids (1 DB):** a single double bond introduces a kink that increases membrane fluidity; common in dietary oils (e.g. oleic acid).
+- **PUFA — Polyunsaturated Fatty Acids (2+ DB):** multiple double bonds further increase fluidity and serve as precursors for signaling lipids (eicosanoids, resolvins). Includes essential omega-3 and omega-6 fatty acids.
+
+**Biological interpretation of shifts between groups:**
+
+| Category | ↑ Increase typically reflects | ↓ Decrease typically reflects |
+|----------|-------------------------------|-------------------------------|
+| **SFA**  | Greater membrane rigidity; active de novo lipogenesis; pro-inflammatory signaling (e.g. palmitate → TLR4); commonly seen with high-fat diet, lipotoxicity, insulin resistance. | Increased membrane fluidity; reduced lipogenic flux; generally a metabolically healthier profile. |
+| **MUFA** | Elevated SCD1 (Δ9-desaturase) activity converting SFA → MUFA; adaptive / cytoprotective response to lipid stress; oleic-acid-rich (Mediterranean-style) diets; anti-inflammatory tendency. | Reduced desaturation capacity; possible accumulation of toxic SFA species. |
+| **PUFA** | Larger pool of essential fatty acids and signaling-lipid precursors (eicosanoids, resolvins); higher membrane fluidity; ω-3-driven shifts often anti-inflammatory; greater susceptibility to lipid peroxidation. | Reduced essential FA availability or dietary deficiency; smaller signaling-lipid pool; reduced membrane fluidity; possible oxidative losses. |
+
 ```{r chain-sat, fig.width=8, fig.height=6, results='asis'}
 if (!is.null(class_res$plots$chain_saturation)) {
   safe_print_plot(class_res$plots$chain_saturation)

@@ -193,9 +193,15 @@ show_qc_boxplots <- qc_subs$boxplots
 show_qc_heatmaps <- qc_subs$heatmaps
 
 # DE sub-keys
-de_subs <- resolve_section(rs$de, list(volcano = TRUE, tables = TRUE, explorer = TRUE))
+# `ma` and `pval_hist` default OFF (Apr 2026 reviewer feedback — keep volcano only).
+de_subs <- resolve_section(
+  rs$de,
+  list(volcano = TRUE, ma = FALSE, pval_hist = FALSE, tables = TRUE, explorer = TRUE)
+)
 show_de          <- any(unlist(de_subs))
 show_de_volcano  <- de_subs$volcano
+show_de_ma       <- de_subs$ma
+show_de_pvalhist <- de_subs$pval_hist
 show_de_tables   <- de_subs$tables
 show_de_explorer <- de_subs$explorer
 
@@ -587,49 +593,77 @@ make_dt(module_status, "Module Status", pageLength = 10)
 
 ## PCA {.tabset}
 
-### Static
-
-```{r qc-pca, fig.width=9, fig.height=7, results='asis'}
-if (!is.null(qc_res$plots)) {
-  # Find the primary PCA plot (no _noQC, no extra color suffix)
-  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
-  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
-  if (!is.na(pca_main)) {
-    safe_print_plot(qc_res$plots[[pca_main]])
-    figure_legend("Principal Component Analysis (PCA) of normalized metabolomics data, showing sample separation along PC1 and PC2. Each point represents one sample, colored by experimental group.")
-    render_commentary("pca_pc1_vs_pc2")
+```{r qc-pca-helpers, include=FALSE}
+# Helper: pick the primary PCA key for a given subset (with-QC vs without-QC)
+.pick_pca_key <- function(plots, axes_prefix, subset = c("with_qc", "no_qc")) {
+  subset <- match.arg(subset)
+  keys <- grep(paste0("^", axes_prefix), names(plots), value = TRUE)
+  if (subset == "no_qc") {
+    keys <- keys[grepl("_noQC$", keys)]
+  } else {
+    keys <- keys[!grepl("_noQC$", keys)]
   }
+  if (length(keys) == 0) NA_character_ else keys[1]
+}
 
-  pca13_keys <- grep("^pca_1_3", names(qc_res$plots), value = TRUE)
-  pca13_main <- pca13_keys[!grepl("_noQC$", pca13_keys)][1]
-  if (!is.na(pca13_main)) {
-    safe_print_plot(qc_res$plots[[pca13_main]])
-    figure_legend("PCA projection onto PC1 vs PC3, capturing additional variance beyond the first two components.")
-    render_commentary("pca_pc1_vs_pc3")
+# Decide which subsets to expose as tabs: only show "without QC" if the
+# pipeline produced _noQC plots (i.e. QC samples actually exist).
+.pca_has_noqc <- any(grepl("_noQC$", names(qc_res$plots %||% list())))
+.pca_subsets <- if (.pca_has_noqc) {
+  list(list(tab = "With QC samples",    sub = "with_qc"),
+       list(tab = "Without QC samples", sub = "no_qc"))
+} else {
+  list(list(tab = "All samples", sub = "with_qc"))
+}
+```
+
+### Static {.tabset}
+
+```{r qc-pca-static, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(qc_res$plots)) {
+  for (sub in .pca_subsets) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      safe_print_plot(qc_res$plots[[pca_main]])
+      figure_legend(sprintf(
+        "PCA of normalized metabolomics data (PC1 vs PC2) — %s. Each point represents one sample, colored by experimental group.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_pc1_vs_pc2", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
+    pca13_main <- .pick_pca_key(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      safe_print_plot(qc_res$plots[[pca13_main]])
+      figure_legend(sprintf(
+        "PCA projection onto PC1 vs PC3 — %s. Captures additional variance beyond the first two components.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_pc1_vs_pc3", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
   }
 }
 ```
 
-### With Sample Names
+### With Sample Names {.tabset}
 
 ```{r qc-pca-labeled, fig.width=9, fig.height=7, results='asis'}
 if (!is.null(qc_res$plots)) {
-  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
-  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
-  if (!is.na(pca_main)) {
-    p <- qc_res$plots[[pca_main]]
-    if ("sample" %in% colnames(p$data)) {
-      p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
-      safe_print_plot(p_lab)
+  for (sub in .pca_subsets) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      p <- qc_res$plots[[pca_main]]
+      if ("sample" %in% colnames(p$data)) {
+        p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p_lab)
+      }
     }
-  }
-  pca13_keys <- grep("^pca_1_3", names(qc_res$plots), value = TRUE)
-  pca13_main <- pca13_keys[!grepl("_noQC$", pca13_keys)][1]
-  if (!is.na(pca13_main)) {
-    p13 <- qc_res$plots[[pca13_main]]
-    if ("sample" %in% colnames(p13$data)) {
-      p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
-      safe_print_plot(p13_lab)
+    pca13_main <- .pick_pca_key(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      p13 <- qc_res$plots[[pca13_main]]
+      if ("sample" %in% colnames(p13$data)) {
+        p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p13_lab)
+      }
     }
   }
 }
@@ -739,25 +773,47 @@ if (!is.null(qc_res$plots)) {
 
 `r if (!show_qc_heatmaps) "<!--"`
 
-## Heatmaps
+## Heatmaps {.tabset}
 
 ```{r qc-heatmaps, out.width="100%", results='asis'}
+# Distance heatmap only (correlation heatmap intentionally omitted from the
+# report after Apr 2026 reviewer feedback — pipeline still writes it to disk).
+# Tabs split by sample subset when QC samples exist.
 if (!is.null(qc_res$files)) {
-  # Find heatmap PNGs from file list
-  dist_hits <- qc_res$files[grepl("sample_distance_heatmap\\.png$", basename(qc_res$files), ignore.case = TRUE)]
-  dist_hits <- dist_hits[file.exists(dist_hits)]
-  if (length(dist_hits) > 0) {
-    cat(sprintf("![Sample Distance Heatmap](%s){width=100%%}\n\n", dist_hits[1]))
-    figure_legend("Sample distance heatmap based on Euclidean distances between normalized metabolite profiles. Darker colors indicate more similar samples.")
-    render_commentary("sample_distance_heatmap")
+  fnames <- basename(qc_res$files)
+  dist_with <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap.png"]
+  dist_no   <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap_noQC.png"]
+
+  hm_subsets <- list()
+  if (length(dist_with) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = if (length(dist_no) > 0) "With QC samples" else "All samples",
+      path = dist_with[1],
+      cid  = "sample_distance_heatmap"
+    )
+  }
+  if (length(dist_no) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = "Without QC samples",
+      path = dist_no[1],
+      cid  = "sample_distance_heatmap_noQC"
+    )
   }
 
-  cor_hits <- qc_res$files[grepl("sample_correlation_heatmap\\.png$", basename(qc_res$files), ignore.case = TRUE)]
-  cor_hits <- cor_hits[file.exists(cor_hits)]
-  if (length(cor_hits) > 0) {
-    cat(sprintf("\n![Sample Correlation Heatmap](%s){width=100%%}\n\n", cor_hits[1]))
-    figure_legend("Pearson correlation heatmap across all samples. High within-group correlation (warm colors) indicates good replicate consistency.")
-    render_commentary("sample_correlation_heatmap")
+  if (length(hm_subsets) == 0) {
+    cat("*No sample distance heatmap available.*\n\n")
+  } else {
+    for (sub in hm_subsets) {
+      cat(sprintf("\n### %s\n\n", sub$tab))
+      cat(sprintf("![Sample Distance Heatmap -- %s](%s){width=100%%}\n\n",
+                  sub$tab, sub$path))
+      figure_legend(sprintf(
+        "Sample distance heatmap based on Euclidean distances between normalized metabolite profiles (%s). Darker colors indicate more similar samples.",
+        tolower(sub$tab)))
+      render_commentary(sub$cid)
+    }
   }
 }
 ```
@@ -883,15 +939,48 @@ if (!is.null(de_contrasts)) {
     if (show_de_volcano) {
     cat("\n## Volcano: ", ctr, " {.tabset}\n\n", sep = "")
 
-    # -- Static Volcano --
-    vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"), basename(de_res$files))]
-    vol_png <- vol_png[file.exists(vol_png)]
-    if (length(vol_png) > 0) {
-      cat("### Static\n\n")
-      cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
-      figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a metabolite; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
+    # -- Static Volcano (sub-tabbed by p-value type) --
+    # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
+    default_ptype_metab <- "pval"
+    vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
+                                       basename(de_res$files))]
+    vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
+                                       basename(de_res$files))]
+    vol_padj_png <- vol_padj_png[file.exists(vol_padj_png)]
+    vol_pval_png <- vol_pval_png[file.exists(vol_pval_png)]
+
+    if (length(vol_padj_png) > 0 || length(vol_pval_png) > 0) {
+      cat("### Static {.tabset}\n\n")
+      order_ptypes <- if (default_ptype_metab == "padj") c("padj", "pval") else c("pval", "padj")
+      for (pt in order_ptypes) {
+        png_path <- if (pt == "padj") vol_padj_png else vol_pval_png
+        tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+        if (length(png_path) > 0) {
+          cat(sprintf("#### %s\n\n", tab_label))
+          cat(sprintf("\n![Volcano: %s -- %s](%s){width=100%%}\n\n",
+                      ctr, tab_label, png_path[1]))
+          figure_legend(paste0(
+            "Volcano plot for contrast ", ctr,
+            " (y-axis: -log10 ",
+            if (pt == "padj") "adjusted P-value" else "raw P-value", "). ",
+            "Each point is a metabolite; coloured points exceed both fold-change and significance thresholds."
+          ))
+        }
+      }
       render_commentary(paste0("volcano_", ctr_label))
       cat("\n\n")
+    } else {
+      # Backwards-compat: legacy single volcano file
+      vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"),
+                                    basename(de_res$files))]
+      vol_png <- vol_png[file.exists(vol_png)]
+      if (length(vol_png) > 0) {
+        cat("### Static\n\n")
+        cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
+        figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a metabolite; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
+        render_commentary(paste0("volcano_", ctr_label))
+        cat("\n\n")
+      }
     }
 
     # -- Interactive Volcano --
@@ -1064,9 +1153,10 @@ if (!is.null(de_contrasts)) {
     } # end show_de_volcano
 
     # ================================================================
-    # MA PLOT
+    # MA PLOT  (default-off after Apr 2026 reviewer feedback; toggle via
+    #           report_sections$de$ma: true to restore)
     # ================================================================
-    if (show_de_volcano) {
+    if (show_de_ma) {
     ma_png <- de_res$files[grepl(paste0("MA_", ctr_label, "\\.png$"), basename(de_res$files))]
     ma_png <- ma_png[file.exists(ma_png)]
     if (length(ma_png) > 0) {
@@ -1199,12 +1289,13 @@ if (!is.null(de_contrasts)) {
       }
     }
 
-    } # end show_de_volcano (MA)
+    } # end show_de_ma
 
     # ================================================================
-    # P-VALUE DISTRIBUTION
+    # P-VALUE DISTRIBUTION  (default-off after Apr 2026 reviewer feedback;
+    #                        toggle via report_sections$de$pval_hist: true)
     # ================================================================
-    if (show_de_volcano) {
+    if (show_de_pvalhist) {
     phist_png <- de_res$files[grepl(paste0("pvalue_hist_", ctr_label, "\\.png$"), basename(de_res$files))]
     phist_png <- phist_png[file.exists(phist_png)]
     if (length(phist_png) > 0) {
@@ -1214,7 +1305,7 @@ if (!is.null(de_contrasts)) {
       cat("\n\n")
     }
 
-    } # end show_de_volcano (p-hist)
+    } # end show_de_pvalhist
 
     # ================================================================
     # DE RESULTS TABLE (statistics + normalized intensity)
@@ -1651,6 +1742,93 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
 `r if (is.null(de_res) || is.null(de_res$summary_df) || !show_de_heatmaps) "-->"`
 
 ---
+
+```{r clustering-discover, include=FALSE}
+# ---- Discover clustering outputs on disk for metabolomics ----
+clustering_root_metab <- file.path(dirname(knitr::current_input(dir = TRUE)),
+                                   "metabolomics", "Clustering")
+hier_dir_m   <- file.path(clustering_root_metab, "Hierarchical")
+part_root_m  <- file.path(clustering_root_metab, "Partition_clustering")
+binary_dir_m <- file.path(clustering_root_metab, "Binary_patterns")
+
+hier_hm_m <- file.path(hier_dir_m, "Hierarchical_DE_heatmap.png")
+
+part_subdirs_m <- if (dir.exists(part_root_m)) {
+  list.dirs(part_root_m, recursive = FALSE)
+} else character(0)
+part_subdir_m <- if (length(part_subdirs_m) > 0) part_subdirs_m[1] else NA_character_
+part_hm_m     <- if (!is.na(part_subdir_m)) file.path(part_subdir_m, "Partition_clustering_heatmap.png") else NA_character_
+
+part_profile_pngs_m <- if (!is.na(part_subdir_m) && dir.exists(part_subdir_m)) {
+  list.files(part_subdir_m, pattern = "^cluster_profiles_cluster[0-9]+\\.png$",
+             full.names = TRUE)
+} else character(0)
+if (length(part_profile_pngs_m) > 0) {
+  ord <- order(as.integer(sub(".*cluster([0-9]+)\\.png$", "\\1",
+                              basename(part_profile_pngs_m))))
+  part_profile_pngs_m <- part_profile_pngs_m[ord]
+}
+
+binary_pngs_m <- if (dir.exists(binary_dir_m)) {
+  list.files(binary_dir_m, pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+} else character(0)
+
+clustering_enabled_m <- isTRUE(metab_cfg$clustering$enabled)
+has_hier_m   <- file.exists(hier_hm_m)
+has_part_m   <- !is.na(part_hm_m) && file.exists(part_hm_m)
+has_binary_m <- length(binary_pngs_m) > 0
+clustering_show_m <- clustering_enabled_m && (has_hier_m || has_part_m || has_binary_m)
+```
+
+```{r clustering-header-m, eval=clustering_show_m, results='asis'}
+cat("# Clustering {.tabset}\n\n")
+cat("Clustering was performed on the differentially expressed metabolites. Each method below answers a different question:\n\n")
+cat("- **Hierarchical** — bottom-up tree built from feature-by-feature distances; reveals nested groupings.\n")
+cat("- **Partition** — splits features into a chosen number of clusters with similar trajectories across groups.\n")
+cat("- **Binary patterns** — assigns each feature to an on/off (1/0) pattern across groups based on correlation.\n\n")
+```
+
+```{r clustering-hier-m, eval=clustering_show_m && has_hier_m, results='asis'}
+cat("## Hierarchical\n\n")
+cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm_m))
+figure_legend("Hierarchical clustering heatmap of differentially expressed metabolites (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+render_commentary("clustering_hierarchical")
+```
+
+```{r clustering-partition-m, eval=clustering_show_m && has_part_m, results='asis'}
+cat("## Partition {.tabset}\n\n")
+cat("### Heatmap\n\n")
+cat(sprintf("![Partition clustering heatmap](%s){width=100%%}\n\n", part_hm_m))
+figure_legend("Partition clustering heatmap. Rows are grouped by cluster (gaps separate clusters); within-cluster ordering follows the feature similarity.")
+
+if (length(part_profile_pngs_m) > 0) {
+  cat("\n### Cluster Profiles {.tabset}\n\n")
+  for (pf in part_profile_pngs_m) {
+    k <- sub(".*cluster([0-9]+)\\.png$", "\\1", basename(pf))
+    cat(sprintf("\n#### Cluster %s\n\n", k))
+    cat(sprintf("![Cluster %s expression profile](%s){width=80%%}\n\n", k, pf))
+    figure_legend(sprintf(
+      "Mean (±SE) expression profile across experimental groups for metabolites in cluster %s.", k))
+  }
+}
+render_commentary("clustering_partition")
+```
+
+```{r clustering-binary-m, eval=clustering_show_m && has_binary_m, results='asis'}
+cat("## Binary Patterns {.tabset}\n\n")
+for (bf in binary_pngs_m) {
+  pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+  cat(sprintf("\n### Pattern %s\n\n", pat))
+  cat(sprintf("![Binary pattern %s](%s){width=100%%}\n\n", pat, bf))
+  figure_legend(sprintf(
+    "Heatmap of metabolites assigned to binary on/off pattern '%s' across experimental groups.", pat))
+}
+render_commentary("clustering_binary")
+```
+
+```{r clustering-divider-m, eval=clustering_show_m, results='asis'}
+cat("\n---\n\n")
+```
 
 `r if ((is.null(rf_res) && is.null(plsda_res)) || !show_feature_selection) "<!--"`
 

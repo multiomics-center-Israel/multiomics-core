@@ -484,12 +484,15 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
     mat_sub <- expr_mat[valid_feats, , drop = FALSE]
     f_hm <- file.path(out_dir, sprintf("Partition_clustering_heatmap_cluster%d.png", ci))
 
+    # pheatmap's row clustering needs >= 2 features; disable it for singletons.
+    cluster_rows_sub <- nrow(mat_sub) >= 2
+
     p <- plot_heatmap_core(
       expr_mat       = mat_sub,
       annotation_col = annotation_col,
       title          = sprintf("Partition Cluster %d (%d features)", ci, length(valid_feats)),
       scale_rows     = TRUE,
-      cluster_rows   = TRUE,
+      cluster_rows   = cluster_rows_sub,
       cluster_cols   = FALSE,
       max_rows       = NULL,
       ...
@@ -512,10 +515,13 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
 #' @param cfg Config list (sections de$p_cutoff, de$logfc_cutoff or de$linear_fc_cutoff)
 #' @param title Plot title
+#' @param pvalue_type Character; "padj" (default, use adj.P.Val) or "pval" (use raw P.Value).
+#'   When "padj" is requested but adj.P.Val is absent, falls back to raw P.Value.
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
   stopifnot(is.data.frame(de_tbl))
+  pvalue_type <- match.arg(pvalue_type, c("padj", "pval"))
 
   # Required columns
   req_cols <- c("logFC", "P.Value")
@@ -538,8 +544,8 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   # Prepare plotting data
   df$.logFC <- as.numeric(df[["logFC"]])
 
-  # Y-axis: use adjusted p-value when available, fall back to raw P.Value
-  p_col_vol <- if ("adj.P.Val" %in% colnames(df)) "adj.P.Val" else "P.Value"
+  # Y-axis: respect pvalue_type, fall back to raw P.Value when adj.P.Val absent
+  p_col_vol <- if (pvalue_type == "padj" && "adj.P.Val" %in% colnames(df)) "adj.P.Val" else "P.Value"
   df$.pval <- as.numeric(df[[p_col_vol]])
   df$.pval_plot <- ifelse(is.na(df$.pval), 1, df$.pval)
   df$.neglog10p <- -log10(pmax(df$.pval_plot, 1e-300))

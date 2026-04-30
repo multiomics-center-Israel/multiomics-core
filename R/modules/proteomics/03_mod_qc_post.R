@@ -50,18 +50,30 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
         de_tbl <- tables[[cn]]
         if (is.null(de_tbl)) next
 
-        # Volcano
+        # Volcano — emit one variant per p-value type so the report can show both
         if (do_volcano) {
-            p_volcano <- plot_volcano(de_tbl,
-                cfg = cfg,
-                title = paste0("Volcano: ", cn, " (", de_source, ")"),
-                use_adj = TRUE
-            )
-            f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, de_source))
-            ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
-
-            plots[[paste0("volcano_", cn)]] <- p_volcano
-            files <- c(files, f_volcano)
+            for (ptype in c("padj", "pval")) {
+                p_volcano <- plot_volcano(de_tbl,
+                    cfg = cfg,
+                    title = paste0("Volcano: ", cn, " (", de_source,
+                                   ", ", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                    pvalue_type = ptype
+                )
+                f_volcano <- file.path(out_qc_post,
+                                       sprintf("volcano_%s_%s_%s.png", cn, de_source, ptype))
+                ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
+                plots[[paste0("volcano_", cn, "_", ptype)]] <- p_volcano
+                files <- c(files, f_volcano)
+            }
+            # Backwards-compat alias for downstream consumers (Excel exporter etc.)
+            f_volcano_legacy <- file.path(out_qc_post,
+                                          sprintf("volcano_%s_%s.png", cn, de_source))
+            f_volcano_padj   <- file.path(out_qc_post,
+                                          sprintf("volcano_%s_%s_padj.png", cn, de_source))
+            if (file.exists(f_volcano_padj) && !file.exists(f_volcano_legacy)) {
+                file.copy(f_volcano_padj, f_volcano_legacy, overwrite = TRUE)
+                files <- c(files, f_volcano_legacy)
+            }
         }
 
         # MA

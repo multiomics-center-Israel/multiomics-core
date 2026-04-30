@@ -63,17 +63,28 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
             message(sprintf("[QC_post] Note: Contrast '%s' has low significance (min adj.P.Val > 0.05). Volcano might look flat.", cn))
         }
 
-        # Passing use_adj=TRUE implies core looks for adj.P.Val
-        p_volcano <- plot_volcano(
-            de_tbl,
-            cfg = cfg,
-            title = paste0("Volcano: ", cn),
-            use_adj = TRUE
-        )
-        f_volcano <- file.path(out_qc_post, sprintf("volcano_%s.png", cn))
-        ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
-        files <- c(files, f_volcano)
-        plots[[paste0("volcano_", cn)]] <- p_volcano
+        # Emit one volcano per p-value type (padj + raw pval)
+        for (ptype in c("padj", "pval")) {
+            p_volcano <- plot_volcano(
+                de_tbl,
+                cfg = cfg,
+                title = paste0("Volcano: ", cn,
+                               " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                pvalue_type = ptype
+            )
+            f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, ptype))
+            ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
+            files <- c(files, f_volcano)
+            plots[[paste0("volcano_", cn, "_", ptype)]] <- p_volcano
+        }
+        # Backwards-compat alias
+        f_legacy <- file.path(out_qc_post, sprintf("volcano_%s.png", cn))
+        f_padj   <- file.path(out_qc_post, sprintf("volcano_%s_padj.png", cn))
+        if (file.exists(f_padj) && !file.exists(f_legacy)) {
+            file.copy(f_padj, f_legacy, overwrite = TRUE)
+            files <- c(files, f_legacy)
+            plots[[paste0("volcano_", cn)]] <- plots[[paste0("volcano_", cn, "_padj")]]
+        }
 
         # --- MA Plot ---
         # Requires 'A' / 'AveExpr'. Our Shim ensures this exists.

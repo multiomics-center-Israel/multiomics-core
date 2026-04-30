@@ -683,27 +683,47 @@ save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir)
 
 #' Build heatmap column annotation from config effects
 #'
-#' Returns a character vector of metadata column names to use for heatmap
-#' column annotations, or NULL if none configured.
+#' Returns a data.frame keyed by sample ID (rownames = sample IDs) ready to
+#' pass directly to \code{pheatmap(annotation_col = ...)}, or NULL if no
+#' suitable columns are configured.  Pass \code{as_names = TRUE} to get the
+#' raw character vector of column names instead (legacy behaviour).
 #'
 #' @param meta data.frame of sample metadata
 #' @param cfg  Mode config (e.g. \code{config$modes$rna})
-#' @return Character vector of column names, or NULL
+#' @param as_names If TRUE return character vector of column names; default
+#'   FALSE returns the data.frame.
+#' @return data.frame, character vector, or NULL
 #' @export
-build_heatmap_annotation_col <- function(meta, cfg) {
+build_heatmap_annotation_col <- function(meta, cfg, as_names = FALSE) {
     # Explicit heatmap annotations from config
     annot_cols <- cfg$effects$heatmap_annotations
     if (!is.null(annot_cols)) {
         annot_cols <- intersect(unlist(annot_cols), colnames(meta))
-        if (length(annot_cols) > 0) return(annot_cols)
+    } else {
+        annot_cols <- character(0)
     }
-    # Default: use the group/color column
-    group_col <- cfg$effects$color %||% cfg$effects$group %||%
-                 cfg$clustering$group_col %||% NULL
-    if (!is.null(group_col) && group_col %in% colnames(meta)) {
-        return(group_col)
+
+    # Default: fall back to the group/color column
+    if (length(annot_cols) == 0) {
+        group_col <- cfg$effects$color %||% cfg$effects$group %||%
+                     cfg$clustering$group_col %||% NULL
+        if (!is.null(group_col) && group_col %in% colnames(meta)) {
+            annot_cols <- group_col
+        }
     }
-    NULL
+
+    if (length(annot_cols) == 0) return(NULL)
+    if (isTRUE(as_names)) return(annot_cols)
+
+    sample_col <- cfg$effects$samples
+    if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
+        # Cannot build keyed data.frame; return names so caller can fall back
+        return(annot_cols)
+    }
+
+    df <- as.data.frame(meta[, annot_cols, drop = FALSE])
+    rownames(df) <- as.character(meta[[sample_col]])
+    df
 }
 
 
@@ -748,15 +768,16 @@ clustering_run_flags <- function(pre, cfg) {
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE
   steps <- cl$steps %||% list()
 
+  # As of Apr 2026 reviewer feedback: when clustering is enabled, all three
+  # methods default ON (callers may opt-out per step via config or override
+  # `hierarchical = FALSE` at the call site for RNA-seq).
   hier_enabled <- isTRUE(steps$hierarchical$enabled %||% TRUE)
-  part_enabled <- isTRUE(steps$partition$enabled %||% FALSE)
+  part_enabled <- isTRUE(steps$partition$enabled %||% TRUE)
 
-  # Task 5: Binary clustering conditional on group_col
-  # If group_col is NULL/missing, don't perform binary clustering
   bin_cfg <- steps$binary_patterns %||% list()
-  bin_enabled <- isTRUE(bin_cfg$enabled %||% FALSE)
+  bin_enabled <- isTRUE(bin_cfg$enabled %||% TRUE)
   bin_group_col <- cl$group_col
-  # Only enable if both enabled flag is TRUE AND group_col is provided (non-NULL)
+  # Binary still requires a group_col to be defined
   bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
 
   # guards for data suitability
