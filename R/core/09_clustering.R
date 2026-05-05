@@ -724,14 +724,11 @@ choose_k_silhouette <- function(mat_fg, algorithm = c("pam", "kmeans"), k_max = 
   best_k
 }
 
-# Single source of truth for the gene x gene distance used by every
-# hclust-based path in this pipeline. Ward.D2 is mathematically defined for
-# Euclidean distances (variance-minimization interpretation), so we pair them
-# here and reuse the helper from both the main hclust branch and clusGap().
 build_clustering_distance <- function(mat) {
-  stats::dist(mat, method = "euclidean")
+  cmat <- stats::cor(t(mat), method = "pearson")
+  cmat[is.na(cmat)] <- 0
+  stats::as.dist(1 - cmat)
 }
-
 #' Choose k by gap statistic
 #'
 #' Uses cluster::clusGap() with hclust (Euclidean distance + Ward.D2) to find

@@ -205,11 +205,12 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       }
 
       expr_work <- normalize_counts(
-          counts      = norm_input,
-          meta        = meta2,
-          method      = cfg$normalization$method %||% "TMMlogCPM",
-          prior.count = as.numeric(cfg$normalization$prior.count %||% 1),
-          sample_col  = sample_col
+          counts            = norm_input,
+          meta              = meta2,
+          method            = cfg$normalization$method %||% "TMMlogCPM",
+          prior.count       = as.numeric(cfg$normalization$prior.count %||% 1),
+          sample_col        = sample_col,
+          filter_zero_count = cfg$de$filter_zero_count
       )
   }
 

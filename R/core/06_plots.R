@@ -200,6 +200,27 @@ plot_heatmap_core <- function(expr_mat,
                               ...) { # ... allows passing extra pheatmap args
 
   if (!requireNamespace("pheatmap", quietly = TRUE)) stop("Need pheatmap")
+  
+  expr_mat <- as.matrix(expr_mat)
+  
+  # 0. Defensive filter: drop zero-variance rows when they would break
+  # clustering (NaN distances) or row-scaling (division by zero SD).
+  # This is purely a visualization safeguard — the upstream matrix is
+  # not modified.
+  if (isTRUE(cluster_rows) || isTRUE(scale_rows)) {
+    row_vars <- apply(expr_mat, 1, stats::var, na.rm = TRUE)
+    keep <- !is.na(row_vars) & row_vars > 0
+    n_dropped <- sum(!keep)
+    if (n_dropped > 0) {
+      message(sprintf(
+        "[heatmap] dropped %d zero-variance rows for visualization", n_dropped
+      ))
+      expr_mat <- expr_mat[keep, , drop = FALSE]
+    }
+    if (nrow(expr_mat) < 2) {
+      stop("Heatmap: <2 features remain after removing zero-variance rows")
+    }
+  }
 
   # 1. Subsampling if too large (Optimization)
   if (!is.null(max_rows) && nrow(expr_mat) > max_rows) {
