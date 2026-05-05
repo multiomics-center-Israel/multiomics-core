@@ -979,6 +979,25 @@ compute_cluster_gaps <- function(clusters_ordered) {
   cumsum(rl$lengths[-length(rl$lengths)])
 }
 
+#' Compute column gap positions from a sample annotation column
+#'
+#' Reads a group label per sample from \code{annot_col} (preserving the
+#' existing column order — no reordering) and returns the cumulative
+#' positions where pheatmap should draw vertical gaps between contiguous
+#' group blocks.
+#'
+#' @param annot_col data.frame of column annotations (rownames = sample IDs).
+#' @param group_col Optional name of the group column in \code{annot_col};
+#'   defaults to the first column (per \code{build_heatmap_annotation_col}
+#'   convention).
+#' @return Integer vector of gap positions (empty if only one block).
+compute_column_gaps_by_group <- function(annot_col, group_col = NULL) {
+  if (is.null(group_col)) group_col <- colnames(annot_col)[1]
+  groups <- as.character(annot_col[, group_col])
+  group_int <- as.integer(factor(groups, levels = unique(groups)))
+  compute_cluster_gaps(group_int)
+}
+
 #' Write cluster data in exact legacy format
 #' Columns: Name (Sample), Group, Exp (Absolute Expression)
 #' Summary File Columns: Cluster, Group, Mean, SE, Mean_SE.y, Mean_SE.ymin, Mean_SE.ymax
@@ -1245,4 +1264,257 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
   }
 
   annot_df
+}
+
+# ---- Module-level step orchestrators -------------------------------------
+#
+# The three `.run_*_step` helpers are the shared step bodies used by
+# mod_rnaseq_clustering / mod_metabolomics_clustering / mod_proteomics_clustering.
+# They take prepared inputs (expression matrix, DE feature ids, annotation
+# context, etc.) and run a single clustering step end-to-end: clustering call,
+# heatmap render, table writes, profile outputs. Per-omic differences live in
+# the calling module (input prep + which optional fields the caller attaches
+# to its return list).
+
+#' Run the Hierarchical clustering step (shared across omics modules)
+#'
+#' Writes Hierarchical_DE_heatmap.png and (when k is set) Hierarchical_clusters.tsv
+#' under \code{out_dir}. The caller is responsible for attaching the returned
+#' fields to its module-level scaffolds (plots, objects, excel_order).
+#'
+#' @param expr_mat features x samples expression matrix (already coerced).
+#' @param meta sample metadata data.frame.
+#' @param de_features character vector of DE feature ids.
+#' @param cfg mode config (uses cfg$clustering$steps$hierarchical).
+#' @param annot_col column annotation data.frame (for the pheatmap payload).
+#' @param annot_context list passed to wrap_clustering_heatmap as
+#'   \code{annotation_row_context}.
+#' @param out_dir destination directory for this step's outputs.
+#' @return list(files, plot, payload, clusters, excel_order, table_df)
+.run_hierarchical_step <- function(expr_mat, meta, de_features, cfg,
+                                   annot_col, annot_context, out_dir) {
+  ensure_dir(out_dir)
+  hcfg <- cfg$clustering$steps$hierarchical %||% list()
+
+  hc_res <- run_clustering(
+    expr_mat    = expr_mat,
+    col_data    = meta,
+    de_features = de_features,
+    config      = list(
+      method   = "hierarchical",
+      distance = hcfg$distance %||% "euclidean",
+      linkage  = hcfg$linkage  %||% "complete",
+      k        = hcfg$k %||% NULL
+    )
+  )
+
+  mat_de <- expr_mat[intersect(de_features, rownames(expr_mat)), , drop = FALSE]
+  z_de   <- zscore_rows(mat_de)
+  colnames(z_de) <- paste0(colnames(z_de), ".zscore")
+
+  ordered_row_ids <- intersect(hc_res$ordering, rownames(z_de))
+  z_de_ordered    <- z_de[ordered_row_ids, , drop = FALSE]
+
+  excel_order <- list(
+    ordered_ids        = hc_res$ordering,
+    zscore_mat         = z_de,
+    partition_clusters = NULL,
+    partition_k        = NULL,
+    binary_best        = NULL
+  )
+
+  f_hm <- file.path(out_dir, "Hierarchical_DE_heatmap.png")
+  p_cluster <- wrap_clustering_heatmap(
+    expr_mat               = expr_mat,
+    meta                   = meta,
+    cfg                    = cfg,
+    feature_ids            = de_features,
+    ordering               = hc_res$ordering,
+    annotation_row_builder = TRUE,
+    annotation_row_context = annot_context,
+    out_file               = f_hm,
+    cluster_cols           = FALSE,
+    title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
+  )
+  written <- f_hm
+
+  payload <- list(
+    pheatmap       = p_cluster,
+    mat            = z_de_ordered,
+    row_order      = rownames(z_de_ordered),
+    col_order      = colnames(z_de_ordered),
+    annotation_col = annot_col,
+    feature_ids    = de_features,
+    is_zscored     = TRUE,
+    cluster_cols   = FALSE,
+    tree_row       = hc_res$details
+  )
+
+  table_df <- NULL
+  clusters <- NULL
+  if (!is.null(hc_res$clusters)) {
+    f_tbl    <- file.path(out_dir, "Hierarchical_clusters.tsv")
+    table_df <- build_clustering_output_table(hc_res$clusters, f_tbl)
+    written  <- c(written, f_tbl)
+    clusters <- hc_res$clusters
+  }
+
+  list(
+    files       = written,
+    plot        = p_cluster,
+    payload     = payload,
+    clusters    = clusters,
+    excel_order = excel_order,
+    table_df    = table_df
+  )
+}
+
+#' Run the Partition clustering step (shared across omics modules)
+#'
+#' Fits partition clusters via \code{perform_partition_clustering_effects},
+#' writes the partition heatmap, per-cluster heatmaps, profile outputs and
+#' legacy profile exports under \code{out_dir/Partition_clustering_<k>_clusters}.
+#' Column order in the heatmap is preserved from \code{annot_col} — only
+#' \code{gaps_col} is computed from the existing group blocks.
+#'
+#' @param expr_mat features x samples expression matrix (already coerced).
+#' @param meta sample metadata data.frame.
+#' @param de_features character vector of DE feature ids.
+#' @param cfg mode config.
+#' @param annot_col column annotation data.frame.
+#' @param out_dir parent directory (e.g. \code{<clustering>/Partition_clustering}).
+#' @return list(files, plots, table_df, clusters, k)
+.run_partition_step <- function(expr_mat, meta, de_features, cfg,
+                                annot_col, out_dir) {
+  ensure_dir(out_dir)
+
+  part_res <- perform_partition_clustering_effects(
+    expr_mat    = expr_mat,
+    meta        = meta,
+    cfg         = cfg,
+    de_features = de_features
+  )
+
+  part_dir <- file.path(out_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
+  ensure_dir(part_dir)
+
+  written <- character(0)
+  plots   <- list()
+
+  # (1) clusters table
+  f_tbl    <- file.path(part_dir, "partition_clusters.tsv")
+  table_df <- build_clustering_output_table(part_res$clusters, f_tbl)
+  written  <- c(written, f_tbl)
+
+  # (2) heatmap (no column reorder; gaps_col from existing meta order)
+  feats       <- names(part_res$clusters)
+  valid_feats <- intersect(feats, rownames(expr_mat))
+  mat_ord     <- expr_mat[valid_feats, ][order(part_res$clusters[valid_feats], valid_feats), ]
+  clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+
+  annot_row <- data.frame(
+    Cluster   = factor(paste0("C", clusters_ordered)),
+    row.names = rownames(mat_ord)
+  )
+
+  gaps_col <- compute_column_gaps_by_group(annot_col)
+
+  f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
+  p_part <- plot_heatmap_core(
+    expr_mat       = mat_ord,
+    annotation_col = annot_col,
+    annotation_row = annot_row,
+    title          = sprintf("Partition clustering (k=%d)", part_res$k),
+    scale_rows     = TRUE,
+    cluster_rows   = FALSE,
+    cluster_cols   = FALSE,
+    max_rows       = NULL,
+    gaps_row       = compute_cluster_gaps(clusters_ordered),
+    gaps_col       = gaps_col
+  )
+  plots$partition_heatmap <- p_part
+  save_heatmap_to_file(p_part, f_hm)
+  written <- c(written, f_hm)
+
+  # (2b) per-cluster heatmaps
+  per_clust_hm_files <- save_per_cluster_heatmaps(
+    expr_mat       = expr_mat,
+    clusters       = part_res$clusters,
+    annotation_col = annot_col,
+    out_dir        = part_dir
+  )
+  written <- c(written, per_clust_hm_files)
+
+  # (3) per-cluster profile PNGs + multi-panel grid PDF
+  prof_out <- save_cluster_profile_outputs(
+    expr_mat = expr_mat,
+    meta     = meta,
+    clusters = part_res$clusters,
+    cfg      = cfg,
+    out_dir  = part_dir
+  )
+  written <- c(written, prof_out$files)
+  plots$cluster_profiles <- prof_out$plots
+
+  # (4) legacy per-cluster data exports
+  legacy_files <- write_clustering_legacy_profiles(
+    expr_mat = expr_mat,
+    meta     = meta,
+    clusters = part_res$clusters,
+    cfg      = cfg,
+    out_dir  = part_dir
+  )
+  written <- c(written, legacy_files)
+
+  list(
+    files    = written,
+    plots    = plots,
+    table_df = table_df,
+    clusters = part_res$clusters,
+    k        = part_res$k
+  )
+}
+
+#' Run the Binary patterns step (shared across omics modules)
+#'
+#' Thin orchestrator that resolves the per-step config, ensures the output
+#' directory and forwards to \code{run_binary_patterns}. \code{expr_mat_counts}
+#' is supplied by the caller (RNA: counts matrix; metab/prot: NULL).
+#'
+#' @param expr_mat_corr log/normalised expression matrix used for correlations.
+#' @param expr_mat_counts counts matrix for gating (NULL to disable).
+#' @param meta sample metadata.
+#' @param de_features character vector of DE feature ids.
+#' @param summary_df DE summary data.frame.
+#' @param cfg mode config.
+#' @param annot_context list of summary_df + cutoffs + id_col for row annotations.
+#' @param out_dir destination directory for binary-pattern outputs.
+#' @return list(files, plots, patterns, patterns_list, binary_best)
+.run_binary_patterns_step <- function(expr_mat_corr, expr_mat_counts, meta,
+                                      de_features, summary_df, cfg,
+                                      annot_context, out_dir) {
+  ensure_dir(out_dir)
+  bcfg <- cfg$clustering$steps$binary_patterns %||% list()
+
+  bp_res <- run_binary_patterns(
+    expr_mat_corr      = expr_mat_corr,
+    expr_mat_counts    = expr_mat_counts,
+    meta               = meta,
+    cfg                = cfg,
+    de_features        = de_features,
+    out_dir            = out_dir,
+    summary_df         = summary_df,
+    corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
+    counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
+    counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+    annot_context      = annot_context
+  )
+
+  list(
+    files         = bp_res$files %||% character(0),
+    plots         = bp_res$plots %||% list(),
+    patterns      = bp_res$best %||% NULL,
+    patterns_list = bp_res$bp_pat %||% NULL,
+    binary_best   = bp_res$best %||% NULL
+  )
 }
