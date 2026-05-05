@@ -195,36 +195,48 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
         clusters_tbl <- build_clustering_output_table(part_res$clusters, f_tbl)
         written <- c(written, f_tbl)
         plots$pt_tbl <- clusters_tbl
-
-        # Heatmap
+        
+        # heatmap
         feats <- names(part_res$clusters)
-        mat <- expr_mat[feats, , drop = FALSE]
-        ord <- order(part_res$clusters, names(part_res$clusters))
-        mat_ord <- mat[ord, , drop = FALSE]
-
+        valid_feats <- intersect(feats, rownames(expr_mat))
+        
+        mat_ord <- expr_mat[valid_feats, ][order(part_res$clusters[valid_feats], valid_feats), ]
+        
         clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+        
         annot_row <- data.frame(
-            Cluster = factor(paste0("C", clusters_ordered)),
-            row.names = rownames(mat_ord)
+          Cluster = factor(paste0("C", clusters_ordered)),
+          row.names = rownames(mat_ord)
         )
+        
+        # === Sort columns by experimental group, compute column gaps ===
+        # Group is identified by the first column of annot_col (per convention from
+        # build_heatmap_annotation_col). Adjust if your convention differs.
+        group_col_name <- colnames(annot_col)[1]
 
+        # Re-order columns by group so gaps are between contiguous blocks
+        sample_groups_ord  <- as.character(annot_col[, group_col_name])
+        
+        # Convert to integer with order-of-appearance levels (so cumsum-based gaps
+        # match the actual column blocks)
+        group_int <- as.integer(factor(sample_groups_ord, levels = unique(sample_groups_ord)))
+        gaps_col  <- compute_cluster_gaps(group_int)
+        
         f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
-
         p_part <- plot_heatmap_core(
-            expr_mat       = mat_ord,
-            annotation_col = annot_col,
-            annotation_row = annot_row,
-            title = sprintf("Partition clustering (k=%d) on DE features (n=%d)",
-                            part_res$k, nrow(mat_ord)),
-            scale_rows   = TRUE,
-            cluster_rows = FALSE,
-            cluster_cols = FALSE,
-            max_rows     = NULL,
-            gaps_row     = compute_cluster_gaps(clusters_ordered)
+          expr_mat       = mat_ord,
+          annotation_row = annot_row,
+          annotation_col = annot_col,
+          title          = sprintf("Partition clustering (k=%d)", part_res$k),
+          scale_rows     = TRUE,
+          cluster_rows   = FALSE,
+          cluster_cols   = FALSE,
+          max_rows       = NULL,
+          gaps_row       = compute_cluster_gaps(clusters_ordered),
+          gaps_col       = gaps_col
         )
-
-        save_heatmap_to_file(p_part, f_hm)
         plots$partition_heatmap <- p_part
+        save_heatmap_to_file(p_part, f_hm)
         written <- c(written, f_hm)
 
         # Per-cluster heatmaps
