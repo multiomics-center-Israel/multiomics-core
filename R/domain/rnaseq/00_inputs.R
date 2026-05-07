@@ -48,6 +48,7 @@ validate_rna_inputs <- function(inputs, cfg) {
         if (!sample_col %in% names(meta)) {
             stop("metadata missing sample column: ", sample_col)
         }
+        assert_design_viable(meta, cfg)
         return(invisible(TRUE))
     }
 
@@ -82,6 +83,8 @@ validate_rna_inputs <- function(inputs, cfg) {
             paste(missing_in_counts, collapse = ", ")
         )
     }
+
+    assert_design_viable(meta, cfg)
 
     invisible(TRUE)
 }

@@ -173,6 +173,15 @@ validate_count_matrix <- function(counts) {
 
     counts_mat <- as.matrix(counts)
 
+    if (anyNA(counts_mat)) {
+        stop(
+            "[counts] Count matrix contains NA values. Raw counts must be non-negative integers; ",
+            "NAs typically indicate a normalized matrix was routed to the raw-counts path. ",
+            "Use the tximport or preprocessed_counts input instead.",
+            call. = FALSE
+        )
+    }
+
     # Check for negative values
     if (any(counts_mat < 0, na.rm = TRUE)) {
         stop("[counts] Count matrix contains negative values, which is invalid.", call. = FALSE)

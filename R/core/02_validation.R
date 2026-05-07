@@ -1,3 +1,7 @@
+# Error/warning prefix convention in this file (and validators called from
+# here): use [<mode>] for mode-scoped messages (e.g. [rna]) and [<scope>] for
+# cross-cutting ones (e.g. [design], [counts]). Do not use [<function_name>].
+
 #' Check that required columns exist in a data frame
 check_has_cols <- function(df, required, df_name = deparse(substitute(df))) {
     required <- unlist(required)
@@ -334,4 +338,124 @@ assert_de_expr_matrix <- function(x, context = "DE expression matrix") {
     }
 
     invisible(x)
+}
+
+#' Assert that an experimental design is statistically viable for DE.
+#'
+#' Validates group-replicate counts in the sample metadata against thresholds
+#' for differential-expression feasibility. Halts the pipeline on
+#' configurations that make DE impossible; warns on configurations that are
+#' technically runnable but statistically unreliable.
+#'
+#' Thresholds (per resolved group column):
+#' \itemize{
+#'   \item Any group with n < 2 : \code{stop()} — DE cannot be performed.
+#'   \item Group with n == 2    : \code{warning()} — severe; one composite
+#'         warning that subsumes the low-power case.
+#'   \item Group with 3 <= n < 5: \code{warning()} — low statistical power.
+#'   \item max(n) / min(n) > 5  : \code{warning()} — heavily imbalanced
+#'         design (emitted once globally, separate from per-group warnings).
+#' }
+#'
+#' @param meta Sample metadata as a \code{data.frame}.
+#' @param cfg  Mode-level config list (e.g. \code{config$modes$rna}). The
+#'   group column is resolved via \code{\link{resolve_group_col}}.
+#' @return \code{invisible(TRUE)} on viable designs. Stops with an
+#'   informative error on infeasible ones; emits at most one warning
+#'   per underpowered group, plus an optional global imbalance warning.
+#'
+#' @note If the resolved group column is absent from \code{meta}, this
+#'   function \code{stop()}s with the list of available columns. This makes
+#'   \code{assert_design_viable} the canonical gate for group-column
+#'   presence in the rnaseq path; no upstream validator currently performs
+#'   this check.
+#' @note NA values in the resolved group column also cause a \code{stop()}
+#'   — they are not silently dropped and not bucketed as a virtual NA group.
+#'   The user must assign a label or remove the offending samples upstream.
+#'
+#' @examples
+#' meta <- data.frame(sample = paste0("S", 1:6),
+#'                    Condition = rep(c("ctrl", "trt"), each = 3))
+#' cfg <- list(filtering = list(group_col = "Condition"))
+#' assert_design_viable(meta, cfg)  # invisible(TRUE) + one low-power warning
+assert_design_viable <- function(meta, cfg) {
+    if (!is.data.frame(meta)) {
+        stop("[design] meta must be a data.frame.", call. = FALSE)
+    }
+
+    group_col <- resolve_group_col(cfg)
+
+    if (!(group_col %in% names(meta))) {
+        stop(sprintf(
+            "[design] Resolved group column '%s' not found in metadata. Available columns: %s.",
+            group_col, paste(names(meta), collapse = ", ")
+        ), call. = FALSE)
+    }
+
+    grp <- as.character(meta[[group_col]])
+    na_idx <- which(is.na(grp) | !nzchar(grp))
+    if (length(na_idx) > 0) {
+        sample_col <- tryCatch(get_sample_col(cfg), error = function(e) NULL)
+        sample_ids <- if (!is.null(sample_col) && sample_col %in% names(meta)) {
+            as.character(meta[[sample_col]])[na_idx]
+        } else {
+            as.character(na_idx)
+        }
+        shown <- head(sample_ids, 10)
+        more <- length(sample_ids) - length(shown)
+        stop(sprintf(
+            "[design] Group column '%s' has NA values for %d sample(s): %s%s. Assign a group label or remove these samples from the metadata before running DE.",
+            group_col, length(sample_ids), paste(shown, collapse = ", "),
+            if (more > 0) sprintf(" ... (+%d more)", more) else ""
+        ), call. = FALSE)
+    }
+
+    group_sizes <- table(grp)
+
+    critical <- names(group_sizes)[group_sizes < 2]
+    if (length(critical) > 0) {
+        if (length(critical) == 1L) {
+            stop(sprintf(
+                "[design] Group '%s' has n=%d; differential expression requires n >= 2 per group.",
+                critical, as.integer(group_sizes[[critical]])
+            ), call. = FALSE)
+        } else {
+            details <- paste(sprintf("'%s' (n=%d)", critical, as.integer(group_sizes[critical])), collapse = ", ")
+            stop(sprintf(
+                "[design] Groups with n < 2: %s. DE cannot be performed.",
+                details
+            ), call. = FALSE)
+        }
+    }
+
+    for (g in names(group_sizes)) {
+        n <- as.integer(group_sizes[[g]])
+        if (n == 2L) {
+            warning(sprintf(
+                "[design] Group '%s' has n=2: severe — within-group variance cannot be reliably estimated; DE results will be unreliable.",
+                g
+            ), call. = FALSE)
+        } else if (n < 5L) {
+            warning(sprintf(
+                "[design] Group '%s' has n=%d: low statistical power (recommended n >= 5).",
+                g, n
+            ), call. = FALSE)
+        }
+    }
+
+    if (length(group_sizes) >= 2L) {
+        max_idx <- which.max(group_sizes)
+        min_idx <- which.min(group_sizes)
+        ratio <- as.numeric(group_sizes[[max_idx]]) / as.numeric(group_sizes[[min_idx]])
+        if (ratio > 5) {
+            warning(sprintf(
+                "[design] Group sizes imbalanced: max/min ratio = %.1f ('%s' n=%d vs '%s' n=%d). DE estimates may be biased toward the larger group.",
+                ratio,
+                names(group_sizes)[max_idx], as.integer(group_sizes[[max_idx]]),
+                names(group_sizes)[min_idx], as.integer(group_sizes[[min_idx]])
+            ), call. = FALSE)
+        }
+    }
+
+    invisible(TRUE)
 }

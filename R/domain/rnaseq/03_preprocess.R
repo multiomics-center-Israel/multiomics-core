@@ -74,6 +74,11 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     counts <- as.matrix(inputs$counts[, sample_cols, drop = FALSE])
     gene_ids <- inputs$counts[[gene_id_col]]
     if (anyDuplicated(gene_ids)) {
+      n_dup <- sum(duplicated(gene_ids))
+      warning(sprintf(
+        "[counts] Collapsed %d duplicate gene IDs via rowsum (counts summed across duplicates).",
+        n_dup
+      ), call. = FALSE)
       counts <- rowsum(counts, group = gene_ids, reorder = FALSE)
       gene_ids <- rownames(counts)
     }
