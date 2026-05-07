@@ -364,6 +364,14 @@ assert_de_expr_matrix <- function(x, context = "DE expression matrix") {
 #'   informative error on infeasible ones; emits at most one warning
 #'   per underpowered group, plus an optional global imbalance warning.
 #'
+#' @note Caller contract: \code{meta} MUST be the post-\code{apply_sample_filter}
+#'   analysis cohort — i.e. the metadata that will actually enter DE — not
+#'   the raw input metadata. Design viability is a property of the cohort
+#'   that survives filtering; calling this function on unfiltered metadata
+#'   produces false-positive failures for configs that intentionally drop
+#'   singleton or NA-labeled groups via \code{cfg$sample_filter$rules}.
+#'   Canonical call site: \code{R/domain/rnaseq/03_preprocess.R}, immediately
+#'   after the sample-filter block.
 #' @note If the resolved group column is absent from \code{meta}, this
 #'   function \code{stop()}s with the list of available columns. This makes
 #'   \code{assert_design_viable} the canonical gate for group-column

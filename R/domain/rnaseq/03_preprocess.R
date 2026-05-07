@@ -142,13 +142,19 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       )
       meta2 <- filtered$meta
       counts <- filtered$expr
-      
+
       if (!is.null(txi)) {
         txi <- subset_tximport(txi, samples = colnames(counts))
         abundance <- txi$abundance
       }
   }
-  
+
+  # Design viability gate — runs on the post-sample_filter analysis cohort.
+  # Must come AFTER apply_sample_filter so configs that intentionally drop
+  # singleton or NA-labeled groups via cfg$sample_filter$rules are not
+  # rejected for an issue the filter is about to remove.
+  assert_design_viable(meta2, cfg)
+
   # =========================================================================
   # Gene filtering
   # =========================================================================

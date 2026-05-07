@@ -132,3 +132,117 @@ test_that("assert_design_viable stops on empty-string values in the group column
                 effects   = list(samples = "sample"))
     expect_error(assert_design_viable(meta, cfg), "Assign a group label")
 })
+
+# ---------------------------------------------------------------------------
+# Integration tests: assertion fires from preprocess_rna at the post-
+# sample_filter call site. These exercise the actual call site, not the
+# pure function — a unit-level call would have passed even with the buggy
+# pre-filter placement that codex caught.
+# ---------------------------------------------------------------------------
+
+# Fixture builder. The "include_singleton" group ('outlier' n=1) is the
+# trigger for the design-viability gate; whether it survives or not depends
+# on the sample_filter config passed to preprocess_rna.
+make_rna_fixture <- function(include_singleton = TRUE) {
+    base_samples <- c(paste0("C", 1:5), paste0("T", 1:5))
+    base_cond <- c(rep("ctrl", 5), rep("trt", 5))
+    if (include_singleton) {
+        samples <- c(base_samples, "X1")
+        conditions <- c(base_cond, "outlier")
+    } else {
+        samples <- base_samples
+        conditions <- base_cond
+    }
+    n_genes <- 20
+    set.seed(42)
+    counts_mat <- matrix(rpois(n_genes * length(samples), lambda = 50),
+                         nrow = n_genes, ncol = length(samples))
+    counts_df <- data.frame(gene_id = paste0("G", seq_len(n_genes)),
+                            counts_mat, check.names = FALSE,
+                            stringsAsFactors = FALSE)
+    colnames(counts_df)[-1] <- samples
+
+    metadata <- data.frame(
+        SampleID = samples, Condition = conditions,
+        stringsAsFactors = FALSE
+    )
+    list(counts = counts_df, metadata = metadata)
+}
+
+# Config builder. filter_mode="none" short-circuits gene filtering so the
+# test reaches normalization quickly; we don't care whether normalization
+# completes — we only care whether [design] errors fire.
+make_rna_config <- function(sample_filter_enabled = FALSE,
+                            sample_filter_rules = NULL) {
+    list(
+        modes = list(
+            rna = list(
+                id_columns    = list(sample_col = "SampleID", gene_id = "gene_id"),
+                effects       = list(samples = "SampleID"),
+                filtering     = list(group_col = "Condition", mode = "none"),
+                sample_filter = list(
+                    enabled = sample_filter_enabled,
+                    rules   = sample_filter_rules
+                )
+            )
+        )
+    )
+}
+
+# Run preprocess_rna and return either NULL (ran cleanly through assertion)
+# or the error message string (so we can pattern-match on [design]).
+capture_preprocess_error <- function(inputs, config) {
+    tryCatch({
+        suppressWarnings(suppressMessages(
+            preprocess_rna(inputs, config, verbose = FALSE)
+        ))
+        NULL
+    }, error = function(e) conditionMessage(e))
+}
+
+test_that("preprocess_rna fires [design] error on a singleton group with no sample_filter", {
+    inputs <- make_rna_fixture(include_singleton = TRUE)
+    config <- make_rna_config(sample_filter_enabled = FALSE)
+
+    err <- capture_preprocess_error(inputs, config)
+    expect_true(!is.null(err) && grepl("\\[design\\]", err),
+                info = sprintf("expected a [design] error, got: %s", err %||% "(no error)"))
+})
+
+test_that("preprocess_rna does NOT fire [design] errors when sample_filter removes the singleton (regression for pre-filter placement bug)", {
+    # Fixture has an n=1 'outlier' group that would trigger the design gate
+    # if the gate ran on raw input metadata. sample_filter intentionally
+    # whitelists only ctrl/trt, removing the singleton before the gate runs.
+    inputs <- make_rna_fixture(include_singleton = TRUE)
+    config <- make_rna_config(
+        sample_filter_enabled = TRUE,
+        sample_filter_rules   = list(Condition = c("ctrl", "trt"))
+    )
+
+    err <- capture_preprocess_error(inputs, config)
+    # preprocess_rna may still fail later for reasons unrelated to design
+    # viability (e.g. normalization on a tiny fixture); we only assert that
+    # if it DID fail, the failure was not from the [design] gate.
+    if (!is.null(err)) {
+        expect_false(grepl("\\[design\\]", err),
+                     info = sprintf("unexpected [design] error: %s", err))
+    } else {
+        succeed("preprocess_rna ran past the design-viability gate")
+    }
+})
+
+test_that("preprocess_rna fires [design] error on the same fixture when sample_filter is disabled (negative twin — proves the filter is doing the work, not silent skipping)", {
+    inputs <- make_rna_fixture(include_singleton = TRUE)
+    # sample_filter rules present but enabled=FALSE → get_sample_filter_rules
+    # returns NULL → apply_sample_filter is not called → singleton survives
+    # to the gate.
+    config <- make_rna_config(
+        sample_filter_enabled = FALSE,
+        sample_filter_rules   = list(Condition = c("ctrl", "trt"))
+    )
+
+    err <- capture_preprocess_error(inputs, config)
+    expect_true(!is.null(err) && grepl("\\[design\\]", err),
+                info = sprintf("expected [design] error when filter is disabled, got: %s",
+                               err %||% "(no error)"))
+})
