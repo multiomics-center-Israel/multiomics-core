@@ -6,12 +6,6 @@ pipe_rnaseq <- function() {
         tar_target(rna_trinotate_main, load_and_process_trinotate(config)),
         tar_target(rna_pre, preprocess_rna(rna_inputs, config, gene_lengths = NULL, verbose = TRUE)),
         tar_target(rna_out_dir, get_mode_out_dir(run_dir, "rna")),
-        # Preflight validation (runs early, before heavy computation)
-        tar_target(
-            rna_preflight,
-            run_preflight_checks(config, pipeline_type = "rnaseq", verbose = TRUE)
-        ),
-        
         tar_target(
             rna_qc_pre_obj,
             mod_rnaseq_qc_pre(
