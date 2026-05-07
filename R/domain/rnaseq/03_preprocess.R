@@ -74,6 +74,11 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     counts <- as.matrix(inputs$counts[, sample_cols, drop = FALSE])
     gene_ids <- inputs$counts[[gene_id_col]]
     if (anyDuplicated(gene_ids)) {
+      n_dup <- sum(duplicated(gene_ids))
+      warning(sprintf(
+        "[counts] Collapsed %d duplicate gene IDs via rowsum (counts summed across duplicates).",
+        n_dup
+      ), call. = FALSE)
       counts <- rowsum(counts, group = gene_ids, reorder = FALSE)
       gene_ids <- rownames(counts)
     }
@@ -137,13 +142,19 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       )
       meta2 <- filtered$meta
       counts <- filtered$expr
-      
+
       if (!is.null(txi)) {
         txi <- subset_tximport(txi, samples = colnames(counts))
         abundance <- txi$abundance
       }
   }
-  
+
+  # Design viability gate — runs on the post-sample_filter analysis cohort.
+  # Must come AFTER apply_sample_filter so configs that intentionally drop
+  # singleton or NA-labeled groups via cfg$sample_filter$rules are not
+  # rejected for an issue the filter is about to remove.
+  assert_design_viable(meta2, cfg)
+
   # =========================================================================
   # Gene filtering
   # =========================================================================
