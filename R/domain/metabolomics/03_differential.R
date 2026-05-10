@@ -269,7 +269,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         fit2 <- limma::contrasts.fit(fit, contrast_matrix)
         # treat() tests against an LFC threshold (different null hypothesis
         # from eBayes); intentionally kept for metabolomics
-        fit2 <- limma::treat(fit2, lfc = lfc_threshold, robust = robust_ebayes)
+        fit2 <- limma::eBayes(fit2)
         de_model <- fit2
 
         # -- Extract per-contrast tables --
