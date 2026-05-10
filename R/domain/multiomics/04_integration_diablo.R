@@ -121,52 +121,147 @@ run_diablo_integration <- function(mae, config, out_dir = NULL) {
         })
         dev.off()
 
-        # Circos plot (correlations between omics) — use sparse model for speed
-        plots$circos_plot <- file.path(out_dir, "diablo_circos_plot.png")
-        png(plots$circos_plot, width = 1400, height = 1400, res = 120)
-        tryCatch({
-            # Fit a sparse DIABLO model (block.splsda) with keepX to select
-            # a manageable number of features per block for circosPlot.
-            # The non-sparse block.plsda model hangs circosPlot on 300+ features.
-            keepX_per_block <- cfg$circos_keepX %||% 20L
-            data_blocks <- setdiff(diablo_model$names$blocks, "Y")
-            keepX_list <- lapply(data_blocks, function(b)
-                rep(min(keepX_per_block,
-                        length(diablo_model$names$colnames[[b]])),
-                    ncomp))
-            names(keepX_list) <- data_blocks
+        # Circos plots (correlations between omics) — fit ONCE at a generous
+        # keepX, then post-process loadings to keep exactly N features per
+        # block (by max |loading| across components). This gives "Top N" the
+        # honest meaning the user expects: N features per block, not 2N.
+        circos_topN_set <- cfg$circos_topN_set %||% c(5L, 10L, 15L, 20L, 25L, 30L)
+        circos_topN_set <- sort(unique(circos_topN_set))
+        data_blocks <- setdiff(diablo_model$names$blocks, "Y")
+        n_blocks    <- length(data_blocks)
+        block_colors <- grDevices::hcl.colors(n_blocks, palette = "Dark 3")
+        circos_paths <- character(0)
+        circos_corr_combined <- list()
 
-            message("  Fitting sparse DIABLO (block.splsda) for circos plot ",
-                    "(keepX = ", keepX_per_block, " per block per component)...")
+        # Fit once at the largest requested N (keepX is per-component; with
+        # ncomp = 2 some features will overlap between comps and we'll trim
+        # to the desired total via the loading mask below).
+        kx_fit <- max(circos_topN_set)
+        keepX_list <- lapply(data_blocks, function(b)
+            rep(min(kx_fit, length(diablo_model$names$colnames[[b]])), ncomp))
+        names(keepX_list) <- data_blocks
+        message(sprintf("  Fitting sparse DIABLO once for circos (keepX = %d) ...", kx_fit))
+        full_model <- tryCatch(
+            mixOmics::block.splsda(
+                X = data_list, Y = Y, ncomp = ncomp,
+                design = design, keepX = keepX_list),
+            error = function(e) { message("  fit failed: ", e$message); NULL })
 
-            sparse_model <- mixOmics::block.splsda(
-                X = data_list,
-                Y = Y,
-                ncomp = ncomp,
-                design = design,
-                keepX = keepX_list
-            )
-
-            # Ensure Y is a factor for circosPlot color handling
-            if (!is.factor(sparse_model$Y)) {
-                sparse_model$Y <- as.factor(sparse_model$Y)
+        for (kx in circos_topN_set) {
+            png_path <- file.path(out_dir, sprintf("diablo_circos_top%d.png", kx))
+            png(png_path, width = 1400, height = 1400, res = 120)
+            sparse_model <- NULL
+            ok <- tryCatch({
+                if (is.null(full_model)) stop("base model not available")
+                # Trim each block's loadings to the top-N features by max |loading|
+                trimmed <- full_model
+                for (b in data_blocks) {
+                    L <- trimmed$loadings[[b]]
+                    abs_max <- apply(L, 1, function(x) max(abs(x)))
+                    keep_idx <- order(-abs_max)[seq_len(min(kx, sum(abs_max > 0)))]
+                    mask <- rep(0, nrow(L))
+                    mask[keep_idx] <- 1
+                    trimmed$loadings[[b]] <- L * mask
+                }
+                sparse_model <- trimmed
+                if (!is.factor(sparse_model$Y)) sparse_model$Y <- as.factor(sparse_model$Y)
+                mixOmics::circosPlot(sparse_model,
+                                      cutoff = 0.7, line = TRUE, size.labels = 1.5,
+                                      color.blocks = block_colors,
+                                      color.cor = c("#B2182B", "#2166AC"))
+                TRUE
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("Circos plot failed:", e$message), cex = 1.2)
+                FALSE
+            })
+            dev.off()
+            if (ok) {
+                circos_paths <- c(circos_paths, png_path)
+                # Capture correlations among selected features for the
+                # interactive heatmap tab in the report.
+                tryCatch({
+                    # Use loadings directly (rows with any nonzero loading
+                    # across components are the "selected" features). The
+                    # selectVar()$name accessor returns empty in some
+                    # mixOmics versions / argument shapes.
+                    sel <- lapply(setNames(data_blocks, data_blocks),
+                                  function(b) {
+                                      L <- sparse_model$loadings[[b]]
+                                      if (is.null(L)) return(character(0))
+                                      rownames(L)[apply(L, 1, function(x) any(x != 0))]
+                                  })
+                    feats <- list()
+                    for (b in data_blocks) {
+                        if (length(sel[[b]]) == 0) next
+                        feats[[b]] <- data_list[[b]][, intersect(sel[[b]], colnames(data_list[[b]])), drop = FALSE]
+                    }
+                    if (length(feats) >= 2) {
+                        big <- do.call(cbind, feats)
+                        block_of <- unlist(mapply(rep, names(feats),
+                                                  sapply(feats, ncol),
+                                                  SIMPLIFY = FALSE))
+                        cm <- suppressWarnings(stats::cor(big, use = "pairwise.complete.obs"))
+                        df <- data.frame()
+                        nm <- colnames(cm)
+                        for (i in seq_len(ncol(cm) - 1)) {
+                            for (j in (i + 1):ncol(cm)) {
+                                if (block_of[i] == block_of[j]) next
+                                w <- cm[i, j]
+                                if (is.na(w) || abs(w) < 0.7) next
+                                df <- rbind(df, data.frame(
+                                    from = nm[i], to = nm[j],
+                                    from_omics = block_of[i],
+                                    to_omics = block_of[j],
+                                    weight = w,
+                                    keepX = kx,
+                                    stringsAsFactors = FALSE))
+                            }
+                        }
+                        circos_corr_combined[[as.character(kx)]] <- df
+                    }
+                }, error = function(e) {})
             }
+        }
+        # Default circos_plot points to the largest model for backward compat
+        plots$circos_plot <- file.path(out_dir,
+            sprintf("diablo_circos_top%d.png", max(keepX_per_block_vec)))
+        if (!file.exists(plots$circos_plot)) plots$circos_plot <- circos_paths[length(circos_paths)]
+        plots$circos_paths <- circos_paths
+        # Write correlations from the largest model as the interactive source
+        if (length(circos_corr_combined) > 0) {
+            big_kx <- max(as.integer(names(circos_corr_combined)))
+            corr_df <- circos_corr_combined[[as.character(big_kx)]]
+            if (!is.null(corr_df) && nrow(corr_df) > 0) {
+                utils::write.csv(corr_df,
+                    file.path(out_dir, "diablo_circos_correlations.csv"),
+                    row.names = FALSE)
+            }
+        }
 
-            # Set up colors for blocks and correlations
-            n_blocks <- length(data_blocks)
-            block_colors <- grDevices::hcl.colors(n_blocks, palette = "Dark 3")
-
-            mixOmics::circosPlot(sparse_model,
-                                  cutoff = 0.7,
-                                  line = TRUE,
-                                  size.labels = 1.5,
-                                  color.blocks = block_colors,
-                                  color.cor = c("#B2182B", "#2166AC"))
+        # Emit a flat loadings CSV for the interactive scatter chunk in the
+        # report. Combines per-block component loadings into a single long
+        # frame with feature, comp1, comp2, view columns.
+        tryCatch({
+            blocks <- setdiff(names(loadings), "Y")
+            ld_long <- do.call(rbind, lapply(blocks, function(b) {
+                L <- loadings[[b]]
+                if (is.null(L) || ncol(L) < 2) return(NULL)
+                data.frame(
+                    feature = rownames(L),
+                    comp1   = L[, 1],
+                    comp2   = L[, 2],
+                    view    = b,
+                    stringsAsFactors = FALSE)
+            }))
+            if (!is.null(ld_long) && nrow(ld_long) > 0) {
+                utils::write.csv(ld_long,
+                    file.path(out_dir, "diablo_variable_loadings.csv"),
+                    row.names = FALSE)
+            }
         }, error = function(e) {
-            plot.new()
-            text(0.5, 0.5, paste("Circos plot failed:", e$message), cex = 1.2)
+            message("  Could not write diablo_variable_loadings.csv: ", e$message)
         })
-        dev.off()
 
         message("  DIABLO plots saved to: ", out_dir)
     }

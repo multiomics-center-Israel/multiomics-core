@@ -105,6 +105,19 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
         plots_dir = plots_dir
     )
 
+    # Cross-method bucket enrichment (MOFA factor x DIABLO component story).
+    # Reads the on-disk MOFA/DIABLO top-feature CSVs that the integration modules
+    # already wrote, so it depends only on out_dir's parent layout.
+    bucket_results <- tryCatch({
+        mo_root <- dirname(dirname(out_dir))  # consensus/consensus -> multiomics
+        if (!dir.exists(file.path(mo_root, "integration"))) mo_root <- dirname(out_dir)
+        run_cross_method_buckets(mo_root = mo_root, config = config,
+                                 out_dir = file.path(out_dir, "buckets"))
+    }, error = function(e) {
+        message("  Cross-method bucket analysis failed: ", e$message)
+        NULL
+    })
+
     # Compile results
     results <- list(
         available_methods = available_methods,
@@ -113,6 +126,7 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
         robust_patterns = robust_patterns,
         method_specific = specific_patterns,
         meta_integration = meta_integration,
+        bucket_results = bucket_results,
         figures = figures,
         summary = create_consensus_summary(sample_comparison, feature_comparison, robust_patterns)
     )

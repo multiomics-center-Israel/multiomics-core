@@ -183,16 +183,25 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                                            kegg_conv_cache = NULL) {
 
     kegg_org <- get_kegg_organism(organism)
-    kegg_gmt_file <- config$modes$multiomics$enrichment$kegg_gmt_file
+    kegg_gmt_file     <- config$modes$multiomics$enrichment$kegg_gmt_file
+    proteins_gmt_file <- config$modes$multiomics$enrichment$proteins_gmt_file
+
+    # Pick the GMT path for this omics: proteomics may use a protein-ID GMT
+    # (e.g. KAE…) that bypasses gene translation; otherwise fall back to the
+    # gene-ID GMT used for transcriptomics.
+    use_protein_gmt <- omics_type == "proteomics" &&
+        !is.null(proteins_gmt_file) && file.exists(proteins_gmt_file)
+    omics_gmt_file <- if (use_protein_gmt) proteins_gmt_file else kegg_gmt_file
 
     # For gene-based omics, need org_db and kegg_org (or a custom GMT file)
     if (omics_type != "metabolomics") {
         org_db <- get_organism_db(organism)
         if (is.null(org_db) || is.null(kegg_org)) {
             # Fallback: use custom KEGG GMT file if available
-            if (!is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
+            if (!is.null(omics_gmt_file) && file.exists(omics_gmt_file)) {
                 message("    No KEGG org code for '", organism,
-                        "'; using custom GMT file for ", omics_type)
+                        "'; using custom GMT file for ", omics_type,
+                        if (use_protein_gmt) " (protein-ID space)" else "")
                 de_tables <- extract_de_tables(de_data, omics_type, harmonization_res)
                 if (is.null(de_tables) || length(de_tables) == 0) {
                     message("    No DE tables found for ", omics_type)
@@ -200,11 +209,12 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                 }
                 return(run_gmt_fgsea_enrichment(
                     de_tables = de_tables,
-                    gmt_file = kegg_gmt_file,
+                    gmt_file = omics_gmt_file,
                     omics_type = omics_type,
                     harmonization_res = harmonization_res,
                     config = config,
-                    out_dir = out_dir
+                    out_dir = out_dir,
+                    protein_ids_in_gmt = use_protein_gmt
                 ))
             }
             message("    Organism annotation not available for: ", organism)
@@ -315,15 +325,17 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
     if (length(all_results) == 0) {
         # Fallback: try custom GMT file if KEGG API produced no results
         if (omics_type != "metabolomics" &&
-            !is.null(kegg_gmt_file) && file.exists(kegg_gmt_file)) {
-            message("    KEGG API enrichment produced no results; falling back to GMT file")
+            !is.null(omics_gmt_file) && file.exists(omics_gmt_file)) {
+            message("    KEGG API enrichment produced no results; falling back to GMT file",
+                    if (use_protein_gmt) " (protein-ID space)" else "")
             return(run_gmt_fgsea_enrichment(
                 de_tables = de_tables,
-                gmt_file = kegg_gmt_file,
+                gmt_file = omics_gmt_file,
                 omics_type = omics_type,
                 harmonization_res = harmonization_res,
                 config = config,
-                out_dir = out_dir
+                out_dir = out_dir,
+                protein_ids_in_gmt = use_protein_gmt
             ))
         }
         return(NULL)
@@ -1413,7 +1425,8 @@ load_gmt_file <- function(gmt_file) {
 #' @param out_dir Output directory
 #' @return data.frame with fgsea results, or NULL
 run_gmt_fgsea_enrichment <- function(de_tables, gmt_file, omics_type,
-                                      harmonization_res, config, out_dir) {
+                                      harmonization_res, config, out_dir,
+                                      protein_ids_in_gmt = FALSE) {
 
     if (!requireNamespace("fgsea", quietly = TRUE)) {
         message("    fgsea package not available")
@@ -1429,14 +1442,17 @@ run_gmt_fgsea_enrichment <- function(de_tables, gmt_file, omics_type,
     pathway_names <- attr(pathways, "pathway_names")
 
     # For proteomics: build protein_id -> gene_id mapping
+    # Skip translation if the GMT itself uses protein IDs (e.g. KAE…)
     prot_to_gene <- NULL
-    if (omics_type == "proteomics") {
+    if (omics_type == "proteomics" && !protein_ids_in_gmt) {
         prot_to_gene <- build_protein_to_gene_map(harmonization_res, config)
         if (is.null(prot_to_gene) || length(prot_to_gene) == 0) {
             message("    Could not build protein-to-gene mapping for GMT enrichment")
             return(NULL)
         }
         message("    Built protein-to-gene mapping: ", length(prot_to_gene), " entries")
+    } else if (omics_type == "proteomics" && protein_ids_in_gmt) {
+        message("    Using protein-ID GMT directly (no KAE→gene translation)")
     }
 
     enrich_cfg <- config$modes$multiomics$enrichment

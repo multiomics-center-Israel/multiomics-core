@@ -147,12 +147,24 @@ run_mofa2_integration <- function(mae, config, out_dir = NULL) {
     # Build feature name map from MAE rowData for display labels
     feature_name_map <- build_feature_name_map(mae)
 
+    # Read gene_protein_mapping for GENE_n row-index recovery (transcripts
+    # without a paired protein lose their original_name during integration).
+    gpm <- NULL
+    if (!is.null(out_dir)) {
+        gpm_f <- file.path(dirname(dirname(out_dir)), "gene_protein_mapping.csv")
+        if (file.exists(gpm_f)) {
+            gpm <- tryCatch(utils::read.csv(gpm_f, stringsAsFactors = FALSE),
+                            error = function(e) NULL)
+        }
+    }
+
     # Create visualizations
     plots <- list()
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
         plots <- create_mofa_plots(mofa_trained, mofa_results, metadata, config,
-                                    out_dir, feature_name_map = feature_name_map)
+                                    out_dir, feature_name_map = feature_name_map,
+                                    gene_protein_mapping = gpm)
     }
 
     list(
@@ -281,7 +293,8 @@ extract_top_mofa_features <- function(weights, n_top = 50) {
 #' @param out_dir Output directory
 #' @return List of plot file paths
 create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_dir,
-                              feature_name_map = NULL) {
+                              feature_name_map = NULL,
+                              gene_protein_mapping = NULL) {
     message("Creating MOFA2 plots...")
 
     condition_col <- config$modes$multiomics$condition_column %||%
@@ -325,7 +338,8 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
     tryCatch({
         for (view in names(mofa_results$weights)) {
             p <- plot_mofa_top_weights(mofa_results$weights[[view]], view, n_top = 20,
-                                      feature_name_map = feature_name_map)
+                                      feature_name_map = feature_name_map,
+                                      gene_protein_mapping = gene_protein_mapping)
             plots[[paste0("top_weights_", view)]] <- p
             ggplot2::ggsave(
                 file.path(out_dir, paste0("mofa_top_weights_", view, ".png")),
@@ -410,7 +424,8 @@ plot_mofa_factors <- function(factors, metadata, condition_col, factor_idx = c(1
 #' @param n_factors Number of factors to plot
 #' @return ggplot object (or patchwork if available)
 plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
-                                  feature_name_map = NULL) {
+                                  feature_name_map = NULL,
+                                  gene_protein_mapping = NULL) {
     n_factors <- min(n_factors, ncol(weights))
     plots <- list()
 
@@ -468,6 +483,27 @@ plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
         if (any(still_generic)) {
             display_names[still_generic] <- sub("_(transcriptomics|proteomics|metabolomics)$", "",
                                                  display_names[still_generic])
+        }
+
+        # GENE_n row-index recovery via gene_protein_mapping. By construction
+        # the harmonized GENE_n maps to row n of gene_protein_mapping.csv;
+        # this rescues transcripts whose original_name was dropped during
+        # integration writing.
+        if (!is.null(gene_protein_mapping) && nrow(gene_protein_mapping) > 0 &&
+            all(c("gene_id", "protein_id") %in% colnames(gene_protein_mapping))) {
+            still_gene <- grepl("^GENE_\\d+$", display_names)
+            if (any(still_gene)) {
+                idx <- suppressWarnings(as.integer(sub("^GENE_(\\d+).*", "\\1",
+                                                       display_names[still_gene])))
+                valid <- !is.na(idx) & idx >= 1 & idx <= nrow(gene_protein_mapping)
+                if (grepl("transcriptomics", view_name, ignore.case = TRUE)) {
+                    display_names[still_gene][valid] <-
+                        gene_protein_mapping$gene_id[idx[valid]]
+                } else if (grepl("proteomics", view_name, ignore.case = TRUE)) {
+                    display_names[still_gene][valid] <-
+                        gene_protein_mapping$protein_id[idx[valid]]
+                }
+            }
         }
 
         # Truncate long metabolite names to first 25 chars

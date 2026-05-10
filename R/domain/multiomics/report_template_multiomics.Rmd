@@ -157,6 +157,7 @@ concordance_dir      <- file.path(run_dir, "concordance")
 consensus_base_dir   <- file.path(run_dir, "consensus")
 consensus_dir        <- file.path(consensus_base_dir, "consensus")
 stability_dir        <- file.path(consensus_base_dir, "stability")
+buckets_dir          <- file.path(consensus_dir, "buckets")
 foundational_base_dir <- file.path(run_dir, "foundational")
 foundational_dir     <- file.path(foundational_base_dir, "foundational")
 mechanistic_base_dir <- file.path(run_dir, "mechanistic")
@@ -206,6 +207,8 @@ has_consensus       <- dir.exists(consensus_dir) &&
      length(list.files(consensus_dir, "\\.csv$")) > 0)
 has_stability       <- dir.exists(stability_dir) &&
     length(list.files(file.path(stability_dir, "plots"), "\\.png$")) > 0
+has_buckets         <- dir.exists(buckets_dir) &&
+    length(list.files(buckets_dir, "^buckets_.*\\.csv$")) > 0
 has_foundational    <- dir.exists(foundational_dir) &&
     (length(list.files(file.path(foundational_dir, "plots"), "\\.png$")) > 0 ||
      length(list.files(foundational_dir, "\\.csv$")) > 0)
@@ -1494,41 +1497,340 @@ render_commentary("diablo_variable_plot")
 
 ### Circos Plot {.tabset .unnumbered}
 
-#### Static
-
-```{r diablo-circos-plot, eval=has_diablo}
-p <- file.path(diablo_dir, "diablo_circos_plot.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
+```{r diablo-circos-tabset, eval=has_diablo, results='asis'}
+# Show one tab per available top-N circos PNG (e.g. top5, top10, \u2026 top30).
+# Fall back to the legacy "diablo_circos_plot.png" if no top-N variants found.
+top_pngs <- list.files(diablo_dir,
+                       pattern = "^diablo_circos_top\\d+\\.png$",
+                       full.names = TRUE)
+if (length(top_pngs) == 0) {
+    legacy <- file.path(diablo_dir, "diablo_circos_plot.png")
+    if (file.exists(legacy)) top_pngs <- legacy
 }
+top_ord <- as.integer(sub(".*top(\\d+)\\.png$", "\\1", basename(top_pngs)))
+top_ord[is.na(top_ord)] <- Inf
+top_pngs <- top_pngs[order(top_ord)]
+for (p in top_pngs) {
+    n <- sub(".*top(\\d+)\\.png$", "\\1", basename(p))
+    label <- if (n == basename(p)) "Default" else paste0("Top ", n)
+    cat(sprintf("\n#### %s {.unnumbered}\n\n", label))
+    cat(sprintf("![](%s)\n\n", p))
+}
+if (length(top_pngs) == 0) cat("*No circos PNGs found.*\n")
 ```
 
-#### Interactive
+```{r diablo-circos-legend, eval=has_diablo, results='asis'}
+figure_legend("DIABLO circos plots at varying sparsity. **\"Top N\"** = exactly N features per block (transcriptomics / proteomics / metabolomics), ranked by max |loading| across components 1 and 2 of the sparse DIABLO fit. Higher N reveals more cross-omics correlations (harder to read); lower N highlights the strongest links. The **Network analysis** table below quantifies which features are the strongest hubs.")
+```
+
+#### Interactive {.unnumbered}
 
 ```{r diablo-circos-interactive, eval=has_diablo, results='asis'}
 circos_csv <- file.path(diablo_dir, "diablo_circos_correlations.csv")
 if (file.exists(circos_csv)) {
     edges <- read.csv(circos_csv, stringsAsFactors = FALSE)
-    edges <- edges[order(abs(edges$weight), decreasing = TRUE), ]
-    edges <- head(edges, 80)
-    p <- plotly::plot_ly(
-        x = edges$from, y = edges$to, z = edges$weight,
-        text = paste0(edges$from, " [", edges$from_omics, "] \u2014 ",
-                      edges$to, " [", edges$to_omics, "]",
-                      "\nWeight: ", round(edges$weight, 3)),
-        type = "heatmap", hoverinfo = "text",
-        colorscale = list(c(0, "#f7fbff"), c(1, "#08306b"))
-    ) %>%
-        plotly::layout(
-            title = "Cross-Omics Feature Correlations (DIABLO)",
-            xaxis = list(title = "", tickangle = 45, tickfont = list(size = 8)),
-            yaxis = list(title = "", tickfont = list(size = 8)),
-            margin = list(b = 120, l = 120)
+    if (nrow(edges) > 0) {
+        edges <- edges[order(abs(edges$weight), decreasing = TRUE), ]
+        edges <- head(edges, 200)
+
+        # Build a circular feature layout: arrange unique features on a circle,
+        # grouped by omics block. Draw curved chord-like lines for each
+        # correlation. Hover labels show endpoints + weight.
+        feats <- unique(c(edges$from, edges$to))
+        omics_lookup <- stats::setNames(
+            c(edges$from_omics, edges$to_omics),
+            c(edges$from, edges$to)
         )
-    print(htmltools::tagList(p))
+        omics_lookup <- omics_lookup[!duplicated(names(omics_lookup))]
+        # Order: group by omics (alphabetical for reproducibility)
+        feat_df <- data.frame(feature = feats, omics = omics_lookup[feats],
+                              stringsAsFactors = FALSE)
+        feat_df <- feat_df[order(feat_df$omics, feat_df$feature), ]
+        n <- nrow(feat_df)
+        feat_df$angle <- seq(0, 2 * pi, length.out = n + 1)[seq_len(n)]
+        r <- 1
+        feat_df$x <- r * cos(feat_df$angle)
+        feat_df$y <- r * sin(feat_df$angle)
+
+        # Edges: short cubic-bezier-ish quadratic toward the centre
+        edge_lines <- do.call(rbind, lapply(seq_len(nrow(edges)), function(i) {
+            f1 <- match(edges$from[i], feat_df$feature)
+            f2 <- match(edges$to[i],   feat_df$feature)
+            x1 <- feat_df$x[f1]; y1 <- feat_df$y[f1]
+            x2 <- feat_df$x[f2]; y2 <- feat_df$y[f2]
+            # Bezier interp toward centre
+            t <- seq(0, 1, length.out = 30)
+            cx <- 0; cy <- 0
+            xs <- (1-t)^2*x1 + 2*(1-t)*t*cx + t^2*x2
+            ys <- (1-t)^2*y1 + 2*(1-t)*t*cy + t^2*y2
+            data.frame(
+                edge = i, t = t, x = xs, y = ys,
+                weight = edges$weight[i],
+                hover = sprintf("%s [%s] \u2014 %s [%s]<br>r = %.3f",
+                                edges$from[i], edges$from_omics[i],
+                                edges$to[i],   edges$to_omics[i],
+                                edges$weight[i]),
+                color = ifelse(edges$weight[i] > 0, "#B2182B", "#2166AC"),
+                stringsAsFactors = FALSE)
+        }))
+
+        omics_palette <- c(transcriptomics = "#1B9E77",
+                           proteomics      = "#D95F02",
+                           metabolomics    = "#7570B3")
+        feat_df$color <- omics_palette[feat_df$omics]
+        if (any(is.na(feat_df$color))) feat_df$color[is.na(feat_df$color)] <- "#999"
+
+        p <- plotly::plot_ly(width = 950, height = 800)
+        # Add edges as separate traces. Use trace-level `meta` (a single
+        # string per trace, NOT broadcast across points) to encode the
+        # "from||to" endpoint pair so the click handler can identify edges.
+        for (e in unique(edge_lines$edge)) {
+            sub <- edge_lines[edge_lines$edge == e, ]
+            edge_idx <- sub$edge[1]
+            from_feat <- edges$from[edge_idx]
+            to_feat   <- edges$to[edge_idx]
+            p <- plotly::add_trace(p, x = sub$x, y = sub$y,
+                type = "scatter", mode = "lines",
+                line = list(color = sub$color[1], width = 1.2),
+                opacity = 0.55,
+                hoverinfo = "text",
+                text = sub$hover,
+                showlegend = FALSE,
+                meta = paste(from_feat, to_feat, sep = "||"))
+        }
+        # Nodes per omics \u2014 customdata = feature id (one per point)
+        for (om in unique(feat_df$omics)) {
+            sub <- feat_df[feat_df$omics == om, ]
+            p <- plotly::add_trace(p, x = sub$x, y = sub$y,
+                type = "scatter", mode = "markers",
+                marker = list(color = omics_palette[om] %||% "#999",
+                              size = 12, line = list(color = "white", width = 1)),
+                text = sub$feature, hoverinfo = "text",
+                name = om, showlegend = TRUE,
+                customdata = sub$feature)
+        }
+        p <- plotly::layout(p,
+            title = sprintf("Interactive circos \u2014 top %d cross-omics correlations (|r|\u22650.5). Click any node to isolate.",
+                            nrow(edges)),
+            xaxis = list(visible = FALSE, scaleanchor = "y", scaleratio = 1,
+                         range = c(-1.4, 1.4)),
+            yaxis = list(visible = FALSE, range = c(-1.4, 1.4)),
+            margin = list(t = 60, b = 30, l = 20, r = 20),
+            legend = list(orientation = "h", x = 0.15, y = -0.04),
+            autosize = FALSE)
+
+        # Click-to-isolate JS. Use Plotly.react with rebuilt traces — bypasses
+        # restyle/relayout quirks. Edges are HIDDEN (visible:false) when not
+        # incident to the clicked node, so the visual change is unmistakable.
+        status_id <- paste0("circos-status-", as.integer(Sys.time()))
+        click_js <- sprintf("function(el, x) {
+            var statusEl = document.getElementById('%s');
+            function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+
+            // Find the *actual* plotly graph div. el is the htmlwidget
+            // container; the graph div is el itself or an inner child once
+            // _fullLayout is populated.
+            function findGD(root) {
+                if (!root) return null;
+                if (root._fullLayout) return root;
+                var nodes = root.querySelectorAll('div');
+                for (var i = 0; i < nodes.length; i++) {
+                    if (nodes[i]._fullLayout) return nodes[i];
+                }
+                return root; // fall back
+            }
+
+            function isEdgeTrace(t) {
+                if (!t) return false;
+                var m = t.mode || '';
+                return m.indexOf('lines') >= 0;
+            }
+
+            function rebuild(gd, filterFn, origData) {
+                var newData = origData.map(function(t, i) {
+                    var copy = JSON.parse(JSON.stringify(t));
+                    copy.visible = filterFn(t, i) ? true : 'legendonly';
+                    return copy;
+                });
+                return Plotly.react(gd, newData, gd.layout || {}, gd.config || {});
+            }
+
+            function init() {
+                var gd = findGD(el);
+                if (!gd || !gd._fullLayout) {
+                    setTimeout(init, 80);
+                    return;
+                }
+                if (typeof gd.on !== 'function') {
+                    setTimeout(init, 80);
+                    return;
+                }
+                var origData = JSON.parse(JSON.stringify(gd.data));
+                setStatus('Click a node to isolate it. Double-click to reset. (handler ready, traces=' + gd.data.length + ')');
+
+                gd.on('plotly_click', function(ev) {
+                    if (!ev || !ev.points || !ev.points.length) return;
+                    var pt = ev.points[0];
+                    var traceData = pt.data || gd.data[pt.curveNumber];
+                    if (isEdgeTrace(traceData)) {
+                        setStatus('Edge clicked — click a NODE to isolate.');
+                        return;
+                    }
+                    var clickedFeat = pt.text;
+                    if (!clickedFeat) { setStatus('No feature on click.'); return; }
+                    var nKept = 0;
+                    rebuild(gd, function(t) {
+                        if (isEdgeTrace(t)) {
+                            // plotly broadcasts trace-level meta to one entry
+                            // per point — take the scalar value if it's an array
+                            var metaStr = Array.isArray(t.meta) ? t.meta[0] : (t.meta || '');
+                            var pair = String(metaStr).split('||');
+                            var keep = pair.indexOf(clickedFeat) >= 0;
+                            if (keep) nKept++;
+                            return keep;
+                        }
+                        return true;
+                    }, origData)
+                    .then(function() {
+                        setStatus('Isolated: ' + clickedFeat + ' — ' + nKept +
+                                  ' edges shown. Double-click to reset.');
+                    })
+                    .catch(function(err) {
+                        setStatus('react failed for ' + clickedFeat + ': ' +
+                                  (err && err.message ? err.message : err));
+                    });
+                });
+
+                gd.on('plotly_doubleclick', function() {
+                    rebuild(gd, function() { return true; }, origData)
+                        .then(function() {
+                            setStatus('Reset. Click a node to isolate.');
+                        });
+                    return false;
+                });
+            }
+            init();
+        }", status_id)
+        p <- htmlwidgets::onRender(p, click_js)
+
+        # Status div (above the plot) so users see feedback on click
+        cat(sprintf(
+            '<div id="%s" style="font-style:italic;color:#444;margin:6px 0;font-size:0.95em;">Loading interactive circos…</div>\n\n',
+            status_id))
+        print(htmltools::tagList(p))
+        cat("\n*Red = positive correlation, blue = negative. **Click any node** to isolate that feature and its connections; **double-click** anywhere to reset.*\n\n")
+    } else {
+        cat("*Circos correlations CSV is empty (no cross-omics correlations passed the cutoff).*\n")
+    }
 } else {
-    cat("*Circos correlation CSV not available for interactive plot.*\n")
+    cat("*Circos correlation CSV not available \u2014 re-run the DIABLO module with the updated 04_integration_diablo.R to generate it.*\n")
 }
+```
+
+#### Network analysis {.unnumbered}
+
+```{r diablo-circos-network, eval=has_diablo, results='asis'}
+circos_csv <- file.path(diablo_dir, "diablo_circos_correlations.csv")
+if (file.exists(circos_csv) && requireNamespace("igraph", quietly = TRUE)) {
+    edges <- read.csv(circos_csv, stringsAsFactors = FALSE)
+    edges <- edges[is.finite(edges$weight), , drop = FALSE]
+    if (nrow(edges) > 0) {
+        # Build undirected weighted graph from cross-omics correlations
+        g <- igraph::graph_from_data_frame(
+            edges[, c("from", "to")], directed = FALSE)
+        igraph::E(g)$weight    <- abs(edges$weight)
+        igraph::E(g)$signed_w  <- edges$weight
+        # Per-feature stats
+        nodes <- igraph::V(g)$name
+        omics_lookup <- stats::setNames(
+            c(edges$from_omics, edges$to_omics),
+            c(edges$from, edges$to))
+        omics_lookup <- omics_lookup[!duplicated(names(omics_lookup))]
+
+        node_df <- data.frame(
+            feature = nodes,
+            omics = unname(omics_lookup[nodes]),
+            degree = igraph::degree(g),
+            weighted_degree = igraph::strength(g, weights = igraph::E(g)$weight),
+            betweenness = igraph::betweenness(g, weights = 1 / igraph::E(g)$weight,
+                                              normalized = TRUE),
+            mean_abs_r = sapply(nodes, function(v) {
+                inc <- igraph::incident(g, v)
+                mean(abs(igraph::E(g)$signed_w[inc]))
+            }),
+            stringsAsFactors = FALSE
+        )
+
+        # Friendly display name (resolve KAE / GL / HMDB via concordance)
+        conc_f <- file.path(run_dir, "concordance",
+                            "concordance_transcriptomics_vs_proteomics.csv")
+        conc <- if (file.exists(conc_f))
+            read.csv(conc_f, stringsAsFactors = FALSE) else NULL
+        node_df$display_name <- node_df$feature
+        if (!is.null(conc) && "Genes" %in% colnames(conc)) {
+            m_g <- match(node_df$feature, conc$gene_id)
+            node_df$display_name[!is.na(m_g)] <- conc$Genes[m_g[!is.na(m_g)]]
+            m_p <- match(node_df$feature, conc$protein_id)
+            ok_p <- !is.na(m_p) & is.na(m_g)
+            node_df$display_name[ok_p] <- conc$Genes[m_p[ok_p]]
+        }
+        node_df$display_name <- ifelse(nchar(node_df$display_name) > 60,
+            paste0(substr(node_df$display_name, 1, 57), "…"),
+            node_df$display_name)
+
+        # Round + reorder
+        node_df$weighted_degree <- round(node_df$weighted_degree, 3)
+        node_df$betweenness     <- round(node_df$betweenness, 4)
+        node_df$mean_abs_r      <- round(node_df$mean_abs_r, 3)
+        node_df <- node_df[order(-node_df$degree, -node_df$weighted_degree), ]
+        node_df <- node_df[, c("display_name", "omics", "degree",
+                               "weighted_degree", "mean_abs_r",
+                               "betweenness", "feature")]
+
+        # Summary stats
+        gs <- list(
+            "Nodes (features)" = igraph::vcount(g),
+            "Edges (cross-omics correlations |r|≥0.5)" = igraph::ecount(g),
+            "Density" = round(igraph::edge_density(g), 3),
+            "Mean degree" = round(mean(igraph::degree(g)), 2),
+            "Connected components" = igraph::components(g)$no
+        )
+        cat("**Network summary**\n\n")
+        for (k in names(gs)) cat(sprintf("- %s: **%s**\n", k, gs[[k]]))
+        cat("\n")
+
+        # Per-omics top hubs
+        cat("**Top hub features by degree (per omics):**\n\n")
+        for (om in unique(node_df$omics)) {
+            top <- utils::head(node_df[node_df$omics == om, ], 5)
+            cat(sprintf("- *%s*: %s\n", om,
+                        paste(sprintf("%s (deg=%d)",
+                                      short_or <- ifelse(nchar(top$display_name) > 50,
+                                          paste0(substr(top$display_name, 1, 47), "…"),
+                                          top$display_name),
+                                      top$degree),
+                              collapse = "; ")))
+        }
+        cat("\n")
+
+        print(htmltools::tagList(make_dt(
+            node_df,
+            caption = "Cross-omics correlation network — per-feature centrality (sorted by degree)",
+            pageLength = 12
+        )))
+    } else {
+        cat("*No edges in correlations CSV — cannot build network.*\n")
+    }
+} else {
+    if (!file.exists(circos_csv))
+        cat("*No correlations CSV; skipping network analysis.*\n")
+    else
+        cat("*igraph package not available; skipping network analysis.*\n")
+}
+```
+
+```{r diablo-circos-network-legend, eval=has_diablo, results='asis'}
+figure_legend("Network analysis of the cross-omics correlation graph (|r|≥0.5). **Degree** = number of cross-omics partners (the higher the more 'central' the feature is). **Weighted degree** = sum of |r| over all incident edges. **Betweenness** = how often the feature lies on the shortest path between other pairs (higher = bridge between subgroups). **Mean |r|** = average correlation strength of incident edges. Hub features at the top of the table are the strongest 'bridge' candidates between transcriptomics ↔ proteomics ↔ metabolomics — these are typically the best follow-up targets.")
 ```
 
 ### Interactive Loadings Plot {.tabset .unnumbered}
@@ -1546,15 +1848,30 @@ if (file.exists(vp)) {
 
 ```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
 loadings_csv <- file.path(diablo_dir, "diablo_variable_loadings.csv")
+saved_html   <- file.path(diablo_dir, "diablo_loadings_interactive.html")
+rendered <- FALSE
 if (file.exists(loadings_csv)) {
-    ld <- read.csv(loadings_csv, stringsAsFactors = FALSE)
-    omics_col <- intersect(c("view", "omics", "block"), colnames(ld))[1]
-    if (all(c("comp1", "comp2", "feature") %in% colnames(ld)) && !is.na(omics_col)) {
+    ld <- tryCatch(read.csv(loadings_csv, stringsAsFactors = FALSE),
+                   error = function(e) NULL)
+    omics_col <- if (is.null(ld)) NA else intersect(c("view", "omics", "block"),
+                                                    colnames(ld))[1]
+    if (!is.null(ld) && nrow(ld) > 0 &&
+        all(c("comp1", "comp2", "feature") %in% colnames(ld)) &&
+        !is.na(omics_col)) {
         ld$omics_layer <- ld[[omics_col]]
+        ld$comp1[is.na(ld$comp1)] <- 0
+        ld$comp2[is.na(ld$comp2)] <- 0
+        # Prefer human-readable name when available
+        if ("original_name" %in% colnames(ld)) {
+            ld$label <- ifelse(!is.na(ld$original_name) & nzchar(ld$original_name),
+                               ld$original_name, ld$feature)
+        } else {
+            ld$label <- ld$feature
+        }
         p <- plotly::plot_ly(
             data = ld,
             x = ~comp1, y = ~comp2,
-            text = ~paste0(feature, " [", omics_layer, "]"),
+            text = ~paste0(label, " [", omics_layer, "]"),
             color = ~omics_layer,
             type = "scatter", mode = "markers",
             hoverinfo = "text",
@@ -1566,12 +1883,20 @@ if (file.exists(loadings_csv)) {
                 yaxis = list(title = "Component 2")
             )
         print(htmltools::tagList(p))
-    } else {
-        cat("*Loadings CSV columns not in expected format.*\n")
+        rendered <- TRUE
     }
-} else {
-    cat("*Loadings CSV not available for interactive plot.*\n")
 }
+if (!rendered && file.exists(saved_html)) {
+    # Fall back to the standalone interactive widget the DIABLO module
+    # already wrote (pathway-colored scatter). Embedding via iframe keeps
+    # the widget's plotly bindings intact.
+    rel <- saved_html
+    cat(sprintf(
+        '<iframe src="%s" style="width:100%%; height:720px; border:0;" loading="lazy"></iframe>\n\n',
+        basename(rel)))
+    rendered <- TRUE
+}
+if (!rendered) cat("*Interactive DIABLO loadings not available — neither CSV nor saved widget was found in the DIABLO output directory.*\n")
 ```
 
 ```{r diablo-loadings-interactive-legend, eval=has_diablo, results='asis'}
@@ -1750,6 +2075,155 @@ if (length(main_files) > 0) {
 }
 ```
 
+### Per-Factor — All Omics Layers {.tabset .unnumbered}
+
+```{r mofa-per-factor-setup, include=FALSE}
+mofa_top_csv <- file.path(mofa_dir, "mofa_top_features.csv")
+mofa_per_factor_ok <- file.exists(mofa_top_csv)
+mofa_top_df <- if (mofa_per_factor_ok)
+    read.csv(mofa_top_csv, stringsAsFactors = FALSE) else NULL
+# Map GENE_n via gene_protein_mapping if available (row-index trick)
+mofa_gpm <- NULL
+if (!is.null(mofa_top_df)) {
+    gpm_f <- file.path(run_dir, "gene_protein_mapping.csv")
+    if (file.exists(gpm_f)) mofa_gpm <- read.csv(gpm_f, stringsAsFactors = FALSE)
+}
+resolve_mofa_id <- function(feature_id, view_name, original_name = NA) {
+    base <- sub("_(transcriptomics|proteomics|metabolomics)$", "", feature_id)
+    out <- if (!is.na(original_name) && nzchar(original_name)) original_name else base
+    if (!is.null(mofa_gpm) && grepl("^GENE_\\d+$", out)) {
+        idx <- suppressWarnings(as.integer(sub("^GENE_(\\d+)$", "\\1", out)))
+        if (!is.na(idx) && idx >= 1 && idx <= nrow(mofa_gpm)) {
+            out <- if (view_name == "transcriptomics")
+                mofa_gpm$gene_id[idx] else mofa_gpm$protein_id[idx]
+        }
+    }
+    if (view_name == "transcriptomics" && !is.null(mofa_gpm) && grepl("^KAE", out)) {
+        lut <- setNames(mofa_gpm$gene_id, mofa_gpm$protein_id)
+        if (out %in% names(lut)) out <- unname(lut[out])
+    }
+    out
+}
+```
+
+```{r mofa-per-factor-intro, eval=mofa_per_factor_ok, results='asis'}
+cat("Tabs below pivot the **same** MOFA top-features data the other way: each tab is a single factor and shows the top contributors from **all three** omics simultaneously. Useful for asking 'what does Factor 2 look like across layers?' rather than 'what is the proteomics view of all factors?'.\n\n")
+```
+
+```{r mofa-per-factor-tabs, eval=mofa_per_factor_ok, results='asis'}
+factors_present <- sort(unique(mofa_top_df$factor))
+for (fac in factors_present) {
+    cat(sprintf("\n#### %s {.unnumbered}\n\n", fac))
+    fac_df <- mofa_top_df[mofa_top_df$factor == fac, , drop = FALSE]
+    fac_df$abs_weight <- abs(fac_df$weight)
+    # Resolve display IDs
+    fac_df$id_resolved <- mapply(
+        resolve_mofa_id, fac_df$feature_id, fac_df$view, fac_df$original_name,
+        USE.NAMES = FALSE)
+    # Take top 15 per view, side by side
+    show_n <- 15
+    keep <- do.call(rbind, lapply(unique(fac_df$view), function(v) {
+        d <- fac_df[fac_df$view == v, , drop = FALSE]
+        d <- d[order(-d$abs_weight), , drop = FALSE]
+        utils::head(d, show_n)
+    }))
+    keep$direction <- ifelse(keep$weight > 0, "positive", "negative")
+    keep$view <- factor(keep$view, levels = c("transcriptomics", "proteomics",
+                                              "metabolomics"))
+    keep <- keep[order(keep$view, -keep$abs_weight), ]
+    keep$id_resolved <- make.unique(keep$id_resolved, sep = " ")
+    keep$id_resolved <- factor(keep$id_resolved,
+                               levels = rev(unique(keep$id_resolved)))
+    p <- ggplot2::ggplot(keep, ggplot2::aes(x = weight, y = id_resolved,
+                                            fill = direction)) +
+        ggplot2::geom_col() +
+        ggplot2::scale_fill_manual(values = c(positive = "firebrick",
+                                              negative = "steelblue"),
+                                   guide = "none") +
+        ggplot2::facet_wrap(~ view, scales = "free", nrow = 1) +
+        ggplot2::labs(title = sprintf("%s — top %d features per view",
+                                       fac, show_n),
+                      x = "Weight", y = NULL) +
+        ggplot2::theme_minimal(base_size = 10) +
+        ggplot2::theme(strip.text = ggplot2::element_text(face = "bold"),
+                       plot.title = ggplot2::element_text(face = "bold"),
+                       axis.text.y = ggplot2::element_text(size = 8))
+    p_path <- file.path(mofa_dir, sprintf("mofa_per_factor_%s.png", fac))
+    ggplot2::ggsave(p_path, p, width = 14, height = 6, dpi = 150)
+    cat(sprintf("![](%s)\n\n", p_path))
+    print(htmltools::tagList(make_dt(
+        keep[, c("view", "id_resolved", "weight", "abs_weight", "direction")],
+        caption = sprintf("MOFA %s — top %d features per omics", fac, show_n))))
+}
+```
+
+```{r mofa-per-factor-legend, eval=mofa_per_factor_ok, results='asis'}
+figure_legend("Per-factor cross-omics view: each tab fixes the factor and lists top features in transcriptomics, proteomics, and metabolomics side-by-side. Use to ask 'what biology does this factor capture?' across all layers at once.")
+```
+
+### Feature ID Linking Table {.unnumbered}
+
+```{r mofa-id-link-table, eval=has_diablo, results='asis'}
+# Aggregate the GENE_xxx -> external ID mapping from MOFA + DIABLO outputs +
+# gene_protein_mapping.csv. Useful as a one-stop lookup for any GENE_xxx
+# feature mentioned anywhere in the report.
+gpm_f <- file.path(run_dir, "gene_protein_mapping.csv")
+gpm <- if (file.exists(gpm_f)) read.csv(gpm_f, stringsAsFactors = FALSE) else NULL
+link_rows <- list()
+if (!is.null(gpm) && all(c("gene_id","protein_id") %in% colnames(gpm))) {
+    n <- nrow(gpm)
+    link_rows[[length(link_rows)+1]] <- data.frame(
+        feature_id = sprintf("GENE_%d", seq_len(n)),
+        view       = "transcriptomics/proteomics",
+        gene_id    = gpm$gene_id,
+        protein_id = gpm$protein_id,
+        stringsAsFactors = FALSE)
+}
+# Merge metabolomics IDs from MOFA weights csv
+metab_w <- file.path(mofa_dir, "mofa_weights_metabolomics.csv")
+if (file.exists(metab_w)) {
+    mw <- read.csv(metab_w, stringsAsFactors = FALSE)
+    if (all(c("feature_id","original_name") %in% colnames(mw))) {
+        link_rows[[length(link_rows)+1]] <- data.frame(
+            feature_id = mw$feature_id,
+            view       = "metabolomics",
+            gene_id    = NA,
+            protein_id = NA,
+            metabolite = mw$original_name,
+            stringsAsFactors = FALSE)
+    }
+}
+if (length(link_rows) > 0) {
+    link_df <- do.call(plyr::rbind.fill %||% function(...) {
+        # base R fallback: align column names manually
+        dfs <- list(...)
+        cols <- unique(unlist(lapply(dfs, colnames)))
+        dfs <- lapply(dfs, function(d) {
+            for (c in setdiff(cols, colnames(d))) d[[c]] <- NA
+            d[, cols]
+        })
+        do.call(rbind, dfs)
+    }, link_rows)
+    # Pull descriptions from concordance
+    conc_f <- file.path(run_dir, "concordance",
+                        "concordance_transcriptomics_vs_proteomics.csv")
+    if (file.exists(conc_f)) {
+        conc <- read.csv(conc_f, stringsAsFactors = FALSE)
+        if ("Genes" %in% colnames(conc) && "gene_id" %in% colnames(conc)) {
+            m <- match(link_df$gene_id, conc$gene_id)
+            link_df$description <- conc$Genes[m]
+        }
+    }
+    cat("**Single-source-of-truth lookup** for any harmonized `GENE_n` ID seen elsewhere in the report. Maps to the original gene_id (GL50803_), protein_id (KAE…), and free-text description.\n\n")
+    print(htmltools::tagList(make_dt(
+        link_df,
+        caption = "Feature ID linking table: GENE_n → original IDs + description"
+    )))
+} else {
+    cat("*Linking table unavailable (gene_protein_mapping.csv or MOFA weights missing).*\n")
+}
+```
+
 ```{r mofa-loadings-log2fc, eval=has_mofa, results='asis'}
 mofa_lfc_plots <- list.files(mofa_dir, pattern = "mofa_loadings_log2fc_.*\\.png$", full.names = TRUE)
 if (length(mofa_lfc_plots) > 0) {
@@ -1832,6 +2306,156 @@ if (file.exists(mofa_le_csv)) {
         cat("\n#### MOFA2 Weights Enrichment Table {.unnumbered}\n\n")
         print(make_dt(df, caption = "MOFA2 weights KEGG enrichment"))
     }
+}
+```
+
+---
+
+# Cross-Method Multiomics Story {.tabset}
+
+```{r buckets-setup, include=FALSE}
+bucket_factor    <- multi_cfg$consensus$bucket_factor    %||% "Factor1"
+bucket_component <- multi_cfg$consensus$bucket_component %||% "comp1"
+bucket_top_n     <- multi_cfg$consensus$bucket_top_n     %||% 50L
+
+bucket_views <- character(0)
+if (has_buckets) {
+    bucket_views <- sub("^buckets_(.*)\\.csv$", "\\1",
+                        list.files(buckets_dir, "^buckets_.*\\.csv$"))
+}
+```
+
+```{r buckets-note, eval=!has_buckets, results='asis'}
+cat("*Cross-method bucket analysis requires both MOFA and DIABLO to have run.\n",
+    "Outputs are written to `consensus/consensus/buckets/` once the consensus module produces them.*\n",
+    sep = "")
+```
+
+```{r buckets-intro, eval=has_buckets, results='asis'}
+cat(sprintf(
+"Each omics layer's top **%d** features from MOFA **%s** and DIABLO **%s** are partitioned into three buckets:\n\n",
+bucket_top_n, bucket_factor, bucket_component))
+cat("- **Shared** — top in both MOFA and DIABLO (the strongest cross-method signal).\n")
+cat("- **MOFA-only** — top in MOFA only; reflects unsupervised variance not class-discriminating.\n")
+cat("- **DIABLO-only** — top in DIABLO only; reflects class-discriminating signal not driving the dominant variance axis.\n\n")
+cat("For each bucket we run hypergeometric ORA against KEGG (and GO where available), then look for pathways enriched in **multiple omics** within the same bucket — that's the multiomics story this section surfaces.\n\n")
+cat(sprintf("> **Note (small N):** With ~10 samples or fewer, MOFA factors and DIABLO components can fit noise. Treat single-method enrichments as exploratory; emphasize the **Shared** bucket and the cross-omics convergence panels.\n\n"))
+```
+
+## Bucket Membership per Omics
+
+```{r buckets-membership, eval=has_buckets, results='asis', fig.width=8, fig.height=4}
+for (v in bucket_views) {
+    p <- file.path(buckets_dir, "plots", sprintf("buckets_overlap_%s.png", v))
+    if (file.exists(p)) {
+        cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(v)))
+        cat(sprintf("![](%s)\n\n", p))
+        figure_legend(sprintf(
+            "Top-%d feature partition for %s. Shared = top features ranked highly by **both** MOFA %s and DIABLO %s; method-only = top by only one method.",
+            bucket_top_n, v, bucket_factor, bucket_component))
+    }
+    bf <- file.path(buckets_dir, sprintf("buckets_%s.csv", v))
+    if (file.exists(bf)) {
+        bdf <- read.csv(bf, stringsAsFactors = FALSE)
+        cat(sprintf("\n**%s feature counts:** Shared = %d, MOFA-only = %d, DIABLO-only = %d.\n\n",
+                    v,
+                    sum(bdf$bucket == "Shared"),
+                    sum(bdf$bucket == "MOFA_only"),
+                    sum(bdf$bucket == "DIABLO_only")))
+    }
+}
+```
+
+## Per-Bucket Enrichment {.tabset}
+
+```{r buckets-enrich, eval=has_buckets, results='asis'}
+for (v in bucket_views) {
+    cat(sprintf("\n### %s {.tabset .unnumbered}\n\n", tools::toTitleCase(v)))
+    for (bk in c("Shared", "MOFA_only", "DIABLO_only")) {
+        cat(sprintf("\n#### %s {.tabset .unnumbered}\n\n",
+                    gsub("_", "-", bk)))
+        any_set <- FALSE
+        for (set_name in c("kegg", "go")) {
+            f <- file.path(buckets_dir, sprintf(
+                "bucket_enrichment_%s_%s_%s.csv", v, bk, set_name))
+            if (!file.exists(f)) next
+            df <- read.csv(f, stringsAsFactors = FALSE)
+            if (nrow(df) == 0) next
+            any_set <- TRUE
+            cat(sprintf("\n##### %s {.unnumbered}\n\n", toupper(set_name)))
+            show <- df[, intersect(c("pathway_name", "hits_in_set", "n_hits",
+                                     "set_size", "pvalue", "padj", "leading_ids"),
+                                   colnames(df)), drop = FALSE]
+            print(htmltools::tagList(make_dt(utils::head(show, 50),
+                          caption = sprintf("%s — %s bucket — %s ORA",
+                                            v, gsub("_","-",bk), toupper(set_name)))))
+        }
+        if (!any_set) cat("*No enrichment hits in this bucket.*\n\n")
+    }
+}
+```
+
+## Cross-Omics Pathway Convergence {.tabset}
+
+```{r buckets-convergence-intro, eval=has_buckets, results='asis'}
+cat("Pathways enriched in **the same bucket across multiple omics layers** are the clearest multiomics story. Tables and heatmaps below merge per-omics enrichments by pathway name (KEGG IDs differ between species, but names align).\n\n")
+```
+
+```{r buckets-convergence, eval=has_buckets, results='asis', fig.width=9}
+for (set_name in c("kegg", "go")) {
+    for (bk in c("Shared", "MOFA_only", "DIABLO_only")) {
+        f <- file.path(buckets_dir,
+                       sprintf("cross_omics_pathway_convergence_%s_%s.csv",
+                               bk, set_name))
+        if (!file.exists(f)) next
+        df <- read.csv(f, stringsAsFactors = FALSE)
+        if (nrow(df) == 0) next
+        cat(sprintf("\n### %s — %s {.unnumbered}\n\n",
+                    toupper(set_name), gsub("_","-", bk)))
+        # Heatmap
+        p <- file.path(buckets_dir, "plots",
+                       sprintf("cross_omics_convergence_%s_%s.png",
+                               bk, set_name))
+        if (file.exists(p)) cat(sprintf("![](%s)\n\n", p))
+        # Highlight: pathways with ≥2 omics present and ≥1 omics p<0.05
+        story <- df[df$n_omics_present >= 2 & df$n_omics_pval05 >= 1,
+                    , drop = FALSE]
+        if (nrow(story) > 0) {
+            cat(sprintf("**%d pathways supported by ≥2 omics in the %s bucket (≥1 with nominal p<0.05).**\n\n",
+                        nrow(story), bk))
+            print(htmltools::tagList(make_dt(utils::head(story, 30),
+                          caption = sprintf("Cross-omics convergence — %s bucket (%s)",
+                                            gsub("_","-", bk), toupper(set_name)))))
+        } else {
+            cat("*No pathways with multi-omics convergence at this threshold; full table below.*\n\n")
+            print(htmltools::tagList(make_dt(utils::head(df, 30),
+                          caption = sprintf("Per-omics ranks — %s bucket (%s)",
+                                            gsub("_","-", bk), toupper(set_name)))))
+        }
+    }
+}
+```
+
+## Joint Feature Table {.tabset}
+
+```{r buckets-feature-table, eval=has_buckets, results='asis'}
+for (v in bucket_views) {
+    bf <- file.path(buckets_dir, sprintf("buckets_%s.csv", v))
+    if (!file.exists(bf)) next
+    bdf <- read.csv(bf, stringsAsFactors = FALSE)
+    if (nrow(bdf) == 0) next
+    cat(sprintf("\n### %s {.unnumbered}\n\n", tools::toTitleCase(v)))
+    bdf <- bdf[order(factor(bdf$bucket, levels = c("Shared", "MOFA_only", "DIABLO_only")),
+                     -abs(bdf$mofa_weight %||% 0),
+                     -abs(bdf$diablo_loading %||% 0)), ]
+    # Prefer symbol/description columns; show DE stats per layer
+    show_cols <- intersect(
+        c("bucket", "display_name", "symbol", "ext_id",
+          "mofa_weight", "diablo_loading",
+          "log2FC", "pvalue", "padj", "sig"), colnames(bdf))
+    print(htmltools::tagList(make_dt(bdf[, show_cols, drop = FALSE], caption = sprintf(
+        "%s — top %d features per method (MOFA %s + DIABLO %s) with bucket assignment",
+        v, bucket_top_n, bucket_factor, bucket_component))))
 }
 ```
 
