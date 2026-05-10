@@ -125,6 +125,11 @@ modes:
       # Internal standard column (if using IS normalization)
       is_ref_col: null
 
+      # Biological factor column (if using bio_factor normalization).
+      # Name of a numeric column in metadata holding a per-sample value
+      # (e.g. "mg_protein"). Each sample is divided by its row's value.
+      biological_factor_col: null
+
     # ==============================================================================
     # Sample filtering (applied early, in mod_met_raw)
     # ==============================================================================

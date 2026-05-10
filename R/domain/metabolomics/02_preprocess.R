@@ -138,12 +138,12 @@ preprocess_metabolomics <- function(inputs, config) {
     norm_cfg_no_scale <- norm_cfg
     norm_cfg_no_scale$scaling <- "none"
     pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data,
-                                                     groups = norm_groups)
+                                                     groups = norm_groups, meta = meta)
     expr_log <- pre_scale_result$expr_norm
 
     # Full pipeline (with scaling) for statistical tests
     norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data,
-                                                groups = norm_groups)
+                                                groups = norm_groups, meta = meta)
     expr_work <- norm_result$expr_norm
 
     assert_numeric_matrix(expr_work, "metab_expr_work")
