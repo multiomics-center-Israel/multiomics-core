@@ -122,6 +122,34 @@ modes:
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
 
+    # ---- Clustering ----
+    clustering:
+      enabled: true
+      group_col: "condition"
+      min_groups: 2
+      de_source: "any_contrast"
+
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"
+          linkage: "complete"
+
+        partition:
+          enabled: true
+          algorithm: "hclust"
+          distance: "euclidean"
+          k_max: 20
+          nstart: 25
+
+        binary_patterns:
+          enabled: true
+          corr_cutoff: 0.8
+
+      heatmap:
+        max_rows: null
+        cluster_cols: true
+
     # ---- Random forest (optional) ----
     rf:
       run_rf: true

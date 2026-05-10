@@ -87,6 +87,17 @@ pipe_lipidomics <- function() {
             )
         ),
 
+        # ---- clustering: hierarchical / partition / binary (Stage 2) ----
+        tar_target(
+            lipid_clustering_obj,
+            mod_lipidomics_clustering(
+                pre     = lipid_pre,
+                de_res  = lipid_de_res,
+                config  = config,
+                out_dir = lipid_out_dir
+            )
+        ),
+
         # ---- feature selection: RF + PLS-DA (Stage 2, optional) ----
         tar_target(
             lipid_feature_sel_res,
@@ -163,6 +174,7 @@ pipe_lipidomics <- function() {
                 de_res          = lipid_de_res,
                 feature_sel_res = lipid_feature_sel_res,
                 class_res       = lipid_class_res,
+                clustering_res  = lipid_clustering_obj,
                 config          = config,
                 out_dir         = lipid_out_dir,
                 biomarker_res   = lipid_biomarker_res,
