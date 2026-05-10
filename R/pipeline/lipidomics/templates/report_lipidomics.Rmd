@@ -1,0 +1,2318 @@
+---
+title: "`r local({ cfg <- params$config; pname <- cfg$project$name %||% ''; analyst <- gsub('_', ' ', cfg$project$analyst %||% ''); parts <- c('Lipidomics Analysis Report'); if (nzchar(pname)) parts <- c(parts, pname); if (nzchar(analyst)) parts <- c(parts, analyst); paste(parts, collapse = ' - ') })`"
+subtitle: "multiomics-core Pipeline"
+author: "`r paste0('Bioinformatician: ', gsub('_', ' ', params$config$project$analyst %||% ''))`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    number_sections: true
+    fig_width: 10
+    fig_height: 7
+    self_contained: true
+    code_folding: hide
+    df_print: paged
+params:
+  pre: NULL
+  qc_res: NULL
+  de_res: NULL
+  rf_res: NULL
+  plsda_res: NULL
+  class_res: NULL
+  biomarker_res: NULL
+  pathway_res: NULL
+  qc_enhanced: NULL
+  config: NULL
+  commentary_file: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  out.width = "100%"
+)
+
+library(ggplot2)
+library(DT)
+library(htmltools)
+
+if (requireNamespace("plotly", quietly = TRUE))   library(plotly)
+if (requireNamespace("crosstalk", quietly = TRUE)) library(crosstalk)
+if (requireNamespace("jsonlite", quietly = TRUE))  library(jsonlite)
+
+# Source domain helpers needed for report
+make_contrast_label <- function(contrast_str) {
+  parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+  paste(trimws(parts), collapse = "_vs_")
+}
+
+extract_contrast_table <- function(summary_df, contrast) {
+  linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+  logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+  data.frame(
+    feature_id = summary_df$feature_id,
+    logFC      = logfc,
+    AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+    P.Value    = summary_df[[paste0("P.Value.", contrast)]],
+    adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
+    stringsAsFactors = FALSE
+  )
+}
+
+# Source interactive cutoff panel helpers
+tryCatch({
+  .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+  .cp_found <- FALSE
+  for (.cp_i in 1:6) {
+    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
+    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
+    .cp_dir <- dirname(.cp_dir)
+  }
+  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
+}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
+
+# ---------------------------------------------------------------------------
+# Helper: downloadable DT table with CSV/Excel export (proteomics style)
+# ---------------------------------------------------------------------------
+make_dt <- function(df, caption = NULL, pageLength = 15) {
+  if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
+  safe_caption <- gsub("[^a-zA-Z0-9]", "_", caption %||% "data")
+  tbl <- DT::datatable(
+    df,
+    caption  = caption,
+    extensions = "Buttons",
+    options = list(
+      scrollX    = TRUE,
+      pageLength = pageLength,
+      dom        = "Bfrtip",
+      buttons    = list(
+        list(extend = "csv",   filename = safe_caption),
+        list(extend = "excel", filename = safe_caption)
+      )
+    ),
+    rownames = FALSE,
+    class    = "compact stripe hover"
+  )
+  # Format numeric columns: scientific notation for p-values, 2 decimals for the rest
+  num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+  pval_pattern <- "^(p[._]?val|p[._]?adj|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+  pval_cols <- grep(pval_pattern, num_cols, ignore.case = TRUE, value = TRUE)
+  other_cols <- setdiff(num_cols, pval_cols)
+  if (length(other_cols) > 0) {
+    tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+  }
+  if (length(pval_cols) > 0) {
+    pval_idx <- which(names(df) %in% pval_cols) - 1L
+    sci_render <- DT::JS(
+      "function(data, type, row) {",
+      "  if (type === 'display' && data !== null && data !== '') {",
+      "    return parseFloat(data).toExponential(2);",
+      "  }",
+      "  return data;",
+      "}"
+    )
+    col_defs <- lapply(pval_idx, function(i) list(targets = i, render = sci_render))
+    tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs, col_defs)
+  }
+  htmltools::tagList(tbl)
+}
+
+# ---------------------------------------------------------------------------
+# Helper: paper-style figure legend below plots (matching proteomics)
+# ---------------------------------------------------------------------------
+figure_legend <- function(text) {
+  cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
+}
+
+# ---------------------------------------------------------------------------
+# Helper: safely print a ggplot or return invisible(NULL)
+# ---------------------------------------------------------------------------
+safe_print_plot <- function(p) {
+  if (inherits(p, "gg") || inherits(p, "ggplot")) {
+    print(p)
+  } else {
+    invisible(NULL)
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Helper: embed a PNG from a file path vector by basename pattern
+# ---------------------------------------------------------------------------
+embed_png <- function(files, pattern, fig_width = "100%") {
+  if (is.null(files) || length(files) == 0) return(invisible(NULL))
+  hits <- files[grepl(pattern, basename(files), ignore.case = TRUE)]
+  hits <- hits[file.exists(hits)]
+  if (length(hits) == 0) return(invisible(NULL))
+  knitr::include_graphics(hits[1])
+}
+
+# ---------------------------------------------------------------------------
+# Load AI commentary if available
+# ---------------------------------------------------------------------------
+commentary <- NULL
+has_commentary <- FALSE
+if (!is.null(params$commentary_file) && file.exists(params$commentary_file)) {
+    commentary <- tryCatch(
+        jsonlite::read_json(params$commentary_file),
+        error = function(e) NULL
+    )
+    has_commentary <- !is.null(commentary) && length(commentary) > 0
+}
+
+# Helper: render commentary block for a figure_id (collapsible)
+render_commentary <- function(figure_id) {
+    if (!has_commentary) return(invisible(NULL))
+    c <- commentary[[figure_id]]
+    if (is.null(c)) return(invisible(NULL))
+
+    cat("<details class='commentary-details' style='margin: 4px 0 18px 0;'>\n")
+    cat("<summary style='cursor: pointer; color: #4a90d9; font-weight: 500; font-size: 0.93em; padding: 3px 0;'>Show AI Interpretation</summary>\n")
+
+    html <- "<div class='commentary-block' style='background: #f8f9fa; border-left: 4px solid #4a90d9; padding: 12px 16px; margin: 6px 0 4px 0; border-radius: 0 4px 4px 0; font-size: 0.92em;'>\n"
+    html <- paste0(html, "<p style='margin: 0 0 8px 0;'><strong>What this shows:</strong> ",
+                   htmltools::htmlEscape(c$what_is_this %||% ""), "</p>\n")
+
+    bio_interp <- c$biological_interpretation %||% ""
+    if (nzchar(bio_interp)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Interpretation:</strong> ",
+                       htmltools::htmlEscape(bio_interp), "</p>\n")
+    }
+
+    # Support both field names: key_observations (lipidomics) and observations (rnaseq)
+    obs <- c$key_observations %||% c$observations
+    if (!is.null(obs) && length(obs) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0 4px 0;'><strong>Key observations:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (ob in obs) {
+            html <- paste0(html, "<li>", htmltools::htmlEscape(ob), "</li>\n")
+        }
+        html <- paste0(html, "</ul>\n")
+    }
+
+    stat_note <- c$statistical_note %||% c$statistical_assessment %||% ""
+    if (nzchar(stat_note)) {
+        html <- paste0(html, "<p style='margin: 4px 0 8px 0;'><strong>Statistical note:</strong> ",
+                       htmltools::htmlEscape(stat_note), "</p>\n")
+    }
+
+    # Issues / checks
+    issues <- c$issues_checks
+    if (!is.null(issues) && length(issues) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0 4px 0;'><strong>Checks:</strong></p>\n<ul style='margin: 2px 0 8px 0; padding-left: 20px;'>\n")
+        for (issue in issues) html <- paste0(html, "<li>", htmltools::htmlEscape(issue), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    checks <- c$checks
+    if (!is.null(checks) && is.list(checks) && length(checks) > 0 && !is.null(names(checks))) {
+        html <- paste0(html, "<p style='margin: 4px 0 4px 0; color: #888; font-size: 0.88em;'>Checks: ")
+        check_parts <- vapply(names(checks), function(k) {
+            val <- checks[[k]]
+            icon <- if (isTRUE(val)) "&#9989;" else "&#10060;"
+            paste0(icon, " ", gsub("_", " ", k))
+        }, character(1))
+        html <- paste0(html, paste(check_parts, collapse = " &nbsp; "), "</p>\n")
+    }
+
+    # Next steps
+    steps <- c$next_steps
+    if (!is.null(steps) && length(steps) > 0) {
+        html <- paste0(html, "<p style='margin: 4px 0 4px 0;'><strong>Next steps:</strong></p>\n<ul style='margin: 2px 0 4px 0; padding-left: 20px;'>\n")
+        for (s in steps) html <- paste0(html, "<li>", htmltools::htmlEscape(s), "</li>\n")
+        html <- paste0(html, "</ul>\n")
+    }
+
+    # Attribution footer: Claude (Anthropic) + K-Dense AI scientific-skills
+    backend <- c$backend %||% "unknown"
+    confidence <- c$confidence %||% ""
+    backend_label <- if (grepl("claude", backend, ignore.case = TRUE)) {
+        "Claude (Anthropic) + K-Dense AI scientific-skills"
+    } else if (grepl("openai", backend, ignore.case = TRUE)) {
+        "OpenAI + K-Dense AI scientific-skills"
+    } else if (backend == "data_driven") {
+        "data-driven + K-Dense AI scientific-skills"
+    } else {
+        backend
+    }
+    if (nzchar(confidence) && confidence != "none") {
+        backend_label <- paste0(backend_label, " | confidence: ", confidence)
+    }
+    html <- paste0(html, "<p style='margin: 4px 0 0 0; color: #888; font-size: 0.85em;'><em>Generated by: ",
+                   htmltools::htmlEscape(backend_label), "</em></p>\n</div>\n")
+
+    cat(html)
+    cat("</details>\n")
+}
+
+# ---------------------------------------------------------------------------
+# Unpack config and module results
+# ---------------------------------------------------------------------------
+cfg      <- params$config
+lipid_cfg <- cfg$modes$lipidomics
+
+# Section visibility flags (default-off for MA + p-value distribution after
+# Apr 2026 reviewer feedback; toggle on via report_sections in config).
+.lip_rs        <- lipid_cfg$report_sections %||% list()
+.lip_de_subs   <- .lip_rs$de %||% list()
+show_de_ma_lip       <- isTRUE(.lip_de_subs$ma %||% FALSE)
+show_de_pvalhist_lip <- isTRUE(.lip_de_subs$pval_hist %||% FALSE)
+```
+
+```{r force-dependencies, include=FALSE}
+# Force DT and Plotly JS dependencies to be included in the self-contained HTML
+# Note: filter="top" forces noUiSlider dependency (needed for numeric range filters)
+DT::datatable(data.frame(x = 1), filter = "top")
+if (requireNamespace("plotly", quietly = TRUE)) {
+  plotly::plot_ly(data.frame(x = 1, y = 1), x = ~x, y = ~y,
+                  type = "scatter", mode = "markers")
+}
+```
+
+```{r unpack-results, include=FALSE}
+pre           <- params$pre
+qc_res        <- params$qc_res
+de_res        <- params$de_res
+rf_res        <- params$rf_res
+plsda_res     <- params$plsda_res
+class_res     <- params$class_res
+biomarker_res <- params$biomarker_res
+pathway_res   <- params$pathway_res
+qc_enhanced   <- params$qc_enhanced
+
+n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
+n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
+
+# Resolve group / condition column
+cond_col <- lipid_cfg$de$condition_column %||%
+            lipid_cfg$effects$color %||% "sample_type"
+n_groups <- NA
+if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
+  n_groups <- length(unique(pre$meta[[cond_col]]))
+}
+
+# Normalization summary
+norm_method <- "N/A"
+if (!is.null(pre$info$normalization)) {
+  ni    <- pre$info$normalization
+  parts <- character(0)
+  if (!is.null(ni$sample_norm) && tolower(ni$sample_norm) != "none")
+    parts <- c(parts, toupper(ni$sample_norm))
+  if (!is.null(ni$transform) && tolower(ni$transform) != "none")
+    parts <- c(parts, ni$transform)
+  if (!is.null(ni$scaling) && tolower(ni$scaling) != "none")
+    parts <- c(parts, ni$scaling)
+  if (length(parts) > 0) norm_method <- paste(parts, collapse = " + ")
+}
+
+de_method <- if (!is.null(de_res$method)) de_res$method else "N/A"
+
+# DE contrasts
+de_contrasts <- NULL
+if (!is.null(de_res) && !is.null(de_res$summary_df)) {
+  de_cfg       <- lipid_cfg$de %||% list()
+  de_contrasts <- de_cfg$contrasts
+  if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+}
+
+# Lipid classes count
+n_classes <- NA
+if (!is.null(class_res) && !is.null(class_res$class_summary)) {
+  n_classes <- nrow(class_res$class_summary)
+}
+```
+
+# Executive Summary
+
+```{r executive-summary, results='asis'}
+# ---- Gradient panel (matching proteomics style) --------------------------
+cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+cat("<div style='display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;'>\n")
+
+# Metric card helper
+metric_card <- function(value, label, color = "#2c3e50") {
+  cat(sprintf(
+    "<div style='flex: 1; min-width: 120px; background: white; border-radius: 6px; padding: 12px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);'><div style='font-size: 1.8em; font-weight: bold; color: %s;'>%s</div><div style='font-size: 0.85em; color: #666;'>%s</div></div>\n",
+    color, as.character(value), label
+  ))
+}
+
+# Samples
+if (!is.na(n_samples)) metric_card(n_samples, "Samples")
+
+# Groups
+if (!is.na(n_groups)) metric_card(n_groups, "Groups")
+
+# Lipid Features
+if (!is.na(n_features)) metric_card(format(n_features, big.mark = ","), "Lipid Features")
+
+# Lipid Classes
+if (!is.na(n_classes)) metric_card(n_classes, "Lipid Classes", color = "#8e44ad")
+
+# Contrasts
+n_contrasts <- length(de_contrasts)
+if (n_contrasts > 0) metric_card(n_contrasts, "Contrasts")
+
+# Total DE lipids
+n_de_total <- NA
+if (!is.null(de_res$summary_df) && "pass_any_contrast" %in% colnames(de_res$summary_df)) {
+  n_de_total <- sum(de_res$summary_df$pass_any_contrast == 1, na.rm = TRUE)
+  metric_card(format(n_de_total, big.mark = ","), "DE Lipids", color = "#c0392b")
+}
+
+# Significant Pathways
+n_sig_pathways <- if (!is.null(pathway_res$pathway_scores)) sum(pathway_res$pathway_scores$p_value < 0.05, na.rm = TRUE) else 0
+if (n_sig_pathways > 0) metric_card(n_sig_pathways, "Pathways", color = "#16a085")
+
+cat("</div>\n")
+
+# ---- DE breakdown per contrast -------------------------------------------
+if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summary_df)) {
+  padj_cut <- lipid_cfg$de$p_cutoff %||% 0.05
+  if (!is.null(lipid_cfg$de$logfc_cutoff)) {
+    log2_lfc <- lipid_cfg$de$logfc_cutoff
+  } else {
+    lfc_cut  <- lipid_cfg$de$linear_fc_cutoff %||% 1.5
+    log2_lfc <- log2(lfc_cut)
+  }
+
+  cat("<div style='margin: 12px 0;'>\n")
+  cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
+
+  for (ctr in de_contrasts) {
+    ctr_label <- make_contrast_label(ctr)
+    ctr_tbl   <- tryCatch(extract_contrast_table(de_res$summary_df, ctr_label),
+                           error = function(e) NULL)
+    if (!is.null(ctr_tbl)) {
+      sig   <- !is.na(ctr_tbl$adj.P.Val) & ctr_tbl$adj.P.Val <= padj_cut &
+               !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc
+      n_up   <- sum(sig & ctr_tbl$logFC > 0, na.rm = TRUE)
+      n_down <- sum(sig & ctr_tbl$logFC < 0, na.rm = TRUE)
+      if (exists("cutoff_summary_span")) {
+        cat(sprintf("<li><strong>%s</strong>: %s</li>\n",
+                    ctr, cutoff_summary_span(ctr, n_up, n_down, "lipids")))
+      } else {
+        cat(sprintf("<li><strong>%s</strong>: %d DE lipids (%d up, %d down)</li>\n",
+                    ctr, n_up + n_down, n_up, n_down))
+      }
+    }
+  }
+  cat("</ul>\n</div>\n")
+}
+
+cat("</div>\n")
+```
+
+---
+
+# Analysis Parameters {.tabset}
+
+## Project
+
+```{r params-project}
+proj <- data.frame(
+  Parameter = c("Project Name", "Analyst", "Project Directory",
+                "Raw Data Path", "Output Path"),
+  Value = c(
+    cfg$project$name %||% "N/A",
+    gsub("_", " ", cfg$project$analyst %||% "N/A"),
+    cfg$project$dir %||% "N/A",
+    cfg$paths$raw %||% "N/A",
+    cfg$paths$out %||% "N/A"
+  ),
+  stringsAsFactors = FALSE
+)
+make_dt(proj, "Project Parameters")
+```
+
+## Experimental Design
+
+```{r params-design}
+if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
+  design_tbl <- as.data.frame(table(pre$meta[[cond_col]]))
+  colnames(design_tbl) <- c("Group", "n (replicates)")
+  make_dt(design_tbl, "Experimental Design")
+}
+```
+
+## Pipeline Settings
+
+```{r params-pipeline}
+settings <- data.frame(
+  Parameter = c(
+    "Normalization",
+    "DE Method",
+    "Adjusted p-value Cutoff",
+    "Linear FC Cutoff",
+    "Random Forest",
+    "PLS-DA",
+    "Lipid Class Analysis"
+  ),
+  Value = c(
+    norm_method,
+    de_method,
+    as.character(lipid_cfg$de$p_cutoff %||% 0.05),
+    as.character(lipid_cfg$de$linear_fc_cutoff %||% 1.5),
+    if (!is.null(rf_res)) "Enabled" else "Disabled",
+    if (!is.null(plsda_res)) "Enabled" else "Disabled",
+    if (!is.null(class_res)) "Enabled" else "Disabled"
+  ),
+  stringsAsFactors = FALSE
+)
+make_dt(settings, "Pipeline Settings")
+```
+
+## Contrasts
+
+```{r params-contrasts}
+if (!is.null(de_contrasts) && length(de_contrasts) > 0) {
+  ctr_df <- data.frame(
+    `#` = seq_along(de_contrasts),
+    Contrast = de_contrasts,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  make_dt(ctr_df, "Contrasts")
+} else {
+  cat("No contrasts defined.\n")
+}
+```
+
+---
+
+# Module Status
+
+```{r module-status}
+module_status <- data.frame(
+  Module = c("Preprocessing", "QC Diagnostics", "Enhanced QC",
+             "Differential Expression",
+             "Random Forest", "PLS-DA", "Lipid Class Analysis",
+             "Biomarker Discovery", "Lipid Pathway Analysis"),
+  Status = c(
+    if (!is.null(pre)) "Completed" else "Skipped",
+    if (!is.null(qc_res)) "Completed" else "Skipped",
+    if (!is.null(qc_enhanced)) "Completed" else "Skipped",
+    if (!is.null(de_res) && !is.null(de_res$summary_df)) "Completed" else "Skipped",
+    if (!is.null(rf_res)) "Completed" else "Skipped",
+    if (!is.null(plsda_res)) "Completed" else "Skipped",
+    if (!is.null(class_res)) "Completed" else "Skipped",
+    if (!is.null(biomarker_res)) "Completed" else "Skipped",
+    if (!is.null(pathway_res)) "Completed" else "Skipped"
+  ),
+  stringsAsFactors = FALSE
+)
+make_dt(module_status, "Module Status", pageLength = 10)
+```
+
+---
+
+`r if (is.null(qc_res)) "<!--"`
+
+# QC Diagnostics {.tabset}
+
+## PCA {.tabset}
+
+```{r qc-pca-helpers-lip, include=FALSE}
+.pick_pca_key_lip <- function(plots, axes_prefix, subset = c("with_qc", "no_qc")) {
+  subset <- match.arg(subset)
+  keys <- grep(paste0("^", axes_prefix), names(plots), value = TRUE)
+  if (subset == "no_qc") keys <- keys[grepl("_noQC$", keys)]
+  else                   keys <- keys[!grepl("_noQC$", keys)]
+  if (length(keys) == 0) NA_character_ else keys[1]
+}
+
+.pca_has_noqc_lip <- any(grepl("_noQC$", names(qc_res$plots %||% list())))
+.pca_subsets_lip <- if (.pca_has_noqc_lip) {
+  list(list(tab = "With QC samples",    sub = "with_qc"),
+       list(tab = "Without QC samples", sub = "no_qc"))
+} else {
+  list(list(tab = "All samples", sub = "with_qc"))
+}
+```
+
+### Static {.tabset}
+
+```{r qc-pca, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(qc_res$plots)) {
+  for (sub in .pca_subsets_lip) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      safe_print_plot(qc_res$plots[[pca_main]])
+      figure_legend(sprintf(
+        "PCA of normalized lipidomics data (PC1 vs PC2) — %s. Each point represents one sample, colored by experimental group.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_plot", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
+    pca13_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      safe_print_plot(qc_res$plots[[pca13_main]])
+      figure_legend(sprintf(
+        "PCA projection onto PC1 vs PC3 — %s. Captures additional variance beyond the first two components.",
+        tolower(sub$tab)))
+      render_commentary(paste0("pca_plot_13", if (sub$sub == "no_qc") "_noQC" else ""))
+    }
+  }
+}
+```
+
+### With Sample Names {.tabset}
+
+```{r qc-pca-labeled, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(qc_res$plots)) {
+  for (sub in .pca_subsets_lip) {
+    cat(sprintf("\n#### %s\n\n", sub$tab))
+    pca_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_2", sub$sub)
+    if (!is.na(pca_main)) {
+      p <- qc_res$plots[[pca_main]]
+      if ("sample" %in% colnames(p$data)) {
+        p_lab <- p + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p_lab)
+      }
+    }
+    pca13_main <- .pick_pca_key_lip(qc_res$plots, "pca_1_3", sub$sub)
+    if (!is.na(pca13_main)) {
+      p13 <- qc_res$plots[[pca13_main]]
+      if ("sample" %in% colnames(p13$data)) {
+        p13_lab <- p13 + ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.5, vjust = -0.8, show.legend = FALSE)
+        safe_print_plot(p13_lab)
+      }
+    }
+  }
+}
+```
+
+### Interactive
+
+```{r qc-pca-interactive, results='asis'}
+if (!is.null(qc_res$plots) && requireNamespace("plotly", quietly = TRUE)) {
+  pca_keys <- grep("^pca_1_2", names(qc_res$plots), value = TRUE)
+  pca_main <- pca_keys[!grepl("_noQC$", pca_keys)][1]
+  if (!is.na(pca_main)) {
+    p <- qc_res$plots[[pca_main]]
+    sc <- p$data
+    if ("sample" %in% colnames(sc)) {
+      # Use condition column for coloring (prefer over sample_id)
+      non_pc <- setdiff(colnames(sc), c("sample", "sample_id", grep("^PC", colnames(sc), value = TRUE)))
+      color_var <- if (length(non_pc) > 0) non_pc[1] else NA
+      sc$hover_text <- paste0("Sample: ", sc$sample,
+                              if (!is.na(color_var)) paste0("<br>", color_var, ": ", sc[[color_var]]) else "")
+      pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2,
+                            color = if (!is.na(color_var)) as.formula(paste0("~`", color_var, "`")) else NULL,
+                            text = ~hover_text, hoverinfo = "text",
+                            type = "scatter", mode = "markers",
+                            marker = list(size = 10)) |>
+          plotly::layout(title = "PCA: PC1 vs PC2 — Hover for sample names")
+      print(htmltools::tagList(pl))
+    }
+  }
+} else {
+  cat("*Interactive PCA not available (plotly package missing).*\n")
+}
+```
+
+## Density
+
+```{r qc-density, fig.width=9, fig.height=6, results='asis'}
+if (!is.null(qc_res$plots)) {
+  if (!is.null(qc_res$plots[["density_raw"]])) {
+    safe_print_plot(qc_res$plots[["density_raw"]])
+    figure_legend("Per-sample density of log2(raw intensities) before any normalization. Well-overlapping curves indicate consistent sample loading and acquisition.")
+    render_commentary("density_raw")
+  }
+  ni_dens <- pre$info$normalization
+  has_scaling_dens <- !is.null(ni_dens$scaling) && tolower(ni_dens$scaling) != "none"
+  if (has_scaling_dens && !is.null(qc_res$plots[["density_transformed"]])) {
+    safe_print_plot(qc_res$plots[["density_transformed"]])
+    figure_legend("Per-sample density after the transform step. This is the matrix used for differential expression testing. Well-overlapping curves confirm the transform brought samples onto a comparable scale.")
+    render_commentary("density_normalized")
+  }
+  if (!is.null(qc_res$plots[["density_norm"]])) {
+    safe_print_plot(qc_res$plots[["density_norm"]])
+    if (has_scaling_dens) {
+      figure_legend(sprintf(
+        "Per-sample density after full normalization (%s + %s). %s scaling standardizes each lipid independently (mean=0, SD=1), so divergent per-sample curves reflect biological differences between groups. This matrix is used for PCA, heatmaps, and multivariate analyses (RF, PLS-DA).",
+        ni_dens$transform %||% "", ni_dens$scaling %||% "",
+        tools::toTitleCase(ni_dens$scaling %||% "")
+      ))
+    } else {
+      figure_legend("Per-sample density after normalization. Well-aligned curves confirm effective normalization across samples.")
+    }
+  }
+}
+```
+
+## Boxplots
+
+```{r qc-boxplots, fig.width=10, fig.height=6, results='asis'}
+if (!is.null(qc_res$plots)) {
+  if (!is.null(qc_res$plots[["boxplot_raw"]])) {
+    safe_print_plot(qc_res$plots[["boxplot_raw"]])
+    figure_legend("Per-sample boxplots of log2-transformed raw lipid intensities before normalization. Log2 transformation is applied for visualization to make intensity distributions comparable across the dynamic range.")
+    render_commentary("boxplot_raw")
+  }
+  # Show transform-only boxplot when scaling is applied; otherwise show
+  # the fully normalized boxplot (they are identical when no scaling).
+  ni_box <- pre$info$normalization
+  has_scaling_box <- !is.null(ni_box$scaling) && tolower(ni_box$scaling) != "none"
+  if (has_scaling_box && !is.null(qc_res$plots[["boxplot_transformed"]])) {
+    safe_print_plot(qc_res$plots[["boxplot_transformed"]])
+    figure_legend("Per-sample boxplots after the transform step. This is the matrix used for differential expression testing. Aligned medians confirm the transform effectively standardized sample distributions.")
+  }
+  if (!is.null(qc_res$plots[["boxplot"]])) {
+    safe_print_plot(qc_res$plots[["boxplot"]])
+    if (has_scaling_box) {
+      figure_legend(sprintf(
+        "Per-sample boxplots after full normalization (%s + %s). %s scaling standardizes each lipid independently (mean=0, SD=1), so shifted medians between groups reflect biological differences. This matrix is used for PCA, heatmaps, and multivariate analyses (RF, PLS-DA).",
+        ni_box$transform %||% "", ni_box$scaling %||% "",
+        tools::toTitleCase(ni_box$scaling %||% "")
+      ))
+    } else {
+      figure_legend("Per-sample boxplots after normalization. Comparable medians and spreads indicate successful normalization.")
+    }
+  }
+}
+```
+
+## Heatmaps {.tabset}
+
+```{r qc-heatmaps, out.width="100%", results='asis'}
+# Distance heatmap only (correlation heatmap intentionally omitted from the
+# report after Apr 2026 reviewer feedback — pipeline still writes it to disk).
+# Tabs split by sample subset when QC samples exist.
+if (!is.null(qc_res$files)) {
+  fnames <- basename(qc_res$files)
+  dist_with <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap.png"]
+  dist_no   <- qc_res$files[file.exists(qc_res$files) &
+                            fnames == "sample_distance_heatmap_noQC.png"]
+
+  hm_subsets <- list()
+  if (length(dist_with) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = if (length(dist_no) > 0) "With QC samples" else "All samples",
+      path = dist_with[1],
+      cid  = "sample_distance"
+    )
+  }
+  if (length(dist_no) > 0) {
+    hm_subsets[[length(hm_subsets) + 1]] <- list(
+      tab  = "Without QC samples",
+      path = dist_no[1],
+      cid  = "sample_distance_noQC"
+    )
+  }
+
+  if (length(hm_subsets) == 0) {
+    cat("*No sample distance heatmap available.*\n\n")
+  } else {
+    for (sub in hm_subsets) {
+      cat(sprintf("\n### %s\n\n", sub$tab))
+      cat(sprintf("![Sample Distance Heatmap -- %s](%s){width=100%%}\n\n",
+                  sub$tab, sub$path))
+      figure_legend(sprintf(
+        "Sample distance heatmap based on Euclidean distances between normalized lipid profiles (%s). Darker colors indicate larger distances (less similar samples).",
+        tolower(sub$tab)))
+      render_commentary(sub$cid)
+    }
+  }
+}
+```
+
+`r if (is.null(qc_res)) "-->"`
+
+`r if (is.null(qc_enhanced)) "<!--"`
+
+## PCA Scree
+
+```{r qc-enh-scree, fig.width=9, fig.height=6, results='asis'}
+if (!is.null(qc_enhanced$plots$pca_scree)) {
+  safe_print_plot(qc_enhanced$plots$pca_scree)
+  figure_legend("PCA scree plot showing the proportion of total variance explained by each principal component. The elbow point indicates the number of components that capture the majority of biological variation in the lipidome.")
+  render_commentary("pca_scree")
+}
+```
+
+## PCA Loading
+
+```{r qc-enh-loading, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(qc_enhanced$plots$pca_loading)) {
+  safe_print_plot(qc_enhanced$plots$pca_loading)
+  figure_legend("PCA loading plot showing the contribution of individual lipid features to the first two principal components. Lipids with large loadings drive sample separation along the corresponding PC axis.")
+  render_commentary("pca_loading")
+}
+```
+
+## Category Donut {.tabset}
+
+```{r qc-enh-donut, fig.width=9, fig.height=9, results='asis'}
+if (!is.null(qc_enhanced$plots$category_donuts) && length(qc_enhanced$plots$category_donuts) > 0) {
+  for (grp in names(qc_enhanced$plots$category_donuts)) {
+    cat(paste0("\n### ", grp, "\n\n"))
+    safe_print_plot(qc_enhanced$plots$category_donuts[[grp]])
+    cat("\n\n")
+  }
+  figure_legend("Donut charts showing the distribution of detected lipid features across major lipid categories (e.g., glycerophospholipids, sphingolipids, glycerolipids) per condition. This provides an overview of lipidome coverage and allows comparison of category composition between groups.")
+  render_commentary("category_donut")
+} else if (!is.null(qc_enhanced$plots$category_donut)) {
+  safe_print_plot(qc_enhanced$plots$category_donut)
+  figure_legend("Donut chart showing the distribution of detected lipid features across major lipid categories (e.g., glycerophospholipids, sphingolipids, glycerolipids). This provides an overview of lipidome coverage.")
+  render_commentary("category_donut")
+}
+```
+
+## Class Correlation
+
+```{r qc-enh-classcor, fig.width=10, fig.height=8, results='asis'}
+if (!is.null(qc_enhanced$plots$class_correlation)) {
+  safe_print_plot(qc_enhanced$plots$class_correlation)
+  figure_legend("Correlation matrix of lipid class-level mean intensities across samples. Strong positive correlations between classes may indicate co-regulation or shared metabolic pathways.")
+  render_commentary("class_correlation")
+}
+```
+
+## PERMANOVA
+
+```{r qc-enh-permanova, results='asis'}
+if (!is.null(qc_enhanced)) {
+  if (!is.null(qc_enhanced$permanova)) {
+    cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+    cat("<h4>PERMANOVA Results</h4>\n")
+    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Permutational multivariate analysis of variance testing whether lipid profiles differ significantly between experimental groups.</em></p>\n")
+
+    perm_df <- tryCatch({
+      perm <- qc_enhanced$permanova
+      if (is.data.frame(perm)) {
+        perm
+      } else if (!is.null(perm$aov.tab)) {
+        as.data.frame(perm$aov.tab)
+      } else if (!is.null(perm$table)) {
+        as.data.frame(perm$table)
+      } else if (is.list(perm) && !is.null(perm$F_statistic)) {
+        # Handle list(F_statistic, R2, p_value) from run_permanova()
+        data.frame(
+          Statistic = c("F statistic", "R-squared", "p-value"),
+          Value = c(
+            round(perm$F_statistic, 2),
+            round(perm$R2, 2),
+            sprintf("%.2e", perm$p_value)
+          ),
+          stringsAsFactors = FALSE
+        )
+      } else {
+        NULL
+      }
+    }, error = function(e) NULL)
+
+    if (!is.null(perm_df)) {
+      print(make_dt(perm_df, caption = "PERMANOVA Results"))
+    }
+    cat("</div>\n")
+
+    figure_legend("PERMANOVA (Permutational Multivariate Analysis of Variance) tests whether the centroids and dispersion of lipid profiles differ between groups. A significant p-value (< 0.05) indicates that group membership explains a significant proportion of the overall variation in the lipidome.")
+  } else {
+    cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>PERMANOVA not available</strong> — the <code>vegan</code> package is not installed. Install it with <code>install.packages('vegan')</code> to enable permutational multivariate analysis of variance.</p>\n")
+    cat("</div>\n")
+  }
+}
+```
+
+`r if (is.null(qc_enhanced)) "-->"`
+
+---
+
+`r if (is.null(de_res) || is.null(de_res$summary_df)) "<!--"`
+
+# Differential Expression
+
+```{r cutoff-panel, results='asis'}
+if (exists("cutoff_panel_html")) {
+    .lfc_default <- if (!is.null(lipid_cfg$de$logfc_cutoff)) {
+        lipid_cfg$de$logfc_cutoff
+    } else {
+        log2(lipid_cfg$de$linear_fc_cutoff %||% 1.5)
+    }
+    .p_default <- lipid_cfg$de$p_cutoff %||% 0.05
+    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "pval"))
+}
+```
+
+```{r de-prep, include=FALSE}
+# Prepare shared data used across DE sub-sections
+padj_cut_de <- lipid_cfg$de$p_cutoff %||% 0.05
+# logfc_cutoff is applied directly to |logFC| (in the transform's scale).
+# linear_fc_cutoff is a backwards-compat alias converted via log2().
+if (!is.null(lipid_cfg$de$logfc_cutoff)) {
+  log2_lfc_de <- lipid_cfg$de$logfc_cutoff
+} else {
+  lfc_cut_de  <- lipid_cfg$de$linear_fc_cutoff %||% 1.5
+  log2_lfc_de <- log2(lfc_cut_de)
+}
+
+# Build feature_id -> display_name lookup (full lipid names)
+name_map_v <- NULL
+if (!is.null(pre$row_data)) {
+  # Prefer display_name (e.g. "Phosphatidylcholine (16:0/18:1)") over Name
+  name_col <- if ("display_name" %in% colnames(pre$row_data)) "display_name" else "Name"
+  if (name_col %in% colnames(pre$row_data)) {
+    name_map_v <- stats::setNames(
+      as.character(pre$row_data[[name_col]]),
+      as.character(pre$row_data$feature_id)
+    )
+  }
+}
+
+resolve_name <- function(fid) {
+  if (!is.null(name_map_v) && fid %in% names(name_map_v) && !is.na(name_map_v[fid])) {
+    name_map_v[fid]
+  } else {
+    fid
+  }
+}
+
+# Build norm intensity y-label
+norm_y_label_report <- "Normalized intensity"
+ni_r <- pre$info$normalization
+if (!is.null(ni_r)) {
+  np <- character(0)
+  if (!is.null(ni_r$transform) && tolower(ni_r$transform) != "none") np <- c(np, ni_r$transform)
+  if (!is.null(ni_r$sample_norm) && tolower(ni_r$sample_norm) != "none") np <- c(np, toupper(ni_r$sample_norm))
+  if (!is.null(ni_r$scaling) && tolower(ni_r$scaling) != "none") np <- c(np, ni_r$scaling)
+  if (length(np) > 0) norm_y_label_report <- paste0("Normalized intensity (", paste(np, collapse = " + "), ")")
+}
+```
+
+```{r de-note, results='asis'}
+if (!is.null(de_res) && !is.null(de_res$summary_df)) {
+  n_sig_any <- sum(de_res$summary_df$pass_any_contrast == 1, na.rm = TRUE)
+  if (n_sig_any == 0) {
+    n_samp <- ncol(pre$expr_work)
+    cat("\n> **Note:** No features reached significance (p-value < ",
+        padj_cut_de, " and |logFC| >= ", round(log2_lfc_de, 2),
+        "). With only **", n_samp, " samples**, the test has limited power. ",
+        "Consider increasing sample size, relaxing thresholds, or using a ",
+        "rank-based method (e.g. GSEA).\n\n", sep = "")
+  }
+}
+```
+
+```{r de-sections, results='asis', fig.width=10, fig.height=7}
+if (!is.null(de_contrasts)) {
+  for (ctr in de_contrasts) {
+    ctr_label <- make_contrast_label(ctr)
+
+    ctr_tbl <- tryCatch(
+      extract_contrast_table(de_res$summary_df, ctr_label),
+      error = function(e) NULL
+    )
+    if (is.null(ctr_tbl)) next
+
+    # Add Name column
+    ctr_tbl$Name <- vapply(ctr_tbl$feature_id, resolve_name, character(1), USE.NAMES = FALSE)
+
+    # Direction column for coloring (uses adj.P.Val for consistency with cutoff panel)
+    ctr_tbl$Direction <- ifelse(
+      !is.na(ctr_tbl$adj.P.Val) & ctr_tbl$adj.P.Val <= padj_cut_de &
+        !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc_de,
+      ifelse(ctr_tbl$logFC > 0, "Up", "Down"), "NS"
+    )
+    ctr_tbl$Direction <- factor(ctr_tbl$Direction, levels = c("NS", "Down", "Up"))
+    ctr_tbl$neglog10_pval <- pmin(-log10(pmax(
+      ifelse(is.na(ctr_tbl$P.Value), 1, ctr_tbl$P.Value), 1e-300
+    )), 50)
+
+    # ================================================================
+    # VOLCANO
+    # ================================================================
+    cat("\n## Volcano: ", ctr, " {.tabset}\n\n", sep = "")
+
+    # -- Static Volcano (sub-tabbed by p-value type) --
+    # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
+    default_ptype_lip <- "pval"
+    vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
+                                       basename(de_res$files))]
+    vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
+                                       basename(de_res$files))]
+    vol_padj_png <- vol_padj_png[file.exists(vol_padj_png)]
+    vol_pval_png <- vol_pval_png[file.exists(vol_pval_png)]
+
+    if (length(vol_padj_png) > 0 || length(vol_pval_png) > 0) {
+      cat("### Static {.tabset}\n\n")
+      order_ptypes <- if (default_ptype_lip == "padj") c("padj", "pval") else c("pval", "padj")
+      for (pt in order_ptypes) {
+        png_path <- if (pt == "padj") vol_padj_png else vol_pval_png
+        tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+        if (length(png_path) > 0) {
+          cat(sprintf("#### %s\n\n", tab_label))
+          cat(sprintf("\n![Volcano: %s -- %s](%s){width=100%%}\n\n",
+                      ctr, tab_label, png_path[1]))
+          figure_legend(paste0(
+            "Volcano plot for contrast ", ctr,
+            " (y-axis: -log10 ",
+            if (pt == "padj") "adjusted P-value" else "raw P-value", "). ",
+            "Coloured points exceed both fold-change and significance thresholds."
+          ))
+        }
+      }
+      render_commentary(paste0("volcano_", ctr_label))
+      cat("\n\n")
+    } else {
+      vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"),
+                                    basename(de_res$files))]
+      vol_png <- vol_png[file.exists(vol_png)]
+      if (length(vol_png) > 0) {
+        cat("### Static\n\n")
+        cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
+        figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a lipid; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
+        render_commentary(paste0("volcano_", ctr_label))
+        cat("\n\n")
+      }
+    }
+
+    # -- Interactive Volcano (matching proteomics pattern) --
+    if (requireNamespace("plotly", quietly = TRUE)) {
+      cat("### Interactive\n\n")
+
+      vol_cid <- gsub("[^a-zA-Z0-9]", "_", ctr_label)
+
+      vol_p <- ggplot2::ggplot(
+        ctr_tbl,
+        ggplot2::aes(x = logFC, y = neglog10_pval, color = Direction,
+                     text = paste0("Lipid: ", Name,
+                                   "\nlog2(FC): ", round(logFC, 2),
+                                   "\nP.Value: ", sprintf("%.2e", P.Value),
+                                   "\nadj.P.Val: ", sprintf("%.2e", adj.P.Val)))
+      ) +
+        ggplot2::geom_point(alpha = 0.6, size = 1.5) +
+        ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+        ggplot2::geom_vline(xintercept = c(-log2_lfc_de, log2_lfc_de), linetype = "dashed", alpha = 0.5) +
+        ggplot2::geom_hline(yintercept = -log10(padj_cut_de), linetype = "dashed", alpha = 0.5) +
+        ggplot2::labs(x = "log2(FC)", y = "-log10(P.Value)") +
+        ggplot2::theme_minimal()
+
+      vol_plotly <- plotly::ggplotly(vol_p, tooltip = "text")
+
+      cat(sprintf('
+<div style="margin-bottom: 15px; position: relative;">
+<label for="volcano_genes_%s"><strong>Highlight lipids:</strong></label>
+<div style="display: inline-block; position: relative; margin-left: 10px;">
+<input type="text" id="volcano_genes_%s" placeholder="Start typing a lipid name..." autocomplete="off"
+  style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
+  oninput="volcanoAutocomplete_%s(this)" onkeydown="volcanoAutoKey_%s(event)">
+<div id="volcano_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+</div>
+<button onclick="highlightVolcanoGenes_%s()" style="padding: 8px 15px; margin-left: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Highlight</button>
+<button onclick="clearVolcanoHighlight_%s()" style="padding: 8px 15px; margin-left: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+<div id="volcano_tags_%s" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+</div>
+', vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid, vol_cid))
+
+      vol_plotly$elementId <- paste0("volcano_plot_", vol_cid)
+      print(htmltools::tagList(vol_plotly))
+
+      # Register volcano plot for cutoff panel
+      if (exists("cutoff_register_plot")) {
+        vol_reg_df <- data.frame(
+          name = as.character(ctr_tbl$Name),
+          logFC = ctr_tbl$logFC,
+          pval = ctr_tbl$P.Value,
+          adjPval = ctr_tbl$adj.P.Val,
+          stringsAsFactors = FALSE
+        )
+        pass_col_l <- paste0("pass.", ctr_label)
+        if (!is.null(de_res$summary_df) && pass_col_l %in% names(de_res$summary_df)) {
+          pf <- as.numeric(de_res$summary_df[[pass_col_l]])
+          pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
+          vol_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
+        }
+        cat(cutoff_register_plot(
+          paste0("volcano_plot_", vol_cid),
+          vol_reg_df, "volcano", "Lipid", ctr
+        ))
+      }
+
+      # JS for autocomplete + highlight (proteomics pattern)
+      cat(sprintf('
+<script>
+(function() {
+    var cid = "%s";
+    var selectedGenes = [];
+    var acIndex = -1;
+    function getLipidNames() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+    window.volcanoAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = ""; acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var allNames = getLipidNames();
+        var matches = allNames.filter(function(g) { return g.toLowerCase().indexOf(val) !== -1 && selectedGenes.indexOf(g) === -1; }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+    window.volcanoAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcHighlight(items); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcHighlight(items); }
+        else if (e.key === "Enter" && acIndex >= 0) { e.preventDefault(); items[acIndex].click(); }
+    };
+    function updateAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === acIndex ? "#e9ecef" : "white"; }
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    }
+    function renderTags() {
+        var container = document.getElementById("volcano_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeVolcanoGene_" + cid + "(\'" + g + "\')\\">x</span>";
+            container.appendChild(tag);
+        });
+    }
+    window["removeVolcanoGene_" + cid] = function(gene) { selectedGenes = selectedGenes.filter(function(g) { return g !== gene; }); renderTags(); applyHighlight(); };
+    function applyHighlight() {
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) { Plotly.relayout(plotDiv, { annotations: [] }); return; }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var lipidName = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (genesLower.indexOf(lipidName.toLowerCase()) !== -1) {
+                        annotations.push({ x: data.x[i], y: data.y[i], text: lipidName, showarrow: true, arrowhead: 2, ax: 20, ay: -30, font: { size: 12, color: "black" }, bgcolor: "rgba(255,255,255,0.9)", bordercolor: "black", borderwidth: 1 });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+    window.highlightVolcanoGenes_%s = function() {
+        var input = document.getElementById("volcano_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allNames = getLipidNames();
+        manual.forEach(function(m) { var mLower = m.toLowerCase(); var match = allNames.find(function(g) { return g.toLowerCase() === mLower; }); if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match); });
+        document.getElementById("volcano_genes_" + cid).value = "";
+        document.getElementById("volcano_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    };
+    window.clearVolcanoHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("volcano_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("volcano_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("volcano_ac_" + cid);
+        var input = document.getElementById("volcano_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
+    });
+})();
+</script>
+', vol_cid, vol_cid, vol_cid, vol_cid, vol_cid))
+
+      figure_legend(paste0("Interactive volcano plot for ", ctr, ". Type lipid names in the search box to annotate them on the plot. Hover over points for details."))
+      cat("\n\n")
+    }
+
+    # ================================================================
+    # MA PLOT  (default-off after Apr 2026 reviewer feedback;
+    #           toggle via report_sections$de$ma: true to restore)
+    # ================================================================
+    ma_png <- de_res$files[grepl(paste0("MA_", ctr_label, "\\.png$"), basename(de_res$files))]
+    ma_png <- ma_png[file.exists(ma_png)]
+    if (show_de_ma_lip && length(ma_png) > 0) {
+      cat("\n## MA Plot: ", ctr, " {.tabset}\n\n", sep = "")
+
+      cat("### Static\n\n")
+      cat(sprintf("\n![MA Plot: %s](%s){width=100%%}\n\n", ctr, ma_png[1]))
+      figure_legend(paste0("MA plot for contrast ", ctr, ". The x-axis shows average expression and the y-axis shows log2 fold change. Significant features are highlighted."))
+      render_commentary(paste0("ma_", ctr_label))
+      cat("\n\n")
+
+      # Interactive MA (matching proteomics pattern)
+      if (requireNamespace("plotly", quietly = TRUE)) {
+        cat("### Interactive\n\n")
+
+        ma_cid <- paste0("ma_", gsub("[^a-zA-Z0-9]", "_", ctr_label))
+
+        ma_p <- ggplot2::ggplot(
+          ctr_tbl,
+          ggplot2::aes(x = AveExpr, y = logFC, color = Direction,
+                       text = paste0("Lipid: ", Name,
+                                     "\nlog2(FC): ", round(logFC, 2),
+                                     "\nAveExpr: ", round(AveExpr, 2),
+                                     "\nP.Value: ", sprintf("%.2e", P.Value),
+                                     "\nadj.P.Val: ", sprintf("%.2e", adj.P.Val)))
+        ) +
+          ggplot2::geom_point(alpha = 0.6, size = 1.5) +
+          ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+          ggplot2::geom_hline(yintercept = c(-log2_lfc_de, 0, log2_lfc_de),
+                              linetype = c("dashed", "solid", "dashed"),
+                              alpha = c(0.5, 0.3, 0.5)) +
+          ggplot2::labs(x = "Average Expression", y = "log2(FC)") +
+          ggplot2::theme_minimal()
+
+        ma_plotly <- plotly::ggplotly(ma_p, tooltip = "text")
+
+        cat(sprintf('
+<div style="margin-bottom: 15px; position: relative;">
+<label for="ma_genes_%s"><strong>Highlight lipids:</strong></label>
+<div style="display: inline-block; position: relative; margin-left: 10px;">
+<input type="text" id="ma_genes_%s" placeholder="Start typing a lipid name..." autocomplete="off"
+  style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 350px;"
+  oninput="maAutocomplete_%s(this)" onkeydown="maAutoKey_%s(event)">
+<div id="ma_ac_%s" style="position: absolute; top: 100%%; left: 0; width: 350px; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; z-index: 1000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+</div>
+<button onclick="highlightMAGenes_%s()" style="padding: 8px 15px; margin-left: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Highlight</button>
+<button onclick="clearMAHighlight_%s()" style="padding: 8px 15px; margin-left: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+<div id="ma_tags_%s" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+</div>
+', ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid, ma_cid))
+
+        ma_plotly$elementId <- paste0("ma_plot_", ma_cid)
+        print(htmltools::tagList(ma_plotly))
+
+        # Register MA plot for cutoff panel
+        if (exists("cutoff_register_plot")) {
+          ma_reg_df <- data.frame(
+            name = as.character(ctr_tbl$Name),
+            logFC = ctr_tbl$logFC,
+            pval = ctr_tbl$P.Value,
+            avgExpr = ctr_tbl$AveExpr,
+            adjPval = ctr_tbl$adj.P.Val,
+            stringsAsFactors = FALSE
+          )
+          pass_col_l <- paste0("pass.", ctr_label)
+          if (!is.null(de_res$summary_df) && pass_col_l %in% names(de_res$summary_df)) {
+            pf <- as.numeric(de_res$summary_df[[pass_col_l]])
+            pf_aligned <- pf[match(ctr_tbl$feature_id, de_res$summary_df$feature_id)]
+            ma_reg_df$passFlag <- ifelse(is.na(pf_aligned), 0, pf_aligned)
+          }
+          cat(cutoff_register_plot(
+            paste0("ma_plot_", ma_cid),
+            ma_reg_df, "ma", "Lipid", ctr
+          ))
+        }
+
+        cat(sprintf('
+<script>
+(function() {
+    var cid = "%s"; var selectedGenes = []; var acIndex = -1;
+    function getLipidNames() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return [];
+        var names = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var g = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (g && names.indexOf(g) === -1) names.push(g);
+                }
+            }
+        }
+        return names.sort();
+    }
+    window.maAutocomplete_%s = function(el) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var val = el.value.trim().toLowerCase();
+        acDiv.innerHTML = ""; acIndex = -1;
+        if (val.length < 1) { acDiv.style.display = "none"; return; }
+        var allNames = getLipidNames();
+        var matches = allNames.filter(function(g) { return g.toLowerCase().indexOf(val) !== -1 && selectedGenes.indexOf(g) === -1; }).slice(0, 15);
+        if (matches.length === 0) { acDiv.style.display = "none"; return; }
+        matches.forEach(function(g) {
+            var item = document.createElement("div");
+            item.textContent = g;
+            item.style.cssText = "padding: 6px 10px; cursor: pointer; font-size: 13px;";
+            item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+            item.onmouseleave = function() { this.style.background = "white"; };
+            item.onclick = function() { selectGene(g); };
+            acDiv.appendChild(item);
+        });
+        acDiv.style.display = "block";
+    };
+    window.maAutoKey_%s = function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var items = acDiv.children;
+        if (items.length === 0) return;
+        if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcHighlight(items); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcHighlight(items); }
+        else if (e.key === "Enter" && acIndex >= 0) { e.preventDefault(); items[acIndex].click(); }
+    };
+    function updateAcHighlight(items) { for (var i = 0; i < items.length; i++) items[i].style.background = i === acIndex ? "#e9ecef" : "white"; }
+    function selectGene(gene) {
+        if (selectedGenes.indexOf(gene) === -1) selectedGenes.push(gene);
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    }
+    function renderTags() {
+        var container = document.getElementById("ma_tags_" + cid);
+        container.innerHTML = "";
+        selectedGenes.forEach(function(g) {
+            var tag = document.createElement("span");
+            tag.style.cssText = "display: inline-flex; align-items: center; background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; gap: 4px;";
+            tag.innerHTML = g + " <span style=\\"cursor:pointer; font-weight:bold; margin-left:3px;\\" onclick=\\"removeMAGene_" + cid + "(\'" + g + "\')\\">x</span>";
+            container.appendChild(tag);
+        });
+    }
+    window["removeMAGene_" + cid] = function(gene) { selectedGenes = selectedGenes.filter(function(g) { return g !== gene; }); renderTags(); applyHighlight(); };
+    function applyHighlight() {
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (!plotDiv || !plotDiv.data) return;
+        if (selectedGenes.length === 0) { Plotly.relayout(plotDiv, { annotations: [] }); return; }
+        var genesLower = selectedGenes.map(function(g) { return g.toLowerCase(); });
+        var annotations = [];
+        for (var t = 0; t < plotDiv.data.length; t++) {
+            var data = plotDiv.data[t];
+            if (!data.text) continue;
+            for (var i = 0; i < data.text.length; i++) {
+                var parts = data.text[i].split(/<br\\s*\\/?>/i);
+                if (parts.length > 0) {
+                    var lipidName = parts[0].replace(/Lipid:\\s*/i, "").trim();
+                    if (genesLower.indexOf(lipidName.toLowerCase()) !== -1) {
+                        annotations.push({ x: data.x[i], y: data.y[i], text: lipidName, showarrow: true, arrowhead: 2, ax: 20, ay: -30, font: { size: 12, color: "black" }, bgcolor: "rgba(255,255,255,0.9)", bordercolor: "black", borderwidth: 1 });
+                    }
+                }
+            }
+        }
+        Plotly.relayout(plotDiv, { annotations: annotations });
+    }
+    window.highlightMAGenes_%s = function() {
+        var input = document.getElementById("ma_genes_" + cid).value;
+        var manual = input.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var allNames = getLipidNames();
+        manual.forEach(function(m) { var mLower = m.toLowerCase(); var match = allNames.find(function(g) { return g.toLowerCase() === mLower; }); if (match && selectedGenes.indexOf(match) === -1) selectedGenes.push(match); });
+        document.getElementById("ma_genes_" + cid).value = "";
+        document.getElementById("ma_ac_" + cid).style.display = "none";
+        renderTags(); applyHighlight();
+    };
+    window.clearMAHighlight_%s = function() {
+        selectedGenes = [];
+        document.getElementById("ma_genes_" + cid).value = "";
+        renderTags();
+        var plotDiv = document.getElementById("ma_plot_" + cid);
+        if (plotDiv) Plotly.relayout(plotDiv, { annotations: [] });
+    };
+    document.addEventListener("click", function(e) {
+        var acDiv = document.getElementById("ma_ac_" + cid);
+        var input = document.getElementById("ma_genes_" + cid);
+        if (acDiv && e.target !== input && !acDiv.contains(e.target)) acDiv.style.display = "none";
+    });
+})();
+</script>
+', ma_cid, ma_cid, ma_cid, ma_cid, ma_cid))
+        figure_legend(paste0("Interactive MA plot for ", ctr, ". Search and highlight specific lipids."))
+        cat("\n\n")
+      }
+    }
+
+    # ================================================================
+    # P-VALUE DISTRIBUTION  (default-off after Apr 2026 reviewer feedback;
+    #                        toggle via report_sections$de$pval_hist: true)
+    # ================================================================
+    phist_png <- de_res$files[grepl(paste0("pvalue_hist_", ctr_label, "\\.png$"), basename(de_res$files))]
+    phist_png <- phist_png[file.exists(phist_png)]
+    if (show_de_pvalhist_lip && length(phist_png) > 0) {
+      cat("\n## P-value Distribution: ", ctr, "\n\n", sep = "")
+      cat(sprintf("\n![P-value Distribution: %s](%s){width=85%%}\n\n", ctr, phist_png[1]))
+      figure_legend(paste0("Distribution of raw p-values for contrast ", ctr, ". A uniform distribution suggests no differential signal; enrichment near zero indicates true positives."))
+      render_commentary(paste0("pvalue_hist_", ctr_label))
+      cat("\n\n")
+    }
+
+    # ================================================================
+    # DE RESULTS TABLE (statistics + normalized intensity)
+    # ================================================================
+    cat("\n## DE Results: ", ctr, " {.tabset}\n\n", sep = "")
+
+    # Top 50 table
+    top_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ]
+    top_tbl <- head(top_tbl, 50)
+    top_display <- top_tbl[, c("feature_id", "Name", "logFC", "AveExpr", "P.Value", "adj.P.Val", "Direction")]
+    cat("### Top 50 DE Lipids\n\n")
+    print(make_dt(top_display, caption = paste0("Top 50 DE lipids: ", ctr)))
+    cat("\n\n")
+
+    # Full table with normalized intensities
+    cat("### Full Results + Expression\n\n")
+    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>",
+        "Full DE results merged with normalized expression values. ",
+        "Use the search box to find specific lipids and the buttons to export.</em></p>\n")
+
+    full_tbl <- ctr_tbl[order(ctr_tbl$P.Value), ,drop=FALSE]
+    full_display <- full_tbl[, c("feature_id", "Name", "logFC", "AveExpr", "P.Value", "adj.P.Val", "Direction")]
+
+    # Merge transformed expression (glog10, before scaling) for meaningful values
+    de_tbl_expr <- pre$expr_log %||% pre$expr_work
+    if (!is.null(de_tbl_expr)) {
+      expr_df2 <- as.data.frame(de_tbl_expr, check.names = FALSE)
+      expr_df2$feature_id <- rownames(de_tbl_expr)
+      merged <- merge(full_display, expr_df2, by = "feature_id", all.x = TRUE)
+      if (nrow(merged) > 0) full_display <- merged
+    }
+
+    # Format p-value columns as scientific notation strings before DT
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+    pval_cols_de <- grep(pval_pat, names(full_display), ignore.case = TRUE, value = TRUE)
+    for (pc in pval_cols_de) {
+      if (is.numeric(full_display[[pc]])) {
+        full_display[[pc]] <- ifelse(is.na(full_display[[pc]]), NA_character_,
+                                     sprintf("%.2e", full_display[[pc]]))
+      }
+    }
+    num_cols_de <- names(full_display)[vapply(full_display, is.numeric, logical(1))]
+    tbl_de <- DT::datatable(
+      full_display,
+      caption = paste0("DE Results + Normalized Expression: ", ctr),
+      extensions = "Buttons",
+      options = list(
+        scrollX = TRUE, pageLength = 10, dom = "Bfrtip",
+        buttons = list(
+          list(extend = "csv", filename = paste0("DE_expression_", ctr_label)),
+          list(extend = "excel", filename = paste0("DE_expression_", ctr_label))
+        ),
+        search = list(regex = TRUE, caseInsensitive = TRUE)
+      ),
+      rownames = FALSE, filter = "top",
+      class = "compact stripe hover"
+    )
+    if (length(num_cols_de) > 0) tbl_de <- DT::formatRound(tbl_de, columns = num_cols_de, digits = 2)
+    print(htmltools::tagList(tbl_de))
+    cat("\n\n")
+
+  } # end contrast loop
+}
+```
+
+```{r lipid-explorer-prep, include=FALSE}
+# Prepare data for the lipid expression explorer
+explorer_ready <- FALSE
+explorer_json_str <- "{}"
+
+# Use expr_log (transform-only, e.g. glog10) for the explorer so that means
+# reflect actual intensity levels rather than z-scored zeros.
+# Fall back to expr_work if expr_log is not available.
+explorer_expr <- pre$expr_log %||% pre$expr_work
+
+if (!is.null(explorer_expr) && !is.null(pre$meta)) {
+  # Build lipid display names
+  lipid_ids <- rownames(explorer_expr)
+  lipid_display <- vapply(lipid_ids, resolve_name, character(1), USE.NAMES = FALSE)
+
+  # Build sample -> group mapping
+  sample_col_exp <- lipid_cfg$effects$samples %||% "sample_id"
+  group_col_exp  <- cond_col
+  meta_exp       <- pre$meta
+
+  if (sample_col_exp %in% names(meta_exp) && group_col_exp %in% names(meta_exp)) {
+    group_map_exp <- stats::setNames(as.character(meta_exp[[group_col_exp]]),
+                                      meta_exp[[sample_col_exp]])
+    sample_groups_exp <- as.character(group_map_exp[colnames(explorer_expr)])
+    sample_groups_exp[is.na(sample_groups_exp)] <- "Unknown"
+  } else {
+    sample_groups_exp <- rep("All", ncol(explorer_expr))
+  }
+
+  # Build expression matrix as list of numeric vectors
+  expr_matrix_list <- lapply(seq_len(nrow(explorer_expr)), function(i) {
+    round(as.numeric(explorer_expr[i, ]), 2)
+  })
+
+  explorer_data <- list(
+    genes   = lipid_display,
+    samples = colnames(explorer_expr),
+    groups  = sample_groups_exp,
+    expr    = expr_matrix_list
+  )
+
+  explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = FALSE)
+  explorer_ready <- TRUE
+}
+```
+
+`r if (explorer_ready) "" else "<!--"`
+
+## Lipid Explorer
+
+Search for lipids and visualize their transformed expression (glog10, before scaling) across groups.
+
+```{r lipid-explorer, results='asis'}
+if (explorer_ready) {
+  cat(sprintf('
+<div style="margin: 15px 0 20px 0;">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+<label for="boxplot_gene_input" style="font-weight: bold; white-space: nowrap;">Search lipid:</label>
+<div style="position: relative; flex: 1; max-width: 400px;">
+<input type="text" id="boxplot_gene_input" placeholder="Start typing a lipid name..."
+  autocomplete="off"
+  style="padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; width: 100%%; font-size: 14px; box-sizing: border-box;"
+  oninput="boxplotAutocomplete(this)" onkeydown="boxplotAutoKey(event)">
+<div id="boxplot_ac" style="position: absolute; top: 100%%; left: 0; width: 100%%; max-height: 220px; overflow-y: auto; background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 6px 6px; z-index: 1000; display: none; box-shadow: 0 4px 8px rgba(0,0,0,0.12);"></div>
+</div>
+<button onclick="addGeneToPlot()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Add</button>
+<button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
+</div>
+<div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
+</div>
+<div id="boxplot_container" style="width: 100%%; min-height: 450px; margin-bottom: 10px;"></div>
+<div id="boxplot_export_bar" style="display: none; margin-bottom: 20px; gap: 8px; align-items: center;">
+  <span style="font-size: 0.85em; color: #555; margin-right: 4px;">Export:</span>
+  <button onclick="exportBoxplot(\'svg\')" style="padding: 5px 14px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">SVG</button>
+  <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
+</div>
+'))
+
+  # Inject JS data and rendering logic
+  cat(sprintf('<script>
+var geneExprData = %s;
+var bpGroupLabel = "%s";
+var bpYLabel = "%s";
+var boxplotAcIndex = -1;
+var selectedGenes = [];
+
+function boxplotAutocomplete(el) {
+  var ac = document.getElementById("boxplot_ac");
+  var val = el.value.trim().toLowerCase(); ac.innerHTML = ""; boxplotAcIndex = -1;
+  if (val.length < 1) { ac.style.display = "none"; return; }
+  var matches = [];
+  for (var i = 0; i < geneExprData.genes.length; i++) {
+    if (geneExprData.genes[i].toLowerCase().indexOf(val) !== -1) {
+      if (selectedGenes.some(function(g){return g.idx===i;})) continue;
+      matches.push({name: geneExprData.genes[i], idx: i});
+      if (matches.length >= 20) break;
+    }
+  }
+  if (matches.length === 0) { ac.style.display = "none"; return; }
+  matches.forEach(function(m) {
+    var item = document.createElement("div"); item.textContent = m.name;
+    item.style.cssText = "padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0;";
+    item.onmouseenter = function() { this.style.background = "#e9ecef"; };
+    item.onmouseleave = function() { this.style.background = "white"; };
+    item.onclick = function() { document.getElementById("boxplot_gene_input").value = ""; ac.style.display = "none"; addGeneByIdx(m.idx, m.name); };
+    ac.appendChild(item);
+  });
+  ac.style.display = "block";
+}
+function boxplotAutoKey(e) {
+  var ac = document.getElementById("boxplot_ac"); var items = ac.children;
+  if (e.key==="ArrowDown"){boxplotAcIndex=Math.min(boxplotAcIndex+1,items.length-1);for(var i=0;i<items.length;i++)items[i].style.background=i===boxplotAcIndex?"#e9ecef":"white";}
+  else if(e.key==="ArrowUp"){boxplotAcIndex=Math.max(boxplotAcIndex-1,0);for(var i=0;i<items.length;i++)items[i].style.background=i===boxplotAcIndex?"#e9ecef":"white";}
+  else if(e.key==="Enter"){if(boxplotAcIndex>=0&&items[boxplotAcIndex])items[boxplotAcIndex].click(); else addGeneToPlot(); e.preventDefault();}
+}
+function addGeneToPlot() {
+  var el = document.getElementById("boxplot_gene_input");
+  var val = el.value.trim(); if (!val) return;
+  var vl = val.toLowerCase();
+  for (var i = 0; i < geneExprData.genes.length; i++) {
+    if (geneExprData.genes[i].toLowerCase() === vl) { addGeneByIdx(i, geneExprData.genes[i]); el.value = ""; return; }
+  }
+  // Partial match
+  for (var i = 0; i < geneExprData.genes.length; i++) {
+    if (geneExprData.genes[i].toLowerCase().indexOf(vl) !== -1) { addGeneByIdx(i, geneExprData.genes[i]); el.value = ""; return; }
+  }
+}
+function addGeneByIdx(idx, name) {
+  if (selectedGenes.some(function(g){return g.idx===idx;})) return;
+  selectedGenes.push({name:name, idx:idx}); renderGeneTags(); renderMultiBoxplot();
+}
+function removeGene(idx) {
+  selectedGenes = selectedGenes.filter(function(g){return g.idx!==idx;});
+  renderGeneTags(); if (selectedGenes.length>0) renderMultiBoxplot();
+  else { document.getElementById("boxplot_container").innerHTML=""; document.getElementById("boxplot_gene_info").innerHTML=""; document.getElementById("boxplot_export_bar").style.display="none"; }
+}
+function clearBoxplot() {
+  selectedGenes = []; renderGeneTags();
+  document.getElementById("boxplot_container").innerHTML = "";
+  document.getElementById("boxplot_gene_info").innerHTML = "";
+  document.getElementById("boxplot_export_bar").style.display = "none";
+}
+function renderGeneTags() {
+  var c = document.getElementById("boxplot_gene_tags"); c.innerHTML = "";
+  selectedGenes.forEach(function(g) {
+    var tag = document.createElement("span");
+    tag.style.cssText = "display:inline-flex;align-items:center;background:#007bff;color:white;padding:3px 10px;border-radius:14px;font-size:12px;gap:4px;";
+    var txt = document.createTextNode(g.name + " ");
+    tag.appendChild(txt);
+    var btn = document.createElement("span");
+    btn.textContent = String.fromCharCode(215);
+    btn.style.cssText = "cursor:pointer;font-weight:bold;margin-left:3px;";
+    btn.addEventListener("click", (function(idx){return function(){removeGene(idx);};})(g.idx));
+    tag.appendChild(btn);
+    c.appendChild(tag);
+  });
+}
+function renderMultiBoxplot() {
+  if (selectedGenes.length === 0) return;
+  var groups = geneExprData.groups; var samples = geneExprData.samples;
+  var uGroups = []; groups.forEach(function(g){if(uGroups.indexOf(g)===-1)uGroups.push(g);});
+  var colors = ["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#a65628","#f781bf","#999999"];
+  var nGenes = selectedGenes.length; var traces = [];
+  if (nGenes === 1) {
+    var gIdx = selectedGenes[0].idx; var values = geneExprData.expr[gIdx];
+    uGroups.forEach(function(g, gi) {
+      var gv = [], gs = [];
+      for (var i=0;i<values.length;i++) { if(groups[i]===g){gv.push(values[i]);gs.push(samples[i]);} }
+      traces.push({y:gv,type:"box",name:g,boxpoints:"all",jitter:0.4,pointpos:0,text:gs,
+        hovertemplate:"Sample: %%{text}<br>Expression: %%{y:.3f}<extra>"+g+"</extra>",
+        marker:{color:colors[gi%%colors.length],size:6,opacity:0.7},
+        line:{color:colors[gi%%colors.length]},fillcolor:colors[gi%%colors.length]+"33"});
+    });
+    var layout = {title:{text:selectedGenes[0].name+" Expression",font:{size:16}},yaxis:{title:bpYLabel},xaxis:{title:bpGroupLabel},showlegend:false,margin:{t:50,b:80,l:70,r:30},boxgap:0.3};
+  } else {
+    uGroups.forEach(function(g, gi) {
+      var xv=[],yv=[],st=[];
+      selectedGenes.forEach(function(sg){var vals=geneExprData.expr[sg.idx];for(var i=0;i<vals.length;i++){if(groups[i]===g){xv.push(sg.name);yv.push(vals[i]);st.push(samples[i]);}}});
+      traces.push({x:xv,y:yv,type:"box",name:g,boxpoints:"all",jitter:0.4,pointpos:0,text:st,
+        hovertemplate:"%%{x}<br>Sample: %%{text}<br>Expression: %%{y:.3f}<extra>"+g+"</extra>",
+        marker:{color:colors[gi%%colors.length],size:5,opacity:0.7},
+        line:{color:colors[gi%%colors.length]},fillcolor:colors[gi%%colors.length]+"33"});
+    });
+    var gNames = selectedGenes.map(function(sg){return sg.name;});
+    var layout = {title:{text:"Lipid Expression Comparison",font:{size:16}},yaxis:{title:bpYLabel},xaxis:{title:"Lipid",categoryorder:"array",categoryarray:gNames},showlegend:true,legend:{title:{text:bpGroupLabel}},boxmode:"group",margin:{t:50,b:100,l:70,r:30},boxgap:0.15,boxgroupgap:0.1};
+  }
+  var ch = Math.max(450, 350 + nGenes * 30);
+  document.getElementById("boxplot_container").style.height = ch + "px";
+  Plotly.newPlot("boxplot_container", traces, layout, {responsive:true});
+  var info = selectedGenes.map(function(sg){var vals=geneExprData.expr[sg.idx].filter(function(v){return !isNaN(v);});var mean=vals.reduce(function(a,b){return a+b;},0)/vals.length;return "<strong>"+sg.name+"</strong>: mean "+mean.toFixed(3)+" ("+vals.length+" samples)";});
+  document.getElementById("boxplot_gene_info").innerHTML = info.join(" &nbsp;|&nbsp; ");
+  document.getElementById("boxplot_export_bar").style.display = "flex";
+}
+function exportBoxplot(fmt) {
+  var c = document.getElementById("boxplot_container");
+  if (!c||!c.data){alert("No plot to export.");return;}
+  var gNames = selectedGenes.map(function(g){return g.name;}).join("_");
+  var w = fmt==="svg"?1200:2400, h = fmt==="svg"?800:1600, s = fmt==="svg"?1:3;
+  Plotly.downloadImage(c,{format:fmt,width:w,height:h,scale:s,filename:"lipid_expression_"+gNames});
+}
+</script>\n', explorer_json_str, group_col_exp, norm_y_label_report))
+
+  figure_legend("Lipid Expression Explorer. Search for lipids by name, add multiple for side-by-side comparison. Each box shows the distribution of normalized expression values per group. Individual sample points are overlaid. Use the export buttons to save as SVG or PNG.")
+}
+```
+
+`r if (explorer_ready) "" else "-->"`
+
+`r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
+
+---
+
+`r if (is.null(de_res) || is.null(de_res$summary_df)) "<!--"`
+
+# Top DE Heatmaps {.tabset}
+
+Heatmaps of differentially expressed lipids (adjusted p-value < `r padj_cut_de`, z-score scaled) with hierarchical clustering.
+
+```{r de-heatmaps, results='asis', fig.width=10, fig.height=8}
+if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE)) {
+  # Find the Diagnostic_plots directory for heatmap images
+  hm_out_dir <- NULL
+  if (length(de_res$files) > 0) {
+    png_files <- de_res$files[grepl("\\.png$", de_res$files)]
+    if (length(png_files) > 0) {
+      diag_dirs <- unique(dirname(png_files))
+      diag_dirs <- diag_dirs[dir.exists(diag_dirs)]
+      if (length(diag_dirs) > 0) hm_out_dir <- diag_dirs[1]
+    }
+  }
+  if (is.null(hm_out_dir)) hm_out_dir <- file.path(dirname(knitr::current_input(dir = TRUE)), "lipidomics", "Diagnostic_plots")
+  dir.create(hm_out_dir, recursive = TRUE, showWarnings = FALSE)
+
+  # Identify DE features for heatmaps using raw P.Value (ignoring FC cutoff).
+  # Heatmaps benefit from showing all significant lipids; the clustering
+  # pattern reveals biology even for features with modest fold changes.
+  sum_df <- de_res$summary_df
+  pval_cols <- grep("^P\\.Value", colnames(sum_df), value = TRUE)
+  if (length(pval_cols) > 0) {
+    pval_mat <- sum_df[, pval_cols, drop = FALSE]
+    min_pval_per_feat <- apply(pval_mat, 1, function(x) min(x, na.rm = TRUE))
+    de_feats <- sum_df$feature_id[min_pval_per_feat <= padj_cut_de]
+  } else {
+    de_feats <- character(0)
+  }
+
+  # Sort by minimum raw p-value
+  if (length(de_feats) > 0) {
+    feat_pval <- min_pval_per_feat[sum_df$feature_id %in% de_feats]
+    de_feats <- de_feats[order(feat_pval)]
+  }
+
+  # Use expr_log (transform-only) for heatmaps -- z-scoring removes scale anyway,
+  # but expr_log preserves natural variance structure better than auto-scaled data.
+  hm_expr <- pre$expr_log %||% pre$expr_work
+
+  if (length(de_feats) >= 2 && !is.null(hm_expr)) {
+    # Build annotation
+    anno_df <- NULL
+    if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
+      sample_col_hm <- lipid_cfg$effects$samples %||% "sample_id"
+      anno_df <- data.frame(
+        row.names = pre$meta[[sample_col_hm]],
+        Group = pre$meta[[cond_col]],
+        stringsAsFactors = FALSE
+      )
+    }
+
+    # Build display labels (use Name if available)
+    hm_label_map <- if (!is.null(name_map_v)) name_map_v else stats::setNames(de_feats, de_feats)
+
+    for (n_top in c(10, 25, 50, 100)) {
+      if (n_top > length(de_feats)) next
+      top_ids <- utils::head(de_feats, n_top)
+
+      mat_hm <- hm_expr[top_ids, , drop = FALSE]
+      # Z-score scale rows
+      mat_z <- t(scale(t(mat_hm)))
+      mat_z[is.na(mat_z)] <- 0
+
+      # Use display names for rows
+      row_labels <- vapply(rownames(mat_z), function(fid) {
+        nm <- hm_label_map[fid]
+        if (!is.na(nm) && nzchar(nm)) nm else fid
+      }, character(1), USE.NAMES = FALSE)
+      rownames(mat_z) <- row_labels
+
+      cat(sprintf("\n## Top %d\n\n", n_top))
+
+      # Adjust figure height based on number of features
+      fig_h <- max(6, min(20, 4 + n_top * 0.15))
+      show_rownames <- n_top <= 60
+
+      hm_file <- file.path(hm_out_dir, sprintf("heatmap_top%d_DE.png", n_top))
+      hm_ok <- tryCatch({
+        p_hm <- pheatmap::pheatmap(
+          mat_z,
+          annotation_col = anno_df,
+          cluster_rows = TRUE,
+          cluster_cols = TRUE,
+          show_rownames = show_rownames,
+          show_colnames = TRUE,
+          fontsize_row = max(5, min(9, 120 / n_top)),
+          fontsize_col = 8,
+          main = sprintf("Top %d DE Lipids (z-score)", n_top),
+          color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+          border_color = NA,
+          silent = TRUE
+        )
+        ggplot2::ggsave(hm_file, p_hm, width = 10, height = fig_h, dpi = 150)
+        TRUE
+      }, error = function(e) { message("Heatmap top ", n_top, " failed: ", e$message); FALSE })
+      if (hm_ok && file.exists(hm_file)) {
+        cat(sprintf("\n![Top %d DE Heatmap](%s){width=100%%}\n\n", n_top, hm_file))
+        figure_legend(sprintf(
+          "Heatmap of the top %d differentially expressed lipids (ranked by adjusted p-value). Values are z-score normalized per lipid. Rows and columns are hierarchically clustered.",
+          n_top
+        ))
+        cat("\n\n")
+      }
+    }
+
+    # All DE heatmap (if reasonable size and different from last top-N)
+    if (length(de_feats) >= 2 && length(de_feats) <= 500) {
+      n_all <- length(de_feats)
+      mat_all <- hm_expr[de_feats, , drop = FALSE]
+      mat_z_all <- t(scale(t(mat_all)))
+      mat_z_all[is.na(mat_z_all)] <- 0
+
+      row_labels_all <- vapply(rownames(mat_z_all), function(fid) {
+        nm <- hm_label_map[fid]
+        if (!is.na(nm) && nzchar(nm)) nm else fid
+      }, character(1), USE.NAMES = FALSE)
+      rownames(mat_z_all) <- row_labels_all
+
+      cat(sprintf("\n## All DE (%d)\n\n", n_all))
+
+      fig_h_all <- max(8, min(30, 4 + n_all * 0.06))
+      hm_all_file <- file.path(hm_out_dir, sprintf("heatmap_all%d_DE.png", n_all))
+      hm_all_ok <- tryCatch({
+        p_hm_all <- pheatmap::pheatmap(
+          mat_z_all,
+          annotation_col = anno_df,
+          cluster_rows = TRUE,
+          cluster_cols = TRUE,
+          show_rownames = n_all <= 60,
+          show_colnames = TRUE,
+          fontsize_row = max(4, min(8, 100 / n_all)),
+          fontsize_col = 8,
+          main = sprintf("All %d DE Lipids (z-score)", n_all),
+          color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+          border_color = NA,
+          silent = TRUE
+        )
+        ggplot2::ggsave(hm_all_file, p_hm_all, width = 10, height = fig_h_all, dpi = 150)
+        TRUE
+      }, error = function(e) { message("Heatmap all DE failed: ", e$message); FALSE })
+      if (hm_all_ok && file.exists(hm_all_file)) {
+        cat(sprintf("\n![All DE Heatmap](%s){width=100%%}\n\n", hm_all_file))
+      }
+      figure_legend(sprintf(
+        "Heatmap of all %d differentially expressed lipids. Values are z-score normalized per lipid.",
+        n_all
+      ))
+      cat("\n\n")
+    }
+  } else if (length(de_feats) < 2) {
+    cat("\n*Fewer than 2 DE lipids -- heatmap not generated.*\n\n")
+  }
+}
+```
+
+`r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
+
+---
+
+`r if (is.null(class_res)) "<!--"`
+
+# Lipid Class Analysis {.tabset}
+
+## Class Composition {.tabset}
+
+### Normalized
+
+```{r class-composition-norm, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(class_res$plots$class_normalized)) {
+  safe_print_plot(class_res$plots$class_normalized)
+  figure_legend("Normalized lipid class composition showing the relative proportion of each lipid class across samples or groups. Bars are scaled to 100% to facilitate comparison of class distributions.")
+  render_commentary("class_normalized")
+}
+```
+
+### Absolute
+
+```{r class-composition-abs, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(class_res$plots$class_absolute)) {
+  safe_print_plot(class_res$plots$class_absolute)
+  figure_legend("Absolute lipid class composition showing the total intensity or count of each lipid class across samples or groups.")
+  render_commentary("class_absolute")
+}
+```
+
+## Chain Saturation
+
+Lipids are grouped by the number of carbon-carbon double bonds (DB) in their fatty acyl chains:
+
+- **SFA — Saturated Fatty Acids (0 DB):** no double bonds; chains pack tightly, increasing membrane rigidity and contributing to lipid storage.
+- **MUFA — Monounsaturated Fatty Acids (1 DB):** a single double bond introduces a kink that increases membrane fluidity; common in dietary oils (e.g. oleic acid).
+- **PUFA — Polyunsaturated Fatty Acids (2+ DB):** multiple double bonds further increase fluidity and serve as precursors for signaling lipids (eicosanoids, resolvins). Includes essential omega-3 and omega-6 fatty acids.
+
+**Biological interpretation of shifts between groups:**
+
+| Category | ↑ Increase typically reflects | ↓ Decrease typically reflects |
+|----------|-------------------------------|-------------------------------|
+| **SFA**  | Greater membrane rigidity; active de novo lipogenesis; pro-inflammatory signaling (e.g. palmitate → TLR4); commonly seen with high-fat diet, lipotoxicity, insulin resistance. | Increased membrane fluidity; reduced lipogenic flux; generally a metabolically healthier profile. |
+| **MUFA** | Elevated SCD1 (Δ9-desaturase) activity converting SFA → MUFA; adaptive / cytoprotective response to lipid stress; oleic-acid-rich (Mediterranean-style) diets; anti-inflammatory tendency. | Reduced desaturation capacity; possible accumulation of toxic SFA species. |
+| **PUFA** | Larger pool of essential fatty acids and signaling-lipid precursors (eicosanoids, resolvins); higher membrane fluidity; ω-3-driven shifts often anti-inflammatory; greater susceptibility to lipid peroxidation. | Reduced essential FA availability or dietary deficiency; smaller signaling-lipid pool; reduced membrane fluidity; possible oxidative losses. |
+
+```{r class-chain-saturation, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(class_res$plots$chain_saturation)) {
+  safe_print_plot(class_res$plots$chain_saturation)
+  figure_legend("Distribution of fatty acyl chain saturation across lipid classes. This analysis reveals the degree of unsaturation (number of double bonds) in the detected lipidome, which is relevant to membrane fluidity and lipid signaling.")
+  render_commentary("chain_saturation")
+}
+```
+
+## Chain Length
+
+```{r class-chain-length, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(class_res$plots$chain_length)) {
+  safe_print_plot(class_res$plots$chain_length)
+  figure_legend("Distribution of fatty acyl chain lengths across lipid classes. Chain length influences membrane structure and lipid function.")
+  render_commentary("chain_length")
+}
+```
+
+## Per-Class Chain Profiles {.tabset}
+
+```{r chain-profiles-static, fig.width=10, fig.height=6, results='asis'}
+if (!is.null(class_res$chain_profiles) && length(class_res$chain_profiles) > 0) {
+  for (cls in names(class_res$chain_profiles)) {
+    cat(paste0("\n### ", cls, "\n\n"))
+    p <- class_res$plots[[paste0("chain_profile_", cls)]]
+    if (!is.null(p)) {
+      safe_print_plot(p)
+    }
+    cat("\n\n")
+  }
+  figure_legend("Per-class chain profiles showing individual fatty acid chain abundances within each lipid class. Select a lipid class tab to view its chain profile. Error bars show standard error.")
+}
+```
+
+## Class Enrichment {.tabset}
+
+### ORA Plot
+
+```{r class-ora-plot, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(class_res$plots$class_ora)) {
+  safe_print_plot(class_res$plots$class_ora)
+  figure_legend("Over-representation analysis (ORA) of lipid classes among differentially expressed lipids. This test evaluates whether specific lipid classes are enriched among DE lipids compared to the full lipidome background.")
+  render_commentary("class_ora")
+}
+```
+
+### ORA Table
+
+```{r class-ora-table, results='asis'}
+if (!is.null(class_res$class_ora)) {
+  print(htmltools::tagList(make_dt(class_res$class_ora, caption = "Lipid Class Over-Representation Analysis")))
+}
+```
+
+`r if (is.null(class_res)) "-->"`
+
+---
+
+`r if (is.null(rf_res) && is.null(plsda_res)) "<!--"`
+
+# Feature Selection {.tabset}
+
+`r if (is.null(rf_res)) "<!--"`
+
+## Random Forest {.tabset}
+
+### Importance Plot
+
+```{r rf-plot, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(rf_res$plots$rf_importance)) {
+  safe_print_plot(rf_res$plots$rf_importance)
+  figure_legend("Random Forest variable importance plot showing the top features ranked by their contribution to classification accuracy. Higher Mean Decrease Accuracy indicates greater importance.")
+  render_commentary("rf_importance")
+}
+```
+
+### Importance Table
+
+```{r rf-table, results='asis'}
+if (!is.null(rf_res$importance_df)) {
+  imp_df <- rf_res$importance_df
+  sort_col <- if ("MeanDecreaseAccuracy" %in% names(imp_df)) "MeanDecreaseAccuracy" else "importance"
+  imp_df <- imp_df[order(-imp_df[[sort_col]]), ]
+  print(htmltools::tagList(make_dt(head(imp_df, 50), caption = "RF Feature Importance (top 50)")))
+}
+```
+
+`r if (is.null(rf_res)) "-->"`
+
+`r if (is.null(plsda_res)) "<!--"`
+
+## PLS-DA {.tabset}
+
+### Scores Plot
+
+```{r plsda-scores, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(plsda_res$plots$plsda_scores)) {
+  safe_print_plot(plsda_res$plots$plsda_scores)
+  figure_legend("PLS-DA scores plot showing sample separation along the first two latent variables. Clustering by group indicates good discriminatory power of the lipid profiles.")
+  render_commentary("plsda_scores")
+}
+```
+
+### VIP Plot
+
+```{r plsda-vip-plot, fig.width=9, fig.height=7, results='asis'}
+if (!is.null(plsda_res$plots$plsda_vip)) {
+  safe_print_plot(plsda_res$plots$plsda_vip)
+  figure_legend("PLS-DA Variable Importance in Projection (VIP) scores. Features with VIP > 1 are generally considered important for group discrimination.")
+  render_commentary("plsda_vip")
+}
+```
+
+### VIP Table
+
+```{r plsda-vip-table, results='asis'}
+if (!is.null(plsda_res$vip_df)) {
+  vip_df <- plsda_res$vip_df
+  vip_col <- if ("VIP" %in% names(vip_df)) "VIP" else grep("^VIP", names(vip_df), value = TRUE)[1]
+  vip_df <- vip_df[order(-vip_df[[vip_col]]), ]
+
+  # Summary statistics to help interpret VIP scores
+  vip_vals <- vip_df[[vip_col]]
+  vip_mean <- round(mean(vip_vals, na.rm = TRUE), 2)
+  vip_median <- round(median(vip_vals, na.rm = TRUE), 2)
+  n_above_1 <- sum(vip_vals > 1, na.rm = TRUE)
+  cat(sprintf(
+    "<div style='background: #f0f7ff; border: 1px solid #b8daff; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; font-size: 0.92em;'><strong>VIP Summary:</strong> Mean = %s, Median = %s, Features with VIP &gt; 1.0: %d/%d. <em>VIP &gt; 1.0 is generally considered important for group discrimination.</em></div>\n",
+    vip_mean, vip_median, n_above_1, length(vip_vals)
+  ))
+
+  print(htmltools::tagList(make_dt(head(vip_df, 50), caption = "PLS-DA VIP Scores (top 50)")))
+}
+```
+
+`r if (is.null(plsda_res)) "-->"`
+
+`r if (is.null(rf_res) && is.null(plsda_res)) "-->"`
+
+---
+
+`r if (is.null(biomarker_res)) "<!--"`
+
+# Biomarker Discovery {.tabset}
+
+## Biomarker Table
+
+```{r biomarker-table-plot, fig.width=10, fig.height=8, results='asis'}
+if (!is.null(biomarker_res$plots$biomarker_table)) {
+  safe_print_plot(biomarker_res$plots$biomarker_table)
+  figure_legend("Biomarker candidate summary showing key performance metrics for each candidate lipid. AUC (Area Under the ROC Curve) measures classification accuracy, Cohen's d quantifies effect size, and statistical power estimates the probability of detecting the observed effect at the given sample size.")
+  render_commentary("biomarker_table")
+}
+```
+
+## ROC Curves
+
+```{r biomarker-roc, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(biomarker_res$plots$roc_curves)) {
+  safe_print_plot(biomarker_res$plots$roc_curves)
+  figure_legend("Receiver Operating Characteristic (ROC) curves for top biomarker candidates. Each curve shows the trade-off between sensitivity (true positive rate) and 1-specificity (false positive rate). AUC values closer to 1.0 indicate better discriminatory performance; the diagonal dashed line represents random classification (AUC = 0.5).")
+  render_commentary("roc_curves")
+}
+```
+
+## Multivariate ROC
+
+```{r biomarker-roc-multi, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(biomarker_res$plots$roc_multivariate)) {
+  safe_print_plot(biomarker_res$plots$roc_multivariate)
+  figure_legend("Multivariate ROC curve combining multiple biomarker candidates into a single classifier. This evaluates whether a panel of lipids collectively achieves higher classification accuracy than individual markers alone.")
+  render_commentary("roc_multivariate")
+}
+```
+
+## Top Candidates
+
+```{r biomarker-candidates, results='asis'}
+if (!is.null(biomarker_res$biomarker_df)) {
+  bm_df <- biomarker_res$biomarker_df
+  if ("is_candidate" %in% colnames(bm_df)) {
+    bm_show <- bm_df[bm_df$is_candidate == TRUE, , drop = FALSE]
+    if (nrow(bm_show) == 0) bm_show <- bm_df
+  } else {
+    bm_show <- bm_df
+  }
+  bm_show <- head(bm_show, 20)
+  cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+  cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Top biomarker candidates ranked by classification performance. Candidates are selected based on AUC, effect size, and statistical significance.</em></p>\n")
+  print(make_dt(bm_show, caption = "Top Biomarker Candidates"))
+  cat("</div>\n")
+}
+```
+
+`r if (is.null(biomarker_res)) "-->"`
+
+---
+
+`r if (is.null(pathway_res)) "<!--"`
+
+# Lipid Pathway Analysis {.tabset}
+
+## Pathway Network
+
+```{r pathway-network, fig.width=11, fig.height=9, results='asis'}
+if (!is.null(pathway_res$plots$pathway_network)) {
+  safe_print_plot(pathway_res$plots$pathway_network)
+  figure_legend("Lipid pathway network showing metabolic relationships between lipid classes. Nodes represent lipid classes (sized by number of detected species), edges represent known enzymatic reactions. Node colors indicate the direction and magnitude of change: red shades denote upregulation, blue shades denote downregulation, and grey indicates no significant change.")
+  render_commentary("pathway_network")
+}
+```
+
+## Pathway Scores {.tabset}
+
+### Barplot
+
+```{r pathway-barplot, fig.width=10, fig.height=7, results='asis'}
+if (!is.null(pathway_res$plots$pathway_barplot)) {
+  safe_print_plot(pathway_res$plots$pathway_barplot)
+  figure_legend("Pathway activity scores for each lipid metabolic pathway. Bars represent the aggregate dysregulation score combining fold-change direction and significance of member lipids. Pathways are ranked by statistical significance.")
+  render_commentary("pathway_barplot")
+}
+```
+
+### Scores Table
+
+```{r pathway-scores-table, results='asis'}
+if (!is.null(pathway_res$pathway_scores)) {
+  cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+  cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Pathway-level scores summarizing the direction and magnitude of lipid changes within each metabolic pathway. Lower p-values indicate coordinated dysregulation.</em></p>\n")
+  print(make_dt(pathway_res$pathway_scores, caption = "Lipid Pathway Scores"))
+  cat("</div>\n")
+}
+```
+
+## Predicted Enzymes
+
+```{r pathway-enzymes, results='asis'}
+if (!is.null(pathway_res$enzyme_predictions)) {
+  cat("<div style='background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 8px; padding: 20px 24px; margin: 10px 0 20px 0;'>\n")
+  cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 12px;'><em>Predicted enzymes involved in the conversion between differentially abundant lipid species. These predictions are inferred from known lipid metabolic reactions and the observed changes in substrate/product pairs.</em></p>\n")
+  print(make_dt(pathway_res$enzyme_predictions, caption = "Predicted Enzymes in Dysregulated Pathways"))
+  cat("</div>\n")
+
+  figure_legend("Table of predicted enzymes catalysing reactions between differentially expressed lipid pairs. Enzyme annotations are derived from the LIPID MAPS and Reactome pathway databases. Reaction scores reflect the confidence and magnitude of the inferred enzymatic activity change.")
+}
+```
+
+## Enzyme Network
+
+```{r pathway-enzyme-net, fig.width=11, fig.height=9, results='asis'}
+if (!is.null(pathway_res$plots$enzyme_network)) {
+  safe_print_plot(pathway_res$plots$enzyme_network)
+  figure_legend("Enzyme interaction network for predicted dysregulated enzymes. Nodes represent enzymes, and edges represent known protein-protein interactions from the STRING database. Clusters of interacting enzymes may indicate coordinated metabolic pathway perturbations.")
+  render_commentary("enzyme_network")
+} else if (!is.null(pathway_res)) {
+  if (!requireNamespace("STRINGdb", quietly = TRUE)) {
+    cat("<div style='background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>Enzyme interaction network not available</strong> — the <code>STRINGdb</code> package is not installed. Install it with <code>BiocManager::install('STRINGdb')</code> to enable enzyme interaction network visualization.</p>\n")
+    cat("</div>\n")
+  } else {
+    cat("<div style='background: #f0f7ff; border: 1px solid #b8daff; border-radius: 8px; padding: 16px 20px; margin: 10px 0 20px 0;'>\n")
+    cat("<p><strong>Enzyme interaction network not available</strong> — fewer than 2 enzymes mapped to STRING, or no interactions found above the score threshold.</p>\n")
+    cat("</div>\n")
+  }
+}
+```
+
+`r if (is.null(pathway_res)) "-->"`
+
+---
+
+# Output Files
+
+```{r output-files}
+files_tbl <- data.frame(
+  File = c(
+    "lipidomics_report.html",
+    "de_summary_all.csv",
+    "expression_matrix_normalized.csv"
+  ),
+  Description = c(
+    "This HTML report with all QC, DE, and lipid class analysis results",
+    "Full differential expression summary table across all contrasts",
+    "Normalized lipid expression matrix used for downstream analysis"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Add lipid class analysis output rows if class analysis was run
+if (!is.null(class_res)) {
+  class_rows <- data.frame(
+    File = "lipid_class_analysis.csv",
+    Description = "Lipid class composition and enrichment results",
+    stringsAsFactors = FALSE
+  )
+  files_tbl <- rbind(files_tbl, class_rows)
+}
+
+# Add feature selection outputs
+if (!is.null(rf_res))
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = "rf_importance.csv",
+    Description = "Random Forest feature importance scores",
+    stringsAsFactors = FALSE))
+if (!is.null(plsda_res))
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = "plsda_vip_scores.csv",
+    Description = "PLS-DA VIP scores for all features",
+    stringsAsFactors = FALSE))
+
+# Add biomarker discovery outputs
+if (!is.null(biomarker_res))
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = "biomarker_candidates.csv",
+    Description = "Biomarker candidate lipids with AUC, Cohen's d, and power metrics",
+    stringsAsFactors = FALSE))
+
+# Add pathway analysis outputs
+if (!is.null(pathway_res)) {
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = c("pathway_scores.csv", "enzyme_predictions.csv"),
+    Description = c("Lipid pathway activity scores and significance",
+                    "Predicted enzymes in dysregulated lipid pathways"),
+    stringsAsFactors = FALSE))
+}
+
+make_dt(files_tbl, "Key Output Files")
+```
+
+---
+
+# Methods
+
+```{r methods-text, results='asis'}
+padj_cut_m <- lipid_cfg$de$p_cutoff %||% 0.05
+lfc_cut_m  <- lipid_cfg$de$linear_fc_cutoff %||% 1.5
+
+n_lipids <- if (!is.null(pre)) nrow(pre$expr_work) else "N"
+n_de_m  <- "N"
+if (!is.null(de_res$summary_df) && "pass_any_contrast" %in% colnames(de_res$summary_df)) {
+  n_de_m <- sum(de_res$summary_df$pass_any_contrast == 1, na.rm = TRUE)
+}
+
+cat("**Lipidomics Analysis Methods**\n\n")
+
+cat("Lipidomics data were processed using the multiomics-core pipeline. ")
+
+if (norm_method != "N/A") {
+  cat(sprintf("Data were normalized using %s. ", norm_method))
+}
+
+cat(sprintf(
+  "Differential expression analysis was performed using %s. ", de_method
+))
+
+cat(sprintf(
+  "Lipids were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.2f. ",
+  padj_cut_m, lfc_cut_m
+))
+
+cat(sprintf(
+  "A total of %s lipid features were quantified, with %s identified as differentially expressed in at least one contrast.",
+  format(as.numeric(n_lipids), big.mark = ","),
+  format(as.numeric(n_de_m), big.mark = ",")
+))
+
+if (!is.null(class_res)) {
+  cat(" Lipid class analysis was performed to characterize class composition, chain saturation, chain length distributions, and class-level over-representation among DE lipids.")
+}
+
+if (!is.null(rf_res) || !is.null(plsda_res)) {
+  fs_methods <- character(0)
+  if (!is.null(rf_res))    fs_methods <- c(fs_methods, "Random Forest")
+  if (!is.null(plsda_res)) fs_methods <- c(fs_methods, "PLS-DA")
+  cat(sprintf(" Feature selection was performed using %s.",
+              paste(fs_methods, collapse = " and ")))
+}
+
+if (!is.null(biomarker_res)) {
+  cat(" Biomarker discovery was performed by evaluating each lipid's classification performance using ROC analysis (AUC), effect size (Cohen's d), and statistical power.")
+}
+
+if (!is.null(pathway_res)) {
+  cat(" Lipid pathway analysis was conducted to identify dysregulated metabolic pathways and predict involved enzymes based on substrate-product relationships in the LIPID MAPS and Reactome databases.")
+}
+
+cat("\n\n")
+
+cat("**Copy-ready version:**\n\n")
+cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
+
+cat(sprintf(
+  "Lipidomics analysis was performed using the multiomics-core pipeline (v1.0). %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.2f). A total of %s lipid features were quantified, with %s differentially expressed.",
+  if (norm_method != "N/A") sprintf("Data were normalized using %s. ", norm_method) else "",
+  de_method, padj_cut_m, lfc_cut_m,
+  format(as.numeric(n_lipids), big.mark = ","),
+  format(as.numeric(n_de_m), big.mark = ",")
+))
+
+cat("\n</div>\n")
+```
+
+## Statistical Analysis
+
+```{r methods-stats, results='asis'}
+de_method_s <- de_method
+
+test_desc <- switch(tolower(de_method_s),
+  "t_test"       = "Welch's t-tests (unequal variance) were performed for each lipid.",
+  "t_test_equal" = "Student's t-tests (equal variance assumed, MetaboAnalyst convention) were performed for each lipid.",
+  "wilcoxon"     = "Wilcoxon rank-sum tests were used as a non-parametric alternative for differential expression testing.",
+  "limma"        = "Moderated t-tests were performed using the *limma* R/Bioconductor package, which applies empirical Bayes shrinkage of variance estimates to improve statistical power.",
+  sprintf("Differential expression was assessed using the *%s* method.", de_method_s)
+)
+
+cat(test_desc, "\n\n")
+
+cat(sprintf(
+  "Multiple testing correction was applied using the Benjamini-Hochberg procedure to control the false discovery rate (FDR). Lipids were considered differentially expressed at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
+  padj_cut_m, lfc_cut_m
+))
+
+cat(sprintf(
+  "All analyses were performed in R (version %s) using the multiomics-core pipeline.\n\n",
+  paste(R.version$major, R.version$minor, sep = ".")
+))
+```
+
+---
+
+# Session Info
+
+<details>
+<summary>Click to expand</summary>
+
+```{r session-info}
+sessionInfo()
+```
+
+</details>
+
+```{r dt-tab-fix, results='asis', echo=FALSE}
+# Fix DT tables inside hidden tabs: redraw when tab becomes visible
+cat('
+<script>
+$(document).on("shown.bs.tab", function(e) {
+  $($(e.target).attr("href")).find(".datatables.html-widget").each(function() {
+    var widget = HTMLWidgets.find("#" + this.id);
+    if (widget && widget.table) {
+      widget.table.columns.adjust().draw(false);
+    }
+  });
+});
+// Also trigger for any tables that may be in the initially active tab
+$(document).ready(function() {
+  setTimeout(function() {
+    $(".datatables.html-widget").each(function() {
+      var widget = HTMLWidgets.find("#" + this.id);
+      if (widget && widget.table) {
+        widget.table.columns.adjust().draw(false);
+      }
+    });
+  }, 500);
+});
+</script>
+')
+```
