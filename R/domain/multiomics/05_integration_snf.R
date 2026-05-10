@@ -35,7 +35,19 @@ run_snf_integration <- function(mae, config, out_dir = NULL) {
     # Extract data from MAE (transpose to samples x features)
     omics <- names(mae@ExperimentList)
     data_list <- lapply(omics, function(om) {
-        t(SummarizedExperiment::assay(mae[[om]], "expr"))
+        expr_mat <- tryCatch(
+            SummarizedExperiment::assay(mae[[om]], "expr"),
+            error = function(e) {
+                avail <- SummarizedExperiment::assayNames(mae[[om]])
+                if (length(avail) > 0) {
+                    message("  SNF: '", om, "' has no 'expr' assay, using '", avail[1], "'")
+                    SummarizedExperiment::assay(mae[[om]], avail[1])
+                } else {
+                    stop("No assays available for ", om)
+                }
+            }
+        )
+        t(expr_mat)
     })
     names(data_list) <- omics
 

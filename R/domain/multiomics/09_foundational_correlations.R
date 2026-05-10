@@ -1092,15 +1092,13 @@ plot_per_sample_group_distances <- function(per_sample_result, out_dir) {
                     height = 6, dpi = 300)
 
     # Plot 2: Box plot comparing within vs cross distributions per omics
+    # Transparent boxes (no fill) with grey outlines; jitter points colored by condition
     p2 <- ggplot2::ggplot(df_long, ggplot2::aes(x = distance_type,
-                                                  y = distance,
-                                                  fill = distance_type)) +
-        ggplot2::geom_boxplot(alpha = 0.7, outlier.size = 1) +
+                                                  y = distance)) +
+        ggplot2::geom_boxplot(fill = NA, color = "grey40", outlier.size = 1) +
         ggplot2::geom_jitter(ggplot2::aes(color = condition),
                              width = 0.15, size = 1.5, alpha = 0.6) +
         ggplot2::facet_wrap(~omics, scales = "free_y") +
-        ggplot2::scale_fill_manual(values = c("Within group" = "#4DBBD5",
-                                               "Cross group" = "#E64B35")) +
         ggplot2::theme_bw() +
         ggplot2::theme(panel.grid = ggplot2::element_blank(),
                        strip.text = ggplot2::element_text(face = "bold"),
@@ -1110,7 +1108,6 @@ plot_per_sample_group_distances <- function(per_sample_result, out_dir) {
             subtitle = "Lower within-group distance = better condition separation",
             x = NULL,
             y = "Mean Euclidean Distance",
-            fill = "Distance Type",
             color = "Condition"
         )
 

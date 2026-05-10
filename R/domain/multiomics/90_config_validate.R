@@ -48,6 +48,7 @@ validate_multiomics_config <- function(multiomics_cfg) {
         if (is.null(diablo_cfg$ncomp)) {
             message("  DIABLO ncomp not specified, defaulting to 2")
             multiomics_cfg$integration$diablo$ncomp <- 2
+            diablo_cfg$ncomp <- 2
         }
 
         if (diablo_cfg$ncomp < 1 || diablo_cfg$ncomp > 10) {

@@ -36,6 +36,15 @@ run_cosmos_causal_network <- function(mae, de_results = NULL, config,
 
     message("Running COSMOS causal network analysis...")
 
+    # Check organism support — COSMOS PKN uses human dorothea/PROGENy regulons
+    organism <- config$global$organism %||% "human"
+    supported_organisms <- c("human", "homo_sapiens", "mouse", "mus_musculus")
+    if (!tolower(organism) %in% supported_organisms) {
+        message("  COSMOS causal network not available for '", organism,
+                "' (requires human or mouse prior knowledge network). Skipping.")
+        return(NULL)
+    }
+
     # Check dependencies
     if (!requireNamespace("cosmosR", quietly = TRUE)) {
         message("  cosmosR not installed. Install with: BiocManager::install('cosmosR')")
