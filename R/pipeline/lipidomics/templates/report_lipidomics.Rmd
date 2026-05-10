@@ -262,7 +262,29 @@ lipid_cfg <- cfg$modes$lipidomics
 .lip_de_subs   <- .lip_rs$de %||% list()
 show_de_ma_lip       <- isTRUE(.lip_de_subs$ma %||% FALSE)
 show_de_pvalhist_lip <- isTRUE(.lip_de_subs$pval_hist %||% FALSE)
-show_technical_summary_lip <- isTRUE(.lip_rs$technical_summary %||% TRUE)
+
+# Top-level section visibility: each defaults to shown unless the user
+# explicitly sets `<key>: false` in report_sections. Sub-keyed entries
+# (e.g. `de: {ma: true}`) keep the section shown — fine-grained toggles
+# live below where sub-keys are inspected.
+.show_section_lip <- function(key, default = TRUE) {
+    v <- .lip_rs[[key]]
+    if (is.null(v)) return(isTRUE(default))
+    !identical(v, FALSE)
+}
+show_executive_lip      <- .show_section_lip("executive_summary")
+show_module_status_lip  <- .show_section_lip("module_status")
+show_technical_summary_lip <- .show_section_lip("technical_summary")
+show_qc_lip             <- .show_section_lip("qc")
+show_de_lip             <- .show_section_lip("de")
+show_de_heatmaps_lip    <- .show_section_lip("de_heatmaps")
+show_class_lip          <- .show_section_lip("class_analysis")
+show_fs_lip             <- .show_section_lip("feature_selection")
+show_biomarker_lip      <- .show_section_lip("biomarker")
+show_pathway_lip        <- .show_section_lip("pathway")
+show_output_files_lip   <- .show_section_lip("output_files")
+show_methods_lip        <- .show_section_lip("methods")
+show_session_lip        <- .show_section_lip("session_info")
 ```
 
 ```{r force-dependencies, include=FALSE}
@@ -568,7 +590,7 @@ cat(sprintf("- **Pathway analysis:** %s\n",
 
 ---
 
-`r if (is.null(qc_res)) "<!--"`
+`r if (is.null(qc_res) || !show_qc_lip) "<!--"`
 
 # QC Diagnostics {.tabset}
 
@@ -781,7 +803,7 @@ if (!is.null(qc_res$files)) {
 }
 ```
 
-`r if (is.null(qc_res)) "-->"`
+`r if (is.null(qc_res) || !show_qc_lip) "-->"`
 
 `r if (is.null(qc_enhanced)) "<!--"`
 
@@ -884,7 +906,7 @@ if (!is.null(qc_enhanced)) {
 
 ---
 
-`r if (is.null(de_res) || is.null(de_res$summary_df)) "<!--"`
+`r if (is.null(de_res) || is.null(de_res$summary_df) || !show_de_lip) "<!--"`
 
 # Differential Expression
 
@@ -1696,11 +1718,11 @@ function exportBoxplot(fmt) {
 
 `r if (explorer_ready) "" else "-->"`
 
-`r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
+`r if (is.null(de_res) || is.null(de_res$summary_df) || !show_de_lip) "-->"`
 
 ---
 
-`r if (is.null(de_res) || is.null(de_res$summary_df)) "<!--"`
+`r if (is.null(de_res) || is.null(de_res$summary_df) || !show_de_heatmaps_lip) "<!--"`
 
 # Top DE Heatmaps {.tabset}
 
@@ -1860,7 +1882,7 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
 }
 ```
 
-`r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
+`r if (is.null(de_res) || is.null(de_res$summary_df) || !show_de_heatmaps_lip) "-->"`
 
 ---
 
@@ -1951,7 +1973,7 @@ render_commentary("clustering_binary")
 cat("\n---\n\n")
 ```
 
-`r if (is.null(class_res)) "<!--"`
+`r if (is.null(class_res) || !show_class_lip) "<!--"`
 
 # Lipid Class Analysis {.tabset}
 
@@ -2047,11 +2069,11 @@ if (!is.null(class_res$class_ora)) {
 }
 ```
 
-`r if (is.null(class_res)) "-->"`
+`r if (is.null(class_res) || !show_class_lip) "-->"`
 
 ---
 
-`r if (is.null(rf_res) && is.null(plsda_res)) "<!--"`
+`r if ((is.null(rf_res) && is.null(plsda_res)) || !show_fs_lip) "<!--"`
 
 # Feature Selection {.tabset}
 
@@ -2130,11 +2152,11 @@ if (!is.null(plsda_res$vip_df)) {
 
 `r if (is.null(plsda_res)) "-->"`
 
-`r if (is.null(rf_res) && is.null(plsda_res)) "-->"`
+`r if ((is.null(rf_res) && is.null(plsda_res)) || !show_fs_lip) "-->"`
 
 ---
 
-`r if (is.null(biomarker_res)) "<!--"`
+`r if (is.null(biomarker_res) || !show_biomarker_lip) "<!--"`
 
 # Biomarker Discovery {.tabset}
 
@@ -2187,11 +2209,11 @@ if (!is.null(biomarker_res$biomarker_df)) {
 }
 ```
 
-`r if (is.null(biomarker_res)) "-->"`
+`r if (is.null(biomarker_res) || !show_biomarker_lip) "-->"`
 
 ---
 
-`r if (is.null(pathway_res)) "<!--"`
+`r if (is.null(pathway_res) || !show_pathway_lip) "<!--"`
 
 # Lipid Pathway Analysis {.tabset}
 
@@ -2261,9 +2283,11 @@ if (!is.null(pathway_res$plots$enzyme_network)) {
 }
 ```
 
-`r if (is.null(pathway_res)) "-->"`
+`r if (is.null(pathway_res) || !show_pathway_lip) "-->"`
 
 ---
+
+`r if (!show_output_files_lip) "<!--"`
 
 # Output Files
 
@@ -2323,7 +2347,11 @@ if (!is.null(pathway_res)) {
 make_dt(files_tbl, "Key Output Files")
 ```
 
+`r if (!show_output_files_lip) "-->"`
+
 ---
+
+`r if (!show_methods_lip) "<!--"`
 
 # Methods
 
@@ -2422,7 +2450,11 @@ cat(sprintf(
 ))
 ```
 
+`r if (!show_methods_lip) "-->"`
+
 ---
+
+`r if (!show_session_lip) "<!--"`
 
 # Session Info
 
@@ -2434,6 +2466,8 @@ sessionInfo()
 ```
 
 </details>
+
+`r if (!show_session_lip) "-->"`
 
 ```{r dt-tab-fix, results='asis', echo=FALSE}
 # Fix DT tables inside hidden tabs: redraw when tab becomes visible
