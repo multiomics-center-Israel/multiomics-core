@@ -84,11 +84,13 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
 
     # Normalize contrast names across omics so they aggregate correctly.
     # Different omics may encode the same contrast differently (e.g.,
-    # "1.56ppm_vs_0ppm" from RNA vs "1.56ppm vs. 0ppm" from proteomics).
-    # Normalize: collapse to lowercase, remove spaces/dots around "vs",
-    # then group by normalized key and use the first original name.
+    # "1.56ppm_vs_0ppm" from RNA, "1.56ppm vs. 0ppm" from proteomics,
+    # or "1.56ppm - 0ppm" from metabolomics). All of these refer to the
+    # same contrast and must map to the same canonical key.
     .normalize_contrast_key <- function(x) {
         x <- tolower(trimws(x))
+        # Treat " - " / "-" between groups as an alias for "vs"
+        x <- gsub("\\s*-\\s*", "vs", x)
         x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
         x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
         x
@@ -130,7 +132,7 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
         else NULL
     })))
 
-    if (length(contrast_names) > 1) {
+    if (length(contrast_names) >= 1) {
         message("  Generating per-contrast enrichment output for ",
                 length(contrast_names), " contrasts")
         per_contrast_dir <- file.path(out_dir, "per_contrast")

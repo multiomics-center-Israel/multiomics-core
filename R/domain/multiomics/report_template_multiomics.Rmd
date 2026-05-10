@@ -384,7 +384,9 @@ cat("*No MultiGSEA plots found.*\n")
 ## All Contrasts (Combined) {.unnumbered}
 
 ```{r multigsea-plots, eval=has_multigsea, results='asis'}
+# Exclude pairwise "omics_vs_omics" scatter plots; keep combined/summary plots only.
 gsea_pngs <- list.files(multigsea_dir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
+gsea_pngs <- gsea_pngs[!grepl("_vs_", basename(gsea_pngs))]
 for (gp in gsea_pngs) {
     pair_name <- gsub("multigsea_|\\.png$", "", basename(gp))
     display_name <- gsub("_", " ", pair_name)
@@ -406,6 +408,7 @@ if (dir.exists(multigsea_per_contrast_dir)) {
         cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
 
         cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
+        cpngs <- cpngs[!grepl("_vs_", basename(cpngs))]
         if (length(cpngs) == 0) {
             cat("*No MultiGSEA plots for this contrast.*\n\n")
             next
@@ -1399,27 +1402,18 @@ cat("*Mechanistic inference was not run or produced no results. Enable in config
 
 ## Protein-Metabolite Correlations
 
-```{r mech-prot-metab-heatmap, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "protein_metabolite_correlation_heatmap.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-pm-hm-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    # Read the significant pairs CSV to report feature counts
-    pm_csv <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant_pairs.csv")
-    if (file.exists(pm_csv)) {
-        pm_df <- read.csv(pm_csv, stringsAsFactors = FALSE)
-        n_prot <- length(unique(pm_df$protein))
-        n_metab <- length(unique(pm_df$metabolite))
-        cat(sprintf("\n**Features shown:** %d proteins x %d metabolites. ", n_prot, n_metab))
-        cat("Feature selection: differentially expressed features (pass\\_any filter from DE analysis) are used when available; otherwise the top variable features by variance are selected. ")
-        cat(sprintf("Up to 100 proteins and 50 metabolites are included.\n\n"))
-    }
-    figure_legend("Cross-omics Spearman correlation heatmap between significant/variable proteins and metabolites. Blue = negative correlation, red = positive. Significant pairs (padj < 0.2, |r| > 0.7) are used for downstream network analysis.")
+```{r mech-prot-metab-summary, eval=has_mechanistic, results='asis'}
+pm_csv <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant_pairs.csv")
+if (file.exists(pm_csv)) {
+    pm_df <- read.csv(pm_csv, stringsAsFactors = FALSE)
+    n_prot <- length(unique(pm_df$protein))
+    n_metab <- length(unique(pm_df$metabolite))
+    cat(sprintf("\n**Features shown:** %d proteins x %d metabolites. ", n_prot, n_metab))
+    cat("Feature selection: differentially expressed features (pass\\_any filter from DE analysis) are used when available; otherwise the top variable features by variance are selected. ")
+    cat(sprintf("Up to 100 proteins and 50 metabolites are included.\n\n"))
     render_commentary("protein_metabolite_correlations")
 } else {
-    cat("*No protein-metabolite correlation heatmap available. Requires both proteomics and metabolomics data with sufficient overlapping samples.*\n\n")
+    cat("*No significant protein-metabolite pairs available. Requires both proteomics and metabolomics data with sufficient overlapping samples.*\n\n")
 }
 ```
 

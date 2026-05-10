@@ -1727,14 +1727,20 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         diablo_dir <- file.path(out_dir, "diablo_loadings")
         dir.create(diablo_dir, showWarnings = FALSE)
 
-        results$diablo <- run_diablo_loadings_enrichment(
-            diablo_results = integration_res$diablo_results,
-            harmonization_res = harmonization_res,
-            organism = organism,
-            kegg_org = kegg_org,
-            org_db = org_db,
-            out_dir = diablo_dir,
-            top_n = top_n
+        results$diablo <- tryCatch(
+            run_diablo_loadings_enrichment(
+                diablo_results = integration_res$diablo_results,
+                harmonization_res = harmonization_res,
+                organism = organism,
+                kegg_org = kegg_org,
+                org_db = org_db,
+                out_dir = diablo_dir,
+                top_n = top_n
+            ),
+            error = function(e) {
+                message("  DIABLO loadings enrichment failed: ", conditionMessage(e))
+                NULL
+            }
         )
     }
 
@@ -1744,14 +1750,20 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         mofa_dir <- file.path(out_dir, "mofa_loadings")
         dir.create(mofa_dir, showWarnings = FALSE)
 
-        results$mofa <- run_mofa_weights_enrichment(
-            mofa_results = integration_res$mofa_results,
-            harmonization_res = harmonization_res,
-            organism = organism,
-            kegg_org = kegg_org,
-            org_db = org_db,
-            out_dir = mofa_dir,
-            top_n = top_n
+        results$mofa <- tryCatch(
+            run_mofa_weights_enrichment(
+                mofa_results = integration_res$mofa_results,
+                harmonization_res = harmonization_res,
+                organism = organism,
+                kegg_org = kegg_org,
+                org_db = org_db,
+                out_dir = mofa_dir,
+                top_n = top_n
+            ),
+            error = function(e) {
+                message("  MOFA2 weights enrichment failed: ", conditionMessage(e))
+                NULL
+            }
         )
     }
 
@@ -1838,11 +1850,28 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
     }
 
     if (length(all_results) == 0) return(NULL)
-    combined <- do.call(rbind, all_results)
+    combined <- .rbind_fill(all_results)
     rownames(combined) <- NULL
     write.csv(combined, file.path(out_dir, "diablo_loadings_enrichment_all.csv"),
               row.names = FALSE)
     combined
+}
+
+
+#' Row-bind data frames with differing column sets (union-of-columns).
+#' Gene-based ORA and compound ORA return different columns, so a plain
+#' do.call(rbind, ...) fails. This pads missing columns with NA.
+.rbind_fill <- function(dfs) {
+    dfs <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, dfs)
+    if (length(dfs) == 0) return(NULL)
+    if (length(dfs) == 1) return(dfs[[1]])
+    all_cols <- unique(unlist(lapply(dfs, colnames)))
+    aligned <- lapply(dfs, function(df) {
+        missing <- setdiff(all_cols, colnames(df))
+        for (m in missing) df[[m]] <- NA
+        df[, all_cols, drop = FALSE]
+    })
+    do.call(rbind, aligned)
 }
 
 
@@ -1922,7 +1951,7 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
     }
 
     if (length(all_results) == 0) return(NULL)
-    combined <- do.call(rbind, all_results)
+    combined <- .rbind_fill(all_results)
     rownames(combined) <- NULL
     write.csv(combined, file.path(out_dir, "mofa_weights_enrichment_all.csv"),
               row.names = FALSE)
@@ -1933,7 +1962,10 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 #' Run compound ORA for metabolomics loadings/weights
 #'
 #' Maps top metabolomics features to KEGG compound IDs and runs compound ORA.
-#' Used by loadings enrichment for DIABLO and MOFA2.
+#' Used by loadings enrichment for DIABLO and MOFA2. Reuses
+#' map_metabolite_ids_to_kegg() — the same mapper used by the per-omics
+#' enrichment path — so loadings enrichment succeeds whenever metabolite-name
+#' / synthetic-ID / bare-numeric feature IDs can be resolved to HMDB.
 #'
 #' @param feature_ids Character vector of top metabolomics feature IDs
 #' @param harmonization_res Harmonization result (for HMDB mapping)
@@ -1942,72 +1974,44 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 #' @return data.frame of enriched pathways, or NULL
 run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label) {
     # Build a pseudo-DE table: treat all top features as significant
-    de_mapped <- data.frame(
+    de_tbl <- data.frame(
         feature_id = feature_ids,
         pvalue = 0.01,
         padj = 0.01,
         stringsAsFactors = FALSE
     )
 
-    # Map feature IDs to KEGG compound IDs
-    # Try via MAE rowData first (Name, HMDB columns)
-    kegg_ids <- NULL
-    mae <- harmonization_res$mae
-    if (!is.null(mae) && "metabolomics" %in% names(mae@ExperimentList)) {
-        rd <- as.data.frame(SummarizedExperiment::rowData(mae[["metabolomics"]]))
-        avail <- intersect(feature_ids, rownames(rd))
-        if (length(avail) > 0 && "KEGG" %in% colnames(rd)) {
-            kegg_ids <- setNames(as.character(rd[avail, "KEGG"]), avail)
-        } else if (length(avail) > 0 && "HMDB" %in% colnames(rd)) {
-            # Try HMDB -> KEGG mapping
-            hmdb_ids <- as.character(rd[avail, "HMDB"])
-            kegg_conv <- tryCatch(
-                map_hmdb_to_kegg_compound(hmdb_ids),
-                error = function(e) NULL
-            )
-            if (!is.null(kegg_conv)) kegg_ids <- setNames(kegg_conv, avail)
+    # Use the same robust mapper as the per-omics enrichment path.
+    id_map <- tryCatch(
+        map_metabolite_ids_to_kegg(
+            de_tables = list(loadings = de_tbl),
+            harmonization_res = harmonization_res
+        ),
+        error = function(e) {
+            message("    Metabolite ID mapping failed: ", e$message)
+            NULL
         }
-    }
+    )
 
-    # Fallback: recover from original abundance file
-    if (is.null(kegg_ids) || all(is.na(kegg_ids))) {
-        config <- harmonization_res$config %||% list()
-        hmdb_map <- tryCatch(
-            recover_metabolomics_hmdb_ids(config),
-            error = function(e) NULL
-        )
-        if (!is.null(hmdb_map)) {
-            matched <- hmdb_map[feature_ids]
-            valid <- !is.na(matched)
-            if (any(valid)) {
-                hmdb_ids <- matched[valid]
-                kegg_conv <- tryCatch(
-                    map_hmdb_to_kegg_compound(hmdb_ids),
-                    error = function(e) NULL
-                )
-                if (!is.null(kegg_conv)) {
-                    kegg_ids <- setNames(kegg_conv, names(hmdb_ids))
-                }
-            }
-        }
-    }
-
-    if (is.null(kegg_ids) || sum(!is.na(kegg_ids)) < 2) {
-        message("    Could not map enough metabolomics features to KEGG compound IDs")
+    if (is.null(id_map) || nrow(id_map) == 0) {
+        message("    Could not map metabolomics features to KEGG compound IDs")
         return(NULL)
     }
 
-    # Merge KEGG compound IDs into DE table
-    de_mapped$KEGG_ID <- kegg_ids[de_mapped$feature_id]
-    de_mapped <- de_mapped[!is.na(de_mapped$KEGG_ID), ]
+    de_mapped <- merge(de_tbl, id_map, by = "feature_id")
+    de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
+    de_mapped <- de_mapped[!is.na(de_mapped$KEGG_ID) & !duplicated(de_mapped$KEGG_ID), ]
 
     if (nrow(de_mapped) < 2) {
         message("    Too few mapped metabolites for compound ORA (", nrow(de_mapped), ")")
         return(NULL)
     }
 
+    # Use all measured KEGG-mapped metabolites as the background universe
+    full_universe <- unique(id_map$KEGG_CPD[!is.na(id_map$KEGG_CPD)])
+
     enrich_df <- tryCatch(
-        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1),
+        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe),
         error = function(e) {
             message("    Compound ORA failed: ", e$message)
             NULL
