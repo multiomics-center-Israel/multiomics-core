@@ -10,11 +10,13 @@
 #' @param de_res          List from mod_lipidomics_de().
 #' @param feature_sel_res List from mod_lipidomics_feature_selection() (or NULL).
 #' @param class_res       List from mod_lipidomics_class_analysis() (or NULL).
+#' @param clustering_res  List from mod_lipidomics_clustering() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
 #' @return Character path to the rendered HTML file.
 mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
                                    class_res, config, out_dir,
+                                   clustering_res = NULL,
                                    biomarker_res = NULL, pathway_res = NULL,
                                    qc_enhanced = NULL,
                                    commentary_file = NULL) {
@@ -57,6 +59,7 @@ mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
         rf_res          = rf_res_out,
         plsda_res       = plsda_res_out,
         class_res       = class_res,
+        clustering_res  = clustering_res,
         biomarker_res   = biomarker_res,
         pathway_res     = pathway_res,
         qc_enhanced     = qc_enhanced,

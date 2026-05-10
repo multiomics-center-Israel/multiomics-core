@@ -22,6 +22,7 @@ params:
   rf_res: NULL
   plsda_res: NULL
   class_res: NULL
+  clustering_res: NULL
   biomarker_res: NULL
   pathway_res: NULL
   qc_enhanced: NULL
@@ -274,15 +275,16 @@ if (requireNamespace("plotly", quietly = TRUE)) {
 ```
 
 ```{r unpack-results, include=FALSE}
-pre           <- params$pre
-qc_res        <- params$qc_res
-de_res        <- params$de_res
-rf_res        <- params$rf_res
-plsda_res     <- params$plsda_res
-class_res     <- params$class_res
-biomarker_res <- params$biomarker_res
-pathway_res   <- params$pathway_res
-qc_enhanced   <- params$qc_enhanced
+pre            <- params$pre
+qc_res         <- params$qc_res
+de_res         <- params$de_res
+rf_res         <- params$rf_res
+plsda_res      <- params$plsda_res
+class_res      <- params$class_res
+clustering_res <- params$clustering_res
+biomarker_res  <- params$biomarker_res
+pathway_res    <- params$pathway_res
+qc_enhanced    <- params$qc_enhanced
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -1805,6 +1807,93 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
 `r if (is.null(de_res) || is.null(de_res$summary_df)) "-->"`
 
 ---
+
+```{r clustering-discover, include=FALSE}
+# ---- Discover clustering outputs on disk for lipidomics ----
+clustering_root_lip <- file.path(dirname(knitr::current_input(dir = TRUE)),
+                                 "lipidomics", "Clustering")
+hier_dir_l   <- file.path(clustering_root_lip, "Hierarchical")
+part_root_l  <- file.path(clustering_root_lip, "Partition_clustering")
+binary_dir_l <- file.path(clustering_root_lip, "Binary_patterns")
+
+hier_hm_l <- file.path(hier_dir_l, "Hierarchical_DE_heatmap.png")
+
+part_subdirs_l <- if (dir.exists(part_root_l)) {
+  list.dirs(part_root_l, recursive = FALSE)
+} else character(0)
+part_subdir_l <- if (length(part_subdirs_l) > 0) part_subdirs_l[1] else NA_character_
+part_hm_l     <- if (!is.na(part_subdir_l)) file.path(part_subdir_l, "Partition_clustering_heatmap.png") else NA_character_
+
+part_profile_pngs_l <- if (!is.na(part_subdir_l) && dir.exists(part_subdir_l)) {
+  list.files(part_subdir_l, pattern = "^cluster_profiles_cluster[0-9]+\\.png$",
+             full.names = TRUE)
+} else character(0)
+if (length(part_profile_pngs_l) > 0) {
+  ord <- order(as.integer(sub(".*cluster([0-9]+)\\.png$", "\\1",
+                              basename(part_profile_pngs_l))))
+  part_profile_pngs_l <- part_profile_pngs_l[ord]
+}
+
+binary_pngs_l <- if (dir.exists(binary_dir_l)) {
+  list.files(binary_dir_l, pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+} else character(0)
+
+clustering_enabled_l <- isTRUE(lipid_cfg$clustering$enabled)
+has_hier_l   <- file.exists(hier_hm_l)
+has_part_l   <- !is.na(part_hm_l) && file.exists(part_hm_l)
+has_binary_l <- length(binary_pngs_l) > 0
+clustering_show_l <- clustering_enabled_l && (has_hier_l || has_part_l || has_binary_l)
+```
+
+```{r clustering-header-l, eval=clustering_show_l, results='asis'}
+cat("# Clustering {.tabset}\n\n")
+cat("Clustering was performed on the differentially expressed lipids. Each method below answers a different question:\n\n")
+cat("- **Hierarchical** — bottom-up tree built from feature-by-feature distances; reveals nested groupings.\n")
+cat("- **Partition** — splits features into a chosen number of clusters with similar trajectories across groups.\n")
+cat("- **Binary patterns** — assigns each feature to an on/off (1/0) pattern across groups based on correlation.\n\n")
+```
+
+```{r clustering-hier-l, eval=clustering_show_l && has_hier_l, results='asis'}
+cat("## Hierarchical\n\n")
+cat(sprintf("![Hierarchical clustering heatmap](%s){width=100%%}\n\n", hier_hm_l))
+figure_legend("Hierarchical clustering heatmap of differentially expressed lipids (rows z-scored). Row dendrogram reflects feature similarity; samples are annotated by experimental group.")
+render_commentary("clustering_hierarchical")
+```
+
+```{r clustering-partition-l, eval=clustering_show_l && has_part_l, results='asis'}
+cat("## Partition {.tabset}\n\n")
+cat("### Heatmap\n\n")
+cat(sprintf("![Partition clustering heatmap](%s){width=100%%}\n\n", part_hm_l))
+figure_legend("Partition clustering heatmap. Rows are grouped by cluster (gaps separate clusters); within-cluster ordering follows the feature similarity.")
+
+if (length(part_profile_pngs_l) > 0) {
+  cat("\n### Cluster Profiles {.tabset}\n\n")
+  for (pf in part_profile_pngs_l) {
+    k <- sub(".*cluster([0-9]+)\\.png$", "\\1", basename(pf))
+    cat(sprintf("\n#### Cluster %s\n\n", k))
+    cat(sprintf("![Cluster %s expression profile](%s){width=80%%}\n\n", k, pf))
+    figure_legend(sprintf(
+      "Mean (±SE) expression profile across experimental groups for lipids in cluster %s.", k))
+  }
+}
+render_commentary("clustering_partition")
+```
+
+```{r clustering-binary-l, eval=clustering_show_l && has_binary_l, results='asis'}
+cat("## Binary Patterns {.tabset}\n\n")
+for (bf in binary_pngs_l) {
+  pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+  cat(sprintf("\n### Pattern %s\n\n", pat))
+  cat(sprintf("![Binary pattern %s](%s){width=100%%}\n\n", pat, bf))
+  figure_legend(sprintf(
+    "Heatmap of lipids assigned to binary on/off pattern '%s' across experimental groups.", pat))
+}
+render_commentary("clustering_binary")
+```
+
+```{r clustering-divider-l, eval=clustering_show_l, results='asis'}
+cat("\n---\n\n")
+```
 
 `r if (is.null(class_res)) "<!--"`
 

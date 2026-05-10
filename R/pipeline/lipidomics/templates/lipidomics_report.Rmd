@@ -16,6 +16,7 @@ params:
   rf_res: NULL
   plsda_res: NULL
   class_res: NULL
+  clustering_res: NULL
   biomarker_res: NULL
   pathway_res: NULL
   qc_enhanced: NULL
