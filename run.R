@@ -2391,16 +2391,35 @@ wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
     c("Sum normalization (recommended for lipidomics)",
       "PQN — Probabilistic Quotient Normalization",
       "Median centering",
+      "EigenMS — SVD-based systematic bias removal",
+      "EigenMS-forced — EigenMS retaining a fixed % of eigentrends",
+      "Internal standard — divide each sample by an IS feature",
+      "Biological factor — divide each sample by a metadata covariate (e.g. mg protein)",
       "None (data already normalized)"),
     default = 1)
-  sample_norm <- c("sum", "pqn", "median", "none")[norm_idx]
+  sample_norm <- c("sum", "pqn", "median", "eigenms", "eigenms_forced",
+                   "is", "bio_factor", "none")[norm_idx]
+
+  # Method-specific follow-ups
+  is_ref_col <- "null"
+  bio_factor_col <- "null"
+  if (sample_norm == "is") {
+    is_ref_col <- ask("Row metadata column with the IS feature flag (e.g. 'is_internal_standard')",
+                      "is_internal_standard")
+    is_ref_col <- sprintf('"%s"', is_ref_col)
+  } else if (sample_norm == "bio_factor") {
+    bio_factor_col <- ask("Metadata column with per-sample numeric factor to divide by (e.g. 'mg_protein')",
+                          "mg_protein")
+    bio_factor_col <- sprintf('"%s"', bio_factor_col)
+  }
 
   transform_idx <- ask_choice("Transformation:",
     c("log2 (recommended)",
       "log10",
+      "Generalized log10 (MetaboAnalyst-style)",
       "None"),
     default = 1)
-  transform <- c("log2", "log10", "none")[transform_idx]
+  transform <- c("log2", "log10", "glog10", "none")[transform_idx]
 
   scaling_idx <- ask_choice("Scaling:",
     c("Auto-scaling (unit variance, recommended for lipidomics)",
@@ -2450,6 +2469,91 @@ wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
   # PowerPoint
   generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
 
+  # --- Technical / Instrument Report (Optional) ---
+  nna <- function(x, default = "") if (is.null(x) || !nzchar(x)) default else x
+  cat("\n--- [LIPID] Technical / Instrument Report (Optional) ---\n")
+  cat("Provide a LipidSearch / MS-DIAL parameter dump or facility report\n")
+  cat("(LOG/TXT/PDF/DOCX) to auto-extract instrument and software details.\n")
+  tech_report_path <- ask("Path to log file or technical report (or 'none')", "none")
+  tech_report_fields <- NULL
+
+  if (tolower(tech_report_path) != "none") {
+    tech_report_path <- validate_file(tech_report_path, "Technical report / log file")
+    if (!is.null(tech_report_path) && nzchar(Sys.which("claude"))) {
+      cat("  Extracting text from file...\n")
+      ext <- tolower(tools::file_ext(tech_report_path))
+      doc_text <- tryCatch({
+        if (ext %in% c("log", "txt", "tsv", "csv")) {
+          paste(readLines(tech_report_path, warn = FALSE), collapse = "\n")
+        } else if (ext == "pdf") {
+          paste(system2("pdftotext", c("-layout", shQuote(tech_report_path), "-"),
+                        stdout = TRUE, stderr = FALSE), collapse = "\n")
+        } else {
+          paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_path)),
+                        stdout = TRUE, stderr = FALSE), collapse = "\n")
+        }
+      }, error = function(e) NULL)
+
+      if (!is.null(doc_text) && nchar(doc_text) >= 50) {
+        cat(sprintf("  Extracted %d characters. Sending to Claude for parsing...\n",
+                    nchar(doc_text)))
+        json_schema <- paste0(
+          '{"type":"object","properties":{',
+          '"facility":{"type":"string","description":"Lipidomics facility / core if mentioned"},',
+          '"sample_prep":{"type":"string","description":"Lipid extraction protocol, internal standards (e.g. SPLASH Lipidomix)"},',
+          '"ms_acquisition":{"type":"string","description":"Mass spectrometer model and chromatography (e.g. Q Exactive, HILIC, RP, normal-phase)"},',
+          '"search_engine":{"type":"string","description":"Software name and version (e.g. LipidSearch 5.0, MS-DIAL 5.0, LipidMatch)"},',
+          '"search_parameters":{"type":"string","description":"Mass tolerance, lipid class library, identification grade, FA scoring"},',
+          '"acknowledgment":{"type":"string","description":"Facility acknowledgment if present"}',
+          '},"required":["facility","sample_prep","ms_acquisition","search_engine","search_parameters"]}'
+        )
+        prompt <- sprintf(paste0(
+          "Extract structured information from this lipidomics processing log or facility report. ",
+          "Return only the fields described in the schema. Use exact details from the text. ",
+          "If a field is not mentioned, use an empty string.\n\nLOG/REPORT TEXT:\n%s"), doc_text)
+        cmd <- sprintf(
+          "claude --print --output-format json --model sonnet --json-schema %s --no-session-persistence %s",
+          shQuote(json_schema), shQuote(prompt))
+        parsed <- tryCatch({
+          raw <- system(cmd, intern = TRUE, timeout = 120)
+          p <- jsonlite::fromJSON(paste(raw, collapse = "\n"), simplifyVector = FALSE)
+          if (!is.null(p$structured_output)) p$structured_output
+          else if (!is.null(p$result) && nzchar(p$result))
+            jsonlite::fromJSON(p$result, simplifyVector = FALSE)
+          else NULL
+        }, error = function(e) { cat(sprintf("  Claude extraction failed: %s\n", e$message)); NULL })
+
+        if (!is.null(parsed) && (!is.null(parsed$search_engine) || !is.null(parsed$ms_acquisition))) {
+          cat("\n  Extracted fields:\n")
+          for (k in c("facility", "sample_prep", "ms_acquisition", "search_engine",
+                      "search_parameters", "acknowledgment")) {
+            v <- nna(parsed[[k]])
+            if (nzchar(v)) cat(sprintf("    %-16s %s\n", paste0(k, ":"), substr(v, 1, 80)))
+          }
+          if (ask_yn("\n  Use these extracted fields?", TRUE)) tech_report_fields <- parsed
+        }
+      }
+    } else if (!is.null(tech_report_path)) {
+      cat("  Claude Code CLI not found — add 'technical_report:' block manually later.\n")
+    }
+  }
+
+  # --- Report Section Toggles (Optional) ---
+  cat("\n--- [LIPID] Report Section Toggles (Optional) ---\n")
+  cat("Each section can be toggled on/off in the final HTML report.\n")
+  cat("Press Enter to keep all sections ON.\n\n")
+  show_qc          <- ask_yn("Show QC section (PCA, density, boxplots, heatmaps)?", TRUE)
+  show_de          <- ask_yn("Show DE section (volcano + tables)?", TRUE)
+  show_de_heatmaps <- ask_yn("Show DE heatmaps section?", TRUE)
+  show_clustering  <- ask_yn("Show Clustering section (hierarchical / partition / binary)?", TRUE)
+  show_class       <- ask_yn("Show Lipid Class Analysis section?", TRUE)
+  show_fs          <- ask_yn("Show Feature Selection section (RF + PLS-DA)?", TRUE)
+  show_biomarker   <- ask_yn("Show Biomarker Discovery section?", TRUE)
+  show_pathway     <- ask_yn("Show Lipid Pathway section?", TRUE)
+  show_methods     <- ask_yn("Show Methods section?", TRUE)
+  show_session     <- ask_yn("Show Session Info section?", TRUE)
+  show_technical   <- ask_yn("Show Technical Summary section?", TRUE)
+
   # Copy data into project structure
   cat("\n--- [LIPID] Setting Up Project ---\n")
 
@@ -2487,6 +2591,37 @@ wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
 
   sheet_yaml <- if (sheet_name == "null") "null" else paste0('"', sheet_name, '"')
 
+  # Build report_sections block (only emit non-default toggles to keep YAML clean)
+  rs_lines <- character(0)
+  if (!show_qc)          rs_lines <- c(rs_lines, "      qc: false")
+  if (!show_de)          rs_lines <- c(rs_lines, "      de: false")
+  if (!show_de_heatmaps) rs_lines <- c(rs_lines, "      de_heatmaps: false")
+  if (!show_clustering)  rs_lines <- c(rs_lines, "      clustering: false")
+  if (!show_class)       rs_lines <- c(rs_lines, "      class_analysis: false")
+  if (!show_fs)          rs_lines <- c(rs_lines, "      feature_selection: false")
+  if (!show_biomarker)   rs_lines <- c(rs_lines, "      biomarker: false")
+  if (!show_pathway)     rs_lines <- c(rs_lines, "      pathway: false")
+  if (!show_methods)     rs_lines <- c(rs_lines, "      methods: false")
+  if (!show_session)     rs_lines <- c(rs_lines, "      session_info: false")
+  if (!show_technical)   rs_lines <- c(rs_lines, "      technical_summary: false")
+  report_sections_yaml <- if (length(rs_lines) > 0) {
+    paste0("\n    report_sections:\n", paste(rs_lines, collapse = "\n"), "\n")
+  } else ""
+
+  technical_report_yaml <- ""
+  if (!is.null(tech_report_fields)) {
+    yaml_esc <- function(s) gsub('"', '\\\\"', nna(s))
+    technical_report_yaml <- paste0(
+      "\n    technical_report:\n",
+      sprintf('      facility: "%s"\n',          yaml_esc(tech_report_fields$facility)),
+      sprintf('      sample_prep: "%s"\n',       yaml_esc(tech_report_fields$sample_prep)),
+      sprintf('      ms_acquisition: "%s"\n',    yaml_esc(tech_report_fields$ms_acquisition)),
+      sprintf('      search_engine: "%s"\n',     yaml_esc(tech_report_fields$search_engine)),
+      sprintf('      search_parameters: "%s"\n', yaml_esc(tech_report_fields$search_parameters)),
+      sprintf('      acknowledgment: "%s"\n',    yaml_esc(tech_report_fields$acknowledgment))
+    )
+  }
+
   config_yaml <- sprintf('# Auto-generated by run.R wizard (lipidomics)
 # Project: %s
 # Date: %s
@@ -2522,6 +2657,8 @@ modes:
       scaling: "%s"
       pseudocount: 1
       na_policy: "%s"
+      is_ref_col: %s
+      biological_factor_col: %s
 
     sample_filter:
       enabled: false
@@ -2562,7 +2699,7 @@ modes:
 
     outputs:
       generate_pptx: %s
-
+%s%s
 params:
   seed: 1
 ',
@@ -2572,6 +2709,7 @@ params:
     data_dest, meta_dest,
     name_col,
     sample_norm, transform, scaling, na_policy,
+    is_ref_col, bio_factor_col,
     sample_col, group_col,
     de_method, group_col,
     contrasts_yaml,
@@ -2579,7 +2717,9 @@ params:
     tolower(run_rf),
     tolower(run_plsda),
     tolower(commentary_enabled), commentary_backend,
-    tolower(generate_pptx)
+    tolower(generate_pptx),
+    report_sections_yaml,
+    technical_report_yaml
   )
 
   writeLines(config_yaml, config_path)

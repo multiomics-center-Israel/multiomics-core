@@ -73,6 +73,11 @@ modes:
       # Column in row_data for internal standard (if sample_norm = "is")
       is_ref_col: null
 
+      # Metadata column for biological-factor normalization (if sample_norm = "bio_factor").
+      # Numeric column on the metadata table (e.g. "mg_protein"). Each sample's
+      # intensities are divided by its row's value.
+      biological_factor_col: null
+
       # ---- Method evaluation (optional) ----
       evaluate_methods:
         - sample_norm: "none"
