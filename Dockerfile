@@ -44,13 +44,31 @@ RUN R -e "renv::restore(prompt = FALSE)"
 COPY R/ R/
 COPY run.R run.R
 COPY _targets.R _targets.R
+COPY wizard.html wizard.html
+COPY wizard_defaults.template.json wizard_defaults.template.json
+COPY tools/ tools/
+COPY utils/ utils/
+COPY config/templates/ config/templates/
+COPY data/example_proteomics/ data/example_proteomics/
+COPY data/example_metabolomics/ data/example_metabolomics/
+COPY data/example_lipidomics/ data/example_lipidomics/
 
-# Create mount points for data and outputs
-RUN mkdir -p /app/data /app/outputs /app/config
+# Create mount points for user data + outputs (left empty inside the image —
+# bind-mount real data at run time with `docker run -v ...`).
+RUN mkdir -p /app/data/user /app/outputs /app/config
+
+# Wizard binds to 0.0.0.0 inside the container so `-p 8080:8080` forwarding
+# works from the host browser. Outside Docker, default stays 127.0.0.1.
+ENV MULTIOMICS_WIZARD_BIND=0.0.0.0
+
+# Expose the wizard port for `docker run -p 8080:8080`
+EXPOSE 8080
 
 # Run as non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Default: interactive wizard
-CMD ["Rscript", "run.R", "--new"]
+# Default: HTML wizard on port 8080. Override with `docker run ... <cmd>`
+# to use the CLI wizard (`Rscript run.R --new`) or run an existing config
+# (`Rscript run.R --config /app/config/foo.yaml`).
+CMD ["Rscript", "run.R", "--wizard"]

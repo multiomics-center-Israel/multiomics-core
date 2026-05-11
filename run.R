@@ -3089,11 +3089,17 @@ main <- function() {
     .wizard_state$log_path   <- NULL
     .wizard_state$config_path <- NULL
 
+    # Bind address: 127.0.0.1 by default (local-only). Set
+    # MULTIOMICS_WIZARD_BIND=0.0.0.0 to allow port-forwarding from Docker /
+    # remote shells. The default is local-only because the wizard has no
+    # auth and serves a Run-Pipeline endpoint.
+    wizard_bind <- Sys.getenv("MULTIOMICS_WIZARD_BIND", "127.0.0.1")
+
     # Find available port
     port <- 8080L
     for (p in 8080:8099) {
       tryCatch({
-        srv_test <- httpuv::startServer("127.0.0.1", p, list(call = function(req) {
+        srv_test <- httpuv::startServer(wizard_bind, p, list(call = function(req) {
           list(status = 200L, headers = list(), body = "")
         }))
         httpuv::stopServer(srv_test)
@@ -3565,8 +3571,8 @@ main <- function() {
       }
     )
 
-    # Start server
-    server <- httpuv::startServer("127.0.0.1", port, app)
+    # Start server (bind from env var picked above; localhost by default)
+    server <- httpuv::startServer(wizard_bind, port, app)
     url <- sprintf("http://localhost:%d", port)
     cat(sprintf("  Wizard running at: %s\n", url))
     cat("  Press Ctrl+C to stop.\n\n")
