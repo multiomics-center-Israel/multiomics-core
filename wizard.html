@@ -246,7 +246,17 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <button type="button" class="btn btn-primary" id="btn_load_example"
             onclick="loadExampleData()"
             title="Fills all fields with a bundled synthetic proteomics dataset. Ready to Run.">
-      &#9733; Load Example Dataset (Proteomics)
+      &#9733; Load Example (Proteomics)
+    </button>
+    <button type="button" class="btn" id="btn_load_example_metab"
+            onclick="loadExampleMetab()" style="margin-left:8px;"
+            title="Fills all fields with a bundled synthetic metabolomics dataset. Ready to Run.">
+      &#9733; Load Example (Metabolomics)
+    </button>
+    <button type="button" class="btn" id="btn_load_example_lipid"
+            onclick="loadExampleLipid()" style="margin-left:8px;"
+            title="Fills all fields with a bundled synthetic lipidomics dataset. Ready to Run.">
+      &#9733; Load Example (Lipidomics)
     </button>
     <span class="hint" style="margin-left:10px;">First time? Click to try a ~10 sec demo run with built-in data.</span>
   </div>
@@ -3232,6 +3242,171 @@ function loadExampleData() {
     .catch(function(err) {
       showToast('Failed to load example: ' + err.message, 'error', 8000);
       btn.textContent = '\u2605 Load Example Dataset (Proteomics)';
+      btn.disabled = false;
+    });
+}
+
+// ============================================================
+// Load Example \u2014 Metabolomics
+// ============================================================
+function loadExampleMetab() {
+  var btn = document.getElementById('btn_load_example_metab');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  fetch('/api/load-example-metab')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast(d.error, 'error', 8000); return; }
+
+      setMode('metabolomics');
+
+      document.getElementById('project_name').value = d.project_name;
+      document.getElementById('analyst').value      = d.analyst;
+      document.getElementById('round').value        = d.round;
+
+      var orgSel = document.getElementById('organism');
+      if (orgSel) { orgSel.value = 'Homo sapiens'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
+      var commSel = document.getElementById('commentary_backend');
+      if (commSel) commSel.value = 'none';
+
+      document.getElementById('metab_data_path').value     = d.data.path;
+      document.getElementById('metab_metadata_path').value = d.metadata.path;
+
+      function apply(prefix, info) {
+        if (!info || !info.columns || info.columns.length === 0) return;
+        detectedColumns[prefix] = info.columns;
+        var colsDiv = document.getElementById(prefix + '_cols');
+        if (colsDiv) {
+          colsDiv.textContent = 'Detected ' + info.columns.length + ' columns: ' +
+            info.columns.slice(0, 8).join(', ') + (info.columns.length > 8 ? '...' : '');
+          colsDiv.classList.add('visible');
+        }
+        var statusDiv = document.getElementById(prefix + '_status');
+        if (statusDiv) { statusDiv.textContent = 'Loaded: ' + info.path; statusDiv.className = 'upload-status visible success'; }
+        populateSelects(prefix, info.columns);
+      }
+      apply('metab_data',     d.data);
+      apply('metab_metadata', d.metadata);
+
+      if (d.metadata.text) {
+        var lines = d.metadata.text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+        if (lines.length >= 2) {
+          var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+          var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+          var rows = [];
+          for (var i = 1; i < lines.length; i++) {
+            var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+            var row = {};
+            for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+            rows.push(row);
+          }
+          metadataRows['metab_metadata'] = { header: header, rows: rows };
+        }
+      }
+
+      function setSel(id, val) { var s = document.getElementById(id); if (s) s.value = val; }
+      setSel('metab_input_format', 'processed_wide');
+      setSel('metab_sample_col',   'sample_id');
+      setSel('metab_group_col',    'condition');
+
+      if (typeof updateContrastBuilder === 'function') updateContrastBuilder('metab');
+      if (typeof populateSampleExclusion === 'function') populateSampleExclusion('metab');
+
+      showToast('Metabolomics example loaded. Scroll down and click Run Pipeline.', 'success', 8000);
+      btn.textContent = '\u2713 Example Loaded';
+      setTimeout(function() {
+        btn.textContent = '\u2605 Load Example (Metabolomics)';
+        btn.disabled = false;
+      }, 3000);
+    })
+    .catch(function(err) {
+      showToast('Failed to load example: ' + err.message, 'error', 8000);
+      btn.textContent = '\u2605 Load Example (Metabolomics)';
+      btn.disabled = false;
+    });
+}
+
+// ============================================================
+// Load Example \u2014 Lipidomics
+// ============================================================
+function loadExampleLipid() {
+  var btn = document.getElementById('btn_load_example_lipid');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  fetch('/api/load-example-lipid')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast(d.error, 'error', 8000); return; }
+
+      setMode('lipidomics');
+
+      document.getElementById('project_name').value = d.project_name;
+      document.getElementById('analyst').value      = d.analyst;
+      document.getElementById('round').value        = d.round;
+
+      var orgSel = document.getElementById('organism');
+      if (orgSel) { orgSel.value = 'Homo sapiens'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
+      var commSel = document.getElementById('commentary_backend');
+      if (commSel) commSel.value = 'none';
+
+      document.getElementById('lipid_data_path').value     = d.data.path;
+      document.getElementById('lipid_metadata_path').value = d.metadata.path;
+
+      function apply(prefix, info) {
+        if (!info || !info.columns || info.columns.length === 0) return;
+        detectedColumns[prefix] = info.columns;
+        var colsDiv = document.getElementById(prefix + '_cols');
+        if (colsDiv) {
+          colsDiv.textContent = 'Detected ' + info.columns.length + ' columns: ' +
+            info.columns.slice(0, 8).join(', ') + (info.columns.length > 8 ? '...' : '');
+          colsDiv.classList.add('visible');
+        }
+        var statusDiv = document.getElementById(prefix + '_status');
+        if (statusDiv) { statusDiv.textContent = 'Loaded: ' + info.path; statusDiv.className = 'upload-status visible success'; }
+        populateSelects(prefix, info.columns);
+      }
+      apply('lipid_data',     d.data);
+      apply('lipid_metadata', d.metadata);
+
+      if (d.metadata.text) {
+        var lines = d.metadata.text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+        if (lines.length >= 2) {
+          var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+          var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+          var rows = [];
+          for (var i = 1; i < lines.length; i++) {
+            var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+            var row = {};
+            for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+            rows.push(row);
+          }
+          metadataRows['lipid_metadata'] = { header: header, rows: rows };
+        }
+      }
+
+      function setSel(id, val) { var s = document.getElementById(id); if (s) s.value = val; }
+      setSel('lipid_input_format', 'translated_csv');
+      setSel('lipid_name_col',     'Metabolite');
+      setSel('lipid_sample_col',   'sample_id');
+      setSel('lipid_group_col',    'condition');
+      var hgr = document.getElementById('lipid_has_group_row');
+      if (hgr) hgr.checked = true;
+
+      if (typeof updateContrastBuilder === 'function') updateContrastBuilder('lipid');
+      if (typeof populateSampleExclusion === 'function') populateSampleExclusion('lipid');
+
+      showToast('Lipidomics example loaded. Scroll down and click Run Pipeline.', 'success', 8000);
+      btn.textContent = '\u2713 Example Loaded';
+      setTimeout(function() {
+        btn.textContent = '\u2605 Load Example (Lipidomics)';
+        btn.disabled = false;
+      }, 3000);
+    })
+    .catch(function(err) {
+      showToast('Failed to load example: ' + err.message, 'error', 8000);
+      btn.textContent = '\u2605 Load Example (Lipidomics)';
       btn.disabled = false;
     });
 }

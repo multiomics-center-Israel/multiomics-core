@@ -3395,6 +3395,80 @@ main <- function() {
                       body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
         }
 
+        # API: load example metabolomics dataset
+        if (path == "/api/load-example-metab" && method == "GET") {
+          ex_dir <- file.path(project_dir, "data", "example_metabolomics", "metabolomics")
+          if (!dir.exists(ex_dir)) {
+            return(list(status = 404L, headers = c(cors,
+                          list("Content-Type" = "application/json")),
+                        body = '{"error":"Example dataset missing. Run data/example_metabolomics/metabolomics/generate_example.R"}'))
+          }
+
+          read_header <- function(fn) {
+            fp <- file.path(ex_dir, fn)
+            if (!file.exists(fp)) return(list(path = fn, columns = character(0), text = ""))
+            txt   <- paste(readLines(fp, warn = FALSE), collapse = "\n")
+            first <- strsplit(txt, "\r?\n")[[1]][1]
+            sep   <- if (grepl("\t", first)) "\t" else ","
+            cols  <- trimws(gsub('["\']', '', strsplit(first, sep)[[1]]))
+            list(path = fn, columns = cols, text = txt)
+          }
+
+          resp_obj <- list(
+            project_name = "example_metabolomics",
+            analyst      = "Example Run",
+            round        = "A01",
+            organism     = "human",
+            mode         = "metabolomics",
+            data         = read_header("data.csv"),
+            metadata     = read_header("metadata.csv"),
+            contrasts    = read_header("contrasts.csv")
+          )
+          resp_obj$data$text      <- NULL
+          resp_obj$contrasts$text <- NULL
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
+        }
+
+        # API: load example lipidomics dataset
+        if (path == "/api/load-example-lipid" && method == "GET") {
+          ex_dir <- file.path(project_dir, "data", "example_lipidomics", "lipidomics")
+          if (!dir.exists(ex_dir)) {
+            return(list(status = 404L, headers = c(cors,
+                          list("Content-Type" = "application/json")),
+                        body = '{"error":"Example dataset missing. Run data/example_lipidomics/lipidomics/generate_example.R"}'))
+          }
+
+          read_header <- function(fn) {
+            fp <- file.path(ex_dir, fn)
+            if (!file.exists(fp)) return(list(path = fn, columns = character(0), text = ""))
+            txt   <- paste(readLines(fp, warn = FALSE), collapse = "\n")
+            first <- strsplit(txt, "\r?\n")[[1]][1]
+            sep   <- if (grepl("\t", first)) "\t" else ","
+            cols  <- trimws(gsub('["\']', '', strsplit(first, sep)[[1]]))
+            list(path = fn, columns = cols, text = txt)
+          }
+
+          resp_obj <- list(
+            project_name = "example_lipidomics",
+            analyst      = "Example Run",
+            round        = "A01",
+            organism     = "human",
+            mode         = "lipidomics",
+            data         = read_header("data.csv"),
+            metadata     = read_header("metadata.csv"),
+            contrasts    = read_header("contrasts.csv")
+          )
+          resp_obj$data$text      <- NULL
+          resp_obj$contrasts$text <- NULL
+
+          return(list(status = 200L,
+                      headers = c(cors, list("Content-Type" = "application/json")),
+                      body = jsonlite::toJSON(resp_obj, auto_unbox = TRUE)))
+        }
+
         # API: open a local file with the OS default handler (for report HTML)
         if (path == "/api/open-file" && method == "POST") {
           body_raw <- req$rook.input$read()
