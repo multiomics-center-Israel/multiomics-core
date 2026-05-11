@@ -74,7 +74,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
         }
         abs <- resolve_raw_path(config, rel)
         if (dir.exists(abs)) next    # skip directory paths (e.g., data_dir)
-        if (!file.exists(abs)) stop("File not found: ", abs)
+        if (!file.exists(abs)) stop(sprintf("[%s] File '%s' not found at: %s", mode, nm, abs), call. = FALSE)
 
         # Detect file type and load appropriately
         ext <- tolower(tools::file_ext(abs))
@@ -165,14 +165,63 @@ save_tsv_path <- function(x, path) {
     path
 }
 
+#' Sanitize character columns: convert to UTF-8, replace NBSP, trim whitespace.
+#' Emits a warning listing affected columns and modification counts.
+sanitize_character_columns <- function(df, source = "input") {
+    chr_cols <- which(vapply(df, is.character, logical(1)))
+    if (length(chr_cols) == 0L) return(df)
+
+    modified_summary <- character(0)
+
+    for (j in chr_cols) {
+        orig <- df[[j]]
+        cleaned <- iconv(orig, from = "", to = "UTF-8", sub = "")
+        cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
+        cleaned <- trimws(cleaned)
+
+        n_changed <- sum(orig != cleaned, na.rm = TRUE)
+        if (n_changed > 0L) {
+            modified_summary <- c(modified_summary,
+                sprintf("  - %s: %d value(s)", names(df)[j], n_changed))
+        }
+        df[[j]] <- cleaned
+    }
+
+    if (length(modified_summary) > 0L) {
+        warning(
+            sprintf("Encoding/whitespace issues sanitized in %s:\n", source),
+            paste(modified_summary, collapse = "\n"),
+            call. = FALSE
+        )
+    }
+
+    df
+}
+
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
     ext <- tolower(tools::file_ext(path))
-    df <- if (ext %in% c("tsv", "txt")) {
-        readr::read_tsv(path, show_col_types = FALSE)
-    } else {
-        readr::read_csv(path, show_col_types = FALSE)
-    }
+    read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+    df <- tryCatch(
+        read_fn(path, show_col_types = FALSE),
+        error = function(e) {
+            if (grepl("invalid.*UTF-8|invalid.*utf8", conditionMessage(e),
+                       ignore.case = TRUE)) {
+                warning(
+                    sprintf("Non-UTF-8 encoding detected in %s; re-reading as Latin1.",
+                            basename(path)),
+                    call. = FALSE
+                )
+                read_fn(path, show_col_types = FALSE,
+                         locale = readr::locale(encoding = "Latin1"))
+            } else {
+                stop(e)
+            }
+        }
+    )
     # Convert tibble to data.frame to support rownames and proper subsetting
-    as.data.frame(df)
+    df <- as.data.frame(df)
+    # Sanitize character columns: NBSP, whitespace
+    df <- sanitize_character_columns(df, source = basename(path))
+    df
 }

@@ -5,9 +5,7 @@
 # ---------------------------------------------------------------------------
 # Helper: build a minimal de_stats data.frame
 # ---------------------------------------------------------------------------
-# Generic test helper — uses "pass." and "linearFC." dot-prefix naming
-# for testing build_de_summary_counts_generic() with custom patterns.
-make_de_stats_generic <- function(include_any = TRUE) {
+make_de_stats_metab <- function(include_any = TRUE) {
     df <- data.frame(
         feature_id          = paste0("F", 1:10),
         pass.A_vs_B         = c(1, 1, 1, NA, 0, 1, NA, 0, 1, 1),
@@ -48,6 +46,7 @@ make_de_stats_metab <- function(include_any = TRUE) {
     }
     df
 }
+
 
 make_de_stats_prot <- function() {
     # Proteomics schema: pass.imputs.<contrast>, linearFC.imputs.<contrast>
@@ -103,7 +102,7 @@ test_that("generic: no matching pass columns returns NULL", {
 })
 
 test_that("generic: correct per-contrast counts with FC column", {
-    df <- make_de_stats_generic(include_any = FALSE)
+    df <- make_de_stats_metab(include_any = FALSE)
     result <- build_de_summary_counts_generic(
         de_stats         = df,
         pass_pattern     = "^pass\\.",
@@ -164,7 +163,7 @@ test_that("generic: pass_any_contrast excluded from per-contrast rows", {
 })
 
 test_that("generic: 'any' row appended when pass_any_contrast exists", {
-    df <- make_de_stats_generic(include_any = TRUE)
+    df <- make_de_stats_metab(include_any = TRUE)
     result <- build_de_summary_counts_generic(
         df, "^pass\\.",
         function(col) sub("^pass\\.", "", col),
@@ -187,7 +186,7 @@ test_that("generic: 'any' row appended when pass_any_contrast exists", {
 })
 
 test_that("generic: no 'any' row when pass_any_contrast is absent", {
-    df <- make_de_stats_generic(include_any = FALSE)
+    df <- make_de_stats_metab(include_any = FALSE)
     result <- build_de_summary_counts_generic(
         df, "^pass\\.",
         function(col) sub("^pass\\.", "", col),
@@ -278,6 +277,7 @@ test_that("metabolomics wrapper: correct output with pass_any_contrast", {
     expect_equal(row_a$up, 4)
     # linearFC < 0 among sig: rows 2(-0.3), 9(-0.6) => down = 2
     expect_equal(row_a$down, 2)
+    expect_equal(result$contrast[nrow(result)], "any")
 })
 
 test_that("metabolomics wrapper: NULL input returns NULL", {

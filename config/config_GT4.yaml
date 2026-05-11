@@ -1,11 +1,10 @@
 # ==============================================================================
-# GT15 genotype metabolomics analysis (2024 vs 2013)
-# Converted from: metabolomics_pipeline/config_GT15.yml
+# GT4 genotype metabolomics analysis (2024 vs 2013)
 # ==============================================================================
 
 project:
-  dir: "/home/ozsol/MultiOmics_Projects/MultiOmics_Projects/2025_06_Yonatan_Sharabi/"
-  name: "GT15"
+  dir: "/home/ozsol/MultiOmics_Projects/MultiOmics_Projects/2025_06_Yonatan_Sharabi"
+  name: "GT4"
   analysis_round: "01"
 
 paths:
@@ -24,7 +23,7 @@ modes:
       has_group_row: true        # Row 2 = condition assignments per sample
 
     files:
-      data: "01.Lab_res/GT15_flt.level1.txt"
+      data: "01.Lab_res/GT4_flt.level1.txt"
       metadata: null             # Auto-generated from group row
 
     # ---- Feature ID construction ----
@@ -45,7 +44,7 @@ modes:
       input_already_normalized: false
       sample_norm: "sum"         # SumNorm
       transform: "log2"         # LogNorm
-      scaling: "auto"           # Autoscale (mean-center + divide by SD)
+      scaling: "auto"           # Autoscale (mean-center + divide by SD)         # MeanCenter
       pseudocount: 1
       na_policy: "lod"
       na_lod_fraction: 0.2
@@ -67,7 +66,7 @@ modes:
       method: "t_test"
       condition_column: "condition"
       contrasts:
-        - "GT15_2024 - GT15_2013"
+        - "GT4_2024 - GT4_2013"
       p_cutoff: 0.05
       pval_cutoff: 0.05
       linear_fc_cutoff: 1       # no FC filter (log2FC threshold = 0)

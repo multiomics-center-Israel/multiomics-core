@@ -16,9 +16,9 @@
 #' @param sample_col Column name in meta containing sample IDs (default "SampleID")
 #' @return numeric matrix; attr(., "method") indicates method used
 normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST"),
-                             prior.count = 1, sample_col = "SampleID") {
+                             prior.count = 1, sample_col = "SampleID", filter_zero_count = TRUE) {
     method <- match.arg(method)
-
+   message("THE FILTER ZERO COUNT IS:  ", filter_zero_count )
     # Detect source type
     source_type <- detect_source_type(counts)
 
@@ -76,25 +76,25 @@ normalize_counts <- function(counts, meta = NULL, method = c("TMMlogCPM", "VST")
     )
 
     # Filter zero-count genes
-    keep_nonzero <- rowSums(DESeq2::counts(dds)) > 0
-    dds <- dds[keep_nonzero, , drop = FALSE]
-    if (nrow(dds) == 0) {
+    if (isTRUE(filter_zero_count)) {
+      keep_nonzero <- rowSums(DESeq2::counts(dds)) > 0
+      n_dropped <- sum(!keep_nonzero)
+      if (n_dropped > 0) {
+        message(sprintf("Dropped %d zero-count features before VST", n_dropped))
+      }
+      dds <- dds[keep_nonzero, , drop = FALSE]
+      if (nrow(dds) == 0) {
         stop("No rows with nonzero counts available for VST.")
+      }
     }
     # Store original counts for potential fallback
     original_counts <- if (source_type == "matrix") as.matrix(counts) else NULL
 
     mat <- tryCatch(
         {
-            if (nrow(dds) < 50) {
-                vt <- DESeq2::varianceStabilizingTransformation(
-                    dds, blind = TRUE)
-                SummarizedExperiment::assay(vt)
-            } else {
-                nsub <- min(1000L, nrow(dds))
-                vt <- DESeq2::vst(dds, blind = TRUE, nsub = nsub)
-                SummarizedExperiment::assay(vt)
-            }
+              vt <- DESeq2::varianceStabilizingTransformation(dds, blind = TRUE)
+              SummarizedExperiment::assay(vt)
+            
         },
         error = function(e1) {
             # Fallback to TMMlogCPM only if source is matrix (not tximport)

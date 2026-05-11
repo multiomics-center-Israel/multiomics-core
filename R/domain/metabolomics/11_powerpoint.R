@@ -112,7 +112,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     }
     title_context <- paste0(title_context,
         sprintf("%d %s, %d samples, %d significant DE.", n_features, feature_label_lc, n_samples, n_de))
-    title_bl <- generate_slide_bottom_line(title_context, config = config)
+    title_bl <- generate_slide_bottom_line(title_context, config = config, mode = "metabolomics")
 
     pptx <- pptx_add_title_slide(pptx,
         main_title = paste(domain_label, "Analysis"),
@@ -127,7 +127,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         "Study design. %d samples, %d %s. Groups: %s. DE method: %s. Normalization: %s + %s.",
         n_samples, n_features, feature_label_lc, groups_str, de_method,
         norm_cfg$transform %||% "glog10", norm_cfg$scaling %||% "auto")
-    design_bl <- generate_slide_bottom_line(design_context, config = config)
+    design_bl <- generate_slide_bottom_line(design_context, config = config, mode = "metabolomics")
 
     design_items <- list(
         list(label = "Samples", value = as.character(n_samples)),
@@ -153,6 +153,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
             "PCA plot (PC1 vs PC2). %d samples, groups: %s.", n_samples, groups_str)
         pca_bl <- generate_slide_bottom_line(pca_context, image_path = pca_png, config = config)
         pptx <- pptx_add_figure_slide(pptx, "PCA: PC1 vs PC2", pca_png,
+
                                   subtitle = sprintf("%d samples | %s", n_samples, groups_str),
                                   bl = pca_bl, footer = footer_txt)
     }
@@ -187,7 +188,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
             "Volcano plot: %s. %d up, %d down (p<%.2g, |log2FC|>=%.1f). Top: %s.",
             gsub("_vs_", " vs ", ctr), n_up, n_down, p_cut, lfc_cut, top_names)
         vol_bl <- generate_slide_bottom_line(vol_context, stats_json = vol_stats,
-                                              image_path = volcano_png, config = config)
+                                              image_path = volcano_png, config = config, mode = "metabolomics")
 
         subtitle <- sprintf("Up: %d  |  Down: %d  |  Total DE: %d  (p < %s, |log2FC| >= %s)",
                              n_up, n_down, n_up + n_down, p_cut, lfc_cut)
@@ -207,6 +208,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                                gsub("_vs_", " vs ", ctr))
         ma_bl <- generate_slide_bottom_line(ma_context, image_path = ma_png, config = config)
         pptx <- pptx_add_figure_slide(pptx,
+
             paste("MA Plot:", gsub("_vs_", " vs ", ctr)),
             ma_png, bl = ma_bl, footer = footer_txt)
     }
@@ -238,7 +240,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
             top_n, feature_label_lc, gsub("_vs_", " vs ", ctr),
             display_df$Metabolite[1], display_df$`log2(FC)`[1],
             display_df$P.Value[1], nrow(sig))
-        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config)
+        tbl_bl <- generate_slide_bottom_line(tbl_context, config = config, mode = "metabolomics")
 
         pptx <- pptx_add_table_slide(pptx,
             title = paste("Top DE", paste0(feature_label, ":"), gsub("_vs_", " vs ", ctr)),
@@ -260,6 +262,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         hm_context <- sprintf("Heatmap of top DE %s with hierarchical clustering.", feature_label_lc)
         hm_bl <- generate_slide_bottom_line(hm_context, image_path = hm_png, config = config)
         pptx <- pptx_add_figure_slide(pptx, paste("DE", feature_label, "Heatmap"), hm_png,
+
                                   subtitle = "Z-scored glog10 intensities | hierarchical clustering",
                                   bl = hm_bl, footer = footer_txt)
     }
@@ -313,6 +316,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         plsda_context <- sprintf("PLS-DA scores. Supervised separation of %s.", groups_str)
         plsda_bl <- generate_slide_bottom_line(plsda_context, image_path = plsda_png, config = config)
         pptx <- pptx_add_figure_slide(pptx, "PLS-DA: Scores Plot", plsda_png,
+
                                   subtitle = sprintf("Supervised classification | %s", groups_str),
                                   bl = plsda_bl, footer = footer_txt)
     }
@@ -337,7 +341,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         cor_context <- "Sample-to-sample Pearson correlation after normalization."
         cor_bl <- generate_slide_bottom_line(cor_context, image_path = cor_png, config = config)
         pptx <- pptx_add_figure_slide(pptx, "Sample Correlation Heatmap", cor_png,
-                                  bl = cor_bl, footer = footer_txt)
+              bl = cor_bl, footer = footer_txt)
     }
 
     # ================================================================
@@ -353,6 +357,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
             ep_context <- sprintf("Pathway enrichment: %s.", ep_label)
             ep_bl <- generate_slide_bottom_line(ep_context, image_path = ep, config = config)
             pptx <- pptx_add_figure_slide(pptx, paste("Enrichment:", ep_label), ep,
+
                                       bl = ep_bl, footer = footer_txt)
         }
     }

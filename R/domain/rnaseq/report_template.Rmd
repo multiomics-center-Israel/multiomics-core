@@ -1,5 +1,5 @@
 ---
-title: "`r local({ .c <- yaml::read_yaml(file.path(normalizePath(dirname(knitr::current_input())), 'execution_info', 'config_used.yaml')); pname <- .c$project$name %||% ''; analyst <- gsub('_', ' ', .c$project$analyst %||% ''); parts <- c('RNA-seq Analysis Report'); if (nzchar(pname)) parts <- c(parts, pname); if (nzchar(analyst)) parts <- c(parts, analyst); paste(parts, collapse = ' — ') })`"
+title: "RNA-seq Analysis Report"
 subtitle: "multiomics-core Pipeline"
 author: "Bioinformatician: `r yaml::read_yaml(file.path(normalizePath(dirname(knitr::current_input())), 'execution_info', 'config_used.yaml'))$project$analyst`"
 date: "`r format(Sys.time(), '%B %d, %Y')`"
@@ -29,18 +29,6 @@ library(plotly)
 library(ggplot2)
 library(htmltools)
 library(jsonlite)
-
-# Source interactive cutoff panel helpers
-tryCatch({
-  .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-  .cp_found <- FALSE
-  for (.cp_i in 1:6) {
-    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
-    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
-    .cp_dir <- dirname(.cp_dir)
-  }
-  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
-}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
 
 # Load ggVennDiagram if available
 has_ggVennDiagram <- FALSE
@@ -78,16 +66,24 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     tbl
 }
 
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
-diag_dir <- file.path(run_dir, "rna", "Diagnostic_plots")
-qc_post_dir <- file.path(diag_dir, "QC_post")
-datasets_dir <- file.path(run_dir, "rna", "Datasets")
-enrich_dir <- file.path(run_dir, "rna", "Enrichment")
+# Detect if we are already inside the rna output dir
+if (basename(run_dir) == "rna") {
+    prot_dir <- run_dir
+    config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
+} else {
+    prot_dir <- file.path(run_dir, "rna")
+    config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
+}
+diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+qc_post_dir <- file.path(diag_dir, "DE_plots")
+datasets_dir <- file.path(run_dir,  "Datasets")
+enrich_dir <- file.path(run_dir,"Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
 filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "rna", "commentary")
+commentary_dir <- file.path(run_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
@@ -373,25 +369,6 @@ if (!is.null(tech$acknowledgment)) {
 }
 ```
 
-```{r project-overview, results='asis'}
-# Project Overview — user-provided notes (optionally AI-enhanced)
-user_notes <- cfg$project$user_notes
-if (!is.null(user_notes) && nzchar(trimws(user_notes))) {
-    cat("# Project Overview\n\n")
-
-    # Try to load pre-generated summary if available
-    summary_file <- file.path(run_dir, "rna", "project_summary.html")
-    if (file.exists(summary_file)) {
-        cat(paste(readLines(summary_file, warn = FALSE), collapse = "\n"))
-    } else {
-        # Fallback: render user notes as-is
-        notes_html <- gsub("\n", "<br>\n", htmltools::htmlEscape(trimws(user_notes)))
-        cat(sprintf("<div style='background:#f8f9fa; border-left:4px solid #4a90d9; padding:16px 20px; border-radius:6px; margin-bottom:20px; font-size:14px; line-height:1.7; color:#333;'>%s</div>\n", notes_html))
-    }
-    cat("\n")
-}
-```
-
 # Analysis Parameters {.tabset}
 
 ## Project
@@ -404,21 +381,19 @@ proj <- data.frame(
             cfg$paths$raw, cfg$paths$out),
   stringsAsFactors = FALSE
 )
-make_dt(proj, "Analysis Parameters")
+kable(proj, col.names = c("Parameter", "Value"))
 ```
 
 ## Experimental Design
 
 ```{r params-design}
-meta <- read.csv(
-  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata),
-  stringsAsFactors = FALSE
-)
-group_col <- rna_cfg$filtering$group_col
+meta <- read_table_auto(
+  file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata))
+group_col <- resolve_group_col(rna_cfg)
 
 design_tbl <- as.data.frame(table(meta[[group_col]]))
 colnames(design_tbl) <- c("Group", "n (replicates)")
-make_dt(design_tbl, "Experimental Design")
+kable(design_tbl)
 ```
 
 **Grouping variable:** `r group_col`
@@ -448,7 +423,7 @@ settings <- data.frame(
   ),
   stringsAsFactors = FALSE
 )
-make_dt(settings, "Pipeline Settings")
+kable(settings, col.names = c("Parameter", "Value"))
 ```
 
 ## Contrasts
@@ -458,7 +433,7 @@ contrasts <- read.csv(
   file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$contrasts),
   stringsAsFactors = FALSE
 )
-make_dt(contrasts, "Contrasts")
+kable(contrasts)
 ```
 
 ## Filtering Strategy
@@ -487,7 +462,7 @@ filter_params <- data.frame(
   ),
   stringsAsFactors = FALSE
 )
-make_dt(filter_params, "Filtering Parameters")
+kable(filter_params, col.names = c("Parameter", "Value"))
 ```
 
 **Algorithm:**
@@ -673,6 +648,8 @@ cat('</tbody></table>\n')
 ## Gene Filtering
 
 Counts before and after the filtering rule defined under *Analysis Parameters → Filtering Strategy*.
+Lowly expressed genes were removed using the auto-filtering strategy described above.
+The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
 
 ```{r filter-stats}
 # Read raw and filtered counts to get gene numbers
@@ -842,8 +819,6 @@ render_commentary("density_plot")
 PCA was performed on normalized log-CPM values to assess overall sample
 grouping and detect potential outliers or batch effects.
 
-Principal Component Analysis (PCA) reduces high-dimensional expression data to a low-dimensional representation that captures the largest sources of variation. Samples that cluster together share similar expression profiles; separation along PC1 indicates the dominant source of biological or technical variation.
-
 ### By Top Variable Genes
 
 Select the number of top variable genes used for PCA calculation:
@@ -925,9 +900,7 @@ function updatePCAPlot(n_top) {
 }
 </script>
 
-### PC1 vs PC2 {.tabset}
-
-#### Static
+### PC1 vs PC2
 
 ```{r pca-12, fig.cap="PCA — PC1 vs PC2"}
 p <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
@@ -942,37 +915,7 @@ figure_legend("Principal Component Analysis (PCA) of normalized expression data,
 render_commentary("pca_plot")
 ```
 
-#### With Sample Names
-
-```{r pca-12-labeled, fig.cap="PCA — PC1 vs PC2 (labeled)"}
-p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC2_labeled.png")
-if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
-```
-
-#### Interactive
-
-```{r pca-12-interactive, fig.width=8, fig.height=6}
-scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC2_scores.csv")
-if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
-    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
-    color_var <- rna_cfg$effects$color %||% "Condition"
-    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
-    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
-    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC2, color = as.formula(paste0("~`", color_var, "`")),
-                          text = ~hover_text, hoverinfo = "text",
-                          type = "scatter", mode = "markers",
-                          marker = list(size = 10)) |>
-        plotly::layout(xaxis = list(title = "PC1"), yaxis = list(title = "PC2"),
-                       title = "PCA: PC1 vs PC2 — Hover for sample names")
-    pl
-} else {
-    cat("*Interactive PCA not available.*\n")
-}
-```
-
-### PC1 vs PC3 {.tabset}
-
-#### Static
+### PC1 vs PC3
 
 ```{r pca-13, fig.cap="PCA — PC1 vs PC3"}
 p <- file.path(diag_dir, "PCA_PC1.vs.PC3.png")
@@ -1025,10 +968,12 @@ if (file.exists(pca3d_file)) {
     cat('<p style="color: #0a3069; font-size: 0.95em; margin-bottom: 14px;">The interactive 3D PCA plot below shows sample separation along PC1, PC2, and PC3. Rotate, zoom, and hover over points to explore clustering structure.</p>\n')
     cat('<a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="display: inline-block; padding: 10px 20px; background: #0969da; color: #fff; font-weight: 600; text-decoration: none; border-radius: 6px; font-size: 1em;">Open Interactive 3D PCA &rarr;</a>\n')
     cat('</div>\n')
+    cat(sprintf('<p><a href="Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
 } else {
     cat("*3D PCA plot not available.*")
 }
 ```
+
 
 ## Sample Similarity
 
@@ -1047,6 +992,10 @@ cat("### Correlation Heatmap\n\n")
 ```
 
 ```{r corr-heatmap, eval=show_corr_heatmap_rna, fig.cap="Sample-to-sample correlation heatmap"}
+
+## Sample Similarity {.tabset}
+
+### Correlation Heatmap
 p <- file.path(diag_dir, "sample_correlation_heatmap.png")
 if (file.exists(p)) knitr::include_graphics(p)
 ```
@@ -1123,44 +1072,18 @@ figure_legend("Expression heatmap with hierarchical row clustering but without c
 
 # Differential Expression Analysis
 
-```{r cutoff-panel, results='asis', echo=FALSE}
-if (exists("cutoff_panel_html")) {
-    .lfc_default <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
-    .p_default   <- rna_cfg$de$p_cutoff %||% 0.05
-    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "padj"))
-}
-```
-
 Differential expression was performed using **DESeq2** (`r rna_cfg$de$deseq_mode` mode).
 Genes were considered significant at adjusted p-value $\leq$ `r rna_cfg$de$p_cutoff`
 and |linear fold change| $\geq$ `r rna_cfg$de$linear_fc_cutoff`.
 
 ## DE Summary
 
-Differential expression analysis identifies features with statistically significant abundance changes between experimental conditions. Results are corrected for multiple testing to control the false discovery rate.
-
-```{r de-summary, results='asis'}
+```{r de-summary}
 de_counts_file <- file.path(datasets_dir, "de_summary_counts.tsv")
 if (file.exists(de_counts_file)) {
     de_counts <- read.delim(de_counts_file, stringsAsFactors = FALSE)
-    if (exists("cutoff_summary_span") && nrow(de_counts) > 0) {
-        # Detect column names for Up/Down counts
-        up_col   <- intersect(c("Up", "up", "n_up"), names(de_counts))[1]
-        down_col <- intersect(c("Down", "down", "n_down"), names(de_counts))[1]
-        ctr_col  <- intersect(c("Contrast", "contrast"), names(de_counts))[1]
-        if (!is.na(up_col) && !is.na(down_col) && !is.na(ctr_col)) {
-            cat("<div class='cutoff-de-summary' style='margin-bottom:12px;'>\n")
-            for (row_i in seq_len(nrow(de_counts))) {
-                cat(sprintf("<div style='margin:3px 0;'><strong>%s:</strong> %s</div>\n",
-                    de_counts[[ctr_col]][row_i],
-                    cutoff_summary_span(de_counts[[ctr_col]][row_i],
-                                        de_counts[[up_col]][row_i],
-                                        de_counts[[down_col]][row_i], "genes")))
-            }
-            cat("</div>\n")
-        }
-    }
-    make_dt(de_counts, "DE Gene Counts per Contrast")
+    kable(de_counts, col.names = c("Contrast", "Up-regulated", "Down-regulated", "Total DE"),
+          caption = "Number of differentially expressed genes per contrast")
 } else {
     cat("DE summary counts file not found.")
 }
@@ -1204,15 +1127,15 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
             names(de_gene_lists) <- short_names
             venn_plot <- ggVennDiagram(de_gene_lists, label_alpha = 0,
                                        label = "both", label_percent_digit = 1,
-                                       set_size = 2.8) +
+                                       set_size = 3.5) +
                 scale_fill_gradient(low = "white", high = "steelblue") +
-                scale_x_continuous(expand = expansion(mult = 0.4)) +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
                 labs(title = "DE Gene Overlap (All)",
                      subtitle = paste0("Total unique DE genes: ", total_unique)) +
                 theme(legend.position = "none",
                       plot.title = element_text(hjust = 0),
                       plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 60, 10, 60))
+                      plot.margin = margin(10, 40, 10, 40))
             print(venn_plot)
         } else {
             # Fallback: simple overlap table
@@ -1267,15 +1190,15 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
             names(up_gene_lists) <- short_names_up
             venn_plot <- ggVennDiagram(up_gene_lists, label_alpha = 0,
                                        label = "both", label_percent_digit = 1,
-                                       set_size = 2.8) +
+                                       set_size = 3.5) +
                 scale_fill_gradient(low = "white", high = "#E41A1C") +
-                scale_x_continuous(expand = expansion(mult = 0.4)) +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
                 labs(title = "Up-regulated Gene Overlap",
                      subtitle = paste0("Total unique up-regulated genes: ", total_up)) +
                 theme(legend.position = "none",
                       plot.title = element_text(hjust = 0),
                       plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 60, 10, 60))
+                      plot.margin = margin(10, 40, 10, 40))
             print(venn_plot)
         } else {
             cat("**Up-regulated gene counts:**\n\n")
@@ -1315,15 +1238,15 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
             names(down_gene_lists) <- short_names_dn
             venn_plot <- ggVennDiagram(down_gene_lists, label_alpha = 0,
                                        label = "both", label_percent_digit = 1,
-                                       set_size = 2.8) +
+                                       set_size = 3.5) +
                 scale_fill_gradient(low = "white", high = "#377EB8") +
-                scale_x_continuous(expand = expansion(mult = 0.4)) +
+                scale_x_continuous(expand = expansion(mult = 0.25)) +
                 labs(title = "Down-regulated Gene Overlap",
                      subtitle = paste0("Total unique down-regulated genes: ", total_down)) +
                 theme(legend.position = "none",
                       plot.title = element_text(hjust = 0),
                       plot.subtitle = element_text(hjust = 0),
-                      plot.margin = margin(10, 60, 10, 60))
+                      plot.margin = margin(10, 40, 10, 40))
             print(venn_plot)
         } else {
             cat("**Down-regulated gene counts:**\n\n")
@@ -1336,8 +1259,6 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
 ```
 
 ## Volcano Plots {.tabset}
-
-Volcano plots display the relationship between statistical significance (-log10 adjusted p-value) and biological effect size (log2 fold-change) for each feature. Points in the upper corners represent features that are both statistically significant and have large fold changes.
 
 ```{r volcano-data-prep, include=FALSE}
 # Load DE data for interactive plots
@@ -1396,9 +1317,7 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     if (grepl("^linearFC", lfc_col)) {
         plot_df$logFC <- log2(abs(plot_df$logFC)) * sign(plot_df$logFC)
     }
-    raw_nlogp <- -log10(pmax(plot_df$padj, 1e-300))
-    ycap_v <- max(quantile(raw_nlogp[is.finite(raw_nlogp)], 0.995, na.rm = TRUE), 10)
-    plot_df$neglog10padj <- pmin(raw_nlogp, ycap_v)
+    plot_df$neglog10padj <- -log10(pmax(plot_df$padj, 1e-300))
     plot_df$Direction <- ifelse(
         !is.na(plot_df$padj) & plot_df$padj <= padj_cut & abs(plot_df$logFC) >= lfc_cut,
         ifelse(plot_df$logFC > 0, "Up", "Down"), "NS"
@@ -1430,6 +1349,7 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
                          stringsAsFactors = FALSE)
     if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df, ycap = ycap_v)
+    ggplotly(p, tooltip = "text")
 }
 
 # Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
@@ -1517,19 +1437,11 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        vol_res <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        p <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                                   log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(vol_res)) {
-            p <- vol_res$widget
+        if (!is.null(p)) {
             p$elementId <- paste0("volcano_plot_", clean_id)
             print(htmltools::tagList(p))
-            if (exists("cutoff_register_plot")) {
-                cat(cutoff_register_plot(
-                    paste0("volcano_plot_", clean_id),
-                    vol_res$plot_df, "volcano", "Gene", cn,
-                    ycap = vol_res$ycap
-                ))
-            }
 
             # Add JavaScript for autocomplete + gene highlighting
             cat(sprintf('
@@ -1705,7 +1617,6 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </script>
 ', clean_id, clean_id, clean_id, clean_id, clean_id))
         }
-        figure_legend(sprintf("Interactive volcano plot for the %s contrast. Hover over points to see gene names, fold changes, and adjusted p-values. Use the search box to highlight specific genes of interest.", contrast_clean))
         cat("\n\n")
     }
 } else {
@@ -1720,6 +1631,9 @@ cat("### Static {.tabset}\n\n")
 ```
 
 ```{r ma-plots-static, eval=show_de_ma_rna, results='asis'}
+### Static {.tabset}
+
+
 ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
 if (length(ma_files) > 0) {
     for (mf in ma_files) {
@@ -1813,6 +1727,7 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
                          stringsAsFactors = FALSE)
     if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
     list(widget = widget, plot_df = reg_df)
+    ggplotly(p, tooltip = "text")
 }
 ```
 
@@ -1841,18 +1756,12 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        ma_res <- make_ma_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        p <- make_ma_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                             log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(ma_res)) {
-            p <- ma_res$widget
+        if (!is.null(p)) {
+            # Assign unique div ID
             p$elementId <- paste0("ma_plot_", clean_id)
             print(htmltools::tagList(p))
-            if (exists("cutoff_register_plot")) {
-                cat(cutoff_register_plot(
-                    paste0("ma_plot_", clean_id),
-                    ma_res$plot_df, "ma", "Gene", cn
-                ))
-            }
 
             # Add JavaScript for autocomplete + gene highlighting (MA)
             cat(sprintf('
@@ -2020,7 +1929,6 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </script>
 ', clean_id, clean_id, clean_id, clean_id, clean_id))
         }
-        figure_legend(sprintf("Interactive MA plot for the %s contrast. Hover over points to see gene names, fold changes, and mean expression. Use the search box to highlight specific genes of interest.", contrast_clean))
         cat("\n\n")
     }
 } else {
@@ -2102,67 +2010,36 @@ if (!is.null(de_summary_full)) {
 }
 ```
 
-```{r caption-de-table, results='asis', echo=FALSE}
-if (!is.null(de_summary_full)) {
-    cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Top differentially expressed genes ranked by adjusted p-value. Fold changes and significance values are shown for each contrast. Use the search box to filter and the download buttons to export.</em></p>\n")
-}
-```
-
 ## Gene Lookup
 
-Search for any gene by name or ID to see its differential expression statistics and normalized expression across all contrasts and samples.
+Search for any gene by name or ID to see its differential expression statistics across all contrasts.
 
 ```{r gene-lookup}
 if (!is.null(de_summary_full)) {
     # Remove min_padj and pass_any_contrast columns from display
     display_cols <- setdiff(names(de_summary_full), c("min_padj", grep("pass_any", names(de_summary_full), value = TRUE)))
-    lookup_df <- de_summary_full[, display_cols]
-
-    # Merge normalized counts into DE results
-    norm_counts_file_lookup <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
-    if (file.exists(norm_counts_file_lookup)) {
-        nc <- read.delim(norm_counts_file_lookup, stringsAsFactors = FALSE, check.names = FALSE)
-        nc_id_col <- names(nc)[1]
-        nc[[nc_id_col]] <- sub("^Gene:", "", nc[[nc_id_col]])
-
-        # Try merging on GeneName first, then on the first column (FeatureID)
-        merged <- NULL
-        if ("GeneName" %in% names(lookup_df)) {
-            merged <- merge(lookup_df, nc, by.x = "GeneName", by.y = nc_id_col, all.x = TRUE)
-            # If gene symbols didn't match well, try FeatureID
-            sample_cols <- setdiff(names(nc), nc_id_col)
-            if (sum(!is.na(merged[[sample_cols[1]]])) < nrow(merged) * 0.3) {
-                merged <- merge(lookup_df, nc, by.x = names(lookup_df)[1], by.y = nc_id_col, all.x = TRUE)
-            }
-        } else {
-            merged <- merge(lookup_df, nc, by.x = names(lookup_df)[1], by.y = nc_id_col, all.x = TRUE)
-        }
-        if (!is.null(merged) && nrow(merged) > 0) lookup_df <- merged
-    }
 
     DT::datatable(
-      lookup_df,
-      caption = "Full DE results + normalized expression — search for any gene",
+      de_summary_full[, display_cols],
+      caption = "Full DE results — search for any gene",
       extensions = 'Buttons',
       options = list(
           scrollX = TRUE,
           pageLength = 10,
           dom = 'Bfrtip',
           buttons = list(
-              list(extend = 'csv', filename = 'DE_results_with_expression'),
-              list(extend = 'excel', filename = 'DE_results_with_expression')
+              list(extend = 'csv', filename = 'all_DE_results'),
+              list(extend = 'excel', filename = 'all_DE_results')
           ),
           search = list(regex = TRUE, caseInsensitive = TRUE)
       ),
       rownames = FALSE,
       filter = 'top'
-    ) |> DT::formatSignif(columns = which(sapply(lookup_df, is.numeric)), digits = 4)
+    ) |> DT::formatSignif(columns = which(sapply(de_summary_full[, display_cols], is.numeric)), digits = 4)
 }
 ```
 
 ## Gene Expression Explorer
-
-The expression explorer provides an interactive interface for examining individual gene expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.
 
 Type a gene name and click **Add Gene** to visualize its expression across experimental groups. Add multiple genes to create a combined comparison plot. Export figures as SVG or PNG.
 
@@ -2512,9 +2389,59 @@ document.addEventListener("click", function(e) {
 cat("*Gene expression explorer requires normalized expression data and metadata.*\n")
 ```
 
-## Top DE Heatmap {.tabset}
+## Normalized Counts
 
-Heatmaps of the most significantly differentially expressed features provide a focused view of the strongest expression changes. Hierarchical clustering of both features and samples reveals co-regulation patterns and group-level expression signatures.
+Download the full normalized expression matrix (TMMlogCPM) for all genes that passed filtering. Use the search box to find specific genes.
+
+```{r norm-counts-table}
+norm_counts_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
+if (file.exists(norm_counts_file)) {
+    norm_counts_df <- read.delim(norm_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+    # Add gene names from annotation if available
+    anno_file_nc <- file.path(enrich_dir, "gene_annotation.csv")
+    if (file.exists(anno_file_nc)) {
+        anno_nc <- read.csv(anno_file_nc, stringsAsFactors = FALSE)
+        id_col_nc <- names(norm_counts_df)[1]
+        clean_ids <- gsub("^Gene:", "", norm_counts_df[[id_col_nc]])
+        anno_match_nc <- anno_nc[match(clean_ids, anno_nc$gene_id), ]
+        norm_counts_df$GeneName <- ifelse(
+            !is.na(anno_match_nc$symbol) & anno_match_nc$symbol != anno_match_nc$gene_id,
+            anno_match_nc$symbol,
+            clean_ids
+        )
+        # Move GeneName to second column
+        cols_nc <- names(norm_counts_df)
+        norm_counts_df <- norm_counts_df[, c(cols_nc[1], "GeneName",
+                                              setdiff(cols_nc[-1], "GeneName"))]
+    }
+
+    num_cols_nc <- which(sapply(norm_counts_df, is.numeric))
+
+    DT::datatable(
+        norm_counts_df,
+        caption = paste0("Normalized expression (TMMlogCPM) — ",
+                         format(nrow(norm_counts_df), big.mark = ","), " genes"),
+        extensions = 'Buttons',
+        options = list(
+            scrollX = TRUE,
+            pageLength = 15,
+            dom = 'Bfrtip',
+            buttons = list(
+                list(extend = 'csv', filename = 'normalized_counts_TMMlogCPM'),
+                list(extend = 'excel', filename = 'normalized_counts_TMMlogCPM')
+            ),
+            search = list(regex = TRUE, caseInsensitive = TRUE)
+        ),
+        rownames = FALSE,
+        filter = 'top'
+    ) |> DT::formatRound(columns = num_cols_nc, digits = 3)
+} else {
+    cat("Normalized counts file not found.\n")
+}
+```
+
+## Top DE Heatmap {.tabset}
 
 Expression heatmap of top differentially expressed genes. Select the number of genes to display.
 
@@ -2618,7 +2545,7 @@ make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
 # Load metadata
 meta_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$metadata)
 meta_df <- if (file.exists(meta_file)) read.csv(meta_file, stringsAsFactors = FALSE) else NULL
-group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+group_col <- rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% rna_cfg$effects$color[1] %||% "Condition"
 ```
 
 ### Top 10
@@ -2639,6 +2566,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 10 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
+
 
 ### Top 50
 
@@ -2679,11 +2607,13 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
 }
 ```
 
+
 ```{r legend-heatmap-top200, results='asis', echo=FALSE}
 if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of the top 200 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
+
 
 ### All DE
 
@@ -2704,6 +2634,7 @@ if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
     figure_legend("Heatmap of all significantly differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
+
 
 ---
 
@@ -2786,8 +2717,6 @@ cat("\n---\n\n")
 
 # Cell Type Deconvolution
 
-Cell type deconvolution estimates the relative proportions of distinct cell populations within bulk RNA-seq samples. This computational approach leverages reference expression signatures to infer cellular composition without physical cell separation.
-
 ```{r deconv-setup}
 deconv_dir <- file.path(run_dir, "rna", "Deconvolution")
 has_deconvolution <- dir.exists(deconv_dir) &&
@@ -2837,8 +2766,6 @@ if (file.exists(diff_comp_file)) {
 ---
 
 # Enrichment / Pathway Analysis
-
-Gene set enrichment analysis tests whether predefined biological pathways show coordinated expression changes beyond what is expected by chance. fGSEA uses a ranked list of all genes (rank-based), while ORA tests only the significant gene list against a background (threshold-based).
 
 ```{r pathway-setup}
 # Check if enrichment results exist
@@ -2916,9 +2843,9 @@ if (length(fgsea_tables) > 0) {
 
         cat(sprintf("\n#### All (%d pathways)\n\n", nrow(sig_show)))
         cat(sprintf("**Up-regulated: %d** | **Down-regulated: %d**\n\n", n_up, n_down))
-        cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Fast Gene Set Enrichment Analysis (fGSEA) results showing significantly enriched pathways (adjusted p-value &lt; 0.05). NES indicates direction and magnitude of enrichment.</em></p>\n")
         sig_all <- sig_show[order(sig_show$padj), ]
-        print(htmltools::tagList(make_dt(sig_all, paste("All significant pathways —", tbl$label))))
+        print(knitr::kable(sig_all, caption = paste("All significant pathways —", tbl$label),
+                           row.names = FALSE, digits = 4))
         cat("\n\n")
 
         if (n_up > 0) {
@@ -2926,7 +2853,8 @@ if (length(fgsea_tables) > 0) {
             cat("Pathways enriched in **up-regulated** genes (positive NES).\n\n")
             sig_up <- sig_show[sig_show$Direction == "Up-regulated", ]
             sig_up <- sig_up[order(sig_up$padj), ]
-            print(htmltools::tagList(make_dt(sig_up, paste("Up-regulated pathways —", tbl$label))))
+            print(knitr::kable(sig_up, caption = paste("Up-regulated pathways —", tbl$label),
+                               row.names = FALSE, digits = 4))
             cat("\n\n")
         }
 
@@ -2935,7 +2863,8 @@ if (length(fgsea_tables) > 0) {
             cat("Pathways enriched in **down-regulated** genes (negative NES).\n\n")
             sig_down <- sig_show[sig_show$Direction == "Down-regulated", ]
             sig_down <- sig_down[order(sig_down$padj), ]
-            print(htmltools::tagList(make_dt(sig_down, paste("Down-regulated pathways —", tbl$label))))
+            print(knitr::kable(sig_down, caption = paste("Down-regulated pathways —", tbl$label),
+                               row.names = FALSE, digits = 4))
             cat("\n\n")
         }
     }
@@ -2954,15 +2883,12 @@ if (length(plot_pngs) > 0) {
         label <- gsub("_", " ", label_raw)
         cat(sprintf("\n### %s\n\n", label))
         cat(sprintf("![%s](%s)\n\n", label, pp))
-        figure_legend(sprintf("Dotplot of top enriched pathways for %s. Dot size represents the number of pathway members; color intensity reflects statistical significance (adjusted p-value). Positive NES values indicate up-regulated pathways; negative values indicate down-regulated pathways.", label))
         render_commentary(paste0("pathway_", label_raw))
     }
 }
 ```
 
 ## Leading Edge Genes {.tabset}
-
-Leading edge genes are the core subset of pathway members that drive the enrichment signal. They represent the genes most responsible for a pathway's statistical significance and are candidates for validation experiments.
 
 The **leading edge** genes are those that contribute most to the enrichment signal of each pathway. These are the genes that appear before the peak of the running enrichment score.
 
@@ -3010,286 +2936,13 @@ if (length(fgsea_files) > 0) {
             }
 
             le_df <- do.call(rbind, le_list)
-            cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Leading edge genes for the top enriched pathways. These core genes drive the enrichment signal and represent candidates for experimental validation.</em></p>\n")
-            print(htmltools::tagList(make_dt(le_df, paste("Leading Edge Genes —", label_clean))))
+            print(knitr::kable(le_df, caption = paste("Leading edge genes for top pathways —", label_clean),
+                               row.names = FALSE))
             cat("\n\n")
         } else {
             cat("No significant pathways with leading edge information.\n\n")
         }
     }
-}
-```
-
-## Pathway Volcano {.tabset}
-
-```{r pathway-volcano-setup-rna, include=FALSE}
-pw_volcano_files_rna <- list.files(enrich_dir, pattern = "^pathway_volcano_data_.*\\.csv$", full.names = TRUE)
-has_pathway_volcano_rna <- length(pw_volcano_files_rna) > 0
-if (has_pathway_volcano_rna) {
-    has_pathway_volcano_rna <- any(vapply(pw_volcano_files_rna, function(f) {
-        df <- read.csv(f, stringsAsFactors = FALSE, nrows = 5)
-        "pathways" %in% colnames(df) && any(nzchar(df$pathways), na.rm = TRUE)
-    }, logical(1)))
-}
-```
-
-```{r pathway-volcano-skip-rna, eval=!has_pathway_volcano_rna, results='asis'}
-cat("No pathway volcano data available. Enable pathway analysis with significant results to generate pathway-colored volcano plots.\n")
-```
-
-```{r pathway-volcano-legend-rna, eval=has_pathway_volcano_rna, results='asis'}
-figure_legend("Pathway volcano plots overlay enriched pathway membership onto the standard DE volcano plot. Select a pathway from the dropdown to highlight its member genes in orange. Non-member genes are dimmed for contrast.")
-```
-
-```{r pathway-volcano-plots-rna, eval=has_pathway_volcano_rna, results='asis'}
-for (vf in pw_volcano_files_rna) {
-    contrast_name <- gsub("^pathway_volcano_data_|\\.csv$", "", basename(vf))
-    contrast_clean <- gsub("_", " ", contrast_name)
-    clean_id <- gsub("[^a-zA-Z0-9]", "_", contrast_name)
-
-    volcano_df <- read.csv(vf, stringsAsFactors = FALSE)
-    if (!"pathways" %in% colnames(volcano_df)) next
-
-    # Cap -log10(p) at 99.5th percentile to keep plot readable
-    yvals <- volcano_df$neg_log10_pvalue[is.finite(volcano_df$neg_log10_pvalue)]
-    ycap <- max(quantile(yvals, 0.995, na.rm = TRUE), 10)
-    volcano_df$neg_log10_pvalue <- pmin(volcano_df$neg_log10_pvalue, ycap)
-
-    cat(sprintf("\n### %s\n\n", contrast_clean))
-
-    # Collect fGSEA info for NES / padj display
-    fgsea_files_for_contrast <- list.files(enrich_dir,
-        pattern = paste0("pathway_", contrast_name, "_.*_fgsea\\.csv$"),
-        full.names = TRUE)
-    pathway_info <- list()
-    for (ff in fgsea_files_for_contrast) {
-        fdf <- read.csv(ff, stringsAsFactors = FALSE)
-        sig <- fdf[!is.na(fdf$padj) & fdf$padj < 0.05, , drop = FALSE]
-        for (r in seq_len(nrow(sig))) {
-            # Use pathway_name (human-readable) to match the volcano data keys
-            pname <- if ("pathway_name" %in% names(sig) && nzchar(sig$pathway_name[r] %||% "")) {
-                sig$pathway_name[r]
-            } else {
-                sig$pathway[r]
-            }
-            pathway_info[[pname]] <- list(
-                NES = round(sig$NES[r], 3),
-                padj = signif(sig$padj[r], 3),
-                size = sig$size[r]
-            )
-        }
-    }
-
-    # Assign direction colors
-    padj_cut_v <- rna_cfg$de$p_cutoff %||% 0.05
-    lfc_cut_v <- log2(rna_cfg$de$linear_fc_cutoff %||% 1.5)
-    volcano_df$Direction <- ifelse(
-        is.na(volcano_df$padj) | volcano_df$padj >= padj_cut_v, "NS",
-        ifelse(volcano_df$log2FC > lfc_cut_v, "Up",
-               ifelse(volcano_df$log2FC < -lfc_cut_v, "Down", "NS")))
-
-    dir_colors <- c("Up" = "#e74c3c", "Down" = "#3498db", "NS" = "#bdc3c7")
-
-    p <- plotly::plot_ly(
-        data = volcano_df,
-        x = ~log2FC,
-        y = ~neg_log10_pvalue,
-        type = "scatter",
-        mode = "markers",
-        color = ~Direction,
-        colors = dir_colors,
-        marker = list(size = 5, opacity = 0.7),
-        text = ~paste0("Gene: ", FeatureID,
-                        "<br>log2FC: ", round(log2FC, 3),
-                        "<br>padj: ", signif(padj, 3),
-                        "<br>Pathways: ", ifelse(nzchar(pathways), pathways, "none")),
-        hoverinfo = "text",
-        customdata = ~FeatureID,
-        source = paste0("pw_volcano_rna_", clean_id)
-    ) |>
-        plotly::layout(
-            title = list(text = paste("Pathway Volcano -", contrast_clean), font = list(size = 14)),
-            xaxis = list(title = "log2 Fold Change"),
-            yaxis = list(title = "-log10(p-value)", rangemode = "tozero"),
-            shapes = list(
-                list(type = "line", x0 = -lfc_cut_v, x1 = -lfc_cut_v, y0 = 0, y1 = 1,
-                     yref = "paper", line = list(dash = "dash", color = "grey50")),
-                list(type = "line", x0 = lfc_cut_v, x1 = lfc_cut_v, y0 = 0, y1 = 1,
-                     yref = "paper", line = list(dash = "dash", color = "grey50")),
-                list(type = "line", x0 = 0, x1 = 1, xref = "paper",
-                     y0 = -log10(padj_cut_v), y1 = -log10(padj_cut_v),
-                     line = list(dash = "dash", color = "grey50"))
-            )
-        ) |>
-        plotly::config(
-            toImageButtonOptions = list(format = "svg", filename = paste0("pathway_volcano_", clean_id),
-                                         width = 1200, height = 900, scale = 3),
-            modeBarButtonsToAdd = list(
-                list(name = "Download PNG (300 dpi)", icon = list(
-                    path = "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H8l4-4 4 4h-3v3h-2v-3z",
-                    width = 24, height = 24
-                ), click = htmlwidgets::JS(sprintf(
-                    "function(gd) { Plotly.downloadImage(gd, {format: 'png', width: 2400, height: 1800, scale: 3, filename: 'pathway_volcano_%s'}); }",
-                    clean_id
-                )))
-            )
-        )
-
-    p$elementId <- paste0("pw_volcano_rna_plot_", clean_id)
-
-    # Build pathway->genes mapping from the pathways column
-    all_pathways <- unique(unlist(strsplit(volcano_df$pathways[nzchar(volcano_df$pathways)], "; ")))
-    all_pathways <- sort(all_pathways[nzchar(all_pathways)])
-
-    pw_genes_map <- list()
-    for (pw in all_pathways) {
-        members <- as.character(volcano_df$FeatureID[grepl(pw, volcano_df$pathways, fixed = TRUE)])
-        pw_genes_map[[pw]] <- I(members)
-    }
-
-    pw_genes_json <- jsonlite::toJSON(pw_genes_map, auto_unbox = TRUE)
-    pw_info_json <- jsonlite::toJSON(pathway_info, auto_unbox = TRUE)
-
-    # Build dropdown options
-    options_html <- '<option value="">None (show all)</option>'
-    for (pw in all_pathways) {
-        pw_escaped <- gsub("\"", "&quot;", pw)
-        info <- pathway_info[[pw]]
-        label <- if (!is.null(info)) {
-            sprintf("%s (NES=%.2f, padj=%.3g)", pw, info$NES, info$padj)
-        } else { pw }
-        label_escaped <- gsub("\"", "&quot;", label)
-        options_html <- paste0(options_html,
-            sprintf('<option value="%s">%s</option>', pw_escaped, label_escaped))
-    }
-
-    cat(sprintf('
-<div style="margin-bottom: 10px;">
-<label for="pw_select_rna_%s"><strong>Highlight pathway:</strong></label>
-<select id="pw_select_rna_%s" style="padding: 6px; border-radius: 4px; border: 1px solid #ccc; margin-left: 8px; max-width: 600px;">
-%s
-</select>
-<div id="pw_info_rna_%s" style="margin-top: 6px; font-size: 13px; color: #555;"></div>
-<div id="pw_legend_rna_%s" style="margin-top: 4px; font-size: 13px;"></div>
-</div>
-', clean_id, clean_id, options_html, clean_id, clean_id))
-
-    print(htmltools::tagList(p))
-
-    cat(sprintf('
-<script>
-(function() {
-    var cid = "%s";
-    var plotId = "pw_volcano_rna_plot_" + cid;
-    var pwGenes = %s;
-    var pwInfo = %s;
-    var origColors = null;
-    var origOpacities = null;
-
-    function captureOriginal() {
-        var plotDiv = document.getElementById(plotId);
-        if (!plotDiv || !plotDiv.data) return;
-        origColors = [];
-        origOpacities = [];
-        for (var t = 0; t < plotDiv.data.length; t++) {
-            var mc = plotDiv.data[t].marker;
-            origColors.push(mc ? (mc.color || null) : null);
-            origOpacities.push(mc ? (mc.opacity || 0.7) : 0.7);
-        }
-    }
-
-    function onSelect() {
-        var plotDiv = document.getElementById(plotId);
-        if (!plotDiv || !plotDiv.data) return;
-        if (!origColors) captureOriginal();
-
-        var pw = document.getElementById("pw_select_rna_" + cid).value;
-        var infoDiv = document.getElementById("pw_info_rna_" + cid);
-        var legendDiv = document.getElementById("pw_legend_rna_" + cid);
-
-        // Freeze axes so restyle cannot trigger auto-range
-        var xRange = plotDiv.layout.xaxis.range ? plotDiv.layout.xaxis.range.slice() : null;
-        var yRange = plotDiv.layout.yaxis.range ? plotDiv.layout.yaxis.range.slice() : null;
-        if (xRange && yRange) {
-            Plotly.relayout(plotDiv, {
-                "xaxis.autorange": false, "xaxis.range": xRange,
-                "yaxis.autorange": false, "yaxis.range": yRange
-            });
-        }
-
-        if (!pw) {
-            for (var t = 0; t < plotDiv.data.length; t++) {
-                Plotly.restyle(plotDiv, {
-                    "marker.color": [origColors[t]],
-                    "marker.opacity": [origOpacities[t]],
-                    "marker.size": [5]
-                }, [t]);
-            }
-            infoDiv.innerHTML = "";
-            if (legendDiv) legendDiv.innerHTML = "";
-            return;
-        }
-
-        var genes = pwGenes[pw] || [];
-        if (typeof genes === "string") genes = [genes];
-        var genesSet = {};
-        for (var g = 0; g < genes.length; g++) genesSet[genes[g]] = true;
-
-        var info = pwInfo[pw];
-        if (info) {
-            infoDiv.innerHTML = "<strong>" + pw + "</strong> &mdash; NES: " +
-                info.NES + " | padj: " + info.padj + " | Members in data: " + genes.length;
-        } else {
-            infoDiv.innerHTML = "<strong>" + pw + "</strong> &mdash; Members in data: " + genes.length;
-        }
-        if (legendDiv) {
-            legendDiv.innerHTML = "<font color=#e67e22>&#9679;</font> Pathway member &nbsp;" +
-                "<font color=#d5d8dc>&#9679;</font> Non-member";
-        }
-
-        for (var t = 0; t < plotDiv.data.length; t++) {
-            var cd = plotDiv.data[t].customdata;
-            if (!cd) { continue; }
-            var colors = [];
-            var opacities = [];
-            var sizes = [];
-            for (var i = 0; i < cd.length; i++) {
-                var fid = Array.isArray(cd[i]) ? cd[i][0] : cd[i];
-                if (genesSet[fid]) {
-                    colors.push("#e67e22");
-                    opacities.push(0.9);
-                    sizes.push(8);
-                } else {
-                    colors.push("#d5d8dc");
-                    opacities.push(0.15);
-                    sizes.push(4);
-                }
-            }
-            Plotly.restyle(plotDiv, {
-                "marker.color": [colors],
-                "marker.opacity": [opacities],
-                "marker.size": [sizes]
-            }, [t]);
-        }
-    }
-
-    var attempts = 0;
-    var timer = setInterval(function() {
-        var plotDiv = document.getElementById(plotId);
-        if ((plotDiv && plotDiv.data) || attempts > 50) {
-            clearInterval(timer);
-            if (plotDiv && plotDiv.data) {
-                captureOriginal();
-                document.getElementById("pw_select_rna_" + cid).addEventListener("change", onSelect);
-            }
-        }
-        attempts++;
-    }, 200);
-})();
-</script>
-', clean_id, pw_genes_json, pw_info_json))
-
-    cat("\n\n")
 }
 ```
 
@@ -3334,7 +2987,7 @@ if (has_enrichment) {
     }
 }
 
-make_dt(files_tbl, "Key Output Files")
+kable(files_tbl, caption = "Key output files in the rna/ directory")
 ```
 
 ---

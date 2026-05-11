@@ -102,11 +102,11 @@ build_shiny_payload_rnaseq <- function(
         pca_sc <- pca_res$pca_scores %||% pca_res$objects$pca_scores
         if (!is.null(pca_sc)) payload$pca_scores <- pca_sc
 
-        # pca_3d: 3D PCA plotly widget (only set if non-NULL; assigning NULL removes list key)
-        if (!is.null(pca_res$plots$pca_3d)) payload$pca_3d <- pca_res$plots$pca_3d
+        # pca_3d: 3D PCA plotly widget
+        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
 
         # QC plot
-        if (!is.null(pca_res$plots$dist_heatmap)) payload$samples_hm <- pca_res$plots$dist_heatmap
+        payload$samples_hm <- pca_res$plots$dist_heatmap %||% NULL
 
     }
 

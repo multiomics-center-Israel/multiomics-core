@@ -34,9 +34,8 @@
     storage.mode(mat) <- "double"
 
     rd <- data.frame(
-        feature_id  = features,
-        Name        = paste0("Compound_", features),
-        original_id = paste0("Compound_", features),
+        feature_id = features,
+        Name       = paste0("Compound_", features),
         stringsAsFactors = FALSE
     )
     for (col in names(extra_annot)) rd[[col]] <- extra_annot[[col]]
@@ -72,7 +71,7 @@ test_that("merge_level_parsed returns all required contract keys", {
         level_names   = c("Level_1", "Level_2")
     )
 
-    expect_true(all(c("expr_raw", "row_data", "sample_ids", "sample_map") %in% names(result)))
+    expect_named(result, c("expr_raw", "row_data", "sample_ids", "sample_map"))
     expect_true(is.matrix(result$expr_raw))
     expect_true(is.numeric(result$expr_raw))
     expect_true(is.data.frame(result$row_data))
@@ -95,19 +94,19 @@ test_that("merge_level_parsed produces correct dimensions", {
 # 2. Source_File injection
 # ==============================================================================
 
-test_that("level_id is populated correctly for each level", {
+test_that("Source_File is populated correctly for each level", {
     result <- merge_level_parsed(
         parsed_levels = list(Level_1 = .lv1, Level_2 = .lv2),
         level_names   = c("Level_1", "Level_2")
     )
     rd <- result$row_data
-    expect_true("level_id" %in% colnames(rd))
+    expect_true("Source_File" %in% colnames(rd))
 
-    # After deduplication, feature_id no longer has level prefix in rownames;
-    # use level_id column directly to check provenance
-    expect_true(all(rd$level_id %in% c("level_1", "level_2")))
-    expect_true(any(rd$level_id == "level_1"))
-    expect_true(any(rd$level_id == "level_2"))
+    lv1_rows <- startsWith(rd$feature_id, "Level_1__")
+    lv2_rows <- startsWith(rd$feature_id, "Level_2__")
+
+    expect_true(all(rd$Source_File[lv1_rows] == "Level_1"))
+    expect_true(all(rd$Source_File[lv2_rows] == "Level_2"))
 })
 
 
@@ -115,7 +114,7 @@ test_that("level_id is populated correctly for each level", {
 # 3. Cross-level unique IDs via Level__ prefix
 # ==============================================================================
 
-test_that("feature IDs are deduplicated when raw IDs collide across levels", {
+test_that("feature IDs are prefixed and unique even when raw IDs collide across levels", {
     shared_feats <- c("Feature_A_mz100.0000_rt1.00", "Feature_B_mz200.0000_rt2.00")
     lv_a <- .make_parsed(shared_feats, .samples)
     lv_b <- .make_parsed(shared_feats, .samples)
@@ -127,12 +126,9 @@ test_that("feature IDs are deduplicated when raw IDs collide across levels", {
 
     ids <- rownames(result$expr_raw)
 
-    # After deduplication, shared features are kept once (from the best level)
-    expect_equal(length(ids), 2L)
     expect_equal(length(ids), length(unique(ids)))   # all unique
-    # Duplicate log should record the dropped entries
-    expect_true(!is.null(result$duplicate_log))
-    expect_equal(nrow(result$duplicate_log), 2L)
+    expect_true(all(startsWith(ids[1:2], "Level_1__")))
+    expect_true(all(startsWith(ids[3:4], "Level_2__")))
 })
 
 
@@ -151,17 +147,18 @@ test_that("feature_id in row_data matches rownames of expr_raw", {
 # ==============================================================================
 
 
-test_that("original_id is present in row_data", {
+test_that("feature_id_orig is present and equals the pre-prefix feature_id", {
     result <- merge_level_parsed(
         parsed_levels = list(Level_1 = .lv1, Level_2 = .lv2),
         level_names   = c("Level_1", "Level_2")
     )
-
+    
     rd <- result$row_data
-    expect_true("original_id" %in% colnames(rd))
-    # original_id should be a character vector with no NAs
-    expect_true(is.character(rd$original_id))
-    expect_false(any(is.na(rd$original_id)))
+    expect_true("feature_id_orig" %in% colnames(rd))
+
+    # Strip level prefix and compare to feature_id_orig
+    reconstructed <- sub("^[^_]+__", "", rd$feature_id)
+    expect_identical(rd$feature_id_orig, reconstructed)
 })
 
 
@@ -169,14 +166,14 @@ test_that("original_id is present in row_data", {
 # 5. Deterministic column ordering
 # ==============================================================================
 
-test_that("row_data first four columns are always feature_id, level_id, identification_level, original_id", {
+test_that("row_data first three columns are always feature_id, Source_File, feature_id_orig", {
     result <- merge_level_parsed(
         parsed_levels = list(Level_1 = .lv1, Level_2 = .lv2),
         level_names   = c("Level_1", "Level_2")
     )
 
-    expect_equal(colnames(result$row_data)[1:4],
-                 c("feature_id", "level_id", "identification_level", "original_id"))
+    expect_equal(colnames(result$row_data)[1:3],
+                 c("feature_id", "Source_File", "feature_id_orig"))
 })
 
 test_that("column order is identical regardless of level list order", {
@@ -189,9 +186,7 @@ test_that("column order is identical regardless of level list order", {
         parsed_levels = list(Level_2 = .lv2, Level_1 = .lv1),
         level_names   = c("Level_2", "Level_1")
     )
-    # Fixed columns are always in the same order; remaining annotation columns
-    # may differ in union order but the fixed prefix is stable
-    expect_identical(colnames(result_ab$row_data)[1:4], colnames(result_ba$row_data)[1:4])
+    expect_identical(colnames(result_ab$row_data), colnames(result_ba$row_data))
 })
 
 
@@ -215,8 +210,8 @@ test_that("annotation column present in level 1 but absent in level 2 is NA for 
     rd <- result$row_data
     expect_true("Formula" %in% colnames(rd))
 
-    expect_equal(rd$Formula[rd$level_id == "level_1"], "C6H12O6")
-    expect_true(is.na(rd$Formula[rd$level_id == "level_2"]))
+    expect_equal(rd$Formula[rd$Source_File == "Level_1"], "C6H12O6")
+    expect_true(is.na(rd$Formula[rd$Source_File == "Level_2"]))
 })
 
 test_that("annotation column appearing only in level 2 is NA for level 1", {
@@ -234,7 +229,7 @@ test_that("annotation column appearing only in level 2 is NA for level 1", {
 
     expect_true("Adducts" %in% colnames(result$row_data))
 
-    expect_true(is.na(result$row_data$Adducts[result$row_data$level_id == "level_1"]))
+    expect_true(is.na(result$row_data$Adducts[result$row_data$Source_File == "Level_1"]))
 })
 
 
@@ -287,10 +282,10 @@ test_that("single-level merge produces the same structure as multi-level", {
     )
 
 
-    expect_true(all(c("expr_raw", "row_data", "sample_ids", "sample_map") %in% names(result_single)))
+    expect_named(result_single, names(result_multi))
     expect_equal(nrow(result_single$expr_raw), 2L)  # only .lv1 features
-    expect_equal(colnames(result_single$row_data)[1:4],
-                 colnames(result_multi$row_data)[1:4])
+    expect_equal(colnames(result_single$row_data)[1:3],
+                 colnames(result_multi$row_data)[1:3])
 })
 
 
@@ -303,10 +298,13 @@ test_that("sample_map is deduplicated when levels share identical mappings", {
         parsed_levels = list(Level_1 = .lv1, Level_2 = .lv2),
         level_names   = c("Level_1", "Level_2")
     )
-    sm <- result$sample_map
-    expect_false(is.null(sm))
-    expect_equal(nrow(sm), length(.samples))   # one row per sample, no dupes
-    expect_equal(nrow(sm), nrow(unique(sm)))
+    
+  sm <- result$sample_map
+  expect_equal(nrow(sm), length(.samples))
+      sm <- result$sample_map
+      expect_false(is.null(sm))
+      expect_equal(nrow(sm), length(.samples))   # one row per sample, no dupes
+      expect_equal(nrow(sm), nrow(unique(sm)))
 })
 
 test_that("sample_map is NULL when all levels return NULL (processed_wide path)", {

@@ -1,5 +1,5 @@
 #' Determine which features pass the filter based on min_count per condition
-pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
+pass_filter <- function(expr_mat, group, min_per_group) {
     expr_mat <- as.matrix(expr_mat)
     group <- as.character(group)
     groups <- unique(group)
@@ -17,9 +17,7 @@ pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
         sums >= min_per_group[[g]]
     })
 
-    # Count how many groups each feature passes in, compare to min_groups
-    n_groups_passed <- rowSums(passes_per_group)
-    n_groups_passed >= min_groups
+    apply(passes_per_group, 1, any)
 }
 
 # ==============================================================================

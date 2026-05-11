@@ -28,7 +28,7 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     }
 
     dirs <- create_legacy_output_dirs(out_dir)
-    out_qc <- file.path(dirs$diagnostic_plots, "QC_post")
+    out_qc <- file.path(dirs$diagnostic_plots, "DE_plots")
     ensure_dir(out_qc)
     out_ds <- dirs$datasets
 
@@ -48,24 +48,8 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     plots <- list()
     files <- character(0)
 
-    # ---- Build feature name lookup ----
-    name_map <- NULL
-    if (!is.null(pre$row_data) && "Name" %in% colnames(pre$row_data)) {
-        name_map <- stats::setNames(
-            as.character(pre$row_data$Name),
-            as.character(pre$row_data$feature_id)
-        )
-    }
-
-    # ---- Save summary table (with Name column) ----
-    summary_out <- de_res$summary_df
-    if (!is.null(name_map)) {
-        summary_out$Name <- name_map[as.character(summary_out$feature_id)]
-        # Move Name to second column (after feature_id)
-        cn <- colnames(summary_out)
-        summary_out <- summary_out[, c("feature_id", "Name", setdiff(cn, c("feature_id", "Name")))]
-    }
-    f_summary <- save_tsv(summary_out, out_ds, "de_summary.tsv")
+    # ---- Save summary table ----
+    f_summary <- save_tsv(de_res$summary_df, out_ds, "de_summary.tsv")
     files <- c(files, f_summary)
 
     # ---- Per-contrast outputs ----
@@ -74,13 +58,6 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
 
     for (ctr_label in contrast_labels) {
         ctr_tbl <- extract_contrast_table(de_res$summary_df, ctr_label)
-
-        # Add Name column
-        if (!is.null(name_map)) {
-            ctr_tbl$Name <- name_map[as.character(ctr_tbl$feature_id)]
-            cn <- colnames(ctr_tbl)
-            ctr_tbl <- ctr_tbl[, c("feature_id", "Name", setdiff(cn, c("feature_id", "Name")))]
-        }
 
         # Save per-contrast table
         f_ctr <- save_tsv(ctr_tbl, out_ds, paste0("de_", ctr_label, ".tsv"))

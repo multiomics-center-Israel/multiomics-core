@@ -25,16 +25,13 @@ validate_proteomics_config <- function(cfg) {
 
     # 3. Imputation Settings
     if (!is.null(cfg$imputation) && !is.null(cfg$imputation$method)) {
-        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "dep2", "qrilc", "minval"))
+        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "dep2"))
 
-        # Only validate repetition/consensus params when multi_imputation is not explicitly FALSE
-        if (!identical(cfg$imputation$multi_imputation, FALSE)) {
-            assert_scalar_num(cfg$imputation$no_repetitions, "imputation$no_repetitions", min_val = 1)
-            assert_scalar_num(cfg$imputation$min_no_passed, "imputation$min_no_passed", min_val = 1)
+        assert_scalar_num(cfg$imputation$no_repetitions, "imputation$no_repetitions", min_val = 1)
+        assert_scalar_num(cfg$imputation$min_no_passed, "imputation$min_no_passed", min_val = 1)
 
-            if (cfg$imputation$min_no_passed > cfg$imputation$no_repetitions) {
-                stop("imputation$min_no_passed cannot be greater than imputation$no_repetitions")
-            }
+        if (cfg$imputation$min_no_passed > cfg$imputation$no_repetitions) {
+            stop("imputation$min_no_passed cannot be greater than imputation$no_repetitions")
         }
 
         # Method-specific validations
@@ -47,44 +44,14 @@ validate_proteomics_config <- function(cfg) {
             assert_scalar_chr(cfg$imputation$dep2_method, "imputation$dep2_method")
             assert_scalar_num(cfg$imputation$dep2_random_seed, "imputation$dep2_random_seed")
         }
-
-        if (identical(cfg$imputation$method, "qrilc")) {
-            assert_scalar_num(cfg$imputation$qrilc_random_seed, "imputation$qrilc_random_seed", allow_null = TRUE)
-        }
-    }
-
-    # 3b. Filtering Settings
-    if (!is.null(cfg$filtering)) {
-        if (!is.null(cfg$filtering$remove_contaminants)) {
-            assert_scalar_bool(cfg$filtering$remove_contaminants, "filtering$remove_contaminants", allow_null = TRUE)
-        }
-        if (!is.null(cfg$filtering$contaminant_prefix)) {
-            assert_scalar_chr(cfg$filtering$contaminant_prefix, "filtering$contaminant_prefix", allow_null = TRUE)
-        }
-        if (!is.null(cfg$filtering$min_groups)) {
-            assert_scalar_num(cfg$filtering$min_groups, "filtering$min_groups", allow_null = TRUE, min_val = 1)
-        }
     }
 
     # 4. de Settings
     if (!is.null(cfg$de)) {
-        if (!is.null(cfg$de$method)) {
-            assert_one_of(cfg$de$method, "de$method", c("limma", "ttest", "welch", "anova"), allow_null = TRUE)
-        }
         assert_scalar_num(cfg$de$p_cutoff, "de$p_cutoff",
             allow_null = TRUE, min_val = .Machine$double.eps, max_val = 1
         )
         assert_scalar_num(cfg$de$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
-        if (!is.null(cfg$de$p_adjust_method)) {
-            assert_one_of(cfg$de$p_adjust_method, "de$p_adjust_method",
-                          c("BH", "bonferroni", "holm", "BY", "fdr", "none"), allow_null = TRUE)
-        }
-        if (!is.null(cfg$de$paired)) {
-            assert_scalar_bool(cfg$de$paired, "de$paired", allow_null = TRUE)
-        }
-        if (!is.null(cfg$de$pairing_col)) {
-            assert_scalar_chr(cfg$de$pairing_col, "de$pairing_col", allow_null = TRUE)
-        }
     }
 
     # 4b. Pathway Settings
@@ -140,11 +107,12 @@ validate_proteomics_config <- function(cfg) {
     }
 
     # 7. Clustering Settings (optional)
+
     if (!is.null(cfg$clustering)) {
         validate_clustering_config(cfg$clustering)
     }
 
-    # 6. PPI Settings (optional)
+    # 8. PPI Settings (optional)
     if (!is.null(cfg$ppi)) {
         assert_scalar_bool(cfg$ppi$enabled, "ppi$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$ppi$string_score_threshold, "ppi$string_score_threshold",
@@ -155,7 +123,7 @@ validate_proteomics_config <- function(cfg) {
                           allow_null = TRUE, min_val = 0)
     }
 
-    # 7. Advanced Stats Settings (optional)
+    # 9. Advanced Stats Settings (optional)
     if (!is.null(cfg$advanced_stats)) {
         assert_scalar_bool(cfg$advanced_stats$enabled, "advanced_stats$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$advanced_stats$bootstrap_n, "advanced_stats$bootstrap_n",
@@ -166,7 +134,7 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
-    # 8. QC Settings (optional)
+    # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
         assert_scalar_num(cfg$qc$umap_n_neighbors, "qc$umap_n_neighbors",
