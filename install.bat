@@ -1,0 +1,126 @@
+@echo off
+:: ============================================================
+:: multiomics-core - One-Time Setup
+::
+:: What this does:
+::   1. Checks that R is installed
+::   2. Installs all required R packages (via renv)
+::   3. Creates a desktop shortcut for the wizard
+::
+:: Prerequisites:
+::   - R 4.5+ installed (https://cran.r-project.org/bin/windows/base/)
+::   - RTools 4.5 installed (https://cran.r-project.org/bin/windows/Rtools/)
+::
+:: ============================================================
+
+echo.
+echo ===========================================================
+echo   multiomics-core - Setup
+echo ===========================================================
+echo.
+
+cd /d "%~dp0"
+
+:: Step 1: Check R is available
+where Rscript >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Rscript not found on PATH.
+    echo.
+    echo Please install R first:
+    echo   https://cran.r-project.org/bin/windows/base/
+    echo.
+    echo During installation, make sure to check:
+    echo   "Add R to PATH" or "Save version number in registry"
+    echo.
+    echo After installing R, also install RTools:
+    echo   https://cran.r-project.org/bin/windows/Rtools/
+    echo.
+    pause
+    exit /b 1
+)
+
+echo [OK] R found:
+Rscript --version 2>&1
+echo.
+
+:: Step 1b: Speed up R startup by disabling renv sandbox
+if not exist "%~dp0.Renviron" (
+    echo RENV_CONFIG_SANDBOX_ENABLED=FALSE> "%~dp0.Renviron"
+)
+
+:: Step 2: Restore renv packages
+echo [2/3] Installing R packages (this may take 10-20 minutes on first run)...
+echo.
+Rscript -e "if (!requireNamespace('renv', quietly=TRUE)) install.packages('renv', repos='https://cloud.r-project.org'); renv::restore(prompt=FALSE)"
+
+if errorlevel 1 (
+    echo.
+    echo [WARNING] Package installation had issues. Some packages may need RTools.
+    echo Make sure RTools is installed: https://cran.r-project.org/bin/windows/Rtools/
+    echo Then run this script again.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo.
+echo [OK] renv packages restored.
+echo.
+
+:: Step 2a: Verify wizard-critical packages are actually loadable.
+:: renv::restore() can return success even when some packages failed to build
+:: (e.g. jsonlite missing -> wizard cannot start). Fall back to CRAN for any
+:: that didn't load.
+echo [2a/4] Verifying wizard dependencies...
+Rscript -e "pkgs <- c('jsonlite','httpuv','later','yaml','rmarkdown','targets'); missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing) > 0) { cat('  Missing after renv::restore: ', paste(missing, collapse=', '), '\n'); cat('  Falling back to CRAN...\n'); install.packages(missing, repos = 'https://cloud.r-project.org'); still <- missing[!vapply(missing, requireNamespace, logical(1), quietly = TRUE)]; if (length(still) > 0) { cat('  [ERROR] Could not install: ', paste(still, collapse=', '), '\n'); quit(status = 1L) } } else { cat('  [OK] All wizard packages loadable.\n') }"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Critical wizard packages could not be installed.
+    echo The wizard will not start without them.
+    echo Try running this installer again, or install R and RTools first.
+    echo.
+    pause
+    exit /b 1
+)
+echo.
+
+:: Step 2b: Ensure pandoc is available (for HTML report rendering)
+echo [2b/4] Checking pandoc...
+Rscript --vanilla tools\install_pandoc.R
+if errorlevel 1 (
+    echo.
+    echo [WARNING] pandoc could not be installed automatically.
+    echo The pipeline will still run but the HTML report will be a stub.
+    echo Install pandoc manually later: https://pandoc.org/installing.html
+    echo.
+)
+echo.
+
+:: Step 3: Configure wizard defaults
+echo [3/4] Configuring wizard defaults...
+echo.
+echo   You can customize which analysis modes are available,
+echo   default settings, theme, etc. for this installation.
+echo.
+set /p CONFIGURE="  Run configuration wizard? [Y/n]: "
+if /i "%CONFIGURE%"=="n" (
+    echo   Skipping - using defaults. Run configure_wizard.bat anytime to change.
+) else (
+    Rscript configure_wizard.R
+)
+echo.
+
+:: Step 4: Create desktop shortcut
+echo [4/4] Creating desktop shortcut...
+cscript //nologo "%~dp0create_shortcut.vbs"
+echo.
+
+echo ===========================================================
+echo   Setup complete!
+echo.
+echo   You can now launch the wizard by:
+echo     - Double-clicking the "Multiomics Pipeline" icon on your desktop
+echo     - Or double-clicking launch_wizard.bat in this folder
+echo ===========================================================
+echo.
+pause

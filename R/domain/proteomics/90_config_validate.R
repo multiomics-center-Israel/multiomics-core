@@ -54,12 +54,65 @@ validate_proteomics_config <- function(cfg) {
         assert_scalar_num(cfg$de$linear_fc_cutoff, "de$linear_fc_cutoff", allow_null = TRUE, min_val = 1)
     }
 
-    # 5. Clustering Settings (optional)
+    # 4b. Pathway Settings
+    if (!is.null(cfg$pathway)) {
+        if (!is.null(cfg$pathway$gsea_ranking)) {
+            assert_one_of(cfg$pathway$gsea_ranking, "pathway$gsea_ranking",
+                          c("stat", "abs_lfc", "lfc"), allow_null = TRUE)
+        }
+        if (!is.null(cfg$pathway$pathway_volcano)) {
+            assert_scalar_bool(cfg$pathway$pathway_volcano, "pathway$pathway_volcano", allow_null = TRUE)
+        }
+    }
+
+    # 4c. Pathway databases validation
+    if (!is.null(cfg$pathway$databases)) {
+        valid_dbs <- c("all", "GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+        for (db in cfg$pathway$databases) {
+            if (!db %in% valid_dbs) {
+                warning("Unknown pathway database '", db, "'. Valid options: ",
+                        paste(valid_dbs, collapse = ", "))
+            }
+        }
+    }
+
+    # 4d. Domain analysis validation
+    if (!is.null(cfg$domain_analysis)) {
+        assert_scalar_bool(cfg$domain_analysis$enabled, "domain_analysis$enabled", allow_null = TRUE)
+    }
+
+    # 5. PPI validation
+    ppi <- cfg$ppi
+    if (!is.null(ppi)) {
+        assert_scalar_bool(ppi$enabled, "ppi$enabled", allow_null = TRUE)
+        assert_scalar_num(ppi$significance_threshold, "ppi$significance_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(ppi$string_score_threshold, "ppi$string_score_threshold",
+                          allow_null = TRUE, min_val = 0, max_val = 1000)
+        assert_scalar_num(ppi$lfc_threshold, "ppi$lfc_threshold", allow_null = TRUE, min_val = 0)
+        assert_scalar_bool(ppi$active_subnetwork, "ppi$active_subnetwork", allow_null = TRUE)
+        assert_scalar_bool(ppi$complex_analysis, "ppi$complex_analysis", allow_null = TRUE)
+    }
+
+    # 6. Advanced stats validation
+    adv <- cfg$advanced_stats
+    if (!is.null(adv)) {
+        assert_scalar_bool(adv$enabled, "advanced_stats$enabled", allow_null = TRUE)
+        assert_scalar_num(adv$bootstrap_n, "advanced_stats$bootstrap_n",
+                          allow_null = TRUE, min_val = 100)
+        assert_scalar_num(adv$ci_level, "advanced_stats$ci_level",
+                          allow_null = TRUE, min_val = 0.5, max_val = 0.999)
+        assert_scalar_bool(adv$run_robust_regression, "advanced_stats$run_robust_regression", allow_null = TRUE)
+        assert_scalar_bool(adv$run_power_analysis, "advanced_stats$run_power_analysis", allow_null = TRUE)
+    }
+
+    # 7. Clustering Settings (optional)
+
     if (!is.null(cfg$clustering)) {
         validate_clustering_config(cfg$clustering)
     }
 
-    # 6. PPI Settings (optional)
+    # 8. PPI Settings (optional)
     if (!is.null(cfg$ppi)) {
         assert_scalar_bool(cfg$ppi$enabled, "ppi$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$ppi$string_score_threshold, "ppi$string_score_threshold",
@@ -70,7 +123,7 @@ validate_proteomics_config <- function(cfg) {
                           allow_null = TRUE, min_val = 0)
     }
 
-    # 7. Advanced Stats Settings (optional)
+    # 9. Advanced Stats Settings (optional)
     if (!is.null(cfg$advanced_stats)) {
         assert_scalar_bool(cfg$advanced_stats$enabled, "advanced_stats$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$advanced_stats$bootstrap_n, "advanced_stats$bootstrap_n",
@@ -81,7 +134,7 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
-    # 8. QC Settings (optional)
+    # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
         assert_scalar_num(cfg$qc$umap_n_neighbors, "qc$umap_n_neighbors",

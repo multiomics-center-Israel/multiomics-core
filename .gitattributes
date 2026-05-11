@@ -1,0 +1,52 @@
+# =============================================================================
+# Line-ending normalization
+# =============================================================================
+# All text files are stored with LF in the repository and checked out as LF,
+# regardless of operating system.  Editors on Windows (RStudio, VSCode) handle
+# LF without issue.  This prevents the "phantom diff" problem where the same
+# file appears modified just because Windows wrote CRLF line endings.
+
+* text=auto eol=lf
+
+# -----------------------------------------------------------------------------
+# Explicit overrides (mostly redundant given `text=auto`, but defensive)
+# -----------------------------------------------------------------------------
+
+# Source code — always LF
+*.R          text eol=lf
+*.Rmd        text eol=lf
+*.py         text eol=lf
+*.sh         text eol=lf
+*.yaml       text eol=lf
+*.yml        text eol=lf
+*.json       text eol=lf
+*.md         text eol=lf
+*.txt        text eol=lf
+*.csv        text eol=lf
+*.tsv        text eol=lf
+*.html       text eol=lf
+
+# Windows-only scripts — keep CRLF (they won't run otherwise on Windows)
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+*.vbs        text eol=crlf
+
+# Binary files — never touch line endings
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.pdf        binary
+*.xlsx       binary
+*.xls        binary
+*.pptx       binary
+*.docx       binary
+*.rds        binary
+*.RData      binary
+*.h5         binary
+*.h5ad       binary
+*.zip        binary
+*.tar.gz     binary
+*.gz         binary
+*.dll        binary
+*.so         binary

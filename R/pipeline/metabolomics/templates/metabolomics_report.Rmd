@@ -20,6 +20,7 @@ params:
   config: NULL
   qc_comparison_file: NULL
   qc_suite_files: NULL
+  commentary_file: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -53,16 +54,33 @@ embed_png <- function(files, pattern, fig_width = "100%") {
 # Helper: render DT datatable inside parameterized Rmd
 render_dt <- function(df, caption = NULL, pageLength = 10) {
   if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
-  htmltools::tagList(
-    DT::datatable(df, caption = caption,
-                  rownames = FALSE,
-                  extensions = "Buttons",
-                  options = list(pageLength = pageLength,
-                                 scrollX = TRUE,
-                                 dom = "Bfrtip",
-                                 buttons = list("csv", "excel")),
-                  class = "compact stripe hover")
-  )
+  tbl <- DT::datatable(df, caption = caption,
+                rownames = FALSE,
+                extensions = "Buttons",
+                options = list(pageLength = pageLength,
+                               scrollX = TRUE,
+                               dom = "Bfrtip",
+                               buttons = list("csv", "excel")),
+                class = "compact stripe hover")
+  num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+  pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P\\.Val|PValue|FDR)"
+  pval_cols <- grep(pval_pat, num_cols, ignore.case = TRUE, value = TRUE)
+  other_cols <- setdiff(num_cols, pval_cols)
+  if (length(other_cols) > 0) tbl <- DT::formatRound(tbl, columns = other_cols, digits = 2)
+  if (length(pval_cols) > 0) {
+    pval_idx <- which(names(df) %in% pval_cols) - 1L
+    sci_render <- DT::JS(
+      "function(data, type, row) {",
+      "  if (type === 'display' && data !== null && data !== '') {",
+      "    return parseFloat(data).toExponential(2);",
+      "  }",
+      "  return data;",
+      "}"
+    )
+    col_defs <- lapply(pval_idx, function(i) list(targets = i, render = sci_render))
+    tbl$x$options$columnDefs <- c(tbl$x$options$columnDefs, col_defs)
+  }
+  htmltools::tagList(tbl)
 }
 
 # Helper: interactive PCA from pca_scores.tsv written by the QC suite.
@@ -374,8 +392,8 @@ if (!is.null(de_contrasts)) {
       vdf$neglog10_FDR <- -log10(pmax(
         ifelse(is.na(vdf$adj.P.Val), 1, vdf$adj.P.Val), 1e-300
       ))
-      vdf$logFC_display <- round(vdf$logFC, 4)
-      vdf$FDR_display   <- signif(vdf$adj.P.Val, 3)
+      vdf$logFC_display <- round(vdf$logFC, 2)
+      vdf$FDR_display   <- sprintf("%.2e", vdf$adj.P.Val)
 
       cat("### Interactive Volcano\n\n")
       cat("*Type metabolite names in the search box to highlight them. ",

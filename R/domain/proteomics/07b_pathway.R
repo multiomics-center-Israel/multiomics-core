@@ -164,11 +164,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     annotation_df <- NULL
     if (!isTRUE(ann_cfg$skip_annotation)) {
         all_gene_ids <- unique(unlist(lapply(de_tables, function(x) x$FeatureID)))
+        # Resolve relative custom_mapping_file against paths.raw
+        resolved_custom <- ann_cfg$custom_mapping_file
+        if (!is.null(resolved_custom) && nzchar(resolved_custom) &&
+            !grepl("^([A-Za-z]:|/|\\\\)", resolved_custom)) {
+            resolved_custom <- resolve_raw_path(config, resolved_custom)
+        }
         anno_config <- list(
             organism = organism,
             annotation = list(
                 skip_annotation = FALSE,
-                custom_mapping_file = ann_cfg$custom_mapping_file,
+                custom_mapping_file = resolved_custom,
                 id_type = ann_cfg$id_type %||% "auto",
                 fallback_chain = c("custom", "biomart", "orgdb", "keggrest")
             )
@@ -188,8 +194,12 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # ------------------------------------------------------------------
     # Load gene sets (using SYMBOL keytype — proteomics IDs are gene symbols)
     # ------------------------------------------------------------------
-    databases <- pw_cfg$databases %||% c("GO", "KEGG")
+    databases <- pw_cfg$databases %||% c("GO", "KEGG", "Reactome")
     gmt_file  <- pw_cfg$gmt_file
+    if (!is.null(gmt_file) && nzchar(gmt_file) &&
+        !grepl("^([A-Za-z]:|/|\\\\)", gmt_file)) {
+        gmt_file <- resolve_raw_path(config, gmt_file)
+    }
 
     gene_sets <- tryCatch(
         load_gene_sets(organism        = organism,
@@ -236,6 +246,66 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         message("Saved gene annotation to: ", anno_file)
     }
 
+    # ------------------------------------------------------------------
+    # Cluster enrichment terms (rrvgo for GO, Jaccard for KEGG/custom)
+    # ------------------------------------------------------------------
+    cluster_threshold <- pw_cfg$cluster_threshold %||% 0.7
+    message("=== Clustering enrichment terms (threshold: ", cluster_threshold, ") ===")
+    clustered_dir <- file.path(enrich_dir, "clustered")
+    dir.create(clustered_dir, recursive = TRUE, showWarnings = FALSE)
+    for (contrast_name in names(pathway_results)) {
+      contrast_res <- pathway_results[[contrast_name]]
+      for (analysis_name in names(contrast_res)) {
+        res_df <- contrast_res[[analysis_name]]
+        if (is.null(res_df) || nrow(res_df) == 0) next
+        # Determine the database for this result
+        db_name <- res_df$database[1]
+        if (is.null(db_name)) db_name <- sub("_.*$", "", analysis_name)
+        # Resolve correct GO ontology for semantic clustering
+        cluster_ont <- "BP"
+        if (grepl("GO_CC", db_name, ignore.case = TRUE)) cluster_ont <- "CC"
+        else if (grepl("GO_MF", db_name, ignore.case = TRUE)) cluster_ont <- "MF"
+        clustered <- tryCatch(
+          cluster_enrichment_terms(
+            enrichment_df = res_df,
+            database = db_name,
+            gene_sets = gene_sets[[db_name]],
+            organism = organism,
+            threshold = cluster_threshold,
+            ont = cluster_ont
+          ),
+          error = function(e) {
+            message("Clustering failed for ", contrast_name, "/", analysis_name, ": ", e$message)
+            NULL
+          }
+        )
+        if (!is.null(clustered) && nrow(clustered) > 0) {
+          clean_contrast <- gsub("[^a-zA-Z0-9_-]", "_", contrast_name)
+          clean_analysis <- gsub("[^a-zA-Z0-9_-]", "_", analysis_name)
+          out_file <- file.path(clustered_dir,
+                                paste0("clustered_", clean_contrast, "_", clean_analysis, ".csv"))
+          write.csv(clustered, out_file, row.names = FALSE)
+          message("  Saved clustered results: ", basename(out_file),
+                  " (", nrow(clustered), " clusters from ",
+                  sum(clustered$n_members), " terms)")
+        }
+      }
+    }
+    # Generate clustered dotplots
+    clustered_plot_dir <- file.path(enrich_dir, "clustered", "plots")
+    generate_clustered_dotplots(clustered_dir, clustered_plot_dir)
+    # Build pathway-colored volcano data if enabled
+    if (isTRUE(pw_cfg$pathway_volcano)) {
+      message("Building pathway-colored volcano data...")
+      for (cn in contrasts) {
+        volcano_data <- build_pathway_volcano_data(de_tables[[cn]], pathway_results)
+        if (!is.null(volcano_data)) {
+          volcano_file <- file.path(enrich_dir, sprintf("pathway_volcano_data_%s.csv", cn))
+          write.csv(volcano_data, volcano_file, row.names = FALSE)
+          message("  Saved: ", volcano_file)
+        }
+      }
+    }
     message("Proteomics pathway analysis complete.")
     pathway_results
 }

@@ -59,20 +59,19 @@ modes:
     # ==============================================================================
     preprocessing:
 
-      # ---- Missingness filtering ----
-      feat_missing_threshold: 0.20
-      sample_missing_threshold: 0.30
-
-      # MNAR vs MAR classification (Spearman correlation)
-      mnar_threshold: 0.3
-
-      # ---- Imputation ----
-      knn_k: 10
-      epsilon: 1.0e-8
+      # ---- Missingness filtering (soft defaults) ----
+      # feat_missing_threshold:   drop a metabolite if it is missing in more
+      #                           than this fraction of samples (0.50 = drop
+      #                           only metabolites missing in >50% of samples).
+      # sample_missing_threshold: drop a sample if it is missing more than
+      #                           this fraction of metabolites. Set to 1.0 to
+      #                           disable sample filtering entirely.
+      feat_missing_threshold: 0.50
+      sample_missing_threshold: 1.0
 
       # ---- Normalization selection workflow ----
       # null  → QC review mode (compute all methods, stop after report)
-      # "tss" | "median" | "pqn" → full pipeline
+      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
       chosen_norm: null
 
       # ---- Drift correction (LOESS) ----
@@ -122,6 +121,11 @@ modes:
 
       # Internal standard column (if using IS normalization)
       is_ref_col: null
+
+      # Biological factor column (if using bio_factor normalization).
+      # Name of a numeric column in metadata holding a per-sample value
+      # (e.g. "mg_protein"). Each sample is divided by its row's value.
+      biological_factor_col: null
 
     # ==============================================================================
     # Sample filtering (applied early, in mod_met_raw)

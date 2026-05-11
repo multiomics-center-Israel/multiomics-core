@@ -41,7 +41,7 @@ tryCatch({
 
 # Helper function for downloadable DT tables
 make_dt <- function(df, caption = NULL, pageLength = 15) {
-    DT::datatable(
+    tbl <- DT::datatable(
         df,
         caption = caption,
         extensions = 'Buttons',
@@ -56,6 +56,14 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
         ),
         rownames = FALSE
     )
+    # Format p-value columns in scientific notation
+    num_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+    pval_pat <- "^(p[._]?val|padj|adj[._]?p|fdr|q[._]?val|BH|bonferroni|p\\.value|adj\\.P|PValue|FDR|combined_p)"
+    pval_cols <- grep(pval_pat, num_cols, ignore.case = TRUE, value = TRUE)
+    other_cols <- setdiff(num_cols, pval_cols)
+    if (length(other_cols) > 0) tbl <- DT::formatRound(tbl, columns = other_cols, digits = 3)
+    if (length(pval_cols) > 0) tbl <- DT::formatSignif(tbl, columns = pval_cols, digits = 3)
+    tbl
 }
 
 
@@ -170,6 +178,13 @@ render_commentary <- function(figure_id) {
 cfg <- yaml::read_yaml(config_path)
 rna_cfg <- cfg$modes$rna
 
+# Section visibility flags (default-off for MA + p-value distribution after
+# Apr 2026 reviewer feedback; toggle on via report_sections in config).
+.rna_rs        <- rna_cfg$report_sections %||% list()
+.rna_de_subs   <- .rna_rs$de %||% list()
+show_de_ma_rna       <- isTRUE(.rna_de_subs$ma %||% FALSE)
+show_de_pvalhist_rna <- isTRUE(.rna_de_subs$pval_hist %||% FALSE)
+
 # Load DE data (used in multiple sections)
 final_results_file <- file.path(datasets_dir, "final_results.tsv")
 de_data <- NULL
@@ -186,6 +201,12 @@ if (file.exists(final_results_file)) {
             de_data$GeneName <- ifelse(
                 !is.na(anno_match_setup$symbol) & anno_match_setup$symbol != anno_match_setup$gene_id,
                 anno_match_setup$symbol,
+                de_data$gene_id_clean
+            )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_data$GeneLabel <- ifelse(
+                de_data$GeneName != de_data$gene_id_clean,
+                paste0(de_data$GeneName, " (", de_data$gene_id_clean, ")"),
                 de_data$gene_id_clean
             )
         }
@@ -562,12 +583,71 @@ if (nzchar(trimws(exec_md_raw)) && trimws(exec_md_raw) != "No summary available.
 cat("</div>\n")
 ```
 
+```{r technical-metadata-table-rna, results='asis'}
+# Technical metadata table — what ran, and gene counts before/after filtering.
+.tm_n_before <- if (!is.null(raw_counts <- tryCatch({
+    f <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
+    if (nzchar(rna_cfg$files$counts %||% "") && file.exists(f) && !dir.exists(f)) {
+        read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
+    } else NULL
+}, error = function(e) NULL))) nrow(raw_counts) else NA_integer_
+
+.tm_n_after <- if (!is.null(filt_counts <- tryCatch({
+    f <- file.path(datasets_dir, "rna_counts_filtered.tsv")
+    if (file.exists(f) && !dir.exists(f)) {
+        read.delim(f, stringsAsFactors = FALSE, check.names = FALSE)
+    } else NULL
+}, error = function(e) NULL))) nrow(filt_counts) else NA_integer_
+
+.tm_steps <- list(
+    list(label = "Filtering",
+         ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
+    list(label = "Normalization",
+         ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
+    list(label = "Differential expression",
+         ran   = !is.null(de_data) && nrow(de_data) > 0),
+    list(label = "Cell-type deconvolution",
+         ran   = isTRUE(rna_cfg$deconvolution$enabled)),
+    list(label = "Pathway enrichment",
+         ran   = isTRUE(rna_cfg$pathway$enabled))
+)
+.tm_steps_str <- paste(vapply(.tm_steps, function(s) {
+    sprintf("%s: %s", s$label, if (isTRUE(s$ran)) "yes" else "skipped")
+}, character(1)), collapse = "<br>")
+
+.tm_fmt_n <- function(n) if (is.na(n)) "n/a" else format(n, big.mark = ",")
+
+cat('<table style="margin: 16px 0 24px 0; border-collapse: collapse; width: 100%; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; font-size: 14px;">\n')
+cat('<thead><tr style="background: #f6f8fa; color: #24292f;">\n')
+cat('<th style="text-align:left; padding: 10px 14px; border-bottom: 1px solid #d0d7de;">Technical metadata</th>\n')
+cat('<th style="text-align:left; padding: 10px 14px; border-bottom: 1px solid #d0d7de;">Value</th>\n')
+cat('</tr></thead><tbody>\n')
+
+.tm_row <- function(k, v) cat(sprintf(
+    '<tr><td style="padding: 8px 14px; border-bottom: 1px solid #eaecef; font-weight: 600; color: #24292f;">%s</td><td style="padding: 8px 14px; border-bottom: 1px solid #eaecef; color: #57606a;">%s</td></tr>\n',
+    k, v))
+
+.tm_row("Analysis steps performed", .tm_steps_str)
+.tm_row("Genes before filtering", .tm_fmt_n(.tm_n_before))
+.tm_row("Genes after filtering",  .tm_fmt_n(.tm_n_after))
+if (!is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before > 0) {
+    .tm_row("Retained", sprintf("%.1f%%", 100 * .tm_n_after / .tm_n_before))
+}
+.tm_row("DE method",
+        sprintf("%s (padj &le; %s, |linear FC| &ge; %s)",
+                toupper(rna_cfg$de$method %||% "DESeq2"),
+                signif(rna_cfg$de$p_cutoff %||% 0.05, 3),
+                rna_cfg$de$linear_fc_cutoff %||% 1.5))
+cat('</tbody></table>\n')
+```
+
 ---
 
 # Quality Control — Pre-DE
 
 ## Gene Filtering
 
+Counts before and after the filtering rule defined under *Analysis Parameters → Filtering Strategy*.
 Lowly expressed genes were removed using the auto-filtering strategy described above.
 The pipeline evaluates CPM distributions across biological groups and selects an optimal threshold.
 
@@ -850,33 +930,81 @@ figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may cap
 render_commentary("pca_plot_13")
 ```
 
-### 3D Interactive
+#### With Sample Names
 
-An interactive 3D PCA plot is available:
+```{r pca-13-labeled, fig.cap="PCA — PC1 vs PC3 (labeled)"}
+p_lab <- file.path(diag_dir, "PCA_PC1.vs.PC3_labeled.png")
+if (file.exists(p_lab)) knitr::include_graphics(p_lab) else cat("*Labeled PCA plot not available.*\n")
+```
+
+#### Interactive
+
+```{r pca-13-interactive, fig.width=8, fig.height=6}
+scores_csv <- file.path(diag_dir, "PCA_PC1.vs.PC3_scores.csv")
+if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
+    sc <- read.csv(scores_csv, stringsAsFactors = FALSE)
+    color_var <- rna_cfg$effects$color %||% "Condition"
+    if (!color_var %in% colnames(sc)) color_var <- setdiff(colnames(sc), c("sample", grep("^PC", colnames(sc), value = TRUE)))[1]
+    sc$hover_text <- paste0("Sample: ", sc$sample, "<br>", color_var, ": ", sc[[color_var]])
+    pl <- plotly::plot_ly(sc, x = ~PC1, y = ~PC3, color = as.formula(paste0("~`", color_var, "`")),
+                          text = ~hover_text, hoverinfo = "text",
+                          type = "scatter", mode = "markers",
+                          marker = list(size = 10)) |>
+        plotly::layout(xaxis = list(title = "PC1"), yaxis = list(title = "PC3"),
+                       title = "PCA: PC1 vs PC3 — Hover for sample names")
+    pl
+} else {
+    cat("*Interactive PCA not available.*\n")
+}
+```
+
+### 3D Interactive PCA
 
 ```{r pca-3d-link, results='asis'}
 pca3d_file <- file.path(diag_dir, "PCA_3D.html")
 if (file.exists(pca3d_file)) {
+    cat('<div style="margin: 20px 0; padding: 20px 24px; border-left: 4px solid #0969da; background: #ddf4ff; border-radius: 6px;">\n')
+    cat('<p style="color: #0550ae; font-weight: 600; font-size: 1.05em; margin-top: 0; margin-bottom: 8px;">Explore sample separation in three dimensions.</p>\n')
+    cat('<p style="color: #0a3069; font-size: 0.95em; margin-bottom: 14px;">The interactive 3D PCA plot below shows sample separation along PC1, PC2, and PC3. Rotate, zoom, and hover over points to explore clustering structure.</p>\n')
+    cat('<a href="rna/Diagnostic_plots/PCA_3D.html" target="_blank" style="display: inline-block; padding: 10px 20px; background: #0969da; color: #fff; font-weight: 600; text-decoration: none; border-radius: 6px; font-size: 1em;">Open Interactive 3D PCA &rarr;</a>\n')
+    cat('</div>\n')
     cat(sprintf('<p><a href="Diagnostic_plots/PCA_3D.html" target="_blank" style="font-size: 1.1em;">🔗 Open 3D PCA (new tab)</a></p>'))
 } else {
     cat("*3D PCA plot not available.*")
 }
 ```
 
+
+## Sample Similarity
+
+Pairwise sample distance assesses overall reproducibility within and between experimental groups. Clear between-group separation indicates a detectable biological signal.
+
+```{r corr-heatmap-config, include=FALSE}
+# Correlation heatmap dropped from report after Apr 2026 reviewer feedback
+# (still produced in the pipeline). Override with
+# `report_sections.qc.correlation_heatmap: true`.
+.rna_qc_subs <- .rna_rs$qc %||% list()
+show_corr_heatmap_rna <- isTRUE(.rna_qc_subs$correlation_heatmap %||% FALSE)
+```
+
+```{r corr-heatmap-heading, eval=show_corr_heatmap_rna, results='asis'}
+cat("### Correlation Heatmap\n\n")
+```
+
+```{r corr-heatmap, eval=show_corr_heatmap_rna, fig.cap="Sample-to-sample correlation heatmap"}
+
 ## Sample Similarity {.tabset}
 
 ### Correlation Heatmap
-
-```{r corr-heatmap, fig.cap="Sample-to-sample correlation heatmap"}
 p <- file.path(diag_dir, "sample_correlation_heatmap.png")
 if (file.exists(p)) knitr::include_graphics(p)
 ```
 
-```{r legend-corr-heatmap, results='asis', echo=FALSE}
+```{r legend-corr-heatmap, eval=show_corr_heatmap_rna, results='asis', echo=FALSE}
 figure_legend("Pairwise Pearson correlation heatmap of normalized expression profiles. Higher correlation values (warmer colors) indicate greater transcriptomic similarity between samples. Within-group correlations should be higher than between-group correlations.")
 ```
 
-```{r commentary-correlation, results='asis'}
+```{r commentary-correlation, eval=show_corr_heatmap_rna, results='asis'}
 render_commentary("sample_correlation")
 ```
 
@@ -888,7 +1016,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-dist-heatmap, results='asis', echo=FALSE}
-figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate smaller distances (higher similarity). Samples from the same experimental group are expected to cluster together with smaller inter-sample distances.")
+figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate larger distances (less similar samples). Samples from the same experimental group are expected to cluster together with smaller (lighter) inter-sample distances.")
 ```
 
 ```{r commentary-distance, results='asis'}
@@ -896,6 +1024,23 @@ render_commentary("sample_distance")
 ```
 
 ## Expression Heatmaps {.tabset}
+
+Expression heatmaps display the relative abundance of features across samples. The tabs below show the same matrix with progressively more clustering applied — comparing them reveals whether clustering meaningfully reorganises the structure.
+
+### Without Clustering
+
+```{r expr-heatmap-uncl, fig.cap="Sample expression heatmap (rows and columns unclustered)"}
+p_uncl <- file.path(diag_dir, "samples_rna_heatmap_unclustered.png")
+if (file.exists(p_uncl)) {
+    knitr::include_graphics(p_uncl)
+} else {
+    cat("*Unclustered expression heatmap not available.*")
+}
+```
+
+```{r legend-expr-heatmap-uncl, results='asis', echo=FALSE}
+figure_legend("Sample expression heatmap with rows and columns left in their original order. Useful as a baseline before applying hierarchical clustering.")
+```
 
 ### With Clustering
 
@@ -912,7 +1057,7 @@ figure_legend("Unsupervised hierarchical clustering heatmap based on the top mos
 render_commentary("expr_heatmap")
 ```
 
-### Without Column Clustering
+### Rows Clustered Only
 
 ```{r expr-heatmap-nocol, fig.cap="Expression heatmap — without column clustering"}
 p <- file.path(diag_dir, "samples_rna_heatmap_wo_col.png")
@@ -920,7 +1065,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-expr-heatmap-nocol, results='asis', echo=FALSE}
-figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the clustered version above.")
+figure_legend("Expression heatmap with hierarchical row clustering but without column reordering, preserving the original sample order for comparison with the fully clustered version above.")
 ```
 
 ---
@@ -1134,6 +1279,22 @@ if (file.exists(final_results_file)) {
                 anno_match_vol$symbol,
                 de_data$gene_id_clean
             )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_data$GeneLabel <- ifelse(
+                de_data$GeneName != de_data$gene_id_clean,
+                paste0(de_data$GeneName, " (", de_data$gene_id_clean, ")"),
+                de_data$gene_id_clean
+            )
+        } else {
+            de_data$GeneLabel <- de_data[[1]]
+        }
+    } else {
+        # No annotation file — use raw gene IDs
+        id_col_vol2 <- if ("Gene" %in% names(de_data)) "Gene" else if ("FeatureID" %in% names(de_data)) "FeatureID" else NULL
+        if (!is.null(id_col_vol2)) {
+            de_data$gene_id_clean <- gsub("^Gene:", "", de_data[[id_col_vol2]])
+            de_data$GeneName <- de_data$gene_id_clean
+            de_data$GeneLabel <- de_data$gene_id_clean
         }
     }
 }
@@ -1144,8 +1305,11 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
     padj_col <- grep(paste0("padj\\.", contrast), names(df), value = TRUE)[1]
     if (is.na(lfc_col) || is.na(padj_col)) return(NULL)
 
+    # Use GeneLabel (GeneName + gene_id) for display if available
+    gene_label <- if ("GeneLabel" %in% names(df)) df$GeneLabel else if ("GeneName" %in% names(df)) df$GeneName else df[[1]]
+
     plot_df <- data.frame(
-        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        gene = gene_label,
         logFC = as.numeric(df[[lfc_col]]),
         padj = as.numeric(df[[padj_col]]),
         stringsAsFactors = FALSE
@@ -1169,26 +1333,74 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
         geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
         labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
         theme_minimal()
+    widget <- ggplotly(p, tooltip = "text")
+    # Include both raw and adjusted p-values for cutoff panel
+    pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
+    raw_pval <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else plot_df$padj
+    # Pipeline pass flag — single source of truth for DE counts
+    pass_col <- paste0(contrast, "_pass")
+    pass_flag <- if (pass_col %in% names(df)) {
+        as.numeric(df[[pass_col]] %in% c(TRUE, 1))
+    } else NULL
+    reg_df <- data.frame(name = as.character(plot_df$gene),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval,
+                         adjPval = plot_df$padj,
+                         stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
+    list(widget = widget, plot_df = reg_df, ycap = ycap_v)
     ggplotly(p, tooltip = "text")
 }
 
-volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$", full.names = TRUE)
-contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
+# Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
+# Fall back to legacy single-file scheme if the pipeline has not regenerated yet.
+volcano_padj_files <- list.files(qc_post_dir, pattern = "^volcano_.*_padj\\.png$",
+                                  full.names = TRUE)
+if (length(volcano_padj_files) > 0) {
+    contrast_names <- gsub("^volcano_|_padj\\.png$", "", basename(volcano_padj_files))
+    volcano_files  <- volcano_padj_files
+} else {
+    volcano_files  <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$",
+                                  full.names = TRUE)
+    contrast_names <- gsub("^volcano_|\\.png$", "", basename(volcano_files))
+}
 ```
 
 ### Static {.tabset}
 
 ```{r volcano-static, results='asis'}
 padj_cut_vol <- rna_cfg$de$p_cutoff %||% 0.05
-lfc_cut_vol <- rna_cfg$de$linear_fc_cutoff %||% 1.5
-if (length(volcano_files) > 0) {
-    for (i in seq_along(volcano_files)) {
-        vf <- volcano_files[i]
-        cn <- contrast_names[i]
+lfc_cut_vol  <- rna_cfg$de$linear_fc_cutoff %||% 1.5
+default_ptype_rna <- "padj"  # matches cutoff_panel_html(default_ptype = "padj")
+if (length(contrast_names) > 0) {
+    for (cn in contrast_names) {
         contrast_clean <- gsub("_", " ", cn)
-        cat(sprintf("\n#### %s\n\n", contrast_clean))
-        cat(sprintf("![Volcano — %s](%s)\n\n", contrast_clean, vf))
-        figure_legend(sprintf("Volcano plot for the %s contrast. Each point represents a gene; the x-axis shows log2 fold change and the y-axis shows -log10 adjusted p-value. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s). Dashed lines indicate significance thresholds.", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        vf_padj <- file.path(qc_post_dir, sprintf("volcano_%s_padj.png", cn))
+        vf_pval <- file.path(qc_post_dir, sprintf("volcano_%s_pval.png", cn))
+        vf_legacy <- file.path(qc_post_dir, sprintf("volcano_%s.png", cn))
+
+        cat(sprintf("\n#### %s {.tabset}\n\n", contrast_clean))
+
+        if (file.exists(vf_padj) || file.exists(vf_pval)) {
+            order_ptypes <- if (default_ptype_rna == "padj") c("padj", "pval") else c("pval", "padj")
+            for (pt in order_ptypes) {
+                tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
+                vf <- if (pt == "padj") vf_padj else vf_pval
+                if (file.exists(vf)) {
+                    cat(sprintf("\n##### %s\n\n", tab_label))
+                    cat(sprintf("![Volcano -- %s -- %s](%s)\n\n",
+                                contrast_clean, tab_label, vf))
+                    figure_legend(sprintf(
+                        "Volcano plot for the %s contrast (y-axis: -log10 %s). Red: significantly up-regulated; blue: significantly down-regulated (cutoff p &le; %s, |FC| &ge; %s).",
+                        contrast_clean,
+                        if (pt == "padj") "adjusted P-value" else "raw P-value",
+                        padj_cut_vol, lfc_cut_vol))
+                }
+            }
+        } else if (file.exists(vf_legacy)) {
+            cat(sprintf("![Volcano -- %s](%s)\n\n", contrast_clean, vf_legacy))
+            figure_legend(sprintf("Volcano plot for the %s contrast. Red: significantly up-regulated; blue: significantly down-regulated (adj. p &le; %s, |FC| &ge; %s).", contrast_clean, padj_cut_vol, lfc_cut_vol))
+        }
         render_commentary(paste0("volcano_", cn))
     }
 } else {
@@ -1412,11 +1624,16 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
-## MA Plots {.tabset}
+```{r ma-section-heading, eval=show_de_ma_rna, results='asis'}
+cat("## MA Plots {.tabset}\n\n")
+cat("MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.\n\n")
+cat("### Static {.tabset}\n\n")
+```
 
+```{r ma-plots-static, eval=show_de_ma_rna, results='asis'}
 ### Static {.tabset}
 
-```{r ma-plots-static, results='asis'}
+
 ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
 if (length(ma_files) > 0) {
     for (mf in ma_files) {
@@ -1432,11 +1649,12 @@ if (length(ma_files) > 0) {
 }
 ```
 
-### Interactive {.tabset}
+```{r ma-interactive-heading, eval=show_de_ma_rna, results='asis'}
+cat("### Interactive {.tabset}\n\n")
+cat("Enter gene names to highlight them on the plot (comma-separated).\n\n")
+```
 
-Enter gene names to highlight them on the plot (comma-separated).
-
-```{r ma-interactive-setup, include=FALSE}
+```{r ma-interactive-setup, eval=show_de_ma_rna, include=FALSE}
 # Function to create interactive MA plot with gene highlighting
 make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
     lfc_col <- grep(paste0("(log2FoldChange|linearFC)\\.", contrast), names(df), value = TRUE)[1]
@@ -1455,8 +1673,11 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
     # Calculate mean expression per gene
     baseMean <- rowMeans(as.matrix(df[, expr_cols, drop = FALSE]), na.rm = TRUE)
 
+    # Use GeneLabel (GeneName + gene_id) for display if available
+    gene_label <- if ("GeneLabel" %in% names(df)) df$GeneLabel else if ("GeneName" %in% names(df)) df$GeneName else df[[1]]
+
     plot_df <- data.frame(
-        gene = if ("GeneName" %in% names(df)) df$GeneName else df[[1]],
+        gene = gene_label,
         logFC = as.numeric(df[[lfc_col]]),
         padj = as.numeric(df[[padj_col]]),
         baseMean = baseMean,
@@ -1488,11 +1709,29 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
         labs(title = title, x = "log10(baseMean)", y = "log2 Fold Change") +
         theme_minimal()
 
+    widget <- ggplotly(p, tooltip = "text")
+    pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
+    raw_pval_all <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else as.numeric(df[[padj_col]])
+    # Filter to same rows as plot_df
+    valid_rows <- !is.na(baseMean) & baseMean > 0
+    raw_pval_filt <- raw_pval_all[valid_rows]
+    pass_col <- paste0(contrast, "_pass")
+    pass_flag <- if (pass_col %in% names(df)) {
+        as.numeric(df[[pass_col]] %in% c(TRUE, 1))[valid_rows]
+    } else NULL
+    reg_df <- data.frame(name = as.character(plot_df$gene),
+                         logFC = plot_df$logFC,
+                         pval = raw_pval_filt,
+                         adjPval = plot_df$padj,
+                         avgExpr = plot_df$log10baseMean,
+                         stringsAsFactors = FALSE)
+    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
+    list(widget = widget, plot_df = reg_df)
     ggplotly(p, tooltip = "text")
 }
 ```
 
-```{r ma-interactive, results='asis', fig.height=6}
+```{r ma-interactive, eval=show_de_ma_rna, results='asis', fig.height=6}
 if (!is.null(de_data) && length(contrast_names) > 0) {
     for (i in seq_along(contrast_names)) {
         cn <- contrast_names[i]
@@ -1720,11 +1959,17 @@ if (file.exists(de_summary_file)) {
                 anno_match$symbol,
                 de_summary_full$gene_id_clean
             )
+            # GeneLabel: "GeneName (gene_id)" for unique identification
+            de_summary_full$GeneLabel <- ifelse(
+                de_summary_full$GeneName != de_summary_full$gene_id_clean,
+                paste0(de_summary_full$GeneName, " (", de_summary_full$gene_id_clean, ")"),
+                de_summary_full$gene_id_clean
+            )
             de_summary_full$gene_id_clean <- NULL
             cols <- names(de_summary_full)
             id_idx <- which(cols == id_col)
-            new_order <- c(cols[1:id_idx], "GeneName",
-                           setdiff(cols[(id_idx + 1):length(cols)], "GeneName"))
+            new_order <- c(cols[1:id_idx], "GeneName", "GeneLabel",
+                           setdiff(cols[(id_idx + 1):length(cols)], c("GeneName", "GeneLabel")))
             de_summary_full <- de_summary_full[, new_order]
         }
     }
@@ -1817,7 +2062,7 @@ meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAs
 group_col_exp <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
 
 if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
-    # Build gene display names
+    # Build gene display names: "GeneName (gene_id)" for unique identification
     gene_ids_exp <- rownames(norm_expr_exp)
     gene_display_exp <- gsub("^Gene:", "", gene_ids_exp)
 
@@ -1827,7 +2072,8 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp)) {
         anno_exp <- read.csv(anno_file_exp, stringsAsFactors = FALSE)
         symbols_exp <- anno_exp$symbol[match(gene_display_exp, anno_exp$gene_id)]
         has_sym <- !is.na(symbols_exp) & symbols_exp != gene_display_exp
-        gene_display_exp[has_sym] <- symbols_exp[has_sym]
+        # Use "GeneName (gene_id)" format for genes with a symbol
+        gene_display_exp[has_sym] <- paste0(symbols_exp[has_sym], " (", gene_display_exp[has_sym], ")")
     }
 
     # Build sample -> group mapping
@@ -2203,32 +2449,58 @@ Expression heatmap of top differentially expressed genes. Select the number of g
 # Load normalized expression data
 norm_expr_file <- file.path(datasets_dir, "rna_norm_TMMlogCPM.tsv")
 norm_expr <- NULL
-if (file.exists(norm_expr_file) && !is.null(de_summary_full)) {
+# Load expression matrix regardless of de_summary_full — we can fall back to de_data
+if (file.exists(norm_expr_file)) {
     norm_expr <- read.delim(norm_expr_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE)
+}
+
+# Build heatmap DE source: prefer de_summary_full, fall back to de_data
+heatmap_de_source <- de_summary_full
+if (is.null(heatmap_de_source) && !is.null(de_data)) {
+    # Build from final_results: sort by min padj, filter to DE genes only
+    heatmap_de_source <- de_data
+    padj_cols_hm <- grep("^padj\\.", names(heatmap_de_source), value = TRUE)
+    if (length(padj_cols_hm) > 0) {
+        heatmap_de_source$min_padj <- apply(heatmap_de_source[, padj_cols_hm, drop = FALSE], 1, min, na.rm = TRUE)
+        # Filter to pass_any if available
+        pass_col_hm <- grep("pass_any", names(heatmap_de_source), value = TRUE)[1]
+        if (!is.na(pass_col_hm)) {
+            heatmap_de_source <- heatmap_de_source[heatmap_de_source[[pass_col_hm]] == TRUE, ]
+        }
+        heatmap_de_source <- heatmap_de_source[order(heatmap_de_source$min_padj), ]
+    }
 }
 
 # Function to create heatmap for top N genes
 make_top_de_heatmap <- function(n_genes, expr_mat, de_df, meta_df, group_col) {
-    if (is.null(expr_mat) || is.null(de_df)) return(NULL)
+    if (is.null(expr_mat) || is.null(de_df) || nrow(de_df) == 0) return(NULL)
 
     # Get top N gene IDs
     top_genes <- head(de_df, n_genes)
-    id_col <- if ("Gene" %in% names(top_genes)) "Gene" else names(top_genes)[1]
+    id_col <- if ("Gene" %in% names(top_genes)) "Gene" else if ("FeatureID" %in% names(top_genes)) "FeatureID" else names(top_genes)[1]
     gene_ids <- as.character(top_genes[[id_col]])
 
-    # Match to expression matrix
+    # Match to expression matrix (try both raw and cleaned IDs)
     gene_ids_clean <- gsub("^Gene:", "", gene_ids)
-    matched_idx <- which(rownames(expr_mat) %in% gene_ids | rownames(expr_mat) %in% gene_ids_clean)
+    rn <- rownames(expr_mat)
+    rn_clean <- gsub("^Gene:", "", rn)
+    matched_idx <- which(rn %in% gene_ids | rn %in% gene_ids_clean | rn_clean %in% gene_ids | rn_clean %in% gene_ids_clean)
 
     if (length(matched_idx) < 2) return(NULL)
 
     mat <- as.matrix(expr_mat[matched_idx, , drop = FALSE])
 
-    # Use gene names if available
-    if ("GeneName" %in% names(top_genes)) {
-        name_map <- setNames(top_genes$GeneName, gsub("^Gene:", "", top_genes[[id_col]]))
-        new_names <- name_map[rownames(mat)]
+    # Use GeneLabel (GeneName + gene_id) if available, otherwise GeneName
+    label_col <- if ("GeneLabel" %in% names(top_genes)) "GeneLabel" else if ("GeneName" %in% names(top_genes)) "GeneName" else NULL
+    if (!is.null(label_col)) {
+        name_map <- setNames(top_genes[[label_col]], gsub("^Gene:", "", top_genes[[id_col]]))
+        rn_mat_clean <- gsub("^Gene:", "", rownames(mat))
+        new_names <- name_map[rn_mat_clean]
         new_names[is.na(new_names)] <- rownames(mat)[is.na(new_names)]
+        # Ensure unique row names for pheatmap
+        if (any(duplicated(new_names))) {
+            new_names <- make.unique(new_names, sep = " #")
+        }
         rownames(mat) <- new_names
     }
 
@@ -2279,56 +2551,169 @@ group_col <- rna_cfg$de_table$group_col %||% rna_cfg$effects$color[1] %||% rna_c
 ### Top 10
 
 ```{r heatmap-top10, fig.height=6, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(10, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source) && nrow(heatmap_de_source) > 0) {
+    tryCatch({
+        hm <- make_top_de_heatmap(10, norm_expr, heatmap_de_source, meta_df, group_col)
+        if (!is.null(hm)) print(hm)
+    }, error = function(e) cat("Heatmap error:", e$message))
 } else {
-    cat("Expression matrix not available.")
+    cat("Expression matrix or DE results not available.")
 }
 ```
+
+```{r legend-heatmap-top10, results='asis', echo=FALSE}
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    figure_legend("Heatmap of the top 10 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
+}
+```
+
 
 ### Top 50
 
 ```{r heatmap-top50, fig.height=8, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(50, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(50, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
+}
+```
+
+```{r legend-heatmap-top50, results='asis', echo=FALSE}
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    figure_legend("Heatmap of the top 50 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
 
 ### Top 100
 
 ```{r heatmap-top100, fig.height=10, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(100, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(100, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
+}
+```
+
+```{r legend-heatmap-top100, results='asis', echo=FALSE}
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    figure_legend("Heatmap of the top 100 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
 }
 ```
 
 ### Top 200
 
 ```{r heatmap-top200, fig.height=12, fig.width=10}
-if (!is.null(norm_expr)) {
-    hm <- make_top_de_heatmap(200, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    hm <- make_top_de_heatmap(200, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
+
+
+```{r legend-heatmap-top200, results='asis', echo=FALSE}
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    figure_legend("Heatmap of the top 200 differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
+}
+```
+
 
 ### All DE
 
 ```{r heatmap-all, fig.height=14, fig.width=10}
-if (!is.null(norm_expr) && !is.null(de_summary_full)) {
-    n_all <- nrow(de_summary_full)
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    n_all <- nrow(heatmap_de_source)
     if (n_all > 500) {
         cat(sprintf("Showing top 500 of %d DE genes (full heatmap too large).\n\n", n_all))
         n_all <- 500
     }
-    hm <- make_top_de_heatmap(n_all, norm_expr, de_summary_full, meta_df, group_col)
-    if (!is.null(hm)) hm
+    hm <- make_top_de_heatmap(n_all, norm_expr, heatmap_de_source, meta_df, group_col)
+    if (!is.null(hm)) print(hm)
 }
 ```
 
+```{r legend-heatmap-all, results='asis', echo=FALSE}
+if (!is.null(norm_expr) && !is.null(heatmap_de_source)) {
+    figure_legend("Heatmap of all significantly differentially expressed genes (z-score normalized) across samples. Rows are clustered by expression similarity; columns are annotated by experimental group.")
+}
+```
+
+
 ---
+
+```{r clustering-discover-rna, include=FALSE}
+# ---- Discover clustering outputs on disk for RNA-seq ----
+# Hierarchical is intentionally excluded for RNA-seq (per Apr 2026 reviewer
+# guidance — too dense to be informative on whole-transcriptome DE lists).
+clustering_root_rna <- file.path(run_dir, "rna", "Clustering")
+part_root_rna  <- file.path(clustering_root_rna, "Partition_clustering")
+binary_dir_rna <- file.path(clustering_root_rna, "Binary_patterns")
+
+part_subdirs_rna <- if (dir.exists(part_root_rna)) {
+  list.dirs(part_root_rna, recursive = FALSE)
+} else character(0)
+part_subdir_rna <- if (length(part_subdirs_rna) > 0) part_subdirs_rna[1] else NA_character_
+part_hm_rna     <- if (!is.na(part_subdir_rna)) file.path(part_subdir_rna, "Partition_clustering_heatmap.png") else NA_character_
+
+part_profile_pngs_rna <- if (!is.na(part_subdir_rna) && dir.exists(part_subdir_rna)) {
+  list.files(part_subdir_rna, pattern = "^cluster_profiles_cluster[0-9]+\\.png$",
+             full.names = TRUE)
+} else character(0)
+if (length(part_profile_pngs_rna) > 0) {
+  ord <- order(as.integer(sub(".*cluster([0-9]+)\\.png$", "\\1",
+                              basename(part_profile_pngs_rna))))
+  part_profile_pngs_rna <- part_profile_pngs_rna[ord]
+}
+
+binary_pngs_rna <- if (dir.exists(binary_dir_rna)) {
+  list.files(binary_dir_rna, pattern = "^Heatmap_[01]+\\.png$", full.names = TRUE)
+} else character(0)
+
+clustering_enabled_rna <- isTRUE(rna_cfg$clustering$enabled)
+has_part_rna   <- !is.na(part_hm_rna) && file.exists(part_hm_rna)
+has_binary_rna <- length(binary_pngs_rna) > 0
+clustering_show_rna <- clustering_enabled_rna && (has_part_rna || has_binary_rna)
+```
+
+```{r clustering-header-rna, eval=clustering_show_rna, results='asis'}
+cat("# Clustering {.tabset}\n\n")
+cat("Clustering was performed on the differentially expressed genes. Each method below answers a different question:\n\n")
+cat("- **Partition** — splits genes into clusters with similar expression trajectories across groups.\n")
+cat("- **Binary patterns** — assigns each gene to an on/off (1/0) pattern across groups based on correlation.\n\n")
+cat("*Hierarchical clustering is omitted for RNA-seq — DE gene lists are typically too large for the dendrogram to be readable.*\n\n")
+```
+
+```{r clustering-partition-rna, eval=clustering_show_rna && has_part_rna, results='asis'}
+cat("## Partition {.tabset}\n\n")
+cat("### Heatmap\n\n")
+cat(sprintf("![Partition clustering heatmap](%s){width=100%%}\n\n", part_hm_rna))
+figure_legend("Partition clustering heatmap. Rows are grouped by cluster (gaps separate clusters); within-cluster ordering follows the feature similarity.")
+
+if (length(part_profile_pngs_rna) > 0) {
+  cat("\n### Cluster Profiles {.tabset}\n\n")
+  for (pf in part_profile_pngs_rna) {
+    k <- sub(".*cluster([0-9]+)\\.png$", "\\1", basename(pf))
+    cat(sprintf("\n#### Cluster %s\n\n", k))
+    cat(sprintf("![Cluster %s expression profile](%s){width=80%%}\n\n", k, pf))
+    figure_legend(sprintf(
+      "Mean (±SE) expression profile across experimental groups for genes in cluster %s.", k))
+  }
+}
+render_commentary("clustering_partition")
+```
+
+```{r clustering-binary-rna, eval=clustering_show_rna && has_binary_rna, results='asis'}
+cat("## Binary Patterns {.tabset}\n\n")
+for (bf in binary_pngs_rna) {
+  pat <- sub("^Heatmap_([01]+)\\.png$", "\\1", basename(bf))
+  cat(sprintf("\n### Pattern %s\n\n", pat))
+  cat(sprintf("![Binary pattern %s](%s){width=100%%}\n\n", pat, bf))
+  figure_legend(sprintf(
+    "Heatmap of genes assigned to binary on/off pattern '%s' across experimental groups.", pat))
+}
+render_commentary("clustering_binary")
+```
+
+```{r clustering-divider-rna, eval=clustering_show_rna, results='asis'}
+cat("\n---\n\n")
+```
 
 # Cell Type Deconvolution
 

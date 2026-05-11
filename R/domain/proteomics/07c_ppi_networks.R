@@ -129,6 +129,11 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
         ppi_network$graph, community_results, config, output_dir
     )
 
+    # STRING functional enrichment (diseases, tissues, compartments, literature)
+    string_enrichment <- get_string_functional_enrichment(
+        sig_proteins, species_id, da_df, output_dir
+    )
+
     # Visualizations
     figures <- generate_ppi_plots(
         ppi_network, topology_results, community_results,
@@ -136,16 +141,17 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     )
 
     results <- list(
-        network           = ppi_network,
-        topology          = topology_results,
-        communities       = community_results,
-        active_subnetwork = active_subnet,
-        complexes         = complex_results,
-        subcellular       = subcell_results,
-        enrichment        = network_enrichment,
-        figures           = figures,
-        summary           = create_ppi_summary(ppi_network, topology_results,
-                                               community_results, complex_results)
+        network               = ppi_network,
+        topology              = topology_results,
+        communities           = community_results,
+        active_subnetwork     = active_subnet,
+        complexes             = complex_results,
+        subcellular           = subcell_results,
+        enrichment            = network_enrichment,
+        string_enrichment     = string_enrichment,
+        figures               = figures,
+        summary               = create_ppi_summary(ppi_network, topology_results,
+                                                   community_results, complex_results)
     )
 
     save_ppi_outputs(results, output_dir)
@@ -671,6 +677,121 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
     write.csv(combined, file.path(output_dir, "community_enrichment.csv"), row.names = FALSE)
 
     enrichment_results
+}
+
+# -----------------------------------------------------------------------------
+# STRING Functional Enrichment (Diseases, Tissues, Compartments, Literature)
+# -----------------------------------------------------------------------------
+
+#' Query STRING API for functional enrichment across multiple categories
+#'
+#' Retrieves enrichment results from STRING for: Process (GO), Component,
+#' Function, KEGG, Reactome, DISEASES, COMPARTMENTS, TISSUES, and PMID.
+#'
+#' @param proteins Character vector of protein/gene symbols
+#' @param species Integer NCBI taxonomy ID
+#' @param da_results DA data frame (used to rank proteins by significance)
+#' @param output_dir Output directory for CSV files
+#' @return List with enrichment data frames per category
+get_string_functional_enrichment <- function(proteins, species, da_results, output_dir) {
+    message("=== STRING Functional Enrichment ===")
+
+    species <- resolve_string_taxid(species)
+
+    # Rank proteins by significance (stat = sign(lfc) * -log10(p)) for prioritized input
+    if (!is.null(da_results) && "pvalue" %in% colnames(da_results) &&
+        "log2FoldChange" %in% colnames(da_results)) {
+        da_sub <- da_results[da_results$protein_id %in% proteins, ]
+        da_sub$rank_stat <- sign(da_sub$log2FoldChange) * -log10(da_sub$pvalue + 1e-300)
+        da_sub <- da_sub[order(abs(da_sub$rank_stat), decreasing = TRUE), ]
+        proteins <- da_sub$protein_id
+        message("  Proteins ranked by fGSEA-style stat for STRING query")
+    }
+
+    # Clean protein IDs
+    proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
+    if (length(proteins) == 0) {
+        message("  No valid protein IDs. Skipping STRING enrichment.")
+        return(NULL)
+    }
+    if (length(proteins) > 500) {
+        message("  Limiting to top 500 ranked proteins for STRING enrichment")
+        proteins <- proteins[1:500]
+    }
+
+    # Query STRING enrichment API
+    protein_list <- paste(proteins, collapse = "%0D")
+    url <- paste0("https://string-db.org/api/tsv/enrichment",
+                  "?identifiers=", protein_list,
+                  "&species=", species,
+                  "&caller_identity=multiomics_pipeline")
+
+    enrichment_df <- tryCatch({
+        resp <- utils::read.delim(url(url), stringsAsFactors = FALSE)
+        if (nrow(resp) == 0) {
+            message("  STRING enrichment returned no results.")
+            return(NULL)
+        }
+        resp
+    }, error = function(e) {
+        message("  STRING enrichment API failed: ", e$message)
+
+        # Fallback: try STRINGdb package
+        if (requireNamespace("STRINGdb", quietly = TRUE)) {
+            tryCatch({
+                string_db <- STRINGdb::STRINGdb$new(
+                    version = "12.0", species = species,
+                    score_threshold = 0, input_directory = ""
+                )
+                proteins_df <- data.frame(protein = proteins, stringsAsFactors = FALSE)
+                mapped <- string_db$map(proteins_df, "protein", removeUnmappedRows = TRUE)
+                if (nrow(mapped) >= 2) {
+                    enrich <- string_db$get_enrichment(mapped$STRING_id)
+                    return(enrich)
+                }
+                NULL
+            }, error = function(e2) {
+                message("  STRINGdb fallback also failed: ", e2$message)
+                NULL
+            })
+        } else NULL
+    })
+
+    if (is.null(enrichment_df) || nrow(enrichment_df) == 0) return(NULL)
+
+    # Split by category
+    categories <- c("Process", "Component", "Function", "KEGG", "Reactome",
+                     "DISEASES", "COMPARTMENTS", "TISSUES", "PMID",
+                     "Keyword", "InterPro", "Pfam", "NetworkNeighborAL")
+
+    string_dir <- file.path(output_dir, "string_enrichment")
+    dir.create(string_dir, recursive = TRUE, showWarnings = FALSE)
+
+    results <- list()
+    cat_col <- if ("category" %in% colnames(enrichment_df)) "category" else NULL
+
+    if (!is.null(cat_col)) {
+        for (cat in unique(enrichment_df[[cat_col]])) {
+            cat_df <- enrichment_df[enrichment_df[[cat_col]] == cat, ]
+            cat_df <- cat_df[order(cat_df$fdr), ]
+            clean_cat <- gsub("[^a-zA-Z0-9_]", "_", cat)
+            results[[cat]] <- cat_df
+
+            out_file <- file.path(string_dir, paste0("string_", clean_cat, ".csv"))
+            write.csv(cat_df, out_file, row.names = FALSE)
+            n_sig <- sum(cat_df$fdr < 0.05, na.rm = TRUE)
+            message("  ", cat, ": ", nrow(cat_df), " terms (", n_sig, " FDR < 0.05)")
+        }
+    } else {
+        results$all <- enrichment_df
+        write.csv(enrichment_df, file.path(string_dir, "string_all.csv"), row.names = FALSE)
+    }
+
+    # Summary
+    write.csv(enrichment_df, file.path(string_dir, "string_enrichment_full.csv"), row.names = FALSE)
+    message("  STRING enrichment saved to: ", string_dir)
+
+    results
 }
 
 # -----------------------------------------------------------------------------

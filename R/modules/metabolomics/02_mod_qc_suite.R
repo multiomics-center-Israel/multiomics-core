@@ -95,7 +95,7 @@
 #' computed with \code{na.rm = TRUE}.
 compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
   # ---- Input validation -------------------------------------------------------
-  valid_stages <- c("log", "norm_tss", "norm_pqn", "norm_median")
+  valid_stages <- c("log", "norm_tss", "norm_pqn", "norm_median", "norm_eigenms", "norm_eigenms_forced")
   if (!stage %in% valid_stages) {
     warning(sprintf(
       "compute_linear_rsd: unknown stage '%s'; expected one of: %s.",
@@ -117,7 +117,7 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
       rsd_per_feature     = setNames(numeric(0), character(0)),
       n_features          = nrow(mat),
       n_samples           = ncol(mat),
-      backtransform_exact = stage %in% c("log", "norm_tss", "norm_pqn"),
+      backtransform_exact = stage %in% c("log", "norm_tss", "norm_pqn", "norm_eigenms"),
       pseudocount_used    = pseudocount
     ))
   }
@@ -750,11 +750,9 @@ mod_met_qc_suite <- function(data, stage, out_dir, config) {
   c(files_with, files_no)
 }
 
-
 # ==============================================================================
 # mod_met_qc_comparison_table — aggregate benchmark TSV across all stages
 # ==============================================================================
-
 #' Aggregate per-stage QC metrics into a cross-stage benchmark table
 #'
 #' Reads the \code{with_qc/metrics_summary.tsv} from each QC stage target,
@@ -762,17 +760,15 @@ mod_met_qc_suite <- function(data, stage, out_dir, config) {
 #' (PC1 variance gained relative to the pre-normalisation log stage), and
 #' saves the result to \code{qc/comparison/normalization_qc_benchmark.tsv}.
 #'
-#' @param log_qc_files    Character vector returned by the \code{met_log_qc}
-#'   file target.
-#' @param tss_qc_files    Character vector returned by the
-#'   \code{met_norm_tss_qc} file target.
-#' @param median_qc_files Character vector returned by the
-#'   \code{met_norm_median_qc} file target.
-#' @param pqn_qc_files    Character vector returned by the
-#'   \code{met_norm_pqn_qc} file target.
-#' @param out_dir         Mode output directory (\code{metab_out_dir}).
-#' @param config          Full pipeline config list (unused in computation;
-#'   included for interface consistency).
+#' @param log_qc_files            Character vector returned by \code{met_log_qc}.
+#' @param tss_qc_files            Character vector returned by \code{met_norm_tss_qc}.
+#' @param median_qc_files         Character vector returned by \code{met_norm_median_qc}.
+#' @param pqn_qc_files            Character vector returned by \code{met_norm_pqn_qc}.
+#' @param eigenms_qc_files        (Optional) returned by \code{met_norm_eigenms_qc}.
+#' @param eigenms_forced_qc_files (Optional) returned by \code{met_norm_eigenms_forced_qc}.
+#' @param out_dir                 Mode output directory (\code{metab_out_dir}).
+#' @param config                  Full pipeline config list (unused; included for
+#'                                interface consistency).
 #'
 #' @return Character scalar: absolute path to the written TSV file.
 #'   Suitable for use as the value of a \code{format = "file"} target.
@@ -790,59 +786,26 @@ mod_met_qc_suite <- function(data, stage, out_dir, config) {
 mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
                                         median_qc_files, pqn_qc_files,
                                         out_dir, config,
-                                        imputed_data = NULL) {
-  all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files)
-
+                                        eigenms_qc_files = NULL,
+                                        eigenms_forced_qc_files = NULL) {
+  all_files <- c(log_qc_files, tss_qc_files, median_qc_files, pqn_qc_files,
+                 eigenms_qc_files, eigenms_forced_qc_files)
   # Locate with_qc/metrics_summary.tsv in each file vector.
   # Use a regex that matches the platform path separator (/ or \).
   metrics_paths <- grep(
     "with_qc[\\/]metrics_summary\\.tsv$",
     all_files, value = TRUE, perl = TRUE
   )
-
   comp_dir <- file.path(out_dir, "qc", "comparison")
   dir.create(comp_dir, recursive = TRUE, showWarnings = FALSE)
   out_file <- file.path(comp_dir, "normalization_qc_benchmark.tsv")
-
-  # ---- raw_linear row: RSD on met_filtered (linear scale; no back-transform) --
-  # The data is already on linear scale, so SD/|mean| is computed directly.
-  # rsd_backtransform_exact = TRUE because no back-transformation is needed.
-  # pseudocount_used = 0 because the matrix has not been log-transformed.
-  # PCA columns are NA because PCA is not computed on linear-scale matrices.
-  raw_row <- NULL
-  if (!is.null(imputed_data) && !is.null(imputed_data$mat)) {
-    mat_lin       <- as.matrix(imputed_data$mat)
-    feat_sds      <- apply(mat_lin, 1, stats::sd, na.rm = TRUE)
-    feat_means_ab <- abs(rowMeans(mat_lin, na.rm = TRUE))
-    feat_means_ab[feat_means_ab == 0 | !is.finite(feat_means_ab)] <- NA_real_
-    rsd_vals      <- feat_sds / feat_means_ab
-    rsd_vals[!is.finite(rsd_vals)] <- NA_real_
-
-    raw_row <- data.frame(
-      stage                   = "raw_linear",
-      subset_mode             = "all",
-      n_samples               = ncol(mat_lin),
-      n_features              = nrow(mat_lin),
-      pca_pc1_var_expl        = NA_real_,
-      pca_pc2_var_expl        = NA_real_,
-      pca_pc3_var_expl        = NA_real_,
-      median_rsd_overall      = stats::median(rsd_vals, na.rm = TRUE),
-      median_rsd_per_group    = NA_character_,
-      rsd_backtransform_exact = TRUE,
-      pseudocount_used        = 0,
-      plots_skipped           = "",
-      status                  = "ok",
-      stringsAsFactors        = FALSE
-    )
-  }
-
+  
   if (length(metrics_paths) == 0L) {
     warning("mod_met_qc_comparison_table: no with_qc/metrics_summary.tsv files found; writing empty benchmark.")
-    empty <- if (!is.null(raw_row)) raw_row else data.frame(stringsAsFactors = FALSE)
-    utils::write.table(empty, out_file, sep = "\t", row.names = FALSE, quote = FALSE)
+    utils::write.table(data.frame(stringsAsFactors = FALSE),
+                       out_file, sep = "\t", row.names = FALSE, quote = FALSE)
     return(out_file)
   }
-
   rows <- lapply(metrics_paths, function(f) {
     tryCatch(
       utils::read.table(f, sep = "\t", header = TRUE, stringsAsFactors = FALSE,
@@ -856,22 +819,15 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
     )
   })
   rows <- Filter(Negate(is.null), rows)
-
   if (length(rows) == 0L) {
     warning("mod_met_qc_comparison_table: all metrics files failed to parse; writing empty benchmark.")
-    empty <- if (!is.null(raw_row)) raw_row else data.frame(stringsAsFactors = FALSE)
-    utils::write.table(empty, out_file, sep = "\t", row.names = FALSE, quote = FALSE)
+    utils::write.table(data.frame(stringsAsFactors = FALSE),
+                       out_file, sep = "\t", row.names = FALSE, quote = FALSE)
     return(out_file)
   }
-
   combined <- do.call(rbind, rows)
-
-  # Prepend raw_linear row so it appears first in the benchmark table.
-  if (!is.null(raw_row)) combined <- rbind(raw_row, combined)
-
   # ---- pca_pc1_delta: PC1 variance relative to log stage --------------------
   # Reference is the "log" stage (first log2-scale checkpoint).
-  # raw_linear gets NA automatically (NA - ref = NA).
   if ("stage" %in% names(combined) && "pca_pc1_var_expl" %in% names(combined)) {
     log_idx <- which(combined$stage == "log")
     ref_pc1 <- if (length(log_idx) == 1L &&
@@ -884,7 +840,6 @@ mod_met_qc_comparison_table <- function(log_qc_files, tss_qc_files,
   } else {
     combined$pca_pc1_delta <- NA_real_
   }
-
   utils::write.table(combined, out_file,
                      sep = "\t", row.names = FALSE, quote = FALSE)
   out_file

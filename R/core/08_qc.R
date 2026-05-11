@@ -12,6 +12,22 @@
 compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = FALSE) {
   expr_mat <- as.matrix(expr_mat)
 
+  # Replace Inf/NaN with NA, then drop features that are all-NA or zero-variance
+  expr_mat[!is.finite(expr_mat)] <- NA
+  keep <- apply(expr_mat, 1, function(x) {
+    vals <- x[!is.na(x)]
+    length(vals) >= 2 && stats::var(vals) > 0
+  })
+  expr_mat <- expr_mat[keep, , drop = FALSE]
+
+  # Impute remaining NAs with row medians for PCA (display only)
+  if (any(is.na(expr_mat))) {
+    row_meds <- apply(expr_mat, 1, median, na.rm = TRUE)
+    for (i in which(rowSums(is.na(expr_mat)) > 0)) {
+      expr_mat[i, is.na(expr_mat[i, ])] <- row_meds[i]
+    }
+  }
+
   pca <- stats::prcomp(t(expr_mat), center = center, scale. = scale)
 
   var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
@@ -53,17 +69,16 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   sample_col <- eff$samples
   color_col <- eff$color
   shape_col <- eff$shape
-  if (is.null(shape_col)) shape_col <- NULL # avoid dependency on %||%
 
   expr_mat <- align_matrix_to_meta(expr_mat, meta, sample_col)
   sample_ids <- colnames(expr_mat)
   meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
 
   # Ensure color_col exists (fail-fast with clear error)
-  if (is.null(color_col) || !color_col %in% colnames(meta_sub)) {
-    stop("qc_pca_scatter(): color column '", color_col, "' not found in aligned metadata.")
+  if (is.null(color_col) || !color_col %in% colnames(meta)) {
+    stop("Color column '", color_col, "' not found in metadata.")
   }
-
+  
   # PCA via shared helper
   res <- compute_pca_scores(expr_mat, pcs = pcs, center = TRUE, scale = FALSE)
   scores <- res$scores
@@ -124,42 +139,42 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
 qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   expr_mat <- as.matrix(expr_mat)
   meta <- as.data.frame(meta)
-
+  
   eff <- cfg$effects
   sample_col <- eff$samples
   color_col <- eff$color
   shape_col <- eff$shape
   label_col <- eff$label
   if (is.null(shape_col)) shape_col <- NULL
-
+  
   if (!sample_col %in% colnames(meta)) {
     stop("Sample column '", sample_col, "' not found in metadata.")
   }
-
+  
   expr_mat <- align_matrix_to_meta(expr_mat, meta, sample_col)
   sample_ids <- colnames(expr_mat)
   meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
-
+  
   # PCA via shared helper
   res <- compute_pca_scores(expr_mat, pcs = 1:3, center = TRUE, scale = FALSE)
   scores <- res$scores
   var_expl <- res$var_expl
-
+  
   pc_labels <- sprintf("PC%d (%.1f%%)", seq_along(var_expl), 100 * var_expl)
-
+  
   # Attach metadata (order is aligned)
   scores[[color_col]] <- as.factor(meta_sub[[color_col]])
   if (!is.null(shape_col) && shape_col %in% colnames(meta_sub)) {
     scores[[shape_col]] <- as.factor(meta_sub[[shape_col]])
   }
-
+  
   # Attach label column if configured
   if (!is.null(label_col) && label_col %in% colnames(meta_sub)) {
     scores[[label_col]] <- meta_sub[[label_col]]
   }
-
+  
   # Hover text
-  hover_text <- scores$sample
+  hover_text <- if ("sample" %in% colnames(scores)) scores$sample else colnames(expr_mat)
   if (!is.null(label_col) && label_col %in% colnames(scores)) {
     hover_text <- paste0(hover_text, "<br>", label_col, ": ", scores[[label_col]])
   }
@@ -169,9 +184,10 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
   if (!is.null(shape_col) && shape_col %in% colnames(scores)) {
     hover_text <- paste0(hover_text, "<br>", shape_col, ": ", scores[[shape_col]])
   }
-
+  
   has_shape <- !is.null(shape_col) && shape_col %in% colnames(scores)
-
+  
+  scores[[color_col]] <- as.factor(meta_sub[[color_col]])
   color_levels <- levels(scores[[color_col]])
   default_colors <- c(
     "#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
@@ -181,7 +197,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     default_colors[seq_along(color_levels)],
     color_levels
   )
-
+  
   plotly_symbols <- c("circle", "square", "diamond", "cross",
                       "x", "triangle-up", "triangle-down", "star")
   if (has_shape) {
@@ -191,16 +207,16 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
       shape_levels
     )
   }
-
+  
   legend_title <- if (has_shape) {
     paste(color_col, shape_col, sep = " / ")
   } else {
     color_col
   }
-
+  
   scores$.hover <- hover_text
   plt <- plotly::plot_ly()
-
+  
   # One trace per color x shape combination, single combined legend
   for (clr in color_levels) {
     if (has_shape) {
@@ -235,7 +251,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
       )
     }
   }
-
+  
   plt <- plotly::layout(
     plt,
     scene = list(
@@ -246,7 +262,7 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
     title = "3D PCA: PC1 vs PC2 vs PC3",
     legend = list(title = list(text = legend_title))
   )
-
+  
   if (!is.null(out_file)) {
     if (!rmarkdown::pandoc_available()) {
       warning("3D PCA not saved to disk (pandoc required for self-contained HTML).")
@@ -259,10 +275,12 @@ qc_pca_3d <- function(expr_mat, meta, cfg, out_file = NULL) {
       )
     }
     # Defense-in-depth: remove any auxiliary _files directory
-    lib_dir <- sub("\\.html$", "_files", out_file)
-    if (dir.exists(lib_dir)) unlink(lib_dir, recursive = TRUE)
+    if (grepl("\\.html$", out_file, ignore.case = TRUE)) {
+      lib_dir <- sub("\\.html$", "_files", out_file, ignore.case = TRUE)
+      if (dir.exists(lib_dir)) unlink(lib_dir, recursive = TRUE)
+    }
   }
-
+  
   plt
 }
 
@@ -495,7 +513,8 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   invisible(p)
 }
 
-wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster_cols = TRUE) {
+wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
+                            cluster_cols = TRUE, cluster_rows = TRUE) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
 
@@ -511,7 +530,7 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL, cluster
     annotation_col = annot,
     title = paste0("QC: Sample ", stage, " Expression"),
     max_rows = 2000,
-    cluster_rows = TRUE,
+    cluster_rows = cluster_rows,
     cluster_cols = cluster_cols
   )
 
@@ -705,6 +724,7 @@ qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = 
 
   invisible(p)
 }
+
 
 #' Write per-sample imputation histograms (Batch writer)
 #' Refactored: Uses ggsave and returns objects

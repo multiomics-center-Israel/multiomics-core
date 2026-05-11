@@ -304,12 +304,86 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir) {
         }
     }
 
+    # ---- Mummichog ----
+    mummichog_res <- NULL
+    mummi_cfg <- enr_cfg$mummichog %||% list()
+    if (isTRUE(mummi_cfg$enabled)) {
+        mummichog_res <- tryCatch({
+            mummi_out <- run_mummichog_all(pre, de_res, config, out_dir)
+            if (!is.null(mummi_out) && length(mummi_out$results) > 0) {
+                out_mummi <- file.path(out_dir, "mummichog_enrichment")
+
+                for (org_label in names(mummi_out$results)) {
+                    res <- mummi_out$results[[org_label]]
+                    if (is.null(res) || is.null(res$table)) next
+
+                    # Save TSV
+                    f_tsv <- save_tsv(res$table, out_mummi,
+                                      paste0("mummichog_", org_label, "_results.tsv"))
+                    files <- c(files, f_tsv)
+
+                    # Barplot
+                    f_bar <- file.path(out_mummi,
+                                       paste0("mummichog_", org_label, "_barplot.png"))
+                    p_bar <- tryCatch({
+                        pb <- plot_mummichog_barplot(
+                            res$table, top_n = 20,
+                            title = paste0("Mummichog — ", toupper(org_label)))
+                        if (!is.null(pb))
+                            ggplot2::ggsave(f_bar, pb, width = 12, height = 8, dpi = 300)
+                        pb
+                    }, error = function(e) NULL)
+                    if (!is.null(p_bar)) {
+                        files <- c(files, f_bar)
+                        plots[[paste0("mummichog_", org_label, "_barplot")]] <- p_bar
+                    }
+
+                    # Lollipop
+                    f_loll <- file.path(out_mummi,
+                                        paste0("mummichog_", org_label, "_lollipop.png"))
+                    p_loll <- tryCatch({
+                        pl <- plot_mummichog_lollipop(
+                            res$table, top_n = 20,
+                            title = paste0("Mummichog — ", toupper(org_label)))
+                        if (!is.null(pl))
+                            ggplot2::ggsave(f_loll, pl, width = 12, height = 8, dpi = 300)
+                        pl
+                    }, error = function(e) NULL)
+                    if (!is.null(p_loll)) {
+                        files <- c(files, f_loll)
+                        plots[[paste0("mummichog_", org_label, "_lollipop")]] <- p_loll
+                    }
+                }
+
+                # Cross-organism heatmap
+                if (length(mummi_out$results) > 1) {
+                    f_heat <- file.path(out_mummi, "mummichog_organism_heatmap.png")
+                    p_heat <- tryCatch({
+                        ph <- plot_mummichog_organism_heatmap(mummi_out$results)
+                        if (!is.null(ph))
+                            ggplot2::ggsave(f_heat, ph, width = 14, height = 10, dpi = 300)
+                        ph
+                    }, error = function(e) NULL)
+                    if (!is.null(p_heat)) {
+                        files <- c(files, f_heat)
+                        plots$mummichog_organism_heatmap <- p_heat
+                    }
+                }
+            }
+            mummi_out
+        }, error = function(e) {
+            warning("mummichog enrichment failed: ", e$message)
+            NULL
+        })
+    }
+
     list(
-        qea    = qea_res,
-        ssgsea = ssgsea_res,
-        ora    = ora_res,
-        gsea   = gsea_res,
-        plots  = plots,
-        files  = unique(files)
+        qea       = qea_res,
+        ssgsea    = ssgsea_res,
+        ora       = ora_res,
+        gsea      = gsea_res,
+        mummichog = mummichog_res,
+        plots     = plots,
+        files     = unique(files)
     )
 }

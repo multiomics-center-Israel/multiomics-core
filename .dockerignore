@@ -1,7 +1,12 @@
 # Don't send these to Docker build context
 _targets/
 outputs/
-data/
+# Exclude data/ contents, but keep the bundled example datasets so the
+# wizard's "Load Example" buttons work inside the image.
+data/*
+!data/example_proteomics/
+!data/example_metabolomics/
+!data/example_lipidomics/
 renv/library/
 renv/staging/
 renv/sandbox/

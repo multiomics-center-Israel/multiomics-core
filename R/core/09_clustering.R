@@ -526,6 +526,11 @@ run_partition_clustering <- function(z_expr, config) {
 #' @export
 get_clustering_group_col <- function(cfg, meta) {
   group_col <- cfg$clustering$group_col
+  # Fall back to the main group/condition column used for DE
+  if (is.null(group_col) || !nzchar(group_col)) {
+    group_col <- cfg$effects$color %||% cfg$effects$group %||%
+                 cfg$de$condition_column %||% NULL
+  }
   if (is.null(group_col) || !nzchar(group_col)) {
     stop("clustering$group_col is required but missing or empty. ",
          "Set it in the config under clustering: group_col: \"<column_name>\"")
@@ -545,7 +550,6 @@ get_clustering_group_col <- function(cfg, meta) {
 #' (for data export) and save_cluster_profile_outputs() (for plotting).
 #' Converts a feature x sample expression matrix into long format, joins with
 #' metadata groups and cluster assignments.
-#'
 #' @param expr_mat Numeric matrix (features x samples)
 #' @param meta Sample metadata data.frame
 #' @param clusters Named integer vector (feature IDs -> cluster numbers)
@@ -580,6 +584,138 @@ build_cluster_long_df <- function(expr_mat, meta, clusters,
   df_annotated |>
     dplyr::inner_join(cluster_map, by = "Gene")
 }
+
+#' Compute row gap positions for pheatmap from ordered cluster assignments
+#'
+#' Given an integer vector of cluster assignments (in heatmap row order),
+#' returns cumulative positions where gaps should appear between clusters.
+#'
+#' @param clusters_ordered Integer vector of cluster assignments in display order
+#' @return Integer vector of gap positions (empty for k=1)
+#' @export
+compute_cluster_gaps <- function(clusters_ordered) {
+  stopifnot(is.integer(clusters_ordered) || is.numeric(clusters_ordered))
+  rl <- rle(as.integer(clusters_ordered))
+  if (length(rl$lengths) <= 1) return(integer(0))
+  cumsum(rl$lengths[-length(rl$lengths)])
+}
+
+
+#' Save per-cluster profile PNGs and multi-panel grid PDF
+#'
+#' Resolves config, builds sample-level long data via build_cluster_long_df(),
+#' generates per-cluster ggplots via build_cluster_profile_plots(), and saves
+#' per-cluster PNGs + a multi-panel grid PDF.
+#'
+#' @param expr_mat Expression matrix (features x samples)
+#' @param meta Sample metadata data.frame
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param cfg Mode config list
+#' @param out_dir Output directory
+#' @return list(files = character vector of written paths, plots = named list of ggplots)
+#' @export
+save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir) {
+  requireNamespace("gridExtra", quietly = TRUE)
+
+  group_col  <- get_clustering_group_col(cfg, meta)
+  sample_col <- cfg$effects$samples
+  color_col  <- cfg$clustering$steps$partition$color_col
+  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
+
+  if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+                    color_col))
+    color_col <- NULL
+  }
+  if (!(x_axis_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+                    x_axis_col))
+    x_axis_col <- group_col
+  }
+
+  long_df <- build_cluster_long_df(expr_mat, meta, clusters,
+                                    x_axis_col, sample_col, color_col)
+
+  color_label <- if (!is.null(color_col)) color_col else NULL
+  plot_list <- build_cluster_profile_plots(long_df, x_label = x_axis_col,
+                                            color_label = color_label)
+  if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
+
+  written <- character(0)
+  k <- length(plot_list)
+
+  for (nm in names(plot_list)) {
+    f_png <- file.path(out_dir, sprintf("cluster_profiles_cluster%s.png", nm))
+    ggplot2::ggsave(f_png, plot = plot_list[[nm]],
+                    dpi = 600, width = 3, height = 3, units = "in")
+    written <- c(written, f_png)
+  }
+
+  if (k <= 2) {
+    ncol_grid <- k; nrow_grid <- 1
+  } else if (k <= 4) {
+    ncol_grid <- 2; nrow_grid <- 2
+  } else {
+    ncol_grid <- 3; nrow_grid <- 2
+  }
+
+  f_pdf <- file.path(out_dir, "cluster_profiles.pdf")
+  ml <- gridExtra::marrangeGrob(
+    grobs = plot_list, ncol = ncol_grid, nrow = nrow_grid, top = NULL
+  )
+  ggplot2::ggsave(f_pdf, ml, width = 6.99, height = 3.99, dpi = 600)
+  written <- c(written, f_pdf)
+
+  list(files = written, plots = plot_list)
+}
+
+
+#' Build heatmap column annotation from config effects
+#'
+#' Returns a data.frame keyed by sample ID (rownames = sample IDs) ready to
+#' pass directly to \code{pheatmap(annotation_col = ...)}, or NULL if no
+#' suitable columns are configured.  Pass \code{as_names = TRUE} to get the
+#' raw character vector of column names instead (legacy behaviour).
+#'
+#' @param meta data.frame of sample metadata
+#' @param cfg  Mode config (e.g. \code{config$modes$rna})
+#' @param as_names If TRUE return character vector of column names; default
+#'   FALSE returns the data.frame.
+#' @return data.frame, character vector, or NULL
+#' @export
+build_heatmap_annotation_col <- function(meta, cfg, as_names = FALSE) {
+    # Explicit heatmap annotations from config
+    annot_cols <- cfg$effects$heatmap_annotations
+    if (!is.null(annot_cols)) {
+        annot_cols <- intersect(unlist(annot_cols), colnames(meta))
+    } else {
+        annot_cols <- character(0)
+    }
+
+    # Default: fall back to the group/color column
+    if (length(annot_cols) == 0) {
+        group_col <- cfg$effects$color %||% cfg$effects$group %||%
+                     cfg$clustering$group_col %||% NULL
+        if (!is.null(group_col) && group_col %in% colnames(meta)) {
+            annot_cols <- group_col
+        }
+    }
+
+    if (length(annot_cols) == 0) return(NULL)
+    if (isTRUE(as_names)) return(annot_cols)
+
+    sample_col <- cfg$effects$samples
+    if (is.null(sample_col) || !(sample_col %in% colnames(meta))) {
+        # Cannot build keyed data.frame; return names so caller can fall back
+        return(annot_cols)
+    }
+
+    df <- as.data.frame(meta[, annot_cols, drop = FALSE])
+    rownames(df) <- as.character(meta[[sample_col]])
+    df
+}
+
+
 
 # ---- Clustering guards ----
 
@@ -622,15 +758,16 @@ clustering_run_flags <- function(pre, cfg) {
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE
   steps <- cl$steps %||% list()
 
+  # As of Apr 2026 reviewer feedback: when clustering is enabled, all three
+  # methods default ON (callers may opt-out per step via config or override
+  # `hierarchical = FALSE` at the call site for RNA-seq).
   hier_enabled <- isTRUE(steps$hierarchical$enabled %||% TRUE)
-  part_enabled <- isTRUE(steps$partition$enabled %||% FALSE)
+  part_enabled <- isTRUE(steps$partition$enabled %||% TRUE)
 
-  # Task 5: Binary clustering conditional on group_col
-  # If group_col is NULL/missing, don't perform binary clustering
   bin_cfg <- steps$binary_patterns %||% list()
-  bin_enabled <- isTRUE(bin_cfg$enabled %||% FALSE)
+  bin_enabled <- isTRUE(bin_cfg$enabled %||% TRUE)
   bin_group_col <- cl$group_col
-  # Only enable if both enabled flag is TRUE AND group_col is provided (non-NULL)
+  # Binary still requires a group_col to be defined
   bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
 
   # guards for data suitability
@@ -748,7 +885,9 @@ choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 100) {
   hclust_func <- function(x, k) {
     d <- build_clustering_distance(x)
     hc <- stats::hclust(d, method = "ward.D2")
-    list(cluster = stats::cutree(hc, k = k))
+    # clusGap bootstraps may yield an hc with fewer leaves than requested k
+    k_safe <- min(k, length(hc$order))
+    list(cluster = stats::cutree(hc, k = k_safe))
   }
   
   gap <- cluster::clusGap(mat_fg, FUNcluster = hclust_func, K.max = k_max, B = B)
@@ -867,8 +1006,14 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
   # Configuration parameters
   k_fixed <- cl_cfg$k
-  k_max <- cl_cfg$k_max %||% 20
+  k_max <- min(cl_cfg$k_max %||% 20, nrow(z_gm) - 1)
   nstart <- cl_cfg$nstart %||% 25
+
+  # Not enough features for partition clustering
+  if (k_max < 2) {
+    message("[partition clustering] Only ", nrow(z_gm), " features — too few for partition clustering, skipping.")
+    return(list(clusters = NULL, group_means = gm, k = NA))
+  }
 
   clusters <- NULL
   final_k <- NULL
@@ -903,6 +1048,8 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
         final_k <- as.integer(names(sil_table)[which.max(sil_table)])
       }
     }
+    
+
   } else {
     # PAM / K-means
     if (is.null(k_fixed)) {

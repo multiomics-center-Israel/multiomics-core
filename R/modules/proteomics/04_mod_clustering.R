@@ -13,13 +13,13 @@
 #' @return list(plots, files, excel_order, objects)
 mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   stopifnot(is.character(out_dir), length(out_dir) == 1)
-
+  
   assert_pre_contract(pre, stage = "proteomics")
   assert_de_contract(de_res, stage = "proteomics")
-
+  
   cfg <- config$modes$proteomics
   cl  <- cfg$clustering
-
+  
   pheatmap_payload    <- NULL
   patterns_tbl        <- NULL
   patterns_list       <- NULL
@@ -28,26 +28,26 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   excel_order         <- NULL
   written             <- character(0)
   plots               <- list()
-
+  
   if (is.null(cl) || isFALSE(cl$enabled)) {
     message("Clustering disabled. Skipping.")
     return(list(plots = list(), files = character(0),
                 excel_order = NULL, objects = list()))
   }
-
+  
   clustering_dir <- file.path(out_dir, "Clustering")
   ensure_dir(clustering_dir)
-
+  
   flags <- clustering_run_flags(pre, cfg)
   message(sprintf(
     "Clustering flags: hierarchical=%s, partition=%s, binary=%s",
     flags$hierarchical, flags$partition, flags$binary_patterns
   ))
-
+  
   annot_col   <- build_heatmap_annotation_col(pre$meta, cfg)
   de_features <- get_de_features(de_res, cfg)
   expr_mat    <- as.matrix(pre$expr_imp_single)
-
+  
   prot_de_cfg <- cfg$de %||% list()
   annot_context <- list(
     summary_df    = de_res$summary_df,
@@ -55,7 +55,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     log2fc_cutoff = log2(prot_de_cfg$linear_fc_cutoff %||% 1.5),
     id_col        = cfg$de_table$id_col %||% "FeatureID"
   )
-
+  
   if (isTRUE(flags$hierarchical)) {
     h <- .run_hierarchical_step(expr_mat, pre$meta, de_features, cfg,
                                 annot_col, annot_context,
@@ -67,7 +67,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     if (!is.null(h$clusters)) clusters_vec <- h$clusters
     excel_order          <- h$excel_order
   }
-
+  
   if (isTRUE(flags$partition)) {
     p <- .run_partition_step(expr_mat, pre$meta, de_features, cfg, annot_col,
                              file.path(clustering_dir, "Partition_clustering"))
@@ -80,7 +80,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
       excel_order$partition_k        <- p$k
     }
   }
-
+  
   if (isTRUE(flags$binary_patterns)) {
     b <- .run_binary_patterns_step(
       expr_mat_corr   = expr_mat,
@@ -101,7 +101,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
       excel_order$binary_best <- b$binary_best
     }
   }
-
+  
   list(
     plots       = plots,
     files       = unique(written),

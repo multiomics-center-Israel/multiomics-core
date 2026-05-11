@@ -18,9 +18,10 @@
 #' @return Raw HTML string (use cat(...) in an asis chunk)
 cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
                                default_ptype = "padj") {
-  lfc_r  <- round(default_lfc, 4)
-  p_r    <- signif(default_p, 4)
-  ptype  <- match.arg(default_ptype, c("pval", "padj"))
+  lfc_r    <- round(default_lfc, 4)
+  linfc_r  <- round(2 ^ default_lfc, 4)
+  p_r      <- signif(default_p, 4)
+  ptype    <- match.arg(default_ptype, c("pval", "padj"))
   pval_checked <- if (ptype == "pval") "checked" else ""
   padj_checked <- if (ptype == "padj") "checked" else ""
 
@@ -78,6 +79,11 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 #cutoff-panel .cp-summary .de-up   { color: #cf222e; font-weight: 600; }
 #cutoff-panel .cp-summary .de-down { color: #0969da; font-weight: 600; }
 #cutoff-panel .cp-summary .de-total { font-weight: 600; color: #24292f; }
+#cutoff-panel .cp-note {
+  margin: 12px 0 0 0; padding: 8px 12px;
+  font-size: 12px; color: #57606a; font-style: italic;
+  background: #fff8e1; border-left: 3px solid #f0b429; border-radius: 4px;
+}
 </style>
 
 <div id="cutoff-panel">
@@ -95,14 +101,19 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
 <input type="number" id="cp-pval-num" min="0.0001" max="1" step="0.005" value="', p_r, '">
 </div>
 <div class="cp-field">
-<label>log2FC threshold</label>
+<label>|log2FC| threshold</label>
 <input type="number" id="cp-lfc-num" min="0" max="10" step="0.1" value="', lfc_r, '">
+</div>
+<div class="cp-field">
+<label>Linear FC threshold</label>
+<input type="number" id="cp-linfc-num" min="1" max="1024" step="0.1" value="', linfc_r, '">
 </div>
 </div>
 <div class="cp-actions">
 <button class="cp-reset" onclick="window.__cutoffReset()">Reset to defaults</button>
 <span class="cp-summary" id="cp-global-summary"></span>
 </div>
+<p class="cp-note">Note: All primary analyses (DE tables, enrichment, exports) use the cutoffs configured at pipeline run-time. Adjusting the controls here only affects the interactive Volcano / MA plots and the live counts above.</p>
 </div>
 
 <script>
@@ -121,17 +132,44 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   var debounceTimer = null;
 
   // --- DOM refs ---
-  var lfcNum, pvalNum;
+  var lfcNum, linfcNum, pvalNum;
+
+  // --- Sync helpers between |log2FC| and Linear FC fields ---
+  // currentLfc is the |log2FC| magnitude (always >= 0). The two helpers
+  // simply mirror currentLfc into the corresponding input box — they do
+  // NOT recompute, since the input handlers already converted/clamped.
+  //   |log2FC| = log2(linearFC)   (always >= 0 when linearFC >= 1)
+  //   linearFC = 2^|log2FC|       (always >= 1)
+  function syncLinearFromLog() {
+    if (linfcNum) linfcNum.value = Math.pow(2, Math.abs(currentLfc)).toFixed(3);
+  }
+  function syncLogFromLinear() {
+    if (lfcNum) lfcNum.value = Math.abs(currentLfc).toFixed(3);
+  }
 
   function initControls() {
     lfcNum   = document.getElementById("cp-lfc-num");
+    linfcNum = document.getElementById("cp-linfc-num");
     pvalNum  = document.getElementById("cp-pval-num");
     if (!lfcNum) return;
 
     lfcNum.addEventListener("input", function() {
-      currentLfc = parseFloat(this.value) || 0;
+      var v = parseFloat(this.value);
+      currentLfc = isFinite(v) ? Math.abs(v) : 0;
+      syncLinearFromLog();
       debouncedUpdate();
     });
+    if (linfcNum) {
+      linfcNum.addEventListener("input", function() {
+        var lin = parseFloat(this.value);
+        if (!isFinite(lin) || lin <= 0) return;
+        // Threshold semantics: linearFC < 1 is meaningless; clamp.
+        var linClamped = Math.max(lin, 1);
+        currentLfc = Math.log(linClamped) / Math.LN2;
+        syncLogFromLinear();
+        debouncedUpdate();
+      });
+    }
     pvalNum.addEventListener("input", function() {
       currentPval = parseFloat(this.value) || 0.05;
       debouncedUpdate();
@@ -162,7 +200,11 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   }
 
   // --- Classify a point ---
-  function classify(logFC, pval, lfcCut, pCut) {
+  // When passFlag is available (imputation-consensus pipelines), a point must
+  // also have passFlag===1 to be called significant.  This keeps the
+  // interactive counts consistent with pipeline results at default thresholds.
+  function classify(logFC, pval, lfcCut, pCut, passFlag) {
+    if (passFlag !== undefined && passFlag !== null && passFlag !== 1) return "NS";
     if (pval !== null && !isNaN(pval) && pval <= pCut &&
         Math.abs(logFC) >= lfcCut) {
       return logFC > 0 ? "Up" : "Down";
@@ -195,7 +237,8 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
       var lfc_i = data.logFC[i];
       if (lfc_i === null || isNaN(lfc_i)) continue;
       var pval_i = getPval(data, i);
-      var dir = classify(lfc_i, pval_i, currentLfc, currentPval);
+      var pf_i = (data.passFlag && data.passFlag[i] !== undefined) ? data.passFlag[i] : undefined;
+      var dir = classify(lfc_i, pval_i, currentLfc, currentPval, pf_i);
       groups[dir].push(i);
     }
 
@@ -309,15 +352,16 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
     for (var plotId in window.__cutoffPlots) {
       var reg = window.__cutoffPlots[plotId];
       var counts = rebuildPlot(plotId);
-      totalUp   += counts.up;
-      totalDown += counts.down;
 
       var cname = reg.contrast || "";
       if (cname) {
         if (!contrastCounts[cname]) contrastCounts[cname] = { up: 0, down: 0 };
+        // Only count volcano plots to avoid double-counting (MA has same data)
         if (reg.plotType === "volcano") {
           contrastCounts[cname].up   += counts.up;
           contrastCounts[cname].down += counts.down;
+          totalUp   += counts.up;
+          totalDown += counts.down;
         }
       }
     }
@@ -359,6 +403,7 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
     if (lfcNum) {
       lfcNum.value  = currentLfc;
       pvalNum.value = currentPval < 0.01 ? currentPval : currentPval;
+      syncLinearFromLog();
     }
     // Reset radio buttons
     var radios = document.querySelectorAll("input[name=\'cp-ptype\']");
@@ -417,6 +462,17 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
     js_adjPval <- jsonlite::toJSON(as.numeric(df$adjPval), auto_unbox = FALSE, na = "null")
   }
 
+  # Optional imputation-consensus pass flag (proteomics: pass.imputs column).
+  # When present, the cutoff panel ANDs this flag with the slider thresholds
+  # so that interactive counts stay consistent with pipeline results.
+  js_passFlag <- "null"
+  if ("passFlag" %in% names(df)) {
+    # Convert to 1/0/null for JS
+    pf <- df$passFlag
+    pf_num <- ifelse(is.na(pf), NA_real_, ifelse(pf == 1 | pf == TRUE, 1, 0))
+    js_passFlag <- jsonlite::toJSON(as.numeric(pf_num), auto_unbox = FALSE, na = "null")
+  }
+
   js_ycap <- if (is.null(ycap)) "null" else as.character(ycap)
 
   sprintf('
@@ -434,13 +490,14 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
       pval: %s,
       avgExpr: %s,
       avgExprLabel: %s,
-      adjPval: %s
+      adjPval: %s,
+      passFlag: %s
     }
   };
 })();
 </script>',
     plot_id, plot_type, entity_label, contrast, js_ycap,
-    js_name, js_logFC, js_pval, js_avgExpr, js_avgExprLabel, js_adjPval)
+    js_name, js_logFC, js_pval, js_avgExpr, js_avgExprLabel, js_adjPval, js_passFlag)
 }
 
 

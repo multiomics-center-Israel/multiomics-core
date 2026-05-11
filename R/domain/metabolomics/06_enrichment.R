@@ -358,9 +358,14 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
     response <- factor(df$Group)
     X <- as.matrix(df[, -c(1, 2), drop = FALSE])
 
-    # Keep only pathways where at least 2 members are present in the data
-    available <- colnames(X)
-    subsets <- lapply(gmt_list, function(cpds) cpds[cpds %in% available])
+    # Keep only pathways where at least 2 members are present in the data.
+    # Match case-insensitively so "GLUCOSE" in data matches "Glucose" in GMT.
+    avail_lower <- tolower(colnames(X))
+    avail_map   <- stats::setNames(colnames(X), avail_lower)
+    subsets <- lapply(gmt_list, function(cpds) {
+        matched <- avail_map[tolower(cpds)]
+        unname(matched[!is.na(matched)])
+    })
     keep <- vapply(subsets, length, integer(1)) >= 2L
     subsets <- subsets[keep]
 
@@ -460,8 +465,12 @@ run_metabolomics_ssgsea <- function(pre, config) {
     }
 
     # Discard pathway sets with fewer than 2 members present in the data
-    available <- rownames(expr_mat)
-    gene_sets <- lapply(gene_sets, function(cpds) cpds[cpds %in% available])
+    # (case-insensitive match)
+    avail_map <- stats::setNames(rownames(expr_mat), tolower(rownames(expr_mat)))
+    gene_sets <- lapply(gene_sets, function(cpds) {
+        m <- avail_map[tolower(cpds)]
+        unname(m[!is.na(m)])
+    })
     gene_sets <- gene_sets[vapply(gene_sets, length, integer(1)) >= 2L]
 
     if (length(gene_sets) == 0) {
@@ -646,8 +655,12 @@ run_metabolomics_ora <- function(pre, de_res, config) {
         return(NULL)
     }
 
-    # Filter to sets with >= 2 members in background
-    gene_sets_filt <- lapply(gene_sets, function(cpds) cpds[cpds %in% bg_ids])
+    # Filter to sets with >= 2 members in background (case-insensitive)
+    bg_map <- stats::setNames(bg_ids, tolower(bg_ids))
+    gene_sets_filt <- lapply(gene_sets, function(cpds) {
+        m <- bg_map[tolower(cpds)]
+        unname(m[!is.na(m)])
+    })
     keep <- vapply(gene_sets_filt, length, integer(1)) >= 2L
     gene_sets_filt <- gene_sets_filt[keep]
     gene_sets      <- gene_sets[keep]
@@ -805,8 +818,12 @@ run_metabolomics_gsea <- function(pre, de_res, config) {
     }
 
     # Filter to sets with >= 2 members present in ranked list
-    available <- names(ranks)
-    gene_sets_filt <- lapply(gene_sets, function(cpds) cpds[cpds %in% available])
+    # (case-insensitive match — map GMT compound names to actual ranks keys)
+    avail_map <- stats::setNames(names(ranks), tolower(names(ranks)))
+    gene_sets_filt <- lapply(gene_sets, function(cpds) {
+        m <- avail_map[tolower(cpds)]
+        unname(m[!is.na(m)])
+    })
     keep <- vapply(gene_sets_filt, length, integer(1)) >= 2L
     gene_sets_filt <- gene_sets_filt[keep]
     gene_sets      <- gene_sets[keep]

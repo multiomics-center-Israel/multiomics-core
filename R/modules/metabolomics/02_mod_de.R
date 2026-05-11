@@ -63,19 +63,32 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
         f_ctr <- save_tsv(ctr_tbl, out_ds, paste0("de_", ctr_label, ".tsv"))
         files <- c(files, f_ctr)
 
-        # Volcano plot (using core plot_volcano)
-        f_volcano <- file.path(out_qc, paste0("volcano_", ctr_label, ".png"))
-        p_volcano <- tryCatch({
-            pv <- plot_volcano(ctr_tbl, cfg, title = paste0("Volcano: ", ctr_label))
-            ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
-            pv
-        }, error = function(e) {
-            warning("Volcano plot failed for ", ctr_label, ": ", e$message)
-            NULL
-        })
-        if (!is.null(p_volcano)) {
-            files <- c(files, f_volcano)
-            plots[[paste0("volcano_", ctr_label)]] <- p_volcano
+        # Volcano plot — emit one variant per p-value type
+        for (ptype in c("padj", "pval")) {
+            f_volcano <- file.path(out_qc, paste0("volcano_", ctr_label, "_", ptype, ".png"))
+            p_volcano <- tryCatch({
+                pv <- plot_volcano(ctr_tbl, cfg,
+                                   title = paste0("Volcano: ", ctr_label,
+                                                  " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                                   pvalue_type = ptype)
+                ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
+                pv
+            }, error = function(e) {
+                warning("Volcano plot (", ptype, ") failed for ", ctr_label, ": ", e$message)
+                NULL
+            })
+            if (!is.null(p_volcano)) {
+                files <- c(files, f_volcano)
+                plots[[paste0("volcano_", ctr_label, "_", ptype)]] <- p_volcano
+            }
+        }
+        # Backwards-compat alias (legacy padj-based plot)
+        f_legacy <- file.path(out_qc, paste0("volcano_", ctr_label, ".png"))
+        f_padj   <- file.path(out_qc, paste0("volcano_", ctr_label, "_padj.png"))
+        if (file.exists(f_padj) && !file.exists(f_legacy)) {
+            file.copy(f_padj, f_legacy, overwrite = TRUE)
+            files <- c(files, f_legacy)
+            plots[[paste0("volcano_", ctr_label)]] <- plots[[paste0("volcano_", ctr_label, "_padj")]]
         }
 
         # MA plot (using core plot_ma)

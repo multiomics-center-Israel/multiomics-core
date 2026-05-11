@@ -101,25 +101,6 @@ load_metabolomics_inputs <- function(config) {
   inputs
 }
 
-# Internal: read optional metadata file (shared by single-file and multi_level paths)
-.load_optional_metadata <- function(config, files) {
-    meta_path <- files[["metadata"]]
-    if (is.null(meta_path) || !nzchar(meta_path)) return(NULL)
-    abs_meta <- resolve_raw_path(config, meta_path)
-    if (!file.exists(abs_meta)) stop("Metadata file not found: ", abs_meta)
-    read_table_auto(abs_meta)
-}
-
-# Internal: read optional sample_map file (shared by single-file and multi_level paths)
-.load_optional_sample_map <- function(config, files) {
-    sm_path <- files[["sample_map"]]
-    if (is.null(sm_path) || !nzchar(sm_path)) return(NULL)
-    abs_sm <- resolve_raw_path(config, sm_path)
-    if (!file.exists(abs_sm)) stop("Sample map file not found: ", abs_sm)
-    read_table_auto(abs_sm)
-}
-
-
 #' Validate metabolomics config (called by validate_config dispatch)
 #' Uses [[ ]] strict indexing throughout to prevent R's partial-matching from
 #' resolving files[["data"]] to files[["data_dir"]] (or vice versa) when only
@@ -206,10 +187,12 @@ read_metab_file <- function(path, sheet = NULL) {
 #' Parse Compound Discoverer raw export → expr_raw + row_data + meta
 #'
 #' @param data_df Raw CD data.frame.
-#' @param cfg     metabolomics mode config.
+#' @param config  config.
 #' @return list(expr_raw, row_data, sample_map, sample_ids)
-parse_cd_raw <- function(data_df, cfg) {
-    id_cfg   <- cfg$id_columns
+parse_cd_raw <- function(data_df, config) {
+   
+    cfg       <- config$modes$metabolomics
+    id_cfg    <- cfg$id_columns
     parse_cfg <- cfg$parsing %||% list()
 
     area_prefix <- parse_cfg$cd_area_prefix %||% "Area:"
@@ -268,7 +251,7 @@ parse_cd_raw <- function(data_df, cfg) {
     colnames(expr_df) <- sample_ids
 
     # 5) Build feature_id
-    feat_ids <- build_feature_ids(data_df, id_cfg)
+    feat_ids <- build_feature_ids(data_df, id_cfg, config)
 
     expr_raw <- coerce_df_to_numeric_matrix(expr_df, rownames_vec = feat_ids,
                                              name = "cd_raw_expr")
@@ -277,6 +260,7 @@ parse_cd_raw <- function(data_df, cfg) {
     annot_cols <- setdiff(all_cols[!area_mask], character(0))
     row_data <- data_df[, annot_cols, drop = FALSE]
     row_data$feature_id <- feat_ids
+    row_data <- annotate_hmdb_names(row_data, config)
 
     list(
         expr_raw    = expr_raw,
@@ -298,11 +282,12 @@ parse_cd_raw <- function(data_df, cfg) {
 #'   - processed data must contain columns matching those sample IDs
 #'
 #' @param data_df Processed data.frame (wide).
-#' @param cfg     metabolomics mode config.
+#' @param config     config.
 #' @param meta    Metadata data.frame (REQUIRED).
 #' @return list(expr_raw, row_data, sample_ids)
 #' Parse processed wide table → expr_raw + row_data (META-ONLY, minimal)
-parse_processed_wide <- function(data_df, cfg, meta) {
+parse_processed_wide <- function(data_df, config, meta) {
+    cfg        <- config$modes$metabolomics
 
     if (is.null(meta)) {
         stop("processed_wide: metadata is required (meta = NULL).")
@@ -344,7 +329,7 @@ parse_processed_wide <- function(data_df, cfg, meta) {
     }
 
     # Build feature IDs
-    feat_ids <- build_feature_ids(data_df, cfg$id_columns)
+    feat_ids <- build_feature_ids(data_df, cfg$id_columns, config)
     orig_id  <- attr(feat_ids, "original_id")
 
     expr_df  <- data_df[, sample_cols, drop = FALSE]
@@ -358,6 +343,7 @@ parse_processed_wide <- function(data_df, cfg, meta) {
     row_data <- data_df[, setdiff(df_cols, sample_cols), drop = FALSE]
     row_data$feature_id  <- feat_ids
     row_data$original_id <- orig_id
+    row_data <- annotate_hmdb_names(row_data, config)
 
     list(
         expr_raw   = expr_raw,
@@ -399,6 +385,39 @@ read_multi_level_dir <- function(dir_path, pattern = "\\.xlsx$", sheet = NULL) {
 }
 
 
+#' Normalize CD-raw column names to clean sample IDs
+#'
+#' Strips "Area: " / "Norm. Area: " prefixes and ".raw (Fnn)" suffixes
+#' from data.frame column names. Only touches columns that match the
+#' CD-raw pattern; annotation columns are left untouched.
+#'
+#' @param df data.frame with possibly mixed column name styles.
+#' @return data.frame with cleaned column names.
+.normalize_cd_area_colnames <- function(df) {
+    cn <- colnames(df)
+    # Pattern: optional "Norm. " + "Area: " prefix, then sample name,
+    # then optional ".raw" + optional " (Fnn)" suffix
+    cd_pattern <- "^(Norm[.]\\s*)?Area:\\s*(.+?)([.]raw)?\\s*(\\(F\\d+\\))?$"
+    is_cd <- grepl(cd_pattern, cn, perl = TRUE)
+    if (!any(is_cd)) return(df)
+
+    clean <- sub(cd_pattern, "\\2", cn, perl = TRUE)
+    # Only apply to columns that matched, keep annotation columns unchanged
+    cn[is_cd] <- trimws(clean[is_cd])
+    colnames(df) <- cn
+
+    # Drop blank/procedure blank columns that may only appear in CD-raw levels
+    blank_cols <- grepl("(?i)^(procedure[_]?)?blank", cn)
+    if (any(blank_cols)) {
+        message("  Dropping ", sum(blank_cols), " blank column(s): ",
+                paste(cn[blank_cols], collapse = ", "))
+        df <- df[, !blank_cols, drop = FALSE]
+    }
+
+    df
+}
+
+
 #' Parse a multi-level directory input into the canonical contract
 #'
 #' Dispatches each per-level data frame to \code{parse_cd_raw()} or
@@ -409,23 +428,28 @@ read_multi_level_dir <- function(dir_path, pattern = "\\.xlsx$", sheet = NULL) {
 #'
 #' @param level_data_list Named list returned by \code{read_multi_level_dir()}.
 #'        Names are used as level labels (e.g., \code{"Level_1"}).
-#' @param cfg  metabolomics mode config.
+#' @param config   config.
 #' @param meta Optional metadata data.frame (required for \code{"processed_wide"}).
 #' @return \code{list(expr_raw, row_data, sample_ids, sample_map)} — identical
 #'         contract to \code{parse_cd_raw()}.
-parse_multi_level <- function(level_data_list, cfg, meta) {
-
+parse_multi_level <- function(level_data_list, config, meta) {
+  
+    cfg        <- config$modes$metabolomics
     level_format <- cfg$input[["level_format"]]
     if (is.null(level_format) || !nzchar(level_format))
         stop("parse_multi_level: cfg$input$level_format is required")
 
     level_names <- names(level_data_list)
 
-    # Parse each level file with the shared per-file format
+    # Parse each level file with the shared per-file format.
+    # Some levels may have CD-raw style column names (e.g.
+    # "Norm. Area: Sample.raw (F1)") even when level_format = "processed_wide".
+    # Normalize these columns to clean sample names before parsing.
     parsed_levels <- lapply(level_data_list, function(item) {
+        df <- .normalize_cd_area_colnames(item$data_df)
         switch(level_format,
-            cd_raw         = parse_cd_raw(item$data_df, cfg),
-            processed_wide = parse_processed_wide(item$data_df, cfg, meta),
+            cd_raw         = parse_cd_raw(df, config),
+            processed_wide = parse_processed_wide(df, config, meta),
             stop("parse_multi_level: unsupported level_format '", level_format, "'")
         )
     })
@@ -638,7 +662,6 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 
 
 # ---- helpers ----------------------------------------------------------------
-
 #' Build feature IDs from config rules
 #'
 #' Constructs IDs in the form \code{RT[rt]_MZ[mz]} using the raw (unrounded)
@@ -650,53 +673,77 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 #' \describe{
 #'   \item{\code{original_id}}{Character vector of the raw source strings.}
 #' }
-build_feature_ids <- function(data_df, id_cfg) {
-    name_col <- id_cfg$name_col %||% "Name"
-    mz_col   <- id_cfg$mz_col   %||% "m/z"
-    rt_col   <- id_cfg$rt_col   %||% "RT [min]"
-    fid_col  <- id_cfg$feature_id_col
-
-    nr     <- nrow(data_df)
-    has_mz <- mz_col %in% colnames(data_df)
-    has_rt <- rt_col %in% colnames(data_df)
-    has_nm <- name_col %in% colnames(data_df)
-
-    # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
-    make_rt_mz_ids <- function() {
-        mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
-        rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
-        both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
-
-        fallback <- if (has_nm) {
-            nm <- as.character(data_df[[name_col]])
-            ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
-        } else {
-            paste0("feature_", seq_len(nr))
-        }
-
-        ifelse(both_ok,
-               paste0("RT", as.character(rt_vals), "_MZ", as.character(mz_vals)),
-               fallback)
-    }
-
-    if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
-        original_id <- as.character(data_df[[fid_col]])
-        ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
-        attr(ids, "original_id") <- original_id
-        return(ids)
-    }
-
-    # Constructed path
-    original_id <- if (has_nm) {
-        nm <- as.character(data_df[[name_col]])
-        ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
+#'
+#' @param data_df  Source data frame.
+#' @param id_cfg   id_columns sub-config.
+#' @param config   (Optional) full pipeline config.  When provided, enables
+#'                 HMDB → compound name resolution via the bundled lookup table
+#'                 at \code{resolve_raw_path(config, "hmdb_compound_names.tsv")}.
+#'                 When NULL, HMDB resolution is silently skipped.
+build_feature_ids <- function(data_df, id_cfg, config = NULL) {
+  name_col <- id_cfg$name_col %||% "Name"
+  mz_col   <- id_cfg$mz_col   %||% "m/z"
+  rt_col   <- id_cfg$rt_col   %||% "RT [min]"
+  fid_col  <- id_cfg$feature_id_col
+  nr     <- nrow(data_df)
+  has_mz <- mz_col %in% colnames(data_df)
+  has_rt <- rt_col %in% colnames(data_df)
+  has_nm <- name_col %in% colnames(data_df)
+  # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
+  make_rt_mz_ids <- function() {
+    mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
+    rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
+    both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
+    fallback <- if (has_nm) {
+      nm <- as.character(data_df[[name_col]])
+      ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
     } else {
-        paste0("feature_", seq_len(nr))
+      paste0("feature_", seq_len(nr))
     }
-
-    ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
-    attr(ids, "original_id") <- original_id
-    ids
+    ifelse(both_ok,
+           paste0("RT", as.character(rt_vals), "_MZ", as.character(mz_vals)),
+           fallback)
+  }
+  if (!is.null(fid_col) && fid_col %in% colnames(data_df)) {
+    raw_names <- as.character(data_df[[fid_col]])
+    raw_names <- ifelse(is.na(raw_names) | raw_names == "",
+                        make_rt_mz_ids(), raw_names)
+    ids <- make.unique(raw_names, sep = "_dup")
+    orig <- make_rt_mz_ids()
+    # Resolve HMDB IDs to compound names if original_id is just "feature_N"
+    if (!is.null(config) &&
+        all(grepl("^feature_\\d+$", orig[!is.na(orig)]))) {
+      hmdb_lookup <- resolve_raw_path(config, "hmdb_compound_names.tsv")
+      if (file.exists(hmdb_lookup)) {
+        hmdb_db <- tryCatch(
+          utils::read.delim(hmdb_lookup, stringsAsFactors = FALSE),
+          error = function(e) NULL
+        )
+        if (!is.null(hmdb_db) && all(c("HMDB", "Name") %in% colnames(hmdb_db))) {
+          idx <- match(ids, hmdb_db$HMDB)
+          resolved <- hmdb_db$Name[idx]
+          has_name <- !is.na(resolved) & resolved != ""
+          orig[has_name] <- resolved[has_name]
+          # Keep HMDB ID for unresolved
+          orig[!has_name] <- ids[!has_name]
+          message("  Resolved ", sum(has_name), "/", length(ids),
+                  " HMDB IDs to compound names")
+        }
+      }
+    }
+    attr(ids, "original_id") <- orig
+    return(ids)
+  }
+  # Constructed path
+  original_id <- if (has_nm) {
+    nm <- as.character(data_df[[name_col]])
+    ifelse(is.na(nm) | nm == "", paste0("feature_", seq_len(nr)), nm)
+  } else {
+    paste0("feature_", seq_len(nr))
+  }
+  ids <- make.unique(make_rt_mz_ids(), sep = "_dup")
+  attr(ids, "original_id") <- original_id
+  ids
 }
 
 
@@ -756,3 +803,49 @@ apply_sample_filter_metab <- function(sample_ids, meta, rules, sample_col) {
   sample_ids[keep]
 }
 
+#' Annotate row_data with metabolite names from HMDB lookup table
+#'
+#' If row_data already has a populated Name column, this is a no-op.
+#' Otherwise, looks up feature IDs in the bundled HMDB compound names table
+#' at {project$dir}/data/hmdb_compound_names.tsv.
+#' For non-HMDB feature IDs (already human-readable names), uses the ID itself.
+#'
+#' @param row_data  data.frame with at least a feature_id column.
+#' @param config    Full pipeline config (for project$dir path).
+#' @return row_data with a Name column populated.
+annotate_hmdb_names <- function(row_data, config) {
+  # Skip if Name column already exists and is mostly populated
+  if ("Name" %in% colnames(row_data)) {
+    n_populated <- sum(!is.na(row_data$Name) & nzchar(trimws(row_data$Name)))
+    if (n_populated > nrow(row_data) * 0.5) return(row_data)
+  }
+  
+  feat_ids <- as.character(row_data$feature_id)
+  is_hmdb <- grepl("^HMDB[0-9]+$", feat_ids)
+  
+  # For non-HMDB IDs, the feature ID is itself a name
+  names_out <- ifelse(is_hmdb, NA_character_, feat_ids)
+  
+  # Look for bundled lookup table
+  lookup_path <- resolve_raw_path(config, "hmdb_compound_names.tsv")
+  
+  if (file.exists(lookup_path)) {
+    lookup <- utils::read.delim(lookup_path, stringsAsFactors = FALSE)
+    if (all(c("HMDB", "Name") %in% colnames(lookup))) {
+      lut <- stats::setNames(lookup$Name, lookup$HMDB)
+      hmdb_ids <- feat_ids[is_hmdb]
+      matched <- lut[hmdb_ids]
+      names_out[is_hmdb] <- ifelse(is.na(matched), hmdb_ids, matched)
+      n_annotated <- sum(!is.na(matched))
+      n_hmdb <- sum(is_hmdb)
+      message(sprintf("metabolomics: annotated %d/%d HMDB features with compound names.",
+                      n_annotated, n_hmdb))
+    }
+  } else {
+    # No lookup available — use HMDB IDs as-is
+    names_out[is_hmdb] <- feat_ids[is_hmdb]
+  }
+  
+  row_data$Name <- names_out
+  row_data
+}

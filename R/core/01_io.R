@@ -34,7 +34,7 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
     required_files <- switch(mode,
         proteomics = if (is_preprocessed) c("preprocessed_protein", "metadata", "contrasts") else c("protein", "metadata", "contrasts"),
         rna = c("metadata", "contrasts"),
-        metabolomics = c("metadata", "contrasts"),
+        metabolomics = c("metadata"),   # contrasts can be inline in de.contrasts
         character(0)
     )
 

@@ -49,7 +49,7 @@ generate_rnaseq_executive_summary <- function(de_res,
     }
 
     # --- DE results ---
-    de_stats <- get_de_summary_stats(de_res)
+    de_stats <- get_de_summary_stats(de_res, rna_cfg = config$modes$rna)
     if (!is.null(de_stats)) {
         for (stat in de_stats) {
             summary_points <- c(summary_points, stat$text)
@@ -96,44 +96,66 @@ generate_rnaseq_executive_summary <- function(de_res,
 
 #' Extract DE summary statistics from multiomics-core de_res
 #' @noRd
-get_de_summary_stats <- function(de_res) {
+get_de_summary_stats <- function(de_res, rna_cfg = NULL) {
     if (is.null(de_res) || is.null(de_res$summary_df)) return(NULL)
 
     df <- de_res$summary_df
 
-    # Find padj columns (pattern: padj.ContrastName)
-    padj_cols <- grep("^padj\\.", colnames(df), value = TRUE)
-    lfc_cols  <- grep("^log2FoldChange\\.", colnames(df), value = TRUE)
+    # Use pipeline pass columns as the single source of truth for DE counts.
+    # RNA-seq pattern: {contrast}_pass (TRUE/FALSE)
+    pass_cols <- grep("_pass$", colnames(df), value = TRUE)
+    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
-    if (length(padj_cols) == 0) return(NULL)
+    if (length(pass_cols) > 0) {
+        stats <- list()
+        for (i in seq_along(pass_cols)) {
+            pcol <- pass_cols[i]
+            cn <- sub("_pass$", "", pcol)
+            is_sig <- !is.na(df[[pcol]]) & df[[pcol]] %in% c(TRUE, 1)
 
-    stats <- list()
-
-    for (i in seq_along(padj_cols)) {
-        pcol <- padj_cols[i]
-        contrast_name <- sub("^padj\\.", "", pcol)
-
-        # Find matching LFC column
-        lcol <- paste0("log2FoldChange.", contrast_name)
-        if (!(lcol %in% colnames(df))) {
-            lcol <- if (i <= length(lfc_cols)) lfc_cols[i] else NULL
+            # Find FC column for direction
+            fc_col <- paste0("log2FoldChange.", cn)
+            if (!(fc_col %in% colnames(df))) {
+                fc_col <- paste0("linearFC.", cn)
+            }
+            if (fc_col %in% colnames(df)) {
+                fc_vals <- as.numeric(df[[fc_col]])
+                n_up   <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                n_down <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+                text <- sprintf("**%s**: %d significant genes (%d up, %d down)",
+                                cn, n_up + n_down, n_up, n_down)
+            } else {
+                n_sig <- sum(is_sig)
+                text <- sprintf("**%s**: %d significant genes", cn, n_sig)
+            }
+            stats[[i]] <- list(contrast = cn, n_sig = sum(is_sig), text = text)
         }
-
-        sig <- !is.na(df[[pcol]]) & df[[pcol]] < 0.05
-        n_sig <- sum(sig, na.rm = TRUE)
-
-        if (!is.null(lcol) && lcol %in% colnames(df)) {
-            n_up <- sum(sig & df[[lcol]] > 0, na.rm = TRUE)
-            n_down <- sum(sig & df[[lcol]] < 0, na.rm = TRUE)
-            text <- sprintf("**%s**: %d significant genes (%d up, %d down) at FDR < 0.05",
-                            contrast_name, n_sig, n_up, n_down)
-        } else {
-            text <- sprintf("**%s**: %d significant genes at FDR < 0.05", contrast_name, n_sig)
-        }
-
-        stats[[i]] <- list(contrast = contrast_name, n_sig = n_sig, text = text)
+        return(stats)
     }
 
+    # Fallback: recompute from padj + LFC using config thresholds
+    padj_cols <- grep("^padj\\.", colnames(df), value = TRUE)
+    if (length(padj_cols) == 0) return(NULL)
+
+    padj_cut <- if (!is.null(rna_cfg)) rna_cfg$de$p_cutoff %||% 0.05 else 0.05
+    lfc_cut  <- if (!is.null(rna_cfg)) log2(rna_cfg$de$linear_fc_cutoff %||% 1.5) else log2(1.5)
+
+    stats <- list()
+    for (i in seq_along(padj_cols)) {
+        pcol <- padj_cols[i]
+        cn <- sub("^padj\\.", "", pcol)
+        lcol <- paste0("log2FoldChange.", cn)
+        if (!(lcol %in% colnames(df))) next
+
+        sig <- !is.na(df[[pcol]]) & df[[pcol]] <= padj_cut &
+               !is.na(df[[lcol]]) & abs(df[[lcol]]) >= lfc_cut
+        n_up   <- sum(sig & df[[lcol]] > 0, na.rm = TRUE)
+        n_down <- sum(sig & df[[lcol]] < 0, na.rm = TRUE)
+        n_sig  <- n_up + n_down
+        text <- sprintf("**%s**: %d significant genes (%d up, %d down)",
+                        cn, n_sig, n_up, n_down)
+        stats[[i]] <- list(contrast = cn, n_sig = n_sig, text = text)
+    }
     stats
 }
 

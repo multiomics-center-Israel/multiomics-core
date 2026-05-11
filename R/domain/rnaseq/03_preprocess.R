@@ -52,7 +52,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     }
     rownames(counts) <- gene_ids
     txi <- NULL; abundance <- NULL
-
+    
   } else if (has_txi) {
     source_type <- "tximport"
     if(verbose) message("[preprocess_rna] Input detected as tximport object")
@@ -60,7 +60,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     txi <- inputs$txi; counts <- txi$counts; abundance <- txi$abundance
     gene_ids <- rownames(counts)
     row_data <- data.frame(gene_id = gene_ids, stringsAsFactors = FALSE)
-
+    
   } else if (has_counts) {
     source_type <- "matrix"
     if(verbose) message("[preprocess_rna] Input detected as raw count matrix")
@@ -95,7 +95,7 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   map_to   <- cfg$id_columns$map_to
   if (!is.null(inputs$sample_map) && !is.null(map_from) && !is.null(map_to)) {
     counts <- apply_sample_map_to_colnames(counts, inputs$sample_map, map_from, map_to)
-
+    
     # Also update txi matrices if present
     if (!is.null(txi)) {
       colnames(txi$counts)    <- colnames(counts)
@@ -132,36 +132,36 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   # =========================================================================
   rules <- get_sample_filter_rules(config, mode = "rna")
   if (!is.null(rules) && exists("apply_sample_filter")) {
-      filtered <- apply_sample_filter(
-        sample_col = sample_col,
-        meta = meta2,
-        expr = counts,
-        rules = rules,
-        mode = "rna",
-        strict_cols = FALSE
-      )
-      meta2 <- filtered$meta
-      counts <- filtered$expr
-
-      if (!is.null(txi)) {
-        txi <- subset_tximport(txi, samples = colnames(counts))
-        abundance <- txi$abundance
-      }
+    filtered <- apply_sample_filter(
+      sample_col = sample_col,
+      meta = meta2,
+      expr = counts,
+      rules = rules,
+      mode = "rna",
+      strict_cols = FALSE
+    )
+    meta2 <- filtered$meta
+    counts <- filtered$expr
+    
+    if (!is.null(txi)) {
+      txi <- subset_tximport(txi, samples = colnames(counts))
+      abundance <- txi$abundance
+    }
   }
-
+  
   # Design viability gate — runs on the post-sample_filter analysis cohort.
   # Must come AFTER apply_sample_filter so configs that intentionally drop
   # singleton or NA-labeled groups via cfg$sample_filter$rules are not
   # rejected for an issue the filter is about to remove.
   assert_design_viable(meta2, cfg)
-
+  
   # =========================================================================
   # Gene filtering
   # =========================================================================
   filter_mode <- cfg$filtering$mode %||% "adaptive"
   group_col <- cfg$filtering$group_col %||% cfg$de_table$group_col %||% cfg$effects$color[1]
   
-
+  
   if (filter_mode == "none" || source_type == "preprocessed") {
     message("Filtering mode: none/preprocessed — keeping all features.")
     keep_vec <- rep(TRUE, nrow(counts))
@@ -190,47 +190,47 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       fr <- run_auto_filter_pipeline(norm_for_filter, meta2, sample_col, group_col, output_plot = plot_path)
     }
   }
-
+  
   # FIX: Extract keep_vec and threshold from result list
   keep_vec <- fr$keep_vec
   thr <- fr$used_threshold
   if (sum(keep_vec) == 0) stop("Filtering removed all features.")
-
+  
   # Apply gene filter
   counts_filt <- counts[keep_vec, , drop = FALSE]
   row_data_filt <- row_data[keep_vec, , drop = FALSE]
   txi_filt <- if (!is.null(txi)) subset_tximport_genes(txi, genes = keep_vec) else NULL
-
+  
   # =========================================================================
   # Normalized expression for QC/visualization (expr_work)
   # =========================================================================
   if (source_type == "preprocessed") {
-      expr_work <- counts_filt
-      attr(expr_work, "method") <- "preprocessed"
-      message("[Normalization] Skipped — using preprocessed values directly")
+    expr_work <- counts_filt
+    attr(expr_work, "method") <- "preprocessed"
+    message("[Normalization] Skipped — using preprocessed values directly")
   } else {
-      norm_input <- if (!is.null(txi_filt)) {
-          annotate_source_type(txi_filt, "tximport")
-      } else {
-          annotate_source_type(counts_filt, "matrix")
-      }
-
-      expr_work <- normalize_counts(
-          counts            = norm_input,
-          meta              = meta2,
-          method            = cfg$normalization$method %||% "TMMlogCPM",
-          prior.count       = as.numeric(cfg$normalization$prior.count %||% 1),
-          sample_col        = sample_col,
-          filter_zero_count = cfg$de$filter_zero_count
-      )
+    norm_input <- if (!is.null(txi_filt)) {
+      annotate_source_type(txi_filt, "tximport")
+    } else {
+      annotate_source_type(counts_filt, "matrix")
+    }
+    
+    expr_work <- normalize_counts(
+      counts            = norm_input,
+      meta              = meta2,
+      method            = cfg$normalization$method %||% "TMMlogCPM",
+      prior.count       = as.numeric(cfg$normalization$prior.count %||% 1),
+      sample_col        = sample_col,
+      filter_zero_count = cfg$de$filter_zero_count
+    )
   }
-
+  
   # FIX: Ensure row consistency if filtering was skipped or modified
   if (!identical(rownames(counts_filt), rownames(expr_work))) {
     counts_filt <- counts_filt[rownames(expr_work), , drop = FALSE]
     row_data_filt <- row_data_filt[rownames(expr_work), , drop = FALSE]
   }
-
+  
   # =========================================================================
   # Build return object
   # =========================================================================
@@ -241,11 +241,11 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
     
     # de_input for downstream analysis
     de_input = if (source_type == "preprocessed") {
-        annotate_source_type(counts_filt, "preprocessed")
+      annotate_source_type(counts_filt, "preprocessed")
     } else if (!is.null(txi_filt)) {
-        annotate_source_type(txi_filt, "tximport")
+      annotate_source_type(txi_filt, "tximport")
     } else {
-        annotate_source_type(counts_filt, "matrix")
+      annotate_source_type(counts_filt, "matrix")
     },
     
     row_data = row_data_filt,
@@ -267,13 +267,13 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
   return(result)
 }
 get_sample_filter_rules <- function(config, mode) {
-    cfg <- config$modes[[mode]]
-    if (is.null(cfg)) {
-        return(NULL)
-    }
-    sf <- cfg$sample_filter
-    if (is.null(sf) || !isTRUE(sf$enabled)) {
-        return(NULL)
-    }
-    sf$rules %||% NULL
+  cfg <- config$modes[[mode]]
+  if (is.null(cfg)) {
+    return(NULL)
+  }
+  sf <- cfg$sample_filter
+  if (is.null(sf) || !isTRUE(sf$enabled)) {
+    return(NULL)
+  }
+  sf$rules %||% NULL
 }

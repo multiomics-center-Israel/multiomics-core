@@ -38,6 +38,7 @@ modes:
       sample_map: "proteomics/sample_map.csv"
       metadata:   "proteomics/meta_prot.csv"
       contrasts:  "proteomics/contrasts_prot.csv"
+      peptides:   ""              # optional peptide-level intensity matrix (enables Peptide Explorer in report)
 
     # --------------------------------------------------------
     # Column naming conventions (REQUIRED)
@@ -163,6 +164,35 @@ modes:
       samples: "SampleID"
 
     # --------------------------------------------------------
+    # Report customization
+    # --------------------------------------------------------
+    report:
+      project_id: ""                       # Shown in report title (e.g. "EP-2025-001")
+      introduction_text: ""                # Main introduction paragraph
+      introduction_background: ""          # Optional: Background subsection
+      introduction_aim: ""                 # Optional: Aim subsection
+      experimental_design_file: ""         # Path or URL to experimental design (shown in intro)
+      raw_files_location: ""               # URL or path to raw data files
+      analysis_files_location: ""          # URL or path to analysis output files
+      full_results_table_link: ""          # URL or path to full DE results table
+      expected_proteins_file: ""           # CSV with columns: label, count (bar chart of expected proteins)
+
+      # QC plot visibility (all true by default except distance heatmap)
+      show_pca: true
+      show_density: true
+      show_distance: false
+      show_correlation: true
+      show_expression_heatmap: true
+      show_imputation_qc: true
+      show_identified_proteins_venn: false  # Pre-imputation identified proteins Venn diagram
+      force_pca: false                     # Force PCA even with <2 replicates per group
+
+      # Text overrides (leave empty for auto-generated text)
+      stats_methods_text: ""               # Custom DE statistics description in Results section
+      stats_section_text: ""               # Custom statistical analysis text in Methods section
+      disclaimer_text: ""                  # Legal disclaimer (shown verbatim if non-empty)
+
+    # --------------------------------------------------------
     # Excel export configuration
     # --------------------------------------------------------
     excel:
@@ -200,10 +230,13 @@ modes:
     pathway:
       enabled: true
       method: "both"          # "fgsea" | "ora" | "both"
-      databases: ["GO", "KEGG"]
+      databases: ["GO", "KEGG", "Reactome"]  # "all" = GO+KEGG+Reactome; "GO" loads BP+CC+MF; or pick: "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome"
       gmt_file: null          # Custom GMT file for non-model organisms
       min_size: 10
       max_size: 500
+      gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
+      pathway_volcano: true   # produce pathway-colored volcano data for report
+      cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
     # --------------------------------------------------------
     # PPI network analysis
@@ -218,6 +251,12 @@ modes:
       string_score_threshold: 400
       active_subnetwork: true
       complex_analysis: true
+
+    # --------------------------------------------------------
+    # Protein domain & functional feature analysis
+    # --------------------------------------------------------
+    domain_analysis:
+      enabled: true               # InterPro/Pfam enrichment + UniProt features
 
     # --------------------------------------------------------
     # Advanced statistics

@@ -33,6 +33,11 @@ modes:
         - "Molecule"
         - "HMDB"
 
+    # ---- Preprocessing: missingness (soft filter) ----
+    preprocessing:
+      feat_missing_threshold: 0.50   # drop metabolites missing in >50% of samples
+      sample_missing_threshold: 1.0  # disable sample filtering (keep all samples)
+
     # ---- Normalization ----
     # Original: SumNorm → LogNorm → MeanCenter
     normalization:

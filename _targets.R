@@ -118,22 +118,15 @@ list(
     mode_targets <- list()
 
     # Single-omics pipelines
-    if (!is.null(cfg_raw$modes$rna))        mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics)) mode_targets <- c(mode_targets, pipe_proteomics())
+    if (!is.null(cfg_raw$modes$rna))           mode_targets <- c(mode_targets, pipe_rnaseq())
+    if (!is.null(cfg_raw$modes$proteomics))    mode_targets <- c(mode_targets, pipe_proteomics())
     if (!is.null(cfg_raw$modes$metabolomics)) {
-      met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
-      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen))
+        metab_chosen_norm <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
+        mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = metab_chosen_norm))
     }
-
-    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
-    # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
-    n_omics <- sum(!is.null(cfg_raw$modes$rna),
-                   !is.null(cfg_raw$modes$proteomics),
-                   !is.null(cfg_raw$modes$metabolomics))
-
-    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
-      mode_targets <- c(mode_targets, pipe_multiomics(cfg_raw))
-    }
+    # NOTE: Lipidomics and multi-omics integration layers were split into
+    # separate review branches. Restore the pipe_lipidomics() and
+    # pipe_multiomics() target wiring here when those branches are merged back.
 
     mode_targets
   }

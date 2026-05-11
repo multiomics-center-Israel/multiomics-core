@@ -12,12 +12,12 @@
 #' @return list(plots, files, excel_order, objects)
 mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
   stopifnot(is.character(out_dir), length(out_dir) == 1)
-
+  
   assert_pre_contract(pre, stage = "rna")
-
+  
   cfg <- config$modes$rna
   cl  <- cfg$clustering
-
+  
   written     <- character(0)
   plots       <- list()
   excel_order <- NULL
@@ -29,29 +29,29 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     patterns_list       = NULL,
     heatmaps_by_pattern = NULL
   )
-
+  
   if (is.null(cl) || isFALSE(cl$enabled)) {
     message("[rnaseq clustering] skipped: Clustering disabled in config.")
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
-
+  
   if (is.null(cfg$effects$samples)) {
     stop("[rnaseq clustering] effects$samples is missing in config.")
   }
-
+  
   expr_mat <- as.matrix(pre$expr_work)
   if (nrow(expr_mat) < 10) {
     warning("[rnaseq clustering] skipped: Too few features in expr_work (< 10).")
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
-
+  
   summary_df <- tryCatch(build_rnaseq_summary_df(de_res$tables, cfg$de),
                          error = function(e) NULL)
   if (is.null(summary_df)) {
     warning("[rnaseq clustering] skipped: Could not build RNA summary_df.")
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
-
+  
   de_features <- get_rna_de_features(summary_df)
   message(sprintf("[rnaseq clustering] Found %d DE features for clustering.", length(de_features)))
   manual         <- cfg$de$manual_include %||% character(0)
@@ -62,23 +62,23 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
                     n_added))
   }
   de_features <- union(de_features, manual_in_data)
-
+  
   if (length(de_features) < 2) {
     warning("[rnaseq clustering] skipped: < 2 DE features found.")
     return(list(plots = plots, files = written, excel_order = NULL, objects = objects))
   }
-
+  
   clustering_dir <- file.path(out_dir, "Clustering")
   ensure_dir(clustering_dir)
-
+  
   flags <- clustering_run_flags(pre, cfg)
   message(sprintf(
     "[rnaseq clustering] Flags: hierarchical=%s, partition=%s, binary=%s",
     flags$hierarchical, flags$partition, flags$binary_patterns
   ))
-
+  
   annot_col <- build_heatmap_annotation_col(pre$meta, cfg)
-
+  
   de_cfg <- cfg$de %||% list()
   annot_context <- list(
     summary_df    = summary_df,
@@ -86,7 +86,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     log2fc_cutoff = log2(de_cfg$linear_fc_cutoff %||% 1.5),
     id_col        = "FeatureID"
   )
-
+  
   if (isTRUE(flags$hierarchical)) {
     h <- .run_hierarchical_step(expr_mat, pre$meta, de_features, cfg,
                                 annot_col, annot_context,
@@ -98,7 +98,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
     if (!is.null(h$clusters)) objects$clusters <- h$clusters
     excel_order            <- h$excel_order
   }
-
+  
   if (isTRUE(flags$partition)) {
     p <- .run_partition_step(expr_mat, pre$meta, de_features, cfg, annot_col,
                              file.path(clustering_dir, "Partition_clustering"))
@@ -113,7 +113,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       }
     }
   }
-
+  
   if (isTRUE(flags$binary_patterns)) {
     b <- .run_binary_patterns_step(
       expr_mat_corr   = expr_mat,
@@ -133,7 +133,7 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
       excel_order$binary_best <- b$binary_best
     }
   }
-
+  
   list(
     plots       = plots,
     files       = unique(written),
@@ -145,16 +145,16 @@ mod_rnaseq_clustering <- function(pre, de_res, config, out_dir) {
 # Helper to extract DE features from RNA summary_df
 get_rna_de_features <- function(summary_df) {
   if (is.null(summary_df) || nrow(summary_df) == 0) return(character(0))
-
+  
   if ("pass_any_contrast" %in% colnames(summary_df)) {
     return(summary_df$FeatureID[which(summary_df$pass_any_contrast == 1)])
   }
-
+  
   pass_cols <- grep("^sum\\.pass\\.", colnames(summary_df), value = TRUE)
   if (length(pass_cols) > 0) {
     row_sums <- rowSums(summary_df[, pass_cols, drop = FALSE], na.rm = TRUE)
     return(summary_df$FeatureID[which(row_sums > 0)])
   }
-
+  
   character(0)
 }

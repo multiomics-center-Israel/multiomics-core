@@ -428,6 +428,16 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             updown = paste0("upDown.", contrast),
             manual = paste0("manual_cutoffs.", contrast)
         )
+    } else if (mode %in% c("metabolomics", "lipidomics")) {
+        # Metabolomics/lipidomics use linearFC., P.Value., adj.P.Val. dot naming
+        list(
+            fc     = paste0("linearFC.", contrast_safe),
+            p      = paste0("P.Value.", contrast_safe),
+            padj   = paste0("adj.P.Val.", contrast_safe),
+            pass   = paste0("pass.", contrast_safe),
+            updown = paste0("upDown.", contrast_safe),
+            manual = paste0("manual_cutoffs.", contrast_safe)
+        )
     } else {
         # Proteomics (uses imputation naming)
         list(
@@ -760,7 +770,7 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
   # Calculate a simple hierarchical clustering order
   # We use a basic Euclidean/Complete linkage
   message("Calculating fallback hierarchical clustering order...")
-  
+
   # Handle NAs by replacing with row mean (safe for proteomics)
   mat_clean <- expr_mat
   if (any(is.na(mat_clean))) {
@@ -768,7 +778,14 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
     idx_na <- which(is.na(mat_clean), arr.ind = TRUE)
     mat_clean[idx_na] <- row_means[idx_na[,1]]
   }
-  
+
+  # hclust requires >= 2 rows; assign rank 1 for a single feature
+  if (nrow(mat_clean) < 2) {
+    ranks <- if (nrow(mat_clean) == 1) match(df[[id_col]], rownames(mat_clean)) else rep(NA_integer_, nrow(df))
+    if ("Hierarchical_Order" %in% names(df)) df$Hierarchical_Order <- ranks else df$order <- ranks
+    return(df)
+  }
+
   # Simple clustering
   dists <- dist(mat_clean)
   hc <- hclust(dists, method = "complete")

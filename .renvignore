@@ -1,0 +1,11 @@
+data/
+outputs/
+reports/
+scripts/
+tests/
+_targets/
+renv/
+*.html
+*.md
+*.py
+*.Rmd
