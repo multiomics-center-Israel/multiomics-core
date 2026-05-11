@@ -249,6 +249,19 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         <p style="font-weight:600;font-size:14px;margin-bottom:10px;">Step 2b &mdash; Download the pipeline</p>
         <p style="font-size:13px;color:var(--text-dim);margin-bottom:10px;">Open <strong>Command Prompt</strong> (press <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">Win + R</code>, type <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">cmd</code>, press Enter).</p>
 
+        <p style="font-weight:600;font-size:13px;margin-top:14px;">Which omics layers do you need?</p>
+        <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Pick one &mdash; the clone command updates accordingly.</p>
+        <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+            <input type="radio" name="install_branch" value="main" checked onchange="updateCloneCmd()">
+            <span><strong>main</strong> &mdash; Proteomics, RNA-seq, Metabolomics, Multi-omics</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+            <input type="radio" name="install_branch" value="Lipidomics_dor" onchange="updateCloneCmd()">
+            <span><strong>Lipidomics_dor</strong> &mdash; all of the above <em>plus Lipidomics</em></span>
+          </label>
+        </div>
+
         <p style="font-weight:600;font-size:13px;margin-top:14px;">Where do you want to install the pipeline?</p>
         <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">Type the folder path below &mdash; the command will update automatically.</p>
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
@@ -259,7 +272,7 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
         <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">Copy and paste these two lines into Command Prompt:</p>
         <div class="cmd" id="clone_cmd" onclick="copyCmd(this)">
           cd /d <span class="highlight" id="cmd_dir">C:\Users\Lab\Documents</span><br>
-          git clone --branch Dor_branch https://github.com/multiomics-center-Israel/multiomics-core.git multiomics-core
+          git clone --branch <span class="highlight" id="cmd_branch">main</span> https://github.com/multiomics-center-Israel/multiomics-core.git multiomics-core
         </div>
 
         <div class="note" style="margin-bottom:0;">
@@ -281,10 +294,10 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
           taskkill /F /IM Rterm.exe /T<br>
           taskkill /F /IM R.exe /T
         </div>
-        <p style="font-size:12px;color:var(--text-dim);margin:8px 0 6px;">Then pull the latest code:</p>
-        <div class="cmd" onclick="copyCmd(this)">
+        <p style="font-size:12px;color:var(--text-dim);margin:8px 0 6px;">Then pull the latest code (use the same branch you cloned):</p>
+        <div class="cmd" id="pull_cmd" onclick="copyCmd(this)">
           cd /d C:\path\to\multiomics-core<br>
-          git pull origin Dor_branch
+          git pull origin <span class="highlight" id="cmd_pull_branch">main</span>
         </div>
         <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">This updates the code in-place &mdash; no need to re-run <code style="background:var(--surface);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;">install.bat</code> unless the release notes mention new R packages. Then relaunch the wizard.</p>
       </div>
@@ -455,6 +468,13 @@ function updateCloneCmd() {
   document.getElementById('cmd_dir').textContent = dir;
   var sep = dir.endsWith('\\') ? '' : '\\';
   document.getElementById('full_path_preview').textContent = dir + sep + 'multiomics-core';
+
+  var selected = document.querySelector('input[name="install_branch"]:checked');
+  var branch = selected ? selected.value : 'main';
+  var branchEl = document.getElementById('cmd_branch');
+  if (branchEl) branchEl.textContent = branch;
+  var pullEl = document.getElementById('cmd_pull_branch');
+  if (pullEl) pullEl.textContent = branch;
 }
 
 function copyCmd(el) {

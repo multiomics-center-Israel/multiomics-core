@@ -6,6 +6,27 @@ The Docker image bundles **R 4.5.2**, **Bioconductor 3.22**, all
 built (or pulled), the only thing the user needs locally is **Docker
 Desktop**.
 
+## Which branch should I clone?
+
+| Branch | What you get | When to use |
+|---|---|---|
+| **`main`** | Proteomics, RNA-seq, Metabolomics, Multi-omics integration | Default. Picks up reviewed/merged work as Michal lands PRs. |
+| **`Lipidomics_dor`** | All of `main` *plus* the lipidomics layer | If you need the lipidomics pipeline. Will fold back into `main` once Michal merges that PR. |
+
+If the user has any lipidomics input data, use `Lipidomics_dor`. Once
+that branch is merged into `main`, switch back to `main`:
+
+```bash
+git fetch origin
+git checkout main
+git pull origin main
+docker build -t multiomics-core:latest .   # rebuild the image
+```
+
+`MO_dor` is a similar follow-up branch for the multi-omics
+integration layer; merge once Michal reviews PR #78. Install
+instructions below are branch-agnostic.
+
 ## When to use Docker vs the native installer
 
 | Use Docker | Use native `install.bat` |
