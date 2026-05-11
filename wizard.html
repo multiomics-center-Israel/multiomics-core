@@ -246,7 +246,17 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <button type="button" class="btn btn-primary" id="btn_load_example"
             onclick="loadExampleData()"
             title="Fills all fields with a bundled synthetic proteomics dataset. Ready to Run.">
-      &#9733; Load Example Dataset (Proteomics)
+      &#9733; Load Example (Proteomics)
+    </button>
+    <button type="button" class="btn" id="btn_load_example_metab"
+            onclick="loadExampleMetab()" style="margin-left:8px;"
+            title="Fills all fields with a bundled synthetic metabolomics dataset. Ready to Run.">
+      &#9733; Load Example (Metabolomics)
+    </button>
+    <button type="button" class="btn" id="btn_load_example_lipid"
+            onclick="loadExampleLipid()" style="margin-left:8px;"
+            title="Fills all fields with a bundled synthetic lipidomics dataset. Ready to Run.">
+      &#9733; Load Example (Lipidomics)
     </button>
     <span class="hint" style="margin-left:10px;">First time? Click to try a ~10 sec demo run with built-in data.</span>
   </div>
@@ -783,11 +793,15 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="field-row">
     <div class="field">
       <label>Sample normalization</label>
-      <select id="metab_sample_norm">
-        <option value="pqn">PQN (recommended)</option>
+      <select id="metab_sample_norm" onchange="updateMetabNormCondFields()">
+        <option value="pqn">PQN — Probabilistic Quotient Normalization (recommended)</option>
         <option value="median">Median centering</option>
         <option value="sum">Sum normalization</option>
-        <option value="none">None</option>
+        <option value="eigenms">EigenMS (NOREVA)</option>
+        <option value="eigenms_forced">EigenMS-forced (fixed % eigentrends)</option>
+        <option value="is">Internal standard (per-sample IS feature)</option>
+        <option value="bio_factor">Biological factor (e.g. mg protein)</option>
+        <option value="none">None (already normalized)</option>
       </select>
     </div>
     <div class="field">
@@ -795,10 +809,22 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <select id="metab_transform">
         <option value="log2">log2 (recommended)</option>
         <option value="log10">log10</option>
+        <option value="glog10">Generalized log10 (MetaboAnalyst)</option>
         <option value="none">None</option>
       </select>
     </div>
   </div>
+
+  <!-- Conditional inputs for bio_factor / is normalization -->
+  <div class="field conditional" id="metab_bio_factor_field" style="display:none;">
+    <label>Biological factor metadata column <span class="hint">(numeric column to divide by, e.g. "mg_protein")</span></label>
+    <input type="text" id="metab_bio_factor_col" placeholder="mg_protein">
+  </div>
+  <div class="field conditional" id="metab_is_ref_field" style="display:none;">
+    <label>IS reference column <span class="hint">(row metadata column flagging the IS feature)</span></label>
+    <input type="text" id="metab_is_ref_col" placeholder="is_internal_standard">
+  </div>
+
   <div class="field-row">
     <div class="field">
       <label>Scaling</label>
@@ -813,7 +839,8 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <label>DE method</label>
       <select id="metab_de_method">
         <option value="limma">Limma (recommended)</option>
-        <option value="t_test">t-test</option>
+        <option value="t_test">Welch t-test</option>
+        <option value="t_test_equal">Student t-test (equal variance)</option>
         <option value="wilcoxon">Wilcoxon rank-sum</option>
       </select>
     </div>
@@ -837,6 +864,29 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="field conditional" id="metab_gmt_field">
     <label>GMT file path <span class="hint">(for pathway enrichment)</span></label>
     <input type="text" id="metab_gmt_file" placeholder="/path/to/pathways.gmt or leave empty">
+  </div>
+
+  <!-- Report Section Toggles -->
+  <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px;">
+    <label style="font-weight:600;margin-bottom:10px;display:block;">Report Sections <span class="hint">(toggle which sections appear in the HTML report)</span></label>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
+      <div class="toggle-row"><input type="checkbox" id="metab_show_qc" checked><label class="toggle-label" for="metab_show_qc">QC Diagnostics</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_de" checked><label class="toggle-label" for="metab_show_de">Differential Expression</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_de_heatmaps" checked><label class="toggle-label" for="metab_show_de_heatmaps">DE Heatmaps</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_clustering" checked><label class="toggle-label" for="metab_show_clustering">Clustering</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_fs" checked><label class="toggle-label" for="metab_show_fs">Feature Selection</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_enrichment" checked><label class="toggle-label" for="metab_show_enrichment">Enrichment</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_network" checked><label class="toggle-label" for="metab_show_network">Metabolite Network</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_mummichog" checked><label class="toggle-label" for="metab_show_mummichog">Mummichog Pathways</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_methods" checked><label class="toggle-label" for="metab_show_methods">Methods</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_session" checked><label class="toggle-label" for="metab_show_session">Session Info</label></div>
+      <div class="toggle-row"><input type="checkbox" id="metab_show_technical" checked><label class="toggle-label" for="metab_show_technical">Technical Summary</label></div>
+    </div>
+  </div>
+
+  <!-- Run QC-only mode -->
+  <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+    <div class="toggle-row"><input type="checkbox" id="metab_qc_only"><label class="toggle-label" for="metab_qc_only"><strong>QC-only run</strong> <span class="hint">— compare normalizations, skip DE/clustering/enrichment</span></label></div>
   </div>
 </div>
 
@@ -2409,6 +2459,16 @@ function generateMetaboYaml() {
   var sampleNorm = v('metab_sample_norm') || 'pqn';
   var transform = v('metab_transform') || 'log2';
   var scaling = v('metab_scaling') || 'none';
+  var qcOnly = checked('metab_qc_only');
+  var bioFactorCol = v('metab_bio_factor_col');
+  var isRefCol = v('metab_is_ref_col');
+
+  // Preprocessing block — emit only when QC-only is requested so chosen_norm
+  // is null (the metab pipeline switches to QC-comparison mode in that case).
+  if (qcOnly) {
+    yaml += '\n    preprocessing:\n';
+    yaml += '      chosen_norm: null\n';
+  }
 
   yaml += '\n    normalization:\n';
   yaml += '      input_already_normalized: ' + (sampleNorm === 'none' ? 'true' : 'false') + '\n';
@@ -2417,7 +2477,8 @@ function generateMetaboYaml() {
   yaml += '      scaling: ' + yamlStr(scaling) + '\n';
   yaml += '      pseudocount: 1\n';
   yaml += '      na_policy: "keep"\n';
-  yaml += '      is_ref_col: null\n';
+  yaml += '      is_ref_col: ' + (sampleNorm === 'is' && isRefCol ? yamlStr(isRefCol) : 'null') + '\n';
+  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && bioFactorCol ? yamlStr(bioFactorCol) : 'null') + '\n';
 
   var metabExcludeBoxes = document.querySelectorAll('.metab_exclude_sample:checked');
   yaml += '\n    sample_filter:\n';
@@ -2473,8 +2534,34 @@ function generateMetaboYaml() {
   yaml += '\n    outputs:\n';
   yaml += '      generate_pptx: ' + yamlBool(checked('generate_pptx')) + '\n';
 
+  // Report section toggles — only emit non-default (false) entries to keep YAML clean
+  var rsLines = [];
+  if (!checked('metab_show_qc'))            rsLines.push('      qc: false');
+  if (!checked('metab_show_de'))            rsLines.push('      de: false');
+  if (!checked('metab_show_de_heatmaps'))   rsLines.push('      de_heatmaps: false');
+  if (!checked('metab_show_clustering'))    rsLines.push('      clustering: false');
+  if (!checked('metab_show_fs'))            rsLines.push('      feature_selection: false');
+  if (!checked('metab_show_enrichment'))    rsLines.push('      enrichment: false');
+  if (!checked('metab_show_network'))       rsLines.push('      network: false');
+  if (!checked('metab_show_mummichog'))     rsLines.push('      mummichog: false');
+  if (!checked('metab_show_methods'))       rsLines.push('      methods: false');
+  if (!checked('metab_show_session'))       rsLines.push('      session_info: false');
+  if (!checked('metab_show_technical'))     rsLines.push('      technical_summary: false');
+  if (rsLines.length > 0) {
+    yaml += '\n    report_sections:\n' + rsLines.join('\n') + '\n';
+  }
+
   yaml += '\nparams:\n  seed: 1\n';
   return yaml;
+}
+
+// Toggle visibility of conditional metab normalization fields (bio_factor / is)
+function updateMetabNormCondFields() {
+  var sn = v('metab_sample_norm');
+  var bioField = document.getElementById('metab_bio_factor_field');
+  var isField  = document.getElementById('metab_is_ref_field');
+  if (bioField) bioField.style.display = (sn === 'bio_factor') ? '' : 'none';
+  if (isField)  isField.style.display  = (sn === 'is')         ? '' : 'none';
 }
 
 // ============================================================
@@ -3091,6 +3178,171 @@ function loadExampleData() {
     .catch(function(err) {
       showToast('Failed to load example: ' + err.message, 'error', 8000);
       btn.textContent = '\u2605 Load Example Dataset (Proteomics)';
+      btn.disabled = false;
+    });
+}
+
+// ============================================================
+// Load Example \u2014 Metabolomics
+// ============================================================
+function loadExampleMetab() {
+  var btn = document.getElementById('btn_load_example_metab');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  fetch('/api/load-example-metab')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast(d.error, 'error', 8000); return; }
+
+      setMode('metabolomics');
+
+      document.getElementById('project_name').value = d.project_name;
+      document.getElementById('analyst').value      = d.analyst;
+      document.getElementById('round').value        = d.round;
+
+      var orgSel = document.getElementById('organism');
+      if (orgSel) { orgSel.value = 'Homo sapiens'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
+      var commSel = document.getElementById('commentary_backend');
+      if (commSel) commSel.value = 'none';
+
+      document.getElementById('metab_data_path').value     = d.data.path;
+      document.getElementById('metab_metadata_path').value = d.metadata.path;
+
+      function apply(prefix, info) {
+        if (!info || !info.columns || info.columns.length === 0) return;
+        detectedColumns[prefix] = info.columns;
+        var colsDiv = document.getElementById(prefix + '_cols');
+        if (colsDiv) {
+          colsDiv.textContent = 'Detected ' + info.columns.length + ' columns: ' +
+            info.columns.slice(0, 8).join(', ') + (info.columns.length > 8 ? '...' : '');
+          colsDiv.classList.add('visible');
+        }
+        var statusDiv = document.getElementById(prefix + '_status');
+        if (statusDiv) { statusDiv.textContent = 'Loaded: ' + info.path; statusDiv.className = 'upload-status visible success'; }
+        populateSelects(prefix, info.columns);
+      }
+      apply('metab_data',     d.data);
+      apply('metab_metadata', d.metadata);
+
+      if (d.metadata.text) {
+        var lines = d.metadata.text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+        if (lines.length >= 2) {
+          var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+          var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+          var rows = [];
+          for (var i = 1; i < lines.length; i++) {
+            var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+            var row = {};
+            for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+            rows.push(row);
+          }
+          metadataRows['metab_metadata'] = { header: header, rows: rows };
+        }
+      }
+
+      function setSel(id, val) { var s = document.getElementById(id); if (s) s.value = val; }
+      setSel('metab_input_format', 'processed_wide');
+      setSel('metab_sample_col',   'sample_id');
+      setSel('metab_group_col',    'condition');
+
+      if (typeof updateContrastBuilder === 'function') updateContrastBuilder('metab');
+      if (typeof populateSampleExclusion === 'function') populateSampleExclusion('metab');
+
+      showToast('Metabolomics example loaded. Scroll down and click Run Pipeline.', 'success', 8000);
+      btn.textContent = '\u2713 Example Loaded';
+      setTimeout(function() {
+        btn.textContent = '\u2605 Load Example (Metabolomics)';
+        btn.disabled = false;
+      }, 3000);
+    })
+    .catch(function(err) {
+      showToast('Failed to load example: ' + err.message, 'error', 8000);
+      btn.textContent = '\u2605 Load Example (Metabolomics)';
+      btn.disabled = false;
+    });
+}
+
+// ============================================================
+// Load Example \u2014 Lipidomics
+// ============================================================
+function loadExampleLipid() {
+  var btn = document.getElementById('btn_load_example_lipid');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  fetch('/api/load-example-lipid')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast(d.error, 'error', 8000); return; }
+
+      setMode('lipidomics');
+
+      document.getElementById('project_name').value = d.project_name;
+      document.getElementById('analyst').value      = d.analyst;
+      document.getElementById('round').value        = d.round;
+
+      var orgSel = document.getElementById('organism');
+      if (orgSel) { orgSel.value = 'Homo sapiens'; if (typeof toggleNonModel === 'function') toggleNonModel(); }
+      var commSel = document.getElementById('commentary_backend');
+      if (commSel) commSel.value = 'none';
+
+      document.getElementById('lipid_data_path').value     = d.data.path;
+      document.getElementById('lipid_metadata_path').value = d.metadata.path;
+
+      function apply(prefix, info) {
+        if (!info || !info.columns || info.columns.length === 0) return;
+        detectedColumns[prefix] = info.columns;
+        var colsDiv = document.getElementById(prefix + '_cols');
+        if (colsDiv) {
+          colsDiv.textContent = 'Detected ' + info.columns.length + ' columns: ' +
+            info.columns.slice(0, 8).join(', ') + (info.columns.length > 8 ? '...' : '');
+          colsDiv.classList.add('visible');
+        }
+        var statusDiv = document.getElementById(prefix + '_status');
+        if (statusDiv) { statusDiv.textContent = 'Loaded: ' + info.path; statusDiv.className = 'upload-status visible success'; }
+        populateSelects(prefix, info.columns);
+      }
+      apply('lipid_data',     d.data);
+      apply('lipid_metadata', d.metadata);
+
+      if (d.metadata.text) {
+        var lines = d.metadata.text.split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+        if (lines.length >= 2) {
+          var sep = lines[0].indexOf('\t') >= 0 ? '\t' : ',';
+          var header = lines[0].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+          var rows = [];
+          for (var i = 1; i < lines.length; i++) {
+            var vals = lines[i].split(sep).map(function(c) { return c.replace(/^["']|["']$/g, '').trim(); });
+            var row = {};
+            for (var j = 0; j < header.length; j++) row[header[j]] = vals[j] || '';
+            rows.push(row);
+          }
+          metadataRows['lipid_metadata'] = { header: header, rows: rows };
+        }
+      }
+
+      function setSel(id, val) { var s = document.getElementById(id); if (s) s.value = val; }
+      setSel('lipid_input_format', 'translated_csv');
+      setSel('lipid_name_col',     'Metabolite');
+      setSel('lipid_sample_col',   'sample_id');
+      setSel('lipid_group_col',    'condition');
+      var hgr = document.getElementById('lipid_has_group_row');
+      if (hgr) hgr.checked = true;
+
+      if (typeof updateContrastBuilder === 'function') updateContrastBuilder('lipid');
+      if (typeof populateSampleExclusion === 'function') populateSampleExclusion('lipid');
+
+      showToast('Lipidomics example loaded. Scroll down and click Run Pipeline.', 'success', 8000);
+      btn.textContent = '\u2713 Example Loaded';
+      setTimeout(function() {
+        btn.textContent = '\u2605 Load Example (Lipidomics)';
+        btn.disabled = false;
+      }, 3000);
+    })
+    .catch(function(err) {
+      showToast('Failed to load example: ' + err.message, 'error', 8000);
+      btn.textContent = '\u2605 Load Example (Lipidomics)';
       btn.disabled = false;
     });
 }

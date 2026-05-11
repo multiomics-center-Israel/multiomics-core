@@ -64,7 +64,24 @@ if errorlevel 1 (
 )
 
 echo.
-echo [OK] All packages installed.
+echo [OK] renv packages restored.
+echo.
+
+:: Step 2a: Verify wizard-critical packages are actually loadable.
+:: renv::restore() can return success even when some packages failed to build
+:: (e.g. jsonlite missing -> wizard cannot start). Fall back to CRAN for any
+:: that didn't load.
+echo [2a/4] Verifying wizard dependencies...
+Rscript -e "pkgs <- c('jsonlite','httpuv','later','yaml','rmarkdown','targets'); missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing) > 0) { cat('  Missing after renv::restore: ', paste(missing, collapse=', '), '\n'); cat('  Falling back to CRAN...\n'); install.packages(missing, repos = 'https://cloud.r-project.org'); still <- missing[!vapply(missing, requireNamespace, logical(1), quietly = TRUE)]; if (length(still) > 0) { cat('  [ERROR] Could not install: ', paste(still, collapse=', '), '\n'); quit(status = 1L) } } else { cat('  [OK] All wizard packages loadable.\n') }"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Critical wizard packages could not be installed.
+    echo The wizard will not start without them.
+    echo Try running this installer again, or install R and RTools first.
+    echo.
+    pause
+    exit /b 1
+)
 echo.
 
 :: Step 2b: Ensure pandoc is available (for HTML report rendering)

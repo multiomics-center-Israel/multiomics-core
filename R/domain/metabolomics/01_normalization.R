@@ -23,10 +23,12 @@
 #'                (required for eigenms; ignored by other methods).
 #' @return Normalized numeric matrix (same dimensions).
 normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL,
-                              groups = NULL, ref_samples = NULL) {
+                              groups = NULL, ref_samples = NULL,
+                              meta = NULL, bio_factor_col = NULL) {
     method <- tolower(method)
     assert_one_of(method, "sample_norm",
-                  c("none", "sum", "median", "pqn", "eigenms", "eigenms_forced", "is"))
+                  c("none", "sum", "median", "pqn", "eigenms", "eigenms_forced",
+                    "is", "bio_factor"))
 
     switch(method,
         none           = mat,
@@ -36,6 +38,7 @@ normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = N
         eigenms        = norm_eigenms(mat, groups),
         eigenms_forced = norm_eigenms_forced(mat, groups),
         is             = norm_internal_standard(mat, ref_col, row_data),
+        bio_factor     = norm_biological_factor(mat, meta, bio_factor_col),
         stop("Unknown sample normalization method: ", method)
     )
 }
@@ -323,6 +326,58 @@ norm_internal_standard <- function(mat, ref_col = NULL, row_data = NULL) {
     is_intensity[!is.finite(is_intensity) | is_intensity == 0] <- 1
 
     sweep(mat, 2, is_intensity, FUN = "/")
+}
+
+
+#' Biological-factor normalization
+#'
+#' Divide each sample column by a per-sample numeric value (e.g., mg of total
+#' protein) read from a metadata column. Used when intensities should be
+#' normalized to a measured biological covariate rather than to a
+#' sample-level statistic.
+#'
+#' @param mat        Numeric matrix (features x samples).
+#' @param meta       data.frame with per-sample rows; must contain
+#'                   `factor_col` and a sample-id column matching colnames(mat)
+#'                   (or be in the same row order as colnames(mat)).
+#' @param factor_col Name of the column in meta with per-sample numeric values.
+#' @return Normalized matrix.
+norm_biological_factor <- function(mat, meta, factor_col) {
+    if (is.null(meta) || is.null(factor_col) || !nzchar(factor_col)) {
+        stop("biological_factor normalization requires both meta and ",
+             "biological_factor_col to be set in config.")
+    }
+    if (!factor_col %in% colnames(meta)) {
+        stop("biological_factor: column '", factor_col,
+             "' not found in metadata.")
+    }
+
+    # Match meta rows to sample column order via a sample-id column when present
+    sample_cols <- intersect(c("sample_id", "SampleID", "Sample.ID", "sample"),
+                             colnames(meta))
+    if (length(sample_cols) > 0) {
+        idx <- match(colnames(mat), meta[[sample_cols[1]]])
+        if (any(is.na(idx))) {
+            missing <- colnames(mat)[is.na(idx)]
+            stop("biological_factor: samples missing from meta: ",
+                 paste(utils::head(missing, 5), collapse = ", "))
+        }
+        factors <- as.numeric(meta[[factor_col]][idx])
+    } else {
+        if (nrow(meta) != ncol(mat)) {
+            stop("biological_factor: cannot align meta to samples; ",
+                 "no sample-id column found and row count mismatch.")
+        }
+        factors <- as.numeric(meta[[factor_col]])
+    }
+
+    if (any(is.na(factors)) || any(factors <= 0)) {
+        bad <- colnames(mat)[is.na(factors) | factors <= 0]
+        stop("biological_factor: invalid (NA or non-positive) values for ",
+             "samples: ", paste(utils::head(bad, 5), collapse = ", "))
+    }
+
+    sweep(mat, 2, factors, FUN = "/")
 }
 
 

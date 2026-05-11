@@ -175,6 +175,7 @@ resolve_section <- function(entry, sub_defaults) {
 
 # Top-level sections (no sub-keys)
 show_executive_summary <- isTRUE(rs$executive_summary %||% TRUE)
+show_technical_summary <- isTRUE(rs$technical_summary %||% TRUE)
 show_parameters        <- isTRUE(rs$parameters        %||% TRUE)
 show_module_status     <- isTRUE(rs$module_status      %||% TRUE)
 show_de_heatmaps       <- isTRUE(rs$de_heatmaps        %||% TRUE)
@@ -582,6 +583,61 @@ make_dt(module_status, "Module Status", pageLength = 10)
 ```
 
 `r if (!show_module_status) "-->"`
+
+---
+
+```{r technical-summary-heading, eval=show_technical_summary, results='asis'}
+cat("# Technical Summary\n\n")
+```
+
+```{r technical-summary, eval=show_technical_summary, results='asis'}
+tech <- metab_cfg$technical_report
+
+n_samples_ts <- if (!is.null(pre)) ncol(pre$expr_work) else NA
+n_groups_ts  <- if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) length(unique(pre$meta[[cond_col]])) else NA
+
+cat("## Sample & Acquisition Overview\n\n")
+overview <- character(0)
+if (!is.na(n_samples_ts) && !is.na(n_groups_ts)) {
+    overview <- c(overview, sprintf("This analysis comprises **%d samples** across **%d experimental groups** (grouping variable: *%s*).",
+                                     n_samples_ts, n_groups_ts, cond_col))
+}
+if (!is.null(tech$facility) && nzchar(tech$facility)) {
+    overview <- c(overview, sprintf("Data were acquired at the **%s**.", tech$facility))
+}
+if (length(overview) > 0) cat(paste(overview, collapse = " "), "\n\n")
+
+if (!is.null(tech)) {
+    if (!is.null(tech$sample_prep) && nzchar(tech$sample_prep)) {
+        cat("## Sample Preparation\n\n", tech$sample_prep, "\n\n")
+    }
+    if (!is.null(tech$ms_acquisition) && nzchar(tech$ms_acquisition)) {
+        cat("## MS Acquisition\n\n", tech$ms_acquisition, "\n\n")
+    }
+    if (!is.null(tech$search_engine) && nzchar(tech$search_engine)) {
+        cat("## Software / Identification\n\n", tech$search_engine, "\n\n")
+    }
+    if (!is.null(tech$search_parameters) && nzchar(tech$search_parameters)) {
+        cat("## Processing Parameters\n\n", tech$search_parameters, "\n\n")
+    }
+}
+
+cat("## Downstream Analysis (multiomics-core)\n\n")
+norm_cfg <- metab_cfg$normalization %||% list()
+cat(sprintf("- **Normalization:** %s + %s + %s\n",
+            norm_cfg$sample_norm %||% "none",
+            norm_cfg$transform %||% "none",
+            norm_cfg$scaling %||% "none"))
+if (identical(norm_cfg$sample_norm, "bio_factor") && nzchar(norm_cfg$biological_factor_col %||% "")) {
+    cat(sprintf("  - Biological factor column: `%s`\n", norm_cfg$biological_factor_col))
+}
+cat(sprintf("- **DE method:** %s (adj.p <= %s, |FC| >= %s)\n",
+            metab_cfg$de$method %||% "limma",
+            metab_cfg$de$p_cutoff %||% 0.05,
+            metab_cfg$de$linear_fc_cutoff %||% 1.5))
+cat(sprintf("- **Enrichment:** %s\n",
+            if (isTRUE(metab_cfg$enrichment$run_enrichment)) "enabled" else "disabled"))
+```
 
 ---
 
