@@ -492,7 +492,12 @@ if (!is.null(clustering_res) && !is.null(clustering_res$plots$partition_heatmap)
 
 ```{r clustering-profiles, fig.width=10, fig.height=7}
 if (!is.null(clustering_res) && !is.null(clustering_res$plots$cluster_profiles)) {
-  safe_print_plot(clustering_res$plots$cluster_profiles)
+  cp <- clustering_res$plots$cluster_profiles
+  if (is.list(cp) && !inherits(cp, "gg")) {
+    for (p in cp) safe_print_plot(p)
+  } else {
+    safe_print_plot(cp)
+  }
 }
 ```
 

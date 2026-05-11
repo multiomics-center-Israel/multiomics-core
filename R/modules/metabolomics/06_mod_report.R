@@ -75,8 +75,6 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
-#' @param qc_comparison_file Character scalar. Path to normalization_qc_benchmark.tsv (or NULL).
-#' @param qc_suite_files     Character vector. QC file paths (or NULL).
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     clustering_res = NULL,
@@ -142,6 +140,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         qc_suite_files     = qc_suite_files,
         commentary_file    = commentary_file
     )
+
 
     rmarkdown::render(
         input       = dest_rmd,
@@ -276,7 +275,6 @@ mod_metabolome_overview <- function(pre, inputs, config, out_dir) {
         warning("Metabolome overview rendering failed: ", e$message)
         return(character(0))
     })
-
     out_file
 }
 

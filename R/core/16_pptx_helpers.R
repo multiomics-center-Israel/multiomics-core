@@ -35,7 +35,22 @@ truncate_bl <- function(txt, max_chars = 350) {
 #' @param config        Pipeline config (for model selection).
 #' @return Character string with the AI bottom line.
 generate_slide_bottom_line <- function(slide_context, stats_json = NULL,
-                                       image_path = NULL, config = NULL) {
+                                       image_path = NULL, config = NULL,
+                                       mode = NULL) {
+
+    # Resolve mode-scoped commentary settings (same pattern as 12_commentary.R)
+    if (!is.null(mode) && !is.null(config$modes[[mode]]$commentary)) {
+        comment_cfg <- config$modes[[mode]]$commentary
+    } else {
+        comment_cfg <- config$commentary %||% list()
+    }
+
+    # Respect the enabled flag
+    if (!isTRUE(comment_cfg$enabled)) return("")
+
+    # Respect the backend setting
+    backend <- comment_cfg$backend %||% "none"
+    if (backend != "claude-code") return("")
 
     # Respect commentary.enabled setting
     comment_cfg <- config$commentary %||% list()

@@ -11,7 +11,7 @@
 mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
     assert_pre_contract(pre, stage = "rna")
     dirs <- create_legacy_output_dirs(out_dir, create = TRUE)
-    out_qc_post <- file.path(dirs$diagnostic_plots, "QC_post")
+    out_qc_post <- file.path(dirs$diagnostic_plots, "DE_plots")
     ensure_dir(out_qc_post)
 
     mat <- pre$expr_work

@@ -24,6 +24,11 @@ load_rna_inputs <- function(config) {
     } else if (!is.null(inputs$counts)) {
         message("[load_rna_inputs] Loaded raw count matrix")
         inputs$source_type <- "matrix"
+    } else if (!is.null(inputs$preprocessed_counts)) {
+        # Fallback: preprocessed_counts provided instead of raw counts
+        message("[load_rna_inputs] Using preprocessed_counts as count matrix")
+        inputs$counts <- inputs$preprocessed_counts
+        inputs$source_type <- "matrix"
     }
 
     inputs
@@ -81,8 +86,5 @@ validate_rna_inputs <- function(inputs, cfg) {
     invisible(TRUE)
 }
 
-#' Generic loader helper
-# NOTE: load_omics_inputs() and validate_contrasts_content() are defined in
-# R/core/01_io.R — the canonical, shared implementation. Do NOT duplicate them
-# here; domain files are sourced after core files and would overwrite the
-# core version, losing fixes (e.g. dir.exists skip, multi-level support).
+
+# load_omics_inputs and validate_contrasts_content live in R/core/01_io.R

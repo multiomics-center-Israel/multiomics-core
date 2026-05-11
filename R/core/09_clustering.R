@@ -43,7 +43,8 @@ run_binary_patterns <- function(expr_mat_corr,
                                 summary_df = NULL,
                                 corr_cutoff = 0.8,
                                 counts_cutoff_high = 0,
-                                counts_cutoff_low = NULL) {
+                                counts_cutoff_low = NULL, 
+                                annot_context = NULL) {
   stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
   expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
@@ -224,14 +225,6 @@ run_binary_patterns <- function(expr_mat_corr,
 
     lin_fc_cutoff <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cutoff <- log2(lin_fc_cutoff)
-    
-    
-    annot_context <- list(
-      summary_df    = summary_df,
-      p_cutoff      = de_cfg$p_cutoff %||% 0.05,
-      log2fc_cutoff = log2fc_cutoff,
-      id_col        = "feature_id"
-    )
     
     
     p_bin <- wrap_clustering_heatmap(
@@ -551,14 +544,12 @@ get_clustering_group_col <- function(cfg, meta) {
   group_col
 }
 
-
 #' Build sample-level long data frame annotated with group and cluster
 #'
 #' Shared data-preparation helper used by both write_clustering_legacy_profiles()
-#' and save_cluster_profile_outputs(). Converts a feature x sample expression
-#' matrix into long format and joins with metadata groups and cluster
-#' assignments.
-#'
+#' (for data export) and save_cluster_profile_outputs() (for plotting).
+#' Converts a feature x sample expression matrix into long format, joins with
+#' metadata groups and cluster assignments.
 #' @param expr_mat Numeric matrix (features x samples)
 #' @param meta Sample metadata data.frame
 #' @param clusters Named integer vector (feature IDs -> cluster numbers)
@@ -567,7 +558,6 @@ get_clustering_group_col <- function(cfg, meta) {
 #' @param color_col Character or NULL: optional metadata column for secondary grouping
 #' @return data.frame with columns: Gene, Name, Exp, Group, Cluster,
 #'   and optionally ColorGroup (only when color_col is not NULL)
-#' @export
 build_cluster_long_df <- function(expr_mat, meta, clusters,
                                   group_col, sample_col,
                                   color_col = NULL) {
@@ -594,7 +584,6 @@ build_cluster_long_df <- function(expr_mat, meta, clusters,
   df_annotated |>
     dplyr::inner_join(cluster_map, by = "Gene")
 }
-
 
 #' Compute row gap positions for pheatmap from ordered cluster assignments
 #'
@@ -725,6 +714,7 @@ build_heatmap_annotation_col <- function(meta, cfg, as_names = FALSE) {
     rownames(df) <- as.character(meta[[sample_col]])
     df
 }
+
 
 
 # ---- Clustering guards ----
@@ -871,26 +861,29 @@ choose_k_silhouette <- function(mat_fg, algorithm = c("pam", "kmeans"), k_max = 
   best_k
 }
 
+build_clustering_distance <- function(mat) {
+  cmat <- stats::cor(t(mat), method = "pearson")
+  cmat[is.na(cmat)] <- 0
+  stats::as.dist(1 - cmat)
+}
 #' Choose k by gap statistic
 #'
-#' Uses cluster::clusGap() with hclust (Pearson correlation + Ward.D2) to find
+#' Uses cluster::clusGap() with hclust (Euclidean distance + Ward.D2) to find
 #' optimal k. Matches Neat_RNA-Seq behavior: firstSEmax with SE.factor=1.
 #'
 #' @param mat_fg Feature x group z-scored matrix
 #' @param k_max Maximum K to test (default 20)
-#' @param B Number of bootstrap samples (default 10)
+#' @param B Number of bootstrap samples (default 100)
 #' @return integer k
-choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
+choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 100) {
   stopifnot(is.matrix(mat_fg))
   n <- nrow(mat_fg)
   if (n < 2) stop("choose_k_gap_statistic: need at least 2 features")
   k_max <- min(as.integer(k_max), n - 1L)
   if (k_max < 2) return(2L)
-  
+
   hclust_func <- function(x, k) {
-    cmat <- stats::cor(t(x), use = "pairwise.complete.obs")
-    cmat[is.na(cmat)] <- 0
-    d <- stats::as.dist(1 - cmat)
+    d <- build_clustering_distance(x)
     hc <- stats::hclust(d, method = "ward.D2")
     # clusGap bootstraps may yield an hc with fewer leaves than requested k
     k_safe <- min(k, length(hc$order))
@@ -907,12 +900,35 @@ choose_k_gap_statistic <- function(mat_fg, k_max = 20, B = 10) {
 
 #' Perform partition clustering on DE features using group means (legacy-like)
 #'
+#' Two normalization scopes are supported via cl_cfg$zscore_scope:
+#'   - "groups" (default, legacy): build group means first, then z-score the
+#'     gene x group matrix. Backward-compatible.
+#'   - "samples" (recommended for K = 2-4 groups): z-score the gene x sample
+#'     matrix first, then build group means and feed them directly to
+#'     clustering. Per-gene SD estimated from K group means is unstable when K
+#'     is small; sample-level z-scoring uses many more observations and gives
+#'     a noise-aware weighting.
+#'
+#' Under "samples", the matrix in $z_group_means is no longer row-scaled to
+#' unit variance — noisier genes carry smaller magnitudes by design. Callers
+#' that plot $z_group_means assuming row-unit variance (e.g. fixed [-2, +2]
+#' color scale) should be reviewed before switching scope.
+#'
 #' @param expr_mat features x samples (imputed)
 #' @param meta sample metadata
-#' @param cfg mode config (uses effects + clustering$steps$partition)
+#' @param cfg mode config (uses effects + clustering$steps$partition).
+#'   Recognized keys under clustering$steps$partition: algorithm, k, k_max,
+#'   k_method, gap_B, nstart, distance, min_variance (variance units, default
+#'   0 -> only fully constant rows are dropped), zscore_scope ("groups" |
+#'   "samples"), seed (overrides the function-arg default).
 #' @param de_features feature IDs to include
-#' @return list(k, clusters_named, group_means, z_group_means)
-perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_features) {
+#' @param seed integer reproducibility seed for clusGap / kmeans (default
+#'   1L). cl_cfg$seed wins over this default. Kept for reproducibility even
+#'   though cluster::pam() is deterministic in this implementation.
+#' @return list(algorithm, k, clusters, group_means, z_group_means, seed,
+#'   zscore_scope). $group_means always holds raw group means; $z_group_means
+#'   holds whatever matrix was fed to clustering for the chosen scope.
+perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_features, seed = 1L) {
   stopifnot(is.character(de_features))
   expr_mat <- as.matrix(expr_mat)
 
@@ -924,20 +940,69 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     stop("Partition clustering requested but config$modes$<mode>$clustering$steps$partition$enabled is FALSE")
   }
 
+  # Reproducibility: cl_cfg$seed wins over the function-arg default.
+  seed <- cl_cfg$seed %||% seed
+  set.seed(seed)
+
   # Default algorithm is now hclust to match legacy, but supports others
   alg <- tolower(cl_cfg$algorithm %||% "hclust")
   if (!(alg %in% c("pam", "kmeans", "hclust"))) stop("partition$algorithm must be 'pam', 'kmeans' or 'hclust'")
 
+  zscore_scope <- tolower(cl_cfg$zscore_scope %||% "groups")
+  if (!(zscore_scope %in% c("groups", "samples"))) {
+    stop("partition$zscore_scope must be 'groups' or 'samples'")
+  }
+  min_var <- cl_cfg$min_variance %||% 0
+
   # feature x sample subset
   x <- expr_mat[feats, , drop = FALSE]
 
-  # group means: feature x group
-  gm_obj <- build_group_means_from_effects(x, meta, cfg)
-  gm <- gm_obj$group_means
+  # Drop low-variance rows. Variance, not SD; threshold is also in variance
+  # units so the comparison is unit-consistent. zscore_rows()'s row_sds == 0
+  # safety net stays intact for other callers.
+  filter_low_var <- function(m) {
+    vars <- apply(m, 1, stats::var, na.rm = TRUE)
+    vars[is.na(vars)] <- 0
+    keep <- vars > min_var
+    n_dropped <- sum(!keep)
+    if (n_dropped > 0) {
+      dropped_ids <- rownames(m)[!keep]
+      message(sprintf(
+        "partition clustering: dropped %d low-variance features (min_variance = %g)",
+        n_dropped, min_var
+      ))
+      if (length(dropped_ids) > 0) {
+        message(sprintf("  first dropped: %s",
+                        paste(utils::head(dropped_ids, 5), collapse = ", ")))
+      }
+    }
+    m[keep, , drop = FALSE]
+  }
 
-  # z-score across groups (row-wise)
-  # This scales the patterns so we focus on trends, not intensity
-  z_gm <- zscore_rows(gm)
+  if (zscore_scope == "samples") {
+    # Recommended for small K: estimate per-gene SD across all samples.
+    x <- filter_low_var(x)
+    if (nrow(x) < 2) stop("Partition clustering: <2 features after variance filter")
+
+    # group_means slot keeps raw expression semantics (un-z-scored), consistent
+    # with the "groups" scope. Avoids leaking z-scored values into any future
+    # downstream caller that reads $group_means.
+    gm_raw_obj <- build_group_means_from_effects(x, meta, cfg)
+    gm <- gm_raw_obj$group_means
+
+    # z-scored samples -> group means -> fed to clustering. No second z-score
+    # on the group-means matrix (that would undo the noise-aware weighting).
+    x_z <- zscore_rows(x)
+    gm_z_obj <- build_group_means_from_effects(x_z, meta, cfg)
+    z_gm <- gm_z_obj$group_means
+  } else {
+    # Default "groups": legacy behavior — group means first, then z-score.
+    gm_obj <- build_group_means_from_effects(x, meta, cfg)
+    gm <- gm_obj$group_means
+    gm <- filter_low_var(gm)
+    if (nrow(gm) < 2) stop("Partition clustering: <2 features after variance filter")
+    z_gm <- zscore_rows(gm)
+  }
 
   # Configuration parameters
   k_fixed <- cl_cfg$k
@@ -952,20 +1017,16 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
   clusters <- NULL
   final_k <- NULL
+  hc <- NULL
+  dist_mat <- NULL
 
-  # --- Logic Split based on Algorithm ---
+  # --- Determine final_k (no fitting yet) ---
 
   if (alg == "hclust") {
-    # === Legacy Style: Hierarchical Clustering ===
-
-    # 1. Distance: Pearson Correlation (1 - cor)
-    #    We use t(z_gm) because cor() works on columns
-    dist_mat <- as.dist(1 - cor(t(z_gm)))
-
-    # 2. Linkage: Ward.D2 (Minimizes variance within clusters)
+    # Single source of truth for the distance, paired with Ward.D2 (Euclidean).
+    dist_mat <- build_clustering_distance(z_gm)
     hc <- stats::hclust(dist_mat, method = "ward.D2")
 
-    # 3. Determine K (if not fixed)
     if (!is.null(k_fixed)) {
       final_k <- as.integer(k_fixed)
     } else {
@@ -973,49 +1034,45 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
 
       if (k_method == "gap") {
         # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
-        gap_B <- cl_cfg$gap_B %||% 10
+        gap_B <- cl_cfg$gap_B %||% 100
         final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
       } else {
-        # Default: Silhouette on hierarchical tree cuts
-        sil_width <- numeric(k_max)
-
-        for (i in 2:k_max) {
-          ct <- stats::cutree(hc, k = i)
+        # Silhouette on hierarchical tree cuts: explicit k -> score table,
+        # no magic offsets.
+        sil_table <- vapply(2:k_max, function(i) {
+          ct  <- stats::cutree(hc, k = i)
           sil <- cluster::silhouette(ct, dist_mat)
-          sil_width[i] <- mean(sil[, 3])
-        }
-
-        final_k <- which.max(sil_width[-1]) + 1
+          mean(sil[, "sil_width"], na.rm = TRUE)
+        }, numeric(1))
+        names(sil_table) <- as.character(2:k_max)
+        final_k <- as.integer(names(sil_table)[which.max(sil_table)])
       }
     }
+    
 
-    # 4. Cut the tree (clamp k to tree size - 1 in case maxSE/gap returns too high)
-    # When k >= n we'd get trivial singleton clusters, which downstream plots
-    # (pheatmap with scale="row") can't handle gracefully. Cap at n-1.
-    final_k <- min(as.integer(final_k), length(hc$order) - 1L)
-    if (final_k < 2L) {
-      message("[partition clustering] Computed k < 2 after clamping — skipping partition.")
-      return(list(clusters = NULL, group_means = gm, k = NA))
-    }
-    clusters <- stats::cutree(hc, k = final_k)
   } else {
-    # === Modern Style: Partitioning (PAM / K-means) ===
-
+    # PAM / K-means
     if (is.null(k_fixed)) {
       final_k <- choose_k_silhouette(z_gm, algorithm = alg, k_max = k_max, nstart = nstart)
     } else {
       final_k <- as.integer(k_fixed)
     }
+  }
 
-    if (final_k < 2) stop("partition$k must be >= 2")
+  # Single point of validation, fires for every branch (incl. k_fixed = 1).
+  if (is.null(final_k) || final_k < 2) stop("partition$k must be >= 2")
 
-    if (alg == "pam") {
-      res <- cluster::pam(z_gm, k = final_k, metric = cl_cfg$distance %||% "euclidean")
-      clusters <- res$clustering
-    } else { # kmeans
-      res <- stats::kmeans(z_gm, centers = final_k, nstart = nstart)
-      clusters <- res$cluster
-    }
+  # --- Fit clusters ---
+
+  if (alg == "hclust") {
+    # hc and dist_mat are reused from the k-determination block above.
+    clusters <- stats::cutree(hc, k = final_k)
+  } else if (alg == "pam") {
+    res <- cluster::pam(z_gm, k = final_k, metric = cl_cfg$distance %||% "euclidean")
+    clusters <- res$clustering
+  } else { # kmeans
+    res <- stats::kmeans(z_gm, centers = final_k, nstart = nstart)
+    clusters <- res$cluster
   }
 
   # Ensure names are set correctly (with defensive check)
@@ -1033,7 +1090,9 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     k = final_k,
     clusters = clusters,
     group_means = gm,
-    z_group_means = z_gm
+    z_group_means = z_gm,
+    seed = seed,
+    zscore_scope = zscore_scope
   )
 }
 
@@ -1052,44 +1111,38 @@ build_clustering_output_table <- function(clusters, out_file = NULL) {
   tbl
 }
 
-#' Build cluster profile data frame from z-scored group means
+#' Compute row gap positions for pheatmap from ordered cluster assignments
 #'
-#' Computes per-cluster mean and SD of z-scored group means. Handles empty
-#' clusters and NA group names safely.
+#' Given an integer vector of cluster assignments (in heatmap row order),
+#' returns cumulative positions where gaps should appear between clusters.
 #'
-#' @param z_group_means Matrix (features x groups) of z-scored group means
-#' @param clusters Named integer vector mapping feature IDs to cluster numbers
-#' @param k Number of clusters
-#' @return Data frame with columns: cluster, group, mean, sd, n_features.
-#'         Returns NULL if all clusters are empty.
-build_cluster_profiles <- function(z_group_means, clusters, k) {
-  clv <- clusters[rownames(z_group_means)]
-  groups <- colnames(z_group_means)
+#' @param clusters_ordered Integer vector of cluster assignments in display order
+#' @return Integer vector of gap positions (empty for k=1)
+#' @export
+compute_cluster_gaps <- function(clusters_ordered) {
+  stopifnot(is.integer(clusters_ordered) || is.numeric(clusters_ordered))
+  rl <- rle(as.integer(clusters_ordered))
+  if (length(rl$lengths) <= 1) return(integer(0))
+  cumsum(rl$lengths[-length(rl$lengths)])
+}
 
-  prof_list <- lapply(seq_len(k), function(ci) {
-    rows <- which(clv == ci)
-    sub <- z_group_means[rows, , drop = FALSE]
-    if (nrow(sub) == 0) {
-      return(NULL)
-    }
-    data.frame(
-      cluster = ci,
-      group = groups,
-      mean = colMeans(sub, na.rm = TRUE),
-      sd = apply(sub, 2, stats::sd, na.rm = TRUE),
-      n_features = nrow(sub),
-      stringsAsFactors = FALSE
-    )
-  })
-
-  prof_list <- Filter(Negate(is.null), prof_list)
-  if (length(prof_list) == 0) {
-    return(NULL)
-  }
-
-  prof <- do.call(rbind, prof_list)
-  if (any(is.na(prof$group))) prof$group[is.na(prof$group)] <- "NA"
-  prof
+#' Compute column gap positions from a sample annotation column
+#'
+#' Reads a group label per sample from \code{annot_col} (preserving the
+#' existing column order — no reordering) and returns the cumulative
+#' positions where pheatmap should draw vertical gaps between contiguous
+#' group blocks.
+#'
+#' @param annot_col data.frame of column annotations (rownames = sample IDs).
+#' @param group_col Optional name of the group column in \code{annot_col};
+#'   defaults to the first column (per \code{build_heatmap_annotation_col}
+#'   convention).
+#' @return Integer vector of gap positions (empty if only one block).
+compute_column_gaps_by_group <- function(annot_col, group_col = NULL) {
+  if (is.null(group_col)) group_col <- colnames(annot_col)[1]
+  groups <- as.character(annot_col[, group_col])
+  group_int <- as.integer(factor(groups, levels = unique(groups)))
+  compute_cluster_gaps(group_int)
 }
 
 #' Write cluster data in exact legacy format
@@ -1104,33 +1157,10 @@ build_cluster_profiles <- function(z_group_means, clusters, k) {
 write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_dir) {
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
-  # 1. Prepare Metadata Map (Sample -> Group)
-  group_col <- get_clustering_group_col(cfg, meta)
+  group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
 
-  meta_map <- meta |>
-    dplyr::select(Name = all_of(sample_col), Group = all_of(group_col))
-
-  # 2. Convert Expression Matrix to Long Format
-  # Rows = Genes, Cols = Samples -> Melt
-  norm_expr_long <- as.data.frame(expr_mat)|>
-    tibble::rownames_to_column("Gene")|>
-    tidyr::pivot_longer(cols = -Gene, names_to = "Name", values_to = "Exp")
-
-  # 3. Join with Metadata
-  df_annotated <- norm_expr_long|>
-    dplyr::inner_join(meta_map, by = "Name")
-
-  # 4. Map Genes to Clusters
-  cluster_map <- data.frame(
-    Gene = names(clusters),
-    Cluster = as.integer(clusters),
-    stringsAsFactors = FALSE
-  )
-
-  # Final Join: Only keep genes that are in a cluster
-  df_final <- df_annotated|>
-    dplyr::inner_join(cluster_map, by = "Gene")
+  df_final <- build_cluster_long_df(expr_mat, meta, clusters, group_col, sample_col)
 
   files_written <- character(0)
 
@@ -1171,6 +1201,82 @@ write_clustering_legacy_profiles <- function(expr_mat, meta, clusters, cfg, out_
   files_written <- c(files_written, fname_all)
 
   return(files_written)
+}
+
+#' Save per-cluster profile PNGs and multi-panel grid PDF
+#'
+#' Orchestration layer: resolves config, builds sample-level long data via
+#' build_cluster_long_df(), generates per-cluster ggplots via
+#' build_cluster_profile_plots(), and saves PNGs + grid PDF.
+#'
+#' @param expr_mat Expression matrix (features x samples)
+#' @param meta Sample metadata data.frame
+#' @param clusters Named integer vector (feature IDs -> cluster numbers)
+#' @param cfg Mode config list
+#' @param out_dir Output directory
+#' @return list(files = character vector of written paths, plots = named list of ggplots)
+#' @export
+save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir) {
+  requireNamespace("gridExtra", quietly = TRUE)
+
+  group_col  <- get_clustering_group_col(cfg, meta)
+  sample_col <- cfg$effects$samples
+  color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
+  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
+
+  if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+                    color_col))
+    color_col <- NULL
+  }
+  if (!(x_axis_col %in% colnames(meta))) {
+    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+                    x_axis_col))
+    x_axis_col <- group_col
+  }
+
+  long_df <- build_cluster_long_df(expr_mat, meta, clusters,
+                                    x_axis_col, sample_col, color_col)
+
+  color_label <- if (!is.null(color_col)) color_col else NULL
+  plot_list <- build_cluster_profile_plots(long_df, x_label = x_axis_col,
+                                            color_label = color_label)
+  if (length(plot_list) == 0) return(list(files = character(0), plots = list()))
+
+  written <- character(0)
+  k <- length(plot_list)
+
+  # Per-cluster PNGs (source parity: 600 dpi, 3x3 in)
+  for (nm in names(plot_list)) {
+    f_png <- file.path(out_dir, sprintf("cluster_profiles_cluster%s.png", nm))
+    ggplot2::ggsave(f_png, plot = plot_list[[nm]],
+                    dpi = 600, width = 3, height = 3, units = "in")
+    written <- c(written, f_png)
+  }
+
+  # Multi-panel grid PDF (source parity layout)
+  if (k <= 2) {
+    ncol_grid <- k
+    nrow_grid <- 1
+  } else if (k <= 4) {
+    ncol_grid <- 2
+    nrow_grid <- 2
+  } else {
+    ncol_grid <- 3
+    nrow_grid <- 2
+  }
+
+  f_pdf <- file.path(out_dir, "cluster_profiles.pdf")
+  ml <- gridExtra::marrangeGrob(
+    grobs = plot_list,
+    ncol = ncol_grid,
+    nrow = nrow_grid,
+    top = NULL
+  )
+  ggplot2::ggsave(f_pdf, ml, width = 6.99, height = 3.99, dpi = 600)
+  written <- c(written, f_pdf)
+
+  list(files = written, plots = plot_list)
 }
 
 
@@ -1305,4 +1411,257 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
   }
 
   annot_df
+}
+
+# ---- Module-level step orchestrators -------------------------------------
+#
+# The three `.run_*_step` helpers are the shared step bodies used by
+# mod_rnaseq_clustering / mod_metabolomics_clustering / mod_proteomics_clustering.
+# They take prepared inputs (expression matrix, DE feature ids, annotation
+# context, etc.) and run a single clustering step end-to-end: clustering call,
+# heatmap render, table writes, profile outputs. Per-omic differences live in
+# the calling module (input prep + which optional fields the caller attaches
+# to its return list).
+
+#' Run the Hierarchical clustering step (shared across omics modules)
+#'
+#' Writes Hierarchical_DE_heatmap.png and (when k is set) Hierarchical_clusters.tsv
+#' under \code{out_dir}. The caller is responsible for attaching the returned
+#' fields to its module-level scaffolds (plots, objects, excel_order).
+#'
+#' @param expr_mat features x samples expression matrix (already coerced).
+#' @param meta sample metadata data.frame.
+#' @param de_features character vector of DE feature ids.
+#' @param cfg mode config (uses cfg$clustering$steps$hierarchical).
+#' @param annot_col column annotation data.frame (for the pheatmap payload).
+#' @param annot_context list passed to wrap_clustering_heatmap as
+#'   \code{annotation_row_context}.
+#' @param out_dir destination directory for this step's outputs.
+#' @return list(files, plot, payload, clusters, excel_order, table_df)
+.run_hierarchical_step <- function(expr_mat, meta, de_features, cfg,
+                                   annot_col, annot_context, out_dir) {
+  ensure_dir(out_dir)
+  hcfg <- cfg$clustering$steps$hierarchical %||% list()
+
+  hc_res <- run_clustering(
+    expr_mat    = expr_mat,
+    col_data    = meta,
+    de_features = de_features,
+    config      = list(
+      method   = "hierarchical",
+      distance = hcfg$distance %||% "euclidean",
+      linkage  = hcfg$linkage  %||% "complete",
+      k        = hcfg$k %||% NULL
+    )
+  )
+
+  mat_de <- expr_mat[intersect(de_features, rownames(expr_mat)), , drop = FALSE]
+  z_de   <- zscore_rows(mat_de)
+  colnames(z_de) <- paste0(colnames(z_de), ".zscore")
+
+  ordered_row_ids <- intersect(hc_res$ordering, rownames(z_de))
+  z_de_ordered    <- z_de[ordered_row_ids, , drop = FALSE]
+
+  excel_order <- list(
+    ordered_ids        = hc_res$ordering,
+    zscore_mat         = z_de,
+    partition_clusters = NULL,
+    partition_k        = NULL,
+    binary_best        = NULL
+  )
+
+  f_hm <- file.path(out_dir, "Hierarchical_DE_heatmap.png")
+  p_cluster <- wrap_clustering_heatmap(
+    expr_mat               = expr_mat,
+    meta                   = meta,
+    cfg                    = cfg,
+    feature_ids            = de_features,
+    ordering               = hc_res$ordering,
+    annotation_row_builder = TRUE,
+    annotation_row_context = annot_context,
+    out_file               = f_hm,
+    cluster_cols           = FALSE,
+    title = sprintf("Hierarchical Clustering (%d DE features)", length(de_features))
+  )
+  written <- f_hm
+
+  payload <- list(
+    pheatmap       = p_cluster,
+    mat            = z_de_ordered,
+    row_order      = rownames(z_de_ordered),
+    col_order      = colnames(z_de_ordered),
+    annotation_col = annot_col,
+    feature_ids    = de_features,
+    is_zscored     = TRUE,
+    cluster_cols   = FALSE,
+    tree_row       = hc_res$details
+  )
+
+  table_df <- NULL
+  clusters <- NULL
+  if (!is.null(hc_res$clusters)) {
+    f_tbl    <- file.path(out_dir, "Hierarchical_clusters.tsv")
+    table_df <- build_clustering_output_table(hc_res$clusters, f_tbl)
+    written  <- c(written, f_tbl)
+    clusters <- hc_res$clusters
+  }
+
+  list(
+    files       = written,
+    plot        = p_cluster,
+    payload     = payload,
+    clusters    = clusters,
+    excel_order = excel_order,
+    table_df    = table_df
+  )
+}
+
+#' Run the Partition clustering step (shared across omics modules)
+#'
+#' Fits partition clusters via \code{perform_partition_clustering_effects},
+#' writes the partition heatmap, per-cluster heatmaps, profile outputs and
+#' legacy profile exports under \code{out_dir/Partition_clustering_<k>_clusters}.
+#' Column order in the heatmap is preserved from \code{annot_col} — only
+#' \code{gaps_col} is computed from the existing group blocks.
+#'
+#' @param expr_mat features x samples expression matrix (already coerced).
+#' @param meta sample metadata data.frame.
+#' @param de_features character vector of DE feature ids.
+#' @param cfg mode config.
+#' @param annot_col column annotation data.frame.
+#' @param out_dir parent directory (e.g. \code{<clustering>/Partition_clustering}).
+#' @return list(files, plots, table_df, clusters, k)
+.run_partition_step <- function(expr_mat, meta, de_features, cfg,
+                                annot_col, out_dir) {
+  ensure_dir(out_dir)
+
+  part_res <- perform_partition_clustering_effects(
+    expr_mat    = expr_mat,
+    meta        = meta,
+    cfg         = cfg,
+    de_features = de_features
+  )
+
+  part_dir <- file.path(out_dir, sprintf("Partition_clustering_%d_clusters", part_res$k))
+  ensure_dir(part_dir)
+
+  written <- character(0)
+  plots   <- list()
+
+  # (1) clusters table
+  f_tbl    <- file.path(part_dir, "partition_clusters.tsv")
+  table_df <- build_clustering_output_table(part_res$clusters, f_tbl)
+  written  <- c(written, f_tbl)
+
+  # (2) heatmap (no column reorder; gaps_col from existing meta order)
+  feats       <- names(part_res$clusters)
+  valid_feats <- intersect(feats, rownames(expr_mat))
+  mat_ord     <- expr_mat[valid_feats, ][order(part_res$clusters[valid_feats], valid_feats), ]
+  clusters_ordered <- part_res$clusters[rownames(mat_ord)]
+
+  annot_row <- data.frame(
+    Cluster   = factor(paste0("C", clusters_ordered)),
+    row.names = rownames(mat_ord)
+  )
+
+  gaps_col <- compute_column_gaps_by_group(annot_col)
+
+  f_hm <- file.path(part_dir, "Partition_clustering_heatmap.png")
+  p_part <- plot_heatmap_core(
+    expr_mat       = mat_ord,
+    annotation_col = annot_col,
+    annotation_row = annot_row,
+    title          = sprintf("Partition clustering (k=%d)", part_res$k),
+    scale_rows     = TRUE,
+    cluster_rows   = FALSE,
+    cluster_cols   = FALSE,
+    max_rows       = NULL,
+    gaps_row       = compute_cluster_gaps(clusters_ordered),
+    gaps_col       = gaps_col
+  )
+  plots$partition_heatmap <- p_part
+  save_heatmap_to_file(p_part, f_hm)
+  written <- c(written, f_hm)
+
+  # (2b) per-cluster heatmaps
+  per_clust_hm_files <- save_per_cluster_heatmaps(
+    expr_mat       = expr_mat,
+    clusters       = part_res$clusters,
+    annotation_col = annot_col,
+    out_dir        = part_dir
+  )
+  written <- c(written, per_clust_hm_files)
+
+  # (3) per-cluster profile PNGs + multi-panel grid PDF
+  prof_out <- save_cluster_profile_outputs(
+    expr_mat = expr_mat,
+    meta     = meta,
+    clusters = part_res$clusters,
+    cfg      = cfg,
+    out_dir  = part_dir
+  )
+  written <- c(written, prof_out$files)
+  plots$cluster_profiles <- prof_out$plots
+
+  # (4) legacy per-cluster data exports
+  legacy_files <- write_clustering_legacy_profiles(
+    expr_mat = expr_mat,
+    meta     = meta,
+    clusters = part_res$clusters,
+    cfg      = cfg,
+    out_dir  = part_dir
+  )
+  written <- c(written, legacy_files)
+
+  list(
+    files    = written,
+    plots    = plots,
+    table_df = table_df,
+    clusters = part_res$clusters,
+    k        = part_res$k
+  )
+}
+
+#' Run the Binary patterns step (shared across omics modules)
+#'
+#' Thin orchestrator that resolves the per-step config, ensures the output
+#' directory and forwards to \code{run_binary_patterns}. \code{expr_mat_counts}
+#' is supplied by the caller (RNA: counts matrix; metab/prot: NULL).
+#'
+#' @param expr_mat_corr log/normalised expression matrix used for correlations.
+#' @param expr_mat_counts counts matrix for gating (NULL to disable).
+#' @param meta sample metadata.
+#' @param de_features character vector of DE feature ids.
+#' @param summary_df DE summary data.frame.
+#' @param cfg mode config.
+#' @param annot_context list of summary_df + cutoffs + id_col for row annotations.
+#' @param out_dir destination directory for binary-pattern outputs.
+#' @return list(files, plots, patterns, patterns_list, binary_best)
+.run_binary_patterns_step <- function(expr_mat_corr, expr_mat_counts, meta,
+                                      de_features, summary_df, cfg,
+                                      annot_context, out_dir) {
+  ensure_dir(out_dir)
+  bcfg <- cfg$clustering$steps$binary_patterns %||% list()
+
+  bp_res <- run_binary_patterns(
+    expr_mat_corr      = expr_mat_corr,
+    expr_mat_counts    = expr_mat_counts,
+    meta               = meta,
+    cfg                = cfg,
+    de_features        = de_features,
+    out_dir            = out_dir,
+    summary_df         = summary_df,
+    corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
+    counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
+    counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
+    annot_context      = annot_context
+  )
+
+  list(
+    files         = bp_res$files %||% character(0),
+    plots         = bp_res$plots %||% list(),
+    patterns      = bp_res$best %||% NULL,
+    patterns_list = bp_res$bp_pat %||% NULL,
+    binary_best   = bp_res$best %||% NULL
+  )
 }

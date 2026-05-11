@@ -78,17 +78,10 @@ config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
 
 list(
   # Configuration file (tracked as a file dependency)
-  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
-  # Or defaults to config.yaml
+  # Override with: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
-    {
-      cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-      if (cfg_path == "") {
-        cfg_path <- file.path(getwd(), "config.yaml")
-      }
-      normalizePath(cfg_path, mustWork = TRUE)
-    },
+    !!config_path,
     format = "file"
   ),
 
@@ -131,21 +124,9 @@ list(
         metab_chosen_norm <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
         mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = metab_chosen_norm))
     }
-    if (!is.null(cfg_raw$modes$lipidomics))    mode_targets <- c(mode_targets, pipe_lipidomics())
-
-    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
-    # Enabled if: (a) multiomics mode is configured, AND
-    #             (b) >=2 omics modes are present OR input_mode == "outputs" (payload mode)
-    n_omics <- sum(!is.null(cfg_raw$modes$rna),
-                   !is.null(cfg_raw$modes$proteomics),
-                   !is.null(cfg_raw$modes$metabolomics))
-    payload_mode <- identical(cfg_raw$modes$multiomics$input_mode, "outputs")
-    n_omics_global <- length(cfg_raw$global$omics_present %||% character(0))
-
-    if (!is.null(cfg_raw$modes$multiomics) &&
-        (n_omics >= 2 || payload_mode || n_omics_global >= 2)) {
-      mode_targets <- c(mode_targets, pipe_multiomics())
-    }
+    # NOTE: Lipidomics and multi-omics integration layers were split into
+    # separate review branches. Restore the pipe_lipidomics() and
+    # pipe_multiomics() target wiring here when those branches are merged back.
 
     mode_targets
   }

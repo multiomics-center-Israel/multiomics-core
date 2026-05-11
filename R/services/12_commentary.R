@@ -20,7 +20,7 @@
 
 #' Discover all figure files from the RNA output directory
 #'
-#' Scans Diagnostic_plots/, QC_post/, and Enrichment/plots/ directories
+#' Scans Diagnostic_plots/, DE_plots/, and Enrichment/plots/ directories
 #' for PNG files and builds a metadata table.
 #'
 #' @param out_dir  RNA output directory (e.g. .../rna)
@@ -29,7 +29,7 @@
 discover_figures <- function(out_dir, config = NULL) {
 
     diag_dir   <- file.path(out_dir, "Diagnostic_plots")
-    qc_post    <- file.path(diag_dir, "QC_post")
+    qc_post    <- file.path(diag_dir, "DE_plots")
     enrich_plt <- file.path(out_dir, "Enrichment", "plots")
 
     figures <- list()
@@ -654,7 +654,7 @@ run_claude_code_commentary <- function(image_path, figure_id, context,
 
     # Allow MCP tools (K-Dense, etc.) if available, plus Read for images
     cmd <- sprintf(
-        "unset CLAUDECODE; claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
+        "claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
         model,
         json_schema,
         shQuote(prompt)

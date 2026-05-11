@@ -8,9 +8,6 @@ project:
   dir: "/full-path/to/project_dir"   # REQUIRED
   name: "<PROJECT_NAME>"             # REQUIRED
   analysis_round: "A01"              # REQUIRED
-  analyst: "Bioinformatics Core"     # Name of the analyst (shown in report header)
-  user_notes: ""                     # Optional: free-text project description (appears in report as Project Overview)
-  technical_report_file: ""          # Optional: path to facility report (DOCX/PDF/log) for AI-enhanced summary
 
 paths:
   raw: "data"
@@ -125,6 +122,8 @@ modes:
           k_method: "silhouette"   # "silhouette" | "gap" — method for automatic K selection
           gap_B: 10                # Bootstrap samples for gap statistic (only used when k_method: "gap")
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8             # Minimum correlation to assign feature to pattern
@@ -193,7 +192,7 @@ modes:
       heatmap_viz:
         show_sample_labels: false   # Show sample names on axes (default: false to prevent overload)
         cluster_samples: true       # Enable hierarchical clustering (default: true)
-        adjust_correlation_scale: true  # Adjust color scale for tight ranges (default: true)
+        adjust_correlation_scale: false  # Adjust color scale for tight ranges (default: false)
 
       # To disable adaptive plotting and generate all plots unconditionally:
       #   qc:

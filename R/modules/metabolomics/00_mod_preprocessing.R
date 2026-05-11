@@ -4,14 +4,13 @@
 #
 # Each function is called directly from the {targets} target bodies in
 # pipe_metabolomics().  They orchestrate domain functions from:
-#   R/domain/metabolomics/00_inputs.R      (load / parse)
-#   R/domain/metabolomics/08_missingness.R (classify / filter)
-#   R/domain/metabolomics/09_imputation_met.R (impute)
+#   R/domain/metabolomics/00_inputs.R         (load / parse)
 #   R/domain/metabolomics/10_drift_correction.R (LOESS)
-#   R/domain/metabolomics/01_normalization.R   (norm_*, transform_metab)
-#   R/core/08_qc.R                         (qc_pca_scatter, norm_boxplot)
-#   R/core/06_plots.R                      (qc_missingness_heatmap via 08_qc.R)
-
+#   R/domain/metabolomics/01_normalization.R  (norm_*, transform_metab)
+#   R/core/08_qc.R                            (qc_pca_scatter, norm_boxplot)
+#
+# Inlined helpers (previously in deleted files):
+#   filter_by_missingness()  — threshold-based feature + sample filtering
 
 #' Detect QC pool sample names from metadata
 #'
@@ -96,9 +95,9 @@ mod_met_raw <- function(inp, config) {
   }
 
   parsed <- switch(fmt,
-    cd_raw         = parse_cd_raw(inp_data, cfg),
-    processed_wide = parse_processed_wide(inp_data, cfg, inp$metadata),
-    multi_level    = parse_multi_level(inp_data, cfg, inp$metadata),
+    cd_raw         = parse_cd_raw(inp_data, config),
+    processed_wide = parse_processed_wide(inp_data, config, inp$metadata),
+    multi_level    = parse_multi_level(inp_data, config, inp$metadata),
     stop("mod_met_raw: unsupported format: '", fmt, "'")
   )
 
@@ -118,6 +117,7 @@ mod_met_raw <- function(inp, config) {
 
   # Align metadata; build minimal stub if none provided
   meta <- inp$metadata %||% build_minimal_meta(colnames(expr_raw))
+  expr_raw <- align_matrix_to_meta(expr_raw, meta, sample_col)
   meta <- align_meta_to_matrix(colnames(expr_raw), meta, sample_col)
 
   # Apply optional sample filter (QC/blank exclusion)
@@ -164,65 +164,82 @@ mod_met_raw <- function(inp, config) {
 
 
 # ==============================================================================
-# mod_met_missingness_stats — classify MNAR / MAR per feature
+# filter_by_missingness — low-level helper used by mod_met_filtered()
 # ==============================================================================
 
-#' Classify features as MNAR or MAR based on missingness vs. intensity correlation
+#' Filter features and samples by missingness thresholds
 #'
-#' @param raw    List returned by \code{mod_met_raw()}.
-#' @param config Full pipeline config list.
-#' @return List from \code{compute_missingness_stats()} plus
-#'   \code{mnar_mask} (named logical: TRUE = MNAR),
-#'   \code{mar_mask}  (named logical: TRUE = MAR).
+#' Applies two sequential filters:
+#' 1. Drop samples where the fraction of missing values > \code{sample_threshold}.
+#' 2. Drop features where the fraction of missing values (on remaining samples)
+#'    > \code{feat_threshold}.
 #'
-mod_met_missingness_stats <- function(raw, config) {
-  pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-  mnar_thr <- pre_cfg$mnar_threshold %||% 0.3
-
-  result <- compute_missingness_stats(
-    mat                = raw$expr_raw,
-    meta               = raw$meta,
-    sample_col         = raw$sample_col,
-    feat_miss_threshold = pre_cfg$feat_missing_threshold   %||% 0.20,
-    samp_miss_threshold = pre_cfg$sample_missing_threshold %||% 0.30,
-    mnar_cor_threshold  = -abs(mnar_thr)
-  )
-
-  stats_df <- result$stats_df
-  mnar_mask <- stats::setNames(stats_df$mnar_class == "MNAR", stats_df$feature_id)
-  mar_mask  <- stats::setNames(
-    stats_df$mnar_class == "MAR",
-    stats_df$feature_id
-  )
-
-  c(result, list(mnar_mask = mnar_mask, mar_mask = mar_mask))
-}
-
-
-# ==============================================================================
-# mod_met_missingness_plot — save binary heatmap as PNG, return file path
-# ==============================================================================
-
-#' Save the missingness heatmap to disk
+#' Samples are filtered first so that feature missingness is evaluated on the
+#' retained sample set.
 #'
-#' @param miss_stats List returned by \code{mod_met_missingness_stats()}.
-#' @param raw        List returned by \code{mod_met_raw()}.
-#' @param out_dir    Mode output directory (met_out_dir).
-#' @param config     Full pipeline config list.
-#' @return Character scalar: path to saved PNG (for \code{format = "file"} target).
+#' @param mat Numeric matrix (features x samples).
+#' @param meta data.frame with a column matching \code{sample_col}.
+#' @param sample_col Column in \code{meta} containing sample identifiers that
+#'   match \code{colnames(mat)}.
+#' @param feat_threshold Numeric (default 0.50 — soft filter).  Drop features
+#'   missing in more than this fraction of samples.
+#' @param sample_threshold Numeric (default 1.0 — sample filtering disabled).
+#'   Drop samples missing more than this fraction of features.  Set to 1.0 to
+#'   keep all samples.
 #'
-mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
-  diag_dir <- file.path(out_dir, "diagnostic_plots")
-  dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
-  out_file <- file.path(diag_dir, "missingness_heatmap.png")
+#' @return list with: \code{mat}, \code{meta}, \code{dropped_features},
+#'   \code{dropped_samples}.
+#'
+filter_by_missingness <- function(mat, meta, sample_col,
+                                  feat_threshold   = 0.50,
+                                  sample_threshold = 1.0) {
+  mat  <- as.matrix(mat)
+  meta <- as.data.frame(meta)
 
-  qc_missingness_heatmap(raw$expr_raw, miss_stats$stats_df, out_file)
+  # 1. Filter samples first
+  samp_miss_pct    <- colMeans(is.na(mat))
+  keep_samps       <- colnames(mat)[samp_miss_pct <= sample_threshold]
+  dropped_samples  <- setdiff(colnames(mat), keep_samps)
 
-  # Return file path if plot was saved, otherwise create a placeholder
-  if (!file.exists(out_file)) {
-    writeLines("No missingness heatmap generated (insufficient variation).", out_file)
+  if (length(dropped_samples) > 0) {
+    message(sprintf(
+      "filter_by_missingness: dropping %d sample(s) with > %.0f%% missing: %s",
+      length(dropped_samples),
+      sample_threshold * 100,
+      paste(head(dropped_samples, 5), collapse = ", "),
+      if (length(dropped_samples) > 5) "..." else ""
+    ))
   }
-  out_file
+
+  mat  <- mat[, keep_samps, drop = FALSE]
+  meta <- meta[meta[[sample_col]] %in% keep_samps, , drop = FALSE]
+
+  # 2. Filter features on the retained sample set
+  feat_miss_pct   <- rowMeans(is.na(mat))
+  keep_feats      <- rownames(mat)[feat_miss_pct <= feat_threshold]
+  dropped_feats   <- setdiff(rownames(mat), keep_feats)
+
+  if (length(dropped_feats) > 0) {
+    message(sprintf(
+      "filter_by_missingness: dropping %d feature(s) with > %.0f%% missing.",
+      length(dropped_feats),
+      feat_threshold * 100
+    ))
+  }
+
+  mat <- mat[keep_feats, , drop = FALSE]
+
+  message(sprintf(
+    "filter_by_missingness: retained %d features x %d samples.",
+    nrow(mat), ncol(mat)
+  ))
+
+  list(
+    mat              = mat,
+    meta             = meta,
+    dropped_features = dropped_feats,
+    dropped_samples  = dropped_samples
+  )
 }
 
 
@@ -230,7 +247,7 @@ mod_met_missingness_plot <- function(miss_stats, raw, out_dir, config) {
 # mod_met_filtered — apply missingness thresholds
 # ==============================================================================
 
-#' Filter features and samples by missingness thresholds
+#' Filter features and samples by missingness thresholds (target-ready wrapper)
 #'
 #' @param raw    List returned by \code{mod_met_raw()}.
 #' @param config Full pipeline config list.
@@ -244,8 +261,8 @@ mod_met_filtered <- function(raw, config) {
     mat              = raw$expr_raw,
     meta             = raw$meta,
     sample_col       = raw$sample_col,
-    feat_threshold   = pre_cfg$feat_missing_threshold   %||% 0.20,
-    sample_threshold = pre_cfg$sample_missing_threshold %||% 0.30
+    feat_threshold   = pre_cfg$feat_missing_threshold   %||% 0.50,
+    sample_threshold = pre_cfg$sample_missing_threshold %||% 1.0
   )
 
   row_data <- raw$row_data
@@ -265,91 +282,27 @@ mod_met_filtered <- function(raw, config) {
 
 
 # ==============================================================================
-# mod_met_imputed — MNAR (min/2) + MAR (KNN) imputation
-# ==============================================================================
-
-#' Impute missing values (MNAR -> min/2, MAR -> KNN)
-#'
-#' @param filtered   List returned by \code{mod_met_filtered()}.
-#' @param config     Full pipeline config list.
-#' @return list with: \code{mat}, \code{imputed_flag}, \code{meta},
-#'   \code{row_data}, \code{info}.
-#'
-mod_met_imputed <- function(filtered, config) {
-  pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-  mnar_thr <- pre_cfg$mnar_threshold %||% 0.3
-  knn_k    <- as.integer(pre_cfg$knn_k  %||% 10L)
-  epsilon  <- pre_cfg$epsilon %||% 1e-8
-
-  mat_in <- filtered$mat
-
-  # Optional: convert zeros to half-minimum per feature before imputation
-  # This replicates the approach used by NOREVA / Ifat Abramovich
-  zero_handling <- tolower(pre_cfg$zero_handling %||% "keep")
-  if (zero_handling == "halfmin") {
-    n_zeros <- sum(mat_in == 0, na.rm = TRUE)
-    if (n_zeros > 0) {
-      mat_in[mat_in == 0] <- NA
-      for (i in seq_len(nrow(mat_in))) {
-        na_mask <- is.na(mat_in[i, ])
-        if (any(na_mask) && !all(na_mask)) {
-          mat_in[i, na_mask] <- min(mat_in[i, !na_mask], na.rm = TRUE) / 2
-        }
-      }
-      message(sprintf("mod_met_imputed: converted %d zeros to half-minimum values.", n_zeros))
-    }
-  }
-
-  miss_stats_filt <- classify_missingness(
-    mat_in,
-    mnar_cor_threshold = -abs(mnar_thr)
-  )
-
-  result <- impute_metabolomics(
-    mat        = mat_in,
-    miss_stats = miss_stats_filt,
-    knn_k      = knn_k,
-    epsilon    = epsilon
-  )
-
-  message(sprintf(
-    "mod_met_imputed: MNAR=%d, MAR=%d, skipped=%d, all-missing=%d.",
-    result$info$n_mnar, result$info$n_mar,
-    result$info$n_skipped, result$info$n_all_missing
-  ))
-
-  list(
-    mat          = result$mat_imputed,
-    imputed_flag = result$imputed_flag,
-    meta         = filtered$meta,
-    row_data     = filtered$row_data,
-    info         = result$info
-  )
-}
-
-
-# ==============================================================================
 # mod_met_log — log2 transformation
 # ==============================================================================
 
-#' Apply log2 transformation to the imputed matrix
+#' Apply log2 transformation to the filtered matrix
 #'
-#' @param imputed List returned by \code{mod_met_imputed()}.
+#' @param filtered List returned by \code{mod_met_filtered()}.
 #' @param config  Full pipeline config list.
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}.
 #'
-mod_met_log <- function(imputed, config) {
+mod_met_log <- function(filtered, config) {
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   method      <- norm_cfg$transform   %||% "log2"
   pseudocount <- norm_cfg$pseudocount %||% 1
 
-  mat_log <- transform_metab(imputed$mat, method = method,
+  mat_log <- transform_metab(filtered$mat, method = method,
                              pseudocount = pseudocount)
 
   list(
     mat      = mat_log,
-    meta     = imputed$meta,
-    row_data = imputed$row_data
+    meta     = filtered$meta,
+    row_data = filtered$row_data
   )
 }
 
@@ -524,7 +477,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 
 #' Normalize a linear-scale matrix then apply log2 transformation
 #'
-#' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
+#' @param data   List returned by \code{mod_met_filtered()} (Linear scale).
 #' @param method Character: \code{"tss"} or \code{"pqn"}.
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
@@ -533,6 +486,35 @@ mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
   norm_cfg    <- config$modes$metabolomics$normalization %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
+  
+  pre_cfg <- config$modes$metabolomics$preprocessing %||% list()
+  dc_cfg  <- pre_cfg$drift_correction %||% list()
+  qc_col  <- dc_cfg$qc_flag_col %||% "is_QC"
+  
+  qc_idx <- NULL
+  
+  if (method == "pqn") {
+    meta <- data$meta
+    
+    if (is.null(meta) || !qc_col %in% colnames(meta)) {
+      warning(sprintf(
+        "mod_met_normalize_linear: QC flag column '%s' not found; PQN will use all samples as reference.",
+        qc_col
+      ))
+    } else {
+      qc_flag <- isTRUE_vec(meta[[qc_col]])
+      idx <- which(qc_flag)
+      
+      if (length(idx) >= 2L) {
+        qc_idx <- idx
+      } else {
+        warning(sprintf(
+          "mod_met_normalize_linear: QC flag column '%s' has fewer than 2 QC samples; PQN will use all samples as reference.",
+          qc_col
+        ))
+      }
+    }
+  }
 
   # PQN reference samples: use config$normalization$pqn_reference to specify
   # which sample(s) to use as the reference spectrum (e.g. a QC pool).
@@ -564,7 +546,7 @@ mod_met_normalize_linear <- function(data, method, config) {
 
   mat_norm <- switch(method,
     tss = norm_total_sum(data$mat),
-    pqn = norm_pqn(data$mat, ref_samples = ref_samples),
+    pqn = norm_pqn(data$mat, qc_idx = qc_idx),
     stop(
       "mod_met_normalize_linear: 'method' must be \"tss\" or \"pqn\"; got \"",
       method, "\".  Use mod_met_normalize_log() for median normalization."

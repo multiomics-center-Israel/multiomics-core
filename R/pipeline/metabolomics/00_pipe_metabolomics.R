@@ -15,8 +15,7 @@
 # ── Scale Contract ────────────────────────────────────────────────────────────
 #
 #   met_raw      (Linear)
-#     └─ met_filtered   (Linear)
-#          └─ met_imputed (Linear) ─────────────────────────────┐
+#          └─ met_filtered (Linear) ─────────────────────────────┐
 #               └─ met_log (Log2)                               │ (linear feed)
 #                    ├─ met_norm_median  (Log2, log-shift)      │
 #                    │                                          │
@@ -147,20 +146,6 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             met_raw$duplicate_log
         ),
 
-        # met_missingness_stats: MNAR/MAR classification on pre-filter matrix
-        tar_target(
-            met_missingness_stats,
-            mod_met_missingness_stats(met_raw, config)
-        ),
-
-        # met_missingness_plot: diagnostic binary heatmap (file target)
-        tar_target(
-            met_missingness_plot,
-            mod_met_missingness_plot(met_missingness_stats, met_raw,
-                                     metab_out_dir, config),
-            format = "file"
-        ),
-
         # met_filtered: threshold-based feature + sample removal
         # Scale: Linear
         tar_target(
@@ -168,25 +153,57 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
             mod_met_filtered(met_raw, config)
         ),
 
-        # met_imputed: MNAR → min/2, MAR → KNN
-        # Scale: Linear  ← canonical pre-log linear target for TSS / PQN
+        # met_missingness_stats: per-feature + per-sample missingness statistics
+        # computed on the filtered matrix. Consumed by metab_pre$info$missingness
+        # for reports and Shiny payloads. Basic counts only — no MNAR/MAR
+        # classification (that machinery was removed; see 08_missingness.R
+        # history if the classification is needed later).
         tar_target(
-            met_imputed,
-            mod_met_imputed(met_filtered, config)
+            met_missingness_stats,
+            {
+                mat        <- met_filtered$mat
+                sample_col <- met_raw$sample_col
+
+                # Per-feature missingness
+                feat_n_miss   <- rowSums(is.na(mat))
+                feat_pct_miss <- if (ncol(mat) > 0) feat_n_miss / ncol(mat) else numeric(nrow(mat))
+                stats_df <- data.frame(
+                    feature_id  = rownames(mat),
+                    n_missing   = feat_n_miss,
+                    pct_missing = feat_pct_miss,
+                    stringsAsFactors = FALSE
+                )
+
+                # Per-sample missingness
+                samp_n_miss   <- colSums(is.na(mat))
+                samp_pct_miss <- if (nrow(mat) > 0) samp_n_miss / nrow(mat) else numeric(ncol(mat))
+                samp_miss_df  <- data.frame(
+                    sample_id   = colnames(mat),
+                    n_missing   = samp_n_miss,
+                    pct_missing = samp_pct_miss,
+                    stringsAsFactors = FALSE
+                )
+                colnames(samp_miss_df)[1] <- sample_col
+
+                list(
+                    stats_df     = stats_df,
+                    samp_miss_df = samp_miss_df
+                )
+            }
         ),
 
         # met_log: log2 transform (pseudocount from config)
         # Scale: Log2  ← canonical pre-norm log target for Median
         tar_target(
             met_log,
-            mod_met_log(met_imputed, config)
+            mod_met_log(met_filtered, config)
         ),
 
         # ── Normalization targets ─────────────────────────────────────────
         #
         # Scale Contract enforcement:
         #   TSS and PQN are multiplicative operations → must receive Linear input.
-        #   Both are wired from met_imputed (Linear); mod_met_normalize_linear()
+        #   Both are wired from met_filtered (Linear); mod_met_normalize_linear()
         #   applies normalization first, then log2-transforms the result.
         #
         #   Median normalization on Log2 data is a log-shift (subtraction), not
@@ -195,7 +212,7 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
 
         tar_target(
             met_norm_tss,
-            mod_met_normalize_linear(met_imputed, method = "tss", config = config)
+            mod_met_normalize_linear(met_filtered, method = "tss", config = config)
         ),
 
         tar_target(
@@ -205,17 +222,17 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
 
         tar_target(
             met_norm_pqn,
-            mod_met_normalize_linear(met_imputed, method = "pqn", config = config)
+            mod_met_normalize_linear(met_filtered, method = "pqn", config = config)
         ),
 
         tar_target(
             met_norm_eigenms,
-            mod_met_normalize_eigenms(met_imputed, config = config)
+            mod_met_normalize_eigenms(met_filtered, config = config)
         ),
 
         tar_target(
             met_norm_eigenms_forced,
-            mod_met_normalize_eigenms_forced(met_imputed, config = config)
+            mod_met_normalize_eigenms_forced(met_filtered, config = config)
         ),
 
         # met_norm_comparison: TSV of RSD + PC1 variance for all methods
@@ -320,9 +337,9 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                     pqn_qc_files              = met_norm_pqn_qc,
                     eigenms_qc_files          = met_norm_eigenms_qc,
                     eigenms_forced_qc_files   = met_norm_eigenms_forced_qc,
-                    imputed_data              = met_imputed,
                     out_dir                   = metab_out_dir,
                     config                    = config
+
                 ),
                 format = "file"
             ),
@@ -544,49 +561,36 @@ pipe_metabolomics <- function(chosen_norm = NULL) {
                 commentary_file    = metab_commentary
             ),
             format = "file"
-        ),
-
-        # ---- pipeline summary HTML ----
+        ), 
         tar_target(
-            metab_pipeline_summary,
-            generate_metab_pipeline_summary(
-                config          = config,
-                pre             = metab_pre,
-                de_res          = metab_de_res,
-                feature_sel_res = metab_feature_sel_res,
-                enrichment_res  = metab_enrichment_res,
-                run_dir         = metab_out_dir
-            ),
-            format = "file"
+          metab_pipeline_summary,
+          generate_metab_pipeline_summary(
+            config          = config,
+            pre             = metab_pre,
+            de_res          = metab_de_res,
+            feature_sel_res = metab_feature_sel_res,
+            enrichment_res  = metab_enrichment_res,
+            run_dir         = metab_out_dir
+          ),
+          format = "file"
         ),
-
+        
         # ---- PowerPoint summary presentation ----
         tar_target(
-            metab_pptx,
-            mod_metabolomics_powerpoint(
-                pre             = metab_pre,
-                qc_res          = metab_qc_pre_obj,
-                de_res          = metab_de_res,
-                feature_sel_res = metab_feature_sel_res,
-                enrichment_res  = metab_enrichment_res,
-                config          = config,
-                out_dir         = metab_out_dir
-            ),
-            format = "file"
-        ),
-
-        # ---- Metabolome overview report ----
-        tar_target(
-            metab_overview,
-            mod_metabolome_overview(
-                pre     = metab_pre,
-                inputs  = metab_inputs,
-                config  = config,
-                out_dir = metab_out_dir
-            ),
-            format = "file"
+          metab_pptx,
+          mod_metabolomics_powerpoint(
+            pre             = metab_pre,
+            qc_res          = metab_qc_pre_obj,
+            de_res          = metab_de_res,
+            feature_sel_res = metab_feature_sel_res,
+            enrichment_res  = metab_enrichment_res,
+            config          = config,
+            out_dir         = metab_out_dir
+          ),
+          format = "file"
         )
     )
+    
 
     c(base_targets, analysis_targets)
 }

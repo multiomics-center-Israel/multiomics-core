@@ -24,15 +24,7 @@ impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
         return(impute_proteomics_dep2(expr_mat, cfg, return_flags))
     }
 
-    if (method == "qrilc") {
-        return(impute_proteomics_qrilc(expr_mat, cfg, return_flags))
-    }
-
-    if (method == "minval") {
-        return(impute_proteomics_minval(expr_mat, cfg, return_flags))
-    }
-
-    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2', 'qrilc', 'minval'.", method))
+    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2'.", method))
 }
 
 #' Impute proteomics expr_mat using Perseus-style method
@@ -102,141 +94,18 @@ impute_proteomics_dep2 <- function(expr_mat, cfg, return_flags = FALSE) {
     if (return_flags) list(imputed = imputed, imputed_flag = imputed_flag) else imputed
 }
 
-#' Impute proteomics expr_mat using QRILC method
-#'
-#' Quantile Regression Imputation of Left-Censored data (QRILC).
-#' Uses the imputeLCMD package implementation when available (matching DEP behavior),
-#' falling back to a faithful reimplementation of the same algorithm.
-#' The algorithm uses quantile regression on a Q-Q plot to estimate the
-#' complete data distribution (CDD) parameters, then samples from a truncated
-#' normal with upper bound at the pNAs-th quantile of the CDD.
-#'
-#' @param expr_mat numeric matrix (proteins x samples), may contain NAs
-#' @param cfg      mode-level config (config$modes$proteomics)
-#' @param return_flags if TRUE, return list(imputed, imputed_flag)
-#' @return imputed matrix or list(imputed, imputed_flag)
-impute_proteomics_qrilc <- function(expr_mat, cfg, return_flags = FALSE) {
-    qrilc_seed <- as.integer(cfg$imputation$qrilc_random_seed %||% 1)
-
-    expr_mat <- as.matrix(expr_mat)
-    imputed_flag <- is.na(expr_mat)
-
-    set.seed(qrilc_seed)
-
-    # Use imputeLCMD::impute.QRILC when available (exact DEP match)
-    if (requireNamespace("imputeLCMD", quietly = TRUE)) {
-        result <- imputeLCMD::impute.QRILC(expr_mat, tune.sigma = 1)
-        imputed <- as.matrix(result[[1]])
-        rownames(imputed) <- rownames(expr_mat)
-        colnames(imputed) <- colnames(expr_mat)
-    } else {
-        # Fallback: faithful reimplementation of imputeLCMD::impute.QRILC algorithm
-        message("imputeLCMD package not available; using built-in QRILC (quantile regression).")
-        imputed <- qrilc_impute_builtin(expr_mat)
-    }
-
-    if (return_flags) list(imputed = imputed, imputed_flag = imputed_flag) else imputed
-}
-
-#' Built-in QRILC implementation matching imputeLCMD algorithm
-#'
-#' Reimplements the quantile regression approach from imputeLCMD::impute.QRILC
-#' for environments where the package is not available.
-#' @param expr_mat numeric matrix with NAs
-#' @return imputed numeric matrix
-qrilc_impute_builtin <- function(expr_mat) {
-    nFeatures <- nrow(expr_mat)
-    nSamples <- ncol(expr_mat)
-    imputed <- expr_mat
-
-    for (j in seq_len(nSamples)) {
-        curr_sample <- expr_mat[, j]
-        if (all(is.na(curr_sample))) stop("Imputation failed: sample '", colnames(expr_mat)[j], "' is all-NA.")
-
-        n_miss <- sum(is.na(curr_sample))
-        if (n_miss == 0) next
-
-        # Fraction of missing values
-        pNAs <- n_miss / length(curr_sample)
-        upper_q <- 0.99
-
-        # Build theoretical normal quantiles at observed probability points
-        q_normal <- stats::qnorm(
-            seq(pNAs + 0.001, upper_q + 0.001, (upper_q - pNAs) / (upper_q * 100)),
-            mean = 0, sd = 1
-        )
-
-        # Build empirical quantiles of observed values
-        q_curr <- stats::quantile(
-            curr_sample,
-            probs = seq(0.001, upper_q + 0.001, 0.01),
-            na.rm = TRUE
-        )
-
-        # Quantile regression: empirical ~ theoretical => intercept = mean_CDD, slope = sd_CDD
-        temp_qr <- stats::lm(q_curr ~ q_normal)
-        mean_cdd <- as.numeric(temp_qr$coefficients[1])
-        sd_cdd <- as.numeric(temp_qr$coefficients[2])
-        if (!is.finite(sd_cdd) || sd_cdd <= 0) sd_cdd <- 1e-8
-
-        # Upper bound: pNAs-th quantile of the complete data distribution
-        upper_bound <- stats::qnorm(pNAs + 0.001, mean = mean_cdd, sd = sd_cdd)
-
-        # Sample from truncated normal via inverse CDF
-        u <- stats::runif(nFeatures, min = 0, max = stats::pnorm(upper_bound, mean = mean_cdd, sd = sd_cdd))
-        data_to_imp <- stats::qnorm(u, mean = mean_cdd, sd = sd_cdd)
-
-        imputed[is.na(curr_sample), j] <- data_to_imp[is.na(curr_sample)]
-    }
-
-    imputed
-}
-
-#' Impute proteomics expr_mat using MinVal method (floor of minimum observed value)
-#'
-#' Deterministic imputation: replaces each missing value with the floor of the
-#' minimum observed value in that sample column. Simple LOD-style approach.
-#'
-#' @param expr_mat numeric matrix (proteins x samples), may contain NAs
-#' @param cfg      mode-level config (config$modes$proteomics)
-#' @param return_flags if TRUE, return list(imputed, imputed_flag)
-#' @return imputed matrix or list(imputed, imputed_flag)
-impute_proteomics_minval <- function(expr_mat, cfg, return_flags = FALSE) {
-    expr_mat <- as.matrix(expr_mat)
-    imputed_flag <- is.na(expr_mat)
-    imputed <- expr_mat
-
-    for (j in seq_len(ncol(imputed))) {
-        x <- imputed[, j]
-        if (all(is.na(x))) stop("Imputation failed: sample '", colnames(imputed)[j], "' is all-NA.")
-        obs <- x[!is.na(x)]
-        fill_val <- floor(min(obs))
-        x[is.na(x)] <- fill_val
-        imputed[, j] <- x
-    }
-
-    if (return_flags) list(imputed = imputed, imputed_flag = imputed_flag) else imputed
-}
-
 #' Wrapper to run multiple imputations (with seed increments)
 make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imp_cfg <- cfg$modes$proteomics$imputation
     method <- imp_cfg$method %||% "perseus"
-    multi_imp <- imp_cfg$multi_imputation %||% TRUE
     n_imputations <- as.integer(imp_cfg$no_repetitions)
     seed_base <- cfg$params$seed
 
-    if (isFALSE(multi_imp)) {
-        n_imputations <- 1L
-        if (isTRUE(verbose)) message("Single imputation mode (multi_imputation: false)")
-    }
-
     stopifnot(is.matrix(expr_mat))
 
-    # For deterministic methods (none, MinDet, minval), all runs are identical —
+    # For deterministic methods (none, MinDet), all runs are identical —
     # still produce n_imputations copies for pipeline compatibility
     is_deterministic <- method == "none" ||
-        method == "minval" ||
         (method == "dep2" && (imp_cfg$dep2_method %||% "MinDet") == "MinDet")
 
     imps <- vector("list", n_imputations)

@@ -3,7 +3,7 @@
 # Three-step normalization for metabolomics data.
 # Three independent steps (applied in order):
 #   1. Sample normalization  (sum, median, PQN, internal standard)
-#   2. Transformation        (log2, log10, glog10)
+#   2. Transformation        (log2, log10)
 #   3. Scaling               (auto, pareto, range)
 #
 # Each function operates on a numeric matrix [features x samples].
@@ -69,66 +69,56 @@ norm_median <- function(mat) {
     sweep(mat, 2, scale_factors, FUN = "*")
 }
 
-
 #' Probabilistic Quotient Normalization (PQN)
 #'
-#' 1. Perform median normalization first.
-#' 2. Compute reference spectrum:
-#'    - If \code{ref_samples} is provided, use the median of those samples
-#'      (e.g. QC pools) as the reference spectrum.
-#'    - Otherwise, use the median across all samples.
-#' 3. For each sample, compute quotients (sample / reference) and take the median.
-#' 4. Divide each sample by its median quotient.
+#' Applies PQN after an initial median normalization step.
+#' The reference spectrum is defined as the feature-wise median across samples.
 #'
-#' Features where the reference is 0 or NA are excluded from the quotient
-#' calculation (they cannot inform sample-level scaling).
+#' Procedure:
+#' 1. Apply median normalization.
+#' 2. Compute the reference spectrum as the feature-wise median across samples.
+#' 3. For each sample, calculate quotients relative to the reference.
+#' 4. Use the sample's median quotient as a scaling factor.
+#' 5. Divide each sample by this factor.
 #'
-#' @param mat          Numeric matrix (features x samples).
-#' @param ref_samples  Optional character vector of sample (column) names to use
-#'                     as the reference spectrum. If a single sample is given, that
-#'                     sample's values are used directly. If multiple, their median
-#'                     per feature is used. If NULL (default), the median across
-#'                     all samples is used.
-#' @return Normalized numeric matrix (same dimensions).
-#'
-#' @references Dieterle F et al. (2006) Anal Chem 78:4281-4290.
-norm_pqn <- function(mat, ref_samples = NULL) {
-    # Step 1: initial median normalization
-    mat_mn <- norm_median(mat)
-
-    # Step 2: reference spectrum
-    if (!is.null(ref_samples)) {
-        ref_cols <- intersect(ref_samples, colnames(mat_mn))
-        if (length(ref_cols) == 0) {
-            warning("norm_pqn: none of ref_samples found in data columns; ",
-                    "falling back to median of all samples.")
-            ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
-        } else if (length(ref_cols) == 1) {
-            message(sprintf("norm_pqn: using single reference sample '%s'", ref_cols))
-            ref <- mat_mn[, ref_cols]
-        } else {
-            message(sprintf("norm_pqn: using median of %d reference samples (%s)",
-                            length(ref_cols), paste(ref_cols, collapse = ", ")))
-            ref <- apply(mat_mn[, ref_cols, drop = FALSE], 1, stats::median, na.rm = TRUE)
-        }
-    } else {
-        ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
-    }
-
-    # Exclude features with zero/NA reference — they produce Inf quotients
-    ref_ok <- is.finite(ref) & ref != 0
-    if (!any(ref_ok)) {
-        warning("norm_pqn: all reference values are 0 or NA; returning median-normalized data.")
-        return(mat_mn)
-    }
-
-    # Step 3 & 4: per-sample quotient normalization (using valid features only)
-    quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1,
-                       ref[ref_ok], FUN = "/")
-    med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
-    med_quotients[!is.finite(med_quotients) | med_quotients == 0] <- 1
-
-    sweep(mat_mn, 2, med_quotients, FUN = "/")
+#' Features with zero, missing, or non-finite reference values are excluded
+#' from quotient calculation.
+norm_pqn <- function(mat, qc_idx = NULL) {
+  # Step 1: initial median normalization
+  mat_mn <- norm_median(mat)
+  
+  # Step 2: reference spectrum
+  if (!is.null(qc_idx)) {
+    # Use QC samples as reference
+    ref <- apply(mat_mn[, qc_idx, drop = FALSE], 1, stats::median, na.rm = TRUE)
+  } else {
+    # Fallback: use all samples
+    ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
+  }
+  
+  # Exclude features with invalid reference values
+  ref_ok <- is.finite(ref) & abs(ref) > .Machine$double.eps
+  if (!any(ref_ok)) {
+    warning("norm_pqn: all reference values are zero, missing, or non-finite; returning median-normalized data.")
+    return(mat_mn)
+  }
+  
+  # Step 3: compute sample/reference quotients
+  quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1, ref[ref_ok], FUN = "/")
+  
+  # Step 4: estimate sample-specific scaling factors
+  med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
+  bad <- !is.finite(med_quotients) | med_quotients == 0
+  if (any(bad)) {
+    warning(sprintf(
+      "norm_pqn: %d sample(s) had invalid median quotient; using scale factor 1.",
+      sum(bad)
+    ))
+    med_quotients[bad] <- 1
+  }
+  
+  # Step 5: apply PQN scaling
+  sweep(mat_mn, 2, med_quotients, FUN = "/")
 }
 
 
@@ -396,25 +386,14 @@ norm_biological_factor <- function(mat, meta, factor_col) {
 #' Apply transformation
 #'
 #' @param mat         Numeric matrix.
-#' @param method      One of "none", "log2", "log10", "glog10".
+#' @param method      One of "none", "log2", "log10".
 #' @param pseudocount Numeric value added before log (default 1).
-#'                    Ignored when method = "glog10" (uses adaptive min.val).
 #' @return Transformed matrix.
 transform_metab <- function(mat, method = "none", pseudocount = 1) {
     method <- tolower(method)
-    assert_one_of(method, "transform", c("none", "log2", "log10", "glog10"))
+    assert_one_of(method, "transform", c("none", "log2", "log10"))
 
     if (method == "none") return(mat)
-
-    # Generalized log10 (MetaboAnalyst convention):
-    #   glog10(x) = log10( (x + sqrt(x^2 + min.val^2)) / 2 )
-    # where min.val = 1/10 of the smallest positive value.
-    # Smoothly handles zeros and near-zero values without a pseudocount.
-    if (method == "glog10") {
-        pos_vals <- mat[mat > 0 & is.finite(mat)]
-        min_val <- if (length(pos_vals) > 0) min(pos_vals) / 10 else 1
-        return(log10((mat + sqrt(mat^2 + min_val^2)) / 2))
-    }
 
     if (pseudocount > 0) {
         mat <- mat + pseudocount
@@ -483,48 +462,3 @@ scale_metab <- function(mat, method = "none") {
 }
 
 
-# ==== PIPELINE WRAPPER ========================================================
-
-#' Apply full normalization pipeline: sample_norm → transform → scaling
-#'
-#' @param mat         Numeric matrix (features x samples).
-#' @param norm_cfg    normalization config section.
-#' @param row_data    data.frame (for IS normalization only).
-#' @param groups      Character/factor vector of group labels per sample
-#'                    (required for eigenms; ignored by other methods).
-#' @return list(expr_norm, applied) where applied records what was done.
-apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL, groups = NULL,
-                                         meta = NULL) {
-    sample_norm <- norm_cfg$sample_norm %||% "none"
-    transform   <- norm_cfg$transform   %||% "none"
-    scaling     <- norm_cfg$scaling     %||% "none"
-    pseudocount <- norm_cfg$pseudocount %||% 1
-
-    # IS-specific config
-    is_ref_col <- norm_cfg$is_ref_col %||% NULL
-
-    # bio_factor-specific config (per-sample numeric column in meta)
-    bio_factor_col <- norm_cfg$biological_factor_col %||% NULL
-
-    # Step 1: sample normalization
-    mat <- normalize_samples(mat, method = sample_norm,
-                             ref_col = is_ref_col, row_data = row_data,
-                             groups = groups,
-                             meta = meta, bio_factor_col = bio_factor_col)
-
-    # Step 2: transformation
-    mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
-
-    # Step 3: scaling
-    mat <- scale_metab(mat, method = scaling)
-
-    list(
-        expr_norm = mat,
-        applied = list(
-            sample_norm = sample_norm,
-            transform   = transform,
-            scaling     = scaling,
-            pseudocount = if (transform != "none") pseudocount else NA
-        )
-    )
-}
