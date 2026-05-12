@@ -43,8 +43,16 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     pval_vals <- as.numeric(summary_df[[pval_col]])
     lfc_vals  <- signed_fc_to_log2(as.numeric(summary_df[[fc_col]]))
 
-    # stat = sign(log2FC) * -log10(pvalue)
-    stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+    # Compute stat based on configured GSEA ranking method
+    ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "stat"
+    if (identical(ranking, "abs_lfc")) {
+        stat_vals <- abs(lfc_vals)
+    } else if (identical(ranking, "lfc")) {
+        stat_vals <- lfc_vals
+    } else {
+        # Default "stat": sign(log2FC) * -log10(pvalue)
+        stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+    }
 
     de_tbl <- data.frame(
         FeatureID       = summary_df[[src_id_col]],
@@ -223,13 +231,31 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     min_size <- pw_cfg$min_size %||% 10
     max_size <- pw_cfg$max_size %||% 500
 
+    # GO simplification config
+    simplify_go        <- isTRUE(pw_cfg$simplify_go)
+    simplify_threshold <- pw_cfg$simplify_threshold %||% 0.7
+    simplify_measure   <- pw_cfg$simplify_measure   %||% "Wang"
+    simplify_orgdb     <- if (simplify_go) {
+        org_info <- get_organism_info(organism)
+        if (!is.na(org_info$orgdb)) org_info$orgdb else NULL
+    } else NULL
+
+    if (simplify_go && is.null(simplify_orgdb)) {
+        message("GO simplification requested but no OrgDb available for '", organism,
+                "'. Simplification will be skipped.")
+    }
+
     pathway_results <- run_pathway_analysis(
-        de_tables  = de_tables,
-        gene_sets  = gene_sets,
-        annotation = annotation_df,
-        method     = method,
-        min_size   = min_size,
-        max_size   = max_size
+        de_tables          = de_tables,
+        gene_sets          = gene_sets,
+        annotation         = annotation_df,
+        method             = method,
+        min_size           = min_size,
+        max_size           = max_size,
+        simplify_go        = simplify_go,
+        simplify_threshold = simplify_threshold,
+        simplify_measure   = simplify_measure,
+        simplify_orgdb     = simplify_orgdb
     )
 
     # Save results and plots
@@ -245,6 +271,7 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         write.csv(annotation_df, anno_file, row.names = FALSE)
         message("Saved gene annotation to: ", anno_file)
     }
+
 
     # ------------------------------------------------------------------
     # Cluster enrichment terms (rrvgo for GO, Jaccard for KEGG/custom)

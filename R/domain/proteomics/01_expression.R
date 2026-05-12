@@ -59,6 +59,7 @@ apply_custom_annotation <- function(row_data, cfg, config = NULL) {
 #' @param config Full config list.
 #' @return List with fields: assay_log2, assay_linear, row_data, col_data, info.
 get_proteomics_expression_matrix <- function(inputs, config) {
+
   cfg <- config$modes$proteomics
   is_preprocessed <- identical(inputs$source_type, "preprocessed") ||
     identical(cfg$input$format, "preprocessed")

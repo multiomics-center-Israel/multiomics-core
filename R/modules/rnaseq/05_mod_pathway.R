@@ -107,13 +107,26 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
     pw_min     <- pw_cfg$min_size %||% 10
     pw_max     <- pw_cfg$max_size %||% 500
 
+    # GO simplification config
+    simplify_go        <- isTRUE(pw_cfg$simplify_go)
+    simplify_threshold <- pw_cfg$simplify_threshold %||% 0.7
+    simplify_measure   <- pw_cfg$simplify_measure   %||% "Wang"
+    simplify_orgdb     <- if (simplify_go) {
+        org_info <- get_organism_info(organism)
+        if (!is.na(org_info$orgdb)) org_info$orgdb else NULL
+    } else NULL
+
     pathway_results <- run_pathway_analysis(
-        de_tables  = de_tables,
-        gene_sets  = gene_sets,
-        annotation = annotation_df,
-        method     = pw_method,
-        min_size   = pw_min,
-        max_size   = pw_max
+        de_tables          = de_tables,
+        gene_sets          = gene_sets,
+        annotation         = annotation_df,
+        method             = pw_method,
+        min_size           = pw_min,
+        max_size           = pw_max,
+        simplify_go        = simplify_go,
+        simplify_threshold = simplify_threshold,
+        simplify_measure   = simplify_measure,
+        simplify_orgdb     = simplify_orgdb
     )
 
     # ------------------------------------------------------------------
@@ -130,6 +143,20 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
         anno_file <- file.path(enrich_dir, "gene_annotation.csv")
         write.csv(annotation_df, anno_file, row.names = FALSE)
         message("Saved gene annotation to: ", anno_file)
+    }
+
+    # Build pathway-colored volcano data
+    pw_volcano_enabled <- isTRUE(pw_cfg$pathway_volcano) || is.null(pw_cfg$pathway_volcano)
+    if (pw_volcano_enabled && length(pathway_results) > 0) {
+        message("Building pathway-colored volcano data for RNA-seq...")
+        for (cn in names(de_tables)) {
+            volcano_data <- build_pathway_volcano_data(de_tables[[cn]], pathway_results)
+            if (!is.null(volcano_data)) {
+                volcano_file <- file.path(enrich_dir, sprintf("pathway_volcano_data_%s.csv", cn))
+                write.csv(volcano_data, volcano_file, row.names = FALSE)
+                message("  Saved pathway volcano data: ", volcano_file)
+            }
+        }
     }
 
     list(

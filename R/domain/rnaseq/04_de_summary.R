@@ -142,6 +142,7 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
 #' @return Data frame with summary statistics and pass flags
 #' @export
 build_rnaseq_summary_df <- function(de_tables, de_cfg) {
+
   if (length(de_tables) == 0) {
     warning("No DE tables provided to build_rnaseq_summary_df")
     return(data.frame())
@@ -195,6 +196,7 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
   
   return(summary_df)
 }
+
 #' Build DE summary counts table
 #'
 #' Creates a summary table showing counts of upregulated, downregulated,

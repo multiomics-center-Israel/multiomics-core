@@ -286,7 +286,18 @@ load_gene_sets <- function(organism,
         # KEGG pathways
         if ("KEGG" %in% pathway_database && !is.na(org_info$kegg)) {
             tryCatch({
-                kegg_gene <- clusterProfiler::download_KEGG(org_info$kegg, keggType = "KEGG")
+                # Cache clusterProfiler KEGG download (network call)
+                kegg_cache_dir <- file.path(tempdir(), "kegg_cache")
+                kegg_cp_cache <- file.path(kegg_cache_dir, paste0("kegg_cp_", org_info$kegg, ".rds"))
+                if (file.exists(kegg_cp_cache) &&
+                    difftime(Sys.time(), file.mtime(kegg_cp_cache), units = "days") < 7) {
+                    kegg_gene <- readRDS(kegg_cp_cache)
+                    message("Using cached clusterProfiler KEGG data for '", org_info$kegg, "'")
+                } else {
+                    kegg_gene <- clusterProfiler::download_KEGG(org_info$kegg, keggType = "KEGG")
+                    dir.create(kegg_cache_dir, recursive = TRUE, showWarnings = FALSE)
+                    tryCatch(saveRDS(kegg_gene, kegg_cp_cache), error = function(e) NULL)
+                }
 
                 if (!is.null(kegg_gene) && nrow(kegg_gene$KEGGPATHID2EXTID) > 0) {
                     kegg_df <- kegg_gene$KEGGPATHID2EXTID
@@ -396,9 +407,26 @@ run_ora <- function(sig_genes, gene_sets, background, min_size = 10, max_size = 
 #' @param kegg_code Three-letter KEGG organism code (e.g. "gla", "hsa")
 #' @param min_size Minimum genes per pathway (default 3)
 #' @return Named list of gene sets (character vectors of gene IDs)
-fetch_kegg_via_rest <- function(kegg_code, min_size = 3) {
+fetch_kegg_via_rest <- function(kegg_code, min_size = 3, cache_dir = NULL,
+                                cache_days = 7) {
     if (!requireNamespace("KEGGREST", quietly = TRUE)) {
         stop("KEGGREST package required. Install with: BiocManager::install('KEGGREST')")
+    }
+
+    # --- Local cache: avoid hitting KEGG REST API every run ---
+    if (is.null(cache_dir)) {
+        cache_dir <- file.path(tempdir(), "kegg_cache")
+    }
+    cache_file <- file.path(cache_dir, paste0("kegg_", kegg_code, ".rds"))
+
+    if (file.exists(cache_file)) {
+        cache_age <- difftime(Sys.time(), file.mtime(cache_file), units = "days")
+        if (cache_age < cache_days) {
+            cached <- readRDS(cache_file)
+            message("Using cached KEGG data for '", kegg_code,
+                    "' (", round(as.numeric(cache_age), 1), " days old)")
+            return(cached)
+        }
     }
 
     # Bulk fetch: all gene <-> pathway links for this organism
@@ -424,6 +452,10 @@ fetch_kegg_via_rest <- function(kegg_code, min_size = 3) {
         has_name <- !is.na(new_names)
         names(pw_genes)[has_name] <- paste0(names(pw_genes)[has_name], " ", new_names[has_name])
     }
+
+    # Save to cache
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    tryCatch(saveRDS(pw_genes, cache_file), error = function(e) NULL)
 
     pw_genes
 }

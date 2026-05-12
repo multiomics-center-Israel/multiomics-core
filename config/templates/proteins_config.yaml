@@ -11,6 +11,9 @@ project:
   dir: "/full-path/to/project_dir"   # REQUIRED: absolute path to the project folder (outside the repo)
   name: "<PROJECT_NAME>"             # REQUIRED: short project identifier
   analysis_round: "A01"              # REQUIRED: analysis iteration / round (e.g., A01, A02...)
+  analyst: "Bioinformatics Core"     # Name of the analyst (shown in report header)
+  user_notes: ""                     # Optional: free-text project description (appears in report as Project Overview)
+  technical_report_file: ""          # Optional: path to facility report (DOCX/PDF/log) for AI-enhanced summary
 
 # Paths are RELATIVE to project.dir
 paths:
@@ -59,23 +62,27 @@ modes:
     # Filtering
     # --------------------------------------------------------
     filtering:
+      remove_contaminants: true
+      contaminant_prefix: "cRAP-"
       min_count:
         default: 3
         # Optional per-condition override:
         # Control: 3
         # Treatment: 2
+      min_groups: 1             # require passing in at least N group(s)
 
     # --------------------------------------------------------
     # Normalization
     # --------------------------------------------------------
     normalization:
-      method: "none"      # "none" or "median"
+      method: "none"      # "none" | "median" | "vsn"
 
     # --------------------------------------------------------
     # Multiple imputation
     # --------------------------------------------------------
     imputation:
-      method: "perseus"    # "none" | "perseus" | "dep2"
+      multi_imputation: true  # false = single imputation (no consensus filter)
+      method: "perseus"    # "none" | "perseus" | "dep2" | "qrilc" | "minval"
 
       no_repetitions: 10
       min_no_passed: 8
@@ -88,14 +95,21 @@ modes:
       dep2_method: "MinDet"
       dep2_random_seed: 1
 
+      # QRILC parameters (truncated normal, single imputation)
+      qrilc_random_seed: 1
+
     # --------------------------------------------------------
     # Differential expression
     # --------------------------------------------------------
     de:
-      method: "limma"
+      method: "limma"           # "limma" | "ttest" | "welch" | "anova"
       use_adj_for_pass1: true
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
+      p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
+      fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
+      paired: false
+      pairing_col: null          # metadata column for paired test (e.g. "Subject")
 
     # --------------------------------------------------------
     # How to interpret DE summary tables (used by get_de_features, QC_post, etc.)
@@ -222,6 +236,11 @@ modes:
       outlier_sd_threshold: 3
       min_sample_correlation: 0.8
       top_de_heatmap_sizes: [25, 50, 100]
+      pca_subsets:
+        - name: "All samples"
+          conditions: null    # null = all conditions
+        # - name: "Custom subset"
+        #   conditions: ["Group1", "Group2"]
 
     # --------------------------------------------------------
     # Pathway enrichment
@@ -236,6 +255,12 @@ modes:
       max_size: 500
       gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
       pathway_volcano: true   # produce pathway-colored volcano data for report
+
+      # GO term simplification — cluster semantically similar GO terms
+      # and keep only the most significant per cluster (uses rrvgo)
+      simplify_go: true             # true = reduce redundant GO terms
+      simplify_threshold: 0.7       # 0-1: higher = more aggressive merging
+      simplify_measure: "Wang"      # "Wang" | "Rel" | "Resnik" | "Lin" | "Jiang"
       cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
     # --------------------------------------------------------

@@ -3,8 +3,15 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
     de_cfg <- config$modes$proteomics$de
     imp_cfg <- config$modes$proteomics$imputation
 
+    multi_imp <- imp_cfg$multi_imputation %||% TRUE
     NO_REPETITIONS <- as.integer(imp_cfg$no_repetitions)
     MIN_NO_PASSED <- as.integer(imp_cfg$min_no_passed)
+
+    # Single imputation mode: override consensus parameters
+    if (isFALSE(multi_imp) || length(runs_de_tables) == 1L) {
+        NO_REPETITIONS <- length(runs_de_tables)
+        MIN_NO_PASSED <- 1L
+    }
 
     use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
     p_cutoff <- as.numeric(de_cfg$p_cutoff)
@@ -232,6 +239,19 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
 
     fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(expr_imp, design), contrast_matrix))
 
+    # Optional fdrtool empirical null correction (matching DEP::test_diff)
+    if (isTRUE(p_cfg$de$fdrtool_correction)) {
+        if (!requireNamespace("fdrtool", quietly = TRUE))
+            stop("fdrtool_correction is enabled but 'fdrtool' package is not installed.\n",
+                 "Install with: install.packages('fdrtool')")
+        for (i in seq_len(ncol(fit2$t))) {
+            fdr_res <- fdrtool::fdrtool(fit2$t[, i], statistic = "normal",
+                                         plot = FALSE, verbose = FALSE)
+            fit2$p.value[, i] <- fdr_res$pval
+        }
+        message("Applied fdrtool empirical null correction to t-statistics.")
+    }
+
     ann <- align_annotations_to_expr(expr_imp, prot_tbl, protein_id_col, annot_cols)
     feature_id <- ann[[protein_id_col]]
     annot_out <- setdiff(annot_cols, protein_id_col)
@@ -240,7 +260,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     target_id_col <- de_table_cfg$id_col %||% "FeatureID"
 
     de_tables <- lapply(colnames(contrast_matrix), function(cn) {
-        de <- limma::topTable(fit2, coef = cn, adjust.method = "BH", sort.by = "none", number = Inf)
+        adj_method <- p_cfg$de$p_adjust_method %||% "BH"
+        de <- limma::topTable(fit2, coef = cn, adjust.method = adj_method, sort.by = "none", number = Inf)
         de <- align_de_to_expr(de, expr_imp, contrast_name = cn)
         df_out <- data.frame(
             TEMP_ID_COL = feature_id,
@@ -632,8 +653,9 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         cn <- colnames(raw)
 
         # Feature IDs
-        feat_col <- cn[cn %in% c(id_col, "FeatureID", "Protein.Group",
-                                  "protein_id", "feature_id")][1]
+        prot_id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
+        feat_col <- cn[cn %in% c(id_col, prot_id_col, "FeatureID", "ID",
+                                  "Protein.Group", "protein_id", "feature_id")][1]
         if (is.na(feat_col)) {
             unnamed_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
             feat_ids <- if (!is.na(unnamed_idx)) as.character(raw[[unnamed_idx]]) else rownames(raw)

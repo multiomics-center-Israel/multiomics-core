@@ -424,7 +424,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
-            pass   = paste0("pass.", contrast),
+            pass   = paste0(contrast, "_pass"),
             updown = paste0("upDown.", contrast),
             manual = paste0("manual_cutoffs.", contrast)
         )
@@ -779,6 +779,7 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
     mat_clean[idx_na] <- row_means[idx_na[,1]]
   }
 
+
   # hclust requires >= 2 rows; assign rank 1 for a single feature
   if (nrow(mat_clean) < 2) {
     ranks <- if (nrow(mat_clean) == 1) match(df[[id_col]], rownames(mat_clean)) else rep(NA_integer_, nrow(df))
@@ -789,10 +790,11 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
   # Simple clustering
   dists <- dist(mat_clean)
   hc <- hclust(dists, method = "complete")
-  
+
   # Create an order mapping
   ordered_ids <- rownames(mat_clean)[hc$order]
   ranks <- match(df[[id_col]], ordered_ids)
+
 
   # Use Hierarchical_Order if column exists, otherwise fall back to 'order'
   if ("Hierarchical_Order" %in% names(df)) {

@@ -205,24 +205,44 @@ build_figure_context <- function(fig, config, de_summary = NULL, extra_data = NU
             }
         }
 
-        # Top DE genes for the current contrast
+        # Top DE genes/proteins for the current contrast
         if (!is.na(fig$contrast) && !is.null(extra_data$top_genes)) {
+            # Try exact match first, then partial (fig contrast may have suffixes)
             tg <- extra_data$top_genes[[fig$contrast]]
+            if (is.null(tg)) {
+                for (cn in names(extra_data$top_genes)) {
+                    if (grepl(cn, fig$contrast, fixed = TRUE)) {
+                        tg <- extra_data$top_genes[[cn]]
+                        break
+                    }
+                }
+            }
             if (!is.null(tg)) {
                 context$top_genes <- tg
             }
+        }
+
+        # Domain-specific overrides (e.g. "proteomics")
+        if (!is.null(extra_data$domain_label)) {
+            context$domain_label <- extra_data$domain_label
+        }
+        if (!is.null(extra_data$domain_guidance)) {
+            context$domain_guidance <- extra_data$domain_guidance
         }
     }
 
     # --- DE summary counts ---
     if (!is.null(de_summary) && !is.na(fig$contrast)) {
-        row <- de_summary[grepl(fig$contrast, de_summary$contrast, fixed = TRUE), ]
+        # Match: fig$contrast contains de_summary$contrast, or vice versa
+        row <- de_summary[
+            sapply(de_summary$contrast, function(cn) grepl(cn, fig$contrast, fixed = TRUE)),
+        , drop = FALSE]
         if (nrow(row) > 0) {
             row <- row[1, ]
-            context$de_significant <- row$significant %||% row$total_de
+            context$de_significant <- row$significant %||% row$total_de %||% row$total
             context$de_up   <- row$up %||% row$up_regulated
             context$de_down <- row$down %||% row$down_regulated
-            context$de_total_tested <- row$total %||% row$total_tested
+            context$de_total_tested <- row$total_tested %||% row$total
         }
     }
 
@@ -242,6 +262,7 @@ build_figure_context <- function(fig, config, de_summary = NULL, extra_data = NU
 build_figure_guidance <- function(context) {
     pt <- context$plot_type
     fid <- context$figure_id
+    feature_term <- if (identical(context$domain_label, "proteomics")) "proteins" else "genes"
 
     # PCA plots
     if (pt == "scatter" && grepl("pca", fid, ignore.case = TRUE)) {
@@ -308,7 +329,7 @@ build_figure_guidance <- function(context) {
             "INTERPRETATION GUIDANCE FOR EXPRESSION DENSITY PLOT:",
             "\n- Each curve represents one sample's expression distribution.",
             "\n- After normalization, curves should largely overlap.",
-            "\n- Bimodal distributions are common in RNA-seq (low/no expression peak + expressed genes peak).",
+            "\n- Bimodal distributions are common (low/no expression peak + expressed ", feature_term, " peak).",
             "\n- Samples with shifted or differently shaped curves may indicate quality issues or biological differences."
         ))
     }
@@ -340,10 +361,10 @@ build_figure_guidance <- function(context) {
     if (pt == "heatmap" && grepl("expr_heatmap", fid)) {
         return(paste0(
             "INTERPRETATION GUIDANCE FOR EXPRESSION HEATMAP:",
-            "\n- Shows z-score-scaled expression of top variable genes across all samples.",
+            "\n- Shows z-score-scaled expression of top variable ", feature_term, " across all samples.",
             "\n- Row clustering reveals co-expressed gene modules.",
             "\n- Column clustering should ideally group samples by experimental condition.",
-            "\n- Identify blocks of genes that are consistently up or down in specific conditions.",
+            "\n- Identify blocks of ", feature_term, " that are consistently up or down in specific conditions.",
             "\n- This gives a global overview of transcriptomic differences between conditions."
         ))
     }
@@ -353,8 +374,8 @@ build_figure_guidance <- function(context) {
         de_info <- ""
         if (!is.null(context$de_significant)) {
             de_info <- sprintf(
-                "\nDE statistics: %s significant genes (%s up, %s down) out of %s tested.",
-                context$de_significant,
+                "\nDE statistics: %s significant %s (%s up, %s down) out of %s tested.",
+                context$de_significant, feature_term,
                 context$de_up %||% "?",
                 context$de_down %||% "?",
                 context$de_total_tested %||% "?"
@@ -375,7 +396,7 @@ build_figure_guidance <- function(context) {
             top_dn <- tg[tg$direction == "down", ]
             if (nrow(top_up) > 0) {
                 gene_info <- paste0(gene_info, sprintf(
-                    "\nTop up-regulated genes: %s",
+                    "\nTop up-regulated %s: %s", feature_term,
                     paste(sprintf("%s (log2FC=%.1f, padj=%.1e)",
                           top_up$gene, top_up$log2FC, top_up$padj),
                           collapse = "; ")
@@ -383,7 +404,7 @@ build_figure_guidance <- function(context) {
             }
             if (nrow(top_dn) > 0) {
                 gene_info <- paste0(gene_info, sprintf(
-                    "\nTop down-regulated genes: %s",
+                    "\nTop down-regulated %s: %s", feature_term,
                     paste(sprintf("%s (log2FC=%.1f, padj=%.1e)",
                           top_dn$gene, top_dn$log2FC, top_dn$padj),
                           collapse = "; ")
@@ -397,11 +418,11 @@ build_figure_guidance <- function(context) {
             "\n- The x-axis shows log2 fold change (effect size); the y-axis shows -log10 adjusted p-value (statistical significance).",
             "\n- Dashed lines indicate significance cutoffs.",
             "\n- Describe the overall pattern: symmetric (balanced up/down) or asymmetric?",
-            "\n- Name the most prominent genes if visible in the plot or provided in the data above.",
-            "\n- For named genes, briefly mention their known biological function if relevant to the organism (",
+            "\n- Name the most prominent ", feature_term, " if visible in the plot or provided in the data above.",
+            "\n- For named ", feature_term, ", briefly mention their known biological function if relevant to the organism (",
             context$organism %||% "unknown", ").",
-            "\n- Comment on the proportion of significant genes relative to total tested.",
-            "\n- If many genes cluster near the cutoff boundary, note that these are borderline results."
+            "\n- Comment on the proportion of significant ", feature_term, " relative to total tested.",
+            "\n- If many ", feature_term, " cluster near the cutoff boundary, note that these are borderline results."
         ))
     }
 
@@ -411,10 +432,10 @@ build_figure_guidance <- function(context) {
             "INTERPRETATION GUIDANCE FOR MA PLOT:",
             "\nContrast: ", context$contrast %||% "unknown",
             "\n- The x-axis shows average expression (baseMean on log10 scale); y-axis shows log2 fold change.",
-            "\n- After proper normalization, the cloud of non-significant genes should be centered at log2FC = 0.",
+            "\n- After proper normalization, the cloud of non-significant ", feature_term, " should be centered at log2FC = 0.",
             "\n- Asymmetry or trend in the cloud suggests normalization issues.",
-            "\n- Lowly expressed genes (left side) have higher fold-change variance — this is expected.",
-            "\n- Significant genes (colored) scattered at high expression levels are the most reliable DE calls.",
+            "\n- Lowly expressed ", feature_term, " (left side) have higher fold-change variance — this is expected.",
+            "\n- Significant ", feature_term, " (colored) scattered at high expression levels are the most reliable DE calls.",
             "\n- Comment on whether normalization appears adequate based on the overall cloud shape."
         ))
     }
@@ -424,16 +445,16 @@ build_figure_guidance <- function(context) {
         gene_info <- ""
         if (!is.null(context$top_genes)) {
             top_names <- head(context$top_genes$gene, 10)
-            gene_info <- sprintf("\nTop DE genes include: %s", paste(top_names, collapse = ", "))
+            gene_info <- sprintf("\nTop DE %s include: %s", feature_term, paste(top_names, collapse = ", "))
         }
         return(paste0(
-            "INTERPRETATION GUIDANCE FOR TOP DE GENES HEATMAP:",
+            "INTERPRETATION GUIDANCE FOR TOP DE ", toupper(feature_term), " HEATMAP:",
             "\nContrast: ", context$contrast %||% "unknown", gene_info,
-            "\n- Shows row-scaled (z-score) expression of the top differentially expressed genes.",
+            "\n- Shows row-scaled (z-score) expression of the top differentially expressed ", feature_term, ".",
             "\n- Check if the heatmap clearly separates the two conditions in this contrast.",
-            "\n- Identify co-regulated gene clusters (groups of genes with similar patterns).",
-            "\n- Describe the overall pattern: are most genes up in one condition vs the other, or mixed?",
-            "\n- If gene names are visible, mention any with known biological relevance."
+            "\n- Identify co-regulated clusters (groups of ", feature_term, " with similar patterns).",
+            "\n- Describe the overall pattern: are most ", feature_term, " up in one condition vs the other, or mixed?",
+            "\n- If names are visible, mention any with known biological relevance."
         ))
     }
 
@@ -442,11 +463,11 @@ build_figure_guidance <- function(context) {
         return(paste0(
             "INTERPRETATION GUIDANCE FOR PATHWAY ENRICHMENT PLOT:",
             "\nContrast: ", context$contrast %||% "unknown",
-            "\n- Dot size typically indicates the number of genes in the gene set that overlap with DE genes.",
+            "\n- Dot size typically indicates the number of ", feature_term, " in the gene set that overlap with DE ", feature_term, ".",
             "\n- Color indicates statistical significance (p-value or adjusted p-value).",
             "\n- Identify the top enriched pathways and their biological relevance to the experiment.",
             "\n- Group related pathways into biological themes (e.g., immune response, metabolism, cell cycle).",
-            "\n- Note whether enrichment is predominantly in up-regulated or down-regulated genes.",
+            "\n- Note whether enrichment is predominantly in up-regulated or down-regulated ", feature_term, ".",
             "\n- Comment on whether the enriched pathways make biological sense given the organism (",
             context$organism %||% "unknown", ") and experimental context."
         ))
@@ -607,6 +628,9 @@ run_claude_code_commentary <- function(image_path, figure_id, context,
 
     # Get figure-type-specific interpretation guidance
     guidance <- build_figure_guidance(context)
+    if (!is.null(context$domain_guidance)) {
+        guidance <- paste0(guidance, "\n\n", context$domain_guidance)
+    }
 
     # JSON schema for structured output
     json_schema <- paste0(
@@ -624,9 +648,10 @@ run_claude_code_commentary <- function(image_path, figure_id, context,
     )
 
     # Build the full prompt with scientific writing principles
+    domain_label <- context$domain_label %||% "RNA-seq"
     prompt <- sprintf(
         paste0(
-            "You are an expert bioinformatics scientist interpreting RNA-seq analysis figures for a report. ",
+            "You are an expert bioinformatics scientist interpreting %s analysis figures for a report. ",
             "Read the image at '%s' and provide a rigorous scientific interpretation.\n\n",
             "EXPERIMENT CONTEXT:\n%s\n",
             "%s\n\n",
@@ -647,14 +672,14 @@ run_claude_code_commentary <- function(image_path, figure_id, context,
             "Do not invent gene names or numeric values unless clearly visible.\n",
             "- Set figure_id to '%s'."
         ),
-        image_path, context_str, guidance, figure_id
+        domain_label, image_path, context_str, guidance, figure_id
     )
 
     model <- config$claude_code_model %||% "sonnet"
 
     # Allow MCP tools (K-Dense, etc.) if available, plus Read for images
     cmd <- sprintf(
-        "claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
+        "unset CLAUDECODE; claude --print --output-format json --model %s --json-schema '%s' --no-session-persistence %s",
         model,
         json_schema,
         shQuote(prompt)
