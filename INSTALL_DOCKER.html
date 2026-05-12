@@ -141,14 +141,21 @@ h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; background: line
         <div style="font-size:30px;">🐳</div>
         <div>
           <div style="font-weight:600;font-size:14px;">docker-run.bat</div>
-          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Pulls the prebuilt image (~5 min, only first time) and starts the wizard.</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Resolves the image (.tar load / pull / build), then starts the wizard.</div>
         </div>
       </div>
+      <p><code>docker-run.bat</code> tries to find the image in this order:</p>
+      <ul>
+        <li><strong>(a)</strong> Already loaded in Docker — used immediately</li>
+        <li><strong>(b)</strong> A file named <code>multiomics-core_Lipidomics_dor.tar</code> sitting next to <code>docker-run.bat</code> — loaded in ~5 min (this is the route Dor will use to hand you a prebuilt image)</li>
+        <li><strong>(c)</strong> Public image on <code>ghcr.io</code> — pulled in ~5 min if the GitHub package was made public</li>
+        <li><strong>(d)</strong> Build locally from source — last resort, ~30 min</li>
+      </ul>
       <p>A black Command Prompt window opens and shows progress. Wait until you see:</p>
       <div class="cmd">Starting wizard at http://localhost:8080</div>
       <p>Your browser should open automatically. If it doesn't, click here: <a href="http://localhost:8080" target="_blank">http://localhost:8080</a></p>
-      <div class="note warning">
-        <strong>If the pull fails</strong> (no internet, or the image hasn't been published yet for this branch), the script falls back to building the image locally — that takes ~30 min. You'll only ever pay that cost once.
+      <div class="note">
+        <strong>For the fastest path on a fresh laptop:</strong> have whoever set up the repo run <code>docker save -o multiomics-core_Lipidomics_dor.tar multiomics-core:Lipidomics_dor</code> on their machine, then USB the <code>.tar</code> to your laptop and drop it next to <code>docker-run.bat</code>. Double-click → ~5 min → wizard.
       </div>
       <div class="checkbox-row" onclick="this.querySelector('input').click()">
         <input type="checkbox">

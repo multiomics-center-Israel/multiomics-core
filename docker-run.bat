@@ -4,9 +4,12 @@
 ::
 :: What this does:
 ::   1. Checks Docker Desktop is running
-::   2. Pulls the prebuilt image from ghcr.io (~5 min, no R/Bioc build)
-::      Falls back to a local build only if the pull fails (e.g. offline,
-::      or the registry image hasn't been published yet for this branch).
+::   2. Resolves the image in this order:
+::        a. Image already in Docker -> use it
+::        b. multiomics-core_<TAG>.tar in the same folder -> docker load
+::           (fastest offline route — pre-built on another machine)
+::        c. Pull from ghcr.io -> needs the package to be Public
+::        d. Build locally -> ~30 min, last resort
 ::   3. Starts the wizard on http://localhost:8080
 ::   4. Mounts your data + outputs folders so reports persist on Windows
 ::
@@ -15,10 +18,10 @@
 ::     https://www.docker.com/products/docker-desktop
 ::   - WSL2 enabled (Docker Desktop installer handles this)
 ::
-:: First run on a clean machine:
-::   - With internet:  ~5 min image pull, then ~10 sec to start.
-::   - Without internet (or registry image missing): falls back to local
-::     build, ~30 min.
+:: First run timing:
+::   - .tar already next to this script:   ~5 min load + 10 sec start
+::   - ghcr.io image publicly pullable:    ~5 min pull + 10 sec start
+::   - Neither, but internet available:    ~30 min build + 10 sec start
 :: Subsequent runs: ~10 sec.
 :: ============================================================
 
@@ -66,16 +69,43 @@ if errorlevel 1 (
 echo [OK] Docker daemon is up.
 echo.
 
-:: Step 2: Try to pull the prebuilt image from ghcr.io first (fast path).
-::         Fall back to local build if pull fails.
+:: Step 2: Resolve the image. Order of preference:
+::   (a) image already in Docker     -> use it
+::   (b) `.tar` file next to script  -> docker load it (offline transfer flow)
+::   (c) ghcr.io pull                -> needs package to be public
+::   (d) local docker build          -> last resort, ~30 min
+docker image inspect "%IMAGE_LOCAL%" >nul 2>&1
+if not errorlevel 1 (
+    echo [OK] Using existing local image %IMAGE_LOCAL%.
+    set "RUN_IMAGE=%IMAGE_LOCAL%"
+    goto :run
+)
+
+:: (b) Look for a bundled .tar next to this script
+set "TAR_FILE=%~dp0multiomics-core_%MULTIOMICS_IMAGE_TAG%.tar"
+if exist "%TAR_FILE%" (
+    echo Loading image from %TAR_FILE% ...
+    docker load -i "%TAR_FILE%"
+    if errorlevel 1 (
+        echo [WARN] docker load failed. Will try ghcr.io / build next.
+    ) else (
+        echo [OK] Loaded image from .tar.
+        docker image inspect "%IMAGE_LOCAL%" >nul 2>&1
+        if not errorlevel 1 ( set "RUN_IMAGE=%IMAGE_LOCAL%" & goto :run )
+        docker image inspect "%IMAGE_REMOTE%" >nul 2>&1
+        if not errorlevel 1 ( set "RUN_IMAGE=%IMAGE_REMOTE%" & goto :run )
+    )
+)
+
+:: (c) Pull from ghcr.io
 echo Pulling prebuilt image from ghcr.io ...
 echo   %IMAGE_REMOTE%
 docker pull "%IMAGE_REMOTE%" 2>&1
 if errorlevel 1 (
     echo.
     echo [WARN] Pull from ghcr.io failed. Falling back to local build.
-    echo        Reasons can include: no internet, registry image not yet
-    echo        published for this branch, or repo set to private.
+    echo        Common reasons: no internet, package set to private, no .tar
+    echo        bundled next to this script.
     echo.
     docker image inspect "%IMAGE_LOCAL%" >nul 2>&1
     if errorlevel 1 (
@@ -98,6 +128,7 @@ if errorlevel 1 (
 )
 echo.
 
+:run
 :: Step 3: Mount user data + outputs folders. Defaults to ./user_data and
 :: ./outputs next to this script. Override by setting USER_DATA_DIR and/or
 :: OUTPUTS_DIR before launching.
