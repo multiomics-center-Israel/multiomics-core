@@ -98,6 +98,43 @@ load_metabolomics_inputs <- function(config) {
   }
   
   inputs$format <- fmt
+
+  # If no contrasts file was provided but the YAML has inline `de.contrasts`
+  # strings (the wizard's default), build the contrasts data.frame here so
+  # run_metabolomics_de's Factor-column validator has something to chew on.
+  # Each string "A - B" becomes one row: Contrast_name = "A_vs_B",
+  # Factor = condition_column, Numerator = "A", Denominator = "B".
+  if (is.null(inputs$contrasts)) {
+    ctr_strs <- cfg$de$contrasts
+    if (!is.null(ctr_strs) && length(ctr_strs) > 0) {
+      if (is.list(ctr_strs)) ctr_strs <- unlist(ctr_strs, use.names = FALSE)
+      condition_col <- cfg$de$condition_column %||%
+                       cfg$effects$color %||% "condition"
+      rows <- lapply(ctr_strs, function(s) {
+        # Split on the FIRST " - " — group names themselves may contain hyphens
+        # ("HFD-Control" etc.), so we don't split on bare "-".
+        parts <- strsplit(s, "\\s*-\\s*", fixed = FALSE)[[1]]
+        if (length(parts) < 2) return(NULL)
+        num <- trimws(parts[1]); den <- trimws(parts[length(parts)])
+        data.frame(
+          Contrast_name = paste0(num, "_vs_", den),
+          Factor        = condition_col,
+          Numerator     = num,
+          Denominator   = den,
+          stringsAsFactors = FALSE
+        )
+      })
+      rows <- rows[!vapply(rows, is.null, logical(1))]
+      if (length(rows) > 0) {
+        inputs$contrasts <- do.call(rbind, rows)
+        message(sprintf(
+          "metabolomics: built %d-row contrast table from inline de$contrasts (Factor=%s)",
+          nrow(inputs$contrasts), condition_col
+        ))
+      }
+    }
+  }
+
   inputs
 }
 
