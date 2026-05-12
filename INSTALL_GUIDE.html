@@ -182,36 +182,44 @@ details .detail-body code { background: var(--input-bg); padding: 2px 6px; borde
   <div class="step" id="step1">
     <div class="step-header">
       <div class="step-num">1</div>
-      <div class="step-title">Install R + RTools</div>
+      <div class="step-title">Install R 4.5.2 + RTools 4.5</div>
       <div class="step-time"><span class="tag tag-prereq">prerequisite</span> ~10 min</div>
     </div>
     <div class="step-body">
-      <p>Download and install both of these (in order):</p>
+      <p>The pipeline pins <strong>R 4.5.2</strong> + Bioconductor 3.22. R 4.6 will silently break the install (jsonlite / Bioconductor packages fail to compile). Download these <em>exact</em> versions:</p>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0;">
-        <a href="https://cran.r-project.org/bin/windows/base/" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
+        <a href="https://cran.r-project.org/bin/windows/base/old/4.5.2/R-4.5.2-win.exe" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
           <div style="font-size:28px;margin-bottom:6px;">&#x1F4E6;</div>
-          <div style="font-size:14px;font-weight:600;color:var(--text);">R 4.5+</div>
-          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">cran.r-project.org</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);">R 4.5.2</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">direct download (R-4.5.2-win.exe)</div>
         </a>
-        <a href="https://cran.r-project.org/bin/windows/Rtools/" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
+        <a href="https://cran.r-project.org/bin/windows/Rtools/rtools45/rtools.html" target="_blank" style="display:block;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;text-decoration:none;transition:border-color 0.2s;">
           <div style="font-size:28px;margin-bottom:6px;">&#x1F527;</div>
           <div style="font-size:14px;font-weight:600;color:var(--text);">RTools 4.5</div>
-          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">cran.r-project.org</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">rtools45 page on CRAN</div>
         </a>
       </div>
 
       <div class="note warning">
-        <strong>Important during R installation:</strong> Make sure the checkbox
-        <em>"Save version number in registry"</em> is checked (it is by default). This allows
-        Rscript to be found from the command line.
+        <strong>If you already have a different R version installed</strong> (e.g. R 4.6): install R 4.5.2 anyway &mdash; the installer puts it in its own folder (<code>C:\Program Files\R\R-4.5.2\</code>). Then update your <code>Path</code> environment variable so <code>R-4.5.2\bin</code> appears <em>above</em> the other R version's path. Verify in a fresh Command Prompt:
+        <div class="cmd" onclick="copyCmd(this)">Rscript --version</div>
+        It must print <code>R scripting front-end version 4.5.2</code>.
+      </div>
+
+      <div class="note">
+        <strong>Important during R installation:</strong> Keep the checkbox <em>"Save version number in registry"</em> checked (it is by default). This allows Rscript to be found from the command line.
       </div>
 
       <p>Install R first, then RTools. Use all default settings &mdash; just click Next through both installers.</p>
 
       <div class="checkbox-row" onclick="this.querySelector('input').click()">
         <input type="checkbox" onchange="updateProgress()">
-        <label>R and RTools are installed</label>
+        <label><code>Rscript --version</code> prints <strong>4.5.2</strong></label>
+      </div>
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox" onchange="updateProgress()">
+        <label>RTools 4.5 is installed (<code>where gcc</code> finds a path under RTools)</label>
       </div>
     </div>
   </div>
