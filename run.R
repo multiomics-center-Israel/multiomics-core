@@ -18,9 +18,26 @@
 # project for dependencies — on Windows this caused pathway analysis to
 # balloon from ~5 min to ~12 min.
 if (!"renv" %in% loadedNamespaces()) {
-  lib_dirs <- list.dirs(file.path(getwd(), "renv", "library"), recursive = TRUE)
-  for (d in lib_dirs) {
-    if (file.exists(file.path(d, "jsonlite"))) {
+  # Compute the canonical renv library path deterministically. The old
+  # shim walked list.dirs() looking for a directory containing a
+  # `jsonlite` subdir. That probe failed silently on Windows installs
+  # where the renv library layout is renv/library/windows/R-x.y/<arch>/
+  # but the jsonlite check returned FALSE in vanilla mode for reasons
+  # never tracked down — leaving .libPaths() empty of the renv tree and
+  # breaking every Bioconductor-using target downstream (the bug Ifat's
+  # metabolomics pipeline ran into).
+  R_short <- paste0("R-", R.version$major, ".",
+                    strsplit(R.version$minor, ".", fixed = TRUE)[[1]][1])
+  R_arch  <- R.version$platform
+  sysname <- tolower(Sys.info()[["sysname"]])
+  candidates <- c(
+    file.path(getwd(), "renv", "library", sysname, R_short, R_arch),
+    file.path(getwd(), "renv", "library", "windows", R_short, R_arch),
+    file.path(getwd(), "renv", "library", R_short, R_arch),
+    file.path(getwd(), "renv", "library", R_short)
+  )
+  for (d in candidates) {
+    if (dir.exists(d) && length(list.files(d)) > 0) {
       .libPaths(c(d, .libPaths()))
       break
     }
