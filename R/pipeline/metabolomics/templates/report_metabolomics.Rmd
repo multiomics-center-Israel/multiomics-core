@@ -47,31 +47,38 @@ if (requireNamespace("plotly", quietly = TRUE))   library(plotly)
 if (requireNamespace("crosstalk", quietly = TRUE)) library(crosstalk)
 if (requireNamespace("jsonlite", quietly = TRUE))  library(jsonlite)
 
-# Source interactive cutoff panel helpers + metabolomics domain helpers
-# (make_contrast_label etc.) — the Rmd renders in a child R session that
-# doesn't inherit the parent's sourced functions, so we walk up looking for
-# the project root and source what the report needs.
+# Source interactive cutoff panel helpers
 tryCatch({
   .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-  .cp_proj_root <- NULL
+  .cp_found <- FALSE
   for (.cp_i in 1:6) {
-    if (file.exists(file.path(.cp_dir, "R", "core", "17_cutoff_panel.R"))) {
-      .cp_proj_root <- .cp_dir
-      break
-    }
+    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
+    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
     .cp_dir <- dirname(.cp_dir)
   }
-  if (is.null(.cp_proj_root)) {
-    message("project root not found (walked 6 levels up)")
-  } else {
-    source(file.path(.cp_proj_root, "R", "core", "17_cutoff_panel.R"))
-    # make_contrast_label + parse_metab_contrast + extract_contrast_table all
-    # live in 03_differential.R and are called from the report chunks below.
-    .cp_diff <- file.path(.cp_proj_root, "R", "domain", "metabolomics",
-                          "03_differential.R")
-    if (file.exists(.cp_diff)) source(.cp_diff)
-  }
-}, error = function(e) message("Rmd helper sourcing failed: ", e$message))
+  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
+}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
+
+# The Rmd renders in a child R session that doesn't inherit functions sourced
+# by the parent _targets.R run. Inline the small helpers the report uses
+# (same definitions the lipidomics report Rmd uses) so the child has them.
+make_contrast_label <- function(contrast_str) {
+  parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+  paste(trimws(parts), collapse = "_vs_")
+}
+
+extract_contrast_table <- function(summary_df, contrast) {
+  linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+  logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+  data.frame(
+    feature_id = summary_df$feature_id,
+    logFC      = logfc,
+    AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+    P.Value    = summary_df[[paste0("P.Value.", contrast)]],
+    adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
+    stringsAsFactors = FALSE
+  )
+}
 
 # ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
