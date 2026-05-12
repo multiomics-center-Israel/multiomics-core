@@ -52,10 +52,31 @@ try_register <- function(dir) {
     }, error = function(e) FALSE)
 }
 
+# Persist the pandoc dir into the project's .Renviron so future Rscript
+# sessions (i.e. `Rscript run.R --wizard`, `targets::tar_make()` from
+# cmd) pick it up via RSTUDIO_PANDOC. rmarkdown honors RSTUDIO_PANDOC
+# regardless of whether RStudio is actually installed.
+persist_pandoc_env <- function(dir) {
+    renv_file <- file.path(getwd(), ".Renviron")
+    new_line  <- paste0("RSTUDIO_PANDOC=", gsub("\\\\", "/", dir))
+    existing  <- if (file.exists(renv_file)) readLines(renv_file, warn = FALSE) else character(0)
+    keep      <- existing[!grepl("^RSTUDIO_PANDOC=", existing)]
+    writeLines(c(keep, new_line), renv_file)
+    message("  Wrote RSTUDIO_PANDOC to .Renviron so future R sessions ",
+            "find pandoc without rerunning this script.")
+}
+
 # 1. Is pandoc already reachable (PATH / RSTUDIO_PANDOC)?
 if (isTRUE(rmarkdown::pandoc_available(version = PANDOC_MIN))) {
     message("  pandoc already available (version ",
             rmarkdown::pandoc_version(), ")")
+    # If pandoc was found via PATH but RSTUDIO_PANDOC isn't set, still
+    # persist the directory so non-wizard Rscript sessions (e.g. direct
+    # `targets::tar_make()`) inherit it predictably.
+    if (!nzchar(Sys.getenv("RSTUDIO_PANDOC"))) {
+        pandoc_dir <- dirname(rmarkdown::pandoc_exec())
+        if (.Platform$OS.type == "windows") persist_pandoc_env(pandoc_dir)
+    }
     quit(save = "no", status = 0)
 }
 
@@ -65,6 +86,7 @@ for (d in probe_dirs()) {
     if (file.exists(file.path(d, exe)) && try_register(d)) {
         message("  Found pandoc at: ", d,
                 " (version ", rmarkdown::pandoc_version(), ")")
+        if (.Platform$OS.type == "windows") persist_pandoc_env(d)
         quit(save = "no", status = 0)
     }
 }
@@ -118,6 +140,7 @@ unlink(tmp_ex, recursive = TRUE)
 
 if (try_register(dest_dir)) {
     message("  pandoc ", rmarkdown::pandoc_version(), " installed to: ", dest_dir)
+    persist_pandoc_env(dest_dir)
     quit(save = "no", status = 0)
 }
 
