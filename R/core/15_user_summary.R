@@ -43,9 +43,13 @@ generate_project_summary <- function(config) {
       ext <- tolower(tools::file_ext(tech_report_file))
       if (ext %in% c("log", "txt", "tsv", "csv")) {
         paste(readLines(tech_report_file, warn = FALSE), collapse = "\n")
-      } else {
+      } else if (nzchar(Sys.which("pandoc"))) {
         paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_file)),
-                       stdout = TRUE, stderr = FALSE), collapse = "\n")
+                      stdout = TRUE, stderr = FALSE), collapse = "\n")
+      } else {
+        message("[user_summary] pandoc not found - cannot extract text from ",
+                tech_report_file)
+        NULL
       }
     }, error = function(e) NULL)
     if (!is.null(doc_text) && nchar(doc_text) > 20) {
@@ -67,9 +71,13 @@ generate_project_summary <- function(config) {
       ext <- tolower(tools::file_ext(tech_report_file))
       if (ext %in% c("log", "txt", "tsv", "csv")) {
         paste(readLines(tech_report_file, warn = FALSE), collapse = "\n")
-      } else {
+      } else if (nzchar(Sys.which("pandoc"))) {
         paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_file)),
-                       stdout = TRUE, stderr = FALSE), collapse = "\n")
+                      stdout = TRUE, stderr = FALSE), collapse = "\n")
+      } else {
+        message("[user_summary] pandoc not found - cannot extract text from ",
+                tech_report_file)
+        NULL
       }
     }, error = function(e) NULL)
     notes_html <- user_notes
@@ -125,9 +133,23 @@ generate_project_summary <- function(config) {
   ), user_notes, substr(doc_text, 1, 6000))
 
   blended <- tryCatch({
-    cmd <- sprintf("unset CLAUDECODE; claude --print --model sonnet --no-session-persistence %s",
-                    shQuote(prompt))
-    raw <- system(cmd, intern = TRUE, timeout = 120)
+    # NEW: 
+    if (!nzchar(Sys.which("claude"))) {
+      stop("claude CLI not found in PATH")
+    }
+    # CLAUDECODE env var may interfere with standalone claude CLI; unset for this call
+    claudecode_old <- Sys.getenv("CLAUDECODE", unset = NA)
+    Sys.unsetenv("CLAUDECODE")
+    on.exit({
+      if (!is.na(claudecode_old)) Sys.setenv(CLAUDECODE = claudecode_old)
+    }, add = TRUE)
+    
+    raw <- system2(
+      "claude",
+      args = c("--print", "--model", "sonnet", "--no-session-persistence", prompt),
+      stdout = TRUE,
+      timeout = 120
+    )
     paste(raw, collapse = "\n")
   }, error = function(e) {
     message(sprintf("[user_summary] Claude blending failed: %s", e$message))

@@ -5,6 +5,29 @@
 #'
 #' Also provides get_organism_info() lookup for database/package mappings.
 
+# Cache for orgdb keys to avoid repeated expensive queries
+.annotation_keys_cache <- new.env(parent = emptyenv())
+
+#' Cached version of AnnotationDbi::keys()
+#' @keywords internal
+.cached_orgdb_keys <- function(orgdb, keytype) {
+  org_name <- tryCatch(
+    {
+      md <- AnnotationDbi::metadata(orgdb)
+      md$value[md$name == "ORGANISM"][1]
+    },
+    error = function(e) "unknown"
+  )
+  cache_id <- paste0(org_name, ":", keytype)
+  if (!exists(cache_id, envir = .annotation_keys_cache)) {
+    keys <- tryCatch(
+      AnnotationDbi::keys(orgdb, keytype = keytype),
+      error = function(e) character(0)
+    )
+    assign(cache_id, keys, envir = .annotation_keys_cache)
+  }
+  get(cache_id, envir = .annotation_keys_cache)
+}
 # ==============================================================================
 # ORGANISM INFO LOOKUP
 # ==============================================================================
@@ -384,10 +407,7 @@ annotate_from_orgdb <- function(feature_ids, config, verbose = TRUE) {
 
     # Pre-filter to keys that actually exist in the OrgDb to avoid
     # errors from invalid keys (e.g. unmapped protein IDs mixed with symbols)
-    valid_keys <- tryCatch(
-        AnnotationDbi::keys(orgdb, keytype = keytype),
-        error = function(e) character(0)
-    )
+    valid_keys <- .cached_orgdb_keys(orgdb, keytype)
     # Direct exact match
     exact_ids <- feature_ids[feature_ids %in% valid_keys]
 

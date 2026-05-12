@@ -313,7 +313,8 @@ generate_deconvolution_plots <- function(xcell_results, diff_comp, metadata, gro
                 t(score_mat_scaled),
                 name = "z-score",
                 show_column_names = ncol(score_mat_scaled) <= 50,
-                column_title = "Cell Type Enrichment Scores"
+                column_title = "Cell Type Enrichment Scores",
+              rect_gp = grid::gpar(col = NA)
             )
             ComplexHeatmap::draw(ht)
             grDevices::dev.off()

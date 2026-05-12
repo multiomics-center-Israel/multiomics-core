@@ -1069,7 +1069,8 @@ plot_cluster_stability <- function(cluster_results, plots_dir) {
             left_annotation = ComplexHeatmap::rowAnnotation(
                 Cluster = cluster_anno$Cluster,
                 col = list(Cluster = c("1" = "blue", "2" = "red", "3" = "green")[1:length(unique(cluster_anno$Cluster))])
-            )
+            ),
+          rect_gp = grid::gpar(col = NA)
         )
 
         png(fig_path, width = 10, height = 10, units = "in", res = 150)

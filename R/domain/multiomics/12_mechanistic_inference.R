@@ -944,7 +944,8 @@ plot_tf_activity <- function(tf_activity, out_dir) {
                 clustering_method = "ward.D2",
                 show_colnames = ncol(mat_plot) < 50,
                 main = "Transcription Factor Activity",
-                color = grDevices::colorRampPalette(c("blue", "white", "red"))(100)
+                color = grDevices::colorRampPalette(c("blue", "white", "red"))(100),
+                border_color = NA
             )
         }, error = function(e) {
             message("  TF heatmap failed: ", e$message)

@@ -34,92 +34,93 @@ run_anova_posthoc <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     de_table_cfg <- p_cfg$de_table %||% list()
     target_id_col <- de_table_cfg$id_col %||% "FeatureID"
 
-    # Per-protein ANOVA
+   
+    # Pre-compute factor + contrast lookup keys once (outside any loop)
+    grp_factor <- factor(group)
     n_proteins <- nrow(expr_imp)
-    anova_pvals <- numeric(n_proteins)
-
-    for (i in seq_len(n_proteins)) {
-        vals <- as.numeric(expr_imp[i, ])
-        grp <- group
-        fit <- tryCatch(
-            stats::aov(vals ~ factor(grp)),
-            error = function(e) NULL
-        )
-        if (is.null(fit)) {
-            anova_pvals[i] <- NA_real_
-        } else {
-            sf <- summary(fit)
-            anova_pvals[i] <- sf[[1]][["Pr(>F)"]][1]
-        }
-    }
-
-    # Build per-contrast tables using Tukey HSD results
+    n_contrasts <- nrow(contrasts_df)
     contrast_names <- contrasts_df$Contrast_name
     stopifnot(length(contrast_names) > 0)
-
-    de_tables <- lapply(seq_along(contrast_names), function(ci) {
-        cn <- contrast_names[ci]
-        num <- contrasts_df$Numerator[ci]
-        den <- contrasts_df$Denominator[ci]
-
-        logFC_vals <- numeric(n_proteins)
-        p_vals <- numeric(n_proteins)
-
-        for (i in seq_len(n_proteins)) {
-            vals <- as.numeric(expr_imp[i, ])
-            grp <- factor(group)
-            fit <- tryCatch(stats::aov(vals ~ grp), error = function(e) NULL)
-            if (is.null(fit)) {
-                logFC_vals[i] <- NA_real_
-                p_vals[i] <- NA_real_
-                next
-            }
-            tukey <- tryCatch(stats::TukeyHSD(fit), error = function(e) NULL)
-            if (is.null(tukey)) {
-                logFC_vals[i] <- NA_real_
-                p_vals[i] <- NA_real_
-                next
-            }
-            tukey_df <- as.data.frame(tukey$grp)
-            # Tukey names rows like "B-A"; we need "num-den"
-            target_row <- paste0(num, "-", den)
-            rev_row <- paste0(den, "-", num)
-
-            if (target_row %in% rownames(tukey_df)) {
-                logFC_vals[i] <- tukey_df[target_row, "diff"]
-                p_vals[i] <- tukey_df[target_row, "p adj"]
-            } else if (rev_row %in% rownames(tukey_df)) {
-                logFC_vals[i] <- -tukey_df[rev_row, "diff"]
-                p_vals[i] <- tukey_df[rev_row, "p adj"]
-            } else {
-                logFC_vals[i] <- NA_real_
-                p_vals[i] <- NA_real_
-            }
+    
+    # Pre-compute Tukey row keys for each contrast (forward + reverse direction)
+    contrast_fwd <- paste0(contrasts_df$Numerator, "-", contrasts_df$Denominator)
+    contrast_rev <- paste0(contrasts_df$Denominator, "-", contrasts_df$Numerator)
+    
+    # Pre-allocate result containers
+    anova_pvals <- numeric(n_proteins)
+    logFC_mat <- matrix(NA_real_, nrow = n_proteins, ncol = n_contrasts)
+    pval_mat <- matrix(NA_real_, nrow = n_proteins, ncol = n_contrasts)
+    
+    # Single per-protein loop: fit aov + Tukey ONCE, extract all contrasts
+    for (i in seq_len(n_proteins)) {
+      vals <- as.numeric(expr_imp[i, ])
+      fit <- tryCatch(
+        stats::aov(vals ~ grp_factor),
+        error = function(e) NULL
+      )
+      if (is.null(fit)) {
+        anova_pvals[i] <- NA_real_
+        next
+      }
+      
+      # Omnibus ANOVA p-value
+      sf <- summary(fit)
+      anova_pvals[i] <- sf[[1]][["Pr(>F)"]][1]
+      
+      # Tukey HSD: all pairwise comparisons in one shot
+      tukey <- tryCatch(stats::TukeyHSD(fit), error = function(e) NULL)
+      if (is.null(tukey)) next
+      
+      # tukey is a named list with one element per predictor; we have one predictor
+      tukey_df <- as.data.frame(tukey[[1]])
+      tukey_rownames <- rownames(tukey_df)
+      
+      # Extract each requested contrast from the single Tukey table
+      for (ci in seq_len(n_contrasts)) {
+        if (contrast_fwd[ci] %in% tukey_rownames) {
+          logFC_mat[i, ci] <- tukey_df[contrast_fwd[ci], "diff"]
+          pval_mat[i, ci] <- tukey_df[contrast_fwd[ci], "p adj"]
+        } else if (contrast_rev[ci] %in% tukey_rownames) {
+          # Reverse direction: flip the sign of diff
+          logFC_mat[i, ci] <- -tukey_df[contrast_rev[ci], "diff"]
+          pval_mat[i, ci] <- tukey_df[contrast_rev[ci], "p adj"]
         }
-
-        adj_p_vals <- stats::p.adjust(p_vals, method = p_adjust_method)
-
-        df_out <- data.frame(
-            TEMP_ID_COL = feature_id,
-            Contrast = cn,
-            ann[, annot_out, drop = FALSE],
-            logFC = logFC_vals,
-            AveExpr = rowMeans(expr_imp, na.rm = TRUE),
-            t = NA_real_,
-            P.Value = p_vals,
-            adj.P.Val = adj_p_vals,
-            B = NA_real_,
-            check.names = FALSE
-        )
-        names(df_out)[names(df_out) == "TEMP_ID_COL"] <- target_id_col
-        df_out
+        # else: leave as NA (group level missing from Tukey output)
+      }
+    }
+    
+    # Pre-compute average expression once (vectorized)
+    ave_expr <- rowMeans(expr_imp, na.rm = TRUE)
+    
+    # Build per-contrast tables from pre-computed matrices (no nested loops)
+    de_tables <- lapply(seq_along(contrast_names), function(ci) {
+      cn <- contrast_names[ci]
+      logFC_vals <- logFC_mat[, ci]
+      p_vals <- pval_mat[, ci]
+      adj_p_vals <- stats::p.adjust(p_vals, method = p_adjust_method)
+      
+      df_out <- data.frame(
+        TEMP_ID_COL = feature_id,
+        Contrast = cn,
+        ann[, annot_out, drop = FALSE],
+        logFC = logFC_vals,
+        AveExpr = ave_expr,
+        t = NA_real_,
+        P.Value = p_vals,
+        adj.P.Val = adj_p_vals,
+        B = NA_real_,
+        check.names = FALSE
+      )
+      names(df_out)[names(df_out) == "TEMP_ID_COL"] <- target_id_col
+      df_out
     })
-
+    
     names(de_tables) <- contrast_names
 
     list(
-        expr_imp = expr_imp,
-        meta_aligned = meta_aligned,
-        de_tables = de_tables
+      expr_imp = expr_imp,
+      meta_aligned = meta_aligned,
+      de_tables = de_tables,
+      anova_pvals = anova_pvals
     )
 }

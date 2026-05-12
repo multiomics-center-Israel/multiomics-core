@@ -514,7 +514,8 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         top_annotation = top_ha,
         column_title = "Top DIABLO Features Across Omics (Z-scored)",
         column_title_gp = grid::gpar(fontsize = 12, fontface = "bold"),
-        heatmap_legend_param = list(title = "Z-score")
+        heatmap_legend_param = list(title = "Z-score"),
+      rect_gp = grid::gpar(col = NA)
     )
 
     n_features <- nrow(combined_z)
@@ -578,7 +579,8 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
                 top_annotation = top_ha,
                 column_title = "DIABLO Features — Latent Space Clustering",
                 column_title_gp = grid::gpar(fontsize = 12, fontface = "bold"),
-                heatmap_legend_param = list(title = "Z-score")
+                heatmap_legend_param = list(title = "Z-score"),
+              rect_gp = grid::gpar(col = NA)
             )
 
             out_png_latent <- file.path(diablo_dir, "diablo_feature_heatmap_latent.png")

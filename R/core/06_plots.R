@@ -241,9 +241,13 @@ plot_heatmap_core <- function(expr_mat,
   args$show_rownames <- FALSE
   args$annotation_col <- annotation_col
   args$main <- title
+  # Default: no cell borders for cleaner appearance.
+  # Caller can override by passing border_color via `...`.
+  if (is.null(args$border_color)) args$border_color <- NA
   
   do.call(pheatmap::pheatmap, args)
 }
+
 #' Build an imputed histograms/density summary plot (legacy "imputed_histograms_summary")
 #'
 #' Produces a single summary figure showing the distribution of observed vs imputed
@@ -511,7 +515,7 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
     p <- p +
       ggplot2::labs(
         title = sprintf("Cluster %d (n=%d)", ci, n_feat),
-        y = "Expression", x = x_label
+        y = "Normalized counts", x = x_label
       ) +
       ggplot2::theme_bw() +
       ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
