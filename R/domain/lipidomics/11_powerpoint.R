@@ -23,7 +23,12 @@
 #' @param out_dir         Output directory for this mode.
 #' @return Character path to the generated .pptx file.
 generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
-                                      class_res, config, out_dir) {
+                                      class_res, config, out_dir,
+                                      biomarker_res  = NULL,
+                                      pathway_res    = NULL,
+                                      qc_enhanced    = NULL,
+                                      clustering_res = NULL,
+                                      pool_cv        = NULL) {
 
     if (!pptx_enabled(config, "lipidomics")) {
         message("PowerPoint generation disabled for lipidomics -- skipping")
@@ -136,6 +141,27 @@ generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
                                     bl = design_bl, footer = footer_txt)
 
     # ================================================================
+    # SLIDE: PERMANOVA (multivariate group-separation stats)
+    # ================================================================
+    permanova <- qc_enhanced$permanova
+    if (!is.null(permanova) &&
+        all(c("F_statistic", "R2", "p_value") %in% names(permanova))) {
+        perm_items <- list(
+            list(label = "Test",        value = "PERMANOVA (adonis2, Bray-Curtis)"),
+            list(label = "F statistic", value = formatC(permanova$F_statistic, digits = 3, format = "f")),
+            list(label = "R²",     value = formatC(permanova$R2,          digits = 3, format = "f")),
+            list(label = "p-value",     value = formatC(permanova$p_value,     digits = 3, format = "g")),
+            list(label = "Groups",      value = groups_str)
+        )
+        perm_context <- sprintf(
+            "PERMANOVA result. F=%.3f, R2=%.3f, p=%.3g. Groups: %s.",
+            permanova$F_statistic, permanova$R2, permanova$p_value, groups_str)
+        perm_bl <- generate_slide_bottom_line(perm_context, config = config)
+        pptx <- pptx_add_design_slide(pptx, items = perm_items,
+                                       bl = perm_bl, footer = footer_txt)
+    }
+
+    # ================================================================
     # SLIDE 3: PCA
     # ================================================================
     pca_png <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
@@ -146,6 +172,30 @@ generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         pptx <- pptx_add_figure_slide(pptx, "PCA: PC1 vs PC2", pca_png,
                                   subtitle = sprintf("%d samples | %s", n_samples, groups_str),
                                   bl = pca_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: PCA Loading plot
+    # ================================================================
+    pca_load_png <- file.path(diag_dir, "pca_loading_plot.png")
+    if (file.exists(pca_load_png)) {
+        load_context <- "PCA loading plot: top features driving PC1 and PC2 separation."
+        load_bl <- generate_slide_bottom_line(load_context, image_path = pca_load_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "PCA: Top Loadings", pca_load_png,
+                                  subtitle = "Features with largest |loading| on PC1/PC2",
+                                  bl = load_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: PCA Scree plot
+    # ================================================================
+    pca_scree_png <- file.path(diag_dir, "pca_scree_plot.png")
+    if (file.exists(pca_scree_png)) {
+        scree_context <- "PCA scree plot: variance explained per principal component."
+        scree_bl <- generate_slide_bottom_line(scree_context, image_path = pca_scree_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "PCA: Scree Plot", pca_scree_png,
+                                  subtitle = "Variance explained per PC",
+                                  bl = scree_bl, footer = footer_txt)
     }
 
     # ================================================================
@@ -321,6 +371,30 @@ generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
     }
 
     # ================================================================
+    # SLIDE: PLS-DA Cross-Validation
+    # ================================================================
+    plsda_cv_png <- file.path(diag_dir, "plsda_cross_validation.png")
+    if (file.exists(plsda_cv_png)) {
+        cv_context <- "PLS-DA cross-validation. Classification error / Q2 across components."
+        cv_bl <- generate_slide_bottom_line(cv_context, image_path = plsda_cv_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "PLS-DA: Cross-Validation", plsda_cv_png,
+                                  subtitle = "Held-out classification error across components",
+                                  bl = cv_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: PLS-DA Confusion Matrix
+    # ================================================================
+    plsda_cm_png <- file.path(diag_dir, "plsda_confusion_matrix.png")
+    if (file.exists(plsda_cm_png)) {
+        cm_context <- sprintf("PLS-DA confusion matrix. Predicted vs actual %s.", groups_str)
+        cm_bl <- generate_slide_bottom_line(cm_context, image_path = plsda_cm_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "PLS-DA: Confusion Matrix", plsda_cm_png,
+                                  subtitle = sprintf("Predicted vs actual | %s", groups_str),
+                                  bl = cm_bl, footer = footer_txt)
+    }
+
+    # ================================================================
     # SLIDE: Sample correlation
     # ================================================================
     cor_png <- file.path(diag_dir, "sample_correlation_heatmap.png")
@@ -329,6 +403,23 @@ generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         cor_bl <- generate_slide_bottom_line(cor_context, image_path = cor_png, config = config)
         pptx <- pptx_add_figure_slide(pptx, "Sample Correlation Heatmap", cor_png,
                                   bl = cor_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Pool CV QC
+    # ================================================================
+    pool_cv_png <- file.path(diag_dir, "pool_cv_density.png")
+    if (!is.null(pool_cv) && !is.null(pool_cv$cv_result) && file.exists(pool_cv_png)) {
+        pcv <- pool_cv$cv_result
+        pool_subtitle <- sprintf(
+            "Median CV = %.1f%%  |  %d features  |  %d pools",
+            pcv$median_cv, pcv$n_features, pcv$n_pools)
+        pool_context <- sprintf(
+            "Pool QC: per-feature coefficient of variation across %d QC pool samples. Median CV = %.1f%% (n=%d features).",
+            pcv$n_pools, pcv$median_cv, pcv$n_features)
+        pool_bl <- generate_slide_bottom_line(pool_context, image_path = pool_cv_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Pool QC: CV Distribution", pool_cv_png,
+                                  subtitle = pool_subtitle, bl = pool_bl, footer = footer_txt)
     }
 
     # ================================================================
@@ -381,6 +472,199 @@ generate_lipidomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
         pptx <- pptx_add_figure_slide(pptx, "Chain Length & Saturation Analysis", chain_png,
                                   subtitle = "Acyl chain composition across lipid classes",
                                   bl = chain_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Lipid Class Correlation Heatmap
+    # ================================================================
+    class_cor_png <- file.path(diag_dir, "lipid_class_correlation.png")
+    if (file.exists(class_cor_png)) {
+        ccor_context <- "Inter-class correlation: which lipid classes co-vary across samples."
+        ccor_bl <- generate_slide_bottom_line(ccor_context, image_path = class_cor_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Lipid Class Correlation", class_cor_png,
+                                  subtitle = "Pearson correlation between lipid class profiles",
+                                  bl = ccor_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Lipid Category Donut (one slide per group)
+    # ================================================================
+    donut_pngs <- list.files(diag_dir, pattern = "^lipid_category_donut_.*\\.png$",
+                              full.names = TRUE)
+    for (dp in donut_pngs) {
+        grp_label <- sub("^lipid_category_donut_(.*)\\.png$", "\\1", basename(dp))
+        donut_context <- sprintf(
+            "Lipid category composition for group %s. Relative abundance per category.",
+            grp_label)
+        donut_bl <- generate_slide_bottom_line(donut_context, image_path = dp, config = config)
+        pptx <- pptx_add_figure_slide(pptx,
+            paste("Lipid Category Composition:", grp_label),
+            dp, subtitle = sprintf("Group: %s", grp_label),
+            bl = donut_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Hierarchical Clustering Heatmap
+    # ================================================================
+    hier_png <- file.path(out_dir, "Clustering", "Hierarchical",
+                          "Hierarchical_DE_heatmap.png")
+    if (file.exists(hier_png)) {
+        n_de_clust <- if (!is.null(clustering_res$objects$hm_hier_de$feature_ids)) {
+            length(clustering_res$objects$hm_hier_de$feature_ids)
+        } else NA_integer_
+        hier_context <- sprintf(
+            "Hierarchical clustering of %s DE lipids. Rows ordered by dendrogram.",
+            ifelse(is.na(n_de_clust), "the", as.character(n_de_clust)))
+        hier_bl <- generate_slide_bottom_line(hier_context, image_path = hier_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Clustering: Hierarchical (DE features)",
+            hier_png,
+            subtitle = if (is.na(n_de_clust)) "Z-scored intensities | row dendrogram"
+                       else sprintf("%d DE features | Z-scored | row dendrogram", n_de_clust),
+            bl = hier_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Partition Clustering Heatmap
+    # ================================================================
+    part_pngs <- list.files(
+        file.path(out_dir, "Clustering", "Partition_clustering"),
+        pattern = "^Partition_clustering_heatmap\\.png$",
+        recursive = TRUE, full.names = TRUE)
+    if (length(part_pngs) > 0) {
+        part_png <- part_pngs[1]
+        part_k <- clustering_res$excel_order$partition_k
+        part_context <- sprintf(
+            "Partition clustering%s. DE lipids grouped by expression profile.",
+            if (!is.null(part_k)) sprintf(" (k=%d)", part_k) else "")
+        part_bl <- generate_slide_bottom_line(part_context, image_path = part_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Clustering: Partition (DE features)",
+            part_png,
+            subtitle = if (is.null(part_k)) "Z-scored | clusters separated by row gaps"
+                       else sprintf("k = %d clusters | Z-scored | row gaps mark clusters", part_k),
+            bl = part_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Biomarker Discovery Table (figure)
+    # ================================================================
+    bm_fig_png <- file.path(diag_dir, "biomarker_table.png")
+    if (file.exists(bm_fig_png)) {
+        bm_df <- biomarker_res$biomarker_df
+        n_cand <- if (!is.null(bm_df)) sum(bm_df$is_candidate, na.rm = TRUE) else 0L
+        bm_context <- sprintf(
+            "Top biomarker candidates ranked by t-test p-value. %d candidates flagged. Metrics: p-value, AUC, Cohen's d, power, log2FC.",
+            n_cand)
+        bm_bl <- generate_slide_bottom_line(bm_context, image_path = bm_fig_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Biomarker Discovery: Top Candidates",
+            bm_fig_png,
+            subtitle = sprintf("%d candidates | metrics colour-scaled per column", n_cand),
+            bl = bm_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Top Biomarkers Table (data)
+    # ================================================================
+    bm_df <- biomarker_res$biomarker_df
+    if (!is.null(bm_df) && nrow(bm_df) > 0) {
+        top_n_bm <- min(15L, nrow(bm_df))
+        top_bm <- bm_df[seq_len(top_n_bm), , drop = FALSE]
+        label_col <- if ("display_name" %in% colnames(top_bm)) "display_name" else "feature_id"
+        bm_display <- data.frame(
+            Lipid       = top_bm[[label_col]],
+            AUC         = round(top_bm$AUC, 3),
+            `Cohen's d` = round(top_bm$cohens_d, 3),
+            `log2(FC)`  = round(top_bm$log2FC, 2),
+            `P.Value`   = signif(top_bm$p_value, 3),
+            check.names = FALSE, stringsAsFactors = FALSE
+        )
+        top_bm_context <- sprintf(
+            "Top %d biomarker candidates. Best AUC = %.3f for %s.",
+            top_n_bm, max(bm_display$AUC, na.rm = TRUE),
+            bm_display$Lipid[which.max(bm_display$AUC)])
+        top_bm_bl <- generate_slide_bottom_line(top_bm_context, config = config)
+        pptx <- pptx_add_table_slide(pptx,
+            title = "Top Biomarker Candidates",
+            display_df = bm_display,
+            subtitle = sprintf("Ranked by t-test p-value | %d shown", top_n_bm),
+            bl = top_bm_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: ROC Curves (top lipids)
+    # ================================================================
+    roc_png <- file.path(diag_dir, "roc_curves_top_lipids.png")
+    if (file.exists(roc_png)) {
+        roc_context <- "ROC curves for top lipid biomarkers. AUC values shown in legend."
+        roc_bl <- generate_slide_bottom_line(roc_context, image_path = roc_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "ROC Curves: Top Lipid Biomarkers",
+            roc_png,
+            subtitle = "Per-feature ROC | AUC labelled in legend",
+            bl = roc_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Multivariate ROC (Random Forest)
+    # ================================================================
+    mvroc_png <- file.path(diag_dir, "roc_multivariate_rf.png")
+    if (file.exists(mvroc_png)) {
+        mv_auc <- biomarker_res$mv_roc$auc
+        mv_subtitle <- if (!is.null(mv_auc))
+            sprintf("Random Forest OOB | AUC = %.3f", mv_auc)
+        else "Random Forest OOB predictions"
+        mv_context <- sprintf(
+            "Multivariate ROC: Random Forest on all lipid features%s.",
+            if (!is.null(mv_auc)) sprintf(" — AUC = %.3f", mv_auc) else "")
+        mv_bl <- generate_slide_bottom_line(mv_context, image_path = mvroc_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Multivariate ROC (Random Forest)",
+            mvroc_png, subtitle = mv_subtitle, bl = mv_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Lipid Pathway Barplot
+    # ================================================================
+    pw_bar_png <- file.path(diag_dir, "lipid_pathway_barplot.png")
+    if (file.exists(pw_bar_png)) {
+        n_pw <- if (!is.null(pathway_res$pathway_scores)) nrow(pathway_res$pathway_scores) else NA
+        pw_context <- sprintf(
+            "Lipid pathway scores. %s pathways evaluated; bars show enrichment significance.",
+            ifelse(is.na(n_pw), "Multiple", as.character(n_pw)))
+        pw_bl <- generate_slide_bottom_line(pw_context, image_path = pw_bar_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Lipid Pathway Enrichment",
+            pw_bar_png,
+            subtitle = if (is.na(n_pw)) "Pathway scores from DE lipid composition"
+                       else sprintf("%d pathways evaluated", n_pw),
+            bl = pw_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Lipid Pathway Network
+    # ================================================================
+    pw_net_png <- file.path(diag_dir, "lipid_pathway_network.png")
+    if (file.exists(pw_net_png)) {
+        pwn_context <- "Lipid pathway network. Nodes = pathways, edges = shared species."
+        pwn_bl <- generate_slide_bottom_line(pwn_context, image_path = pw_net_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Lipid Pathway Network",
+            pw_net_png,
+            subtitle = "Nodes: pathways | edges: shared lipid species",
+            bl = pwn_bl, footer = footer_txt)
+    }
+
+    # ================================================================
+    # SLIDE: Enzyme Interaction Network (STRING)
+    # ================================================================
+    enz_png <- file.path(diag_dir, "enzyme_interaction_network.png")
+    if (file.exists(enz_png)) {
+        n_enz <- if (!is.null(pathway_res$enzyme_predictions))
+            length(unique(pathway_res$enzyme_predictions$gene_symbol)) else NA
+        enz_context <- sprintf(
+            "STRING protein-protein interaction network of predicted enzymes (%s genes).",
+            ifelse(is.na(n_enz), "multiple", as.character(n_enz)))
+        enz_bl <- generate_slide_bottom_line(enz_context, image_path = enz_png, config = config)
+        pptx <- pptx_add_figure_slide(pptx, "Enzyme Interaction Network (STRING)",
+            enz_png,
+            subtitle = if (is.na(n_enz)) "Predicted enzymes from differential lipid classes"
+                       else sprintf("%d predicted enzymes | STRING interactions", n_enz),
+            bl = enz_bl, footer = footer_txt)
     }
 
     # ---- Save to Results root (parent of mode dir) ----

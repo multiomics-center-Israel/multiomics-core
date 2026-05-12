@@ -258,7 +258,12 @@ pipe_lipidomics <- function() {
                 feature_sel_res = lipid_feature_sel_res,
                 class_res       = lipid_class_res,
                 config          = config,
-                out_dir         = lipid_out_dir
+                out_dir         = lipid_out_dir,
+                biomarker_res   = lipid_biomarker_res,
+                pathway_res     = lipid_pathway_res,
+                qc_enhanced     = lipid_qc_enhanced,
+                clustering_res  = lipid_clustering_obj,
+                pool_cv         = lipid_pool_cv
             ),
             format = "file"
         )
