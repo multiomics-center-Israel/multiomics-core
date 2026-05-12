@@ -17,7 +17,7 @@
 #' @param de_res      DE results list (summary_df, tables)
 #' @param pathway_res Pathway results list
 #' @return Named list with all stats organized by section
-collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
+collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
 
     rna_cfg  <- config$modes$rna
     tech_rep <- rna_cfg$technical_report %||% list()
@@ -38,7 +38,7 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
     n_genes_raw <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA
     n_genes     <- if (!is.null(pre$expr_filt)) nrow(pre$expr_filt) else NA
 
-    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color %||% "Condition"
     n_groups <- NA
     groups <- character()
     if (!is.null(pre$meta) && !is.null(group_col) && group_col %in% names(pre$meta)) {
@@ -47,8 +47,8 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
     }
 
     # --- DE statistics ---
-    # Extract from de_res$tables (per-contrast data frames with padj, log2FoldChange)
-    # or from de_res$summary_df (wide format with padj.ContrastName columns)
+    # Single source of truth: use pipeline pass columns ({cn}_pass) which encode
+    # the pipeline's significance decision. Fallback: recompute from padj + FC.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
     de_contrasts <- list()
 
@@ -56,46 +56,68 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
     fc_lin <- rna_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
-        # Primary path: per-contrast tables (each has padj, log2FoldChange)
+    if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+
+        # Try pass columns first (single source of truth)
+        pass_cols <- grep("_pass$", names(sdf), value = TRUE)
+        pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+
+        if (length(pass_cols) > 0) {
+            for (pcol in pass_cols) {
+                cn <- sub("_pass$", "", pcol)
+                is_sig <- !is.na(sdf[[pcol]]) & sdf[[pcol]] %in% c(TRUE, 1)
+                fc_col <- paste0("log2FoldChange.", cn)
+                if (!(fc_col %in% names(sdf))) fc_col <- paste0("linearFC.", cn)
+                if (fc_col %in% names(sdf)) {
+                    fc_vals <- as.numeric(sdf[[fc_col]])
+                    up <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                    dn <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+                } else {
+                    up <- 0; dn <- 0
+                }
+                padj_col <- paste0("padj.", cn)
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(is_sig),
+                    up = up, down = dn,
+                    tested = if (padj_col %in% names(sdf)) sum(!is.na(sdf[[padj_col]])) else sum(is_sig)
+                )
+                n_de_total <- n_de_total + sum(is_sig)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        } else {
+            # Fallback: recompute from padj + LFC
+            padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
+            for (pc in padj_cols) {
+                cn <- sub("^padj\\.", "", pc)
+                lcol <- paste0("log2FoldChange.", cn)
+                if (!(lcol %in% names(sdf))) next
+                sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
+                if (log2_fc > 0) sig <- sig & (abs(sdf[[lcol]]) >= log2_fc)
+                up <- sum(sig & sdf[[lcol]] > 0, na.rm = TRUE)
+                dn <- sum(sig & sdf[[lcol]] < 0, na.rm = TRUE)
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(sig, na.rm = TRUE),
+                    up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                )
+                n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
+        }
+    } else if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
+        # Direct DE tables — fallback for non-summary_df pipelines
         for (cn in names(de_res$tables)) {
             tbl <- de_res$tables[[cn]]
             if (!is.data.frame(tbl) || !("padj" %in% names(tbl))) next
-
             sig <- !is.na(tbl$padj) & tbl$padj <= p_cut
             if (log2_fc > 0 && "log2FoldChange" %in% names(tbl)) {
                 sig <- sig & (abs(tbl$log2FoldChange) >= log2_fc)
             }
-
-            up <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange > 0, na.rm = TRUE) else NA
-            dn <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange < 0, na.rm = TRUE) else NA
-
+            up <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange > 0, na.rm = TRUE) else 0
+            dn <- if ("log2FoldChange" %in% names(tbl)) sum(sig & tbl$log2FoldChange < 0, na.rm = TRUE) else 0
             de_contrasts[[cn]] <- list(
                 name = cn, total = sum(sig, na.rm = TRUE),
-                up = up %||% 0, down = dn %||% 0, tested = sum(!is.na(tbl$padj))
-            )
-            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
-            n_de_up <- n_de_up + (up %||% 0); n_de_down <- n_de_down + (dn %||% 0)
-        }
-    } else if (!is.null(de_res$summary_df)) {
-        # Fallback: wide-format summary_df (padj.ContrastName columns)
-        sdf <- de_res$summary_df
-        padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
-
-        for (pc in padj_cols) {
-            cn <- sub("^padj\\.", "", pc)
-            lcol <- paste0("log2FoldChange.", cn)
-            if (!(lcol %in% names(sdf))) next
-
-            sig <- !is.na(sdf[[pc]]) & sdf[[pc]] <= p_cut
-            if (log2_fc > 0) sig <- sig & (abs(sdf[[lcol]]) >= log2_fc)
-
-            up <- sum(sig & sdf[[lcol]] > 0, na.rm = TRUE)
-            dn <- sum(sig & sdf[[lcol]] < 0, na.rm = TRUE)
-
-            de_contrasts[[cn]] <- list(
-                name = cn, total = sum(sig, na.rm = TRUE),
-                up = up, down = dn, tested = sum(!is.na(sdf[[pc]]))
+                up = up, down = dn, tested = sum(!is.na(tbl$padj))
             )
             n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
             n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
@@ -114,31 +136,22 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res) {
             list(total = nrow(sig_pw), up = n_up, down = n_dn)
         }
 
-        for (pr_name in names(pathway_res$pathway_results)) {
-            pr <- pathway_res$pathway_results[[pr_name]]
+        pathway_counts <- Filter(Negate(is.null), lapply(pathway_res$pathway_results, function(pr) {
             if (is.data.frame(pr)) {
                 # Direct data frame (flat structure)
-                res <- count_from_df(pr)
+                count_from_df(pr)
             } else if (is.list(pr)) {
                 # Nested: list of database results per contrast
-                res <- list(total = 0, up = 0, down = 0)
-                for (sub_name in names(pr)) {
-                    sub_res <- count_from_df(pr[[sub_name]])
-                    if (!is.null(sub_res)) {
-                        res$total <- res$total + sub_res$total
-                        res$up    <- res$up + sub_res$up
-                        res$down  <- res$down + sub_res$down
-                    }
-                }
-            } else {
-                res <- NULL
+                sub_counts <- Filter(Negate(is.null), lapply(pr, count_from_df))
+                if (length(sub_counts) == 0) return(NULL)
+                list(total = sum(vapply(sub_counts, `[[`, 0L, "total")),
+                     up    = sum(vapply(sub_counts, `[[`, 0L, "up")),
+                     down  = sum(vapply(sub_counts, `[[`, 0L, "down")))
             }
-            if (!is.null(res)) {
-                n_pathways_total <- n_pathways_total + res$total
-                n_pathways_up    <- n_pathways_up + res$up
-                n_pathways_down  <- n_pathways_down + res$down
-            }
-        }
+        }))
+        n_pathways_total <- n_pathways_total + sum(vapply(pathway_counts, `[[`, 0L, "total"))
+        n_pathways_up    <- n_pathways_up    + sum(vapply(pathway_counts, `[[`, 0L, "up"))
+        n_pathways_down  <- n_pathways_down  + sum(vapply(pathway_counts, `[[`, 0L, "down"))
     }
 
     # --- Subtitle from organism + groups ---
@@ -581,21 +594,32 @@ generate_summary_body_r <- function(stats) {
     # -- Downstream --
     s_down <- '      <div class="section-label">Downstream Analysis <span class="team-badge team-multiomics">Multi-omics Core</span></div>\n'
 
-    # Filtering
-    filt_desc <- switch(stats$methods$filtering_mode,
-        "adaptive" = "Adaptive density-based threshold (KDE on log2-CPM) selects optimal CPM cutoff. Genes passing in at least one biological group are retained.",
-        "deseq2_only" = "DESeq2 independent filtering applied. Low-count genes removed by DESeq2&rsquo;s automatic threshold.",
-        "fixed" = "Fixed CPM threshold applied. Genes above threshold in at least one group retained.",
-        "Gene filtering applied to remove lowly expressed genes.")
+    # Filtering — render dynamically based on whether filtering changed the gene count.
+    n_before <- stats$filtering$genes_before %||% 0
+    n_after  <- stats$filtering$genes_after  %||% 0
+    filtering_ran <- n_before > 0 && n_after > 0 && n_before != n_after
     filt_stats <- ""
-    if (stats$filtering$genes_before > 0 && stats$filtering$genes_after > 0) {
+    if (filtering_ran) {
+        filt_desc <- switch(stats$methods$filtering_mode,
+            "adaptive" = "Adaptive density-based threshold (KDE on log2-CPM) selects optimal CPM cutoff. Genes passing in at least one biological group are retained.",
+            "deseq2_only" = "DESeq2 independent filtering applied. Low-count genes removed by DESeq2&rsquo;s automatic threshold.",
+            "fixed" = "Fixed CPM threshold applied. Genes above threshold in at least one group retained.",
+            "Gene filtering applied to remove lowly expressed genes.")
         filt_stats <- build_stats_row(
             list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
             list(arrow = TRUE),
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0), margin = "8px", color = "var(--text)"))
+        filt_tags <- c(stats$methods$filtering_mode)
+    } else if (n_before > 0) {
+        filt_desc <- sprintf("No filtering applied; all %s genes retained for downstream analysis.",
+                             format(n_before, big.mark = ","))
+        filt_tags <- c("no filtering")
+    } else {
+        filt_desc <- "Filtering step was skipped."
+        filt_tags <- c("no filtering")
     }
-    step5 <- build_step_html(5, "\U0001F50D", "Gene Filtering", "phase-filter", "downstream", filt_desc, c(stats$methods$filtering_mode), filt_stats)
+    step5 <- build_step_html(5, "\U0001F50D", "Gene Filtering", "phase-filter", "downstream", filt_desc, filt_tags, filt_stats)
 
     # Normalization
     nm <- stats$methods$normalization
@@ -959,7 +983,7 @@ wrap_html_document <- function(body_html, stats) {
 #' @param run_dir     Run output directory
 #' @return Path to pipeline_summary.html
 #' @export
-generate_pipeline_summary <- function(config, pre, de_res, pathway_res, run_dir) {
+generate_pipeline_summary <- function(config, pre, de_res, pathway_res = NULL, run_dir) {
 
     message("=== Generating Pipeline Summary ===")
 

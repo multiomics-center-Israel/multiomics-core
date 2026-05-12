@@ -1,0 +1,37 @@
+{
+  "_comment": "Wizard configuration file. Edit this to customize the wizard for a specific installation.",
+  "_comment2": "Run 'configure_wizard.bat' for an interactive setup, or edit this file directly.",
+
+  "theme": "light",
+
+  "available_modes": ["rna", "proteomics", "metabolomics", "lipidomics", "multi", "combination"],
+  "default_mode": "rna",
+
+  "defaults": {
+    "analyst": "Bioinformatics Core",
+    "round": "A01",
+    "organism": "human",
+    "generate_pptx": true,
+    "commentary_enabled": false,
+    "commentary_backend": "none"
+  },
+
+  "mode_defaults": {
+    "rna": {
+      "rna_de_method": "deseq2",
+      "rna_pathway": "fgsea"
+    },
+    "proteomics": {
+      "prot_de_method": "limma",
+      "prot_imp_method": "perseus",
+      "prot_pathway": "both",
+      "prot_pathway_volcano": true,
+      "prot_clustering": true,
+      "prot_ppi": false
+    },
+    "metabolomics": {
+      "metab_norm_method": "median"
+    },
+    "lipidomics": {}
+  }
+}

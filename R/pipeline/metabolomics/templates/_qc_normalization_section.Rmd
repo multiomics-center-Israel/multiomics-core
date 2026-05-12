@@ -1,0 +1,357 @@
+<!-- _qc_normalization_section.Rmd — shared child document -->
+<!-- Included by both metabolomics_report.Rmd and qc_summary_report.Rmd.      -->
+<!-- Expects the parent to have defined qc_files and the rendering helpers     -->
+<!-- (embed_png, render_interactive_pca, render_dt, %||%).                    -->
+<!-- params$qc_comparison_file must be set.                                    -->
+
+```{r nqc-child-setup, include=FALSE}
+# stage_files(): filter flat qc_suite_files paths by /qc/<stage>/<subset>/ segment.
+# qc_files is defined in the parent environment; referenced directly below.
+stage_files <- function(files, stage, subset = "with_qc") {
+  pat <- paste0("/qc/", stage, "/", subset, "/")
+  files[grepl(pat, files, fixed = TRUE)]
+}
+```
+
+## Benchmark
+
+```{r nqc-benchmark}
+
+qc_file <- params$qc_comparison_file
+
+if (!is.null(qc_file) &&
+    length(qc_file) >= 1 &&
+    !is.na(qc_file[1]) &&
+    nzchar(qc_file[1]) &&
+    file.exists(qc_file[1])) {
+
+  bench <- utils::read.table(
+    qc_file[1],
+    sep = "\t",
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  # ---- Column reordering ------------------------------------------------
+  rsd_cols   <- grep("^median_rsd", colnames(bench), value = TRUE)
+  pca_cols   <- grep("^pca_",       colnames(bench), value = TRUE)
+  other_cols <- setdiff(colnames(bench), c(rsd_cols, pca_cols))
+
+  nf_pos <- match("n_features", other_cols)
+
+  if (!is.na(nf_pos) && length(rsd_cols) > 0) {
+    ordered_cols <- c(
+      other_cols[seq_len(nf_pos)],
+      rsd_cols,
+      other_cols[seq(nf_pos + 1L, length(other_cols))],
+      pca_cols
+    )
+  } else {
+    ordered_cols <- c(other_cols, rsd_cols, pca_cols)
+  }
+
+  bench <- bench[, intersect(ordered_cols, colnames(bench)), drop = FALSE]
+
+  # ---- Round numeric columns --------------------------------------------
+  num_cols <- vapply(bench, is.numeric, logical(1L))
+  bench[num_cols] <- lapply(bench[num_cols], round, 4)
+
+  render_dt(
+    bench,
+    caption = paste0(
+      "Normalization QC Benchmark — ",
+      "raw_linear (met_filtered) → log → norm_*. ",
+      "Median RSD on linear scale; lower is better. ",
+      "pca_pc1_delta = PC1 gain vs log stage."
+    ),
+    pageLength = 10
+  )
+}
+
+```
+
+```{r nqc-eigenms-info, echo=FALSE, results='asis'}
+# Display eigentrend information if available from normalization targets
+eigenms_info <- tryCatch({
+  targets::tar_read(met_norm_eigenms)$eigenms_info
+}, error = function(e) NULL)
+
+eigenms_forced_info <- tryCatch({
+  targets::tar_read(met_norm_eigenms_forced)$eigenms_info
+}, error = function(e) NULL)
+
+if (!is.null(eigenms_info) || !is.null(eigenms_forced_info)) {
+  cat("\n**EigenMS eigentrend summary:**\n\n")
+  if (!is.null(eigenms_info)) {
+    cat(sprintf("- **EigenMS (ProteoMM)**: %d significant eigentrend(s) detected via bootstrap parallel analysis\n",
+                eigenms_info$n_eigentrends))
+  }
+  if (!is.null(eigenms_forced_info)) {
+    cat(sprintf("- **EigenMS Forced**: %d eigentrend(s) removed (%.0f%% of samples, SVD-based)\n",
+                eigenms_forced_info$n_eigentrends,
+                (eigenms_forced_info$pct_eigentrends %||% 0.2) * 100))
+  }
+  cat("\n")
+}
+```
+
+## Density {.tabset}
+
+*Log2-scale intensity distributions per sample. Tighter, more overlapping curves indicate better between-sample normalization.*
+
+### Log
+
+```{r nqc-density-log, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "log")
+cat(embed_png(path, "density"))
+```
+
+### TSS
+
+```{r nqc-density-tss, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_tss")
+cat(embed_png(path, "density"))
+```
+
+### Median
+
+```{r nqc-density-median, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_median")
+cat(embed_png(path, "density"))
+```
+
+### PQN
+
+```{r nqc-density-pqn, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_pqn")
+cat(embed_png(path, "density"))
+```
+
+### EigenMS
+
+```{r nqc-density-eigenms, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_eigenms")
+cat(embed_png(path, "density"))
+```
+
+### EigenMS Forced
+
+```{r nqc-density-eigenms-forced, out.width="100%", echo=FALSE, results='asis'}
+path <- stage_files(qc_files, "norm_eigenms_forced")
+cat(embed_png(path, "density"))
+```
+
+## Sample Distance {.tabset}
+
+*Euclidean distance between samples on log2-normalised data. Tighter within-group distances and larger between-group distances indicate better separation.*
+
+### Log
+
+```{r nqc-dist-log, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "log"), "distance"))
+```
+
+### TSS
+
+```{r nqc-dist-tss, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_tss"), "distance"))
+```
+
+### Median
+
+```{r nqc-dist-median, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_median"), "distance"))
+```
+
+### PQN
+
+```{r nqc-dist-pqn, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_pqn"), "distance"))
+```
+
+### EigenMS
+
+```{r nqc-dist-eigenms, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms"), "distance"))
+```
+
+### EigenMS Forced
+
+```{r nqc-dist-eigenms-forced, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms_forced"), "distance"))
+```
+
+## PCA (PC1/2) {.tabset}
+
+*PCA on Log2 values. Greater separation between biological groups and tighter within-group clustering indicates better normalization. Hover over points to see sample labels.*
+
+### Log
+
+```{r nqc-pca-log, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "log"))
+```
+
+### TSS
+
+```{r nqc-pca-tss, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_tss"))
+```
+
+### Median
+
+```{r nqc-pca-median, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_median"))
+```
+
+### PQN
+
+```{r nqc-pca-pqn, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_pqn"))
+```
+
+### EigenMS
+
+```{r nqc-pca-eigenms, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms"))
+```
+
+### EigenMS Forced
+
+```{r nqc-pca-eigenms-forced, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms_forced"))
+```
+
+## Boxplots {.tabset}
+
+*Per-sample median and spread. Well-normalized data shows aligned medians and comparable IQRs across samples.*
+
+### Log
+
+```{r nqc-boxplot-log, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "log"), "boxplot"))
+```
+
+### TSS
+
+```{r nqc-boxplot-tss, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_tss"), "boxplot"))
+```
+
+### Median
+
+```{r nqc-boxplot-median, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_median"), "boxplot"))
+```
+
+### PQN
+
+```{r nqc-boxplot-pqn, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_pqn"), "boxplot"))
+```
+
+### EigenMS
+
+```{r nqc-boxplot-eigenms, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms"), "boxplot"))
+```
+
+### EigenMS Forced
+
+```{r nqc-boxplot-eigenms-forced, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms_forced"), "boxplot"))
+```
+
+## RLE {.tabset}
+
+*Relative Log Expression: per-sample deviation from feature medians. Well-normalized data centers around zero with tight IQRs.*
+
+### Log
+
+```{r nqc-rle-log, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "log"), "rle_boxplot"))
+```
+
+### TSS
+
+```{r nqc-rle-tss, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_tss"), "rle_boxplot"))
+```
+
+### Median
+
+```{r nqc-rle-median, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_median"), "rle_boxplot"))
+```
+
+### PQN
+
+```{r nqc-rle-pqn, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_pqn"), "rle_boxplot"))
+```
+
+### EigenMS
+
+```{r nqc-rle-eigenms, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms"), "rle_boxplot"))
+```
+
+### EigenMS Forced
+
+```{r nqc-rle-eigenms-forced, out.width="100%", echo=FALSE, results='asis'}
+cat(embed_png(stage_files(qc_files, "norm_eigenms_forced"), "rle_boxplot"))
+```
+
+## QC Noise Reduction {.tabset}
+
+*Each pair compares PCA **with** injected QC samples (all samples) vs **without** them (biological samples only).
+A marked reduction in PC1 variance or tighter clustering in the no-QC panel confirms that the QC
+injections inflate technical variance and were successfully identified.*
+
+### TSS — with QC
+
+```{r nqc-noise-tss-wq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_tss", "with_qc"))
+```
+
+### TSS — without QC
+
+```{r nqc-noise-tss-nq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_tss", "no_qc"))
+```
+
+### PQN — with QC
+
+```{r nqc-noise-pqn-wq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_pqn", "with_qc"))
+```
+
+### PQN — without QC
+
+```{r nqc-noise-pqn-nq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_pqn", "no_qc"))
+```
+
+### EigenMS — with QC
+
+```{r nqc-noise-eigenms-wq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms", "with_qc"))
+```
+
+### EigenMS — without QC
+
+```{r nqc-noise-eigenms-nq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms", "no_qc"))
+```
+
+### EigenMS Forced — with QC
+
+```{r nqc-noise-eigenmsf-wq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms_forced", "with_qc"))
+```
+
+### EigenMS Forced — without QC
+
+```{r nqc-noise-eigenmsf-nq, echo=FALSE}
+render_interactive_pca(png_files = stage_files(qc_files, "norm_eigenms_forced", "no_qc"))
+```

@@ -19,9 +19,13 @@ validate_config <- function(config) {
     if (!is.null(config$modes$proteomics)) validate_proteomics_config(config$modes$proteomics)
     if (!is.null(config$modes$rna)) validate_rna_config(config$modes$rna)
     if (!is.null(config$modes$metabolomics)) validate_metabolomics_config(config$modes$metabolomics)
-    if (!is.null(config$modes$multiomics)) validate_multiomics_config(config$modes$multiomics)
+    if (!is.null(config$modes$multiomics)) {
+        # validate_multiomics_config() applies defaults and returns the modified
+        # section — capture the return value so defaults actually persist.
+        config$modes$multiomics <- validate_multiomics_config(config$modes$multiomics)
+    }
 
-    invisible(TRUE)
+    invisible(config)
 }
 
 # (Note: validate_proteomics_config and validate_rna_config are dispatch hooks
@@ -47,6 +51,60 @@ get_color_config <- function(cfg) {
         return(NULL)
     }
     as.character(color_config[[1]])
+}
+
+#' Resolve the canonical group column from a mode config.
+#'
+#' Walks the standard rnaseq fallback chain to determine which metadata column
+#' identifies the experimental group used for filtering, DE summaries,
+#' commentary, and design-viability checks. Strict at every level: NULL, NA,
+#' empty strings, and non-character values all fall through to the next
+#' fallback. Only a length-1, non-NA, non-empty character scalar is accepted.
+#'
+#' Resolution order:
+#' \enumerate{
+#'   \item \code{cfg$filtering$group_col}
+#'   \item \code{cfg$de_table$group_col}
+#'   \item First element of \code{cfg$effects$color}
+#'   \item Literal default \code{"Condition"}
+#' }
+#'
+#' @param cfg Mode-level config list (e.g. \code{config$modes$rna}).
+#' @return Single non-empty character string. Never \code{NULL}.
+#'
+#' @note This function is the canonical resolver going forward, but as of
+#'   introduction it is NOT yet adopted at every call site. Several rnaseq,
+#'   proteomics, and report-template files still inline divergent variants:
+#'   the proteomics chain skips \code{filtering$group_col}; some sites use
+#'   bare \code{effects$color} (vector) instead of the first element; some
+#'   omit the terminal default. Migration is tracked in follow-up issues
+#'   filed alongside this change. Do not assume every group-column lookup
+#'   in the repo flows through this function.
+#'
+#' @examples
+#' cfg <- list(filtering = list(group_col = "treatment"),
+#'             effects   = list(color = c("batch", "treatment")))
+#' resolve_group_col(cfg)  # "treatment"
+#'
+#' cfg <- list(effects = list(color = c("Group", "batch")))
+#' resolve_group_col(cfg)  # "Group" (first element only)
+#'
+#' resolve_group_col(list())  # "Condition" (terminal default)
+resolve_group_col <- function(cfg) {
+    is_valid <- function(x) {
+        is.character(x) && length(x) == 1L && !is.na(x) && nzchar(x)
+    }
+
+    candidates <- list(
+        cfg$filtering$group_col,
+        cfg$de_table$group_col,
+        if (!is.null(cfg$effects$color)) as.character(cfg$effects$color)[1] else NULL
+    )
+
+    for (cand in candidates) {
+        if (is_valid(cand)) return(cand)
+    }
+    "Condition"
 }
 
 #' Write execution info (snapshot)

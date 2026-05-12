@@ -36,8 +36,9 @@ build_shiny_payload_proteomics <- function(
     config,
     pca_res = NULL,
     clustering_res = NULL,
-    annot = NULL,
-    final_results = NULL) 
+    final_results = NULL,
+    out_dir = NULL,
+    annot = NULL)
   {
     # ============================================================
     # Initialize canonical payload structure
@@ -161,7 +162,7 @@ build_shiny_payload_proteomics <- function(
             }
 
             # de_summary: Per-contrast summary counts
-            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats)
+            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats, out_dir = out_dir)
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 
@@ -214,10 +215,6 @@ build_shiny_payload_proteomics <- function(
         if (is.null(val) && !is.null(clustering_res$plots)) {
             val <- clustering_res$plots$hm_hier_de %||% clustering_res$plots$p_cluster_hier
         }
-    }
-    # Legacy fallback: check de_res
-    if (is.null(val) && !is.null(de_res)) {
-        val <- de_res$hm_hier_de %||% de_res$pheatmap_data
     }
     if (!is.null(val)) payload$clust_heatmap_hier <- val
 
@@ -273,55 +270,37 @@ build_shiny_payload_proteomics <- function(
 
 #' Build DE summary counts for Proteomics
 #'
+#' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
+#' proteomics naming conventions: \code{pass.imputs.<contrast>} pass columns
+#' and multiple FC column candidates (\code{logFC_}, \code{log2FoldChange_},
+#' \code{logFC.}, \code{linearFC.imputs.}).
+#'
 #' @param de_stats DE statistics data.frame with pass columns
-#' @return data.frame with columns: contrast, up, down, total
+#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
+#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
 #' @keywords internal
-build_de_summary_counts_proteomics <- function(de_stats) {
-    if (is.null(de_stats)) return(NULL)
-
-    pass_cols <- grep("^pass.", names(de_stats), value = TRUE)
-    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
-
-    if (length(pass_cols) == 0) return(NULL)
-
-    summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- sub("^pass.", "", col)
-
-        # Try multiple FC column name patterns
-        fc_patterns <- c(
-            paste0("logFC_", contrast_name),
-            paste0("log2FoldChange_", contrast_name),
-            paste0("logFC.", contrast_name),
-            paste0("linearFC.", contrast_name)
-        )
-        fc_col <- NULL
-        for (pat in fc_patterns) {
-            if (pat %in% names(de_stats)) {
-                fc_col <- pat
-                break
-            }
+build_de_summary_counts_proteomics <- function(de_stats, out_dir = NULL) {
+    result <- build_de_summary_counts_generic(
+        de_stats         = de_stats,
+        pass_pattern     = "^pass\\.imputs\\.",
+        extract_contrast = function(col) sub("^pass\\.imputs\\.", "", col),
+        find_fc_col      = function(cn, cols) {
+            candidates <- c(
+                paste0("logFC_", cn),
+                paste0("log2FoldChange_", cn),
+                paste0("logFC.", cn),
+                paste0("linearFC.imputs.", cn)
+            )
+            matched <- candidates[candidates %in% cols]
+            if (length(matched) > 0) matched[1] else NULL
         }
+    )
 
-        sig_rows <- !is.na(de_stats[[col]]) & de_stats[[col]] == 1
+    if (!is.null(out_dir) && !is.null(result) && nrow(result) > 0) {
+        save_tsv(result, out_dir, "de_summary_counts.tsv")
+    }
 
-        if (!is.null(fc_col)) {
-            up <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
-            down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
-        } else {
-            up <- NA
-            down <- NA
-        }
-
-        data.frame(
-            contrast = contrast_name,
-            up = up,
-            down = down,
-            total = sum(sig_rows, na.rm = TRUE),
-            stringsAsFactors = FALSE
-        )
-    })
-
-    do.call(rbind, summaries)
+    result
 }
 
 
@@ -353,23 +332,3 @@ build_de_contrast_summary <- function(de_stats) {
     do.call(rbind, summaries)
 }
 
-
-#' Save Proteomics Shiny payload to RDS file
-#'
-#' @param ... Arguments passed to build_shiny_payload_proteomics()
-#' @param out_file Output file path
-#' @return Path to saved file (invisibly)
-#' @export
-save_shiny_payload_proteomics <- function(..., out_file = "shiny_payload_proteomics.rds") {
-    payload <- build_shiny_payload_proteomics(...)
-
-    out_dir <- dirname(out_file)
-    if (nchar(out_dir) > 0 && !dir.exists(out_dir)) {
-        dir.create(out_dir, recursive = TRUE)
-    }
-
-    saveRDS(payload, out_file)
-    message("Saved proteomics payload to: ", out_file)
-
-    invisible(out_file)
-}

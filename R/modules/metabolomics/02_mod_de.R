@@ -4,7 +4,7 @@
 # (volcano, MA, p-value histogram), and saves result tables.
 #
 # Reuses core plotting: plot_volcano, plot_ma
-# Reuses domain: run_metabolomics_de, extract_contrast_table, make_contrast_label
+# Reuses domain: run_metabolomics_de, extract_contrast_table
 
 
 #' Metabolomics differential expression module
@@ -14,7 +14,7 @@
 #' @param out_dir Output directory for this mode.
 #' @return list conforming to the DE contract: summary_df, method, de_tables,
 #'   de_model, plots, files
-mod_metabolomics_de <- function(pre, config, out_dir) {
+mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     stage <- "metabolomics"
     assert_pre_contract(pre, stage = stage)
 
@@ -28,7 +28,8 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
     }
 
     dirs <- create_legacy_output_dirs(out_dir)
-    out_qc <- dirs$diagnostic_plots
+    out_qc <- file.path(dirs$diagnostic_plots, "DE_plots")
+    ensure_dir(out_qc)
     out_ds <- dirs$datasets
 
     # ---- Run DE or load pre-computed ----
@@ -40,7 +41,7 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         message("metabolomics DE: loading pre-computed DE tables")
         de_res <- load_precomputed_metabolomics_de(config)
     } else {
-        de_res <- run_metabolomics_de(pre, config)
+        de_res <- run_metabolomics_de(pre, config, inputs$contrasts)
     }
     assert_de_contract(de_res, stage = stage)
 
@@ -68,15 +69,8 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
     files <- c(files, f_summary)
 
     # ---- Per-contrast outputs ----
-    # For precomputed DE, use de_tables names directly as labels
-    if (has_precomputed && !is.null(de_res$de_tables)) {
-        contrast_labels <- names(de_res$de_tables)
-    } else {
-        contrasts <- de_cfg$contrasts
-        if (is.list(contrasts)) contrasts <- unlist(contrasts)
-        contrast_labels <- vapply(contrasts, make_contrast_label, character(1),
-                                  USE.NAMES = FALSE)
-    }
+    # Labels come from de_tables names (set by run_metabolomics_de or precomputed loader)
+    contrast_labels <- names(de_res$de_tables)
 
     for (ctr_label in contrast_labels) {
         ctr_tbl <- extract_contrast_table(de_res$summary_df, ctr_label)
@@ -92,19 +86,32 @@ mod_metabolomics_de <- function(pre, config, out_dir) {
         f_ctr <- save_tsv(ctr_tbl, out_ds, paste0("de_", ctr_label, ".tsv"))
         files <- c(files, f_ctr)
 
-        # Volcano plot (using core plot_volcano)
-        f_volcano <- file.path(out_qc, paste0("volcano_", ctr_label, ".png"))
-        p_volcano <- tryCatch({
-            pv <- plot_volcano(ctr_tbl, cfg, title = paste0("Volcano: ", ctr_label))
-            ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
-            pv
-        }, error = function(e) {
-            warning("Volcano plot failed for ", ctr_label, ": ", e$message)
-            NULL
-        })
-        if (!is.null(p_volcano)) {
-            files <- c(files, f_volcano)
-            plots[[paste0("volcano_", ctr_label)]] <- p_volcano
+        # Volcano plot — emit one variant per p-value type
+        for (ptype in c("padj", "pval")) {
+            f_volcano <- file.path(out_qc, paste0("volcano_", ctr_label, "_", ptype, ".png"))
+            p_volcano <- tryCatch({
+                pv <- plot_volcano(ctr_tbl, cfg,
+                                   title = paste0("Volcano: ", ctr_label,
+                                                  " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                                   pvalue_type = ptype)
+                ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
+                pv
+            }, error = function(e) {
+                warning("Volcano plot (", ptype, ") failed for ", ctr_label, ": ", e$message)
+                NULL
+            })
+            if (!is.null(p_volcano)) {
+                files <- c(files, f_volcano)
+                plots[[paste0("volcano_", ctr_label, "_", ptype)]] <- p_volcano
+            }
+        }
+        # Backwards-compat alias (legacy padj-based plot)
+        f_legacy <- file.path(out_qc, paste0("volcano_", ctr_label, ".png"))
+        f_padj   <- file.path(out_qc, paste0("volcano_", ctr_label, "_padj.png"))
+        if (file.exists(f_padj) && !file.exists(f_legacy)) {
+            file.copy(f_padj, f_legacy, overwrite = TRUE)
+            files <- c(files, f_legacy)
+            plots[[paste0("volcano_", ctr_label)]] <- plots[[paste0("volcano_", ctr_label, "_padj")]]
         }
 
         # MA plot (using core plot_ma)

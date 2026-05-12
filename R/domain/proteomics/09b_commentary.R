@@ -357,11 +357,13 @@ run_proteomics_commentary <- function(de_res, qc_pre_obj, config, out_dir) {
     )
 
     # Override config to point at proteomics commentary settings
-    # generate_all_commentary reads config$modes$rna for organism, effects, etc.
-    # so we temporarily inject our proteomics config there
+
+    # generate_all_commentary reads config$modes$rna$commentary,
+    # so we temporarily inject our proteomics commentary config there
+    # Deep copy to avoid mutating the original config
     config_for_commentary <- config
-    if (is.null(config_for_commentary$modes$rna))
-        config_for_commentary$modes$rna <- list()
+    config_for_commentary$modes <- config$modes
+    config_for_commentary$modes$rna <- list()
     config_for_commentary$modes$rna$commentary <- comm_cfg
     config_for_commentary$modes$rna$annotation <- cfg$annotation
     config_for_commentary$modes$rna$effects <- cfg$effects

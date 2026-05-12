@@ -1,11 +1,5 @@
 library(targets)
 
-# Auto-detect conda Python for reticulate (needed by MOFA2)
-if (Sys.getenv("RETICULATE_PYTHON") == "" && Sys.getenv("CONDA_PREFIX") != "") {
-  conda_python <- file.path(Sys.getenv("CONDA_PREFIX"), "bin", "python")
-  if (file.exists(conda_python)) Sys.setenv(RETICULATE_PYTHON = conda_python)
-}
-
 # ------------------------------------------------------------------------------
 # Source R files in a strict dependency order:
 # 1) core     – generic utilities, no domain knowledge
@@ -63,7 +57,8 @@ invisible(lapply(pipeline_files, tar_source))
 required_pkgs <- c(
   "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
   "openxlsx", "readr", "readxl", "tidyr", "tibble",
-  "edgeR", "DESeq2", "SummarizedExperiment"
+  "edgeR", "DESeq2", "SummarizedExperiment",
+  "impute"   # Bioconductor: KNN imputation for metabolomics MAR features
 )
 # Only require packages that are actually installed (allows running a
 # subset of pipelines when some omics-specific packages are absent).
@@ -83,33 +78,19 @@ config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
 
 list(
   # Configuration file (tracked as a file dependency)
-  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
-  # Or defaults to config.yaml
+  # Override with: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
   tar_target(
     config_file,
-    {
-      cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-      if (cfg_path == "") {
-        cfg_path <- file.path(getwd(), "config.yaml")
-      }
-      normalizePath(cfg_path, mustWork = TRUE)
-    },
+    !!config_path,
     format = "file"
   ),
-
-  # Load configuration
+  
+  # Load and validate configuration. validate_config() applies defaults (e.g.
+  # multiomics integration methods) and returns the updated config, so all
+  # downstream targets that depend on `config` receive the defaulted values.
   tar_target(
     config,
-    load_config(config_file)
-  ),
-
-  # Validate configuration early; downstream targets should depend on this
-  tar_target(
-    cfg_validated,
-    {
-      validate_config(config)
-      TRUE
-    }
+    validate_config(load_config(config_file))
   ),
 
   # Resolve run output directory
@@ -122,15 +103,16 @@ list(
   tar_target(
     execution_info_files,
     write_execution_info(
-      config = config,
-      run_dir = run_dir,
-      config_path = config_file,
+      config       = config,
+      run_dir      = run_dir,
+      config_path  = config_file,
       targets_file = "_targets.R"
     ),
     format = "file"
   ),
 
-  # Mode-specific pipelines (only run if mode is present in config)
+  # Mode-specific pipelines — only included when the mode is present in config.
+  # Read config at plan-definition time so {targets} can detect mode changes.
   {
     cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
     if (cfg_path == "") cfg_path <- file.path(getwd(), "config.yaml")
@@ -143,7 +125,13 @@ list(
     has_multiomics <- !is.null(cfg_raw$modes$multiomics)
     if (!is.null(cfg_raw$modes$rna))          mode_targets <- c(mode_targets, pipe_rnaseq(skip_outputs = has_multiomics))
     if (!is.null(cfg_raw$modes$proteomics))   mode_targets <- c(mode_targets, pipe_proteomics(skip_outputs = has_multiomics))
-    if (!is.null(cfg_raw$modes$metabolomics)) mode_targets <- c(mode_targets, pipe_metabolomics(skip_outputs = has_multiomics))
+    
+    if (!is.null(cfg_raw$modes$metabolomics)) {
+      met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
+      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics))
+    }
+    
+    
 
     # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
     # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
@@ -153,7 +141,9 @@ list(
 
     if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
       mode_targets <- c(mode_targets, pipe_multiomics())
+
     }
+   
 
     mode_targets
   }

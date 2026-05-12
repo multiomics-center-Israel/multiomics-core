@@ -124,11 +124,17 @@ filter_features_optimized <- function(norm_mat, meta, sample_col, group_col, thr
 # 3. Main Pipeline Wrapper
 # ==============================================================================
 run_auto_filter_pipeline <- function(cpm_mat, meta, sample_col, group_col,
-                                     output_plot = "threshold_qc.png") {
+                                     output_plot = "threshold_qc.png",
+                                     min_limit = 0.5,
+                                     max_limit = 2.0,
+                                     fallback  = 1.0) {
     message("--- Starting Auto-Filtering Pipeline ---")
 
     # Step 1: Calculate Optimal Threshold
-    auto_thresh <- find_optimal_threshold_safe(cpm_mat)
+    auto_thresh <- find_optimal_threshold_safe(cpm_mat,
+                                               min_limit = min_limit,
+                                               max_limit = max_limit,
+                                               fallback  = fallback)
     message(sprintf("Optimal Threshold: %.3f CPM", auto_thresh))
 
     # Step 2: Generate QC Plot

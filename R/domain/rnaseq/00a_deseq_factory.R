@@ -173,6 +173,15 @@ validate_count_matrix <- function(counts) {
 
     counts_mat <- as.matrix(counts)
 
+    if (anyNA(counts_mat)) {
+        stop(
+            "[counts] Count matrix contains NA values. Raw counts must be non-negative integers; ",
+            "NAs typically indicate a normalized matrix was routed to the raw-counts path. ",
+            "Use the tximport or preprocessed_counts input instead.",
+            call. = FALSE
+        )
+    }
+
     # Check for negative values
     if (any(counts_mat < 0, na.rm = TRUE)) {
         stop("[counts] Count matrix contains negative values, which is invalid.", call. = FALSE)
@@ -243,21 +252,29 @@ align_samples_strict <- function(expr_samples, meta, sample_col, lenient = TRUE)
         msg_parts <- c("[alignment] Sample mismatch detected:")
 
         if (length(in_expr_not_meta) > 0) {
-            msg_parts <- c(msg_parts, sprintf(
-                "  - In expression data but not metadata (%d): %s",
-                length(in_expr_not_meta),
-                paste(head(in_expr_not_meta, 5), collapse = ", "),
-                if (length(in_expr_not_meta) > 5) "..." else ""
-            ))
+          preview <- paste0(
+            paste(head(in_expr_not_meta, 5), collapse = ", "),
+            if (length(in_expr_not_meta) > 5) ", ..." else ""
+          )
+          
+          msg_parts <- c(msg_parts, sprintf(
+            "  - In expression data but not metadata (%d): %s",
+            length(in_expr_not_meta),
+            preview
+          ))
         }
-
+        
         if (length(in_meta_not_expr) > 0) {
-            msg_parts <- c(msg_parts, sprintf(
-                "  - In metadata but not expression data (%d): %s",
-                length(in_meta_not_expr),
-                paste(head(in_meta_not_expr, 5), collapse = ", "),
-                if (length(in_meta_not_expr) > 5) "..." else ""
-            ))
+          preview <- paste0(
+            paste(head(in_meta_not_expr, 5), collapse = ", "),
+            if (length(in_meta_not_expr) > 5) ", ..." else ""
+          )
+          
+          msg_parts <- c(msg_parts, sprintf(
+            "  - In metadata but not expression data (%d): %s",
+            length(in_meta_not_expr),
+            preview
+          ))
         }
 
         if (!lenient) {
@@ -272,7 +289,7 @@ align_samples_strict <- function(expr_samples, meta, sample_col, lenient = TRUE)
     }
 
     # Compute intersection
-    common_samples <- intersect(expr_samples, meta_samples)
+    common_samples <- intersect(meta_samples, expr_samples)
     if (length(common_samples) == 0) {
         stop("[alignment] No samples in common between expression data and metadata.", call. = FALSE)
     }
@@ -406,7 +423,12 @@ subset_tximport <- function(txi, samples) {
     txi$counts <- txi$counts[, samples, drop = FALSE]
     txi$abundance <- txi$abundance[, samples, drop = FALSE]
     txi$length <- txi$length[, samples, drop = FALSE]
-
+    
+    # Subset inferential replicates if they exist
+    if (!is.null(txi$infReps)) {
+      txi$infReps <- lapply(txi$infReps, function(m) m[, samples, drop = FALSE])
+    }
+    
     # Preserve other attributes
     txi
 }
@@ -421,34 +443,39 @@ subset_tximport <- function(txi, samples) {
 #' @return Subsetted tximport object
 #' @keywords internal
 subset_tximport_genes <- function(txi, genes) {
-    if (is.logical(genes)) {
-        # genes is a keep_vec
-        if (length(genes) != nrow(txi$counts)) {
-            stop(
-                sprintf("[tximport] keep_vec length (%d) != number of genes (%d)",
-                        length(genes), nrow(txi$counts)),
-                call. = FALSE
-            )
-        }
-        keep_idx <- genes
-    } else {
-        # genes is a character vector of gene IDs
-        available_genes <- rownames(txi$counts)
-        missing <- setdiff(genes, available_genes)
-        if (length(missing) > 0) {
-            warning(
-                sprintf("[tximport] %d genes not found in tximport object (ignored)", length(missing))
-            )
-        }
-        keep_idx <- available_genes %in% genes
+  if (is.logical(genes)) {
+    # genes is a keep_vec
+    if (length(genes) != nrow(txi$counts)) {
+      stop(
+        sprintf("[tximport] keep_vec length (%d) != number of genes (%d)",
+                length(genes), nrow(txi$counts)),
+        call. = FALSE
+      )
     }
-
-    # Subset all three matrices together (invariant: always subset together)
-    txi$counts <- txi$counts[keep_idx, , drop = FALSE]
-    txi$abundance <- txi$abundance[keep_idx, , drop = FALSE]
-    txi$length <- txi$length[keep_idx, , drop = FALSE]
-
-    txi
+    keep_idx <- genes
+  } else {
+    # genes is a character vector of gene IDs
+    available_genes <- rownames(txi$counts)
+    missing <- setdiff(genes, available_genes)
+    if (length(missing) > 0) {
+      warning(
+        sprintf("[tximport] %d genes not found in tximport object (ignored)", length(missing))
+      )
+    }
+    keep_idx <- available_genes %in% genes
+  }
+  
+  # Subset the three core matrices
+  txi$counts    <- txi$counts[keep_idx, , drop = FALSE]
+  txi$abundance <- txi$abundance[keep_idx, , drop = FALSE]
+  txi$length    <- txi$length[keep_idx, , drop = FALSE]
+  
+  # Handle inferential replicates if they exist
+  if (!is.null(txi$infReps)) {
+    txi$infReps <- lapply(txi$infReps, function(m) m[keep_idx, , drop = FALSE])
+  }
+  
+  txi
 }
 
 # =============================================================================

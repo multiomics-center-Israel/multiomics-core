@@ -35,7 +35,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
     # --- Get thresholds (use defaults if not configured) ---
     thresh <- if (!is.null(cfg$qc)) cfg$qc$thresholds else NULL
     thresh <- thresh %||% list()
-    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 10
+    min_samples_pca3d <- thresh$min_samples_for_pca3d %||% 4
     max_samples_heatmaps <- thresh$max_samples_for_heatmaps %||% 120
     max_samples_expr_heatmap <- thresh$max_samples_for_expr_heatmap %||% 60
 
@@ -271,6 +271,20 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         save_heatmap_to_file(p_hm_nocol, f_hm_nocol)
         files <- c(files, f_hm_nocol)
         plots$heatmap_nocol <- p_hm_nocol
+
+        # Fully unclustered heatmap (rows + cols both in original order)
+        f_hm_uncl <- file.path(out_qc, "samples_rna_heatmap_unclustered.png")
+        p_hm_uncl <- plot_heatmap_core(
+            expr_mat = mat,
+            annotation_col = annot,
+            title = "QC: Sample RNA Expression",
+            max_rows = 2000,
+            cluster_rows = FALSE,
+            cluster_cols = FALSE
+        )
+        save_heatmap_to_file(p_hm_uncl, f_hm_uncl)
+        files <- c(files, f_hm_uncl)
+        plots$heatmap_unclustered <- p_hm_uncl
     } else if (isTRUE(adaptive_enabled)) {
         message(sprintf("Skipping expression heatmap (%d samples > %d threshold)",
                         n_samples, max_samples_expr_heatmap))

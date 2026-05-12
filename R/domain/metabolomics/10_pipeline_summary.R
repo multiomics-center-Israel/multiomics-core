@@ -50,6 +50,9 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     }
 
     # --- DE statistics ---
+
+    # Single source of truth: use pipeline pass columns (pass.{cn}) from summary_df.
+    # Fallback: recompute from p-value + FC thresholds.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
     de_contrasts <- list()
 
@@ -57,29 +60,55 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     fc_lin <- metab_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
-    if (!is.null(de_res$tables) && length(de_res$tables) > 0) {
-        for (cn in names(de_res$tables)) {
-            tbl <- de_res$tables[[cn]]
-            if (!is.data.frame(tbl)) next
 
-            padj_col <- intersect(c("padj", "adj.P.Val", "p.adjusted"), names(tbl))[1]
-            lfc_col  <- intersect(c("log2FoldChange", "logFC", "log2FC"), names(tbl))[1]
-            if (is.na(padj_col)) next
+    if (!is.null(de_res$summary_df)) {
+        sdf <- de_res$summary_df
+        pass_cols <- grep("^pass\\.", names(sdf), value = TRUE)
+        pass_cols <- setdiff(pass_cols, "pass_any_contrast")
 
-            sig <- !is.na(tbl[[padj_col]]) & tbl[[padj_col]] <= p_cut
-            if (log2_fc > 0 && !is.na(lfc_col)) {
-                sig <- sig & (abs(tbl[[lfc_col]]) >= log2_fc)
+        if (length(pass_cols) > 0) {
+            for (pcol in pass_cols) {
+                cn <- sub("^pass\\.", "", pcol)
+                is_sig <- !is.na(sdf[[pcol]]) & sdf[[pcol]] == 1
+                fc_col <- paste0("linearFC.", cn)
+                if (fc_col %in% names(sdf)) {
+                    fc_vals <- as.numeric(sdf[[fc_col]])
+                    up <- sum(is_sig & fc_vals > 0, na.rm = TRUE)
+                    dn <- sum(is_sig & fc_vals < 0, na.rm = TRUE)
+                } else {
+                    up <- 0; dn <- 0
+                }
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(is_sig),
+                    up = up, down = dn, tested = nrow(sdf)
+                )
+                n_de_total <- n_de_total + sum(is_sig)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
             }
+        }
+    }
 
-            up <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] > 0, na.rm = TRUE) else 0
-            dn <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] < 0, na.rm = TRUE) else 0
-
-            de_contrasts[[cn]] <- list(
-                name = cn, total = sum(sig, na.rm = TRUE),
-                up = up, down = dn, tested = sum(!is.na(tbl[[padj_col]]))
-            )
-            n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
-            n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+    # Fallback: use per-contrast DE tables
+    if (length(de_contrasts) == 0) {
+        de_tables <- de_res$de_tables %||% de_res$tables
+        if (!is.null(de_tables) && length(de_tables) > 0) {
+            for (cn in names(de_tables)) {
+                tbl <- de_tables[[cn]]
+                if (!is.data.frame(tbl)) next
+                padj_col <- intersect(c("P.Value", "pvalue", "padj", "adj.P.Val"), names(tbl))[1]
+                lfc_col  <- intersect(c("log2FoldChange", "logFC", "log2FC"), names(tbl))[1]
+                if (is.na(padj_col)) next
+                sig <- !is.na(tbl[[padj_col]]) & tbl[[padj_col]] <= p_cut
+                if (log2_fc > 0 && !is.na(lfc_col)) sig <- sig & (abs(tbl[[lfc_col]]) >= log2_fc)
+                up <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] > 0, na.rm = TRUE) else 0
+                dn <- if (!is.na(lfc_col)) sum(sig & tbl[[lfc_col]] < 0, na.rm = TRUE) else 0
+                de_contrasts[[cn]] <- list(
+                    name = cn, total = sum(sig, na.rm = TRUE),
+                    up = up, down = dn, tested = sum(!is.na(tbl[[padj_col]]))
+                )
+                n_de_total <- n_de_total + sum(sig, na.rm = TRUE)
+                n_de_up <- n_de_up + up; n_de_down <- n_de_down + dn
+            }
         }
     }
 
@@ -89,14 +118,18 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
 
     if (!is.null(feature_sel_res$rf)) {
         rf_res <- feature_sel_res$rf
-        if (!is.null(rf_res$importance) && is.data.frame(rf_res$importance)) {
-            rf_top_n <- nrow(rf_res$importance)
+
+        rf_imp <- rf_res$importance_df %||% rf_res$importance
+        if (!is.null(rf_imp) && is.data.frame(rf_imp)) {
+            rf_top_n <- metab_cfg$rf$top_n %||% min(20, nrow(rf_imp))
         }
     }
     if (!is.null(feature_sel_res$plsda)) {
         plsda_res <- feature_sel_res$plsda
-        if (!is.null(plsda_res$vip) && is.data.frame(plsda_res$vip)) {
-            plsda_top_n <- nrow(plsda_res$vip)
+
+        plsda_vip <- plsda_res$vip_df %||% plsda_res$vip
+        if (!is.null(plsda_vip) && is.data.frame(plsda_vip)) {
+            plsda_top_n <- metab_cfg$plsda$vip_top_n %||% min(15, nrow(plsda_vip))
         }
     }
 
@@ -141,7 +174,8 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
         enrichment = list(total = n_enriched_total),
         methods = list(
             input_format = metab_cfg$input$format %||% "cd_raw",
-            sample_norm  = norm_cfg$sample_norm %||% "pqn",
+
+            sample_norm  = metab_cfg$preprocessing$chosen_norm %||% norm_cfg$sample_norm %||% "pqn",
             transform    = norm_cfg$transform %||% "log2",
             scaling      = norm_cfg$scaling %||% "none",
             de_method    = metab_cfg$de$method %||% "limma",
@@ -489,31 +523,59 @@ generate_metab_summary_body_r <- function(stats) {
     step1 <- build_metab_step_html(1, "\U0001F4E5", "Data Import", "phase-input", "input",
         input_desc, c(stats$methods$input_format))
 
-    # Step 2: Feature Filtering
-    filt_desc <- "Low-abundance and unreliable features removed. Features retained based on detection frequency across samples."
+
+    # Step 2: Feature Filtering — render dynamically based on whether
+    # filtering actually changed the feature count.
+    n_before <- stats$filtering$features_before %||% 0
+    n_after  <- stats$filtering$features_after  %||% 0
+    filtering_ran <- n_before > 0 && n_after > 0 && n_before != n_after
     filt_stats <- ""
-    if (stats$filtering$features_before > 0 && stats$filtering$features_after > 0) {
+    if (filtering_ran) {
+        filt_desc <- "Low-abundance and unreliable features removed. Features retained based on detection frequency across samples."
         filt_stats <- build_metab_stats_row(
             list(value = stats$filtering$before_fmt, label = "before", color = "var(--accent-orange)"),
             list(arrow = TRUE),
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0),
                  margin = "8px", color = "var(--text)"))
+
+        filt_tags <- c("detection filter")
+    } else if (n_before > 0) {
+        filt_desc <- sprintf("No filtering applied; all %s features retained for downstream analysis.",
+                             format(n_before, big.mark = ","))
+        filt_tags <- c("no filtering")
+    } else {
+        filt_desc <- "Filtering step was skipped."
+        filt_tags <- c("no filtering")
     }
     step2 <- build_metab_step_html(2, "\U0001F50D", "Feature Filtering", "phase-filter", "processing",
-        filt_desc, c("detection filter"), filt_stats)
+        filt_desc, filt_tags, filt_stats)
 
     # Step 3: Normalization
+    # Human-readable normalization method names
+    norm_display_names <- c(
+        pqn = "PQN (Probabilistic Quotient Normalization)",
+        tss = "TSS (Total Sum Scaling)",
+        median = "Median normalization",
+        eigenms = "EigenMS (SVD-based bias removal, ProteoMM)",
+        eigenms_forced = "EigenMS Forced (SVD-based, fixed eigentrend removal)",
+        sum = "Sum normalization",
+        none = "None"
+    )
+    norm_method <- stats$methods$sample_norm
+    norm_label <- norm_display_names[norm_method] %||% toupper(norm_method)
+
     norm_parts <- c()
-    if (stats$methods$sample_norm != "none")
-        norm_parts <- c(norm_parts, sprintf("Sample normalization: %s", toupper(stats$methods$sample_norm)))
+    if (norm_method != "none")
+        norm_parts <- c(norm_parts, sprintf("Sample normalization: %s", norm_label))
     if (stats$methods$transform != "none")
         norm_parts <- c(norm_parts, sprintf("%s transformation", stats$methods$transform))
     if (stats$methods$scaling != "none")
         norm_parts <- c(norm_parts, sprintf("%s scaling", stats$methods$scaling))
     if (length(norm_parts) == 0) norm_parts <- "No normalization applied"
     norm_desc <- paste(norm_parts, collapse = ". ") |> paste0(".")
-    norm_tags <- c(toupper(stats$methods$sample_norm), stats$methods$transform, stats$methods$scaling)
+
+    norm_tags <- c(toupper(norm_method), stats$methods$transform, stats$methods$scaling)
     norm_tags <- norm_tags[norm_tags != "none" & norm_tags != "NONE"]
     if (length(norm_tags) == 0) norm_tags <- "raw"
     step3 <- build_metab_step_html(3, "\u2696", "Normalization", "phase-norm", "processing",
@@ -529,13 +591,15 @@ generate_metab_summary_body_r <- function(stats) {
 
     # Step 5: DE
     de_label <- toupper(stats$methods$de_method)
-    de_desc <- sprintf("%s differential expression test. Significance: adj. p-value &le; %s and |linear FC| &ge; %s.",
+
+    de_desc <- sprintf("%s differential expression test. Significance: p-value &le; %s and |linear FC| &ge; %s.",
         de_label, stats$methods$p_cutoff, stats$methods$fc_cutoff)
     de_stats <- build_metab_stats_row(
         list(value = format(stats$de$total, big.mark = ","), label = "DE features", color = "var(--accent-violet)"),
         list(value = format(stats$de$up, big.mark = ","), label = "up", color = "var(--accent-green)"),
         list(value = format(stats$de$down, big.mark = ","), label = "down", color = "var(--accent-rose)"))
-    de_tags <- c(de_label, sprintf("padj \u2264 %s", stats$methods$p_cutoff),
+
+    de_tags <- c(de_label, sprintf("p \u2264 %s", stats$methods$p_cutoff),
                  sprintf("|FC| \u2265 %s", stats$methods$fc_cutoff))
     step5 <- build_metab_step_html(5, "\U0001F4CA", "Differential Expression", "phase-de", "analysis",
         de_desc, de_tags, de_stats)
@@ -905,16 +969,12 @@ generate_metab_pipeline_summary <- function(config, pre, de_res,
         full_html <- body_html
     }
 
-    # 3. Save to mode dir and Results root (matching RNA/proteomics placement)
-    out_file <- file.path(run_dir, "metabolomics_pipeline_summary.html")
+
+    # 3. Save directly to Results root (avoids duplicate inside metabolomics/)
+    results_root <- dirname(run_dir)
+    out_file <- file.path(results_root, "metabolomics_pipeline_summary.html")
     writeLines(full_html, out_file, useBytes = TRUE)
     message("Metabolomics pipeline summary saved to: ", out_file)
-
-    # Also copy to Results root (like rna_pipeline_summary.html / proteomics_pipeline_summary.html)
-    results_root <- dirname(run_dir)
-    root_copy <- file.path(results_root, "metabolomics_pipeline_summary.html")
-    file.copy(out_file, root_copy, overwrite = TRUE)
-    message("  Also copied to: ", root_copy)
 
     out_file
 }

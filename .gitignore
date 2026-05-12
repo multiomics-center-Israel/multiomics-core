@@ -37,13 +37,20 @@ reports/
 *.tar.gz
 *.zip
 
-# Local data (do not commit)
-data/
+# Local data (do not commit) — ignore contents, not the dir itself,
+# so subdirectory exceptions (below) can be re-included.
+data/*
+# Exception: ship tiny synthetic datasets for the wizard "Load Example" demos
+!data/example_proteomics/
+!data/example_metabolomics/
+!data/example_lipidomics/
 
 # Project-specific configs (use config/templates/ as reference)
 config/*.yaml
 !config/templates/*.yaml
 
+# bioskills
+bioSkills/
 # Third-party repos (referenced, not bundled)
 claude-scientific-skills/
 
@@ -52,6 +59,30 @@ scripts/*.R
 
 # User-specific environment variables
 .Renviron
-
 Rplots.pdf
+Rplot.png
 .lintr
+
+# User-specific Claude Code settings
+.claude/settings.local.json
+
+# Local wizard configuration (created by configure_wizard.bat)
+wizard_defaults.json
+
+# Python virtual environments
+.mummichog_venv/
+
+# Windows zone identifier files
+*:Zone.Identifier
+
+# Temporary discussion/review reports
+MERGE_DISCUSSION_REPORT.*
+PR*_report.html
+
+# Local targets state
+_targets.yaml
+
+# Test output artifacts
+tests/testthat/test_outputs/
+
+results/ 

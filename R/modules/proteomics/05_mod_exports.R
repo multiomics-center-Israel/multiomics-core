@@ -45,13 +45,13 @@ mod_proteomics_exports <- function(
     # =========================================================================
     # 1. Write dataset TSVs (raw, imputed matrices)
     # =========================================================================
-    files <- c(files, write_proteomics_datasets_legacy(pre, runs = NULL, config, out_dir))
+    files <- c(files, write_proteomics_datasets_legacy(pre, runs = NULL, config, dirs))
 
     # =========================================================================
     # 2. Write limma summary TSV
     # =========================================================================
     if (!is.null(de_res$summary_df)) {
-        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, out_dir))
+        files <- c(files, write_limma_multimp_summary_legacy(de_res$summary_df, config, dirs))
     }
 
     # =========================================================================
@@ -64,7 +64,7 @@ mod_proteomics_exports <- function(
                 de_res = de_res,
                 contrast_name = cn,
                 config = config,
-                out_dir = out_dir
+                dirs = dirs
             ))
         }
     }
@@ -95,6 +95,11 @@ mod_proteomics_exports <- function(
     # 5. Write Excel files (using the already-built final_results)
     # =========================================================================
     if (!is.null(final_results)) {
+        # Extract Excel config for enriched layout (annotation rows, sample labels)
+        excel_cfg <- prot_cfg$excel %||% list()
+        prot_sample_id_col <- prot_cfg$effects$samples %||%
+            prot_cfg$id_columns$sample_col %||% "SampleID"
+
         excel_files <- write_final_results_excels_legacy_generic(
             final_results = final_results,
             config = config,
@@ -103,7 +108,11 @@ mod_proteomics_exports <- function(
             id_col = id_col,
             expr_for_de = pre$expr_imp_single,
             with_cutoffs = TRUE,
-            clustering_res = clustering_res
+            clustering_res = clustering_res,
+            sample_meta = pre$meta,
+            sample_id_col = prot_sample_id_col,
+            annotation_rows = excel_cfg$annotation_rows,
+            sample_label_cols = excel_cfg$sample_label_cols
         )
         files <- c(files, excel_files)
     }
@@ -121,13 +130,14 @@ mod_proteomics_exports <- function(
         config = config,
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
-        final_results = final_results
+        final_results = final_results,
+        out_dir = out_dir
     )
 
     saveRDS(shiny_payload, shiny_payload_file)
     message("Saved proteomics Shiny payload to: ", shiny_payload_file)
     files <- c(files, shiny_payload_file)
-
+    
     # =========================================================================
     # Return consolidated results
     # =========================================================================

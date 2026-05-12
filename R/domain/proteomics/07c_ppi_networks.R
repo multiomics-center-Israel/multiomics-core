@@ -81,6 +81,9 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     cfg <- config$modes$proteomics
     ppi_cfg <- cfg$ppi %||% list()
 
+    # Resolve organism name for OrgDb dispatch (used by subcellular + enrichment)
+    organism <- normalize_organism_name(cfg$annotation$organism %||% "Homo sapiens")
+
     # Set up output directories
     output_dir <- file.path(out_dir, "ppi_networks")
     plots_dir  <- file.path(output_dir, "plots")
@@ -188,11 +191,17 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     }
 
     # Subcellular localization
-    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, config, output_dir)
+
+    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, output_dir, organism = organism)
 
     # Network-based enrichment
     network_enrichment <- run_network_enrichment(
         ppi_network$graph, community_results, config, output_dir
+    )
+
+    # STRING functional enrichment (diseases, tissues, compartments, literature)
+    string_enrichment <- get_string_functional_enrichment(
+        sig_proteins, species_id, da_df, output_dir
     )
 
     # Visualizations
@@ -202,16 +211,17 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     )
 
     results <- list(
-        network           = ppi_network,
-        topology          = topology_results,
-        communities       = community_results,
-        active_subnetwork = active_subnet,
-        complexes         = complex_results,
-        subcellular       = subcell_results,
-        enrichment        = network_enrichment,
-        figures           = figures,
-        summary           = create_ppi_summary(ppi_network, topology_results,
-                                               community_results, complex_results)
+        network               = ppi_network,
+        topology              = topology_results,
+        communities           = community_results,
+        active_subnetwork     = active_subnet,
+        complexes             = complex_results,
+        subcellular           = subcell_results,
+        enrichment            = network_enrichment,
+        string_enrichment     = string_enrichment,
+        figures               = figures,
+        summary               = create_ppi_summary(ppi_network, topology_results,
+                                                   community_results, complex_results)
     )
 
     save_ppi_outputs(results, output_dir)
@@ -278,46 +288,61 @@ build_string_network <- function(proteins, species = 9606,
     })
 }
 
-build_string_network_api <- function(proteins, species, score_threshold) {
+build_string_network_api <- function(proteins, species, score_threshold,
+                                      chunk_size = 500) {
     message("  Using STRING API fallback...")
 
-    if (length(proteins) > 500) {
-        message("WARNING: Limiting to first 500 proteins for API query")
-        proteins <- proteins[1:500]
-    }
-
-    base_url <- "https://string-db.org/api/tsv/network"
     # Clean protein IDs: remove any containing "|" (empty gene symbols) and whitespace
     proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
     if (length(proteins) == 0) {
         message("WARNING: No valid protein IDs for STRING API query")
         return(NULL)
     }
-    protein_list <- paste(proteins, collapse = "%0a")
 
-    url <- paste0(base_url, "?identifiers=", protein_list,
+    # Do NOT chunk: the /network endpoint returns edges only among submitted identifiers,
+    # so independent per-chunk queries silently drop all inter-chunk edges.
+    # Cap explicitly instead so truncation is visible and the user can install STRINGdb.
+    if (length(proteins) > chunk_size) {
+        message("WARNING: ", length(proteins), " proteins exceed the STRING API fallback ",
+                "limit (", chunk_size, "). Capping to ", chunk_size, " proteins. ",
+                "Install STRINGdb for complete cross-protein results.")
+        proteins <- proteins[seq_len(chunk_size)]
+    }
+
+    base_url <- "https://string-db.org/api/tsv/network"
+    url <- paste0(base_url,
+                  "?identifiers=", paste(proteins, collapse = "%0a"),
                   "&species=", species,
                   "&required_score=", score_threshold,
                   "&caller_identity=multiomics_pipeline")
+    combined <- tryCatch(
+        utils::read.delim(url(url), stringsAsFactors = FALSE),
+        error = function(e) {
+            message("WARNING: STRING API request failed: ", e$message)
+            NULL
+        }
+    )
+    if (is.null(combined) || nrow(combined) == 0) return(NULL)
 
-    tryCatch({
-        response <- utils::read.delim(url(url), stringsAsFactors = FALSE)
-        if (nrow(response) == 0) return(NULL)
+    required_cols <- c("preferredName_A", "preferredName_B", "score")
+    missing_cols  <- setdiff(required_cols, colnames(combined))
+    if (length(missing_cols) > 0) {
+        message("WARNING: STRING API response is missing expected network columns (",
+                paste(missing_cols, collapse = ", "), "). ",
+                "Got: ", paste(colnames(combined), collapse = ", "), ". ",
+                "Response may be a non-network payload (e.g. error text). Skipping.")
+        return(NULL)
+    }
 
-        graph <- igraph::graph_from_data_frame(
-            response[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
-        )
-        graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
+    graph <- igraph::graph_from_data_frame(
+        combined[, required_cols], directed = FALSE
+    )
+    graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
 
-        message("  API returned ", igraph::ecount(graph), " edges")
+    message("  API returned ", igraph::ecount(graph), " unique edges")
 
-        list(graph = graph, edges = response, mapping = NULL,
-             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
-
-    }, error = function(e) {
-        message("ERROR: STRING API failed: ", e$message)
-        NULL
-    })
+    list(graph = graph, edges = combined, mapping = NULL,
+         n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
 }
 
 get_species_name <- function(taxid) {
@@ -684,23 +709,20 @@ get_corum_database <- function(species) {
 # Subcellular Localization
 # -----------------------------------------------------------------------------
 
-analyze_subcellular_localization <- function(proteins, da_results, config, output_dir) {
+
+analyze_subcellular_localization <- function(proteins, da_results, output_dir,
+                                             organism = "Homo sapiens") {
     message("Analyzing subcellular localization...")
 
-    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg)) {
-        message("  No OrgDb available for organism '", organism, "'. Skipping subcellular localization.")
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping subcellular localization.")
         return(NULL)
     }
-    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  ", orgdb_pkg, " not installed. Skipping subcellular localization.")
-        return(NULL)
-    }
-    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     tryCatch({
-        go_cc <- AnnotationDbi::select(orgdb,
+        go_cc <- AnnotationDbi::select(org_db,
             keys = proteins, keytype = "SYMBOL", columns = c("GOALL", "ONTOLOGYALL"))
         go_cc <- go_cc[go_cc$ONTOLOGYALL == "CC" & !is.na(go_cc$GOALL), ]
         if (nrow(go_cc) == 0) return(NULL)
@@ -742,34 +764,45 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         return(NULL)
     }
 
-    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
+
+    cfg_prot <- config$modes$proteomics
+    organism <- normalize_organism_name(cfg_prot$annotation$organism %||% "Homo sapiens")
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg)) {
-        message("  No OrgDb available for organism '", organism, "'. Skipping network enrichment.")
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping network enrichment.")
         return(NULL)
     }
-    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  ", orgdb_pkg, " not installed. Skipping network enrichment.")
-        return(NULL)
-    }
-    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     enrichment_results <- list()
     community_df <- community_results$membership
     communities_ids <- unique(community_df$community)
+
+    # Batch all symbol → Entrez lookups in a single OrgDb call before the loop
+    all_comm_symbols <- unique(community_df$protein_name)
+    entrez_batch <- tryCatch(
+        AnnotationDbi::mapIds(org_db, keys = all_comm_symbols,
+                              keytype = "SYMBOL", column = "ENTREZID",
+                              multiVals = "first"),
+        error = function(e) {
+            message("  mapIds batch failed: ", e$message)
+            setNames(rep(NA_character_, length(all_comm_symbols)), all_comm_symbols)
+        }
+    )
 
     for (comm in communities_ids) {
         comm_proteins <- community_df$protein_name[community_df$community == comm]
         if (length(comm_proteins) < 3) next
 
         tryCatch({
-            entrez <- AnnotationDbi::mapIds(orgdb,
-                keys = comm_proteins, keytype = "SYMBOL", column = "ENTREZID")
+
+            entrez <- entrez_batch[comm_proteins]
             entrez <- entrez[!is.na(entrez)]
             if (length(entrez) < 3) next
 
             go_result <- clusterProfiler::enrichGO(
-                gene = entrez, OrgDb = orgdb,
+
+                gene = entrez, OrgDb = org_db,
                 ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.1
             )
 
@@ -792,6 +825,121 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
     write.csv(combined, file.path(output_dir, "community_enrichment.csv"), row.names = FALSE)
 
     enrichment_results
+}
+
+# -----------------------------------------------------------------------------
+# STRING Functional Enrichment (Diseases, Tissues, Compartments, Literature)
+# -----------------------------------------------------------------------------
+
+#' Query STRING API for functional enrichment across multiple categories
+#'
+#' Retrieves enrichment results from STRING for: Process (GO), Component,
+#' Function, KEGG, Reactome, DISEASES, COMPARTMENTS, TISSUES, and PMID.
+#'
+#' @param proteins Character vector of protein/gene symbols
+#' @param species Integer NCBI taxonomy ID
+#' @param da_results DA data frame (used to rank proteins by significance)
+#' @param output_dir Output directory for CSV files
+#' @return List with enrichment data frames per category
+get_string_functional_enrichment <- function(proteins, species, da_results, output_dir) {
+    message("=== STRING Functional Enrichment ===")
+
+    species <- resolve_string_taxid(species)
+
+    # Rank proteins by significance (stat = sign(lfc) * -log10(p)) for prioritized input
+    if (!is.null(da_results) && "pvalue" %in% colnames(da_results) &&
+        "log2FoldChange" %in% colnames(da_results)) {
+        da_sub <- da_results[da_results$protein_id %in% proteins, ]
+        da_sub$rank_stat <- sign(da_sub$log2FoldChange) * -log10(da_sub$pvalue + 1e-300)
+        da_sub <- da_sub[order(abs(da_sub$rank_stat), decreasing = TRUE), ]
+        proteins <- da_sub$protein_id
+        message("  Proteins ranked by fGSEA-style stat for STRING query")
+    }
+
+    # Clean protein IDs
+    proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
+    if (length(proteins) == 0) {
+        message("  No valid protein IDs. Skipping STRING enrichment.")
+        return(NULL)
+    }
+    if (length(proteins) > 500) {
+        message("  Limiting to top 500 ranked proteins for STRING enrichment")
+        proteins <- proteins[1:500]
+    }
+
+    # Query STRING enrichment API
+    protein_list <- paste(proteins, collapse = "%0D")
+    url <- paste0("https://string-db.org/api/tsv/enrichment",
+                  "?identifiers=", protein_list,
+                  "&species=", species,
+                  "&caller_identity=multiomics_pipeline")
+
+    enrichment_df <- tryCatch({
+        resp <- utils::read.delim(url(url), stringsAsFactors = FALSE)
+        if (nrow(resp) == 0) {
+            message("  STRING enrichment returned no results.")
+            return(NULL)
+        }
+        resp
+    }, error = function(e) {
+        message("  STRING enrichment API failed: ", e$message)
+
+        # Fallback: try STRINGdb package
+        if (requireNamespace("STRINGdb", quietly = TRUE)) {
+            tryCatch({
+                string_db <- STRINGdb::STRINGdb$new(
+                    version = "12.0", species = species,
+                    score_threshold = 0, input_directory = ""
+                )
+                proteins_df <- data.frame(protein = proteins, stringsAsFactors = FALSE)
+                mapped <- string_db$map(proteins_df, "protein", removeUnmappedRows = TRUE)
+                if (nrow(mapped) >= 2) {
+                    enrich <- string_db$get_enrichment(mapped$STRING_id)
+                    return(enrich)
+                }
+                NULL
+            }, error = function(e2) {
+                message("  STRINGdb fallback also failed: ", e2$message)
+                NULL
+            })
+        } else NULL
+    })
+
+    if (is.null(enrichment_df) || nrow(enrichment_df) == 0) return(NULL)
+
+    # Split by category
+    categories <- c("Process", "Component", "Function", "KEGG", "Reactome",
+                     "DISEASES", "COMPARTMENTS", "TISSUES", "PMID",
+                     "Keyword", "InterPro", "Pfam", "NetworkNeighborAL")
+
+    string_dir <- file.path(output_dir, "string_enrichment")
+    dir.create(string_dir, recursive = TRUE, showWarnings = FALSE)
+
+    results <- list()
+    cat_col <- if ("category" %in% colnames(enrichment_df)) "category" else NULL
+
+    if (!is.null(cat_col)) {
+        for (cat in unique(enrichment_df[[cat_col]])) {
+            cat_df <- enrichment_df[enrichment_df[[cat_col]] == cat, ]
+            cat_df <- cat_df[order(cat_df$fdr), ]
+            clean_cat <- gsub("[^a-zA-Z0-9_]", "_", cat)
+            results[[cat]] <- cat_df
+
+            out_file <- file.path(string_dir, paste0("string_", clean_cat, ".csv"))
+            write.csv(cat_df, out_file, row.names = FALSE)
+            n_sig <- sum(cat_df$fdr < 0.05, na.rm = TRUE)
+            message("  ", cat, ": ", nrow(cat_df), " terms (", n_sig, " FDR < 0.05)")
+        }
+    } else {
+        results$all <- enrichment_df
+        write.csv(enrichment_df, file.path(string_dir, "string_all.csv"), row.names = FALSE)
+    }
+
+    # Summary
+    write.csv(enrichment_df, file.path(string_dir, "string_enrichment_full.csv"), row.names = FALSE)
+    message("  STRING enrichment saved to: ", string_dir)
+
+    results
 }
 
 # -----------------------------------------------------------------------------

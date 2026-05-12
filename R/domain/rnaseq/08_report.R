@@ -5,7 +5,7 @@
 
 #' Render the RNA-seq analysis report
 #'
-#' @param run_dir  The results run directory (e.g. outputs/amir_sapir/Results_...)
+#' @param run_dir  The results run directory (e.g. outputs/project/Results_.../rna)
 #' @param config   Full pipeline config list
 #' @param config_file Path to the original YAML config file (for embedding)
 #' @return Path to the rendered HTML file (character, format = "file")
@@ -13,9 +13,6 @@
 render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     # Locate the canonical Rmd template shipped with multiomics-core.
-    # When running via tar_source() (not an installed package), system.file()
-    # returns "".  Use getwd() as the primary fallback since {targets} always
-    # executes from the project root.
     template_path <- system.file("report_template.Rmd",
                                   package = "multiomics.core",
                                   mustWork = FALSE)
@@ -31,25 +28,31 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         return(NA_character_)
     }
 
-    # Ensure run_dir exists, then copy template into it (the knit directory)
+    # The Rmd and its HTML output live in the *parent* results directory
+    # (alongside the pptx / pipeline summary), not inside the rna/ sub-folder.
+    # The template already references paths as run_dir/rna/... internally.
     dir.create(run_dir, recursive = TRUE, showWarnings = FALSE)
-    dest_rmd <- file.path(run_dir, "report_rnaseq.Rmd")
+    parent_dir <- if (basename(run_dir) %in% c("rna", "rnaseq")) dirname(run_dir) else run_dir
+    dest_rmd <- file.path(parent_dir, "report_rnaseq.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template)
-    exec_dir <- file.path(run_dir, "execution_info")
-    config_used <- file.path(exec_dir, "config_used.yaml")
-    if (!file.exists(config_used)) {
-        dir.create(exec_dir, recursive = TRUE, showWarnings = FALSE)
-        if (!is.null(config_file) && file.exists(config_file)) {
-            file.copy(config_file, config_used, overwrite = TRUE)
-        } else {
-            yaml::write_yaml(config, config_used)
+    # Ensure execution_info/config_used.yaml exists (needed by the template).
+    # Keep a copy in both parent and rna/ subdirectories.
+    for (edir in unique(c(file.path(parent_dir, "execution_info"),
+                          file.path(run_dir, "execution_info")))) {
+        config_used <- file.path(edir, "config_used.yaml")
+        if (!file.exists(config_used)) {
+            dir.create(edir, recursive = TRUE, showWarnings = FALSE)
+            if (!is.null(config_file) && file.exists(config_file)) {
+                file.copy(config_file, config_used, overwrite = TRUE)
+            } else {
+                yaml::write_yaml(config, config_used)
+            }
         }
     }
 
-    # Render
-    out_html <- file.path(run_dir, "report_rnaseq.html")
+    # Render into the parent results directory
+    out_html <- file.path(parent_dir, "report_rnaseq.html")
 
     message("Rendering RNA-seq report to: ", out_html)
 
@@ -57,7 +60,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
         rmarkdown::render(
             input       = dest_rmd,
             output_file = out_html,
-            output_dir  = run_dir,
+            output_dir  = parent_dir,
             quiet       = TRUE,
             envir       = new.env(parent = globalenv())
         )
@@ -66,6 +69,14 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
                 "\nTemplate: ", dest_rmd,
                 "\nCheck the Rmd for errors.")
     })
+
+    rmarkdown::render(
+        input       = dest_rmd,
+        output_file = out_html,
+        output_dir  = run_dir,
+        quiet       = TRUE,
+        envir       = new.env(parent = globalenv())
+    )
 
     if (file.exists(out_html)) {
         message("Report rendered successfully: ", out_html)

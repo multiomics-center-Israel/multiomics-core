@@ -15,22 +15,30 @@
 #' Apply sample normalization
 #'
 #' @param mat     Numeric matrix (features x samples).
-#' @param method  One of "none", "sum", "median", "pqn", "is".
+#' @param method  One of "none", "sum", "median", "pqn", "eigenms", "is".
 #' @param ref_col Character: column in row_data that flags the internal standard
 #'                (only used when method = "is").
 #' @param row_data data.frame with at least a column matching ref_col (for IS).
+#' @param groups  Character/factor vector of group labels per sample
+#'                (required for eigenms; ignored by other methods).
 #' @return Normalized numeric matrix (same dimensions).
-normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL) {
+normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL,
+                              groups = NULL, ref_samples = NULL,
+                              meta = NULL, bio_factor_col = NULL) {
     method <- tolower(method)
     assert_one_of(method, "sample_norm",
-                  c("none", "sum", "median", "pqn", "is"))
+                  c("none", "sum", "median", "pqn", "eigenms", "eigenms_forced",
+                    "is", "bio_factor"))
 
     switch(method,
-        none   = mat,
-        sum    = norm_total_sum(mat),
-        median = norm_median(mat),
-        pqn    = norm_pqn(mat),
-        is     = norm_internal_standard(mat, ref_col, row_data),
+        none           = mat,
+        sum            = norm_total_sum(mat),
+        median         = norm_median(mat),
+        pqn            = norm_pqn(mat, ref_samples = ref_samples),
+        eigenms        = norm_eigenms(mat, groups),
+        eigenms_forced = norm_eigenms_forced(mat, groups),
+        is             = norm_internal_standard(mat, ref_col, row_data),
+        bio_factor     = norm_biological_factor(mat, meta, bio_factor_col),
         stop("Unknown sample normalization method: ", method)
     )
 }
@@ -61,37 +69,227 @@ norm_median <- function(mat) {
     sweep(mat, 2, scale_factors, FUN = "*")
 }
 
-
 #' Probabilistic Quotient Normalization (PQN)
 #'
-#' 1. Perform median normalization first.
-#' 2. Compute reference spectrum (median across samples per feature).
-#' 3. For each sample, compute quotients (sample / reference) and take the median.
-#' 4. Divide each sample by its median quotient.
+#' Applies PQN after an initial median normalization step.
+#' The reference spectrum is defined as the feature-wise median across samples.
 #'
-#' Features where the reference is 0 or NA are excluded from the quotient
-#' calculation (they cannot inform sample-level scaling).
-norm_pqn <- function(mat) {
-    # Step 1: initial median normalization
-    mat_mn <- norm_median(mat)
-
-    # Step 2: reference spectrum (feature-wise medians across samples)
+#' Procedure:
+#' 1. Apply median normalization.
+#' 2. Compute the reference spectrum as the feature-wise median across samples.
+#' 3. For each sample, calculate quotients relative to the reference.
+#' 4. Use the sample's median quotient as a scaling factor.
+#' 5. Divide each sample by this factor.
+#'
+#' Features with zero, missing, or non-finite reference values are excluded
+#' from quotient calculation.
+norm_pqn <- function(mat, qc_idx = NULL) {
+  # Step 1: initial median normalization
+  mat_mn <- norm_median(mat)
+  
+  # Step 2: reference spectrum
+  if (!is.null(qc_idx)) {
+    # Use QC samples as reference
+    ref <- apply(mat_mn[, qc_idx, drop = FALSE], 1, stats::median, na.rm = TRUE)
+  } else {
+    # Fallback: use all samples
     ref <- apply(mat_mn, 1, stats::median, na.rm = TRUE)
+  }
+  
+  # Exclude features with invalid reference values
+  ref_ok <- is.finite(ref) & abs(ref) > .Machine$double.eps
+  if (!any(ref_ok)) {
+    warning("norm_pqn: all reference values are zero, missing, or non-finite; returning median-normalized data.")
+    return(mat_mn)
+  }
+  
+  # Step 3: compute sample/reference quotients
+  quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1, ref[ref_ok], FUN = "/")
+  
+  # Step 4: estimate sample-specific scaling factors
+  med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
+  bad <- !is.finite(med_quotients) | med_quotients == 0
+  if (any(bad)) {
+    warning(sprintf(
+      "norm_pqn: %d sample(s) had invalid median quotient; using scale factor 1.",
+      sum(bad)
+    ))
+    med_quotients[bad] <- 1
+  }
+  
+  # Step 5: apply PQN scaling
+  sweep(mat_mn, 2, med_quotients, FUN = "/")
+}
 
-    # Exclude features with zero/NA reference — they produce Inf quotients
-    ref_ok <- is.finite(ref) & ref != 0
-    if (!any(ref_ok)) {
-        warning("norm_pqn: all reference values are 0 or NA; returning median-normalized data.")
-        return(mat_mn)
+
+#' EigenMS normalization (Eigenvector-based normalization)
+#'
+#' Uses the ProteoMM Bioconductor package (Karpievitch et al., 2009, 2014) to
+#' perform EigenMS normalization via SVD on residuals from a group-aware linear
+#' model, identifying and removing systematic technical bias while preserving
+#' biological signal.
+#'
+#' References:
+#'   Karpievitch YV et al. (2009) Bioinformatics — original EigenMS method.
+#'   Karpievitch YV et al. (2014) PLoS ONE — EigenMS for metabolomics.
+#'
+#' @param mat    Numeric matrix (features x samples), log-scale or linear.
+#' @param groups Character/factor vector of group labels per sample.
+#' @return Normalized numeric matrix (same dimensions).
+norm_eigenms <- function(mat, groups = NULL) {
+    if (is.null(groups)) {
+        warning("norm_eigenms: groups not provided — falling back to PQN normalization.")
+        return(norm_pqn(mat))
     }
 
-    # Step 3 & 4: per-sample quotient normalization (using valid features only)
-    quotients <- sweep(mat_mn[ref_ok, , drop = FALSE], 1,
-                       ref[ref_ok], FUN = "/")
-    med_quotients <- apply(quotients, 2, stats::median, na.rm = TRUE)
-    med_quotients[!is.finite(med_quotients) | med_quotients == 0] <- 1
+    if (!requireNamespace("ProteoMM", quietly = TRUE)) {
+        stop("norm_eigenms requires the ProteoMM Bioconductor package.\n",
+             "Install with: BiocManager::install('ProteoMM')")
+    }
 
-    sweep(mat_mn, 2, med_quotients, FUN = "/")
+    groups <- as.factor(groups)
+    if (length(groups) != ncol(mat)) {
+        stop("norm_eigenms: length(groups) must equal ncol(mat)")
+    }
+
+    # ProteoMM requires rownames
+    if (is.null(rownames(mat))) rownames(mat) <- paste0("feat_", seq_len(nrow(mat)))
+    if (is.null(colnames(mat))) colnames(mat) <- paste0("S", seq_len(ncol(mat)))
+
+    # prot.info: data.frame with at least one column of feature IDs
+    prot_info <- data.frame(id = rownames(mat), stringsAsFactors = FALSE)
+
+    # Suppress ProteoMM's built-in plotting (it calls par/plot internally)
+    grDevices::pdf(NULL)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    # Step 1: Identify eigentrends (SVD + parallel analysis)
+    set.seed(12345)  # reproducibility as recommended by ProteoMM
+    rv <- suppressWarnings(suppressMessages(
+        ProteoMM::eig_norm1(m = mat, treatment = groups, prot.info = prot_info)
+    ))
+
+    n_eigentrends <- rv$h.c
+    message(sprintf("norm_eigenms (ProteoMM): found %d significant eigentrend(s)",
+                    n_eigentrends))
+    # Store eigentrend count as attribute for downstream reporting
+    attr_info <- list(n_eigentrends = n_eigentrends, method = "ProteoMM_bootstrap")
+
+    if (n_eigentrends == 0) {
+        message("norm_eigenms: no significant systematic bias detected — returning original data.")
+        attr(mat, "eigenms_info") <- attr_info
+        return(mat)
+    }
+
+    # Step 2: Normalize by removing identified eigentrends
+    res <- suppressWarnings(suppressMessages(
+        ProteoMM::eig_norm2(rv)
+    ))
+
+    # res$norm_m is the normalized matrix (features x samples) with row/colnames
+    mat_norm <- res$norm_m
+
+    # Ensure output has same dimensions and names as input
+    # ProteoMM may drop features that are entirely NA in any group
+    if (nrow(mat_norm) == nrow(mat)) {
+        rownames(mat_norm) <- rownames(mat)
+        colnames(mat_norm) <- colnames(mat)
+        attr(mat_norm, "eigenms_info") <- attr_info
+        return(mat_norm)
+    }
+
+    # If ProteoMM dropped some features, map back to original dimensions
+    mat_out <- mat
+    shared <- intersect(rownames(mat_norm), rownames(mat))
+    if (length(shared) > 0) {
+        mat_out[shared, ] <- mat_norm[shared, ]
+    }
+    # Features not returned by ProteoMM keep their original values
+    n_kept <- length(shared)
+    if (n_kept < nrow(mat)) {
+        message(sprintf("norm_eigenms: ProteoMM normalized %d/%d features; %d kept original values.",
+                        n_kept, nrow(mat), nrow(mat) - n_kept))
+    }
+    attr(mat_out, "eigenms_info") <- attr_info
+    mat_out
+}
+
+
+#' EigenMS normalization — forced eigentrend removal (NOREVA-style)
+#'
+#' Unlike the ProteoMM version which uses bootstrap parallel analysis to
+#' determine the number of significant eigentrends, this implementation forces
+#' removal of a fixed number of eigentrends (default: 20% of samples, minimum 1).
+#' This is the approach used in NOREVA (Liang et al., 2020) and by the Technion
+#' metabolomics unit (Ifat Abramovich).
+#'
+#' WARNING: This method does not test whether the eigentrends are statistically
+#' significant. It may remove real biological variation in addition to technical
+#' bias. Use with caution and compare results to the ProteoMM version.
+#'
+#' References:
+#'   Karpievitch YV et al. (2014) PLoS ONE — EigenMS for metabolomics.
+#'   Liang et al. (2020) Nature Protocols — NOREVA.
+#'
+#' @param mat    Numeric matrix (features x samples), log-scale.
+#' @param groups Character/factor vector of group labels per sample.
+#' @param pct_eigentrends Fraction of samples to use as eigentrend count (default 0.2).
+#' @return Normalized numeric matrix (same dimensions).
+norm_eigenms_forced <- function(mat, groups = NULL, pct_eigentrends = 0.2) {
+    if (is.null(groups)) {
+        warning("norm_eigenms_forced: groups not provided — falling back to PQN.")
+        return(norm_pqn(mat))
+    }
+
+    groups <- as.factor(groups)
+    if (length(groups) != ncol(mat)) {
+        stop("norm_eigenms_forced: length(groups) must equal ncol(mat)")
+    }
+
+    n_features <- nrow(mat)
+    n_samples  <- ncol(mat)
+
+    # Transpose to samples x metabolites for lm fitting
+    m <- t(mat)
+
+    residuals_m <- matrix(NA_real_, n_samples, n_features)
+    fitted_m    <- matrix(NA_real_, n_samples, n_features)
+
+    for (j in seq_len(n_features)) {
+        y <- m[, j]
+        if (any(is.na(y))) next
+        fit <- stats::lm(y ~ groups)
+        residuals_m[, j] <- stats::resid(fit)
+        fitted_m[, j]    <- stats::fitted(fit)
+    }
+
+    ok_cols <- which(colSums(is.na(residuals_m)) == 0)
+    if (length(ok_cols) < 2) {
+        warning("norm_eigenms_forced: too few complete features; returning original.")
+        return(mat)
+    }
+
+    R <- residuals_m[, ok_cols]
+    svd_res <- svd(R)
+
+    # Force removal of n_bias eigentrends (20% of samples, min 1)
+    n_bias <- max(1L, round(pct_eigentrends * n_samples))
+    n_bias <- min(n_bias, length(svd_res$d) - 1L)
+
+    message(sprintf("norm_eigenms_forced: forcing removal of %d eigentrend(s) from %d samples",
+                    n_bias, n_samples))
+
+    U_bias <- svd_res$u[, seq_len(n_bias), drop = FALSE]
+    R_corrected <- R - U_bias %*% (t(U_bias) %*% R)
+
+    result <- m
+    result[, ok_cols] <- fitted_m[, ok_cols] + R_corrected
+
+    # Transpose back to features x samples
+    out <- t(result)
+    attr(out, "eigenms_info") <- list(n_eigentrends = n_bias, method = "forced_SVD",
+                                      pct_eigentrends = pct_eigentrends)
+    out
 }
 
 
@@ -128,6 +326,58 @@ norm_internal_standard <- function(mat, ref_col = NULL, row_data = NULL) {
     is_intensity[!is.finite(is_intensity) | is_intensity == 0] <- 1
 
     sweep(mat, 2, is_intensity, FUN = "/")
+}
+
+
+#' Biological-factor normalization
+#'
+#' Divide each sample column by a per-sample numeric value (e.g., mg of total
+#' protein) read from a metadata column. Used when intensities should be
+#' normalized to a measured biological covariate rather than to a
+#' sample-level statistic.
+#'
+#' @param mat        Numeric matrix (features x samples).
+#' @param meta       data.frame with per-sample rows; must contain
+#'                   `factor_col` and a sample-id column matching colnames(mat)
+#'                   (or be in the same row order as colnames(mat)).
+#' @param factor_col Name of the column in meta with per-sample numeric values.
+#' @return Normalized matrix.
+norm_biological_factor <- function(mat, meta, factor_col) {
+    if (is.null(meta) || is.null(factor_col) || !nzchar(factor_col)) {
+        stop("biological_factor normalization requires both meta and ",
+             "biological_factor_col to be set in config.")
+    }
+    if (!factor_col %in% colnames(meta)) {
+        stop("biological_factor: column '", factor_col,
+             "' not found in metadata.")
+    }
+
+    # Match meta rows to sample column order via a sample-id column when present
+    sample_cols <- intersect(c("sample_id", "SampleID", "Sample.ID", "sample"),
+                             colnames(meta))
+    if (length(sample_cols) > 0) {
+        idx <- match(colnames(mat), meta[[sample_cols[1]]])
+        if (any(is.na(idx))) {
+            missing <- colnames(mat)[is.na(idx)]
+            stop("biological_factor: samples missing from meta: ",
+                 paste(utils::head(missing, 5), collapse = ", "))
+        }
+        factors <- as.numeric(meta[[factor_col]][idx])
+    } else {
+        if (nrow(meta) != ncol(mat)) {
+            stop("biological_factor: cannot align meta to samples; ",
+                 "no sample-id column found and row count mismatch.")
+        }
+        factors <- as.numeric(meta[[factor_col]])
+    }
+
+    if (any(is.na(factors)) || any(factors <= 0)) {
+        bad <- colnames(mat)[is.na(factors) | factors <= 0]
+        stop("biological_factor: invalid (NA or non-positive) values for ",
+             "samples: ", paste(utils::head(bad, 5), collapse = ", "))
+    }
+
+    sweep(mat, 2, factors, FUN = "/")
 }
 
 
@@ -223,125 +473,3 @@ scale_metab <- function(mat, method = "none") {
 }
 
 
-# ==== PIPELINE WRAPPER ========================================================
-
-#' Apply full normalization pipeline: sample_norm → transform → scaling
-#'
-#' @param mat         Numeric matrix (features x samples).
-#' @param norm_cfg    normalization config section.
-#' @param row_data    data.frame (for IS normalization only).
-#' @return list(expr_norm, applied) where applied records what was done.
-apply_normalization_pipeline <- function(mat, norm_cfg, row_data = NULL) {
-    sample_norm <- norm_cfg$sample_norm %||% "none"
-    transform   <- norm_cfg$transform   %||% "none"
-    scaling     <- norm_cfg$scaling     %||% "none"
-    pseudocount <- norm_cfg$pseudocount %||% 1
-
-    # IS-specific config
-    is_ref_col <- norm_cfg$is_ref_col %||% NULL
-
-    # Step 1: sample normalization
-    mat <- normalize_samples(mat, method = sample_norm,
-                             ref_col = is_ref_col, row_data = row_data)
-
-    # Step 2: transformation
-    mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
-
-    # Step 3: scaling
-    mat <- scale_metab(mat, method = scaling)
-
-    list(
-        expr_norm = mat,
-        applied = list(
-            sample_norm = sample_norm,
-            transform   = transform,
-            scaling     = scaling,
-            pseudocount = if (transform != "none") pseudocount else NA
-        )
-    )
-}
-
-
-# ==== METHOD EVALUATION =======================================================
-
-#' Evaluate multiple normalization method combinations
-#'
-#' Runs each combination and computes lightweight QC metrics for comparison.
-#'
-#' @param mat          Numeric matrix (features x samples, raw intensities).
-#' @param methods_list List of lists, each with sample_norm/transform/scaling.
-#' @param row_data     data.frame (for IS normalization).
-#' @return data.frame with one row per method combo and columns:
-#'         method_label, sample_norm, transform, scaling,
-#'         median_rsd, pca_var1, pooled_cv (if QCs present)
-evaluate_normalization_methods <- function(mat, methods_list, row_data = NULL) {
-    if (is.null(methods_list) || length(methods_list) == 0) return(NULL)
-
-    results <- vector("list", length(methods_list))
-
-    for (i in seq_along(methods_list)) {
-        m <- methods_list[[i]]
-        norm_cfg <- list(
-            sample_norm = m$sample_norm %||% "none",
-            transform   = m$transform   %||% "none",
-            scaling     = m$scaling     %||% "none",
-            pseudocount = m$pseudocount %||% 1,
-            is_ref_col  = m$is_ref_col  %||% NULL
-        )
-
-        res <- tryCatch(
-            apply_normalization_pipeline(mat, norm_cfg, row_data),
-            error = function(e) {
-                warning(sprintf("Method %d failed: %s", i, e$message))
-                NULL
-            }
-        )
-
-        if (is.null(res)) {
-            results[[i]] <- data.frame(
-                method_id   = i,
-                method_label = paste(norm_cfg$sample_norm, norm_cfg$transform,
-                                     norm_cfg$scaling, sep = "/"),
-                sample_norm = norm_cfg$sample_norm,
-                transform   = norm_cfg$transform,
-                scaling     = norm_cfg$scaling,
-                median_rsd  = NA_real_,
-                pca_var1    = NA_real_,
-                status      = "failed",
-                stringsAsFactors = FALSE
-            )
-            next
-        }
-
-        normed <- res$expr_norm
-
-        # QC metrics
-        # 1) Median relative standard deviation across features
-        row_sds   <- apply(normed, 1, stats::sd, na.rm = TRUE)
-        row_means <- abs(rowMeans(normed, na.rm = TRUE))
-        row_means[row_means == 0] <- NA
-        rsd <- row_sds / row_means
-        median_rsd <- stats::median(rsd, na.rm = TRUE)
-
-        # 2) PCA variance explained by PC1
-        pca_var1 <- tryCatch({
-            pca <- stats::prcomp(t(normed), center = TRUE, scale. = FALSE)
-            (pca$sdev[1]^2) / sum(pca$sdev^2)
-        }, error = function(e) NA_real_)
-
-        results[[i]] <- data.frame(
-            method_id    = i,
-            method_label = paste(norm_cfg$sample_norm, norm_cfg$transform,
-                                 norm_cfg$scaling, sep = "/"),
-            sample_norm  = norm_cfg$sample_norm,
-            transform    = norm_cfg$transform,
-            scaling      = norm_cfg$scaling,
-            median_rsd   = round(median_rsd, 4),
-            pca_var1     = round(pca_var1, 4),
-            status       = "ok",
-            stringsAsFactors = FALSE
-        )
-    }
-
-    do.call(rbind, results)
-}

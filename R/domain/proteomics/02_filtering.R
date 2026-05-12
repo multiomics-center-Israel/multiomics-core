@@ -21,8 +21,8 @@ filter_contaminants <- function(expr_mat, row_data, cfg) {
 filter_proteomics_by_min_count <- function(expr_mat, row_data, meta, cfg, group_col = NULL) {
     eff <- cfg$effects
     sample_id_col <- eff$samples
-    if (is.null(group_col)) group_col <- eff$color
-
+    group_col <- cfg$de_table$group_col %||% cfg$effects$color %||% "Condition"
+    
     check_has_cols(meta, sample_id_col, df_name = "metadata")
     check_has_cols(meta, group_col, df_name = "metadata")
 

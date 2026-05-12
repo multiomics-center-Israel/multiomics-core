@@ -1,228 +1,222 @@
 # ==============================================================================
-# Metabolomics config template (Stages 1 + 2)
+# Metabolomics config (multi-level / processed_wide compatible)
 # ==============================================================================
-# Add this block under modes: in your project config.yaml
 
 project:
-  dir: "C:/path/to/your/project"
-  name: "MyProject"
-  analysis_round: "01"
+  dir: "/full-path/to/project_dir"   # REQUIRED: absolute path to the project folder (outside the repo)
+  name: "<PROJECT_NAME>"             # REQUIRED: short project identifier
+  analysis_round: "A01"              # REQUIRED: analysis iteration / round (e.g., A01, A02...)
 
 paths:
   raw: "data"
   out: "outputs"
 
+# ---- Global parameters ----
 params:
-  seed: 1
+  seed: 1  # global seed for reproducibility (KNN imputation, clustering, etc.)
 
 modes:
   metabolomics:
 
     # ---- Input specification ----
     input:
-      # "cd_raw"         : Compound Discoverer raw export (Area: columns)
-      # "processed_wide" : Already-processed wide table (clean sample columns)
-      format: "cd_raw"
-      sheet: null          # Excel sheet name/index (optional, for xlsx)
+      # "cd_raw" | "processed_wide" | "multi_level"
+      format: "processed_wide"
+
+      # For multi_level only:
+      level_format: "processed_wide"
+      level_pattern: "\\.xlsx$"
+
+      # Excel sheet name (optional)
+      sheet: null
 
     files:
-      data: "metabolomics/cd_export.xlsx"          # REQUIRED
-      metadata: "metabolomics/sample_metadata.csv"  # Optional (pipeline infers minimal meta if absent)
+      # data OR data_dir (mutually exclusive)
+      data: "metabolics/intesities.tsv"
+      # data_dir: "metabolics/dir_name"
 
-    # ---- Parsing rules (for cd_raw format) ----
+      metadata: "metabolics/metadata.txt"
+      # sample_map: "metabolics/sample_map.txt"
+      contrasts: "metabolics/contrasts.txt"
+
+    # ---- Parsing rules ----
     parsing:
       cd_area_prefix: "Area:"
-      # Regex to extract sample_id from CD column names.
-      # Default captures: "Area: <SAMPLE_ID>.raw (Fn)"
-      # Group 1 = sample_id
       cd_sample_regex: null  # null = use default
 
-    # ---- Feature ID construction ----
+    # ---- Feature ID + sample mapping ----
     id_columns:
-      # If set and exists in data, use this column directly as feature_id
-      feature_id_col: null
-      # Columns used to construct feature_id when feature_id_col is absent
-      name_col: "Name"
+      name_col: "feature_id"
       mz_col: "m/z"
       rt_col: "RT [min]"
-      # For processed_wide: list annotation columns so sample columns can be
-      # identified by exclusion. Not needed if metadata is provided.
-      annotation_cols: null
-        # - "Name"
-        # - "Formula"
-        # - "m/z"
-        # - "RT [min]"
-        # - "KEGG ID"
 
-    # ---- Normalization ----
+      # Used only if sample_map is provided
+      map_from: "origin_id"
+      map_to: "SampleID"
+
+    # ==============================================================================
+    # Stage 1: Preprocessing (missingness + imputation + normalization selection)
+    # ==============================================================================
+    preprocessing:
+
+      # ---- Missingness filtering (soft defaults) ----
+      # feat_missing_threshold:   drop a metabolite if it is missing in more
+      #                           than this fraction of samples (0.50 = drop
+      #                           only metabolites missing in >50% of samples).
+      # sample_missing_threshold: drop a sample if it is missing more than
+      #                           this fraction of metabolites. Set to 1.0 to
+      #                           disable sample filtering entirely.
+      feat_missing_threshold: 0.50
+      sample_missing_threshold: 1.0
+
+      # ---- Normalization selection workflow ----
+      # null  → QC review mode (compute all methods, stop after report)
+      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
+      chosen_norm: null
+
+      # ---- Drift correction (LOESS) ----
+      drift_correction:
+        enabled: false
+        injection_order_col: "injection_order"
+        qc_flag_col: "is_QC"
+        loess_span: 0.75
+        epsilon: 1.0e-8
+
+    # ==============================================================================
+    # Normalization & scaling (legacy reference — see preprocessing.chosen_norm)
+    # ==============================================================================
     normalization:
-      # Set to true if the input file is already biologically normalized.
-      # When true, sample_norm defaults to "none" (no double-normalization).
-      # Transformation and scaling are still applied if configured.
-      input_already_normalized: false
 
-      # 1. Sample normalization: "none" | "sum" | "median" | "pqn" | "is"
+      # ---- Input state ----
+      input_already_normalized: false
+      # If TRUE → skip sample_norm but still allow transform/scaling
+
+      # ---- Sample normalization (legacy / reference only) ----
+      # NOTE:
+      # In the new pipeline, ALL methods run in parallel:
+      #   - TSS (total sum scaling)
+      #   - Median normalization (log shift)
+      #   - PQN
+      # The active normalization choice is controlled by
+      # preprocessing.chosen_norm (above), not by this field.
       sample_norm: "pqn"
 
-      # 2. Transformation: "none" | "log2" | "log10"
+      # ---- Transformation ----
+      # Applied in mod_met_log OR inside normalization branches
       transform: "log2"
 
-      # 3. Scaling: "none" | "auto" | "pareto" | "range"
+      # ---- Scaling ----
+      # Feature scaling is not applied in the current metabolomics
+      # preprocessing and DE analysis path.
+      # This field is retained for backward compatibility only.
+      # Options: "none" | "auto" | "pareto" | "range"
       scaling: "none"
 
-      # Pseudocount added before log transform (default 1)
+      # ---- Log pseudocount ----
       pseudocount: 1
 
-      # How to handle NA values before normalization:
-      #   "keep"  (default) — pass NAs through; norm functions use na.rm=TRUE
-      #   "zero"  — replace NA with 0 (treat as below-detection)
-      # expr_filt is never modified; only the working copy (expr_for_norm) is affected.
+      # ---- NA policy (legacy only) ----
+      # New pipeline handles missingness BEFORE normalization
       na_policy: "keep"
 
-      # Column in row_data marking internal standard (only if sample_norm = "is")
+      # Internal standard column (if using IS normalization)
       is_ref_col: null
 
-      # ---- Method evaluation (optional) ----
-      # List of method combos to compare. Each entry must have:
-      #   sample_norm, transform, scaling
-      # Pipeline will produce a comparison table with QC metrics.
-      evaluate_methods:
-        - sample_norm: "none"
-          transform: "log2"
-          scaling: "none"
-        - sample_norm: "pqn"
-          transform: "log2"
-          scaling: "none"
-        - sample_norm: "pqn"
-          transform: "log2"
-          scaling: "pareto"
-        - sample_norm: "median"
-          transform: "log2"
-          scaling: "auto"
+      # Biological factor column (if using bio_factor normalization).
+      # Name of a numeric column in metadata holding a per-sample value
+      # (e.g. "mg_protein"). Each sample is divided by its row's value.
+      biological_factor_col: null
 
-    # ---- Sample filtering (optional) ----
+    # ==============================================================================
+    # Sample filtering (applied early, in mod_met_raw)
+    # ==============================================================================
     sample_filter:
       enabled: false
       rules:
         exclude_blanks: true
         exclude_qc: false
-        exclude_samples: null  # list of sample IDs to exclude
+        exclude_samples: null
 
-    # ---- Effects (for QC plots) ----
+    # ==============================================================================
+    # QC / visualization settings
+    # ==============================================================================
     effects:
-      # Column in metadata used as sample identifier
-      samples: "sample_id"
-      # Column(s) for PCA coloring (single string or list for multi-color)
-      color: "sample_type"
-      # Column for PCA shape aesthetic (optional)
-      shape: null
-      # Columns to show as heatmap annotations (optional list)
-      heatmap_annotations: null
-        # - "Treatment"
-        # - "TimePoint"
+      samples: "SampleID"
+      color: "treatment"
+      shape: "time"
+      heatmap_annotations: "group"
 
-    # ---- QC plot settings ----
+    # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
+
     qc:
-      adaptive_plots: true
+      enabled: true
+
+      # Used for QC-specific plots (e.g., drift, QC clustering)
+      qc_flag_column: "treatment"
+
+      # Set true to generate the binary missingness heatmap (diagnostic_plots/)
+      missingness_heatmap: false
+
       thresholds:
-        min_samples_for_pca3d: 10
+        min_samples_for_pca3d: 4
         max_samples_for_heatmaps: 120
 
-    # ==================================================================
-    # Stage 2: Differential expression, feature selection, enrichment
-    # ==================================================================
+    # ==============================================================================
+    # Stage 2: Downstream analysis
+    # ==============================================================================
 
     # ---- Differential expression ----
     de:
-      # Method: "limma" | "t_test" | "wilcoxon"
       method: "limma"
+      condition_column: "group"
 
-      # Column in metadata defining experimental groups
-      condition_column: "treatment"
+      p_cutoff: 0.05
+      pval_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+      robust_ebayes: true
 
-      # Contrasts: list of "numerator - denominator" strings
-      contrasts:
-        - "treated - control"
+    # ---- Clustering ----
+    clustering:
+      enabled: true
+      group_col: "group"
+      min_groups: 2
+      de_source: "any_contrast"
 
-      # Significance thresholds
-      p_cutoff: 0.05              # adjusted p-value cutoff
-      pval_cutoff: 0.05           # raw p-value for horizontal line on volcano
-      linear_fc_cutoff: 1.5       # linear FC cutoff (log2FC = log2(1.5) ~ 0.585)
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"
+          linkage: "complete"
 
-      # Set to true to skip DE entirely
-      # skip: false
+        partition:
+          enabled: true
+          algorithm: "hclust"
+          distance: "euclidean"
+          k_max: 20
+          nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
 
-    # ---- Random forest feature importance (optional) ----
-    rf:
-      run_rf: true
-      n_trees: 500
-      importance: "permutation"    # "permutation" | "impurity"
-      top_n: 20                    # features to display in bar plot
-      seed: 1234
-      # condition_column: "treatment"  # defaults to de$condition_column
+        binary_patterns:
+          enabled: true
+          corr_cutoff: 0.8
 
-    # ---- PLS-DA multivariate analysis (optional) ----
-    plsda:
-      run_plsda: true
-      vip_top_n: 15               # top VIP features to display
-      colors: null                # null = use default palette
-      # condition_column: "treatment"  # defaults to de$condition_column
+      heatmap:
+        max_rows: null
+        cluster_cols: true
 
-    # ---- Pathway enrichment (optional) ----
-    # Four methods are available (each runs independently):
-    #   QEA    — globaltest: quantitative enrichment on raw expression
-    #   ssGSEA — GSVA + Wilcoxon: single-sample enrichment scores
-    #   ORA    — Fisher's exact test: significant features (fg) vs all (bg)
-    #   GSEA   — fgsea: ranked by log2FC from DE results
-    # ORA and GSEA require DE results; QEA and ssGSEA do not.
+    # ---- Enrichment ----
     enrichment:
-      run_enrichment: false        # set to true to enable
-
-      # Library names are derived from GMT file basenames.
-      # Leave empty to use only gmt_file entries below.
+      run_enrichment: false
       libraries: []
-
-      # GMT files (used by all four methods):
       gmt_file: null
-        # - "path/to/custom_pathways.gmt"
-
-      # Optional HMDB-to-KEGG mapping file (TSV with HMDB and KEGG columns)
       mapping_file: null
-
-      # Condition column for Wilcoxon test in ssGSEA
-      # condition_column: "treatment"  # defaults to de$condition_column
-
-
-# ==============================================================================
-# Example: "processed" input (already normalized)
-# ==============================================================================
-# modes:
-#   metabolomics:
-#     input:
-#       format: "processed_wide"
-#     files:
-#       data: "metabolomics/processed_metabolites.csv"
-#       metadata: "metabolomics/meta.csv"
-#     id_columns:
-#       feature_id_col: "Name"
-#       annotation_cols:
-#         - "Name"
-#         - "Formula"
-#         - "m/z"
-#         - "RT [min]"
-#         - "KEGG ID"
-#         - "TreatmentP"
-#         - "TimeP"
-#         - "InteractionP"
-#     normalization:
-#       input_already_normalized: true
-#       sample_norm: "none"          # skip: already normalized
-#       transform: "log2"            # still apply log2
-#       scaling: "pareto"            # still apply scaling
-#     effects:
-#       samples: "sample_id"
-#       color: "Treatment"
-#       shape: "TimePoint"
-#       heatmap_annotations:
-#         - "Treatment"
-#         - "TimePoint"

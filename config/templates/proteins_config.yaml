@@ -30,6 +30,7 @@ modes:
     # Data origin / engine
     # --------------------------------------------------------
     engine: "DIANN"          # e.g. DIANN / MaxQuant / FragPipe
+    scale_in: "linear" # If the data already transformed : "log" other wise: "linear"
 
     # --------------------------------------------------------
     # Input files (REQUIRED)
@@ -40,7 +41,7 @@ modes:
       sample_map: "proteomics/sample_map.csv"
       metadata:   "proteomics/meta_prot.csv"
       contrasts:  "proteomics/contrasts_prot.csv"
-      peptides:   ""              # optional peptide-level data (stub for future use)
+      peptides:   ""              # optional peptide-level intensity matrix (enables Peptide Explorer in report)
 
     # --------------------------------------------------------
     # Column naming conventions (REQUIRED)
@@ -122,7 +123,7 @@ modes:
     # --------------------------------------------------------
     qc_post:
       enabled: true
-      de_source: "summary"   # "summary" | "table1"
+      de_source: "table1"   # "summary" | "table1"
       plots:
         volcano: true
         ma: true
@@ -134,6 +135,7 @@ modes:
     # --------------------------------------------------------
     clustering:
       enabled: false
+      group_col: "Condition"        # metadata column for clustering group logic
 
       # Which DE features to cluster.
       # "any_contrast" = pass_any_col == 1
@@ -156,6 +158,8 @@ modes:
           k: null
           k_max: 20
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8
@@ -203,6 +207,17 @@ modes:
       disclaimer_text: ""                  # Legal disclaimer (shown verbatim if non-empty)
 
     # --------------------------------------------------------
+    # Excel export configuration
+    # --------------------------------------------------------
+    excel:
+      # Metadata columns to display as annotation rows above the data table.
+      # Set to null to use all metadata columns, or specify a list:
+      annotation_rows: null
+      # Metadata columns to concatenate for informative sample column headers.
+      # Set to null to keep original sample IDs:
+      sample_label_cols: null
+
+    # --------------------------------------------------------
     # Annotation / Organism
     # --------------------------------------------------------
     annotation:
@@ -234,7 +249,7 @@ modes:
     pathway:
       enabled: true
       method: "both"          # "fgsea" | "ora" | "both"
-      databases: ["GO", "KEGG"]
+      databases: ["GO", "KEGG", "Reactome"]  # "all" = GO+KEGG+Reactome; "GO" loads BP+CC+MF; or pick: "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome"
       gmt_file: null          # Custom GMT file for non-model organisms
       min_size: 10
       max_size: 500
@@ -246,6 +261,7 @@ modes:
       simplify_go: true             # true = reduce redundant GO terms
       simplify_threshold: 0.7       # 0-1: higher = more aggressive merging
       simplify_measure: "Wang"      # "Wang" | "Rel" | "Resnik" | "Lin" | "Jiang"
+      cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
     # --------------------------------------------------------
     # PPI network analysis
@@ -260,6 +276,12 @@ modes:
       string_score_threshold: 400
       active_subnetwork: true
       complex_analysis: true
+
+    # --------------------------------------------------------
+    # Protein domain & functional feature analysis
+    # --------------------------------------------------------
+    domain_analysis:
+      enabled: true               # InterPro/Pfam enrichment + UniProt features
 
     # --------------------------------------------------------
     # Advanced statistics
