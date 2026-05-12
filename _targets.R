@@ -58,7 +58,12 @@ required_pkgs <- c(
   "limma", "dplyr", "yaml", "pheatmap", "cluster", "ggplot2",
   "openxlsx", "readr", "readxl", "tidyr", "tibble",
   "edgeR", "DESeq2", "SummarizedExperiment",
-  "impute"   # Bioconductor: KNN imputation for metabolomics MAR features
+  "impute",       # Bioconductor: KNN imputation for metabolomics MAR features
+  "ProteoMM",     # Bioconductor: EigenMS metabolomics normalization
+  "GSVA",         # Bioconductor: ssGSEA enrichment scoring
+  "globaltest",   # Bioconductor: QEA-style pathway tests
+  "RUVSeq",       # Bioconductor: RUVg batch correction for RNA-seq
+  "sva"           # Bioconductor: ComBat-Seq / SVA batch correction
 )
 # Only require packages that are actually installed (allows running a
 # subset of pipelines when some omics-specific packages are absent).
