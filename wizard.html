@@ -2497,11 +2497,18 @@ function generateMetaboYaml() {
   var bioFactorCol = v('metab_bio_factor_col');
   var isRefCol = v('metab_is_ref_col');
 
-  // Preprocessing block — emit only when QC-only is requested so chosen_norm
-  // is null (the metab pipeline switches to QC-comparison mode in that case).
+  // Preprocessing block: chosen_norm controls the metab pipeline's mode.
+  // - null (QC-only): compares all normalizations side-by-side, skips DE
+  // - "pqn" / "tss" / "median" / "eigenms" / "eigenms_forced": full pipeline
+  // Always emitted so the pipeline knows which mode to run; otherwise it
+  // defaults to NULL and silently skips DE/clustering/enrichment.
+  yaml += '\n    preprocessing:\n';
   if (qcOnly) {
-    yaml += '\n    preprocessing:\n';
     yaml += '      chosen_norm: null\n';
+  } else {
+    var validChosenNorms = ['tss','median','pqn','eigenms','eigenms_forced'];
+    var chosen = (validChosenNorms.indexOf(sampleNorm) >= 0) ? sampleNorm : 'pqn';
+    yaml += '      chosen_norm: ' + yamlStr(chosen) + '\n';
   }
 
   yaml += '\n    normalization:\n';
