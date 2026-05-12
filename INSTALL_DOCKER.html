@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>multiomics-core — Docker Install (Windows)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0e17;
+  --surface: #111827;
+  --border: #1e2d45;
+  --text: #e2e8f0;
+  --text-dim: #94a3b8;
+  --accent: #38bdf8;
+  --accent-green: #34d399;
+  --accent-amber: #fbbf24;
+  --input-bg: #0d1320;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: "DM Sans", sans-serif; min-height: 100vh; line-height: 1.65; }
+.container { max-width: 780px; margin: 0 auto; padding: 40px 24px 80px; }
+.header { text-align: center; margin-bottom: 36px; }
+.header-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2);
+  border-radius: 100px; padding: 6px 18px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent);
+  margin-bottom: 14px;
+}
+.header-badge .dot { width: 6px; height: 6px; background: var(--accent-green); border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(135deg, #e2e8f0, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 6px; }
+.header-sub { color: var(--text-dim); font-size: 14px; }
+
+.step {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 22px 26px; margin-bottom: 16px;
+}
+.step-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+.step-num {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(56,189,248,0.1); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 14px;
+  flex-shrink: 0;
+}
+.step-title { font-size: 17px; font-weight: 600; }
+.step-time { margin-left: auto; font-size: 11px; color: var(--text-dim); font-family: "JetBrains Mono", monospace; }
+.step-body { padding-left: 42px; font-size: 14px; color: var(--text); }
+.step-body p { margin: 8px 0; }
+.step-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(56,189,248,0.3); }
+.step-body a:hover { border-bottom-color: var(--accent); }
+.step-body ul { padding-left: 20px; margin: 8px 0; color: var(--text-dim); font-size: 13px; }
+.step-body ul li { margin: 4px 0; }
+
+.cmd {
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; margin: 10px 0; font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px; line-height: 1.6; cursor: pointer; transition: border-color 0.2s;
+  position: relative; overflow-x: auto;
+}
+.cmd:hover { border-color: var(--accent); }
+.cmd::after {
+  content: "click to copy"; position: absolute; top: 6px; right: 12px;
+  font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 1px; opacity: 0; transition: opacity 0.2s;
+}
+.cmd:hover::after { opacity: 1; }
+.cmd.copied::after { content: "copied!"; color: var(--accent-green); opacity: 1; }
+.cmd .highlight { color: var(--accent-amber); }
+
+.note {
+  background: rgba(56,189,248,0.05); border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0; padding: 10px 14px; margin: 10px 0;
+  font-size: 13px; color: var(--text-dim);
+}
+.note.warning { background: rgba(251,191,36,0.05); border-left-color: var(--accent-amber); }
+.note.success { background: rgba(52,211,153,0.05); border-left-color: var(--accent-green); }
+.note strong { color: var(--text); }
+
+.checkbox-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; cursor: pointer; }
+.checkbox-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent-green); cursor: pointer; }
+.checkbox-row label { cursor: pointer; font-size: 13px; }
+
+.summary {
+  background: linear-gradient(135deg, rgba(56,189,248,0.05), rgba(52,211,153,0.05));
+  border: 1px solid rgba(56,189,248,0.2); border-radius: 14px;
+  padding: 22px; text-align: center; margin-top: 26px;
+}
+.summary h2 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+.summary p { color: var(--text-dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-badge"><span class="dot"></span> Docker Install — Windows</div>
+    <h1>multiomics-core</h1>
+    <p class="header-sub">Three steps. No R version, no RTools, no Bioconductor headache.</p>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="step">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <div class="step-title">Install Docker Desktop</div>
+      <div class="step-time">~10 min · one-time</div>
+    </div>
+    <div class="step-body">
+      <p>Download and run the installer:</p>
+      <p>👉 <a href="https://www.docker.com/products/docker-desktop" target="_blank">https://www.docker.com/products/docker-desktop</a></p>
+      <ul>
+        <li>Keep all defaults. Let it enable <strong>WSL2</strong> if prompted.</li>
+        <li><strong>Reboot Windows</strong> when the installer asks.</li>
+        <li>After reboot, open <strong>Docker Desktop</strong> from the Start menu.</li>
+        <li>Wait until the system tray icon (bottom-right) shows the green <strong>"Engine running"</strong> bubble &mdash; about 60 seconds.</li>
+      </ul>
+      <div class="note">If your Windows is older or your machine doesn't support virtualization, Docker won't install. In that case, switch to <a href="INSTALL_GUIDE.html">the native install guide</a> instead.</div>
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox">
+        <label>Docker Desktop is running (tray shows "Engine running")</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="step">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <div class="step-title">Start the wizard</div>
+      <div class="step-time">~5 min · first time</div>
+    </div>
+    <div class="step-body">
+      <p>In <strong>File Explorer</strong>, open the <code>multiomics-core</code> folder (where this HTML file lives).</p>
+      <p><strong>Double-click</strong> the file:</p>
+      <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:18px;margin:12px 0;display:flex;align-items:center;gap:14px;">
+        <div style="font-size:30px;">🐳</div>
+        <div>
+          <div style="font-weight:600;font-size:14px;">docker-run.bat</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Pulls the prebuilt image (~5 min, only first time) and starts the wizard.</div>
+        </div>
+      </div>
+      <p>A black Command Prompt window opens and shows progress. Wait until you see:</p>
+      <div class="cmd">Starting wizard at http://localhost:8080</div>
+      <p>Your browser should open automatically. If it doesn't, click here: <a href="http://localhost:8080" target="_blank">http://localhost:8080</a></p>
+      <div class="note warning">
+        <strong>If the pull fails</strong> (no internet, or the image hasn't been published yet for this branch), the script falls back to building the image locally — that takes ~30 min. You'll only ever pay that cost once.
+      </div>
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox">
+        <label>Browser opened to the wizard at <code>http://localhost:8080</code></label>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="step">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <div class="step-title">Try an example dataset</div>
+      <div class="step-time">~30-60 sec</div>
+    </div>
+    <div class="step-body">
+      <p>In the wizard header, click one of:</p>
+      <ul>
+        <li><strong>★ Load Example (Metabolomics)</strong> &mdash; 150 metabolites × 6 samples</li>
+        <li><strong>★ Load Example (Lipidomics)</strong> &mdash; 120 lipid species × 8 samples</li>
+        <li><strong>★ Load Example (Proteomics)</strong> &mdash; 80 proteins × 6 samples</li>
+      </ul>
+      <p>All fields auto-fill. Scroll to the bottom and click <strong>Run Pipeline</strong>.</p>
+      <p>When the run finishes, the HTML report opens automatically. A copy is saved in the <code>outputs</code> folder next to this guide.</p>
+      <div class="checkbox-row" onclick="this.querySelector('input').click()">
+        <input type="checkbox">
+        <label>An example run completed and the report opened</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- USING REAL DATA -->
+  <div class="step">
+    <div class="step-header">
+      <div class="step-num">4</div>
+      <div class="step-title">Using your own data (later)</div>
+      <div class="step-time">whenever</div>
+    </div>
+    <div class="step-body">
+      <p>Copy your input files into the <code>user_data</code> folder that <code>docker-run.bat</code> auto-created next to itself.</p>
+      <p>In the wizard, reference them with paths like:</p>
+      <div class="cmd">data/user/my_run/metab_intensities.csv</div>
+      <p>Reports land in the <code>outputs</code> folder (on Windows, not inside the container).</p>
+    </div>
+  </div>
+
+  <!-- STOPPING / RESTARTING -->
+  <div class="step">
+    <div class="step-header">
+      <div class="step-num">5</div>
+      <div class="step-title">Stop, restart, update</div>
+      <div class="step-time">when needed</div>
+    </div>
+    <div class="step-body">
+      <p><strong>Stop</strong>: press <code>Ctrl+C</code> in the Command Prompt that's running the wizard, or just close the window.</p>
+      <p><strong>Restart</strong>: double-click <code>docker-run.bat</code> again — starts in ~10 sec the second time.</p>
+      <p><strong>Get the latest version</strong>: <code>docker-run.bat</code> pulls the most recent image every launch. To skip the pull (offline use), set <code>DOCKER_OFFLINE=1</code> before launching.</p>
+    </div>
+  </div>
+
+  <div class="summary">
+    <h2>Done.</h2>
+    <p>The same <code>docker-run.bat</code> works on every machine with Docker Desktop installed. To update to a newer version, just rerun <code>docker-run.bat</code> &mdash; it pulls the latest image automatically.</p>
+  </div>
+
+</div>
+<script>
+document.querySelectorAll('.cmd').forEach(function(el) {
+  el.addEventListener('click', function() {
+    var text = el.innerText.trim();
+    navigator.clipboard.writeText(text).then(function() {
+      el.classList.add('copied');
+      setTimeout(function() { el.classList.remove('copied'); }, 1500);
+    });
+  });
+});
+</script>
+</body>
+</html>
