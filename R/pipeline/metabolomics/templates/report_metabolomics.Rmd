@@ -47,17 +47,31 @@ if (requireNamespace("plotly", quietly = TRUE))   library(plotly)
 if (requireNamespace("crosstalk", quietly = TRUE)) library(crosstalk)
 if (requireNamespace("jsonlite", quietly = TRUE))  library(jsonlite)
 
-# Source interactive cutoff panel helpers
+# Source interactive cutoff panel helpers + metabolomics domain helpers
+# (make_contrast_label etc.) — the Rmd renders in a child R session that
+# doesn't inherit the parent's sourced functions, so we walk up looking for
+# the project root and source what the report needs.
 tryCatch({
   .cp_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-  .cp_found <- FALSE
+  .cp_proj_root <- NULL
   for (.cp_i in 1:6) {
-    .cp_try <- file.path(.cp_dir, "R", "core", "17_cutoff_panel.R")
-    if (file.exists(.cp_try)) { source(.cp_try); .cp_found <- TRUE; break }
+    if (file.exists(file.path(.cp_dir, "R", "core", "17_cutoff_panel.R"))) {
+      .cp_proj_root <- .cp_dir
+      break
+    }
     .cp_dir <- dirname(.cp_dir)
   }
-  if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
-}, error = function(e) message("cutoff_panel helpers not found: ", e$message))
+  if (is.null(.cp_proj_root)) {
+    message("project root not found (walked 6 levels up)")
+  } else {
+    source(file.path(.cp_proj_root, "R", "core", "17_cutoff_panel.R"))
+    # make_contrast_label + parse_metab_contrast + extract_contrast_table all
+    # live in 03_differential.R and are called from the report chunks below.
+    .cp_diff <- file.path(.cp_proj_root, "R", "domain", "metabolomics",
+                          "03_differential.R")
+    if (file.exists(.cp_diff)) source(.cp_diff)
+  }
+}, error = function(e) message("Rmd helper sourcing failed: ", e$message))
 
 # ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
