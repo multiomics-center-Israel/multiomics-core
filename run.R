@@ -2501,7 +2501,11 @@ run_pipeline <- function(config_path, fresh = FALSE) {
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
-    targets::tar_invalidate(everything())
+    # Use tar_destroy(ask = FALSE) — tar_invalidate(everything()) does NOT
+    # work because `everything()` is a tidyselect helper that returns a
+    # selection object, not a character vector. targets reports the
+    # cryptic "names must be a character" error before any target runs.
+    targets::tar_destroy(ask = FALSE)
   }
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)
