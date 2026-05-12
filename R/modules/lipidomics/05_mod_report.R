@@ -19,6 +19,7 @@ mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
                                    clustering_res = NULL,
                                    biomarker_res = NULL, pathway_res = NULL,
                                    qc_enhanced = NULL,
+                                   pool_cv = NULL,
                                    commentary_file = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
@@ -63,6 +64,7 @@ mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
         biomarker_res   = biomarker_res,
         pathway_res     = pathway_res,
         qc_enhanced     = qc_enhanced,
+        pool_cv         = pool_cv,
         config          = config,
         commentary_file = commentary_file
     )

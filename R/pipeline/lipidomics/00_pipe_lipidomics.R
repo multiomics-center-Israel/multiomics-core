@@ -67,6 +67,41 @@ pipe_lipidomics <- function() {
             format = "file"
         ),
 
+        # ---- Pool CV QC (uses pool_matrix snapshot from lipid_pre) ----
+        # Returns NULL when no pools were detected pre-filter, which the
+        # report skips gracefully.
+        tar_target(
+            lipid_pool_cv,
+            {
+                cv_res <- compute_pool_cv(lipid_pre$pool_matrix)
+                if (is.null(cv_res)) {
+                    NULL
+                } else {
+                    dirs <- create_legacy_output_dirs(lipid_out_dir)
+                    out_qc <- dirs$diagnostic_plots
+                    out_ds <- dirs$datasets
+
+                    f_tsv <- save_tsv(cv_res$per_feature, out_ds,
+                                      "pool_cv_per_feature.tsv")
+
+                    p <- plot_pool_cv_density(cv_res)
+                    f_png <- file.path(out_qc, "pool_cv_density.png")
+                    if (!is.null(p)) {
+                        ggplot2::ggsave(f_png, p, width = 7, height = 5,
+                                        dpi = 300)
+                    } else {
+                        f_png <- character(0)
+                    }
+
+                    list(
+                        cv_result = cv_res,
+                        plot      = p,
+                        files     = c(f_tsv, f_png)
+                    )
+                }
+            }
+        ),
+
         # ---- QC diagnostics (Stage 1) ----
         tar_target(
             lipid_qc_pre_obj,
@@ -153,6 +188,19 @@ pipe_lipidomics <- function() {
             )
         ),
 
+        # ---- standalone QC report (HTML) ----
+        tar_target(
+            lipid_qc_report,
+            mod_lipidomics_qc_report(
+                pre         = lipid_pre,
+                qc_res      = lipid_qc_pre_obj,
+                qc_enhanced = lipid_qc_enhanced,
+                config      = config,
+                out_dir     = lipid_out_dir
+            ),
+            format = "file"
+        ),
+
         # ---- AI commentary (depends on all analysis targets) ----
         tar_target(
             lipid_commentary,
@@ -180,6 +228,7 @@ pipe_lipidomics <- function() {
                 biomarker_res   = lipid_biomarker_res,
                 pathway_res     = lipid_pathway_res,
                 qc_enhanced     = lipid_qc_enhanced,
+                pool_cv         = lipid_pool_cv,
                 commentary_file = lipid_commentary
             ),
             format = "file"

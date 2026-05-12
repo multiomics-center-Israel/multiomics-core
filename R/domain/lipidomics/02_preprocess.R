@@ -53,6 +53,12 @@ preprocess_lipidomics <- function(inputs, config) {
 
     assert_meta_contract(meta, sample_col)
 
+    # ---- 2.5 Pool sub-matrix for QC ----
+    # Captured upstream in parse_lipidsearch() before exclude_patterns strips
+    # them. Pull through unchanged here; downstream Pool CV QC uses it even
+    # when pools are also excluded from the analysis matrix.
+    pool_matrix <- parsed$pool_matrix
+
     # ---- 3. Optional sample filtering (QC/blank/pool removal) ----
     rules <- get_sample_filter_rules_lipid(cfg)
     if (!is.null(rules)) {
@@ -68,6 +74,43 @@ preprocess_lipidomics <- function(inputs, config) {
     })
     expr_filt <- expr_raw[row_valid, , drop = FALSE]
     row_data <- row_data[row_valid, , drop = FALSE]
+
+    # ---- 4a. Group-aware missingness filter ----
+    # Drop features whose missing fraction (NA or zero) exceeds
+    # max_group_missing_frac in EVERY biological group. Retains features
+    # with robust signal in at least one group.
+    feat_cfg               <- cfg$feature_filter %||% list()
+    feat_filter_enabled    <- isTRUE(feat_cfg$enabled %||% TRUE)
+    max_group_missing_frac <- feat_cfg$max_group_missing_frac %||% 0.30
+
+    n_features_pre_group_filter <- nrow(expr_filt)
+    n_dropped_group_filter      <- 0L
+    group_filter_applied        <- FALSE
+    group_filter_skip_reason    <- NA_character_
+
+    if (feat_filter_enabled) {
+        group_col <- cfg$de$condition_column %||% cfg$effects$color
+        if (is.null(group_col) || !group_col %in% colnames(meta)) {
+            group_filter_skip_reason <- sprintf(
+                "group column '%s' not found on metadata", group_col %||% "(unset)"
+            )
+            message("lipidomics: group-missingness filter skipped (",
+                    group_filter_skip_reason, ").")
+        } else {
+            keep_feat <- filter_features_by_group_missingness(
+                expr_filt, meta, sample_col, group_col, max_group_missing_frac
+            )
+            n_dropped_group_filter <- sum(!keep_feat)
+            expr_filt <- expr_filt[keep_feat, , drop = FALSE]
+            row_data  <- row_data[keep_feat, , drop = FALSE]
+            group_filter_applied <- TRUE
+            message(sprintf(
+                "lipidomics: group-missingness filter (%.0f%% in every group of '%s') dropped %d/%d features.",
+                max_group_missing_frac * 100, group_col,
+                n_dropped_group_filter, n_features_pre_group_filter
+            ))
+        }
+    }
 
     # ---- 4b. Ensure lipid class annotation ----
     if (!"lipid_class" %in% colnames(row_data)) {
@@ -207,6 +250,7 @@ preprocess_lipidomics <- function(inputs, config) {
         expr_work  = expr_work,
         meta       = meta,
         row_data   = row_data,
+        pool_matrix = pool_matrix,
         info       = list(
             mode     = "lipidomics",
             format   = format,
@@ -216,9 +260,18 @@ preprocess_lipidomics <- function(inputs, config) {
             n_features_raw  = nrow(expr_raw),
             n_features_filt = nrow(expr_filt),
             n_samples       = ncol(expr_work),
+            n_pools         = if (is.null(pool_matrix)) 0L else ncol(pool_matrix),
             n_lipid_classes = length(class_summary),
             lipid_class_counts = as.list(class_summary),
-            missingness     = miss_summary
+            missingness     = miss_summary,
+            feature_filter  = list(
+                enabled                = feat_filter_enabled,
+                max_group_missing_frac = max_group_missing_frac,
+                applied                = group_filter_applied,
+                skip_reason            = group_filter_skip_reason,
+                n_before               = n_features_pre_group_filter,
+                n_dropped              = n_dropped_group_filter
+            )
         ),
         normalization_eval = norm_eval
     )
@@ -226,6 +279,57 @@ preprocess_lipidomics <- function(inputs, config) {
 
 
 # ---- helpers ----------------------------------------------------------------
+
+#' Filter features by group-aware missingness
+#'
+#' Returns a logical keep-vector. A feature is kept if at least one biological
+#' group has missing fraction (NA or zero) <= `max_frac`. A feature is dropped
+#' only when missingness exceeds `max_frac` in EVERY group. Samples whose
+#' group label is NA are ignored. Groups with zero non-NA samples after that
+#' contribute no information and are skipped.
+#'
+#' @param expr        Numeric matrix, features x samples.
+#' @param meta        Sample metadata data.frame (must contain sample_col, group_col).
+#' @param sample_col  Column in `meta` whose values match colnames(expr).
+#' @param group_col   Column in `meta` giving the biological group.
+#' @param max_frac    Maximum tolerated missingness in any group (default 0.30).
+#' @return Logical vector of length nrow(expr): TRUE = keep.
+filter_features_by_group_missingness <- function(expr, meta, sample_col,
+                                                  group_col, max_frac = 0.30) {
+    if (nrow(expr) == 0L) return(logical(0))
+
+    samp_to_grp <- setNames(as.character(meta[[group_col]]),
+                            as.character(meta[[sample_col]]))
+    grp_per_col <- samp_to_grp[colnames(expr)]
+    valid_cols  <- !is.na(grp_per_col)
+    if (!any(valid_cols)) {
+        warning("filter_features_by_group_missingness: no samples have a valid group label; keeping all features.")
+        return(rep(TRUE, nrow(expr)))
+    }
+
+    expr_v <- expr[, valid_cols, drop = FALSE]
+    grp    <- grp_per_col[valid_cols]
+    groups <- unique(grp)
+
+    is_miss <- is.na(expr_v) | expr_v == 0
+
+    # Per-group missingness fraction, features x groups
+    miss_frac <- vapply(
+        groups,
+        function(g) {
+            cols_g <- which(grp == g)
+            rowMeans(is_miss[, cols_g, drop = FALSE])
+        },
+        numeric(nrow(expr_v))
+    )
+    if (!is.matrix(miss_frac)) {
+        miss_frac <- matrix(miss_frac, nrow = nrow(expr_v))
+    }
+
+    # Keep if at least one group is below the threshold
+    apply(miss_frac, 1, function(x) any(x <= max_frac))
+}
+
 
 #' Extract sample filter rules for lipidomics
 get_sample_filter_rules_lipid <- function(cfg) {
@@ -262,4 +366,74 @@ apply_sample_filter_lipid <- function(sample_ids, meta, rules, sample_col) {
     }
 
     sample_ids[keep]
+}
+
+
+#' Compare alternative normalization pipelines on a single matrix
+#'
+#' For each method spec (sample_norm/transform/scaling), applies
+#' apply_normalization_pipeline() and reports median RSD and PC1 variance —
+#' the same diagnostics used by mod_met_norm_comparison.
+#'
+#' @param expr_for_norm Numeric matrix (features x samples), pre-normalization.
+#' @param methods       List of method specs, each a list with optional
+#'                      sample_norm/transform/scaling/pseudocount/na_policy.
+#' @param row_data      data.frame of feature metadata (for is/bio_factor norms).
+#' @return data.frame: label, sample_norm, transform, scaling, median_rsd, pc1_var.
+evaluate_normalization_methods <- function(expr_for_norm, methods, row_data = NULL) {
+    if (!length(methods)) return(NULL)
+
+    run_norm <- function(spec, label) {
+        tryCatch(
+            apply_normalization_pipeline(expr_for_norm, spec, row_data)$expr_norm,
+            error = function(e) {
+                message("evaluate_normalization_methods: ", label, " failed: ",
+                        conditionMessage(e))
+                NULL
+            }
+        )
+    }
+
+    rows <- lapply(methods, function(spec) {
+        sn <- spec$sample_norm %||% "none"
+        tr <- spec$transform   %||% "none"
+        sc <- spec$scaling     %||% "none"
+        label <- paste(sn, tr, sc, sep = "+")
+
+        # RSD on pre-scaling matrix: after auto/pareto scaling, feature means
+        # collapse to ~0 and SD/|mean| explodes. RSD is meaningful only when
+        # features retain their intensity scale.
+        spec_no_scale <- spec
+        spec_no_scale$scaling <- "none"
+        mat_for_rsd <- run_norm(spec_no_scale, paste0(label, " (RSD)"))
+
+        median_rsd <- if (is.null(mat_for_rsd) || ncol(mat_for_rsd) < 2) {
+            NA_real_
+        } else {
+            feat_means <- rowMeans(mat_for_rsd, na.rm = TRUE)
+            feat_sds   <- apply(mat_for_rsd, 1, stats::sd, na.rm = TRUE)
+            rsd        <- feat_sds / abs(feat_means)
+            stats::median(rsd[is.finite(rsd)], na.rm = TRUE)
+        }
+
+        # PC1 variance on the fully-pipelined matrix (the one actually used
+        # downstream) — captures whether scaling spreads variance off PC1.
+        mat_full <- if (identical(sc, "none")) mat_for_rsd else run_norm(spec, label)
+        pc1_var <- if (is.null(mat_full) || ncol(mat_full) < 2) {
+            NA_real_
+        } else {
+            tryCatch(
+                compute_pca_scores(mat_full, pcs = 1L,
+                                   center = TRUE, scale = FALSE)$var_expl[1],
+                error = function(e) NA_real_
+            )
+        }
+
+        data.frame(label = label, sample_norm = sn, transform = tr, scaling = sc,
+                   median_rsd = round(median_rsd, 4),
+                   pc1_var = round(pc1_var, 4),
+                   stringsAsFactors = FALSE)
+    })
+
+    do.call(rbind, rows)
 }

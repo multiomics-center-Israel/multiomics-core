@@ -70,25 +70,24 @@ tar_option_set(packages = available_pkgs)
 # Resolve config path once at plan-definition time so the literal path is
 # baked into the target command.  This ensures {targets} detects a change
 # when MULTIOMICS_CONFIG points to a different file between runs.
-config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
+config_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+if (!nzchar(config_path)) config_path <- file.path(getwd(), "config.yaml")
+config_path <- normalizePath(config_path, mustWork = TRUE)
 
 # ------------------------------------------------------------------------------
 # Targets definition
 # ------------------------------------------------------------------------------
 
 list(
-  # Configuration file (tracked as a file dependency)
-  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml")
-  # Or defaults to config.yaml
-  tar_target(
-    config_file,
-    {
-      cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
-      if (cfg_path == "") {
-        cfg_path <- file.path(getwd(), "config.yaml")
-      }
-      normalizePath(cfg_path, mustWork = TRUE)
-    },
+  # Configuration file (tracked as a file dependency).
+  # Set via: Sys.setenv(MULTIOMICS_CONFIG = "/path/to/config.yaml") or defaults
+  # to config.yaml. The resolved path is baked into the command (as
+  # `identity("/abs/path")`) so that pointing MULTIOMICS_CONFIG at a different
+  # file changes the command hash and invalidates downstream targets —
+  # Sys.getenv() alone is not tracked by {targets}.
+  tar_target_raw(
+    "config_file",
+    call("identity", config_path),
     format = "file"
   ),
 

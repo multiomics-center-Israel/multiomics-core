@@ -1,0 +1,140 @@
+---
+title: "`r local({ cfg <- params$config; pname <- cfg$project$name %||% ''; analyst <- gsub('_', ' ', cfg$project$analyst %||% ''); parts <- c('Lipidomics QC Report'); if (nzchar(pname)) parts <- c(parts, pname); if (nzchar(analyst)) parts <- c(parts, analyst); paste(parts, collapse = ' - ') })`"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+author: "`r paste0('Bioinformatician: ', gsub('_', ' ', params$config$project$analyst %||% ''))`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    self_contained: true
+    theme: cosmo
+params:
+  pre: NULL
+  qc_res: NULL
+  qc_enhanced: NULL
+  config: NULL
+  out_dir: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+pre <- params$pre
+out_dir <- params$out_dir
+diag_dir <- file.path(out_dir, "Diagnostic_plots")
+ds_dir   <- file.path(out_dir, "Datasets")
+
+show_img <- function(fname, caption = NULL) {
+  p <- file.path(diag_dir, fname)
+  if (file.exists(p)) knitr::include_graphics(p) else cat("_", fname, " not found_\n", sep = "")
+}
+```
+
+# Run summary
+
+```{r summary}
+info <- pre$info %||% list()
+miss <- info$missingness %||% list()
+tibble::tibble(
+  Metric = c("Features (raw)", "Features (filtered)", "Samples",
+             "Lipid classes", "Missing cells (%)",
+             "Sample normalization", "Transformation", "Scaling"),
+  Value = c(info$n_features_raw %||% NA, info$n_features_filt %||% NA,
+            info$n_samples %||% NA, info$n_lipid_classes %||% NA,
+            miss$pct_missing %||% NA,
+            info$normalization$sample_norm %||% "none",
+            info$normalization$transform %||% "none",
+            info$normalization$scaling %||% "none")
+) |> knitr::kable()
+```
+
+# Normalization method comparison
+
+```{r norm-comp}
+comp_path <- file.path(ds_dir, "normalization_method_comparison.tsv")
+if (file.exists(comp_path)) {
+  comp_df <- utils::read.table(comp_path, header = TRUE, sep = "\t",
+                               stringsAsFactors = FALSE)
+  knitr::kable(comp_df,
+               caption = "Median RSD computed on the pre-scaling matrix (auto/pareto would otherwise inflate RSD because feature means → 0). PC1 variance computed on the full pipeline output.")
+} else {
+  cat("_No normalization comparison TSV found — `evaluate_methods` block in config is empty._")
+}
+```
+
+# Missingness
+
+```{r missingness}
+miss <- pre$info$missingness
+if (!is.null(miss)) {
+  per_sample <- miss$per_sample
+  if (length(per_sample)) {
+    df <- data.frame(sample = names(per_sample),
+                     pct_missing = round(100 * per_sample, 2),
+                     row.names = NULL)
+    df <- df[order(-df$pct_missing), , drop = FALSE]
+    knitr::kable(utils::head(df, 20),
+                 caption = "Top 20 samples by missingness (%).")
+  }
+}
+```
+
+# Intensity distributions
+
+## Boxplots
+
+```{r boxplots, out.width="100%"}
+show_img("intensity_boxplot_raw.png")
+show_img("intensity_boxplot_transformed.png")
+show_img("intensity_boxplot_normalized.png")
+```
+
+## Densities
+
+```{r densities, out.width="100%"}
+show_img("intensity_density_raw.png")
+show_img("intensity_density_transformed.png")
+show_img("intensity_density_normalized.png")
+```
+
+# PCA
+
+```{r pca, out.width="100%"}
+show_img("PCA_PC1.vs.PC2.png")
+show_img("PCA_PC1.vs.PC3.png")
+show_img("pca_scree_plot.png")
+show_img("pca_loading_plot.png")
+```
+
+# Sample relationships
+
+```{r sample-distance, out.width="100%"}
+show_img("sample_distance_heatmap.png")
+show_img("sample_correlation_heatmap.png")
+```
+
+# PERMANOVA
+
+```{r permanova}
+perm <- params$qc_enhanced$permanova
+if (is.null(perm) || (is.list(perm) && length(perm) == 0)) {
+  cat("_PERMANOVA result not available (vegan missing, or skipped)._")
+} else if (is.data.frame(perm)) {
+  knitr::kable(perm, caption = "PERMANOVA on full distance matrix.")
+} else {
+  print(perm)
+}
+```
+
+# Files referenced
+
+```{r files}
+files_listed <- c(
+  comp_path,
+  file.path(diag_dir, "PCA_PC1.vs.PC2.png"),
+  file.path(diag_dir, "sample_distance_heatmap.png")
+)
+files_listed <- files_listed[file.exists(files_listed)]
+cat(paste0("- `", files_listed, "`"), sep = "\n")
+```

@@ -761,3 +761,83 @@ plot_lipid_class_ora <- function(ora_df, top_n = 20) {
             plot.title = ggplot2::element_text(face = "bold", size = 13, hjust = 0.5)
         )
 }
+
+
+#' DE-aware structural bubble: chain length vs. double bonds
+#'
+#' One point per significant lipid: x = total carbons, y = total double bonds,
+#' size = -log10(p), colour = direction (Up/Down by sign of logFC).
+#' Significance: `p_col` <= `sig_cutoff` AND |logFC| >= `logfc_cutoff`.
+#'
+#' @param de_tbl       Per-contrast DE table with columns feature_id, logFC,
+#'                     P.Value, adj.P.Val (output of extract_contrast_table()).
+#' @param row_data     Feature annotations with feature_id, total_carbons,
+#'                     total_double_bonds.
+#' @param sig_cutoff   p-value threshold (default 0.05).
+#' @param logfc_cutoff |logFC| threshold (default 0 = no FC filter).
+#' @param p_col        Which p column to use ("adj.P.Val" or "P.Value").
+#' @param title        Optional plot title.
+#' @return ggplot object, or NULL when no significant annotated lipids remain.
+plot_de_chain_bubble <- function(de_tbl, row_data,
+                                  sig_cutoff   = 0.05,
+                                  logfc_cutoff = 0,
+                                  p_col        = "adj.P.Val",
+                                  title        = NULL) {
+    if (is.null(de_tbl) || nrow(de_tbl) == 0L) return(NULL)
+    if (!"feature_id" %in% colnames(de_tbl) ||
+        !"logFC"      %in% colnames(de_tbl)) {
+        return(NULL)
+    }
+    if (!p_col %in% colnames(de_tbl)) {
+        warning("plot_de_chain_bubble: '", p_col, "' not in de_tbl; falling back to P.Value.")
+        p_col <- "P.Value"
+        if (!p_col %in% colnames(de_tbl)) return(NULL)
+    }
+    if (is.null(row_data) ||
+        !all(c("feature_id", "total_carbons", "total_double_bonds")
+             %in% colnames(row_data))) {
+        return(NULL)
+    }
+
+    keep_cols <- c("feature_id", "total_carbons", "total_double_bonds",
+                   intersect(c("lipid_class", "bond_type"), colnames(row_data)))
+    rd <- row_data[, keep_cols, drop = FALSE]
+    df <- merge(de_tbl, rd, by = "feature_id", all.x = TRUE)
+
+    pv <- df[[p_col]]
+    sig <- !is.na(pv) & pv <= sig_cutoff &
+        !is.na(df$logFC) & abs(df$logFC) >= logfc_cutoff &
+        !is.na(df$total_carbons) & !is.na(df$total_double_bonds)
+    df <- df[sig, , drop = FALSE]
+    if (nrow(df) == 0L) return(NULL)
+
+    df$direction <- ifelse(df$logFC > 0, "Up", "Down")
+    df$nlp <- -log10(pmax(df[[p_col]], .Machine$double.eps))
+
+    if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
+
+    title <- title %||% sprintf(
+        "Significant lipid structures (%s ≤ %.3g, |logFC| ≥ %.2f)",
+        p_col, sig_cutoff, logfc_cutoff
+    )
+
+    ggplot2::ggplot(df, ggplot2::aes(x = .data$total_carbons,
+                                       y = .data$total_double_bonds,
+                                       size = .data$nlp,
+                                       colour = .data$direction)) +
+        ggplot2::geom_jitter(alpha = 0.75, width = 0.2, height = 0.2) +
+        ggplot2::scale_colour_manual(
+            values = c(Up = "#d73027", Down = "#4575b4"),
+            name   = "Direction"
+        ) +
+        ggplot2::scale_size_continuous(
+            range = c(2, 8),
+            name  = expression(-log[10] * "(p)")
+        ) +
+        ggplot2::labs(
+            title = title,
+            x = "Total carbon atoms",
+            y = "Total double bonds"
+        ) +
+        ggplot2::theme_bw()
+}

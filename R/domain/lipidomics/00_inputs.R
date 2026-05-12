@@ -98,6 +98,15 @@ validate_lipidomics_config <- function(cfg) {
                       c("keep", "zero", "min_half", "lod"),
                       allow_null = TRUE)
     }
+
+    ff <- cfg$feature_filter
+    if (!is.null(ff) && !is.null(ff$max_group_missing_frac)) {
+        v <- ff$max_group_missing_frac
+        if (!is.numeric(v) || length(v) != 1L || is.na(v) || v < 0 || v > 1) {
+            stop("lipidomics: feature_filter$max_group_missing_frac must be a single numeric in [0, 1]")
+        }
+    }
+
     invisible(TRUE)
 }
 
@@ -161,6 +170,13 @@ parse_lipidsearch <- function(data_df, cfg, meta = NULL) {
         stop("No sample columns found after removing annotation columns.")
     }
 
+    # Snapshot pool columns BEFORE exclude_patterns strips them. Captured for
+    # downstream pool-CV QC; matches `^Pool` (case-insensitive) on column
+    # names regardless of whether sample_filter$exclude_patterns also drops
+    # them.
+    pool_col_names <- sample_cols[grepl("^Pool", sample_cols,
+                                          ignore.case = TRUE)]
+
     # Optionally filter to specific samples via metadata or config
     exclude_patterns <- cfg$sample_filter$exclude_patterns %||% NULL
     if (!is.null(exclude_patterns)) {
@@ -189,6 +205,22 @@ parse_lipidsearch <- function(data_df, cfg, meta = NULL) {
     expr_raw <- coerce_df_to_numeric_matrix(expr_df, rownames_vec = feat_ids,
                                              name = "lipidsearch_expr")
 
+    # Build pool matrix with the same row identity as expr_raw, suppressing
+    # warnings from coerce_df_to_numeric_matrix when fewer than 2 pool cols.
+    pool_matrix <- NULL
+    if (length(pool_col_names) > 0) {
+        pool_df <- data_df[, pool_col_names, drop = FALSE]
+        pool_matrix <- tryCatch(
+            coerce_df_to_numeric_matrix(pool_df, rownames_vec = feat_ids,
+                                         name = "lipidsearch_pool"),
+            error = function(e) {
+                warning("parse_lipidsearch: pool matrix coercion failed: ",
+                        e$message)
+                NULL
+            }
+        )
+    }
+
     # Row data (annotations) — include lipid class info
     row_data <- data_df[, annot_present, drop = FALSE]
     row_data$feature_id <- feat_ids
@@ -202,9 +234,10 @@ parse_lipidsearch <- function(data_df, cfg, meta = NULL) {
     }
 
     list(
-        expr_raw   = expr_raw,
-        row_data   = row_data,
-        sample_ids = sample_cols
+        expr_raw    = expr_raw,
+        row_data    = row_data,
+        sample_ids  = sample_cols,
+        pool_matrix = pool_matrix
     )
 }
 

@@ -20,6 +20,7 @@ params:
   biomarker_res: NULL
   pathway_res: NULL
   qc_enhanced: NULL
+  pool_cv: NULL
   config: NULL
   commentary_file: NULL
 ---

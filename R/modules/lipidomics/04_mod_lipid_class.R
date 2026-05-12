@@ -148,6 +148,56 @@ mod_lipidomics_class_analysis <- function(pre, de_res = NULL, config, out_dir) {
         }
     }
 
+    # ---- DE-aware structural bubble (per contrast) ----
+    if (!is.null(de_res) && !is.null(de_res$summary_df)) {
+        cfg_li      <- config$modes$lipidomics %||% list()
+        de_cfg      <- cfg_li$de %||% list()
+        sig_cutoff  <- de_cfg$p_cutoff %||% 0.05
+        contrasts   <- de_cfg$contrasts
+        if (is.list(contrasts)) contrasts <- unlist(contrasts)
+
+        if (!is.null(de_cfg$logfc_cutoff)) {
+            logfc_cut <- de_cfg$logfc_cutoff
+        } else {
+            logfc_cut <- log2(de_cfg$linear_fc_cutoff %||% 1.5)
+        }
+
+        for (ctr in contrasts %||% character(0)) {
+            ctr_label <- make_contrast_label(ctr)
+            ctr_tbl   <- tryCatch(
+                extract_contrast_table(de_res$summary_df, ctr_label),
+                error = function(e) NULL
+            )
+            if (is.null(ctr_tbl)) next
+
+            p_bub <- tryCatch(
+                plot_de_chain_bubble(
+                    ctr_tbl, pre$row_data,
+                    sig_cutoff   = sig_cutoff,
+                    logfc_cutoff = logfc_cut,
+                    title = paste0("Significant lipids by chain length × DB: ",
+                                   ctr)
+                ),
+                error = function(e) {
+                    warning("plot_de_chain_bubble failed for ", ctr_label,
+                            ": ", e$message)
+                    NULL
+                }
+            )
+            if (!is.null(p_bub)) {
+                f_bub <- file.path(out_qc,
+                                   paste0("de_chain_bubble_", ctr_label, ".png"))
+                tryCatch(
+                    ggplot2::ggsave(f_bub, p_bub, width = 8, height = 6,
+                                    dpi = 300),
+                    error = function(e) NULL
+                )
+                files <- c(files, f_bub)
+                plots[[paste0("de_chain_bubble_", ctr_label)]] <- p_bub
+            }
+        }
+    }
+
     # ---- Lipid class ORA ----
     class_ora <- tryCatch(
         lipid_class_ora(de_res, pre$row_data),

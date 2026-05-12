@@ -251,8 +251,12 @@ compute_plsda_confusion <- function(plsda_res) {
         model     <- plsda_res$model
         condition <- plsda_res$condition
 
-        # Predict using training data (resubstitution)
-        pred <- mixOmics::predict(model, plsda_res$X)
+        # Predict using training data (resubstitution).
+        # mixOmics doesn't export `predict`; it ships predict.mixo_pls as an S3
+        # method. Pull it from the namespace explicitly so dispatch works even
+        # when the package is only loaded via ::, not library().
+        predict_method <- get("predict.mixo_pls", envir = asNamespace("mixOmics"))
+        pred <- predict_method(model, plsda_res$X)
         ncomp <- model$ncomp[1]
         predicted <- pred$class$max.dist[, ncomp]
 

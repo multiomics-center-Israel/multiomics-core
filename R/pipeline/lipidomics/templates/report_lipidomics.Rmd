@@ -26,6 +26,7 @@ params:
   biomarker_res: NULL
   pathway_res: NULL
   qc_enhanced: NULL
+  pool_cv: NULL
   config: NULL
   commentary_file: NULL
 ---
@@ -308,6 +309,7 @@ clustering_res <- params$clustering_res
 biomarker_res  <- params$biomarker_res
 pathway_res    <- params$pathway_res
 qc_enhanced    <- params$qc_enhanced
+pool_cv        <- params$pool_cv
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -754,6 +756,26 @@ if (!is.null(qc_res$plots)) {
     } else {
       figure_legend("Per-sample boxplots after normalization. Comparable medians and spreads indicate successful normalization.")
     }
+  }
+}
+```
+
+## Pool CV
+
+```{r qc-pool-cv, fig.width=8, fig.height=5, results='asis'}
+if (is.null(pool_cv) || is.null(pool_cv$cv_result)) {
+  cat("*No QC pool samples detected in the raw data (column names matching `^Pool` were absent or insufficient). Pool CV not computed.*\n")
+} else {
+  res <- pool_cv$cv_result
+  cat(sprintf(
+    "Pool CV across **%d feature(s)** measured in **%d pool sample(s)**. Median pool CV = **%.1f%%** (mean = %.1f%%). The 20%% and 30%% references mark typical 'good' and 'acceptable' QC limits.\n\n",
+    res$n_features, res$n_pools, res$median_cv, res$mean_cv
+  ))
+  if (!is.null(pool_cv$plot)) {
+    safe_print_plot(pool_cv$plot)
+    figure_legend(sprintf(
+      "Density of per-lipid CV (%%) across QC pool samples. Dashed black line = median CV. Dotted grey lines = 20%% and 30%% reference thresholds. Tighter distributions (more mass below 20-30%%) indicate higher analytical reproducibility."
+    ))
   }
 }
 ```
@@ -2066,6 +2088,28 @@ if (!is.null(class_res$plots$class_ora)) {
 ```{r class-ora-table, results='asis'}
 if (!is.null(class_res$class_ora)) {
   print(htmltools::tagList(make_dt(class_res$class_ora, caption = "Lipid Class Over-Representation Analysis")))
+}
+```
+
+## Structural Bubble (Significant Lipids) {.tabset}
+
+```{r class-de-chain-bubble, fig.width=9, fig.height=6, results='asis'}
+bub_keys <- if (!is.null(class_res$plots)) {
+  grep("^de_chain_bubble_", names(class_res$plots), value = TRUE)
+} else character(0)
+
+if (length(bub_keys) == 0) {
+  cat("*No significant lipids with chain annotations to display.*\n")
+} else {
+  for (k in bub_keys) {
+    ctr_lbl <- sub("^de_chain_bubble_", "", k)
+    cat(sprintf("\n### %s\n\n", ctr_lbl))
+    safe_print_plot(class_res$plots[[k]])
+    figure_legend(sprintf(
+      "Significant lipids for contrast %s plotted by total carbon chain length (x) and total double bonds (y). Point size encodes -log10(adj.P.Val); colour encodes direction (red = up, blue = down). Use this to spot shifts in chain length or saturation among DE lipids.",
+      ctr_lbl
+    ))
+  }
 }
 ```
 
