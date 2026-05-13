@@ -1,0 +1,72 @@
+class_key	kegg_pathway_id	pathway_name	organism
+PC	cel00564	Glycerophospholipid metabolism	cel
+PE	cel00564	Glycerophospholipid metabolism	cel
+PG	cel00564	Glycerophospholipid metabolism	cel
+PI	cel00564	Glycerophospholipid metabolism	cel
+PS	cel00564	Glycerophospholipid metabolism	cel
+PA	cel00564	Glycerophospholipid metabolism	cel
+BMP	cel00564	Glycerophospholipid metabolism	cel
+LPC	cel00564	Glycerophospholipid metabolism	cel
+LPE	cel00564	Glycerophospholipid metabolism	cel
+LPG	cel00564	Glycerophospholipid metabolism	cel
+LPI	cel00564	Glycerophospholipid metabolism	cel
+LPS	cel00564	Glycerophospholipid metabolism	cel
+LPA	cel00564	Glycerophospholipid metabolism	cel
+CL	cel00564	Glycerophospholipid metabolism	cel
+PCe	cel00565	Ether lipid metabolism	cel
+PEe	cel00565	Ether lipid metabolism	cel
+LPCe	cel00565	Ether lipid metabolism	cel
+LPEe	cel00565	Ether lipid metabolism	cel
+TG	cel00561	Glycerolipid metabolism	cel
+DG	cel00561	Glycerolipid metabolism	cel
+MG	cel00561	Glycerolipid metabolism	cel
+TGe	cel00561	Glycerolipid metabolism	cel
+DGe	cel00561	Glycerolipid metabolism	cel
+Cer	cel00600	Sphingolipid metabolism	cel
+CerP	cel00600	Sphingolipid metabolism	cel
+SM	cel00600	Sphingolipid metabolism	cel
+GlcCer	cel00600	Sphingolipid metabolism	cel
+GalCer	cel00600	Sphingolipid metabolism	cel
+HexCer	cel00600	Sphingolipid metabolism	cel
+LacCer	cel00600	Sphingolipid metabolism	cel
+GM3	cel00600	Sphingolipid metabolism	cel
+GM1	cel00600	Sphingolipid metabolism	cel
+GD3	cel00600	Sphingolipid metabolism	cel
+GD1a	cel00600	Sphingolipid metabolism	cel
+GD1b	cel00600	Sphingolipid metabolism	cel
+GT1b	cel00600	Sphingolipid metabolism	cel
+SHexCer	cel00600	Sphingolipid metabolism	cel
+SHex2Cer	cel00600	Sphingolipid metabolism	cel
+So	cel00600	Sphingolipid metabolism	cel
+SoP	cel00600	Sphingolipid metabolism	cel
+ChE	cel00100	Steroid biosynthesis	cel
+ChEe	cel00100	Steroid biosynthesis	cel
+ZyE	cel00100	Steroid biosynthesis	cel
+DesE	cel00100	Steroid biosynthesis	cel
+Cho	cel00100	Steroid biosynthesis	cel
+FA	cel01040	Biosynthesis of unsaturated fatty acids	cel
+FA	cel00061	Fatty acid biosynthesis	cel
+FA	cel00071	Fatty acid degradation	cel
+FA	cel00062	Fatty acid elongation	cel
+FA	cel01212	Fatty acid metabolism	cel
+FA	cel04146	Peroxisome	cel
+FA	cel00590	Arachidonic acid metabolism	cel
+FA	cel00591	Linoleic acid metabolism	cel
+FA	cel00592	alpha-Linolenic acid metabolism	cel
+FAHFA	cel00061	Fatty acid biosynthesis	cel
+FAHFA	cel00071	Fatty acid degradation	cel
+FAHFA	cel01212	Fatty acid metabolism	cel
+AcCa	cel00071	Fatty acid degradation	cel
+AcCa	cel00280	Valine, leucine and isoleucine degradation	cel
+AcCa	cel00310	Lysine degradation	cel
+AcCa	cel04146	Peroxisome	cel
+AcCa	cel00640	Propanoate metabolism	cel
+AcCa	cel00650	Butanoate metabolism	cel
+Co	cel00130	Ubiquinone and other terpenoid-quinone biosynthesis	cel
+CoQ	cel00130	Ubiquinone and other terpenoid-quinone biosynthesis	cel
+Q	cel00130	Ubiquinone and other terpenoid-quinone biosynthesis	cel
+Carnitine	cel00071	Fatty acid degradation	cel
+WE	cel00561	Glycerolipid metabolism	cel
+WE	cel00071	Fatty acid degradation	cel
+NAE	cel00591	Linoleic acid metabolism	cel
+NAE	cel00590	Arachidonic acid metabolism	cel
