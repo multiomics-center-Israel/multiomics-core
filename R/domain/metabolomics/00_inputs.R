@@ -650,7 +650,7 @@ merge_level_parsed <- function(parsed_levels, level_names) {
 #' \describe{
 #'   \item{\code{original_id}}{Character vector of the raw source strings.}
 #' }
-build_feature_ids <- function(data_df, id_cfg) {
+build_feature_ids <- function(data_df, id_cfg, config = NULL) {
   name_col <- id_cfg$name_col %||% "Name"
   mz_col   <- id_cfg$mz_col   %||% "m/z"
   rt_col   <- id_cfg$rt_col   %||% "RT [min]"

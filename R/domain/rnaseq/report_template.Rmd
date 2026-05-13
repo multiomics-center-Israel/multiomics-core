@@ -77,13 +77,13 @@ if (basename(run_dir) == "rna") {
     prot_dir <- file.path(run_dir, "rna")
     config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
 }
-diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+diag_dir <- file.path(prot_dir, "Diagnostic_plots")
 qc_post_dir <- file.path(diag_dir, "DE_plots")
-datasets_dir <- file.path(run_dir,  "Datasets")
-enrich_dir <- file.path(run_dir,"Enrichment")
+datasets_dir <- file.path(prot_dir, "Datasets")
+enrich_dir <- file.path(prot_dir, "Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
-filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "commentary")
+filter_plot <- file.path(prot_dir, "filtering_threshold_qc.png")
+commentary_dir <- file.path(prot_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
@@ -1333,22 +1333,6 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
         geom_hline(yintercept = -log10(padj_cut), linetype = "dashed") +
         labs(title = title, x = "log2 Fold Change", y = "-log10(adj.P.Val)") +
         theme_minimal()
-    widget <- ggplotly(p, tooltip = "text")
-    # Include both raw and adjusted p-values for cutoff panel
-    pval_col <- grep(paste0("pvalue\\.", contrast), names(df), value = TRUE)[1]
-    raw_pval <- if (!is.na(pval_col)) as.numeric(df[[pval_col]]) else plot_df$padj
-    # Pipeline pass flag — single source of truth for DE counts
-    pass_col <- paste0(contrast, "_pass")
-    pass_flag <- if (pass_col %in% names(df)) {
-        as.numeric(df[[pass_col]] %in% c(TRUE, 1))
-    } else NULL
-    reg_df <- data.frame(name = as.character(plot_df$gene),
-                         logFC = plot_df$logFC,
-                         pval = raw_pval,
-                         adjPval = plot_df$padj,
-                         stringsAsFactors = FALSE)
-    if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
-    list(widget = widget, plot_df = reg_df, ycap = ycap_v)
     ggplotly(p, tooltip = "text")
 }
 

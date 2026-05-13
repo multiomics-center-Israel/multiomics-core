@@ -132,12 +132,18 @@ list(
     }
 
     # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
-    # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
+    # Enabled when multiomics is configured AND either:
+    #   - ≥2 single-omics modes are present (pipeline mode), OR
+    #   - input_mode == "outputs" (payload mode reads pre-computed RDS files), OR
+    #   - global$omics_present lists ≥2 omics layers
     n_omics <- sum(!is.null(cfg_raw$modes$rna),
                    !is.null(cfg_raw$modes$proteomics),
                    !is.null(cfg_raw$modes$metabolomics))
+    payload_mode   <- identical(cfg_raw$modes$multiomics$input_mode, "outputs")
+    n_omics_global <- length(cfg_raw$global$omics_present %||% character(0))
 
-    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
+    if (!is.null(cfg_raw$modes$multiomics) &&
+        (n_omics >= 2 || payload_mode || n_omics_global >= 2)) {
       mode_targets <- c(mode_targets, pipe_multiomics())
     }
    

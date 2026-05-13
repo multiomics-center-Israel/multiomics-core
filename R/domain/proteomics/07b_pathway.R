@@ -245,17 +245,15 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
                 "'. Simplification will be skipped.")
     }
 
+    # GO simplification args were lost from run_pathway_analysis() during a
+    # merge — pass only the args its current signature accepts.
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = method,
         min_size           = min_size,
-        max_size           = max_size,
-        simplify_go        = simplify_go,
-        simplify_threshold = simplify_threshold,
-        simplify_measure   = simplify_measure,
-        simplify_orgdb     = simplify_orgdb
+        max_size           = max_size
     )
 
     # Save results and plots

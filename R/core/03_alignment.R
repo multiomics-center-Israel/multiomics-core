@@ -98,6 +98,8 @@ align_de_to_expr <- function(de, expr_mat, contrast_name = NULL) {
 align_feature_tbl_to_mat <- function(mat, feature_tbl, feature_id_col, annot_cols) {
     if (!is.matrix(mat)) stop("'mat' must be a matrix.")
     if (!is.data.frame(feature_tbl)) stop("'feature_tbl' must be a data.frame.")
+    annot_cols <- as.character(annot_cols)
+    annot_cols <- annot_cols[nzchar(annot_cols)]
     check_has_cols(feature_tbl, c(feature_id_col, annot_cols), df_name = "feature_tbl")
 
     idx <- match(rownames(mat), feature_tbl[[feature_id_col]])

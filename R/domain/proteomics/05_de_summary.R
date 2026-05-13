@@ -205,6 +205,8 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
     annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
+    annot_cols <- as.character(unlist(annot_cols))
+    annot_cols <- annot_cols[nzchar(annot_cols)]
 
     assert_numeric_matrix(expr_imp, "expr_imp")
     expr_imp <- align_matrix_to_meta(expr_imp, meta, sample_col)
@@ -292,6 +294,8 @@ run_ttest_de <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg,
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
     annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
+    annot_cols <- as.character(unlist(annot_cols))
+    annot_cols <- annot_cols[nzchar(annot_cols)]
 
     assert_numeric_matrix(expr_imp, "expr_imp")
     meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
@@ -402,6 +406,8 @@ run_anova_posthoc <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
     annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
+    annot_cols <- as.character(unlist(annot_cols))
+    annot_cols <- annot_cols[nzchar(annot_cols)]
 
     assert_numeric_matrix(expr_imp, "expr_imp")
     meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
