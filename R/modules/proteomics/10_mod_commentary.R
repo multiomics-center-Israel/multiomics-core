@@ -12,6 +12,7 @@
 #' @return Path to commentary_all.json or NULL
 #' @export
 mod_proteomics_commentary <- function(de_res, qc_pre_obj, config, out_dir) {
+
     cfg      <- config$modes$proteomics
     comm_cfg <- cfg$commentary %||% list()
 

@@ -11,7 +11,7 @@
 #'  - var_expl: numeric vector (length = nPCs) of fraction variance explained
 compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = FALSE) {
   expr_mat <- as.matrix(expr_mat)
-
+  
   # Replace Inf/NaN with NA, then drop features that are all-NA or zero-variance
   expr_mat[!is.finite(expr_mat)] <- NA
   keep <- apply(expr_mat, 1, function(x) {
@@ -19,7 +19,7 @@ compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = F
     length(vals) >= 2 && stats::var(vals) > 0
   })
   expr_mat <- expr_mat[keep, , drop = FALSE]
-
+  
   # Impute remaining NAs with row medians for PCA (display only)
   if (any(is.na(expr_mat))) {
     row_meds <- apply(expr_mat, 1, median, na.rm = TRUE)
@@ -27,19 +27,19 @@ compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = F
       expr_mat[i, is.na(expr_mat[i, ])] <- row_meds[i]
     }
   }
-
+  
   pca <- stats::prcomp(t(expr_mat), center = center, scale. = scale)
-
+  
   var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
-
+  
   pcs <- as.integer(pcs)
   if (any(is.na(pcs)) || any(pcs < 1)) stop("pcs must be positive integers.")
   if (max(pcs) > ncol(pca$x)) stop("pcs contains PC index larger than available PCs.")
-
+  
   scores <- as.data.frame(pca$x[, pcs, drop = FALSE])
   colnames(scores) <- paste0("PC", pcs)
   scores$sample <- rownames(scores)
-
+  
   list(
     pca_obj = pca,
     scores = scores,
@@ -55,7 +55,7 @@ compute_pca_scores <- function(expr_mat, pcs = c(1, 2), center = TRUE, scale = F
 #' @param out_file optional path to save plot.
 qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) {
   expr_mat <- as.matrix(expr_mat)
-
+  
   # Basic input validation
   if (is.null(colnames(expr_mat)) || length(colnames(expr_mat)) == 0) {
     stop("qc_pca_scatter(): expr_mat must have sample column names.")
@@ -64,16 +64,16 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   if (length(pcs) != 2 || anyNA(pcs) || any(pcs < 1)) {
     stop("qc_pca_scatter(): pcs must be a length-2 vector of positive integers, e.g. c(1,2).")
   }
-
+  
   eff <- cfg$effects
   sample_col <- eff$samples
   color_col <- eff$color
   shape_col <- eff$shape
-
+  
   expr_mat <- align_matrix_to_meta(expr_mat, meta, sample_col)
   sample_ids <- colnames(expr_mat)
   meta_sub <- align_meta_to_matrix(sample_ids, meta, sample_col)
-
+  
   # Ensure color_col exists (fail-fast with clear error)
   if (is.null(color_col) || !color_col %in% colnames(meta)) {
     stop("Color column '", color_col, "' not found in metadata.")
@@ -83,7 +83,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   res <- compute_pca_scores(expr_mat, pcs = pcs, center = TRUE, scale = FALSE)
   scores <- res$scores
   var_expl <- res$var_expl
-
+  
   # Ensure expected PC columns exist (should always be true now)
   needed_pc_cols <- paste0("PC", pcs)
   if (!all(needed_pc_cols %in% colnames(scores))) {
@@ -92,12 +92,12 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
       paste(setdiff(needed_pc_cols, colnames(scores)), collapse = ", ")
     )
   }
-
+  
   pc_labels <- sprintf("PC%d: %.2f%% of variance", seq_along(var_expl), 100 * var_expl)
-
+  
   pc_x <- pcs[1]
   pc_y <- pcs[2]
-
+  
   # Attach ALL metadata columns to scores (not just color/shape)
   # This ensures Shiny has access to all metadata via pca_scores
   for (col in colnames(meta_sub)) {
@@ -105,7 +105,7 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
       scores[[col]] <- meta_sub[[col]]
     }
   }
-
+  
   p <- plot_pca_scatter(
     scores    = scores,
     color_col = color_col,
@@ -114,16 +114,16 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
     pc_y      = pc_y,
     pc_labels = pc_labels
   )
-
+  
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 6, height = 5)
   }
-
+  
   # Attach PCA results as attributes (backward compatible - plot is still returned)
   attr(p, "pca_result") <- res$pca_obj
   attr(p, "scores") <- scores # scores now include all metadata
   attr(p, "var_expl") <- var_expl
-
+  
   p
 }
 
@@ -299,16 +299,16 @@ prepare_qc_data <- function(expr, meta, cfg) {
   # 1. Ensure Expression is a Matrix with Names
   expr <- as.matrix(expr)
   sample_ids <- colnames(expr)
-
+  
   # FIX: Handle empty matrix or NULL colnames
   if (is.null(sample_ids) || length(sample_ids) == 0) {
     stop("Expression matrix must have non-empty column names (sample IDs).")
   }
-
+  
   if (anyDuplicated(sample_ids)) {
     stop("Expression matrix contains duplicate column names/sample IDs.")
   }
-
+  
   # 2. Extract Config & Validate Keys
   eff <- cfg$effects
   if (is.null(eff$samples) || is.null(eff$color)) {
@@ -316,10 +316,10 @@ prepare_qc_data <- function(expr, meta, cfg) {
   }
   sample_col <- eff$samples
   color_col <- eff$color
-
+  
   # 3. Ensure Metadata is a base data.frame (safe against tibbles)
   meta <- as.data.frame(meta)
-
+  
   # 4. Validate Columns Existence in Metadata
   if (!sample_col %in% colnames(meta)) {
     stop(sprintf("Sample column '%s' not found in metadata.", sample_col))
@@ -327,23 +327,23 @@ prepare_qc_data <- function(expr, meta, cfg) {
   if (!color_col %in% colnames(meta)) {
     stop(sprintf("Color/Condition column '%s' not found in metadata.", color_col))
   }
-
+  
   # FIX: Critical check for duplicates in metadata ID column
   # match() returns the first hit, so duplicates would be silently ignored without this.
   if (anyDuplicated(meta[[sample_col]])) {
     stop(sprintf("Metadata column '%s' contains duplicate sample IDs.", sample_col))
   }
-
+  
   # 5. Match Metadata to Expression Columns
   # This guarantees that meta_sub rows are 1:1 with expr columns
   meta_sub <- meta[match(sample_ids, meta[[sample_col]]), , drop = FALSE]
-
+  
   # 6. Verify Integrity (Missing samples)
   # FIX: Detailed error message with count + examples
   if (any(is.na(meta_sub[[sample_col]]))) {
     missing_mask <- is.na(meta_sub[[sample_col]])
     missing_samples <- sample_ids[missing_mask]
-
+    
     stop(sprintf(
       "Found %d samples in expression matrix missing from metadata column '%s'. Examples: %s",
       length(missing_samples),
@@ -351,19 +351,19 @@ prepare_qc_data <- function(expr, meta, cfg) {
       paste(head(missing_samples, 3), collapse = ", ")
     ))
   }
-
+  
   # FIX: Extra sanity check for 1:1 alignment
   if (nrow(meta_sub) != ncol(expr)) {
     stop("Internal error: metadata alignment failed (meta_sub rows != expr columns).")
   }
-
+  
   # 7. Create Generic Annotation (for pheatmap)
   annot <- data.frame(
     Condition = meta_sub[[color_col]],
     row.names = sample_ids,
     stringsAsFactors = FALSE
   )
-
+  
   list(
     expr = expr,
     meta = meta_sub, # Perfectly aligned with expr columns
@@ -378,20 +378,20 @@ prepare_qc_data <- function(expr, meta, cfg) {
 #' Used for ggplot2. Optimized to use 'rep' since data is already aligned.
 to_long_format <- function(prep_data) {
   n_features <- nrow(prep_data$expr)
-
+  
   # Vectorized creation of long vectors
   norm_expr_long <- data.frame(
     sample = rep(prep_data$sample_ids, each = n_features),
     value = as.vector(prep_data$expr),
     stringsAsFactors = FALSE
   )
-
+  
   # OPTIMIZATION: Use rep() instead of match()
   # Since prep_data$meta is guaranteed to be sorted by sample_ids (from prepare_qc_data),
   # we can simply repeat each condition n_features times.
   cond_values <- prep_data$meta[[prep_data$color_col]]
   norm_expr_long[[prep_data$color_col]] <- rep(cond_values, each = n_features)
-
+  
   # Filter non-finite values (NA/NaN/Inf) to keep plots clean
   norm_expr_long[is.finite(norm_expr_long$value), , drop = FALSE]
 }
@@ -409,11 +409,11 @@ to_long_format <- function(prep_data) {
 norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
   norm_expr_long <- to_long_format(d)
-
+  
   if (is.null(title)) title <- "Normalized expression boxplots"
-
+  
   plot_title <- title %||% "Normalized expression boxplots"
-
+  
   p <- ggplot2::ggplot(
     norm_expr_long,
     ggplot2::aes(x = sample, y = value, colour = .data[[d$color_col]])
@@ -429,11 +429,11 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
     ggplot2::theme(
       axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
     )
-
+  
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 8, height = 5)
   }
-
+  
   invisible(p)
 }
 
@@ -448,10 +448,10 @@ norm_boxplot <- function(expr_norm, meta, cfg, out_file = NULL, title = NULL) {
 #' @param out_file Optional output file path
 qc_rle_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
-
+  
   row_medians <- apply(d$expr, 1, stats::median, na.rm = TRUE)
   rle_mat <- d$expr - row_medians
-
+  
   n_features <- nrow(rle_mat)
   rle_long <- data.frame(
     sample = rep(d$sample_ids, each = n_features),
@@ -461,7 +461,7 @@ qc_rle_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
   cond_values <- d$meta[[d$color_col]]
   rle_long[[d$color_col]] <- rep(cond_values, each = n_features)
   rle_long <- rle_long[is.finite(rle_long$value), , drop = FALSE]
-
+  
   p <- ggplot2::ggplot(
     rle_long,
     ggplot2::aes(x = sample, y = value, colour = .data[[d$color_col]])
@@ -478,11 +478,11 @@ qc_rle_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
     ggplot2::theme(
       axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
     )
-
+  
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 8, height = 5)
   }
-
+  
   invisible(p)
 }
 
@@ -491,7 +491,7 @@ qc_rle_boxplot <- function(expr_norm, meta, cfg, out_file = NULL) {
 norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
   d <- prepare_qc_data(expr_norm, meta, cfg)
   norm_expr_long <- to_long_format(d)
-
+  
   p <- ggplot2::ggplot(
     norm_expr_long,
     ggplot2::aes(x = value, fill = .data[[d$color_col]])
@@ -505,11 +505,11 @@ norm_histogram_summary <- function(expr_norm, meta, cfg, out_file = NULL) {
       fill  = d$color_col
     ) +
     ggplot2::theme_minimal()
-
+  
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 8, height = 4)
   }
-
+  
   invisible(p)
 }
 
@@ -517,14 +517,14 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
                             cluster_cols = TRUE, cluster_rows = TRUE) {
   # 1. Prepare Data
   d <- prepare_qc_data(expr_mat, meta, cfg)
-
+  
   # Rename column to match config
   col_name <- d$color_col
   annot <- d$annot
   if ("Condition" %in% names(annot)) {
     colnames(annot)[which(names(annot) == "Condition")] <- col_name
   }
-
+  
   ph <- plot_heatmap_core(
     expr_mat = d$expr,
     annotation_col = annot,
@@ -533,11 +533,11 @@ wrap_qc_heatmap <- function(expr_mat, meta, cfg, stage, out_file = NULL,
     cluster_rows = cluster_rows,
     cluster_cols = cluster_cols
   )
-
+  
   if (!is.null(out_file)) {
     save_heatmap_to_file(ph, out_file)
   }
-
+  
   return(ph)
 }
 
@@ -639,15 +639,15 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
   # FIX: Ensure matrix conversion happens BEFORE complete.cases logic
   # This prevents data.frame type coercion issues
   expr_mat <- as.matrix(expr_mat)
-
+  
   if (!with_na) {
     keep <- stats::complete.cases(expr_mat)
     expr_mat <- expr_mat[keep, , drop = FALSE]
   }
-
+  
   # Validate & Prepare (after filtering NAs)
   d <- prepare_qc_data(expr_mat, meta, cfg)
-
+  
   # Build annotations: use multi-column if provided, otherwise default
   if (!is.null(annot_cols)) {
     annot <- d$meta[d$sample_ids, annot_cols, drop = FALSE]
@@ -655,7 +655,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
   } else {
     annot <- d$annot  # Default single-column annotation
   }
-
+  
   ph <- plot_sample_distance_heatmap(
     expr_mat = d$expr,
     annotation_col = annot,
@@ -664,7 +664,7 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
     cluster_rows = cluster_samples,
     cluster_cols = cluster_samples
   )
-
+  
   # Issue 3 & 6 FIX: Larger canvas for better legend placement and readability
   save_heatmap_to_file(ph, out_file, width = 2400, height = 2000, res = 150)
   invisible(ph)
@@ -673,31 +673,31 @@ qc_sample_distance_heatmap <- function(expr_mat, meta, cfg, out_file,
 
 #' Density overlay of normalized expression
 qc_omic_density <- function(expr_mat, meta, cfg, out_file = NULL,
-                                  alpha = 0.3, show_legend = TRUE,
-                                  title = "Density plot of normalized intensities") {
+                            alpha = 0.3, show_legend = TRUE,
+                            title = "Density plot of normalized intensities") {
   # Keeping prepare_qc_data here intentionally.
   d <- prepare_qc_data(expr_mat, meta, cfg)
   norm_expr_long <- to_long_format(d)
-
+  
   # Task 2: Density line only (no fill) - remove fill aesthetic, set alpha=1
   p <- ggplot2::ggplot(norm_expr_long, ggplot2::aes(x = value, colour = .data[["sample"]])) +
     ggplot2::geom_density(alpha = 1) +
     ggplot2::labs(title = title, x = "Intensity", colour = d$color_col) +
     ggplot2::theme_minimal()
-
+  
   if (!show_legend) {
     p <- p + ggplot2::theme(legend.position = "none")
   }
-
-
-
+  
+  
+  
   if (!is.null(out_file)) {
     if (!grepl("\\.png$", out_file, ignore.case = TRUE)) {
       out_file <- paste0(out_file, ".png")
     }
     ggplot2::ggsave(out_file, p, width = 10, height = 6, dpi = 150)
   }
-
+  
   invisible(p)
 }
 
@@ -713,7 +713,7 @@ qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = 
   imp_width <- cfg$imputation$width %||% NULL
   imp_shift <- cfg$imputation$downshift %||% NULL
   p <- plot_imputation_summary(imputed, imputed_flag, width = imp_width, downshift = imp_shift)
-
+  
   if (!is.null(out_file)) {
     # Ensure correct extension if missing
     if (!grepl("\\.png$", out_file, ignore.case = TRUE)) {
@@ -721,7 +721,7 @@ qc_imputation_summary <- function(imputed, imputed_flag, cfg = NULL, out_file = 
     }
     ggplot2::ggsave(out_file, plot = p, width = 12, height = 8, dpi = 150)
   }
-
+  
   invisible(p)
 }
 
@@ -740,6 +740,6 @@ write_imputation_histograms_per_sample <- function(expr_mat, imputed_flag, out_d
     files <- c(files, f)
     plots[[paste0("sample_", s)]] <- p
   }
-
+  
   return(list(files = files, plots = plots))
 }

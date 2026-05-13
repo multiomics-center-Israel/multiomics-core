@@ -69,6 +69,7 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
                 "\nTemplate: ", dest_rmd,
                 "\nCheck the Rmd for errors.")
     })
+
     rmarkdown::render(
         input       = dest_rmd,
         output_file = out_html,

@@ -136,6 +136,7 @@ build_shiny_payload_metabolomics <- function(
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
 
+
         # pca_3d: 3D PCA plotly widget
         payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
         

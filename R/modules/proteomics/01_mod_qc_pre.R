@@ -51,6 +51,43 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
         }
     }
 
+    # ---------- PCA Subsets ----------
+    pca_subsets <- cfg$qc$pca_subsets
+    if (!is.null(pca_subsets) && length(pca_subsets) > 0) {
+        group_col_name <- cfg$effects$color %||% "Condition"
+        sample_col_name <- cfg$effects$samples %||% "SampleID"
+
+        for (si in seq_along(pca_subsets)) {
+            subset_def <- pca_subsets[[si]]
+            subset_name <- subset_def$name %||% paste0("subset_", si)
+            conditions <- subset_def$conditions
+
+            if (is.null(conditions)) next  # null = all samples, already covered above
+
+            # Filter to matching conditions
+            keep_samples <- pre$meta[[group_col_name]] %in% conditions
+            if (sum(keep_samples) < 3) {
+                message(sprintf("  PCA subset '%s': fewer than 3 samples, skipping.", subset_name))
+                next
+            }
+
+            sample_ids <- pre$meta[[sample_col_name]][keep_samples]
+            mat_subset <- pre$expr_imp_single[, colnames(pre$expr_imp_single) %in% sample_ids, drop = FALSE]
+            meta_subset <- pre$meta[keep_samples, , drop = FALSE]
+
+            safe_name <- gsub("[^a-zA-Z0-9_]", "_", subset_name)
+            f_pca_sub <- file.path(out_qc, sprintf("PCA_%s.png", safe_name))
+            tryCatch({
+                p_sub <- qc_pca_scatter(mat_subset, meta_subset, cfg, pcs = c(1, 2), out_file = f_pca_sub)
+                files <- c(files, f_pca_sub)
+                plots[[sprintf("pca_subset_%s", safe_name)]] <- p_sub
+                message(sprintf("  Generated PCA subset: %s (%d samples)", subset_name, ncol(mat_subset)))
+            }, error = function(e) {
+                message(sprintf("  Could not generate PCA subset '%s': %s", subset_name, e$message))
+            })
+        }
+    }
+
     f_pca3d <- file.path(out_qc, "PCA_3D.html")
     p_3d <- qc_pca_3d(pre$expr_imp_single, pre$meta, cfg, out_file = f_pca3d)
     files <- c(files, f_pca3d)

@@ -203,7 +203,8 @@ plot_top_de_heatmap <- function(de_tbl, expr_mat, meta, cfg, n_top = 50,
             fontsize_row     = max(4, 10 - n_top / 10),
             main             = sprintf("Top %d DE Proteins — %s", length(top_ids), contrast_name),
             color            = grDevices::colorRampPalette(c("navy", "white", "firebrick3"))(100),
-            silent           = TRUE
+            silent           = TRUE,
+          border_color = NA
         )
     }, error = function(e) {
         message("Heatmap failed for ", contrast_name, ": ", e$message)

@@ -220,3 +220,7 @@ modes:
       libraries: []
       gmt_file: null
       mapping_file: null
+      # Which p-value column to use when filtering significant features for ORA:
+      #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
+      #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
+      pvalue_column: "P.Value"

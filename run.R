@@ -2523,6 +2523,7 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     # selection object, not a character vector. targets reports the
     # cryptic "names must be a character" error before any target runs.
     targets::tar_destroy(ask = FALSE)
+    dir.create("_targets/scratch", recursive = TRUE, showWarnings = FALSE)
   }
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)

@@ -468,6 +468,15 @@ assert_de_stats <- function(de_stats, context = "de_stats") {
 # Legacy Alias Helpers
 # ------------------------------------------------------------
 
+#' Attach legacy aliases to a canonical payload (pass-through)
+#'
+#' @param payload Canonical payload list
+#' @return payload unchanged (legacy aliases are added by domain builders)
+#' @export
+attach_legacy_aliases <- function(payload) {
+    payload
+}
+
 #' Remove legacy aliases from payload
 #'
 #' Strips legacy keys, leaving only canonical keys.

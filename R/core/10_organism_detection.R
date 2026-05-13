@@ -51,9 +51,11 @@ detect_id_type <- function(ids, n_sample = 100) {
     if (best_score / length(ids) < 0.2) {
         avg_len <- mean(nchar(ids))
         has_letters <- mean(grepl("[A-Za-z]", ids))
-        mostly_upper <- mean(grepl("^[A-Z0-9-]+$", ids))
+        # Gene symbols can be uppercase (human: ACTB), mixed-case (rat: Actb),
+        # or contain digits (TP53, Atp5a1). Accept either convention.
+        looks_like_symbol <- mean(grepl("^[A-Za-z][A-Za-z0-9._-]*$", ids))
 
-        if (avg_len < 15 && has_letters > 0.8 && mostly_upper > 0.5) {
+        if (avg_len < 15 && has_letters > 0.8 && looks_like_symbol > 0.5) {
             return("symbol")
         }
     }
