@@ -84,7 +84,7 @@ list(
     !!config_path,
     format = "file"
   ),
-
+  
   # Load and validate configuration. validate_config() applies defaults (e.g.
   # multiomics integration methods) and returns the updated config, so all
   # downstream targets that depend on `config` receive the defaulted values.
@@ -114,19 +114,33 @@ list(
   # Mode-specific pipelines — only included when the mode is present in config.
   # Read config at plan-definition time so {targets} can detect mode changes.
   {
-    cfg_raw      <- yaml::read_yaml(config_path)
+    cfg_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+    if (cfg_path == "") cfg_path <- file.path(getwd(), "config.yaml")
+    cfg_raw <- yaml::read_yaml(cfg_path)
     mode_targets <- list()
 
-    # Single-omics pipelines
-    if (!is.null(cfg_raw$modes$rna))           mode_targets <- c(mode_targets, pipe_rnaseq())
-    if (!is.null(cfg_raw$modes$proteomics))    mode_targets <- c(mode_targets, pipe_proteomics())
+    # Single-omics pipelines — when multiomics is active, only run core
+    # targets (load + preprocess + DE) needed by the integration pipeline;
+    # skip all single-omics outputs (QC, reports, exports, etc.)
+    has_multiomics <- !is.null(cfg_raw$modes$multiomics)
+    if (!is.null(cfg_raw$modes$rna))          mode_targets <- c(mode_targets, pipe_rnaseq(skip_outputs = has_multiomics))
+    if (!is.null(cfg_raw$modes$proteomics))   mode_targets <- c(mode_targets, pipe_proteomics(skip_outputs = has_multiomics))
+
     if (!is.null(cfg_raw$modes$metabolomics)) {
-        metab_chosen_norm <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
-        mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = metab_chosen_norm))
+      met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
+      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics))
     }
-    # NOTE: Lipidomics and multi-omics integration layers were split into
-    # separate review branches. Restore the pipe_lipidomics() and
-    # pipe_multiomics() target wiring here when those branches are merged back.
+
+    # Multi-omics integration pipeline (runs AFTER single-omics pipelines)
+    # Only enabled if ≥2 omics modes are present AND multiomics mode is configured
+    n_omics <- sum(!is.null(cfg_raw$modes$rna),
+                   !is.null(cfg_raw$modes$proteomics),
+                   !is.null(cfg_raw$modes$metabolomics))
+
+    if (n_omics >= 2 && !is.null(cfg_raw$modes$multiomics)) {
+      mode_targets <- c(mode_targets, pipe_multiomics())
+    }
+   
 
     mode_targets
   }

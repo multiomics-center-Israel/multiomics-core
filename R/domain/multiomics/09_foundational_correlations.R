@@ -1351,7 +1351,8 @@ plot_sample_concordance <- function(results, metadata, out_dir) {
                                 sprintf("%.2f", cor_mat[i, j]),
                                 x, y, gp = grid::gpar(fontsize = 6)
                             )
-                        }
+                        },
+                      rect_gp = grid::gpar(col = NA)
                     )
                     n_samples <- ncol(cor_mat)
                     plot_size <- max(6, 3 + n_samples * 0.35)
@@ -1370,7 +1371,8 @@ plot_sample_concordance <- function(results, metadata, out_dir) {
                         number_format = "%.2f",
                         fontsize_number = 6,
                         fontsize_row = 8, fontsize_col = 8,
-                        main = paste0(om_name, " — Sample Correlation Matrix")
+                        main = paste0(om_name, " — Sample Correlation Matrix"),
+                      border_color = NA
                     )
                     dev.off()
                 }

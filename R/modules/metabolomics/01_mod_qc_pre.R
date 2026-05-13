@@ -16,6 +16,7 @@
 #' @param out_dir Output directory for this mode.
 #' @return list(files, plots, objects, missingness, normalization_eval)
 mod_metabolomics_qc_pre <- function(pre, config, out_dir) {
+
   stage <- "metabolomics"
   stopifnot(is.character(out_dir), length(out_dir) == 1)
   assert_pre_contract(pre, stage = stage)
@@ -335,6 +336,7 @@ build_norm_label <- function(norm_applied) {
 #' @param meta       Metadata data.frame.
 #' @param sample_col Column name for sample IDs.
 #' @return list of subset descriptors.
+
 build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col) {
   all_subset <- list(
     tag       = "",

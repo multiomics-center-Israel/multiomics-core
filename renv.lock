@@ -32,6 +32,31 @@
     "Version": "3.22"
   },
   "Packages": {
+    "ALL": {
+      "Package": "ALL",
+      "Version": "1.52.0",
+      "Source": "Bioconductor",
+      "Title": "A data package",
+      "Date": "2009-07-22",
+      "Author": "Xiaochun Li",
+      "Description": "Data of T- and B-cell Acute Lymphocytic Leukemia from the Ritz Laboratory at the DFCI (includes Apr 2004 versions)",
+      "Maintainer": "Robert Gentleman <rgentlem@gmail.com>",
+      "License": "Artistic-2.0",
+      "Depends": [
+        "R (>= 2.10)",
+        "Biobase (>= 2.5.5)"
+      ],
+      "Suggests": [
+        "rpart"
+      ],
+      "biocViews": "ExperimentData, CancerData, LeukemiaCancerData",
+      "git_url": "https://git.bioconductor.org/packages/ALL",
+      "git_branch": "RELEASE_3_22",
+      "git_last_commit": "0bc53bb",
+      "git_last_commit_date": "2025-10-29",
+      "Repository": "Bioconductor 3.22",
+      "NeedsCompilation": "no"
+    },
     "AnnotationDbi": {
       "Package": "AnnotationDbi",
       "Version": "1.72.0",
@@ -423,7 +448,7 @@
       "NeedsCompilation": "no",
       "Author": "Martin Morgan [aut] (ORCID: <https://orcid.org/0000-0002-5874-8148>), Marcel Ramos [aut, cre] (ORCID: <https://orcid.org/0000-0002-3242-0582>)",
       "Maintainer": "Marcel Ramos <marcel.ramos@sph.cuny.edu>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "BiocParallel": {
       "Package": "BiocParallel",
@@ -625,6 +650,52 @@
       "Author": "Hervé Pagès [aut, cre], Patrick Aboyoun [aut], Robert Gentleman [aut], Saikat DebRoy [aut], Vince Carey [ctb], Nicolas Delhomme [ctb], Felix Ernst [ctb], Wolfgang Huber [ctb] ('matchprobes' vignette), Beryl Kanali [ctb] (Converted 'MultipleAlignments' vignette from Sweave to RMarkdown), Haleema Khan [ctb] (Converted 'matchprobes' vignette from Sweave to RMarkdown), Aidan Lakshman [ctb], Kieran O'Neill [ctb], Valerie Obenchain [ctb], Marcel Ramos [ctb], Albert Vill [ctb], Jen Wokaty [ctb] (Converted 'matchprobes' vignette from Sweave to RMarkdown), Erik Wright [ctb]",
       "Maintainer": "Hervé Pagès <hpages.on.github@gmail.com>"
     },
+    "CARNIVAL": {
+      "Package": "CARNIVAL",
+      "Version": "2.20.0",
+      "Source": "Bioconductor",
+      "Title": "A CAusal Reasoning tool for Network Identification (from gene expression data) using Integer VALue programming",
+      "Authors@R": "c( person(given = \"Enio\", family = \"Gjerga\", role = c(\"aut\"), email = \"enio.gjerga@gmail.com\", comment = c(ORCID = \"0000-0002-3060-5786\")), person(given = \"Panuwat\", family = \"Trairatphisan\", role = \"aut\"), person(given = \"Anika\", family = \"Liu\", role = \"ctb\"), person(given = \"Alberto\", family = \"Valdeolivas\", role = \"ctb\"), person(given = \"Nikolas\", family = \"Peschke\", role = \"ctb\"), person(given = \"Aurelien\", family = \"Dugourd\", role = \"ctb\"), person(given = \"Attila\", family = \"Gabor\", role = \"cre\", email = \"attila.gabor@uni-heidelberg.de\"), person(given = \"Olga\", family = \"Ivanova\", role = \"aut\", email = \"olga.ivanova@bioquant.uni-heidelberg.de\") )",
+      "Description": "An upgraded causal reasoning tool from Melas et al in R with updated assignments of TFs' weights from PROGENy scores. Optimization parameters can be freely adjusted and multiple solutions can be obtained and aggregated.",
+      "URL": "https://github.com/saezlab/CARNIVAL",
+      "BugReports": "https://github.com/saezlab/CARNIVAL/issues",
+      "Depends": [
+        "R (>= 4.0)"
+      ],
+      "Imports": [
+        "readr",
+        "stringr",
+        "lpSolve",
+        "igraph",
+        "dplyr",
+        "tibble",
+        "tidyr",
+        "rjson",
+        "rmarkdown"
+      ],
+      "biocViews": "Transcriptomics, GeneExpression, Network",
+      "License": "GPL-3",
+      "Encoding": "UTF-8",
+      "Suggests": [
+        "RefManageR",
+        "BiocStyle",
+        "covr",
+        "knitr",
+        "testthat (>= 3.0.0)",
+        "sessioninfo"
+      ],
+      "VignetteBuilder": "knitr",
+      "RoxygenNote": "7.1.2",
+      "Config/testthat/edition": "3",
+      "Config/pak/sysreqs": "libglpk-dev make libicu-dev libxml2-dev libx11-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/CARNIVAL",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "c4cdaf44f74f0776a1bd8aff63b736f7a9b20021",
+      "NeedsCompilation": "no",
+      "Author": "Enio Gjerga [aut] (ORCID: <https://orcid.org/0000-0002-3060-5786>), Panuwat Trairatphisan [aut], Anika Liu [ctb], Alberto Valdeolivas [ctb], Nikolas Peschke [ctb], Aurelien Dugourd [ctb], Attila Gabor [cre], Olga Ivanova [aut]",
+      "Maintainer": "Attila Gabor <attila.gabor@uni-heidelberg.de>"
+    },
     "ComplexHeatmap": {
       "Package": "ComplexHeatmap",
       "Version": "2.26.1",
@@ -692,6 +763,32 @@
       "NeedsCompilation": "no",
       "Author": "Zuguang Gu [aut, cre] (ORCID: <https://orcid.org/0000-0002-7395-8709>)",
       "Maintainer": "Zuguang Gu <guzuguang@suat-sz.edu.cn>"
+    },
+    "ConsensusClusterPlus": {
+      "Package": "ConsensusClusterPlus",
+      "Version": "1.74.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Imports": [
+        "Biobase",
+        "ALL",
+        "graphics",
+        "stats",
+        "utils",
+        "cluster"
+      ],
+      "Title": "ConsensusClusterPlus",
+      "Date": "2020-4-24",
+      "Author": "Matt Wilkerson <mdwilkerson@outlook.com>, Peter Waltman <waltman@soe.ucsc.edu>",
+      "Maintainer": "Matt Wilkerson <mdwilkerson@outlook.com>",
+      "Description": "algorithm for determining cluster count and membership by stability evidence in unsupervised analysis",
+      "License": "GPL version 2",
+      "biocViews": "Software, Clustering",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/ConsensusClusterPlus",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "4015c97af1fd96a6cbe6bbd3766875717c122711",
+      "NeedsCompilation": "no"
     },
     "DBI": {
       "Package": "DBI",
@@ -984,7 +1081,7 @@
       "NeedsCompilation": "no",
       "Author": "Derek Beaton [aut, cre], Cherise R. Chin Fatt [aut], Herve Abdi [aut]",
       "Maintainer": "Derek Beaton <exposition.software@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "FNN": {
       "Package": "FNN",
@@ -1025,8 +1122,46 @@
       "NeedsCompilation": "no",
       "Author": "Achim Zeileis [aut, cre] (<https://orcid.org/0000-0003-0918-3766>), Yves Croissant [aut]",
       "Maintainer": "Achim Zeileis <Achim.Zeileis@R-project.org>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
+    },
+    "GENIE3": {
+      "Package": "GENIE3",
+      "Version": "1.32.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "GEne Network Inference with Ensemble of trees",
+      "Date": "2022-04-05",
+      "Author": "Van Anh Huynh-Thu, Sara Aibar, Pierre Geurts",
+      "Maintainer": "Van Anh Huynh-Thu <vahuynh@uliege.be>",
+      "Description": "This package implements the GENIE3 algorithm for inferring gene regulatory networks from expression data.",
+      "License": "GPL (>= 2)",
+      "Imports": [
+        "stats",
+        "reshape2",
+        "dplyr"
+      ],
+      "Suggests": [
+        "knitr",
+        "rmarkdown",
+        "foreach",
+        "doRNG",
+        "doParallel",
+        "Biobase",
+        "SummarizedExperiment",
+        "testthat",
+        "methods",
+        "BiocStyle"
+      ],
+      "NeedsCompilation": "yes",
+      "RoxygenNote": "7.1.2",
+      "VignetteBuilder": "knitr",
+      "biocViews": "NetworkInference, SystemsBiology, DecisionTree, Regression, Network, GraphAndNetwork, GeneExpression",
+      "Config/pak/sysreqs": "libicu-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/GENIE3",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "620284f6cffd8a5958e68c08977793fb50172c56"
     },
     "GO.db": {
       "Package": "GO.db",
@@ -1481,7 +1616,7 @@
       "NeedsCompilation": "no",
       "Author": "Zuguang Gu [aut, cre] (ORCID: <https://orcid.org/0000-0002-7395-8709>)",
       "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "GlobalOptions": {
@@ -1513,7 +1648,7 @@
       "NeedsCompilation": "no",
       "Author": "Zuguang Gu [aut, cre] (ORCID: <https://orcid.org/0000-0002-7395-8709>)",
       "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "HDF5Array": {
@@ -1647,7 +1782,7 @@
       "NeedsCompilation": "yes",
       "Author": "Frank E Harrell Jr [aut, cre] (ORCID: <https://orcid.org/0000-0002-8271-5493>), Cole Beck [ctb], Charles Dupont [ctb]",
       "Maintainer": "Frank E Harrell Jr <fh@fharrell.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "IRanges": {
       "Package": "IRanges",
@@ -1734,6 +1869,49 @@
       "NeedsCompilation": "no",
       "Author": "Dan Tenenbaum [aut], Bioconductor Package Maintainer [aut, cre], Martin Morgan [ctb], Kozo Nishida [ctb], Marcel Ramos [ctb], Kristina Riemer [ctb], Lori Shepherd [ctb], Jeremy Volkening [ctb]",
       "Maintainer": "Bioconductor Package Maintainer <maintainer@bioconductor.org>"
+    },
+    "KEGGgraph": {
+      "Package": "KEGGgraph",
+      "Version": "1.70.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "KEGGgraph: A graph approach to KEGG PATHWAY in R and Bioconductor",
+      "Date": "2025-04-14",
+      "Author": "Jitao David Zhang, with inputs from Paul Shannon and Hervé Pagès",
+      "Maintainer": "Jitao David Zhang <jitao_david.zhang@roche.com>",
+      "Description": "KEGGGraph is an interface between KEGG pathway and graph object as well as a collection of tools to analyze, dissect and visualize these graphs. It parses the regularly updated KGML (KEGG XML) files into graph models maintaining all essential pathway attributes. The package offers functionalities including parsing, graph operation, visualization and etc.",
+      "License": "GPL (>= 2)",
+      "LazyLoad": "yes",
+      "LazyData": "yes",
+      "Depends": [
+        "R (>= 3.5.0)"
+      ],
+      "Imports": [
+        "methods",
+        "XML (>= 2.3-0)",
+        "graph",
+        "utils",
+        "RCurl",
+        "Rgraphviz"
+      ],
+      "Suggests": [
+        "RBGL",
+        "testthat",
+        "RColorBrewer",
+        "org.Hs.eg.db",
+        "hgu133plus2.db",
+        "SPIA"
+      ],
+      "Collate": "kegg2graph-functions.R parse.R annotation.R graph.R kgmlfile.R misc.R vis.R",
+      "URL": "https://accio.github.io/research/#software",
+      "biocViews": "Pathways, GraphAndNetwork, Visualization, KEGG",
+      "Encoding": "UTF-8",
+      "Config/pak/sysreqs": "make libxml2-dev zlib1g-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/KEGGgraph",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "f90447d7e093cb10414c6cf685bd17c83e455fc2",
+      "NeedsCompilation": "no"
     },
     "KernSmooth": {
       "Package": "KernSmooth",
@@ -1958,6 +2136,64 @@
       "Author": "Constantin Ahlmann-Eltze [aut] (ORCID: <https://orcid.org/0000-0002-3762-068X>), Peter Hickey [aut, cre] (ORCID: <https://orcid.org/0000-0002-8153-6258>), Hervé Pagès [aut]",
       "Maintainer": "Peter Hickey <peter.hickey@gmail.com>"
     },
+    "MultiAssayExperiment": {
+      "Package": "MultiAssayExperiment",
+      "Version": "1.36.1",
+      "Source": "Bioconductor",
+      "Title": "Software for the integration of multi-omics experiments in Bioconductor",
+      "Authors@R": "c( person(\"Marcel\", \"Ramos\", , \"marcel.ramos@sph.cuny.edu\", c(\"aut\", \"cre\"), c(ORCID = \"0000-0002-3242-0582\")), person(\"Martin\", \"Morgan\", , , c(\"aut\", \"ctb\")), person(\"Lori\", \"Shepherd\", , , \"ctb\"), person(\"Hervé\", \"Pagès\", , , \"ctb\"), person(\"Vincent J\", \"Carey\", , , c(\"aut\", \"ctb\")), person(\"Levi\", \"Waldron\", , \"lwaldron.research@gmail.com\", \"aut\"), person(\"MultiAssay\", \"SIG\", , \"biocmultiassay@googlegroups.com\", \"ctb\"))",
+      "Description": "Harmonize data management of multiple experimental assays performed on an overlapping set of specimens.  It provides a familiar Bioconductor user experience by extending concepts from SummarizedExperiment, supporting an open-ended mix of standard data classes for individual assays, and allowing subsetting by genomic ranges or rownames. Facilities are provided for reshaping data into wide and long formats for adaptability to graphing and downstream analysis.",
+      "License": "Artistic-2.0",
+      "URL": "http://waldronlab.io/MultiAssayExperiment/, https://github.com/waldornlab/MultiAssayExperiment",
+      "BugReports": "https://github.com/waldronlab/MultiAssayExperiment/issues",
+      "Depends": [
+        "SummarizedExperiment",
+        "R (>= 4.4.0)"
+      ],
+      "Imports": [
+        "Biobase",
+        "BiocBaseUtils",
+        "BiocGenerics",
+        "DelayedArray",
+        "GenomicRanges",
+        "IRanges",
+        "MatrixGenerics",
+        "methods",
+        "S4Vectors",
+        "tidyr",
+        "utils"
+      ],
+      "Suggests": [
+        "BiocStyle",
+        "HDF5Array",
+        "h5mread",
+        "knitr",
+        "maftools",
+        "RaggedExperiment",
+        "reshape2",
+        "rmarkdown",
+        "survival",
+        "survminer",
+        "testthat",
+        "UpSetR"
+      ],
+      "VignetteBuilder": "knitr",
+      "biocViews": "Infrastructure, DataRepresentation",
+      "Encoding": "UTF-8",
+      "RoxygenNote": "7.3.2",
+      "Roxygen": "list(markdown = TRUE)",
+      "Video": "https://youtu.be/w6HWAHaDpyk, https://youtu.be/Vh0hVVUKKFM",
+      "Collate": "'ExperimentList-class.R' 'MultiAssayExperiment-class.R' 'MatchedAssayExperiment-class.R' 'subsetBy-methods.R' 'MultiAssayExperiment-subset.R' 'MultiAssayExperiment-methods.R' 'MultiAssayExperiment-helpers.R' 'MultiAssayExperiment-pkg.R' 'MultiAssayExperimentToMAF.R' 'assay-methods.R' 'data.R' 'hasAssay.R' 'listToMap.R' 'longFormat-defunct.R' 'mapToList.R' 'prepMultiAssay.R' 'reexports.R' 'saveHDF5MultiAssayExperiment.R' 'upsetSamples.R' 'utilities.R'",
+      "Date": "2025-08-18",
+      "Config/pak/sysreqs": "libicu-dev zlib1g-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/MultiAssayExperiment",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "9f37c70bebef4ef08da6f930d7251eddc6114168",
+      "NeedsCompilation": "no",
+      "Author": "Marcel Ramos [aut, cre] (ORCID: <https://orcid.org/0000-0002-3242-0582>), Martin Morgan [aut, ctb], Lori Shepherd [ctb], Hervé Pagès [ctb], Vincent J Carey [aut, ctb], Levi Waldron [aut], MultiAssay SIG [ctb]",
+      "Maintainer": "Marcel Ramos <marcel.ramos@sph.cuny.edu>"
+    },
     "ProteoMM": {
       "Package": "ProteoMM",
       "Version": "1.28.0",
@@ -2020,7 +2256,7 @@
       "URL": "https://github.com/HenrikBengtsson/R.methodsS3",
       "BugReports": "https://github.com/HenrikBengtsson/R.methodsS3/issues",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "R.oo": {
@@ -2048,7 +2284,7 @@
       "URL": "https://henrikbengtsson.github.io/R.oo/, https://github.com/HenrikBengtsson/R.oo",
       "BugReports": "https://github.com/HenrikBengtsson/R.oo/issues",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "R.utils": {
@@ -2079,7 +2315,7 @@
       "URL": "https://henrikbengtsson.github.io/R.utils/, https://github.com/HenrikBengtsson/R.utils",
       "BugReports": "https://github.com/HenrikBengtsson/R.utils/issues",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "R6": {
@@ -2106,7 +2342,7 @@
       "NeedsCompilation": "no",
       "Author": "Winston Chang [aut, cre], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Winston Chang <winston@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "RColorBrewer": {
       "Package": "RColorBrewer",
@@ -2123,7 +2359,7 @@
       "Description": "Provides color schemes for maps (and other graphics) designed by Cynthia Brewer as described at http://colorbrewer2.org.",
       "License": "Apache License 2.0",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "RCurl": {
@@ -2541,7 +2777,7 @@
       "NeedsCompilation": "no",
       "Author": "Georgi N. Boshnakov [aut, cre] (ORCID: <https://orcid.org/0000-0003-2839-346X>), Duncan Murdoch [ctb]",
       "Maintainer": "Georgi N. Boshnakov <georgi.boshnakov@manchester.ac.uk>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "Rfast": {
       "Package": "Rfast",
@@ -2576,6 +2812,44 @@
       "Author": "Manos Papadakis [aut, cre, cph], Michail Tsagris [aut], Marios Dimitriadis [aut], Stefanos Fafalios [aut], Matteo Fasiolo [aut], Morgan Jacob [ctb], Giorgos Borboudakis [aut], John Burkardt [aut], Changliang Zou [aut]",
       "Repository": "CRAN",
       "Encoding": "UTF-8"
+    },
+    "Rgraphviz": {
+      "Package": "Rgraphviz",
+      "Version": "2.54.0",
+      "Source": "Bioconductor",
+      "Title": "Provides plotting capabilities for R graph objects",
+      "Description": "Interfaces R with the AT and T graphviz library for plotting R graph objects from the graph package.",
+      "Authors@R": "c(person(c(\"Kasper\", \"Daniel\"), \"Hansen\", role = c(\"cre\", \"aut\"), email = \"kasperdanielhansen@gmail.com\"), person(\"Jeff\", \"Gentry\", role = \"aut\"), person(\"Li\", \"Long\", role = \"aut\"), person(\"Robert\", \"Gentleman\", role = \"aut\"), person(\"Seth\", \"Falcon\", role = \"aut\"), person(\"Florian\", \"Hahne\", role = \"aut\"), person(\"Deepayan\", \"Sarkar\", role = \"aut\"))",
+      "Depends": [
+        "R (>= 2.6.0)",
+        "methods",
+        "utils",
+        "graph",
+        "grid"
+      ],
+      "Imports": [
+        "stats4",
+        "graphics",
+        "grDevices"
+      ],
+      "Suggests": [
+        "RUnit",
+        "BiocGenerics",
+        "XML"
+      ],
+      "SystemRequirements": "optionally Graphviz (>= 2.16), USE_C17",
+      "GraphvizDetails": "Graphviz 2.28.0",
+      "License": "EPL",
+      "LazyLoad": "Yes",
+      "Collate": "AllGenerics.R AllClasses.R SimpleMethods.R graphvizVersion.R graphviz_build_version.R agfunctions.R attrs.R graphLayout.R plotGraph.R plotUtils.R layoutGraph.R renderGraph.R graph_methods.R writers.R zzz.R",
+      "biocViews": "GraphAndNetwork, Visualization",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/Rgraphviz",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "deef90aa7dfbe898731e5f7efe90796674fe79fa",
+      "NeedsCompilation": "yes",
+      "Author": "Kasper Daniel Hansen [cre, aut], Jeff Gentry [aut], Li Long [aut], Robert Gentleman [aut], Seth Falcon [aut], Florian Hahne [aut], Deepayan Sarkar [aut]",
+      "Maintainer": "Kasper Daniel Hansen <kasperdanielhansen@gmail.com>"
     },
     "Rhdf5lib": {
       "Package": "Rhdf5lib",
@@ -2886,7 +3160,7 @@
       "Description": "Similarity Network Fusion takes multiple views of a network and fuses them together to construct an overall status matrix. The input to our algorithm can be feature vectors, pairwise distances, or pairwise similarities. The learned status matrix can then be used for retrieval, clustering, and classification.",
       "License": "GPL",
       "NeedsCompilation": "no",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "STRINGdb": {
@@ -3309,7 +3583,7 @@
       "Description": "Functions necessary to perform Weighted Correlation Network Analysis on high-dimensional data as originally described in Horvath and Zhang (2005) <doi:10.2202/1544-6115.1128> and Langfelder and Horvath (2008) <doi:10.1186/1471-2105-9-559>. Includes functions for rudimentary data cleaning, construction of correlation networks, module identification, summarization, and relating of variables and modules to sample traits. Also includes a number of utility functions for data manipulation and visualization.",
       "NeedsCompilation": "yes",
       "Author": "Peter Langfelder [aut, cre], Steve Horvath [aut], Chaochao Cai [aut], Jun Dong [aut], Jeremy Miller [aut], Lin Song [aut], Andy Yip [aut], Bin Zhang [aut]",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "XML": {
@@ -3433,7 +3707,7 @@
       "NeedsCompilation": "no",
       "Author": "Michal Bojanowski [aut, cre], Robin Edwards [aut]",
       "Maintainer": "Michal Bojanowski <michal2992@gmail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "annotate": {
@@ -3530,7 +3804,7 @@
       "NeedsCompilation": "yes",
       "Author": "Emmanuel Paradis [aut, cre, cph] (<https://orcid.org/0000-0003-3092-2199>), Simon Blomberg [aut, cph] (<https://orcid.org/0000-0003-1062-0839>), Ben Bolker [aut, cph] (<https://orcid.org/0000-0002-2127-0443>), Joseph Brown [aut, cph] (<https://orcid.org/0000-0002-3835-8062>), Santiago Claramunt [aut, cph] (<https://orcid.org/0000-0002-8926-5974>), Julien Claude [aut, cph] (<https://orcid.org/0000-0002-9267-1228>), Hoa Sien Cuong [aut, cph], Richard Desper [aut, cph], Gilles Didier [aut, cph] (<https://orcid.org/0000-0003-0596-9112>), Benoit Durand [aut, cph], Julien Dutheil [aut, cph] (<https://orcid.org/0000-0001-7753-4121>), RJ Ewing [aut, cph], Olivier Gascuel [aut, cph], Thomas Guillerme [aut, cph] (<https://orcid.org/0000-0003-4325-1275>), Christoph Heibl [aut, cph] (<https://orcid.org/0000-0002-7655-3299>), Anthony Ives [aut, cph] (<https://orcid.org/0000-0001-9375-9523>), Bradley Jones [aut, cph] (<https://orcid.org/0000-0003-4498-1069>), Franz Krah [aut, cph] (<https://orcid.org/0000-0001-7866-7508>), Daniel Lawson [aut, cph] (<https://orcid.org/0000-0002-5311-6213>), Vincent Lefort [aut, cph], Pierre Legendre [aut, cph] (<https://orcid.org/0000-0002-3838-3305>), Jim Lemon [aut, cph], Guillaume Louvel [aut, cph] (<https://orcid.org/0000-0002-7745-0785>), Federico Marotta [aut, cph], Eric Marcon [aut, cph] (<https://orcid.org/0000-0002-5249-321X>), Rosemary McCloskey [aut, cph] (<https://orcid.org/0000-0002-9772-8553>), Johan Nylander [aut, cph], Rainer Opgen-Rhein [aut, cph], Andrei-Alin Popescu [aut, cph], Manuela Royer-Carenzi [aut, cph], Klaus Schliep [aut, cph] (<https://orcid.org/0000-0003-2941-0161>), Korbinian Strimmer [aut, cph] (<https://orcid.org/0000-0001-7917-2056>), Damien de Vienne [aut, cph] (<https://orcid.org/0000-0001-9532-5251>)",
       "Maintainer": "Emmanuel Paradis <Emmanuel.Paradis@ird.fr>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "aplot": {
       "Package": "aplot",
@@ -3563,6 +3837,36 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre] (ORCID: <https://orcid.org/0000-0002-6485-8781>), Shuangbin Xu [ctb] (ORCID: <https://orcid.org/0000-0003-3513-5362>), Thomas Hackl [ctb]",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
+      "Repository": "RSPM"
+    },
+    "aricode": {
+      "Package": "aricode",
+      "Version": "1.0.3",
+      "Source": "Repository",
+      "Type": "Package",
+      "Title": "Efficient Computations of Standard Clustering Comparison Measures",
+      "Authors@R": "c( person(\"Julien\", \"Chiquet\", role = c(\"aut\", \"cre\"), email = \"julien.chiquet@inrae.fr\", comment = c(ORCID = \"0000-0002-3629-3429\")), person(\"Guillem\", \"Rigaill\", role = \"aut\", email = \"guillem.rigaill@inrae.fr\"), person(\"Martina\", \"Sundqvist\", role = \"aut\", email = \"martina.sundqvist@agroparistech.fr\"), person(\"Valentin\", \"Dervieux\", role = \"ctb\", email = \"valentin.dervieux@gmail.com\"), person(\"Florent\", \"Bersani\", role = \"ctb\", email = \"florent@bersani.org\") )",
+      "Maintainer": "Julien Chiquet <julien.chiquet@inrae.fr>",
+      "Description": "Implements an efficient O(n) algorithm based on bucket-sorting for  fast computation of standard clustering comparison measures. Available measures include adjusted Rand index (ARI), normalized information distance (NID),  normalized mutual information (NMI), adjusted mutual information (AMI),  normalized variation information (NVI) and entropy, as described in Vinh et al (2009)  <doi:10.1145/1553374.1553511>. Include AMI (Adjusted Mutual Information) since version 0.1.2,  a modified version of ARI (MARI), as described in Sundqvist et al. <doi:10.1007/s00180-022-01230-7>  and simple Chi-square distance since version 1.0.0.",
+      "License": "GPL (>= 3)",
+      "URL": "https://github.com/jchiquet/aricode",
+      "BugReports": "https://github.com/jchiquet/aricode/issues",
+      "Encoding": "UTF-8",
+      "Imports": [
+        "Matrix",
+        "Rcpp"
+      ],
+      "Suggests": [
+        "testthat",
+        "spelling"
+      ],
+      "LinkingTo": [
+        "Rcpp"
+      ],
+      "RoxygenNote": "7.2.3",
+      "Language": "en-US",
+      "NeedsCompilation": "yes",
+      "Author": "Julien Chiquet [aut, cre] (<https://orcid.org/0000-0002-3629-3429>), Guillem Rigaill [aut], Martina Sundqvist [aut], Valentin Dervieux [ctb], Florent Bersani [ctb]",
       "Repository": "CRAN"
     },
     "aroma.light": {
@@ -3622,7 +3926,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jeroen Ooms [aut, cre] (<https://orcid.org/0000-0002-4035-0289>)",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "assertthat": {
       "Package": "assertthat",
@@ -3728,7 +4032,7 @@
       "Encoding": "UTF-8",
       "RoxygenNote": "7.3.1",
       "Author": "Michel Lang [cre, aut] (<https://orcid.org/0000-0001-9754-0393>), Duncan Murdoch [aut], R Core Team [aut]",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "base64enc": {
       "Package": "base64enc",
@@ -3820,6 +4124,32 @@
       "NeedsCompilation": "no",
       "Author": "Aaron Lun [aut, cre, cph], Vince Carey [ctb]",
       "Maintainer": "Aaron Lun <infinite.monkeys.with.keyboards@gmail.com>"
+    },
+    "bcellViper": {
+      "Package": "bcellViper",
+      "Version": "1.46.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "Human B-cell transcriptional interactome and normal human B-cell expression data",
+      "Date": "2013-04-15",
+      "Author": "Mariano Javier Alvarez",
+      "Maintainer": "Mariano Javier Alvarez <malvarez@c2b2.columbia.edu>",
+      "Description": "This package provides a human B-cell context-specific transcriptional regulatory network and a human normal B-cells dataset for the examples in package viper.",
+      "License": "GPL (>=2)",
+      "Depends": [
+        "R(>= 2.14.0)",
+        "Biobase",
+        "methods"
+      ],
+      "LazyLoad": "yes",
+      "biocViews": "ExperimentData, Genome, Homo_sapiens_Data, CancerData",
+      "Collate": "''",
+      "git_url": "https://git.bioconductor.org/packages/bcellViper",
+      "git_branch": "RELEASE_3_22",
+      "git_last_commit": "3faf694",
+      "git_last_commit_date": "2025-10-29",
+      "Repository": "Bioconductor 3.22",
+      "NeedsCompilation": "no"
     },
     "beachmat": {
       "Package": "beachmat",
@@ -3949,7 +4279,7 @@
       "NeedsCompilation": "yes",
       "Author": "Michael Chirico [aut, cre], Jens Oehlschlägel [aut], Brian Ripley [ctb]",
       "Maintainer": "Michael Chirico <MichaelChirico4@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "bit64": {
       "Package": "bit64",
@@ -3983,7 +4313,7 @@
       "NeedsCompilation": "yes",
       "Author": "Michael Chirico [aut, cre], Jens Oehlschlägel [aut], Leonardo Silvestri [ctb], Ofek Shilon [ctb]",
       "Maintainer": "Michael Chirico <michaelchirico4@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "bitops": {
       "Package": "bitops",
@@ -4032,7 +4362,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut], Kirill Müller [cre], RStudio [cph, fnd]",
       "Maintainer": "Kirill Müller <kirill@cynkra.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "boot": {
       "Package": "boot",
@@ -4265,7 +4595,7 @@
       "Description": "Contains several basic utility functions including: moving (rolling, running) window statistic functions, read/write for GIF and ENVI binary files, fast calculation of AUC, LogitBoost classifier, base64 encoder/decoder, round-off-error-free sum and cumsum, etc.",
       "License": "GPL-3",
       "NeedsCompilation": "yes",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Author": "Jarek Tuszynski [aut], Michael Dietze [cre]",
       "Encoding": "UTF-8"
     },
@@ -4293,7 +4623,7 @@
       "NeedsCompilation": "yes",
       "Author": "Winston Chang [aut, cre], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Winston Chang <winston@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "callr": {
       "Package": "callr",
@@ -4331,7 +4661,7 @@
       "NeedsCompilation": "no",
       "Author": "Gábor Csárdi [aut, cre, cph] (<https://orcid.org/0000-0001-7098-9676>), Winston Chang [aut], Posit Software, PBC [cph, fnd], Ascent Digital Services [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "cellranger": {
       "Package": "cellranger",
@@ -4406,7 +4736,7 @@
       "Collate": "'AssertCollection.R' 'allMissing.R' 'anyInfinite.R' 'anyMissing.R' 'anyNaN.R' 'asInteger.R' 'assert.R' 'helper.R' 'makeExpectation.R' 'makeTest.R' 'makeAssertion.R' 'checkAccess.R' 'checkArray.R' 'checkAtomic.R' 'checkAtomicVector.R' 'checkCharacter.R' 'checkChoice.R' 'checkClass.R' 'checkComplex.R' 'checkCount.R' 'checkDataFrame.R' 'checkDataTable.R' 'checkDate.R' 'checkDirectoryExists.R' 'checkDisjunct.R' 'checkDouble.R' 'checkEnvironment.R' 'checkFALSE.R' 'checkFactor.R' 'checkFileExists.R' 'checkFlag.R' 'checkFormula.R' 'checkFunction.R' 'checkInt.R' 'checkInteger.R' 'checkIntegerish.R' 'checkList.R' 'checkLogical.R' 'checkMatrix.R' 'checkMultiClass.R' 'checkNamed.R' 'checkNames.R' 'checkNull.R' 'checkNumber.R' 'checkNumeric.R' 'checkOS.R' 'checkPOSIXct.R' 'checkPathForOutput.R' 'checkPermutation.R' 'checkR6.R' 'checkRaw.R' 'checkScalar.R' 'checkScalarNA.R' 'checkSetEqual.R' 'checkString.R' 'checkSubset.R' 'checkTRUE.R' 'checkTibble.R' 'checkVector.R' 'coalesce.R' 'isIntegerish.R' 'matchArg.R' 'qassert.R' 'qassertr.R' 'vname.R' 'wfwl.R' 'zzz.R'",
       "Author": "Michel Lang [cre, aut] (ORCID: <https://orcid.org/0000-0001-9754-0393>), Bernd Bischl [ctb], Dénes Tóth [ctb] (ORCID: <https://orcid.org/0000-0003-4262-3217>)",
       "Maintainer": "Michel Lang <michellang@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "chron": {
       "Package": "chron",
@@ -4433,7 +4763,7 @@
       "NeedsCompilation": "yes",
       "Author": "David James [aut] (S original), Kurt Hornik [aut, trl, cre] (<https://orcid.org/0000-0003-4198-9911>, R port), Gabor Grothendieck [ctb], R Core Team [ctb]",
       "Maintainer": "Kurt Hornik <Kurt.Hornik@R-project.org>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "cigarillo": {
@@ -4522,7 +4852,7 @@
       "NeedsCompilation": "no",
       "Author": "Zuguang Gu [aut, cre] (ORCID: <https://orcid.org/0000-0002-7395-8709>)",
       "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "cli": {
@@ -4684,7 +5014,7 @@
       "URL": "https://svn.r-project.org/R-packages/trunk/cluster/",
       "NeedsCompilation": "yes",
       "Author": "Martin Maechler [aut, cre] (<https://orcid.org/0000-0002-8685-9910>), Peter Rousseeuw [aut] (Fortran original, <https://orcid.org/0000-0002-3807-5353>), Anja Struyf [aut] (S original), Mia Hubert [aut] (S original, <https://orcid.org/0000-0001-6398-4850>), Kurt Hornik [trl, ctb] (port to R; maintenance(1999-2000), <https://orcid.org/0000-0003-4198-9911>), Matthias Studer [ctb], Pierre Roudier [ctb], Juan Gonzalez [ctb], Kamil Kozlowski [ctb], Erich Schubert [ctb] (fastpam options for pam(), <https://orcid.org/0000-0001-9143-4880>), Keefe Murphy [ctb] (volume.ellipsoid({d >= 3}))",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "clusterProfiler": {
@@ -4813,7 +5143,7 @@
       "NeedsCompilation": "yes",
       "Author": "Ross Ihaka [aut], Paul Murrell [aut] (ORCID: <https://orcid.org/0000-0002-3224-8858>), Kurt Hornik [aut] (ORCID: <https://orcid.org/0000-0003-4198-9911>), Jason C. Fisher [aut] (ORCID: <https://orcid.org/0000-0001-9032-8912>), Reto Stauffer [aut] (ORCID: <https://orcid.org/0000-0002-3798-5507>), Claus O. Wilke [aut] (ORCID: <https://orcid.org/0000-0002-7470-9261>), Claire D. McWhite [aut] (ORCID: <https://orcid.org/0000-0001-7346-3047>), Achim Zeileis [aut, cre] (ORCID: <https://orcid.org/0000-0003-0918-3766>)",
       "Maintainer": "Achim Zeileis <Achim.Zeileis@R-project.org>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "commonmark": {
       "Package": "commonmark",
@@ -4837,7 +5167,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jeroen Ooms [aut, cre] (ORCID: <https://orcid.org/0000-0002-4035-0289>), John MacFarlane [cph] (Author of cmark)",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "conflicted": {
       "Package": "conflicted",
@@ -4927,6 +5257,55 @@
       "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
+    "cosmosR": {
+      "Package": "cosmosR",
+      "Version": "1.18.1",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "COSMOS (Causal Oriented Search of Multi-Omic Space)",
+      "Description": "COSMOS (Causal Oriented Search of Multi-Omic Space) is a method that integrates phosphoproteomics, transcriptomics, and metabolomics data sets based on prior knowledge of signaling, metabolic, and gene regulatory networks. It estimated the activities of transcrption factors and kinases and finds a network-level causal reasoning. Thereby, COSMOS provides mechanistic hypotheses for experimental observations across mulit-omics datasets.",
+      "Authors@R": "c( person(given = \"Aurélien\", family = \"Dugourd\", role = c(\"aut\"), email = \"dugourdaurelien@gmail.com\", comment = c(ORCID = \"0000-0002-0714-028X\")), person(given = \"Attila\", family = \"Gabor\", role = c(\"cre\"), email = \"attila.gabor@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-0776-1182\")), person(given = \"Katharina\", family = \"Zirngibl\", role = c(\"aut\"), email = \"katharina.zirngibl@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-7518-0339\")))",
+      "URL": "https://github.com/saezlab/COSMOSR",
+      "BugReports": "https://github.com/saezlab/COSMOSR/issues",
+      "Depends": [
+        "R (>= 4.1)"
+      ],
+      "License": "GPL-3",
+      "Encoding": "UTF-8",
+      "LazyData": "false",
+      "RoxygenNote": "7.2.3",
+      "VignetteBuilder": "knitr",
+      "Imports": [
+        "CARNIVAL",
+        "dorothea",
+        "dplyr",
+        "GSEABase",
+        "igraph",
+        "progress",
+        "purrr",
+        "rlang",
+        "stringr",
+        "utils",
+        "visNetwork",
+        "decoupleR"
+      ],
+      "Suggests": [
+        "testthat",
+        "knitr",
+        "rmarkdown",
+        "piano",
+        "ggplot2"
+      ],
+      "biocViews": "CellBiology, Pathways, Network, Proteomics, Metabolomics, Transcriptomics, GeneSignaling",
+      "Config/pak/sysreqs": "libglpk-dev make libicu-dev libpng-dev libxml2-dev libssl-dev libx11-dev zlib1g-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/cosmosR",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "80dd9b7e0e0467405a9f0ee88654676468dcf108",
+      "NeedsCompilation": "no",
+      "Author": "Aurélien Dugourd [aut] (ORCID: <https://orcid.org/0000-0002-0714-028X>), Attila Gabor [cre] (ORCID: <https://orcid.org/0000-0002-0776-1182>), Katharina Zirngibl [aut] (ORCID: <https://orcid.org/0000-0002-7518-0339>)",
+      "Maintainer": "Attila Gabor <attila.gabor@uni-heidelberg.de>"
+    },
     "cowplot": {
       "Package": "cowplot",
       "Version": "1.2.0",
@@ -4975,7 +5354,7 @@
       "NeedsCompilation": "no",
       "Author": "Claus O. Wilke [aut, cre] (ORCID: <https://orcid.org/0000-0002-7470-9261>)",
       "Maintainer": "Claus O. Wilke <wilke@austin.utexas.edu>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "cpp11": {
       "Package": "cpp11",
@@ -5052,7 +5431,7 @@
       "NeedsCompilation": "no",
       "Author": "Gábor Csárdi [aut, cre], Brodie Gaslam [ctb], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "crosstalk": {
       "Package": "crosstalk",
@@ -5118,7 +5497,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jeroen Ooms [aut, cre] (ORCID: <https://orcid.org/0000-0002-4035-0289>), Hadley Wickham [ctb], Posit Software, PBC [cph]",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "data.table": {
       "Package": "data.table",
@@ -5215,6 +5594,77 @@
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
       "Repository": "CRAN"
     },
+    "decoupleR": {
+      "Package": "decoupleR",
+      "Version": "2.16.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "decoupleR: Ensemble of computational methods to infer biological activities from omics data",
+      "Authors@R": "c(person(given = \"Pau\", family = \"Badia-i-Mompel\", role = c(\"aut\",\"cre\"), email = \"pau.badia@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-1004-3923\")), person(given = \"Jesús\", family = \"Vélez-Santiago\", role = c(\"aut\"), email = \"jvelezmagic@gmail.com\", comment = c(ORCID = \"0000-0001-5128-3838\")), person(given = \"Jana\", family = \"Braunger\", role = c(\"aut\"), email = \"jana.bc@gmx.de\", comment = c(ORCID = \"0000-0003-0820-9987\")), person(given = \"Celina\", family = \"Geiss\", role = c(\"aut\"), email = \"celina.geiss@stud.uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-8740-706X\")), person(given = \"Daniel\", family = \"Dimitrov\", role = c(\"aut\"), email = \"daniel.dimitrov@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-5197-2112\")), person(given = \"Sophia\", family = \"Müller-Dott\", role = c(\"aut\"), email = \"sophia.mueller-dott@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-9710-1865\")), person(given = \"Petr\", family = \"Taus\", role = c(\"aut\"), email = \"petr.taus@ceitec.muni.cz\", comment = c(ORCID = \"0000-0003-3764-9033\")), person(given = \"Aurélien\", family = \"Dugourd\", role = c(\"aut\"), email = \"aurelien.dugourd@bioquant.uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-0714-028X\")), person(given = \"Christian H.\", family = \"Holland\", role = \"aut\", email = \"cholland2408@gmail.com\", comment = c(ORCID = \"0000-0002-3060-5786\")), person(given = \"Ricardo O.\", family = \"Ramirez Flores\", role = c(\"aut\"), email = \"roramirezf@uni-heidelberg.de \", comment = c(ORCID = \"0000-0003-0087-371X\")), person(given = \"Julio\", family = \"Saez-Rodriguez\", role = c(\"aut\"), email = \"pub.saez@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-8552-8976\")) )",
+      "Description": "Many methods allow us to extract biological activities from omics data using information from prior knowledge resources, reducing the dimensionality for increased statistical power and better interpretability. Here, we present decoupleR, a Bioconductor package containing different statistical methods to extract these signatures within a unified framework. decoupleR allows the user to flexibly test any method with any resource. It incorporates methods that take into account the sign and weight of network interactions. decoupleR can be used with any omic, as long as its features can be linked to a biological process based on prior knowledge. For example, in transcriptomics gene sets regulated by a transcription factor, or in phospho-proteomics phosphosites that are targeted by a kinase.",
+      "License": "GPL-3 + file LICENSE",
+      "URL": "https://saezlab.github.io/decoupleR/",
+      "BugReports": "https://github.com/saezlab/decoupleR/issues",
+      "Depends": [
+        "R (>= 4.0)"
+      ],
+      "Imports": [
+        "BiocParallel",
+        "broom",
+        "dplyr",
+        "magrittr",
+        "Matrix",
+        "parallelly",
+        "purrr",
+        "rlang",
+        "stats",
+        "stringr",
+        "tibble",
+        "tidyr",
+        "tidyselect",
+        "withr"
+      ],
+      "Suggests": [
+        "glmnet (>= 4.1-7)",
+        "GSVA",
+        "viper",
+        "fgsea (>= 1.15.4)",
+        "AUCell",
+        "SummarizedExperiment",
+        "rpart",
+        "ranger",
+        "BiocStyle",
+        "covr",
+        "knitr",
+        "pkgdown",
+        "RefManageR",
+        "rmarkdown",
+        "roxygen2",
+        "sessioninfo",
+        "pheatmap",
+        "testthat",
+        "OmnipathR",
+        "Seurat",
+        "ggplot2",
+        "ggrepel",
+        "patchwork",
+        "magick"
+      ],
+      "VignetteBuilder": "knitr",
+      "biocViews": "DifferentialExpression, FunctionalGenomics, GeneExpression, GeneRegulation, Network, Software, StatisticalMethod, Transcription,",
+      "Config/testthat/edition": "3",
+      "Encoding": "UTF-8",
+      "Roxygen": "list(markdown = TRUE)",
+      "RoxygenNote": "7.3.0",
+      "Config/pak/sysreqs": "libicu-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/decoupleR",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "ff3aa1d8dac686c11b8611a840a2b5cf30df6902",
+      "NeedsCompilation": "no",
+      "Author": "Pau Badia-i-Mompel [aut, cre] (ORCID: <https://orcid.org/0000-0002-1004-3923>), Jesús Vélez-Santiago [aut] (ORCID: <https://orcid.org/0000-0001-5128-3838>), Jana Braunger [aut] (ORCID: <https://orcid.org/0000-0003-0820-9987>), Celina Geiss [aut] (ORCID: <https://orcid.org/0000-0002-8740-706X>), Daniel Dimitrov [aut] (ORCID: <https://orcid.org/0000-0002-5197-2112>), Sophia Müller-Dott [aut] (ORCID: <https://orcid.org/0000-0002-9710-1865>), Petr Taus [aut] (ORCID: <https://orcid.org/0000-0003-3764-9033>), Aurélien Dugourd [aut] (ORCID: <https://orcid.org/0000-0002-0714-028X>), Christian H. Holland [aut] (ORCID: <https://orcid.org/0000-0002-3060-5786>), Ricardo O. Ramirez Flores [aut] (ORCID: <https://orcid.org/0000-0003-0087-371X>), Julio Saez-Rodriguez [aut] (ORCID: <https://orcid.org/0000-0002-8552-8976>)",
+      "Maintainer": "Pau Badia-i-Mompel <pau.badia@uni-heidelberg.de>"
+    },
     "deldir": {
       "Package": "deldir",
       "Version": "2.0-4",
@@ -5238,7 +5688,7 @@
       "ByteCompile": "true",
       "License": "GPL (>= 2)",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "digest": {
@@ -5333,6 +5783,58 @@
       "Maintainer": "Folashade Daniel <fdaniel@microsoft.com>",
       "Repository": "RSPM",
       "Encoding": "UTF-8"
+    },
+    "dorothea": {
+      "Package": "dorothea",
+      "Version": "1.22.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "Collection Of Human And Mouse TF Regulons",
+      "Authors@R": "c( person(given = \"Pau\", family = \"Badia-i-Mompel\", role = c(\"cre\"), email = \"pau.badia@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-1004-3923\")), person(given = \"Daniel\", family = \"Dimitrov\", role = c(\"aut\"), email = \"daniel.dimitrov@uni-heidelberg.de\", comment = c(ORCID = \"0000-0002-5197-2112\")), person(given = \"Christian H.\", family = \"Holland\", role = c(\"aut\"), email = \"cholland2408@gmail.com\", comment = c(ORCID = \"0000-0002-3060-5786\")), person(given = \"Luz\", family = \"Garcia-Alonso\", role = \"aut\"), person(given = \"Alberto\", family = \"Valdeolivas\", role = \"ctb\"), person(given = \"Minoo\", family = \"Ashtiani\", role = \"ctb\"), person(given = \"Attila\", family = \"Gabor\", role = \"ctb\") )",
+      "Description": "DoRothEA is a gene regulatory network containing signed transcription factor (TF) - target gene interactions. DoRothEA regulons, the collection of a TF and its transcriptional targets, were curated and collected from different types of evidence for both human and mouse. A confidence level was assigned to each TF-target interaction based on the number of supporting evidence.",
+      "URL": "https://saezlab.github.io/dorothea/, https://github.com/saezlab/dorothea",
+      "BugReports": "https://github.com/saezlab/dorothea/issues",
+      "Depends": [
+        "R (>= 4.0)"
+      ],
+      "License": "GPL-3 + file LICENSE",
+      "Encoding": "UTF-8",
+      "LazyData": "true",
+      "LazyDataCompression": "xz",
+      "RoxygenNote": "7.2.3",
+      "VignetteBuilder": "knitr",
+      "biocViews": "ExperimentData, Homo_sapiens_Data, Mus_musculus_Data",
+      "Imports": [
+        "dplyr",
+        "magrittr",
+        "bcellViper",
+        "decoupleR"
+      ],
+      "Suggests": [
+        "Biobase",
+        "BiocStyle",
+        "OmnipathR",
+        "viper",
+        "knitr",
+        "pheatmap",
+        "pkgdown",
+        "rmarkdown",
+        "Seurat",
+        "SingleCellExperiment",
+        "SummarizedExperiment",
+        "testthat (>= 2.1.0)",
+        "tibble",
+        "tidyr",
+        "utils"
+      ],
+      "git_url": "https://git.bioconductor.org/packages/dorothea",
+      "git_branch": "RELEASE_3_22",
+      "git_last_commit": "d467b8d",
+      "git_last_commit_date": "2025-10-29",
+      "Repository": "Bioconductor 3.22",
+      "NeedsCompilation": "no",
+      "Author": "Pau Badia-i-Mompel [cre] (ORCID: <https://orcid.org/0000-0002-1004-3923>), Daniel Dimitrov [aut] (ORCID: <https://orcid.org/0000-0002-5197-2112>), Christian H. Holland [aut] (ORCID: <https://orcid.org/0000-0002-3060-5786>), Luz Garcia-Alonso [aut], Alberto Valdeolivas [ctb], Minoo Ashtiani [ctb], Attila Gabor [ctb]",
+      "Maintainer": "Pau Badia-i-Mompel <pau.badia@uni-heidelberg.de>"
     },
     "dplyr": {
       "Package": "dplyr",
@@ -5496,7 +5998,7 @@
       "Description": "Contains methods for detection of clusters in hierarchical clustering dendrograms.",
       "URL": "http://www.genetics.ucla.edu/labs/horvath/CoexpressionNetwork/BranchCutting/",
       "NeedsCompilation": "no",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "edgeR": {
@@ -5700,7 +6202,7 @@
       "NeedsCompilation": "yes",
       "Author": "Thomas Lin Pedersen [cre, aut] (<https://orcid.org/0000-0002-5147-4711>), Berendea Nicolae [aut] (Author of the ColorSpace C++ library), Romain François [aut] (<https://orcid.org/0000-0002-2444-4226>), Posit, PBC [cph, fnd]",
       "Maintainer": "Thomas Lin Pedersen <thomas.pedersen@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "fastcluster": {
       "Package": "fastcluster",
@@ -5725,7 +6227,7 @@
       "NeedsCompilation": "yes",
       "Author": "Daniel Müllner [aut, cph, cre], Google Inc. [cph]",
       "Maintainer": "Daniel Müllner <daniel@danifold.net>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "fastmap": {
       "Package": "fastmap",
@@ -5745,7 +6247,7 @@
       "NeedsCompilation": "yes",
       "Author": "Winston Chang [aut, cre], Posit Software, PBC [cph, fnd], Tessil [cph] (hopscotch_map library)",
       "Maintainer": "Winston Chang <winston@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "fastmatch": {
       "Package": "fastmatch",
@@ -5763,7 +6265,32 @@
       "URL": "https://www.rforge.net/fastmatch",
       "BugReports": "https://github.com/s-u/fastmatch/issues/",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
+      "Encoding": "UTF-8"
+    },
+    "fdrtool": {
+      "Package": "fdrtool",
+      "Version": "1.2.18",
+      "Source": "Repository",
+      "Date": "2024-08-20",
+      "Title": "Estimation of (Local) False Discovery Rates and Higher Criticism",
+      "Authors@R": "c(person(given = \"Bernd\", family = \"Klaus\", role = \"aut\"), person(given = \"Korbinian\", family = \"Strimmer\", role = c(\"aut\", \"cre\"), email = \"strimmerlab@gmail.com\"))",
+      "Depends": [
+        "R (>= 3.4.0)"
+      ],
+      "Suggests": [],
+      "Imports": [
+        "graphics",
+        "grDevices",
+        "stats"
+      ],
+      "Description": "Estimates both tail area-based false  discovery rates (Fdr) as well as local false discovery rates (fdr) for a  variety of null models (p-values, z-scores, correlation coefficients, t-scores).  The proportion of null values and the parameters of the null  distribution are adaptively estimated from the data.  In addition, the package  contains functions for non-parametric density estimation (Grenander estimator),  for monotone regression (isotonic regression and antitonic regression with weights), for computing the greatest convex minorant (GCM) and the least concave majorant (LCM),  for the half-normal and correlation distributions, and for computing empirical higher criticism (HC) scores and the corresponding decision threshold.",
+      "License": "GPL (>= 3)",
+      "URL": "https://strimmerlab.github.io/software/fdrtool/",
+      "NeedsCompilation": "yes",
+      "Author": "Bernd Klaus [aut], Korbinian Strimmer [aut, cre]",
+      "Maintainer": "Korbinian Strimmer <strimmerlab@gmail.com>",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "fgsea": {
@@ -5848,7 +6375,7 @@
       "NeedsCompilation": "yes",
       "Author": "Gábor Csárdi [aut, cre], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "flextable": {
       "Package": "flextable",
@@ -5933,7 +6460,7 @@
       "Author": "Lionel Henry [cre, aut], Bitstream [cph]",
       "Maintainer": "Lionel Henry <lionel.hry@gmail.com>",
       "License_is_FOSS": "yes",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "fontLiberation": {
       "Package": "fontLiberation",
@@ -5952,7 +6479,7 @@
       "NeedsCompilation": "no",
       "Author": "Lionel Henry [cre], Pravin Satpute [aut], Steve Matteson [aut], Red Hat, Inc [cph], Google Corporation [cph]",
       "Maintainer": "Lionel Henry <lionel@rstudio.com>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "License_is_FOSS": "yes"
     },
     "fontawesome": {
@@ -5988,7 +6515,7 @@
       "NeedsCompilation": "no",
       "Author": "Richard Iannone [aut, cre] (<https://orcid.org/0000-0003-3925-190X>), Christophe Dervieux [ctb] (<https://orcid.org/0000-0003-4474-2498>), Winston Chang [ctb], Dave Gandy [ctb, cph] (Font-Awesome font), Posit Software, PBC [cph, fnd]",
       "Maintainer": "Richard Iannone <rich@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "fontquiver": {
       "Package": "fontquiver",
@@ -6016,7 +6543,7 @@
       "NeedsCompilation": "no",
       "Author": "Lionel Henry [cre, aut], RStudio [cph], George Douros [cph] (Symbola font)",
       "Maintainer": "Lionel Henry <lionel@rstudio.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "forcats": {
       "Package": "forcats",
@@ -6058,7 +6585,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut, cre], Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)",
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "foreach": {
       "Package": "foreach",
@@ -6196,7 +6723,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jim Hester [aut], Hadley Wickham [aut], Gábor Csárdi [aut, cre], libuv project contributors [cph] (libuv library), Joyent, Inc. and other Node contributors [cph] (libuv library), Posit Software, PBC [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "futile.logger": {
       "Package": "futile.logger",
@@ -6433,7 +6960,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut, cre] (ORCID: <https://orcid.org/0000-0003-4757-117X>), Max Kuhn [aut], Davis Vaughan [aut], Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)",
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "ggforce": {
       "Package": "ggforce",
@@ -6485,7 +7012,7 @@
       "Collate": "'aaa.R' 'shape.R' 'arc_bar.R' 'arc.R' 'autodensity.R' 'autohistogram.R' 'autopoint.R' 'bezier.R' 'bspline.R' 'bspline_closed.R' 'circle.R' 'concaveman.R' 'cpp11.R' 'diagonal.R' 'diagonal_wide.R' 'ellipse.R' 'errorbar.R' 'facet_grid_paginate.R' 'facet_matrix.R' 'facet_row.R' 'facet_stereo.R' 'facet_wrap_paginate.R' 'facet_zoom.R' 'ggforce-package.R' 'ggproto-classes.R' 'interpolate.R' 'labeller.R' 'link.R' 'mark_circle.R' 'mark_ellipse.R' 'mark_hull.R' 'mark_label.R' 'mark_rect.R' 'parallel_sets.R' 'position-jitternormal.R' 'position_auto.R' 'position_floatstack.R' 'regon.R' 'scale-depth.R' 'scale-unit.R' 'sina.R' 'spiro.R' 'themes.R' 'trans.R' 'trans_linear.R' 'utilities.R' 'voronoi.R' 'zzz.R'",
       "NeedsCompilation": "yes",
       "Author": "Thomas Lin Pedersen [cre, aut] (ORCID: <https://orcid.org/0000-0002-5147-4711>), RStudio [cph]",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "ggfun": {
       "Package": "ggfun",
@@ -6525,7 +7052,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre, cph] (ORCID: <https://orcid.org/0000-0002-6485-8781>), Shuangbin Xu [aut] (ORCID: <https://orcid.org/0000-0003-3513-5362>)",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "ggiraph": {
       "Package": "ggiraph",
@@ -6606,7 +7133,7 @@
       "NeedsCompilation": "no",
       "Author": "Elio Campitelli [cre, aut] (ORCID: <https://orcid.org/0000-0002-7742-9230>)",
       "Maintainer": "Elio Campitelli <eliocampitelli@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "ggplot2": {
       "Package": "ggplot2",
@@ -6722,7 +7249,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre] (ORCID: <https://orcid.org/0000-0002-6485-8781>)",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "ggrepel": {
       "Package": "ggrepel",
@@ -6961,6 +7488,41 @@
       "Maintainer": "Jennifer Bryan <jenny@posit.co>",
       "Repository": "CRAN"
     },
+    "gmm": {
+      "Package": "gmm",
+      "Version": "1.9-1",
+      "Source": "Repository",
+      "Date": "2025-08-4",
+      "Title": "Generalized Method of Moments and Generalized Empirical Likelihood",
+      "Authors@R": "person(given=\"Pierre\", family=\"Chausse\", role=c(\"aut\",\"cre\"), email=\"pchausse@uwaterloo.ca\")",
+      "Author": "Pierre Chausse [aut, cre]",
+      "Maintainer": "Pierre Chausse <pchausse@uwaterloo.ca>",
+      "Description": "It is a complete suite to estimate models based on moment conditions. It includes the two step Generalized method of moments (Hansen 1982; <doi:10.2307/1912775>), the iterated GMM and continuous updated estimator (Hansen, Eaton and Yaron 1996; <doi:10.2307/1392442>) and several methods that belong to the Generalized Empirical Likelihood family of estimators (Smith 1997; <doi:10.1111/j.0013-0133.1997.174.x>, Kitamura 1997; <doi:10.1214/aos/1069362388>, Newey and Smith 2004; <doi:10.1111/j.1468-0262.2004.00482.x>, and Anatolyev 2005 <doi:10.1111/j.1468-0262.2005.00601.x>).",
+      "Depends": [
+        "R (>= 2.10.0)",
+        "sandwich"
+      ],
+      "NeedsCompilation": "yes",
+      "Suggests": [
+        "knitr",
+        "mvtnorm",
+        "car",
+        "stabledist",
+        "MASS",
+        "timeDate",
+        "timeSeries"
+      ],
+      "Imports": [
+        "stats",
+        "methods",
+        "grDevices",
+        "graphics"
+      ],
+      "License": "GPL (>= 2)",
+      "VignetteBuilder": "knitr",
+      "Repository": "RSPM",
+      "Encoding": "UTF-8"
+    },
     "googledrive": {
       "Package": "googledrive",
       "Version": "2.1.2",
@@ -7097,7 +7659,7 @@
       "NeedsCompilation": "no",
       "Author": "Gregory R. Warnes [aut], Ben Bolker [aut], Lodewijk Bonebakker [aut], Robert Gentleman [aut], Wolfgang Huber [aut], Andy Liaw [aut], Thomas Lumley [aut], Martin Maechler [aut], Arni Magnusson [aut], Steffen Moeller [aut], Marc Schwartz [aut], Bill Venables [aut], Tal Galili [aut, cre]",
       "Maintainer": "Tal Galili <tal.galili@gmail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "graph": {
@@ -7197,7 +7759,7 @@
       "NeedsCompilation": "no",
       "Author": "Paul Murrell [cre, aut], Zhijian Wen [aut]",
       "Maintainer": "Paul Murrell <paul@stat.auckland.ac.nz>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "gsignal": {
@@ -7240,7 +7802,7 @@
       "NeedsCompilation": "yes",
       "Author": "Geert van Boxtel [aut, cre] (Maintainer), Tom Short [aut] (Author of 'signal' package), Paul Kienzle [aut] (Majority of the original sources), Ben Abbott [ctb], Juan Aguado [ctb], Muthiah Annamalai [ctb], Leonardo Araujo [ctb], William Asquith [ctb], David Bateman [ctb], David Billinghurst [ctb], Juan Pablo Carbajal [ctb], André Carezia [ctb], Vincent Cautaerts [ctb], Eric Chassande-Mottin [ctb], Luca Citi [ctb], Dave Cogdell [ctb], Carlo de Falco [ctb], Carne Draug [ctb], Pascal Dupuis [ctb], John W. Eaton [ctb], R.G.H Eschauzier [ctb], Andrew Fitting [ctb], Alan J. Greenberger [ctb], Mike Gross [ctb], Daniel Gunyan [ctb], Kai Habel [ctb], Kurt Hornik [ctb], Jake Janovetz [ctb], Alexander Klein [ctb], Peter V. Lanspeary [ctb], Bill Lash [ctb], Friedrich Leissh [ctb], Laurent S. Mazet [ctb], Mike Miller [ctb], Petr Mikulik [ctb], Paolo Neis [ctb], Georgios Ouzounis [ctb], Sylvain Pelissier [ctb], Francesco Potortì [ctb], Charles Praplan [ctb], Lukas F. Reichlin [ctb], Tony Richardson [ctb], Asbjorn Sabo [ctb], Thomas Sailer [ctb], Rolf Schirmacher [ctb], Rolf Schirmacher [ctb], Ivan Selesnick [ctb], Julius O. Smith III [ctb], Peter L. Soendergaard [ctb], Quentin Spencer [ctb], Doug Stewart [ctb], P. Sudeepam [ctb], Stefan van der Walt [ctb], Andreas Weber [ctb], P. Sudeepam [ctb], Andreas Weingessel [ctb]",
       "Maintainer": "Geert van Boxtel <G.J.M.vanBoxtel@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "gson": {
       "Package": "gson",
@@ -7264,7 +7826,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre, cph] (<https://orcid.org/0000-0002-6485-8781>)",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "gsubfn": {
       "Package": "gsubfn",
@@ -7292,7 +7854,7 @@
       "License": "GPL (>= 2)",
       "URL": "https://github.com/ggrothendieck/gsubfn",
       "NeedsCompilation": "no",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "gtable": {
@@ -7333,7 +7895,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut], Thomas Lin Pedersen [aut, cre], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Thomas Lin Pedersen <thomas.pedersen@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "gtools": {
       "Package": "gtools",
@@ -7364,7 +7926,7 @@
       "NeedsCompilation": "yes",
       "Author": "Gregory R. Warnes [aut], Ben Bolker [aut, cre] (<https://orcid.org/0000-0002-2127-0443>), Thomas Lumley [aut], Arni Magnusson [aut], Bill Venables [aut], Genei Ryodan [aut], Steffen Moeller [aut], Ian Wilson [ctb], Mark Davis [ctb], Nitin Jain [ctb], Scott Chamberlain [ctb]",
       "Maintainer": "Ben Bolker <bolker@mcmaster.ca>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "h5mread": {
       "Package": "h5mread",
@@ -7442,7 +8004,7 @@
       "NeedsCompilation": "no",
       "Author": "Christopher Brown [aut], John Hughes [cre, ctb]",
       "Maintainer": "John Hughes <drjphughesjr@gmail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "haven": {
@@ -7642,7 +8204,7 @@
       "VignetteBuilder": "knitr",
       "RoxygenNote": "7.2.2",
       "Author": "Max Gordon [aut, cre], Stephen Gragg [aut], Peter Konings [aut]",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "htmltools": {
       "Package": "htmltools",
@@ -7718,7 +8280,7 @@
       "NeedsCompilation": "no",
       "Author": "Ramnath Vaidyanathan [aut, cph], Yihui Xie [aut], JJ Allaire [aut], Joe Cheng [aut], Carson Sievert [aut, cre] (<https://orcid.org/0000-0002-4958-2844>), Kenton Russell [aut, cph], Ellis Hughes [ctb], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Carson Sievert <carson@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "httpuv": {
       "Package": "httpuv",
@@ -7859,7 +8421,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut, cre], Posit Software, PBC [cph, fnd], Maximilian Girlich [ctb]",
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "hwriter": {
       "Package": "hwriter",
@@ -7873,7 +8435,7 @@
       "Description": "Easy-to-use and versatile functions to output R objects in HTML format.",
       "Maintainer": "Gregoire Pau <gregoire.pau@gmail.com>",
       "License": "LGPL-2.1",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "NeedsCompilation": "no",
       "Encoding": "UTF-8"
     },
@@ -7991,6 +8553,45 @@
       "RemoteSha": "987333765032b156b0b3bb09a5defb85043d9520",
       "NeedsCompilation": "yes"
     },
+    "imputeLCMD": {
+      "Package": "imputeLCMD",
+      "Version": "2.1",
+      "Source": "Repository",
+      "Type": "Package",
+      "Title": "A Collection of Methods for Left-Censored Missing Data Imputation",
+      "Date": "2022-06-09",
+      "Authors@R": "c( person(\"Cosmin\", \"Lazar\", email = \"vcosminlazar@gmail.com\", role = c(\"aut\")), person(\"Thomas\", \"Burger\", email = \"thomas.burger@cea.fr\", role = c(\"aut\")), person(\"Samuel\", \"Wieczorek\", email = \"samuel.wieczorek@cea.fr\", role = c(\"cre\", \"ctb\")) )",
+      "Maintainer": "Samuel Wieczorek <samuel.wieczorek@cea.fr>",
+      "Description": "A collection of functions for left-censored missing data imputation. Left-censoring is a special case of missing not at random (MNAR)  mechanism that generates non-responses in proteomics experiments. The package also contains functions to artificially generate peptide/protein expression data (log-transformed) as random draws from a multivariate Gaussian distribution as well as a function to generate missing data (both randomly and non-randomly). For comparison reasons, the package also contains several wrapper functions for the imputation of non-responses that are missing at random. * New functionality has been added: a hybrid method that allows the imputation of missing values in a more complex scenario where the missing data are both MAR and MNAR.",
+      "License": "GPL (>= 2)",
+      "Depends": [
+        "R (>= 2.10)",
+        "tmvtnorm",
+        "norm",
+        "pcaMethods",
+        "impute"
+      ],
+      "NeedsCompilation": "no",
+      "Repository": "RSPM",
+      "RoxygenNote": "7.2.0",
+      "Encoding": "UTF-8",
+      "Author": "Cosmin Lazar [aut], Thomas Burger [aut], Samuel Wieczorek [cre, ctb]"
+    },
+    "infotheo": {
+      "Package": "infotheo",
+      "Version": "1.2.0.1",
+      "Source": "Repository",
+      "Title": "Information-Theoretic Measures",
+      "Date": "2014-07-16",
+      "Author": "Patrick E. Meyer",
+      "Description": "Implements various measures of information theory based on several entropy estimators.",
+      "Maintainer": "Patrick E. Meyer <software@meyerp.com>",
+      "License": "GPL (>= 3)",
+      "URL": "http://homepage.meyerp.com/software",
+      "Repository": "RSPM",
+      "NeedsCompilation": "yes",
+      "Encoding": "UTF-8"
+    },
     "interp": {
       "Package": "interp",
       "Version": "1.1-6",
@@ -8030,7 +8631,7 @@
       ],
       "NeedsCompilation": "yes",
       "Author": "Albrecht Gebhardt [aut, cre, cph], Roger Bivand [aut], David Sinclair [aut, cph] (author of the shull library)",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "irlba": {
@@ -8145,7 +8746,7 @@
       "URL": "https://www.rforge.net/jpeg/",
       "BugReports": "https://github.com/s-u/jpeg/issues",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "jquerylib": {
@@ -8168,7 +8769,7 @@
       "NeedsCompilation": "no",
       "Author": "Carson Sievert [aut, cre] (<https://orcid.org/0000-0002-4958-2844>), Joe Cheng [aut], RStudio [cph], jQuery Foundation [cph] (jQuery library and jQuery UI library), jQuery contributors [ctb, cph] (jQuery library; authors listed in inst/lib/jquery-AUTHORS.txt)",
       "Maintainer": "Carson Sievert <carson@rstudio.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "jsonlite": {
       "Package": "jsonlite",
@@ -8282,7 +8883,7 @@
         "stats",
         "graphics"
       ],
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "lambda.r": {
@@ -8424,7 +9025,7 @@
       "LazyData": "yes",
       "License": "GPL (>= 2)",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "lazyeval": {
@@ -8450,7 +9051,7 @@
       "NeedsCompilation": "yes",
       "Author": "Hadley Wickham [aut, cre], RStudio [cph]",
       "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "lifecycle": {
@@ -8649,7 +9250,7 @@
       "NeedsCompilation": "no",
       "Author": "Alexandra Kuznetsova [aut], Per Bruun Brockhoff [aut, ths], Rune Haubo Bojesen Christensen [aut, cre] (ORCID: <https://orcid.org/0000-0002-4494-3399>), Sofie Pødenphant Jensen [ctb]",
       "Maintainer": "Rune Haubo Bojesen Christensen <Rune.Haubo@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "locfit": {
       "Package": "locfit",
@@ -8785,7 +9386,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jeroen Ooms [aut, cre] (ORCID: <https://orcid.org/0000-0002-4035-0289>)",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "magrittr": {
       "Package": "magrittr",
@@ -8925,7 +9526,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut], Jim Hester [aut], Winston Chang [aut, cre], Kirill Müller [aut], Daniel Cook [aut], Mark Edmondson [ctb]",
       "Maintainer": "Winston Chang <winston@rstudio.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "memuse": {
       "Package": "memuse",
@@ -8949,7 +9550,7 @@
       "BugReports": "https://github.com/shinra-dev/memuse/issues",
       "RoxygenNote": "7.1.2",
       "Author": "Drew Schmidt [aut, cre], Christian Heckendorf [ctb] (FreeBSD improvements to meminfo), Wei-Chen Chen [ctb] (Windows build fixes), Dan Burgess [ctb] (donation of a Mac for development and testing)",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "mgcv": {
@@ -9003,7 +9604,28 @@
       "NeedsCompilation": "yes",
       "Author": "Yihui Xie [aut, cre] (<https://orcid.org/0000-0003-0645-5666>, https://yihui.org), Jeffrey Horner [ctb], Beilei Bian [ctb]",
       "Maintainer": "Yihui Xie <xie@yihui.name>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
+    },
+    "minet": {
+      "Package": "minet",
+      "Version": "3.68.0",
+      "Source": "Bioconductor",
+      "Title": "Mutual Information NETworks",
+      "Date": "2014-07",
+      "Author": "Patrick E. Meyer, Frederic Lafitte, Gianluca Bontempi",
+      "Description": "This package implements various algorithms for inferring mutual information networks from data.",
+      "Maintainer": "Patrick E. Meyer <software@meyerp.com>",
+      "License": "Artistic-2.0",
+      "URL": "http://minet.meyerp.com",
+      "Imports": [
+        "infotheo"
+      ],
+      "biocViews": "Microarray, GraphAndNetwork, Network, NetworkInference",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/minet",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "ce17cab3fb292d518a29ff980976c36a2a4bee6d",
+      "NeedsCompilation": "yes"
     },
     "minpack.lm": {
       "Package": "minpack.lm",
@@ -9248,7 +9870,7 @@
       "NeedsCompilation": "yes",
       "Author": "José Pinheiro [aut] (S version), Douglas Bates [aut] (up to 2007), Saikat DebRoy [ctb] (up to 2002), Deepayan Sarkar [ctb] (up to 2005), EISPACK authors [ctb] (src/rs.f), Siem Heisterkamp [ctb] (Author fixed sigma), Bert Van Willigen [ctb] (Programmer fixed sigma), Johannes Ranke [ctb] (varConstProp()), R Core Team [aut, cre]",
       "Maintainer": "R Core Team <R-core@R-project.org>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "nloptr": {
       "Package": "nloptr",
@@ -9301,6 +9923,26 @@
       "Author": "Brian Ripley [aut, cre, cph], William Venables [cph]",
       "Maintainer": "Brian Ripley <ripley@stats.ox.ac.uk>",
       "Repository": "RSPM",
+      "Encoding": "UTF-8"
+    },
+    "norm": {
+      "Package": "norm",
+      "Version": "1.0-11.1",
+      "Source": "Repository",
+      "Date": "2023-06-18",
+      "Title": "Analysis of Multivariate Normal Datasets with Missing Values",
+      "Author": "Ported to R by Alvaro A. Novo <alvaro@novo-online.net>. Original by Joseph L. Schafer <jls@stat.psu.edu>.",
+      "Maintainer": "John Fox <jfox@mcmaster.ca>",
+      "Description": "An integrated set of functions for the analysis of  multivariate normal datasets with missing values, including implementation of the EM algorithm, data augmentation, and multiple imputation.",
+      "License": "GPL (>= 2)",
+      "Imports": [
+        "stats"
+      ],
+      "Repository": "RSPM",
+      "Repository/R-Forge/Project": "norm",
+      "Repository/R-Forge/Revision": "15",
+      "Repository/R-Forge/DateTimeStamp": "2023-06-18 14:31:55",
+      "NeedsCompilation": "yes",
       "Encoding": "UTF-8"
     },
     "numDeriv": {
@@ -9531,6 +10173,36 @@
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
       "Repository": "CRAN"
     },
+    "parallelly": {
+      "Package": "parallelly",
+      "Version": "1.46.1",
+      "Source": "Repository",
+      "Title": "Enhancing the 'parallel' Package",
+      "Imports": [
+        "parallel",
+        "tools",
+        "utils"
+      ],
+      "Suggests": [
+        "commonmark",
+        "base64enc"
+      ],
+      "VignetteBuilder": "parallelly",
+      "Authors@R": "c( person(\"Henrik\", \"Bengtsson\", role = c(\"aut\", \"cre\", \"cph\"), email = \"henrikb@braju.com\", comment = c(ORCID = \"0000-0002-7579-5165\")), person(\"Mike\", \"Cheng\", role = c(\"ctb\"), email = \"mikefc@coolbutuseless.com\") )",
+      "Description": "Utility functions that enhance the 'parallel' package and support the built-in parallel backends of the 'future' package.  For example, availableCores() gives the number of CPU cores available to your R process as given by the operating system, 'cgroups' and Linux containers, R options, and environment variables, including those set by job schedulers on high-performance compute clusters. If none is set, it will fall back to parallel::detectCores(). Another example is makeClusterPSOCK(), which is backward compatible with parallel::makePSOCKcluster() while doing a better job in setting up remote cluster workers without the need for configuring the firewall to do port-forwarding to your local computer.",
+      "License": "LGPL (>= 2.1)",
+      "LazyLoad": "TRUE",
+      "ByteCompile": "TRUE",
+      "URL": "https://parallelly.futureverse.org, https://github.com/futureverse/parallelly",
+      "BugReports": "https://github.com/futureverse/parallelly/issues",
+      "Language": "en-US",
+      "Encoding": "UTF-8",
+      "RoxygenNote": "7.3.3",
+      "NeedsCompilation": "yes",
+      "Author": "Henrik Bengtsson [aut, cre, cph] (ORCID: <https://orcid.org/0000-0002-7579-5165>), Mike Cheng [ctb]",
+      "Maintainer": "Henrik Bengtsson <henrikb@braju.com>",
+      "Repository": "CRAN"
+    },
     "patchwork": {
       "Package": "patchwork",
       "Version": "1.3.2",
@@ -9573,7 +10245,91 @@
       "Config/Needs/website": "gifski",
       "NeedsCompilation": "no",
       "Author": "Thomas Lin Pedersen [cre, aut] (ORCID: <https://orcid.org/0000-0002-5147-4711>)",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
+    },
+    "pathview": {
+      "Package": "pathview",
+      "Version": "1.50.0",
+      "Source": "Bioconductor",
+      "Type": "Package",
+      "Title": "a tool set for pathway based data integration and visualization",
+      "Date": "2025-03-28",
+      "Author": "Weijun Luo",
+      "Maintainer": "Weijun Luo <luo_weijun@yahoo.com>",
+      "Description": "Pathview is a tool set for pathway based data integration and visualization. It maps and renders a wide variety of biological data on relevant pathway graphs. All users need is to supply their data and specify the target pathway. Pathview automatically downloads the pathway graph data, parses the data file, maps user data to the pathway, and render pathway graph with the mapped data. In addition, Pathview also seamlessly integrates with pathway and gene set (enrichment) analysis tools for large-scale and fully automated analysis.",
+      "biocViews": "Pathways, GraphAndNetwork, Visualization, GeneSetEnrichment, DifferentialExpression, GeneExpression, Microarray, RNASeq, Genetics, Metabolomics, Proteomics, SystemsBiology, Sequencing",
+      "Depends": [
+        "R (>= 3.5.0)"
+      ],
+      "Imports": [
+        "KEGGgraph",
+        "XML",
+        "Rgraphviz",
+        "graph",
+        "png",
+        "AnnotationDbi",
+        "org.Hs.eg.db",
+        "KEGGREST",
+        "methods",
+        "utils"
+      ],
+      "Suggests": [
+        "gage",
+        "org.Mm.eg.db",
+        "RUnit",
+        "BiocGenerics"
+      ],
+      "License": "GPL (>=3.0)",
+      "URL": "https://github.com/datapplab/pathview, https://pathview.uncc.edu/",
+      "LazyLoad": "yes",
+      "LazyData": "yes",
+      "Config/pak/sysreqs": "make libpng-dev libxml2-dev libssl-dev zlib1g-dev",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/pathview",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "5efd1476bcf35378d0f10d5c16b151a2be76e005",
+      "NeedsCompilation": "no"
+    },
+    "pcaMethods": {
+      "Package": "pcaMethods",
+      "Version": "2.2.0",
+      "Source": "Bioconductor",
+      "Maintainer": "Henning Redestig <henning.red@gmail.com>",
+      "License": "GPL (>= 3)",
+      "Title": "A collection of PCA methods",
+      "LinkingTo": [
+        "Rcpp"
+      ],
+      "LazyLoad": "Yes",
+      "Author": "Wolfram Stacklies, Henning Redestig, Kevin Wright",
+      "Authors@R": "c(person(given=\"Wolfram\", family=\"Stacklies\", role=c(\"aut\")), person(given=\"Henning\", family=\"Redestig\", email=\"henning.red@gmail.com\", comment=c(ORCID=\"0000-0003-2130-9288\"), role=c(\"aut\",\"cre\")), person(given=\"Kevin\", family=\"Wright\", comment=c(ORCID=\"0000-0002-0617-8673\"), role=\"aut\"))",
+      "SystemRequirements": "Rcpp",
+      "Description": "Provides Bayesian PCA, Probabilistic PCA, Nipals PCA, Inverse Non-Linear PCA and the conventional SVD PCA. A cluster based method for missing value estimation is included for comparison. BPCA, PPCA and NipalsPCA may be used to perform PCA on incomplete data as well as for accurate missing value estimation. A set of methods for printing and plotting the results is also provided. All PCA methods make use of the same data structure (pcaRes) to provide a common interface to the PCA results. Initiated at the Max-Planck Institute for Molecular Plant Physiology, Golm, Germany.",
+      "URL": "https://github.com/hredestig/pcamethods",
+      "BugReports": "https://github.com/hredestig/pcamethods/issues",
+      "Encoding": "UTF-8",
+      "Depends": [
+        "Biobase",
+        "methods"
+      ],
+      "Imports": [
+        "BiocGenerics",
+        "Rcpp (>= 0.11.3)",
+        "MASS"
+      ],
+      "Suggests": [
+        "matrixStats",
+        "lattice",
+        "ggplot2"
+      ],
+      "Collate": "'derrorHierarchic.R' 'errorHierarchic.R' 'AllClasses.R' 'AllGenerics.R' 'BPCA_dostep.R' 'BPCA_initmodel.R' 'bpca.R' 'checkData.R' 'forkNlpcaNet.R' 'kEstimate.R' 'kEstimateFast.R' 'lineSearch.R' 'llsImpute.R' 'methods-ExpressionSet.R' 'methods-nniRes.R' 'methods-pcaRes.R' 'nipalsPca.R' 'nlpca.R' 'optiAlgCgd.R' 'orth.R' 'pca.R' 'pcaMethods-package.R' 'ppca.R' 'prep.R' 'repmat.R' 'robustPca.R' 'sortFeatures.R' 'svdImpute.R' 'vector2matrices.R' 'xval.R'",
+      "biocViews": "Bayesian",
+      "RoxygenNote": "6.1.1",
+      "Repository": "https://bioc-release.r-universe.dev",
+      "RemoteUrl": "https://github.com/bioc/pcaMethods",
+      "RemoteRef": "RELEASE_3_22",
+      "RemoteSha": "0956371559bff825740ecfa5761ee3dc15eb4b5d",
+      "NeedsCompilation": "yes"
     },
     "permute": {
       "Package": "permute",
@@ -9838,7 +10594,7 @@
       "Depends": [
         "R (>= 3.5.0)"
       ],
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "URL": "https://plotrix.github.io/plotrix/, https://github.com/plotrix/plotrix",
       "BugReports": "https://github.com/plotrix/plotrix/issues",
       "Author": "Jim Lemon [aut], Ben Bolker [ctb], Sander Oom [ctb], Eduardo Klein [ctb], Barry Rowlingson [ctb], Hadley Wickham [ctb], Anupam Tyagi [ctb], Olivier Eterradossi [ctb], Gabor Grothendieck [ctb], Michael Toews [ctb], John Kane [ctb], Rolf Turner [ctb], Carl Witthoft [ctb], Julian Stander [ctb], Thomas Petzoldt [ctb], Remko Duursma [ctb], Elisa Biancotto [ctb], Ofir Levy [ctb], Christophe Dutang [ctb], Peter Solymos [ctb], Robby Engelmann [ctb], Michael Hecker [ctb], Felix Steinbeck [ctb], Hans Borchers [ctb], Henrik Singmann [ctb], Ted Toal [ctb], Derek Ogle [ctb], Darshan Baral [ctb], Ulrike Groemping [ctb], Bill Venables [ctb], The CRAN Team [ctb], Duncan Murdoch [ctb, cre]",
@@ -9880,7 +10636,7 @@
       "NeedsCompilation": "yes",
       "Author": "Hadley Wickham [aut, cre]",
       "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "png": {
       "Package": "png",
@@ -9897,7 +10653,7 @@
       "SystemRequirements": "libpng",
       "URL": "http://www.rforge.net/png/",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "polyclip": {
@@ -9919,6 +10675,25 @@
       "Note": "built from Clipper C++ version 6.4.0",
       "NeedsCompilation": "yes",
       "Author": "Angus Johnson [aut] (C++ original, http://www.angusj.com/delphi/clipper.php), Adrian Baddeley [aut, trl, cre], Kurt Hornik [ctb], Brian D. Ripley [ctb], Elliott Sales de Andrade [ctb], Paul Murrell [ctb], Ege Rubak [ctb], Mark Padgham [ctb]",
+      "Repository": "RSPM",
+      "Encoding": "UTF-8"
+    },
+    "ppcor": {
+      "Package": "ppcor",
+      "Version": "1.1",
+      "Source": "Repository",
+      "Type": "Package",
+      "Title": "Partial and Semi-Partial (Part) Correlation",
+      "Date": "2015-11-19",
+      "Author": "Seongho Kim",
+      "Maintainer": "Seongho Kim <biostatistician.kim@gmail.com>",
+      "Depends": [
+        "R (>= 2.6.0)",
+        "MASS"
+      ],
+      "Description": "Calculates partial and semi-partial (part) correlations along with p-value.",
+      "License": "GPL-2",
+      "NeedsCompilation": "no",
       "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
@@ -9950,7 +10725,7 @@
       "NeedsCompilation": "no",
       "Author": "Hans W. Borchers [aut, cre]",
       "Maintainer": "Hans W. Borchers <hwborchers@googlemail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "preprocessCore": {
@@ -9991,7 +10766,7 @@
       "NeedsCompilation": "no",
       "Author": "Derek Beaton [aut, cre]",
       "Maintainer": "Derek Beaton <exposition.software@gmail.com>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "prettyunits": {
       "Package": "prettyunits",
@@ -10056,7 +10831,7 @@
       "NeedsCompilation": "yes",
       "Author": "Gábor Csárdi [aut, cre, cph] (<https://orcid.org/0000-0001-7098-9676>), Winston Chang [aut], Posit Software, PBC [cph, fnd], Ascent Digital Services [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "progress": {
       "Package": "progress",
@@ -10156,7 +10931,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [cre], Gabor Grothendieck [aut], Louis Kates [aut], Thomas Petzoldt [aut]",
       "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "ps": {
@@ -10196,7 +10971,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jay Loden [aut], Dave Daeschler [aut], Giampaolo Rodola' [aut], Gábor Csárdi [aut, cre], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "purrr": {
       "Package": "purrr",
@@ -10645,7 +11420,7 @@
       "NeedsCompilation": "no",
       "Author": "Ben Bolker [aut, cre] (ORCID: <https://orcid.org/0000-0002-2127-0443>), Anna Ly [ctb] (ORCID: <https://orcid.org/0000-0002-0210-0342>)",
       "Maintainer": "Ben Bolker <bolker@mcmaster.ca>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "rematch": {
       "Package": "rematch",
@@ -10853,7 +11628,7 @@
       "NeedsCompilation": "yes",
       "Author": "Hadley Wickham [aut, cre]",
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "restfulr": {
       "Package": "restfulr",
@@ -10884,7 +11659,7 @@
       "NeedsCompilation": "yes",
       "Author": "Michael Lawrence [aut, cre]",
       "Maintainer": "Michael Lawrence <michafla@gene.com>",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "reticulate": {
@@ -11003,7 +11778,7 @@
       "NeedsCompilation": "yes",
       "Author": "Duncan Murdoch [aut, cre], Daniel Adler [aut], Oleg Nenadic [ctb], Simon Urbanek [ctb], Ming Chen [ctb], Albrecht Gebhardt [ctb], Ben Bolker [ctb], Gabor Csardi [ctb], Adam Strzelecki [ctb], Alexander Senger [ctb], The R Core Team [ctb, cph], Dirk Eddelbuettel [ctb], The authors of Shiny [cph], The authors of knitr [cph], Jeroen Ooms [ctb], Yohann Demont [ctb], Joshua Ulrich [ctb], Xavier Fernandez i Marin [ctb], George Helffrich [ctb], Ivan Krylov [ctb], Michael Sumner [ctb], Mike Stein [ctb], Jonathon Love [ctb], Mapbox team [ctb, cph]",
       "Maintainer": "Duncan Murdoch <murdoch.duncan@gmail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "rhdf5": {
@@ -11215,7 +11990,7 @@
       "NeedsCompilation": "no",
       "Author": "JJ Allaire [aut], Yihui Xie [aut, cre] (ORCID: <https://orcid.org/0000-0003-0645-5666>), Christophe Dervieux [aut] (ORCID: <https://orcid.org/0000-0003-4474-2498>), Jonathan McPherson [aut], Javier Luraschi [aut], Kevin Ushey [aut], Aron Atkins [aut], Hadley Wickham [aut], Joe Cheng [aut], Winston Chang [aut], Richard Iannone [aut] (ORCID: <https://orcid.org/0000-0003-3925-190X>), Andrew Dunning [ctb] (ORCID: <https://orcid.org/0000-0003-0464-5036>), Atsushi Yasumoto [ctb, cph] (ORCID: <https://orcid.org/0000-0002-8335-495X>, cph: Number sections Lua filter), Barret Schloerke [ctb], Carson Sievert [ctb] (ORCID: <https://orcid.org/0000-0002-4958-2844>), Devon Ryan [ctb] (ORCID: <https://orcid.org/0000-0002-8549-0971>), Frederik Aust [ctb] (ORCID: <https://orcid.org/0000-0003-4900-788X>), Jeff Allen [ctb], JooYoung Seo [ctb] (ORCID: <https://orcid.org/0000-0002-4064-6012>), Malcolm Barrett [ctb], Rob Hyndman [ctb], Romain Lesur [ctb], Roy Storey [ctb], Ruben Arslan [ctb], Sergio Oller [ctb], Posit Software, PBC [cph, fnd], jQuery UI contributors [ctb, cph] (jQuery UI library; authors listed in inst/rmd/h/jqueryui/AUTHORS.txt), Mark Otto [ctb] (Bootstrap library), Jacob Thornton [ctb] (Bootstrap library), Bootstrap contributors [ctb] (Bootstrap library), Twitter, Inc [cph] (Bootstrap library), Alexander Farkas [ctb, cph] (html5shiv library), Scott Jehl [ctb, cph] (Respond.js library), Ivan Sagalaev [ctb, cph] (highlight.js library), Greg Franko [ctb, cph] (tocify library), John MacFarlane [ctb, cph] (Pandoc templates), Google, Inc. [ctb, cph] (ioslides library), Dave Raggett [ctb] (slidy library), W3C [cph] (slidy library), Dave Gandy [ctb, cph] (Font-Awesome), Ben Sperry [ctb] (Ionicons), Drifty [cph] (Ionicons), Aidan Lister [ctb, cph] (jQuery StickyTabs), Benct Philip Jonsson [ctb, cph] (pagebreak Lua filter), Albert Krewinkel [ctb, cph] (pagebreak Lua filter)",
       "Maintainer": "Yihui Xie <xie@yihui.name>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "rpart": {
       "Package": "rpart",
@@ -11278,7 +12053,7 @@
       "NeedsCompilation": "no",
       "Author": "Kirill Müller [aut, cre] (ORCID: <https://orcid.org/0000-0002-1416-3412>)",
       "Maintainer": "Kirill Müller <kirill@cynkra.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "rstudioapi": {
       "Package": "rstudioapi",
@@ -11306,7 +12081,7 @@
       "Encoding": "UTF-8",
       "NeedsCompilation": "no",
       "Author": "Kevin Ushey [aut, cre], JJ Allaire [aut], Hadley Wickham [aut], Gary Ritchie [aut], RStudio [cph]",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "rsvd": {
       "Package": "rsvd",
@@ -11525,7 +12300,7 @@
       "NeedsCompilation": "yes",
       "Author": "Joe Cheng [aut], Timothy Mastny [aut], Richard Iannone [aut] (<https://orcid.org/0000-0003-3925-190X>), Barret Schloerke [aut] (<https://orcid.org/0000-0001-9986-114X>), Carson Sievert [aut, cre] (<https://orcid.org/0000-0002-4958-2844>), Christophe Dervieux [ctb] (<https://orcid.org/0000-0003-4474-2498>), RStudio [cph, fnd], Sass Open Source Foundation [ctb, cph] (LibSass library), Greter Marcel [ctb, cph] (LibSass library), Mifsud Michael [ctb, cph] (LibSass library), Hampton Catlin [ctb, cph] (LibSass library), Natalie Weizenbaum [ctb, cph] (LibSass library), Chris Eppstein [ctb, cph] (LibSass library), Adams Joseph [ctb, cph] (json.cpp), Trifunovic Nemanja [ctb, cph] (utf8.h)",
       "Maintainer": "Carson Sievert <carson@rstudio.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "scales": {
       "Package": "scales",
@@ -11569,7 +12344,7 @@
       "NeedsCompilation": "no",
       "Author": "Hadley Wickham [aut], Thomas Lin Pedersen [cre, aut] (<https://orcid.org/0000-0002-5147-4711>), Dana Seidel [aut], Posit Software, PBC [cph, fnd] (03wc8by49)",
       "Maintainer": "Thomas Lin Pedersen <thomas.pedersen@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "scatterpie": {
       "Package": "scatterpie",
@@ -11607,7 +12382,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre] (ORCID: <https://orcid.org/0000-0002-6485-8781>), Shuangbin Xu [ctb] (ORCID: <https://orcid.org/0000-0003-3513-5362>)",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "secretbase": {
       "Package": "secretbase",
@@ -11679,7 +12454,7 @@
       "Description": "Functions for plotting graphical shapes such as ellipses, circles, cylinders, arrows, ...",
       "License": "GPL (>= 3)",
       "NeedsCompilation": "no",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "shiny": {
@@ -11845,7 +12620,7 @@
       "NeedsCompilation": "yes",
       "Author": "James Balamuta [aut, cre, cph] (<https://orcid.org/0000-0003-2826-8458>), Thijs van den Berg [aut, cph], Ralf Stubner [ctb]",
       "Maintainer": "James Balamuta <balamut2@illinois.edu>",
-      "Repository": "RSPM"
+      "Repository": "CRAN"
     },
     "snow": {
       "Package": "snow",
@@ -11890,7 +12665,7 @@
       "BugReports": "https://github.com/kevinushey/sourcetools/issues",
       "Encoding": "UTF-8",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "sparseMatrixStats": {
       "Package": "sparseMatrixStats",
@@ -11968,7 +12743,7 @@
       "NeedsCompilation": "no",
       "Author": "G. Grothendieck [aut, cre]",
       "Maintainer": "G. Grothendieck <ggrothendieck@gmail.com>",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "statmod": {
@@ -11994,7 +12769,7 @@
       "License": "GPL-2 | GPL-3",
       "NeedsCompilation": "yes",
       "Author": "Gordon Smyth [cre, aut], Lizhong Chen [aut], Yifang Hu [ctb], Peter Dunn [ctb], Belinda Phipson [ctb], Yunshun Chen [ctb]",
-      "Repository": "RSPM",
+      "Repository": "CRAN",
       "Encoding": "UTF-8"
     },
     "stringi": {
@@ -12164,7 +12939,7 @@
       "NeedsCompilation": "yes",
       "Author": "Jeroen Ooms [aut, cre] (<https://orcid.org/0000-0002-4035-0289>), Gábor Csárdi [ctb]",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "systemfonts": {
       "Package": "systemfonts",
@@ -12212,7 +12987,7 @@
       "NeedsCompilation": "yes",
       "Author": "Thomas Lin Pedersen [aut, cre] (ORCID: <https://orcid.org/0000-0002-5147-4711>), Jeroen Ooms [aut] (ORCID: <https://orcid.org/0000-0002-4035-0289>), Devon Govett [aut] (Author of font-manager), Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)",
       "Maintainer": "Thomas Lin Pedersen <thomas.pedersen@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "targets": {
       "Package": "targets",
@@ -12569,7 +13344,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre, cph] (ORCID: <https://orcid.org/0000-0002-6485-8781>), Bradley Jones [ctb], Zebulun Arendsee [ctb]",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "tidyverse": {
       "Package": "tidyverse",
@@ -12688,6 +13463,38 @@
       "Maintainer": "Yihui Xie <xie@yihui.name>",
       "Repository": "RSPM"
     },
+    "tmvtnorm": {
+      "Package": "tmvtnorm",
+      "Version": "1.7",
+      "Source": "Repository",
+      "Date": "2025-09-01",
+      "Title": "Truncated Multivariate Normal and Student t Distribution",
+      "Authors@R": "c( person(\"Stefan\", \"Wilhelm\", email = \"wilhelm@financial.com\", role = c(\"aut\", \"cre\")), person(\"Manjunath\", \"B G\", email = \"bgmanjunath@gmail.com\", role = \"aut\") )",
+      "Imports": [
+        "stats",
+        "methods"
+      ],
+      "Depends": [
+        "R (>= 1.9.0)",
+        "mvtnorm",
+        "utils",
+        "Matrix",
+        "stats4",
+        "gmm"
+      ],
+      "Encoding": "UTF-8",
+      "Suggests": [
+        "lattice",
+        "rgl"
+      ],
+      "Description": "Random number generation for the truncated multivariate normal and Student t distribution.  Computes probabilities, quantiles and densities,  including one-dimensional and bivariate marginal densities. Computes first and second moments (i.e. mean and covariance matrix) for the double-truncated multinormal case.",
+      "License": "GPL (>= 2)",
+      "URL": "https://www.r-project.org",
+      "NeedsCompilation": "yes",
+      "Author": "Stefan Wilhelm [aut, cre], Manjunath B G [aut]",
+      "Maintainer": "Stefan Wilhelm <wilhelm@financial.com>",
+      "Repository": "RSPM"
+    },
     "treeio": {
       "Package": "treeio",
       "Version": "1.34.0",
@@ -12777,7 +13584,7 @@
       ],
       "NeedsCompilation": "yes",
       "Author": "Thomas Lin Pedersen [aut, cre] (<https://orcid.org/0000-0002-5147-4711>)",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "tximport": {
       "Package": "tximport",
@@ -12936,7 +13743,7 @@
       "URL": "https://www.rforge.net/uuid",
       "BugReports": "https://github.com/s-u/uuid/issues",
       "NeedsCompilation": "yes",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
     "uwot": {
@@ -13107,7 +13914,7 @@
       "RoxygenNote": "7.3.1",
       "NeedsCompilation": "no",
       "Author": "Simon Garnier [aut, cre], Noam Ross [ctb, cph], Bob Rudis [ctb, cph], Marco Sciaini [ctb, cph], Antônio Pedro Camargo [ctb, cph], Cédric Scherer [ctb, cph]",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "viridisLite": {
       "Package": "viridisLite",
@@ -13136,6 +13943,51 @@
       "NeedsCompilation": "no",
       "Author": "Simon Garnier [aut, cre], Noam Ross [ctb, cph], Bob Rudis [ctb, cph], Marco Sciaini [ctb, cph], Antônio Pedro Camargo [ctb, cph], Cédric Scherer [ctb, cph]",
       "Repository": "CRAN"
+    },
+    "visNetwork": {
+      "Package": "visNetwork",
+      "Version": "2.1.4",
+      "Source": "Repository",
+      "Title": "Network Visualization using 'vis.js' Library",
+      "Authors@R": "c( person(family = \"Almende B.V. and Contributors\", role = c(\"aut\", \"cph\"), comment = \"vis.js library in htmlwidgets/lib, https://visjs.org/, https://github.com/visjs/vis-network\"), person(\"Benoit\", \"Thieurmel\", role = c(\"aut\", \"cre\"), comment = \"R interface\", email = \"bthieurmel@gmail.com\") )",
+      "Maintainer": "Benoit Thieurmel <bthieurmel@gmail.com>",
+      "Description": "Provides an R interface to the 'vis.js' JavaScript charting library. It allows an interactive visualization of networks.",
+      "BugReports": "https://github.com/datastorm-open/visNetwork/issues",
+      "URL": "https://datastorm-open.github.io/visNetwork/",
+      "Depends": [
+        "R (>= 3.0)"
+      ],
+      "Imports": [
+        "htmlwidgets",
+        "htmltools",
+        "jsonlite",
+        "magrittr",
+        "utils",
+        "methods",
+        "grDevices",
+        "stats"
+      ],
+      "License": "MIT + file LICENSE",
+      "Encoding": "UTF-8",
+      "Suggests": [
+        "knitr",
+        "rmarkdown",
+        "webshot",
+        "igraph",
+        "rpart",
+        "shiny",
+        "shinyWidgets",
+        "colourpicker",
+        "sparkline",
+        "ggraph",
+        "tidygraph",
+        "flashClust"
+      ],
+      "VignetteBuilder": "knitr, rmarkdown",
+      "RoxygenNote": "7.3.3",
+      "NeedsCompilation": "no",
+      "Author": "Almende B.V. and Contributors [aut, cph] (vis.js library in htmlwidgets/lib, https://visjs.org/, https://github.com/visjs/vis-network), Benoit Thieurmel [aut, cre] (R interface)",
+      "Repository": "RSPM"
     },
     "vroom": {
       "Package": "vroom",
@@ -13244,7 +14096,7 @@
       "NeedsCompilation": "no",
       "Author": "Jim Hester [aut], Lionel Henry [aut, cre], Kirill Müller [aut], Kevin Ushey [aut], Hadley Wickham [aut], Winston Chang [aut], Jennifer Bryan [ctb], Richard Cotton [ctb], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Lionel Henry <lionel@posit.co>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "xCell": {
       "Package": "xCell",
@@ -13433,7 +14285,7 @@
       "NeedsCompilation": "yes",
       "Author": "Hadley Wickham [aut], Jim Hester [aut], Jeroen Ooms [aut, cre], Posit Software, PBC [cph, fnd], R Foundation [ctb] (Copy of R-project homepage cached as example)",
       "Maintainer": "Jeroen Ooms <jeroenooms@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "xtable": {
       "Package": "xtable",
@@ -13530,7 +14382,7 @@
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre] (ORCID: <https://orcid.org/0000-0002-6485-8781>)",
       "Maintainer": "Guangchuang Yu <guangchuangyu@gmail.com>",
-      "Repository": "CRAN"
+      "Repository": "RSPM"
     },
     "zigg": {
       "Package": "zigg",

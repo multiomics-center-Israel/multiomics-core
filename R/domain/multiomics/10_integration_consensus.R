@@ -85,20 +85,32 @@ run_integration_consensus <- function(integration_results, mae, config, out_dir)
     )
 
     # 4. Identify method-specific patterns
-    specific_patterns <- identify_method_specific_patterns(
-        feature_comparison = feature_comparison,
-        config = config,
-        output_dir = out_dir
+    specific_patterns <- tryCatch(
+        identify_method_specific_patterns(
+            feature_comparison = feature_comparison,
+            config = config,
+            output_dir = out_dir
+        ),
+        error = function(e) {
+            message("  Method-specific patterns failed: ", conditionMessage(e))
+            NULL
+        }
     )
 
     # 5. Meta-integration
     meta_integration <- NULL
     if (consensus_config$run_meta_integration %||% TRUE) {
-        meta_integration <- run_meta_integration(
-            integration_results = integration_results,
-            mae_data = mae_data,
-            config = config,
-            output_dir = out_dir
+        meta_integration <- tryCatch(
+            run_meta_integration(
+                integration_results = integration_results,
+                mae_data = mae_data,
+                config = config,
+                output_dir = out_dir
+            ),
+            error = function(e) {
+                message("  Meta-integration failed: ", conditionMessage(e))
+                NULL
+            }
         )
     }
 
@@ -896,6 +908,32 @@ run_meta_integration <- function(integration_results, mae_data, config, output_d
         }, error = function(e) NULL)
     }
 
+    # SNF spectral embedding (Laplacian eigenvectors of the fused network)
+    # SNF doesn't produce explicit latent factors, so derive them from the
+    # normalized Laplacian so SNF can contribute when only MOFA or DIABLO
+    # alone would give < 2 methods.
+    if (!is.null(integration_results$snf)) {
+        tryCatch({
+            W <- integration_results$snf$fused_network
+            if (!is.null(W)) {
+                W <- as.matrix(W)
+                d <- rowSums(W)
+                D_inv_sqrt <- diag(1 / sqrt(d + 1e-10))
+                L_norm <- diag(nrow(W)) - D_inv_sqrt %*% W %*% D_inv_sqrt
+                n_emb <- min(5, nrow(W) - 1)
+                ev <- eigen(L_norm, symmetric = TRUE)
+                # Smallest eigenvalues (excluding the trivial 0) as embedding
+                idx <- order(ev$values)[2:(n_emb + 1)]
+                emb <- ev$vectors[, idx, drop = FALSE]
+                rownames(emb) <- rownames(W)
+                colnames(emb) <- paste0("SNF", seq_len(ncol(emb)))
+                latent_factors$snf <- emb
+            }
+        }, error = function(e) {
+            message("  Could not extract SNF embedding: ", e$message)
+        })
+    }
+
     if (length(latent_factors) < 2) {
         message("  Not enough latent factors for meta-integration.")
         return(NULL)
@@ -968,43 +1006,56 @@ run_meta_integration <- function(integration_results, mae_data, config, output_d
 # -----------------------------------------------------------------------------
 
 #' Generate Consensus Analysis Plots
+#'
+#' Each plot is wrapped in tryCatch so a single failure does not abort the
+#' remaining plots (previously a silent error left the plots dir empty).
 generate_consensus_plots <- function(sample_comparison, feature_comparison, robust_patterns,
                                       specific_patterns, meta_integration, config, plots_dir) {
     message("Generating consensus analysis plots...")
 
     figures <- list()
+    .safe_plot <- function(name, expr) {
+        tryCatch(expr, error = function(e) {
+            message("  Plot '", name, "' failed: ", e$message)
+            NULL
+        })
+    }
 
     # 1. Method agreement heatmap (ARI/NMI)
     if (!is.null(sample_comparison$ari_matrix)) {
-        figures$method_agreement <- plot_method_agreement(
-            sample_comparison = sample_comparison,
-            plots_dir = plots_dir
-        )
+        figures$method_agreement <- .safe_plot("method_agreement",
+            plot_method_agreement(
+                sample_comparison = sample_comparison,
+                plots_dir = plots_dir
+            ))
     }
 
     # 2. Feature importance correlation
     if (!is.null(feature_comparison$rank_correlation)) {
-        figures$feature_correlation <- plot_feature_correlation(
-            feature_comparison = feature_comparison,
-            plots_dir = plots_dir
-        )
+        figures$feature_correlation <- .safe_plot("feature_correlation",
+            plot_feature_correlation(
+                feature_comparison = feature_comparison,
+                plots_dir = plots_dir
+            ))
     }
 
     # 3. Robust features
     if (!is.null(robust_patterns$features) && nrow(robust_patterns$features) > 0) {
-        figures$robust_features <- plot_robust_features(
-            robust_features = robust_patterns$features,
-            feature_comparison = feature_comparison,
-            plots_dir = plots_dir
-        )
+        figures$robust_features <- .safe_plot("robust_features",
+            plot_robust_features(
+                robust_features = robust_patterns$features,
+                feature_comparison = feature_comparison,
+                plots_dir = plots_dir
+            ))
     }
 
     # 4. Meta-integration
     if (!is.null(meta_integration)) {
-        figures$meta_pca <- plot_meta_integration(
-            meta_integration = meta_integration,
-            plots_dir = plots_dir
-        )
+        figures$meta_pca <- .safe_plot("meta_integration_pca",
+            plot_meta_integration(
+                meta_integration = meta_integration,
+                plots_dir = plots_dir
+            ))
     }
 
     return(figures)

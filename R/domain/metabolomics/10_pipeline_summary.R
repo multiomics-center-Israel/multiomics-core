@@ -50,6 +50,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     }
 
     # --- DE statistics ---
+
     # Single source of truth: use pipeline pass columns (pass.{cn}) from summary_df.
     # Fallback: recompute from p-value + FC thresholds.
     n_de_total <- 0; n_de_up <- 0; n_de_down <- 0
@@ -58,6 +59,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     p_cut  <- metab_cfg$de$p_cutoff %||% 0.05
     fc_lin <- metab_cfg$de$linear_fc_cutoff %||% 1.0
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
+
 
     if (!is.null(de_res$summary_df)) {
         sdf <- de_res$summary_df
@@ -116,6 +118,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
 
     if (!is.null(feature_sel_res$rf)) {
         rf_res <- feature_sel_res$rf
+
         rf_imp <- rf_res$importance_df %||% rf_res$importance
         if (!is.null(rf_imp) && is.data.frame(rf_imp)) {
             rf_top_n <- metab_cfg$rf$top_n %||% min(20, nrow(rf_imp))
@@ -123,6 +126,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
     }
     if (!is.null(feature_sel_res$plsda)) {
         plsda_res <- feature_sel_res$plsda
+
         plsda_vip <- plsda_res$vip_df %||% plsda_res$vip
         if (!is.null(plsda_vip) && is.data.frame(plsda_vip)) {
             plsda_top_n <- metab_cfg$plsda$vip_top_n %||% min(15, nrow(plsda_vip))
@@ -170,6 +174,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
         enrichment = list(total = n_enriched_total),
         methods = list(
             input_format = metab_cfg$input$format %||% "cd_raw",
+
             sample_norm  = metab_cfg$preprocessing$chosen_norm %||% norm_cfg$sample_norm %||% "pqn",
             transform    = norm_cfg$transform %||% "log2",
             scaling      = norm_cfg$scaling %||% "none",
@@ -518,6 +523,7 @@ generate_metab_summary_body_r <- function(stats) {
     step1 <- build_metab_step_html(1, "\U0001F4E5", "Data Import", "phase-input", "input",
         input_desc, c(stats$methods$input_format))
 
+
     # Step 2: Feature Filtering — render dynamically based on whether
     # filtering actually changed the feature count.
     n_before <- stats$filtering$features_before %||% 0
@@ -532,6 +538,7 @@ generate_metab_summary_body_r <- function(stats) {
             list(value = stats$filtering$after_fmt, label = "after", color = "var(--accent-green)"),
             list(value = "", label = sprintf("%.1f%% retained", stats$filtering$pct_retained %||% 0),
                  margin = "8px", color = "var(--text)"))
+
         filt_tags <- c("detection filter")
     } else if (n_before > 0) {
         filt_desc <- sprintf("No filtering applied; all %s features retained for downstream analysis.",
@@ -567,6 +574,7 @@ generate_metab_summary_body_r <- function(stats) {
         norm_parts <- c(norm_parts, sprintf("%s scaling", stats$methods$scaling))
     if (length(norm_parts) == 0) norm_parts <- "No normalization applied"
     norm_desc <- paste(norm_parts, collapse = ". ") |> paste0(".")
+
     norm_tags <- c(toupper(norm_method), stats$methods$transform, stats$methods$scaling)
     norm_tags <- norm_tags[norm_tags != "none" & norm_tags != "NONE"]
     if (length(norm_tags) == 0) norm_tags <- "raw"
@@ -583,12 +591,14 @@ generate_metab_summary_body_r <- function(stats) {
 
     # Step 5: DE
     de_label <- toupper(stats$methods$de_method)
+
     de_desc <- sprintf("%s differential expression test. Significance: p-value &le; %s and |linear FC| &ge; %s.",
         de_label, stats$methods$p_cutoff, stats$methods$fc_cutoff)
     de_stats <- build_metab_stats_row(
         list(value = format(stats$de$total, big.mark = ","), label = "DE features", color = "var(--accent-violet)"),
         list(value = format(stats$de$up, big.mark = ","), label = "up", color = "var(--accent-green)"),
         list(value = format(stats$de$down, big.mark = ","), label = "down", color = "var(--accent-rose)"))
+
     de_tags <- c(de_label, sprintf("p \u2264 %s", stats$methods$p_cutoff),
                  sprintf("|FC| \u2265 %s", stats$methods$fc_cutoff))
     step5 <- build_metab_step_html(5, "\U0001F4CA", "Differential Expression", "phase-de", "analysis",
@@ -958,6 +968,7 @@ generate_metab_pipeline_summary <- function(config, pre, de_res,
     } else {
         full_html <- body_html
     }
+
 
     # 3. Save directly to Results root (avoids duplicate inside metabolomics/)
     results_root <- dirname(run_dir)

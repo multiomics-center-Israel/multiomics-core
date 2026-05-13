@@ -5,6 +5,29 @@
 #'
 #' Also provides get_organism_info() lookup for database/package mappings.
 
+# Cache for orgdb keys to avoid repeated expensive queries
+.annotation_keys_cache <- new.env(parent = emptyenv())
+
+#' Cached version of AnnotationDbi::keys()
+#' @keywords internal
+.cached_orgdb_keys <- function(orgdb, keytype) {
+  org_name <- tryCatch(
+    {
+      md <- AnnotationDbi::metadata(orgdb)
+      md$value[md$name == "ORGANISM"][1]
+    },
+    error = function(e) "unknown"
+  )
+  cache_id <- paste0(org_name, ":", keytype)
+  if (!exists(cache_id, envir = .annotation_keys_cache)) {
+    keys <- tryCatch(
+      AnnotationDbi::keys(orgdb, keytype = keytype),
+      error = function(e) character(0)
+    )
+    assign(cache_id, keys, envir = .annotation_keys_cache)
+  }
+  get(cache_id, envir = .annotation_keys_cache)
+}
 # ==============================================================================
 # ORGANISM INFO LOOKUP
 # ==============================================================================
@@ -381,6 +404,41 @@ annotate_from_orgdb <- function(feature_ids, config, verbose = TRUE) {
     }
 
     if (verbose) message(sprintf("  Querying OrgDb (keytype: %s)...", keytype))
+
+    # Pre-filter to keys that actually exist in the OrgDb to avoid
+    # errors from invalid keys (e.g. unmapped protein IDs mixed with symbols)
+    valid_keys <- .cached_orgdb_keys(orgdb, keytype)
+    # Direct exact match
+    exact_ids <- feature_ids[feature_ids %in% valid_keys]
+
+    # Case-insensitive match for remaining IDs (handles rat Actb vs input ACTB)
+    remaining <- feature_ids[!feature_ids %in% valid_keys]
+    case_matched_ids <- character(0)
+    if (length(remaining) > 0 && length(valid_keys) > 0) {
+        valid_upper <- toupper(valid_keys)
+        # Build lookup: uppercase -> first matching valid key
+        dup_mask <- !duplicated(valid_upper)
+        case_lookup <- setNames(valid_keys[dup_mask], valid_upper[dup_mask])
+        rem_upper <- toupper(remaining)
+        found <- rem_upper %in% names(case_lookup)
+        if (any(found)) {
+            case_matched_ids <- unname(case_lookup[rem_upper[found]])
+        }
+    }
+
+    usable_ids <- unique(c(exact_ids, case_matched_ids))
+    n_exact <- length(exact_ids)
+    n_case  <- length(case_matched_ids)
+
+    if (length(usable_ids) == 0) {
+        if (verbose) message(sprintf("  0/%d feature IDs found in OrgDb %s keys",
+                                     length(feature_ids), keytype))
+        return(NULL)
+    }
+    if (verbose) {
+        message(sprintf("  %d/%d feature IDs matched OrgDb %s keys (%d exact, %d case-insensitive)",
+                        length(usable_ids), length(feature_ids), keytype, n_exact, n_case))
+    }
 
     result <- tryCatch({
         AnnotationDbi::select(

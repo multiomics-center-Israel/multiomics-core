@@ -100,6 +100,7 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
     if (!is.null(excel_order) && !is.null(b$binary_best)) {
       excel_order$binary_best <- b$binary_best
     }
+
   }
   
   list(

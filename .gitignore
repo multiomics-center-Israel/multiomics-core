@@ -85,3 +85,4 @@ _targets.yaml
 # Test output artifacts
 tests/testthat/test_outputs/
 
+results/ 

@@ -127,6 +127,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     }
 
     render_params <- list(
+
         pre                = pre,
         qc_res             = qc_res,
         de_res             = de_res,

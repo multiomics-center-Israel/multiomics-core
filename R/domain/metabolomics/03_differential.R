@@ -1,7 +1,7 @@
 # R/domain/metabolomics/03_differential.R
 #
 # Differential expression analysis for metabolomics data.
-# Supports limma, Welch t-test, and Wilcoxon rank-sum methods.
+# Supports limma, Welch t-test, equal-variance t-test, and Wilcoxon rank-sum methods.
 #
 # Operates on the standard pre-processing contract (expr_work, meta).
 # Returns a wide-format summary_df compatible with the DE contract.
@@ -78,6 +78,7 @@ filter_to_biological <- function(mat, meta, condition_col, sample_col,
 #' @param config Full pipeline config.
 #' @return list conforming to the DE contract: summary_df, method, de_tables
 load_precomputed_metabolomics_de <- function(config) {
+
   cfg <- config$modes$metabolomics
   de_cfg <- cfg$de %||% list()
   
@@ -183,6 +184,7 @@ load_precomputed_metabolomics_de <- function(config) {
 #' @param config Full pipeline config.
 #' @return list conforming to the DE contract:
 #'   summary_df, method, de_tables (per-contrast list), de_model
+
 run_metabolomics_de <- function(pre, config, contrast_table) {
   cfg <- config$modes$metabolomics
   de_cfg <- cfg$de %||% list()
@@ -214,10 +216,6 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
   padj_cutoff <- de_cfg$p_cutoff %||% 0.05
   linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
   log2fc_cut  <- log2(linear_fc)
-  
-  # limma::treat() parameters — derived from user config
-  lfc_threshold <- log2(as.numeric(de_cfg$linear_fc_cutoff %||% 1.5))
-  robust_ebayes <- isTRUE(de_cfg$robust_ebayes)
   
   # Run DE — limma fits all contrasts at once (same pattern as proteomics);
   # t_test / wilcoxon use a per-contrast loop.
@@ -267,15 +265,15 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     # -- Single fit for all contrasts --
     fit  <- limma::lmFit(mat_for_test, design)
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
-    # treat() tests against an LFC threshold (different null hypothesis
-    # from eBayes); intentionally kept for metabolomics
+    # eBayes - moderated t-statistics with shrinkage of residual variance
+    # (matches proteomics + RNA-seq DE for consistency across omics)
     fit2 <- limma::eBayes(fit2)
     de_model <- fit2
     
     # -- Extract per-contrast tables --
     for (cn in colnames(contrast_matrix)) {
       message("metabolomics DE [limma]: ", cn)
-      tt <- limma::topTreat(fit2, coef = cn, number = Inf, sort.by = "none")
+      tt <- limma::topTable(fit2, coef = cn, number = Inf, sort.by = "none")
       de_tables[[cn]] <- data.frame(
         feature_id = rownames(tt),
         Contrast   = cn,
@@ -284,10 +282,10 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         t          = tt$t,
         P.Value    = tt$P.Value,
         adj.P.Val  = tt$adj.P.Val,
-        # B placeholder — treat() does not produce the B-statistic
-        # (log-odds of DE); set to NA for schema compatibility
-        B          = NA_real_,
+        # B statistic from eBayes (log-odds of differential expression)
+        B          = tt$B,
         stringsAsFactors = FALSE
+
       )
     }
   } else {
@@ -338,6 +336,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 #' @param mat_for_fc   Optional pre-scaling matrix for logFC computation.
 #' @param test_fn      Function(vals_B, vals_A) returning list(statistic, p.value).
 #' @return data.frame with feature_id, logFC, AveExpr, statistic, P.Value, adj.P.Val.
+
 de_two_group <- function(mat, condition, numerator, denominator, mat_for_fc = NULL, test_fn) {
   idx_A <- which(condition == denominator)
   idx_B <- which(condition == numerator)
@@ -394,6 +393,16 @@ de_t_test <- function(mat, condition, numerator, denominator, mat_for_fc = NULL)
 }
 
 
+# ---- equal-variance t-test -------------------------------------------------
+
+#' Run equal-variance (Student's) t-tests per feature on a single contrast
+#' (MetaboAnalyst default)
+de_t_test_equal <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
+    de_two_group(mat, condition, contrast_str, mat_for_fc,
+                 test_fn = function(b, a) stats::t.test(b, a, var.equal = TRUE))
+}
+
+
 # ---- wilcoxon --------------------------------------------------------------
 
 #' Run Wilcoxon rank-sum tests per feature on a single contrast
@@ -447,6 +456,7 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
         tbl$adj.P.Val < padj_cutoff &
         abs(tbl$logFC) >= log2fc_cut
     )
+
     summary_df[[paste0("pass.", ctr)]] <- pass
   }
   

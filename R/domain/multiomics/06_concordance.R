@@ -86,9 +86,13 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
         padj_cols <- grep("^(padj\\.imputs\\.|padj\\.|adj\\.P\\.Val\\.)", names(df), value = TRUE)
 
         if (length(lfc_cols) == 0) {
-            # Try metabolomics naming: linearFC.contrast
+            # Try metabolomics naming: linearFC.contrast (dot) or logFC_contrast (underscore)
             lfc_cols <- grep("^linearFC\\.", names(df), value = TRUE)
             padj_cols <- grep("^adj\\.P\\.Val\\.", names(df), value = TRUE)
+            if (length(lfc_cols) == 0) {
+                lfc_cols <- grep("^logFC_", names(df), value = TRUE)
+                padj_cols <- grep("^adj\\.P\\.Val_", names(df), value = TRUE)
+            }
         }
 
         if (length(lfc_cols) == 0) {
