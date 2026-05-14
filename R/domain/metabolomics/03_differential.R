@@ -84,10 +84,11 @@ load_precomputed_metabolomics_de <- function(config) {
   
   de_files <- cfg$files$de_table
   if (is.list(de_files)) de_files <- unlist(de_files)
-  
+
   padj_cutoff <- de_cfg$p_cutoff %||% 0.05
   linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
   log2fc_cut  <- log2(linear_fc)
+  use_adj_de  <- isTRUE(de_cfg$use_adj %||% TRUE)
   
   # Derive contrast labels from file names
   contrast_labels <- vapply(de_files, function(f) {
@@ -154,9 +155,10 @@ load_precomputed_metabolomics_de <- function(config) {
     summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
     summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
     
+    p_vec <- if (isTRUE(use_adj_de)) tbl$adj.P.Val[idx] else tbl$P.Value[idx]
     pass <- as.integer(
-      !is.na(tbl$adj.P.Val[idx]) &
-        tbl$adj.P.Val[idx] < padj_cutoff &
+      !is.na(p_vec) &
+        p_vec < padj_cutoff &
         abs(tbl$logFC[idx]) >= log2fc_cut
     )
     summary_df[[paste0("pass.", ctr)]] <- pass
@@ -212,10 +214,13 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
   meta         <- bio$meta
   condition    <- bio$condition
   
-  # Thresholds for significance flags
+  # Thresholds for significance flags. use_adj controls whether the pass flag
+  # is computed against adj.P.Val (default, TRUE) or raw P.Value (FALSE) — set
+  # `de.use_adj: false` in the config when the analyst wants pvalue-based DE.
   padj_cutoff <- de_cfg$p_cutoff %||% 0.05
   linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
   log2fc_cut  <- log2(linear_fc)
+  use_adj_de  <- isTRUE(de_cfg$use_adj %||% TRUE)
   
   # Run DE — limma fits all contrasts at once (same pattern as proteomics);
   # t_test / wilcoxon use a per-contrast loop.
@@ -308,7 +313,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
   }
   
   # Build wide summary_df
-  summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut)
+  summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut, use_adj = use_adj_de)
   
   message("metabolomics DE complete: ", nrow(summary_df), " features, ",
           sum(summary_df$pass_any_contrast == 1, na.rm = TRUE), " significant")
@@ -429,31 +434,32 @@ de_wilcoxon <- function(mat, condition, numerator, denominator, mat_for_fc = NUL
 #' @param padj_cutoff Numeric, adjusted p-value threshold.
 #' @param log2fc_cut  Numeric, absolute log2 FC threshold.
 #' @return Wide data.frame with feature_id + per-contrast columns + pass flags.
-build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
+build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut, use_adj = TRUE) {
   contrast_names <- names(de_tables)
   first <- de_tables[[1]]
-  
+
   summary_df <- data.frame(
     feature_id = first$feature_id,
     stringsAsFactors = FALSE
   )
-  
+
   for (ctr in contrast_names) {
     tbl <- de_tables[[ctr]]
-    
+
     # Signed linear FC: preserves directionality from limma logFC
     lfc <- tbl$logFC
     linear_fc_signed <- ifelse(lfc >= 0, 2^lfc, -(2^abs(lfc)))
-    
+
     summary_df[[paste0("linearFC.", ctr)]] <- signif(linear_fc_signed, 3)
     summary_df[[paste0("AveExpr.", ctr)]]  <- tbl$AveExpr
     summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value
     summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val
-    
-    # Significance flag (logic unchanged — same thresholds, same test)
+
+    # Significance flag — config-driven choice of raw vs adjusted p-value
+    p_vec <- if (isTRUE(use_adj)) tbl$adj.P.Val else tbl$P.Value
     pass <- as.integer(
-      !is.na(tbl$adj.P.Val) &
-        tbl$adj.P.Val < padj_cutoff &
+      !is.na(p_vec) &
+        p_vec < padj_cutoff &
         abs(tbl$logFC) >= log2fc_cut
     )
 

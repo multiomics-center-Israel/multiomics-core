@@ -52,8 +52,32 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Determine alignment mode from config (strict by default)
     lenient_alignment <- identical(de_cfg$sample_alignment, "lenient")
 
+    # Optional covariate (e.g. pair_id for paired designs). Adds the term to the
+    # design formula: ~ covariate_col + factor_col. results() with
+    # contrast = c(factor_col, num, den) still extracts the main effect cleanly.
+    covariate_col <- de_cfg$covariate_col
+    if (!is.null(covariate_col) && nzchar(covariate_col)) {
+        if (!covariate_col %in% colnames(meta)) {
+            stop(sprintf("covariate_col '%s' not found in metadata", covariate_col))
+        }
+        meta[[covariate_col]] <- as.factor(meta[[covariate_col]])
+        design_formula <- stats::as.formula(
+            paste0("~ ", covariate_col, " + ", factor_col))
+        # Fail fast on rank-deficient designs (e.g. an unbalanced pair where one
+        # member was dropped during QC). DESeq() would otherwise error with an
+        # opaque "model matrix not full rank" message deep in the call stack.
+        mm <- stats::model.matrix(design_formula, data = meta)
+        if (qr(mm)$rank < ncol(mm)) {
+            stop(sprintf(
+                "Design ~ %s + %s is rank-deficient — likely an unbalanced %s (e.g. a pair missing one member). Drop the orphan or remove the covariate.",
+                covariate_col, factor_col, covariate_col))
+        }
+        message(sprintf("[run_deseq2_de] Paired design: ~ %s + %s",
+                        covariate_col, factor_col))
+    } else {
+        design_formula <- stats::as.formula(paste0("~ ", factor_col))
+    }
     # Create DESeqDataSet using factory (handles both matrix and tximport)
-    design_formula <- stats::as.formula(paste0("~ ", factor_col))
     dds0 <- create_deseq_dataset(
         expr = counts,
         meta = meta,

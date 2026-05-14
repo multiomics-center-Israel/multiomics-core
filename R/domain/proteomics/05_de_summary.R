@@ -232,7 +232,24 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     contrast_matrix <- limma::makeContrasts(contrasts = contrast_formulas, levels = design)
     colnames(contrast_matrix) <- names(contrast_formulas)
 
-    fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(expr_imp, design), contrast_matrix))
+    # Optional paired design via duplicateCorrelation (standard limma approach
+    # for repeated measures / biological pairing — keeps the ~ 0 + group design
+    # intact and supplies block + within-block correlation to lmFit).
+    block_col <- p_cfg$de$covariate_col %||% p_cfg$de$pairing_col
+    if (!is.null(block_col) && nzchar(block_col)) {
+        if (!block_col %in% colnames(meta_aligned)) {
+            stop(sprintf("covariate_col '%s' not found in metadata", block_col))
+        }
+        block_vec <- meta_aligned[[block_col]]
+        dupcor <- limma::duplicateCorrelation(expr_imp, design, block = block_vec)
+        message(sprintf("[run_limma_proteomics] Paired design via duplicateCorrelation(block = %s), rho = %.3f",
+                        block_col, dupcor$consensus.correlation))
+        fit <- limma::lmFit(expr_imp, design, block = block_vec,
+                            correlation = dupcor$consensus.correlation)
+    } else {
+        fit <- limma::lmFit(expr_imp, design)
+    }
+    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
     ann <- align_annotations_to_expr(expr_imp, prot_tbl, protein_id_col, annot_cols)
     feature_id <- ann[[protein_id_col]]
