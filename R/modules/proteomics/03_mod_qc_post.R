@@ -23,7 +23,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
   }
   
   dirs <- create_legacy_output_dirs(out_dir)
-  out_qc_post <- file.path(dirs$diagnostic_plots, "DE_plots")
+  out_qc_post <- file.path(dirs$diagnostic_plots, "QC_post")
   ensure_dir(out_qc_post)
   
   plots <- list()

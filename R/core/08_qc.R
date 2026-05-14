@@ -114,9 +114,26 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
     pc_y      = pc_y,
     pc_labels = pc_labels
   )
-  
+
   if (!is.null(out_file)) {
     ggplot2::ggsave(out_file, plot = p, width = 6, height = 5)
+
+    # Companion labeled variant: same plot + sample-name labels via ggrepel.
+    # The report template (rnaseq + proteomics) looks for a parallel _labeled.png
+    # file alongside each PCA png. Save it next to out_file.
+    label_col <- if (!is.null(sample_col) && sample_col %in% colnames(scores)) sample_col else "sample"
+    if (requireNamespace("ggrepel", quietly = TRUE) && label_col %in% colnames(scores)) {
+        p_lab <- p + ggrepel::geom_text_repel(
+            ggplot2::aes(label = .data[[label_col]]),
+            size = 3, max.overlaps = Inf, show.legend = FALSE
+        )
+        labeled_file <- sub("\\.png$", "_labeled.png", out_file)
+        ggplot2::ggsave(labeled_file, plot = p_lab, width = 7, height = 5.5)
+    }
+
+    # Companion scores CSV (used by the report's interactive elements).
+    scores_csv <- sub("\\.png$", "_scores.csv", out_file)
+    utils::write.csv(scores, scores_csv, row.names = FALSE)
   }
   
   # Attach PCA results as attributes (backward compatible - plot is still returned)

@@ -1758,7 +1758,10 @@ run_pipeline <- function(config_path, fresh = FALSE) {
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
-    targets::tar_invalidate(everything())
+    # tar_invalidate(everything()) is broken — `everything()` is a tidyselect
+    # helper returning an opaque selection object, not the character vector
+    # tar_invalidate expects. Use tar_destroy instead (same effect, valid API).
+    targets::tar_destroy(ask = FALSE)
   }
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)

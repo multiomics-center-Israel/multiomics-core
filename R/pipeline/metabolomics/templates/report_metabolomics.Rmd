@@ -59,6 +59,33 @@ tryCatch({
   if (!.cp_found) message("cutoff_panel helpers not found (walked 6 levels up)")
 }, error = function(e) message("cutoff_panel helpers not found: ", e$message))
 
+# The Rmd renders in a child R session that doesn't inherit functions sourced
+# by the parent _targets.R run. Inline the small helpers the report uses
+# (same definitions the lipidomics report Rmd uses) so the child has them.
+make_contrast_label <- function(contrast_str) {
+  parts <- strsplit(contrast_str, " - ", fixed = TRUE)[[1]]
+  paste(trimws(parts), collapse = "_vs_")
+}
+
+extract_contrast_table <- function(summary_df, contrast) {
+  linear_fc <- summary_df[[paste0("linearFC.", contrast)]]
+  logfc <- ifelse(linear_fc >= 0, log2(linear_fc), -log2(abs(linear_fc)))
+  # Pipeline emits pvalue.X / padj.X (DESeq2-style); the older versions emitted
+  # P.Value.X / adj.P.Val.X (limma-style). Read whichever exists.
+  pcol_raw <- if (paste0("pvalue.", contrast) %in% names(summary_df))
+    paste0("pvalue.", contrast) else paste0("P.Value.", contrast)
+  pcol_adj <- if (paste0("padj.", contrast) %in% names(summary_df))
+    paste0("padj.", contrast) else paste0("adj.P.Val.", contrast)
+  data.frame(
+    feature_id = summary_df$feature_id,
+    logFC      = logfc,
+    AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
+    P.Value    = summary_df[[pcol_raw]],
+    adj.P.Val  = summary_df[[pcol_adj]],
+    stringsAsFactors = FALSE
+  )
+}
+
 # ---------------------------------------------------------------------------
 # Helper: downloadable DT table with CSV/Excel export (proteomics style)
 # ---------------------------------------------------------------------------
@@ -939,48 +966,24 @@ if (!is.null(de_contrasts)) {
     if (show_de_volcano) {
     cat("\n## Volcano: ", ctr, " {.tabset}\n\n", sep = "")
 
-    # -- Static Volcano (sub-tabbed by p-value type) --
-    # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
-    default_ptype_metab <- "pval"
-    vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
-                                       basename(de_res$files))]
+    # -- Static Volcano --
+    # Single static volcano. Default is raw P-value (matches default_ptype="pval"
+    # in the cutoff panel); padj can be switched to in the interactive section.
     vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
                                        basename(de_res$files))]
-    vol_padj_png <- vol_padj_png[file.exists(vol_padj_png)]
     vol_pval_png <- vol_pval_png[file.exists(vol_pval_png)]
-
-    if (length(vol_padj_png) > 0 || length(vol_pval_png) > 0) {
-      cat("### Static {.tabset}\n\n")
-      order_ptypes <- if (default_ptype_metab == "padj") c("padj", "pval") else c("pval", "padj")
-      for (pt in order_ptypes) {
-        png_path <- if (pt == "padj") vol_padj_png else vol_pval_png
-        tab_label <- if (pt == "padj") "Adjusted P-value" else "Raw P-value"
-        if (length(png_path) > 0) {
-          cat(sprintf("#### %s\n\n", tab_label))
-          cat(sprintf("\n![Volcano: %s -- %s](%s){width=100%%}\n\n",
-                      ctr, tab_label, png_path[1]))
-          figure_legend(paste0(
-            "Volcano plot for contrast ", ctr,
-            " (y-axis: -log10 ",
-            if (pt == "padj") "adjusted P-value" else "raw P-value", "). ",
-            "Each point is a metabolite; coloured points exceed both fold-change and significance thresholds."
-          ))
-        }
-      }
+    if (length(vol_pval_png) == 0) {
+      vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "(_padj)?\\.png$"),
+                                         basename(de_res$files))]
+      vol_pval_png <- vol_pval_png[file.exists(vol_pval_png)]
+    }
+    if (length(vol_pval_png) > 0) {
+      cat("### Static\n\n")
+      cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_pval_png[1]))
+      figure_legend(paste0("Volcano plot for contrast ", ctr,
+        ". Each point is a metabolite; x-axis shows log2(fold change) and y-axis shows -log10(raw P-value). Coloured points exceed both fold-change and significance thresholds."))
       render_commentary(paste0("volcano_", ctr_label))
       cat("\n\n")
-    } else {
-      # Backwards-compat: legacy single volcano file
-      vol_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "\\.png$"),
-                                    basename(de_res$files))]
-      vol_png <- vol_png[file.exists(vol_png)]
-      if (length(vol_png) > 0) {
-        cat("### Static\n\n")
-        cat(sprintf("\n![Volcano: %s](%s){width=100%%}\n\n", ctr, vol_png[1]))
-        figure_legend(paste0("Volcano plot for contrast ", ctr, ". Each point is a metabolite; x-axis shows log2(fold change) and y-axis shows -log10(p-value). Colored points exceed both fold-change and significance thresholds."))
-        render_commentary(paste0("volcano_", ctr_label))
-        cat("\n\n")
-      }
     }
 
     # -- Interactive Volcano --

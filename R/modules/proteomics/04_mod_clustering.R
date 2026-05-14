@@ -47,6 +47,33 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   annot_col   <- build_heatmap_annotation_col(pre$meta, cfg)
   de_features <- get_de_features(de_res, cfg)
   expr_mat    <- as.matrix(pre$expr_imp_single)
+
+  # Need >=2 DE features for any clustering (hclust requires n>=2 to dist+link).
+  # When the dataset has weak DE signal (0 or 1 passing features), skip with a
+  # friendly message rather than failing the whole pipeline.
+  if (length(de_features) < 2) {
+    message(sprintf(
+      "Clustering skipped: only %d DE feature(s) — need >=2 to cluster.",
+      length(de_features)))
+    return(list(plots = list(), files = character(0),
+                excel_order = NULL, objects = list()))
+  }
+
+  # Also skip if <2 DE features have non-zero variance (e.g. after Perseus
+  # imputation collapses near-empty rows): pheatmap row-scaling and hclust
+  # both fail on those.
+  de_in_mat <- intersect(de_features, rownames(expr_mat))
+  if (length(de_in_mat) >= 1) {
+    de_vars <- apply(expr_mat[de_in_mat, , drop = FALSE], 1, stats::var, na.rm = TRUE)
+    n_var <- sum(!is.na(de_vars) & de_vars > 0)
+    if (n_var < 2) {
+      message(sprintf(
+        "Clustering skipped: only %d DE feature(s) have non-zero variance — need >=2.",
+        n_var))
+      return(list(plots = list(), files = character(0),
+                  excel_order = NULL, objects = list()))
+    }
+  }
   
   prot_de_cfg <- cfg$de %||% list()
   annot_context <- list(

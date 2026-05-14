@@ -539,64 +539,61 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #'   When "padj" is requested but adj.P.Val is absent, falls back to raw P.Value.
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
   # 1. Flexible Column Mapping
-  # Try to find the logFC column
-  lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
-  # Try to find the Adjusted P-value column
+  lfc_col  <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
   padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
-  # Try to find the raw P-value column
   pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
-  
-  # Validation check
+
   if (is.na(lfc_col) || is.na(padj_col)) {
     stop(paste0(
       "plot_volcano: Could not find required columns. ",
       "Available: ", paste(colnames(de_tbl), collapse = ", ")
     ))
   }
-  
-  # 2. Thresholds from config
+
+  # Choose y-axis source from pvalue_type. "pval" -> raw p, anything else -> padj.
+  use_raw <- identical(tolower(pvalue_type), "pval") && !is.na(pval_col)
+  y_col   <- if (use_raw) pval_col else padj_col
+  y_label <- if (use_raw) "P-value (raw)" else "adj. P-value"
+
+  # 2. Thresholds from config (raw cutoff borrowed from same p_cutoff for now)
   p_cut <- cfg$de$p_cutoff %||% 0.05
   lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
   log2fc_cut <- log2(lin_fc_cut)
-  
+
   # 3. Prepare Data
-  # We create a local 'plot_df' so we don't mess with the original de_tbl
   plot_df <- as.data.frame(de_tbl)
-  plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
-  
-  # Handle NAs (important for DESeq2)
-  plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
-  plot_df$.neglog10p <- -log10(pmax(plot_df$.padj_plot, 1e-300))
-  
-  # 4. Define Significance & Direction
-  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.padj_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
-  
+  plot_df$.logFC  <- as.numeric(plot_df[[lfc_col]])
+  plot_df$.y      <- as.numeric(plot_df[[y_col]])
+  plot_df$.y_plot <- ifelse(is.na(plot_df$.y), 1, plot_df$.y)
+  plot_df$.neglog10p <- -log10(pmax(plot_df$.y_plot, 1e-300))
+
+  # 4. Significance flag uses the y_col cutoff (so the dashed line matches the axis)
+  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.y_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
   plot_df$.direction <- factor(
     ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
     levels = c("NS", "Down", "Up")
   )
-  
+
   # 5. Sorting (Significant points on top)
   plot_df <- plot_df[order(plot_df$.direction), ]
-  
+
   # 6. Plotting
   ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
     ggplot2::scale_color_manual(
       values = c("NS" = "grey80", "Down" = "#377eb8", "Up" = "#e41a1c"),
-      drop = FALSE # Keep all levels in legend even if 0 counts
+      drop = FALSE
     ) +
     ggplot2::scale_alpha_manual(values = c("NS" = 0.3, "Down" = 0.8, "Up" = 0.8), guide = "none") +
     ggplot2::geom_vline(xintercept = c(-log2fc_cut, log2fc_cut), linetype = "dashed", color = "grey50") +
     ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
     ggplot2::labs(
       title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", padj_col, "and", lfc_col),
+      subtitle = paste("Using:", y_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", padj_col, ")")
+      y = paste0("-log10(", y_label, ")")
     ) +
     ggplot2::theme_minimal()
 }
@@ -739,8 +736,18 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
     feats <- names(clusters[clusters == ci])
     valid_feats <- intersect(feats, rownames(expr_mat))
     if (length(valid_feats) == 0) next
-    
+
     mat_sub <- expr_mat[valid_feats, , drop = FALSE]
+    # plot_heatmap_core (with cluster_rows + scale_rows) errors when <2 rows
+    # remain after zero-variance filter. Skip such clusters with a friendly
+    # message rather than abort the whole pipeline.
+    v <- apply(mat_sub, 1, stats::var, na.rm = TRUE)
+    if (sum(!is.na(v) & v > 0) < 2) {
+      message(sprintf(
+        "Per-cluster heatmap skipped (cluster %s): <2 features have non-zero variance.",
+        ci))
+      next
+    }
     f_hm <- file.path(out_dir, sprintf("Partition_clustering_heatmap_cluster%d.png", ci))
     
     p <- plot_heatmap_core(
@@ -880,8 +887,12 @@ build_heatmap_annotation_col <- function(meta, cfg) {
   )
   
   if (length(annot_cols) == 0) return(NULL)
-  
+
   annot <- meta[, annot_cols, drop = FALSE]
   rownames(annot) <- meta[[sample_col]]
+  # pheatmap rejects logical annotation columns with "'x' must be numeric" —
+  # coerce to factor so TRUE/FALSE renders as a 2-level categorical.
+  lgl <- vapply(annot, is.logical, logical(1))
+  if (any(lgl)) annot[lgl] <- lapply(annot[lgl], factor)
   annot
 }

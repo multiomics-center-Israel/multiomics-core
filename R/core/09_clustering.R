@@ -188,12 +188,25 @@ run_binary_patterns <- function(expr_mat_corr,
   
   # 5) Heatmaps per pattern
   for (pat in patterns) {
-    
+
     # Features belonging to this pattern
     idx_pat <- which(best$best_pattern == pat)
     if (length(idx_pat) < 2) next
-    
+
     feats_pat <- best$feature_id[idx_pat]
+
+    # Skip patterns where fewer than 2 features have non-zero variance —
+    # otherwise plot_heatmap_core's zero-variance filter drops below the
+    # minimum and aborts the whole clustering target.
+    feats_in_x <- intersect(feats_pat, rownames(x))
+    if (length(feats_in_x) >= 1) {
+      v <- apply(x[feats_in_x, , drop = FALSE], 1, stats::var, na.rm = TRUE)
+      if (sum(!is.na(v) & v > 0) < 2) {
+        message(sprintf(
+          "Binary pattern %s skipped: <2 features have non-zero variance.", pat))
+        next
+      }
+    }
     
     # ---- LEGACY-EQUIVALENT ORDERING ----
     # Legacy sorts genes within pattern by correlation to that pattern, descending.
