@@ -35,6 +35,11 @@ if (!"renv" %in% loadedNamespaces()) {
   )
 }
 
+# Polyfill `%||%` for R < 4.4 (base only added it in 4.4.0).
+if (!exists("%||%", envir = baseenv(), inherits = FALSE)) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+}
+
 # --- Dependency check --------------------------------------------------------
 
 check_dependencies <- function(mode = "cli") {
