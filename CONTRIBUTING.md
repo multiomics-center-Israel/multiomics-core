@@ -185,10 +185,15 @@ docs(readme): document input data layout
 **The steps:**
 
 ```bash
-# 1. Make sure your branch is up to date with main, then push
+# 1. Make sure your branch is up to date with main
 git fetch origin
 git rebase origin/main
-git push
+
+# 2. Push the rebased branch.
+#    Because rebase rewrites commit history, a plain `git push` will be
+#    rejected (non-fast-forward). Use --force-with-lease — it's the safe
+#    version of --force (won't overwrite anyone else's work on the branch).
+git push --force-with-lease
 ```
 
 Then on GitHub:
@@ -392,15 +397,25 @@ git reset --hard HEAD@{3}    # use the number from reflog
 
 If you're not sure — **stop and ask before running this**. `--hard` cannot be undone easily.
 
-### "My push was rejected"
+### "My push was rejected" (non-fast-forward)
 
-Probably someone pushed to your branch (or to `main`) since you last pulled. Sync first, then push:
+Two common causes:
+
+**A. You rebased your branch.** Rebase rewrites commit history, so your local commits have different SHAs than the remote commits. Plain `git push` is rejected. Use:
+
+```bash
+git push --force-with-lease
+```
+
+**B. Someone pushed to your branch since you last pulled.** Sync first, then push:
 
 ```bash
 git fetch origin
 git rebase origin/<your-branch>
-git push
+git push --force-with-lease     # because the rebase rewrote history
 ```
+
+`--force-with-lease` is the safe version of `--force` — it refuses to overwrite the remote if there are commits you haven't seen yet. Use it whenever you rebase a branch that's already been pushed.
 
 ---
 
@@ -428,7 +443,7 @@ git push                                      # back up to GitHub
 # ── WHEN READY FOR REVIEW ──────────────────────────────────
 git fetch origin                              # sync one more time
 git rebase origin/main
-git push
+git push --force-with-lease                   # rebase rewrote history
 # → open PR on GitHub, request Michal's review
 
 # ── AFTER MERGE ────────────────────────────────────────────
@@ -452,6 +467,9 @@ git log --oneline -10         # last 10 commits
 # Sync with the team (two-step version)
 git fetch origin              # download latest from GitHub
 git rebase origin/main        # replay your work on top
+
+# After rebasing a branch that's already been pushed:
+git push --force-with-lease   # safe version of --force
 
 # Save work
 git add <file>     OR     git add .
