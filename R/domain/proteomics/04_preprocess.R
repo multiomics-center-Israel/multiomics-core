@@ -73,8 +73,16 @@ preprocess_proteomics <- function(inputs, config) {
   if (norm_method == "median") {
     expr_filt <- normalize_proteomics_median(expr_filt)
     message("Normalization: median centering applied.")
+  } else if (norm_method == "vsn") {
+    # VSN canonically operates on linear-scale intensities. The current loader
+    # only carries log2 (assay_linear is unpopulated), so we invert log2 to
+    # recover the linear matrix before applying VSN. VSN itself produces a
+    # glog2-scale output (same scale as the rest of the pipeline expects).
+    expr_linear_filt <- 2 ^ expr_filt
+    expr_filt <- normalize_proteomics_vsn(expr_linear_filt)
+    message("Normalization: VSN (variance stabilizing) applied.")
   } else if (norm_method != "none") {
-    stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median'.", norm_method))
+    stop(sprintf("Unknown normalization method: '%s'. Supported: 'none', 'median', 'vsn'.", norm_method))
   }
   
   # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
@@ -109,6 +117,28 @@ normalize_proteomics_median <- function(expr_mat) {
   col_medians <- apply(expr_mat, 2, median, na.rm = TRUE)
   global_median <- median(col_medians, na.rm = TRUE)
   sweep(expr_mat, 2, col_medians - global_median)
+}
+
+#' Variance Stabilizing Normalization (VSN) for proteomics
+#'
+#' Applies vsn::vsnMatrix to linear-scale intensity data (matching the
+#' DEP::normalize_vsn pattern). VSN performs its own generalized-log
+#' transformation internally, so the output is on a glog2 scale comparable
+#' to log2. NAs are preserved (the model is fitted on complete values only).
+#' Requires the Bioconductor 'vsn' package.
+#'
+#' @param expr_mat numeric matrix (proteins x samples), linear scale
+#' @return normalized matrix (glog2 scale)
+normalize_proteomics_vsn <- function(expr_mat) {
+  if (!requireNamespace("vsn", quietly = TRUE)) {
+    stop("VSN normalization requires the 'vsn' Bioconductor package.\n",
+         "Install with: BiocManager::install('vsn')")
+  }
+  na_mask <- is.na(expr_mat)
+  vsn_fit <- vsn::vsnMatrix(expr_mat)
+  result  <- vsn::predict(vsn_fit, expr_mat)
+  result[na_mask] <- NA
+  result
 }
 
 get_sample_filter_rules <- function(config, mode) {

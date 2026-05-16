@@ -24,7 +24,88 @@ impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
         return(impute_proteomics_dep2(expr_mat, cfg, return_flags))
     }
 
-    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2'.", method))
+    if (method == "qrilc") {
+        return(impute_proteomics_qrilc(expr_mat, cfg, return_flags))
+    }
+
+    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2', 'qrilc'.", method))
+}
+
+#' Impute proteomics expr_mat using QRILC (quantile regression for left-censored data)
+#'
+#' Uses imputeLCMD::impute.QRILC when available; falls back to a built-in
+#' reimplementation of the same quantile-regression algorithm otherwise.
+#'
+#' @param expr_mat numeric matrix (proteins x samples), may contain NAs
+#' @param cfg      mode-level config (config$modes$proteomics)
+#' @param return_flags if TRUE, return list(imputed, imputed_flag)
+#' @return imputed matrix or list(imputed, imputed_flag)
+impute_proteomics_qrilc <- function(expr_mat, cfg, return_flags = FALSE) {
+    qrilc_seed <- as.integer(cfg$imputation$qrilc_random_seed %||% 1)
+
+    expr_mat <- as.matrix(expr_mat)
+    imputed_flag <- is.na(expr_mat)
+
+    set.seed(qrilc_seed)
+
+    if (requireNamespace("imputeLCMD", quietly = TRUE)) {
+        result <- imputeLCMD::impute.QRILC(expr_mat, tune.sigma = 1)
+        imputed <- as.matrix(result[[1]])
+        rownames(imputed) <- rownames(expr_mat)
+        colnames(imputed) <- colnames(expr_mat)
+    } else {
+        message("imputeLCMD package not available; using built-in QRILC (quantile regression).")
+        imputed <- qrilc_impute_builtin(expr_mat)
+    }
+
+    if (return_flags) list(imputed = imputed, imputed_flag = imputed_flag) else imputed
+}
+
+#' Built-in QRILC implementation matching imputeLCMD::impute.QRILC algorithm
+#'
+#' Fallback used when the imputeLCMD package isn't installed.
+#' @param expr_mat numeric matrix with NAs
+#' @return imputed numeric matrix
+qrilc_impute_builtin <- function(expr_mat) {
+    nFeatures <- nrow(expr_mat)
+    nSamples <- ncol(expr_mat)
+    imputed <- expr_mat
+
+    for (j in seq_len(nSamples)) {
+        curr_sample <- expr_mat[, j]
+        if (all(is.na(curr_sample))) stop("Imputation failed: sample '", colnames(expr_mat)[j], "' is all-NA.")
+
+        n_miss <- sum(is.na(curr_sample))
+        if (n_miss == 0) next
+
+        pNAs <- n_miss / length(curr_sample)
+        upper_q <- 0.99
+
+        q_normal <- stats::qnorm(
+            seq(pNAs + 0.001, upper_q + 0.001, (upper_q - pNAs) / (upper_q * 100)),
+            mean = 0, sd = 1
+        )
+
+        q_curr <- stats::quantile(
+            curr_sample,
+            probs = seq(0.001, upper_q + 0.001, 0.01),
+            na.rm = TRUE
+        )
+
+        temp_qr <- stats::lm(q_curr ~ q_normal)
+        mean_cdd <- as.numeric(temp_qr$coefficients[1])
+        sd_cdd <- as.numeric(temp_qr$coefficients[2])
+        if (!is.finite(sd_cdd) || sd_cdd <= 0) sd_cdd <- 1e-8
+
+        upper_bound <- stats::qnorm(pNAs + 0.001, mean = mean_cdd, sd = sd_cdd)
+
+        u <- stats::runif(nFeatures, min = 0, max = stats::pnorm(upper_bound, mean = mean_cdd, sd = sd_cdd))
+        data_to_imp <- stats::qnorm(u, mean = mean_cdd, sd = sd_cdd)
+
+        imputed[is.na(curr_sample), j] <- data_to_imp[is.na(curr_sample)]
+    }
+
+    imputed
 }
 
 #' Impute proteomics expr_mat using Perseus-style method

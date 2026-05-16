@@ -251,6 +251,22 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     }
     fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
+    # Optional fdrtool empirical-null correction (matches DEP::test_diff). When
+    # enabled, replaces limma's per-contrast p-values with fdrtool's empirical-null
+    # p-values, then BH adjustment downstream produces more-conservative padj.
+    if (isTRUE(p_cfg$de$fdrtool_correction)) {
+        if (!requireNamespace("fdrtool", quietly = TRUE)) {
+            stop("fdrtool_correction is enabled but 'fdrtool' package is not installed.\n",
+                 "Install with: install.packages('fdrtool')")
+        }
+        for (i in seq_len(ncol(fit2$t))) {
+            fdr_res <- fdrtool::fdrtool(fit2$t[, i], statistic = "normal",
+                                        plot = FALSE, verbose = FALSE)
+            fit2$p.value[, i] <- fdr_res$pval
+        }
+        message("Applied fdrtool empirical null correction to t-statistics.")
+    }
+
     ann <- align_annotations_to_expr(expr_imp, prot_tbl, protein_id_col, annot_cols)
     feature_id <- ann[[protein_id_col]]
     annot_out <- setdiff(annot_cols, protein_id_col)
