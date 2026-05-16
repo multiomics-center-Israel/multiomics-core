@@ -1669,6 +1669,12 @@
       "Author": "Marcel Ramos [aut, cre] (ORCID: <https://orcid.org/0000-0002-3242-0582>), Martin Morgan [aut, ctb], Lori Shepherd [ctb], Hervé Pagès [ctb], Vincent J Carey [aut, ctb], Levi Waldron [aut], MultiAssay SIG [ctb]",
       "Maintainer": "Marcel Ramos <marcel.ramos@sph.cuny.edu>"
     },
+    "ProteoMM": {
+      "Package": "ProteoMM",
+      "Version": "1.28.0",
+      "Source": "Repository",
+      "Repository": "BioCsoft"
+    },
     "R.methodsS3": {
       "Package": "R.methodsS3",
       "Version": "1.8.2",
@@ -5320,6 +5326,12 @@
       "NeedsCompilation": "no",
       "Repository": "RSPM",
       "Encoding": "UTF-8"
+    },
+    "gdata": {
+      "Package": "gdata",
+      "Version": "3.0.1",
+      "Source": "Repository",
+      "Repository": "CRAN"
     },
     "gdtools": {
       "Package": "gdtools",

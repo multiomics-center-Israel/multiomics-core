@@ -204,7 +204,22 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     if (is.null(contrasts) || length(contrasts) == 0) {
         stop("metabolomics DE: contrasts are required (via contrast_table argument or config$de$contrasts).")
     }
-    if (is.list(contrasts)) contrasts <- unlist(contrasts)
+    if (is.data.frame(contrasts)) {
+        req <- c("Numerator", "Denominator")
+        miss <- setdiff(req, colnames(contrasts))
+        if (length(miss) > 0) {
+            stop("metabolomics DE: contrast_table is missing required column(s): ",
+                 paste(miss, collapse = ", "))
+        }
+        contrast_labels_override <- if ("Contrast_name" %in% colnames(contrasts))
+            as.character(contrasts$Contrast_name) else NULL
+        contrasts <- paste(as.character(contrasts$Numerator),
+                           as.character(contrasts$Denominator),
+                           sep = " - ")
+    } else {
+        contrast_labels_override <- NULL
+        if (is.list(contrasts)) contrasts <- unlist(contrasts)
+    }
 
     mat  <- pre$expr_work
     # When variance-scaling (auto/pareto/range) is applied, DE tests must use
@@ -246,8 +261,10 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     de_tables <- list()
     de_model  <- NULL
 
-    for (ctr in contrasts) {
-        ctr_label <- make_contrast_label(ctr)
+    for (i in seq_along(contrasts)) {
+        ctr <- contrasts[i]
+        ctr_label <- if (!is.null(contrast_labels_override))
+            contrast_labels_override[i] else make_contrast_label(ctr)
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
