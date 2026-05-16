@@ -192,7 +192,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
   de_cfg <- cfg$de %||% list()
   
   method <- tolower(de_cfg$method %||% "limma")
-  assert_one_of(method, "de$method", c("limma", "t_test", "wilcoxon"))
+  assert_one_of(method, "de$method", c("limma", "t_test", "t_test_equal", "wilcoxon"))
   
   condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
   sample_col <- cfg$effects$samples %||% "sample_id"
@@ -304,8 +304,9 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
               " (", numerator, " vs ", denominator, ")")
       
       tbl <- switch(method,
-                    t_test   = de_t_test(mat_for_test, condition, numerator, denominator),
-                    wilcoxon = de_wilcoxon(mat_for_test, condition, numerator, denominator)
+                    t_test       = de_t_test(mat_for_test, condition, numerator, denominator),
+                    t_test_equal = de_t_test_equal(mat_for_test, condition, numerator, denominator),
+                    wilcoxon     = de_wilcoxon(mat_for_test, condition, numerator, denominator)
       )
       tbl$Contrast <- ctr_name
       de_tables[[ctr_name]] <- tbl
@@ -402,9 +403,9 @@ de_t_test <- function(mat, condition, numerator, denominator, mat_for_fc = NULL)
 
 #' Run equal-variance (Student's) t-tests per feature on a single contrast
 #' (MetaboAnalyst default)
-de_t_test_equal <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
-    de_two_group(mat, condition, contrast_str, mat_for_fc,
-                 test_fn = function(b, a) stats::t.test(b, a, var.equal = TRUE))
+de_t_test_equal <- function(mat, condition, numerator, denominator, mat_for_fc = NULL) {
+  de_two_group(mat, condition, numerator, denominator, mat_for_fc,
+               test_fn = function(b, a) stats::t.test(b, a, var.equal = TRUE))
 }
 
 

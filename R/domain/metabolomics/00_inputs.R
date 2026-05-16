@@ -164,7 +164,7 @@ validate_metabolomics_config <- function(cfg) {
                   c("none", "sum", "median", "pqn", "is"),
                   allow_null = TRUE)
     assert_one_of(norm$transform, "normalization$transform",
-                  c("none", "log2", "log10"),
+                  c("none", "log2", "log10", "glog10"),
                   allow_null = TRUE)
     assert_one_of(norm$scaling, "normalization$scaling",
                   c("none", "center", "auto", "pareto", "range"),

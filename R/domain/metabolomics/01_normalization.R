@@ -386,14 +386,25 @@ norm_biological_factor <- function(mat, meta, factor_col) {
 #' Apply transformation
 #'
 #' @param mat         Numeric matrix.
-#' @param method      One of "none", "log2", "log10".
+#' @param method      One of "none", "log2", "log10", "glog10".
 #' @param pseudocount Numeric value added before log (default 1).
+#'                    Ignored when method = "glog10" (uses adaptive min.val).
 #' @return Transformed matrix.
 transform_metab <- function(mat, method = "none", pseudocount = 1) {
     method <- tolower(method)
-    assert_one_of(method, "transform", c("none", "log2", "log10"))
+    assert_one_of(method, "transform", c("none", "log2", "log10", "glog10"))
 
     if (method == "none") return(mat)
+
+    # Generalized log10 (MetaboAnalyst convention):
+    #   glog10(x) = log10( (x + sqrt(x^2 + min.val^2)) / 2 )
+    # where min.val = 1/10 of the smallest positive value. Smoothly handles
+    # zeros and near-zero values without a pseudocount.
+    if (method == "glog10") {
+        pos_vals <- mat[mat > 0 & is.finite(mat)]
+        min_val <- if (length(pos_vals) > 0) min(pos_vals) / 10 else 1
+        return(log10((mat + sqrt(mat^2 + min_val^2)) / 2))
+    }
 
     if (pseudocount > 0) {
         mat <- mat + pseudocount
