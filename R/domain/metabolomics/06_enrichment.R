@@ -99,10 +99,12 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
                                         col_types = readr::cols(),
                                         show_col_types = FALSE)
 
-        # Locate HMDB IDs — try dedicated column first, then parse feature_id
+        # Locate HMDB IDs — try common column-name variants, then parse feature_id
         hmdb_ids <- NULL
-        if ("HMDB" %in% colnames(row_data)) {
-            hmdb_ids <- as.character(row_data$HMDB)
+        hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
+                              colnames(row_data))[1]
+        if (!is.na(hmdb_col)) {
+            hmdb_ids <- as.character(row_data[[hmdb_col]])
         } else if ("feature_id" %in% colnames(row_data)) {
             # Try extracting HMDB from feature_id (HMDB|Name format)
             hmdb_ids <- sub("\\|.*$", "", as.character(row_data$feature_id))

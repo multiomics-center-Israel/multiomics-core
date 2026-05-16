@@ -743,6 +743,54 @@ build_feature_ids <- function(data_df, id_cfg) {
 
 
 
+#' Annotate row_data with a KEGG column from an HMDB → KEGG mapping file
+#'
+#' Adds (or fills) a \code{KEGG} column on \code{row_data} by looking up the
+#' HMDB ID for each feature in a TSV with columns \code{HMDB} and \code{KEGG}.
+#' If \code{row_data} already has a \code{KEGG} column, only NA / blank entries
+#' are filled — pre-existing IDs are preserved. No-op when \code{mapping_file}
+#' is NULL/missing or no HMDB-like column is present.
+#'
+#' @param row_data data.frame of feature annotations.
+#' @param mapping_file Path to TSV with HMDB and KEGG columns (or NULL).
+#' @return row_data with a \code{KEGG} column populated where possible.
+add_kegg_from_hmdb <- function(row_data, mapping_file) {
+    if (is.null(row_data) || is.null(mapping_file) ||
+        !nzchar(mapping_file) || !file.exists(mapping_file)) {
+        return(row_data)
+    }
+
+    hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
+                          colnames(row_data))[1]
+    if (is.na(hmdb_col)) return(row_data)
+
+    mapping_df <- tryCatch(
+        readr::read_delim(mapping_file, delim = "\t",
+                          col_types = readr::cols(), show_col_types = FALSE),
+        error = function(e) NULL
+    )
+    if (is.null(mapping_df) ||
+        !all(c("HMDB", "KEGG") %in% colnames(mapping_df))) {
+        return(row_data)
+    }
+
+    map_vec <- stats::setNames(as.character(mapping_df$KEGG),
+                               as.character(mapping_df$HMDB))
+    looked_up <- map_vec[as.character(row_data[[hmdb_col]])]
+
+    existing <- if ("KEGG" %in% colnames(row_data))
+        as.character(row_data$KEGG) else rep(NA_character_, nrow(row_data))
+    needs_fill <- is.na(existing) | !nzchar(existing)
+    existing[needs_fill] <- looked_up[needs_fill]
+    row_data$KEGG <- existing
+
+    n_filled <- sum(!is.na(looked_up[needs_fill]))
+    message(sprintf("add_kegg_from_hmdb: populated KEGG for %d/%d features",
+                    n_filled, nrow(row_data)))
+    row_data
+}
+
+
 #' Build minimal metadata when no metadata file is provided
 #'
 #' Infers is_QC and is_blank flags from sample names.
