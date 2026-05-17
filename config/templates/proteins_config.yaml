@@ -255,12 +255,6 @@ modes:
       max_size: 500
       gsea_ranking: "stat"    # "stat" | "abs_lfc" | "lfc"
       pathway_volcano: true   # produce pathway-colored volcano data for report
-
-      # GO term simplification — cluster semantically similar GO terms
-      # and keep only the most significant per cluster (uses rrvgo)
-      simplify_go: true             # true = reduce redundant GO terms
-      simplify_threshold: 0.7       # 0-1: higher = more aggressive merging
-      simplify_measure: "Wang"      # "Wang" | "Rel" | "Resnik" | "Lin" | "Jiang"
       cluster_threshold: 0.7  # semantic similarity threshold for term clustering (0-1, lower = more merging)
 
     # --------------------------------------------------------

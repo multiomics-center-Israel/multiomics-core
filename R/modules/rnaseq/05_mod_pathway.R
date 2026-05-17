@@ -107,26 +107,16 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
     pw_min     <- pw_cfg$min_size %||% 10
     pw_max     <- pw_cfg$max_size %||% 500
 
-    # GO simplification config
-    simplify_go        <- isTRUE(pw_cfg$simplify_go)
-    simplify_threshold <- pw_cfg$simplify_threshold %||% 0.7
-    simplify_measure   <- pw_cfg$simplify_measure   %||% "Wang"
-    simplify_orgdb     <- if (simplify_go) {
-        org_info <- get_organism_info(organism)
-        if (!is.na(org_info$orgdb)) org_info$orgdb else NULL
-    } else NULL
-
+    # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
+    # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
+    # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = pw_method,
         min_size           = pw_min,
-        max_size           = pw_max,
-        simplify_go        = simplify_go,
-        simplify_threshold = simplify_threshold,
-        simplify_measure   = simplify_measure,
-        simplify_orgdb     = simplify_orgdb
+        max_size           = pw_max
     )
 
     # ------------------------------------------------------------------
