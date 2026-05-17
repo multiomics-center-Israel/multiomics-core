@@ -131,6 +131,29 @@ build_shiny_payload_rnaseq <- function(
                 } else if ("Gene" %in% names(payload$de_stats) && !"feature_id" %in% names(payload$de_stats)) {
                     payload$de_stats$feature_id <- payload$de_stats$Gene
                 }
+
+                # Merge row_data annotation columns into de_stats (additive, skip on collision).
+                # tximport/matrix paths build a single-column row_data with just the gene ID
+                # (R/domain/rnaseq/03_preprocess.R:62,85), so this becomes a no-op there.
+                if (!is.null(pre$row_data) && ncol(pre$row_data) > 0) {
+                    gene_id_col <- rna_cfg$id_columns$gene_id
+                    if (is.null(gene_id_col) || !(gene_id_col %in% colnames(pre$row_data))) {
+                        fallback_col <- colnames(pre$row_data)[1]
+                        message(
+                            "[shiny_export] rna id_columns$gene_id (",
+                            gene_id_col %||% "<unset>",
+                            ") not in row_data; using first column '",
+                            fallback_col, "' as join key."
+                        )
+                        gene_id_col <- fallback_col
+                    }
+                    payload$de_stats <- annotate_de_stats(
+                        payload$de_stats,
+                        pre$row_data,
+                        id_col_de  = "feature_id",
+                        id_col_row = gene_id_col
+                    )
+                }
             }
         }
 
