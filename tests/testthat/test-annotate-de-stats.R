@@ -206,6 +206,71 @@ test_that("duplicate keys in row_data warn and first match wins", {
 # Custom id column names (RNA-seq / proteomics scenarios)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Regression: row_data columns named like pass/FC must not corrupt
+# build_de_summary_counts_generic counts. This is the integration the explicit
+# contrasts API protects against.
+# ---------------------------------------------------------------------------
+
+test_that("row_data 'qc_pass' / 'linearFC.qc' columns do not leak into de_summary counts", {
+    de <- data.frame(
+        feature_id        = paste0("f", 1:5),
+        A_vs_B_pass       = c(1, 1, 0, 1, NA),
+        linearFC.A_vs_B   = c(0.5, -0.3, 0.1, 0.8, 0.4),
+        pass_any_contrast = c(1, 1, NA, 1, NA),
+        stringsAsFactors  = FALSE
+    )
+    rd <- data.frame(
+        feature_id       = paste0("f", 1:5),
+        qc_pass          = c(1, 1, 1, 1, 1),
+        linearFC.qc      = c(0.9, -0.9, 0.9, -0.9, 0.9),
+        Name             = c("a", "b", "c", "d", "e"),
+        stringsAsFactors = FALSE
+    )
+
+    annotated <- annotate_de_stats(de, rd)
+    # Sanity: the would-be-corrupting columns made it in.
+    expect_true(all(c("qc_pass", "linearFC.qc", "Name") %in% colnames(annotated)))
+
+    # Counts must reflect only the declared contrast.
+    result <- build_de_summary_counts_generic(
+        de_stats     = annotated,
+        contrasts    = "A_vs_B",
+        pass_col_for = function(cn) paste0(cn, "_pass"),
+        fc_col_for   = function(cn, cols) {
+            fc <- paste0("linearFC.", cn)
+            if (fc %in% cols) fc else NULL
+        }
+    )
+
+    # No 'qc' row, just A_vs_B + any.
+    expect_equal(result$contrast, c("A_vs_B", "any"))
+    expect_false("qc" %in% result$contrast)
+
+    # A_vs_B_pass == 1 at rows 1, 2, 4 => total = 3. qc_pass is ignored.
+    row_ab <- result[result$contrast == "A_vs_B", ]
+    expect_equal(row_ab$total, 3)
+    expect_equal(row_ab$up, 2)    # 0.5, 0.8
+    expect_equal(row_ab$down, 1)  # -0.3
+})
+
+test_that("rnaseq wrapper ignores row_data noise columns under explicit contrasts", {
+    # End-to-end smoke through the domain wrapper.
+    annotated <- data.frame(
+        feature_id        = paste0("f", 1:4),
+        Name              = c("a", "b", "c", "d"),     # from row_data
+        qc_pass           = c(1, 1, 1, 1),             # from row_data, attack vector
+        linearFC.qc       = c(0.9, -0.9, 0.9, -0.9),   # from row_data, attack vector
+        A_vs_B_pass       = c(1, 1, 0, 1),
+        linearFC.A_vs_B   = c(0.5, -0.3, 0.1, 0.8),
+        pass_any_contrast = c(1, 1, NA, 1),
+        stringsAsFactors  = FALSE
+    )
+    result <- build_de_summary_counts_rnaseq(annotated, contrasts = "A_vs_B")
+    expect_equal(result$contrast, c("A_vs_B", "any"))
+    expect_equal(result[result$contrast == "A_vs_B", "total"], 3)
+})
+
 test_that("merge works with different id column names on each side", {
     de <- data.frame(
         feature_id        = c("g1", "g2"),

@@ -1,44 +1,50 @@
 #' Generic DE summary counts builder (internal)
 #'
 #' Counts up-/down-/total significant features per contrast from a DE
-#' statistics data.frame.  Domain-specific wrappers supply the naming
-#' conventions and significance logic via callback arguments.
+#' statistics data.frame.  Domain-specific wrappers supply the per-omics
+#' column-naming conventions via callback arguments.
 #'
-#' @param de_stats  DE statistics data.frame with pass and FC columns.
-#' @param pass_pattern  Regex that matches per-contrast pass columns
-#'   (e.g. \code{"^pass\\\\.imputs\\\\."} or \code{"_pass$"}).
-#' @param extract_contrast  \code{function(col_name)} returning the contrast
-#'   name derived from the pass column name.
-#' @param find_fc_col  \code{function(contrast_name, col_names)} returning the
-#'   matching fold-change column name, or \code{NULL} if none found.
-#' @param is_significant  \code{function(x)} returning a logical vector
-#'   indicating which rows are significant.  Receives the raw pass-column
-#'   values (may contain \code{NA}).  Default: \code{!is.na(x) & x == 1}.
+#' Matching is done by exact column name (constructed from the explicit
+#' \code{contrasts} list), never by regex over \code{names(de_stats)}.
+#' This is intentional: \code{de_stats} may now carry annotation columns
+#' merged in from \code{row_data} via \code{annotate_de_stats()}, and a
+#' regex over column names would pick up any user-supplied column matching
+#' \code{*_pass} / \code{pass.*} / \code{linearFC.*}.
+#'
+#' @param de_stats  DE statistics data.frame.
+#' @param contrasts Character vector of contrast names to count.  An
+#'   empty vector returns \code{NULL}.
+#' @param pass_col_for \code{function(contrast_name)} returning the exact
+#'   pass-column name for that contrast (e.g. \code{paste0(cn, "_pass")}).
+#' @param fc_col_for  \code{function(contrast_name, available_cols)}
+#'   returning the exact fold-change column name for that contrast, or
+#'   \code{NULL} if none is available.
+#' @param is_significant \code{function(x)} returning a logical vector
+#'   indicating which rows are significant.  Default: \code{!is.na(x) & x == 1}.
 #' @return A \code{data.frame} with columns \code{contrast}, \code{up},
-#'   \code{down}, \code{total}; or \code{NULL} when no pass columns exist.
+#'   \code{down}, \code{total}; or \code{NULL} when nothing was counted.
 #'   If \code{pass_any_contrast} is present in \code{de_stats}, an extra
 #'   \code{"any"} row is appended with the total number of features
 #'   significant in any contrast (up/down are 0).
 #' @keywords internal
 build_de_summary_counts_generic <- function(de_stats,
-                                            pass_pattern,
-                                            extract_contrast,
-                                            find_fc_col,
+                                            contrasts,
+                                            pass_col_for,
+                                            fc_col_for,
                                             is_significant = function(x) !is.na(x) & x == 1) {
     if (is.null(de_stats)) return(NULL)
+    if (is.null(contrasts) || length(contrasts) == 0) return(NULL)
 
-    pass_cols <- grep(pass_pattern, names(de_stats), value = TRUE)
-    pass_cols <- setdiff(pass_cols, "pass_any_contrast")
+    de_cols <- names(de_stats)
 
-    if (length(pass_cols) == 0) return(NULL)
+    summaries <- lapply(contrasts, function(cn) {
+        pass_col <- pass_col_for(cn)
+        if (is.null(pass_col) || !(pass_col %in% de_cols)) return(NULL)
 
-    summaries <- lapply(pass_cols, function(col) {
-        contrast_name <- extract_contrast(col)
-        fc_col <- find_fc_col(contrast_name, names(de_stats))
+        fc_col <- fc_col_for(cn, de_cols)
+        sig_rows <- is_significant(de_stats[[pass_col]])
 
-        sig_rows <- is_significant(de_stats[[col]])
-
-        if (!is.null(fc_col)) {
+        if (!is.null(fc_col) && fc_col %in% de_cols) {
             up   <- sum(sig_rows & de_stats[[fc_col]] > 0, na.rm = TRUE)
             down <- sum(sig_rows & de_stats[[fc_col]] < 0, na.rm = TRUE)
         } else {
@@ -47,7 +53,7 @@ build_de_summary_counts_generic <- function(de_stats,
         }
 
         data.frame(
-            contrast = contrast_name,
+            contrast = cn,
             up       = up,
             down     = down,
             total    = sum(sig_rows, na.rm = TRUE),
@@ -55,13 +61,14 @@ build_de_summary_counts_generic <- function(de_stats,
         )
     })
 
+    summaries <- Filter(Negate(is.null), summaries)
+    if (length(summaries) == 0) return(NULL)
+
     result <- do.call(rbind, summaries)
 
-    # Append "any" row if pass_any_contrast exists
-    if ("pass_any_contrast" %in% names(de_stats)) {
-        any_total <- sum(
-            is_significant(de_stats$pass_any_contrast)
-        )
+    # Append "any" row if pass_any_contrast exists (fixed column name).
+    if ("pass_any_contrast" %in% de_cols) {
+        any_total <- sum(is_significant(de_stats$pass_any_contrast))
         any_row <- data.frame(
             contrast = "any",
             up       = 0,

@@ -188,7 +188,17 @@ build_shiny_payload_rnaseq <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            payload$de_summary <- build_de_summary_counts_rnaseq(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
@@ -321,23 +331,26 @@ build_shiny_payload_rnaseq <- function(
 #'
 #' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
 #' RNA-seq naming conventions: \code{<contrast>_pass} pass columns and
-#' \code{linearFC.<contrast>} fold-change columns (with grep fallback).
+#' \code{linearFC.<contrast>} fold-change columns (exact match only —
+#' the grep-over-de_stats-columns fallback was removed because
+#' \code{de_stats} may now carry user-supplied annotation columns from
+#' \code{row_data}, which a regex could pick up).
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_rnaseq <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_rnaseq <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "_pass$",
-        extract_contrast = function(col) sub("_pass$", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0(cn, "_pass"),
+        fc_col_for   = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
-            if (fc %in% cols) return(fc)
-            # Fallback: grep search
-            hits <- grep(paste0("linearFC.*", cn), cols, value = TRUE)
-            if (length(hits) > 0) hits[1] else NULL
+            if (fc %in% cols) fc else NULL
         }
     )
 

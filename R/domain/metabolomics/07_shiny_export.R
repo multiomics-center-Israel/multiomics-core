@@ -204,7 +204,17 @@ build_shiny_payload_metabolomics <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            payload$de_summary <- build_de_summary_counts_metabolomics(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
         }
 
         # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
@@ -375,16 +385,19 @@ build_shiny_payload_metabolomics <- function(
 #' metabolomics naming conventions: \code{pass.<contrast>} pass columns and
 #' \code{linearFC.<contrast>} fold-change columns.
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_metabolomics <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_metabolomics <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "^pass\\.",
-        extract_contrast = function(col) sub("^pass\\.", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0("pass.", cn),
+        fc_col_for   = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
             if (fc %in% cols) fc else NULL
         }

@@ -177,7 +177,17 @@ build_shiny_payload_proteomics <- function(
             }
 
             # de_summary: Per-contrast summary counts
-            summary_counts <- build_de_summary_counts_proteomics(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            summary_counts <- build_de_summary_counts_proteomics(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 
@@ -290,16 +300,19 @@ build_shiny_payload_proteomics <- function(
 #' and multiple FC column candidates (\code{logFC_}, \code{log2FoldChange_},
 #' \code{logFC.}, \code{linearFC.imputs.}).
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_proteomics <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_proteomics <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "^pass\\.imputs\\.",
-        extract_contrast = function(col) sub("^pass\\.imputs\\.", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0("pass.imputs.", cn),
+        fc_col_for   = function(cn, cols) {
             candidates <- c(
                 paste0("logFC_", cn),
                 paste0("log2FoldChange_", cn),
