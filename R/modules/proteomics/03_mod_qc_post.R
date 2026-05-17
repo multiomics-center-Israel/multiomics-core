@@ -17,7 +17,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
   cfg <- config$modes$proteomics
   
   # Check if QC post is enabled
-  if (isFALSE(cfg$qc_post$enabled)) {
+  if (is.null(cfg$qc_post) || isFALSE(cfg$qc_post$enabled)) {
     message("QC post-DE disabled in config.")
     return(list(plots = list(), files = character(0)))
   }

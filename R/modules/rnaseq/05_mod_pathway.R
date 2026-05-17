@@ -13,10 +13,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
 
     rna_cfg <- config$modes$rna
     ann_cfg <- rna_cfg$annotation %||% list()
-    pw_cfg  <- rna_cfg$pathway   %||% list()
+    pw_cfg  <- rna_cfg$pathway
 
     # Skip entirely if pathway analysis is disabled
-    if (isFALSE(pw_cfg$enabled)) {
+    if (is.null(pw_cfg) || isFALSE(pw_cfg$enabled)) {
         message("Pathway analysis disabled in config (pathway.enabled: false)")
         return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
     }
