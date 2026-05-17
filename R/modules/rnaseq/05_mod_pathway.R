@@ -107,6 +107,9 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
     pw_min     <- pw_cfg$min_size %||% 10
     pw_max     <- pw_cfg$max_size %||% 500
 
+    # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
+    # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
+    # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
