@@ -179,9 +179,10 @@ test_that("low match rate emits a warning", {
 })
 
 test_that("NA in de_stats join key yields NA in annotations", {
-    de  <- make_de(ids = c("f1", NA, "f3"))
-    rd  <- make_rd()
-    out <- annotate_de_stats(de, rd)
+    de <- make_de(ids = c("f1", NA, "f3"))
+    rd <- make_rd()
+    # 2/3 match rate trips the low-match-rate warning; not what this test checks.
+    suppressWarnings(out <- annotate_de_stats(de, rd))
     expect_true(is.na(out$Name[2]))
     expect_equal(out$Name[c(1, 3)], c("alpha", "gamma"))
 })

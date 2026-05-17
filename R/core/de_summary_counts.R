@@ -124,13 +124,17 @@ annotate_de_stats <- function(de_stats,
              call. = FALSE)
     }
 
-    if (is.null(row_data) || nrow(row_data) == 0) {
+    if (is.null(row_data)) {
         message("annotate_de_stats: row_data is NULL or empty - no annotations merged.")
         return(de_stats)
     }
     if (!is.data.frame(row_data)) {
         stop("annotate_de_stats: row_data must be a data.frame, got ",
              class(row_data)[1], call. = FALSE)
+    }
+    if (nrow(row_data) == 0) {
+        message("annotate_de_stats: row_data is NULL or empty - no annotations merged.")
+        return(de_stats)
     }
     if (!(id_col_row %in% colnames(row_data))) {
         stop("annotate_de_stats: id_col_row '", id_col_row,
