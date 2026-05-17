@@ -121,6 +121,9 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(de_res$dds)) payload$de_model <- de_res$dds
 
         # de_stats: Full DE statistics table
+        # Snapshot the un-annotated shape for build_final_results_rnaseq(), which
+        # was designed to run with annot_cols = NULL (see 05_outputs_legacy.R:113).
+        de_stats_pre_annot <- NULL
         if (!is.null(de_res$tables)) {
             payload$de_stats <- build_rnaseq_summary_df(de_res$tables, de_cfg)
 
@@ -131,6 +134,9 @@ build_shiny_payload_rnaseq <- function(
                 } else if ("Gene" %in% names(payload$de_stats) && !"feature_id" %in% names(payload$de_stats)) {
                     payload$de_stats$feature_id <- payload$de_stats$Gene
                 }
+
+                # Capture the un-annotated snapshot before any row_data merge.
+                de_stats_pre_annot <- payload$de_stats
 
                 # Merge row_data annotation columns into de_stats (additive, skip on collision).
                 # tximport/matrix paths build a single-column row_data with just the gene ID
@@ -186,10 +192,12 @@ build_shiny_payload_rnaseq <- function(
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
-        # Use payload$de_stats which was built above from de_res$tables
+        # Pass the un-annotated snapshot so build_final_results_rnaseq() keeps its
+        # pre-existing behavior (it expects to manage annotations itself, with
+        # annot_cols = NULL by design).
         if (!is.null(payload$de_stats) && !is.null(inputs$contrasts)) {
             final_results <- tryCatch(
-                build_final_results_rnaseq(pre, payload$de_stats, inputs$contrasts, pre$row_data),
+                build_final_results_rnaseq(pre, de_stats_pre_annot, inputs$contrasts, pre$row_data),
                 error = function(e) {
                     warning("[shiny_export] de_final_table: ", conditionMessage(e))
                     NULL
