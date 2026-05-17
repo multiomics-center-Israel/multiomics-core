@@ -137,6 +137,21 @@ build_shiny_payload_proteomics <- function(
                 payload$de_stats$feature_id <- payload$de_stats[[found_col]]
             }
 
+            # Merge row_data annotation columns into de_stats. on_collision = "skip"
+            # is critical: Protein.Names / Genes / First.Protein.Description are already
+            # carried in summary_df by summarize_limma_mult_imputation() (and may have
+            # been edited by apply_custom_annotation()), so summary_df wins.
+            if (!is.null(pre$row_data) && ncol(pre$row_data) > 0) {
+                protein_id_col <- prot_cfg$id_columns$protein_id
+                payload$de_stats <- annotate_de_stats(
+                    payload$de_stats,
+                    pre$row_data,
+                    id_col_de    = "feature_id",
+                    id_col_row   = protein_id_col,
+                    on_collision = "skip"
+                )
+            }
+
             # de_sig_stats: Subset of de_stats for significant features
             if ("pass_any_contrast" %in% colnames(payload$de_stats)) {
                 sig_df <- payload$de_stats[
