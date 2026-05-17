@@ -169,6 +169,14 @@ build_shiny_payload_metabolomics <- function(
             if (!is.na(found_col) && !"feature_id" %in% names(payload$de_stats)) {
                 payload$de_stats$feature_id <- payload$de_stats[[found_col]]
             }
+
+            # Merge row_data annotation columns into de_stats (additive, skip on collision)
+            payload$de_stats <- annotate_de_stats(
+                payload$de_stats,
+                pre$row_data,
+                id_col_de  = "feature_id",
+                id_col_row = "feature_id"
+            )
         }
 
         # de_sig_stats: Subset of de_stats for significant features
