@@ -121,6 +121,9 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(de_res$dds)) payload$de_model <- de_res$dds
 
         # de_stats: Full DE statistics table
+        # Snapshot the un-annotated shape for build_final_results_rnaseq(), which
+        # was designed to run with annot_cols = NULL (see 05_outputs_legacy.R:113).
+        de_stats_pre_annot <- NULL
         if (!is.null(de_res$tables)) {
             payload$de_stats <- build_rnaseq_summary_df(de_res$tables, de_cfg)
 
@@ -130,6 +133,32 @@ build_shiny_payload_rnaseq <- function(
                     payload$de_stats$feature_id <- payload$de_stats$FeatureID
                 } else if ("Gene" %in% names(payload$de_stats) && !"feature_id" %in% names(payload$de_stats)) {
                     payload$de_stats$feature_id <- payload$de_stats$Gene
+                }
+
+                # Capture the un-annotated snapshot before any row_data merge.
+                de_stats_pre_annot <- payload$de_stats
+
+                # Merge row_data annotation columns into de_stats (additive, skip on collision).
+                # tximport/matrix paths build a single-column row_data with just the gene ID
+                # (R/domain/rnaseq/03_preprocess.R:62,85), so this becomes a no-op there.
+                if (!is.null(pre$row_data) && ncol(pre$row_data) > 0) {
+                    gene_id_col <- rna_cfg$id_columns$gene_id
+                    if (is.null(gene_id_col) || !(gene_id_col %in% colnames(pre$row_data))) {
+                        fallback_col <- colnames(pre$row_data)[1]
+                        message(
+                            "[shiny_export] rna id_columns$gene_id (",
+                            gene_id_col %||% "<unset>",
+                            ") not in row_data; using first column '",
+                            fallback_col, "' as join key."
+                        )
+                        gene_id_col <- fallback_col
+                    }
+                    payload$de_stats <- annotate_de_stats(
+                        payload$de_stats,
+                        pre$row_data,
+                        id_col_de  = "feature_id",
+                        id_col_row = gene_id_col
+                    )
                 }
             }
         }
@@ -159,14 +188,26 @@ build_shiny_payload_rnaseq <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            payload$de_summary <- build_de_summary_counts_rnaseq(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
-        # Use payload$de_stats which was built above from de_res$tables
+        # Pass the un-annotated snapshot so build_final_results_rnaseq() keeps its
+        # pre-existing behavior (it expects to manage annotations itself, with
+        # annot_cols = NULL by design).
         if (!is.null(payload$de_stats) && !is.null(inputs$contrasts)) {
             final_results <- tryCatch(
-                build_final_results_rnaseq(pre, payload$de_stats, inputs$contrasts, pre$row_data),
+                build_final_results_rnaseq(pre, de_stats_pre_annot, inputs$contrasts, pre$row_data),
                 error = function(e) {
                     warning("[shiny_export] de_final_table: ", conditionMessage(e))
                     NULL
@@ -290,23 +331,26 @@ build_shiny_payload_rnaseq <- function(
 #'
 #' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
 #' RNA-seq naming conventions: \code{<contrast>_pass} pass columns and
-#' \code{linearFC.<contrast>} fold-change columns (with grep fallback).
+#' \code{linearFC.<contrast>} fold-change columns (exact match only —
+#' the grep-over-de_stats-columns fallback was removed because
+#' \code{de_stats} may now carry user-supplied annotation columns from
+#' \code{row_data}, which a regex could pick up).
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_rnaseq <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_rnaseq <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "_pass$",
-        extract_contrast = function(col) sub("_pass$", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0(cn, "_pass"),
+        fc_col_for   = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
-            if (fc %in% cols) return(fc)
-            # Fallback: grep search
-            hits <- grep(paste0("linearFC.*", cn), cols, value = TRUE)
-            if (length(hits) > 0) hits[1] else NULL
+            if (fc %in% cols) fc else NULL
         }
     )
 
