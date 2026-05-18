@@ -280,20 +280,16 @@ If you want to extend, modify, or maintain **multiomics-core**, see:
 
 ## Acknowledgments
 
--   AI-powered figure commentary uses scientific domain knowledge templates informed by [K-Dense AI claude-scientific-skills](https://github.com/K-Dense-AI/claude-scientific-skills) (MIT License). To enable AI commentary, clone their repository into the project root and set your API key (see below).
+-   AI-powered figure commentary uses scientific domain knowledge templates informed by [K-Dense AI claude-scientific-skills](https://github.com/K-Dense-AI/claude-scientific-skills) (MIT License). To enable AI commentary, clone their repository into the project root and configure credentials for your chosen backend (see below).
 -   Commentary generation is powered by [Claude](https://www.anthropic.com/) (Anthropic) or [GPT-4o](https://openai.com/) (OpenAI).
 
 ### AI commentary setup (optional)
 
-AI commentary requires your own API key. No keys are stored in or shared via this repository.
+Each backend has its own prerequisite. No credentials are stored in or shared via this repository.
 
-```bash
-# For Claude backend:
-export ANTHROPIC_API_KEY="your-key-here"
-
-# For OpenAI backend:
-export OPENAI_API_KEY="your-key-here"
-```
+-   `claude-code` (default): the [`claude` CLI](https://claude.ai/claude-code) must be installed, on your `PATH`, and authenticated (e.g. via `claude login`). The pipeline only checks that the CLI is on `PATH` — authentication is handled by the CLI itself.
+-   `claude`: set `ANTHROPIC_API_KEY="your-key-here"` in your environment (or `.Renviron`).
+-   `openai`: set `OPENAI_API_KEY="your-key-here"` in your environment (or `.Renviron`).
 
 Enable in your config YAML:
 
@@ -306,7 +302,7 @@ commentary:
   max_retries: 2
 ```
 
-If no API key is set, the pipeline automatically falls back to data-driven commentary (no AI, no cost).
+If the configured backend's prerequisite is missing at runtime (`claude` CLI not on `PATH`, `ANTHROPIC_API_KEY` unset, or `OPENAI_API_KEY` unset), the pipeline emits a warning and silently falls back to data-driven commentary (no AI, no cost). Check the run log for a `Falling back to data-driven commentary` message to verify the backend you configured actually engaged.
 
 ------------------------------------------------------------------------
 
