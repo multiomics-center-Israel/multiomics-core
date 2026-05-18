@@ -75,6 +75,7 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           clustering_res = rna_clustering_obj,
           annot = rna_annot,                    # Optional: gene annotation
           trinotate_main = rna_trinotate_main,  # Optional: Trinotate annotation
+          xlsx_files = rna_outputs_legacy,      # paths of Final_results_{ALL,DE}_P_*.xlsx
           out_file = file.path(rna_out_dir, "shiny_payload_rnaseq.rds")
         ),
         format = "file"

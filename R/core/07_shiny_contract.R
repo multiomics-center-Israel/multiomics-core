@@ -135,6 +135,16 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "DE-significant rows from final results table (equivalent to Final_results_DE_P_*.xlsx content)"
         ),
+        all_final_xlsx = list(
+            type = "raw",
+            required = FALSE,
+            description = "Raw bytes of Final_results_ALL_P_<p_cutoff>.xlsx (writeBin to round-trip)"
+        ),
+        de_final_xlsx = list(
+            type = "raw",
+            required = FALSE,
+            description = "Raw bytes of Final_results_DE_P_<p_cutoff>.xlsx (writeBin to round-trip)"
+        ),
 
         # --- Clustering (4 keys) ---
         clust_partition = list(
@@ -204,7 +214,7 @@ get_payload_key_definitions <- function() {
 
 #' Get list of all canonical key names
 #'
-#' @return Character vector of canonical key names (27 keys)
+#' @return Character vector of canonical key names (29 keys)
 #' @export
 get_canonical_keys <- function() {
     names(get_payload_key_definitions())
@@ -234,7 +244,7 @@ get_optional_keys <- function() {
 
 #' Initialize empty canonical Shiny payload
 #'
-#' Creates a payload structure with all 27 canonical keys set to NULL.
+#' Creates a payload structure with all 29 canonical keys set to NULL.
 #' Use this as the starting point for all omics builders.
 #'
 #' @param source Character. Omics type: "rnaseq", "proteomics", or "metabolomics"

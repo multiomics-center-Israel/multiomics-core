@@ -37,6 +37,7 @@ build_shiny_payload_proteomics <- function(
     pca_res = NULL,
     clustering_res = NULL,
     final_results = NULL,
+    xlsx_files = NULL,
     out_dir = NULL,
     annot = NULL)
   {
@@ -198,6 +199,13 @@ build_shiny_payload_proteomics <- function(
           payload$de_final_table <- de_df
         }
     }
+
+    # ============================================================
+    # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
+    # Independent of the de_final_table path above: that one still reads the
+    # DE xlsx via readxl to populate a data.frame; this one stores raw bytes.
+    # ============================================================
+    payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
     # CLUSTERING (4 keys)
