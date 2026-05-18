@@ -406,6 +406,7 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         plsda_res      = if (!is.null(metab_feature_sel_res)) metab_feature_sel_res$plsda else NULL,
         enrichment_res = metab_enrichment_res,
         include_legacy = TRUE,
+        xlsx_files     = metab_final_results,
         out_file       = file.path(metab_out_dir,
                                    "shiny_payload_metabolomics.rds")
       ),

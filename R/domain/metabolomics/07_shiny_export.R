@@ -44,6 +44,7 @@ build_shiny_payload_metabolomics <- function(
     enrichment_res = NULL,
     annot = NULL,
     include_legacy = TRUE,
+    xlsx_files = NULL,
     out_dir = NULL
 ) {
     # ============================================================
@@ -222,6 +223,11 @@ build_shiny_payload_metabolomics <- function(
             payload$de_final_table <- payload$de_sig_stats
         }
     }
+
+    # ============================================================
+    # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
+    # ============================================================
+    payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
     # CLUSTERING (4 keys)

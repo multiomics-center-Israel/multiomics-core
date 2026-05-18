@@ -131,6 +131,7 @@ mod_proteomics_exports <- function(
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
         final_results = final_results,
+        xlsx_files = excel_files,
         out_dir = out_dir
     )
 

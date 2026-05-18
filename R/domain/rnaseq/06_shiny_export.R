@@ -38,6 +38,7 @@ build_shiny_payload_rnaseq <- function(
     clustering_res = NULL,
     annot = NULL,
     trinotate_main = NULL,
+    xlsx_files = NULL,
     out_dir = NULL
 ) {
     # ============================================================
@@ -234,6 +235,11 @@ build_shiny_payload_rnaseq <- function(
             }
         }
     }
+
+    # ============================================================
+    # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
+    # ============================================================
+    payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
     # CLUSTERING (4 keys)

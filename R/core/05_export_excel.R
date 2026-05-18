@@ -804,3 +804,63 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
   }
   return(df)
 }
+
+# ============================================================
+# Shiny-payload helpers
+# ============================================================
+
+# Keep these in sync with the sprintf() patterns in
+# write_final_results_excels_legacy_generic() (lines 80-81).
+.final_xlsx_all_pattern <- "Final_results_ALL_P_.*\\.xlsx$"
+.final_xlsx_de_pattern  <- "Final_results_DE_P_.*\\.xlsx$"
+
+#' Attach raw .xlsx bytes for Final_results_{ALL,DE} to a Shiny payload
+#'
+#' Adds two optional keys to a canonical Shiny payload:
+#'   - \code{all_final_xlsx}: raw bytes of \code{Final_results_ALL_P_<p>.xlsx}
+#'   - \code{de_final_xlsx}:  raw bytes of \code{Final_results_DE_P_<p>.xlsx}
+#'
+#' Both files are produced by
+#' \code{\link{write_final_results_excels_legacy_generic}}. The Shiny app can
+#' \code{writeBin()} either field to a temp file and re-open it as a workbook.
+#'
+#' Existing \code{de_final_table} (a data.frame) is left untouched. NULL-safe:
+#' if a matching path is absent from \code{xlsx_files} or the file does not
+#' exist on disk, the corresponding key stays NULL and a \code{message()} is
+#' emitted.
+#'
+#' @param payload Named list (canonical Shiny payload).
+#' @param xlsx_files Character vector of file paths returned by the legacy
+#'   exports target (e.g. \code{rna_outputs_legacy}, \code{metab_final_results},
+#'   or \code{excel_files} inside \code{mod_proteomics_exports}).
+#' @return \code{payload} with \code{all_final_xlsx} / \code{de_final_xlsx}
+#'   populated as \code{raw} vectors (or left NULL).
+#' @export
+attach_final_results_xlsx_bytes <- function(payload, xlsx_files) {
+    if (is.null(xlsx_files) || length(xlsx_files) == 0) {
+        message("[shiny payload] no xlsx_files provided; ",
+                "all_final_xlsx / de_final_xlsx left NULL")
+        return(payload)
+    }
+    xlsx_files <- as.character(xlsx_files)
+
+    read_one <- function(pattern, key) {
+        hits <- xlsx_files[grepl(pattern, basename(xlsx_files))]
+        if (length(hits) == 0) {
+            message(sprintf("[shiny payload] no match for %s; %s left NULL",
+                            pattern, key))
+            return(NULL)
+        }
+        path <- hits[[1]]
+        if (!file.exists(path)) {
+            message(sprintf("[shiny payload] file missing: %s; %s left NULL",
+                            path, key))
+            return(NULL)
+        }
+        readBin(path, what = "raw", n = file.info(path)$size)
+    }
+
+    payload$all_final_xlsx <- read_one(.final_xlsx_all_pattern, "all_final_xlsx")
+    payload$de_final_xlsx  <- read_one(.final_xlsx_de_pattern,  "de_final_xlsx")
+    payload
+}
