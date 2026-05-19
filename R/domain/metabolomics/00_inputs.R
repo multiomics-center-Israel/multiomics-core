@@ -755,27 +755,15 @@ build_feature_ids <- function(data_df, id_cfg) {
 #' @param mapping_file Path to TSV with HMDB and KEGG columns (or NULL).
 #' @return row_data with a \code{KEGG} column populated where possible.
 add_kegg_from_hmdb <- function(row_data, mapping_file) {
-    if (is.null(row_data) || is.null(mapping_file) ||
-        !nzchar(mapping_file) || !file.exists(mapping_file)) {
-        return(row_data)
-    }
+    if (is.null(row_data)) return(row_data)
 
     hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
                           colnames(row_data))[1]
     if (is.na(hmdb_col)) return(row_data)
 
-    mapping_df <- tryCatch(
-        readr::read_delim(mapping_file, delim = "\t",
-                          col_types = readr::cols(), show_col_types = FALSE),
-        error = function(e) NULL
-    )
-    if (is.null(mapping_df) ||
-        !all(c("HMDB", "KEGG") %in% colnames(mapping_df))) {
-        return(row_data)
-    }
+    map_vec <- read_hmdb_kegg_map(mapping_file)
+    if (is.null(map_vec)) return(row_data)
 
-    map_vec <- stats::setNames(as.character(mapping_df$KEGG),
-                               as.character(mapping_df$HMDB))
     looked_up <- map_vec[as.character(row_data[[hmdb_col]])]
 
     existing <- if ("KEGG" %in% colnames(row_data))
