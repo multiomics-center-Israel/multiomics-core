@@ -64,17 +64,17 @@ combine_lipid_links <- function(pathway_links_list, literature_res = NULL,
         if (!is.null(lit_summary) && nrow(lit_summary) > 0) {
             lit_lay <- lit_summary[lit_summary$layer == lay, , drop = FALSE]
             if (nrow(lit_lay) > 0) {
-                # match by (contrast, lipid_class, feature_name)
-                m <- merge(
-                    agg[, c("layer", "contrast", "lipid_class",
-                             "feature_name")],
-                    lit_lay,
-                    by = c("layer", "contrast", "lipid_class",
-                            "feature_name"),
-                    all.x = TRUE
-                )
-                agg$n_papers <- ifelse(is.na(m$n_papers), 0L,
-                                        as.integer(m$n_papers))
+                # Key-based lookup preserves agg row order; merge(all.x=TRUE)
+                # previously reordered its result, mis-assigning n_papers.
+                key_str <- paste(agg$contrast, agg$lipid_class,
+                                  agg$feature_name, sep = "||")
+                pap_str <- paste(lit_lay$contrast, lit_lay$lipid_class,
+                                  lit_lay$feature_name, sep = "||")
+                n_papers <- vapply(key_str, function(k) {
+                    hits <- lit_lay$n_papers[pap_str == k]
+                    if (length(hits) == 0) 0L else as.integer(hits[1])
+                }, integer(1))
+                agg$n_papers <- n_papers
             }
         }
         if (!is.null(lit_papers) && nrow(lit_papers) > 0) {
