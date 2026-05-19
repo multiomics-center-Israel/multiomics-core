@@ -38,6 +38,7 @@ jobs:
       - name: Restore renv
         run: |
           R -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+          R -e "renv::repair()"
           R -e "renv::restore(prompt = FALSE)"
 
       - name: Lint (advisory)
