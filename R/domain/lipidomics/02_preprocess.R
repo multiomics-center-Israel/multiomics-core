@@ -380,6 +380,9 @@ apply_sample_filter_lipid <- function(sample_ids, meta, rules, sample_col) {
 #'                      sample_norm/transform/scaling/pseudocount/na_policy.
 #' @param row_data      data.frame of feature metadata (for is/bio_factor norms).
 #' @return data.frame: label, sample_norm, transform, scaling, median_rsd, pc1_var.
+#'   The per-method full-pipeline matrices are attached as `attr(df, "matrices")`
+#'   (named list keyed by label) for downstream per-method visualisation. The
+#'   attribute survives RDS serialisation but is dropped by TSV writers.
 evaluate_normalization_methods <- function(expr_for_norm, methods, row_data = NULL) {
     if (!length(methods)) return(NULL)
 
@@ -393,6 +396,8 @@ evaluate_normalization_methods <- function(expr_for_norm, methods, row_data = NU
             }
         )
     }
+
+    method_mats <- list()
 
     rows <- lapply(methods, function(spec) {
         sn <- spec$sample_norm %||% "none"
@@ -429,11 +434,15 @@ evaluate_normalization_methods <- function(expr_for_norm, methods, row_data = NU
             )
         }
 
+        if (!is.null(mat_full)) method_mats[[label]] <<- mat_full
+
         data.frame(label = label, sample_norm = sn, transform = tr, scaling = sc,
                    median_rsd = round(median_rsd, 4),
                    pc1_var = round(pc1_var, 4),
                    stringsAsFactors = FALSE)
     })
 
-    do.call(rbind, rows)
+    out <- do.call(rbind, rows)
+    attr(out, "matrices") <- method_mats
+    out
 }

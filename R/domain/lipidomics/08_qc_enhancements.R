@@ -444,3 +444,258 @@ run_permanova <- function(pre, config, n_perm = 999) {
         NULL
     })
 }
+
+
+# ==== PER-METHOD NORMALIZATION DIAGNOSTICS ===================================
+
+#' PLS-DA Component-1 X-variance per normalization method
+#'
+#' Fits a 1-component PLS-DA per matrix and returns the fraction of X-variance
+#' captured by Component 1. Provides a supervised counterpart to PC1 variance,
+#' so the comparison table shows how much group-discriminating signal each
+#' normalization preserves vs the unsupervised PCA baseline.
+#'
+#' @param method_mats Named list of fully-pipelined matrices (features x samples).
+#' @param meta        Sample metadata.
+#' @param sample_col  Column in meta matching matrix sample colnames.
+#' @param condition_col Column in meta giving the class label.
+#' @return data.frame(label, plsda_comp1_var) — NA when mixOmics is missing or
+#'   the fit fails for a method.
+compute_plsda_var_per_method <- function(method_mats, meta, sample_col,
+                                         condition_col) {
+    labels <- names(method_mats)
+    if (!length(labels)) return(NULL)
+
+    if (!requireNamespace("mixOmics", quietly = TRUE)) {
+        message("compute_plsda_var_per_method: mixOmics not available — returning NAs")
+        return(data.frame(label = labels,
+                          plsda_comp1_var = NA_real_,
+                          stringsAsFactors = FALSE))
+    }
+
+    rows <- lapply(labels, function(lbl) {
+        mat <- method_mats[[lbl]]
+        var1 <- tryCatch({
+            meta_aligned <- meta[match(colnames(mat), meta[[sample_col]]), , drop = FALSE]
+            condition <- factor(meta_aligned[[condition_col]])
+            X <- t(mat)
+            for (j in seq_len(ncol(X))) {
+                nas <- is.na(X[, j])
+                if (any(nas)) X[nas, j] <- stats::median(X[!nas, j], na.rm = TRUE)
+            }
+            keep <- apply(X, 2, stats::var, na.rm = TRUE) > 0
+            X <- X[, keep, drop = FALSE]
+            n_classes <- length(unique(stats::na.omit(condition)))
+            if (n_classes < 2 || nrow(X) < 3 || ncol(X) < 2) return(NA_real_)
+            model <- mixOmics::plsda(X, condition, ncomp = 1)
+            ev <- model$prop_expl_var$X
+            as.numeric(ev[1])
+        }, error = function(e) {
+            message("compute_plsda_var_per_method: ", lbl, " failed: ",
+                    conditionMessage(e))
+            NA_real_
+        })
+        data.frame(label = lbl, plsda_comp1_var = round(var1, 4),
+                   stringsAsFactors = FALSE)
+    })
+
+    do.call(rbind, rows)
+}
+
+
+#' Combined boxplot panel across normalization methods
+#'
+#' One small boxplot per method assembled into a single PNG via patchwork.
+#' Lets the reader compare intensity distributions across normalization choices
+#' side by side.
+#'
+#' @param method_mats Named list of matrices (features x samples) per method.
+#' @param meta        Sample metadata.
+#' @param cfg         config$modes$lipidomics (needs effects$samples/color).
+#' @param out_file    PNG output path.
+#' @return The combined patchwork object (invisibly), or NULL if no methods.
+make_method_panel_boxplot <- function(method_mats, meta, cfg, out_file) {
+    labels <- names(method_mats)
+    if (!length(labels)) return(NULL)
+    if (!requireNamespace("patchwork", quietly = TRUE)) {
+        message("make_method_panel_boxplot: patchwork unavailable — skipping")
+        return(NULL)
+    }
+
+    plots <- lapply(labels, function(lbl) {
+        p <- tryCatch(
+            norm_boxplot(method_mats[[lbl]], meta, cfg,
+                         title = lbl,
+                         y_label = "intensity"),
+            error = function(e) NULL
+        )
+        if (is.null(p)) return(NULL)
+        p + ggplot2::theme(legend.position = "none",
+                           plot.title = ggplot2::element_text(size = 10),
+                           axis.text.x = ggplot2::element_text(size = 6))
+    })
+    plots <- plots[!vapply(plots, is.null, logical(1))]
+    if (!length(plots)) return(NULL)
+
+    ncol <- if (length(plots) <= 3) length(plots) else 3
+    combined <- patchwork::wrap_plots(plots, ncol = ncol) +
+        patchwork::plot_annotation(
+            title = "Intensity boxplots per normalization method")
+    nrow <- ceiling(length(plots) / ncol)
+    ggplot2::ggsave(out_file, plot = combined,
+                    width = 4 * ncol, height = 3.2 * nrow, limitsize = FALSE)
+    invisible(combined)
+}
+
+
+#' Combined PCA-score panel across normalization methods
+#'
+#' One small PC1-vs-PC2 scatter per method assembled into a single PNG.
+#'
+#' @param method_mats Named list of matrices (features x samples) per method.
+#' @param meta        Sample metadata.
+#' @param cfg         config$modes$lipidomics (needs effects$samples/color).
+#' @param out_file    PNG output path.
+#' @return The combined patchwork object (invisibly), or NULL if no methods.
+make_method_panel_pca <- function(method_mats, meta, cfg, out_file) {
+    labels <- names(method_mats)
+    if (!length(labels)) return(NULL)
+    if (!requireNamespace("patchwork", quietly = TRUE)) {
+        message("make_method_panel_pca: patchwork unavailable — skipping")
+        return(NULL)
+    }
+
+    plots <- lapply(labels, function(lbl) {
+        p <- tryCatch(
+            qc_pca_scatter(method_mats[[lbl]], meta, cfg, pcs = c(1, 2)),
+            error = function(e) NULL
+        )
+        if (is.null(p)) return(NULL)
+        p + ggplot2::ggtitle(lbl) +
+            ggplot2::theme(legend.position = "bottom",
+                           plot.title = ggplot2::element_text(size = 10))
+    })
+    plots <- plots[!vapply(plots, is.null, logical(1))]
+    if (!length(plots)) return(NULL)
+
+    ncol <- if (length(plots) <= 3) length(plots) else 3
+    combined <- patchwork::wrap_plots(plots, ncol = ncol, guides = "collect") +
+        patchwork::plot_annotation(
+            title = "PCA (PC1 vs PC2) per normalization method") &
+        ggplot2::theme(legend.position = "bottom")
+    nrow <- ceiling(length(plots) / ncol)
+    ggplot2::ggsave(out_file, plot = combined,
+                    width = 4.2 * ncol, height = 3.6 * nrow, limitsize = FALSE)
+    invisible(combined)
+}
+
+
+#' Per-contrast log2 fold-change from a pre-scaling normalized matrix
+#'
+#' Computes log2FC as (mean(numerator group) - mean(denominator group)) for
+#' each feature — valid when the input matrix is already log-transformed and
+#' on the original intensity scale (i.e. before centering/scaling). No model
+#' is fitted, so this works in QC mode where DE is skipped.
+#'
+#' @param expr_log     Matrix (features x samples), log-transformed + normalized
+#'                     but NOT scaled.
+#' @param meta         Sample metadata.
+#' @param sample_col   Column in meta matching matrix sample colnames.
+#' @param condition_col Column in meta with group labels.
+#' @param contrasts    Character vector of contrasts in 'A - B' format.
+#' @return Named list keyed by contrast label, each element a named numeric
+#'   vector of log2FC indexed by feature_id. Returns NULL when no usable
+#'   contrasts.
+compute_contrast_logfc <- function(expr_log, meta, sample_col, condition_col,
+                                   contrasts) {
+    if (!length(contrasts)) return(NULL)
+    if (is.list(contrasts)) contrasts <- unlist(contrasts)
+    if (!sample_col %in% colnames(meta) || !condition_col %in% colnames(meta)) {
+        return(NULL)
+    }
+
+    meta_aligned <- meta[match(colnames(expr_log), meta[[sample_col]]), , drop = FALSE]
+    groups <- as.character(meta_aligned[[condition_col]])
+
+    result <- list()
+    for (ctr in contrasts) {
+        parsed <- tryCatch(parse_metab_contrast(ctr), error = function(e) NULL)
+        if (is.null(parsed)) next
+        idx_num <- which(groups == parsed$numerator)
+        idx_den <- which(groups == parsed$denominator)
+        if (!length(idx_num) || !length(idx_den)) {
+            message("compute_contrast_logfc: skipping '", ctr,
+                    "' — missing samples in one group")
+            next
+        }
+        mean_num <- rowMeans(expr_log[, idx_num, drop = FALSE], na.rm = TRUE)
+        mean_den <- rowMeans(expr_log[, idx_den, drop = FALSE], na.rm = TRUE)
+        logfc <- mean_num - mean_den
+        names(logfc) <- rownames(expr_log)
+        result[[make_contrast_label(ctr)]] <- logfc
+    }
+
+    if (!length(result)) NULL else result
+}
+
+
+#' PCA loading plot coloured by per-feature log2 fold-change
+#'
+#' Replaces the top-N highlight in plot_pca_loading() with a diverging colour
+#' scale on log2FC, so direction of effect (up/down) is visible across all
+#' features in the loading space.
+#'
+#' @param pca_result    A prcomp result (rotation matrix required).
+#' @param logfc_vec     Named numeric vector of log2FC keyed by feature_id.
+#' @param pcs           Length-2 integer vector of PCs to plot.
+#' @param contrast_label Label used in the plot title.
+#' @param out_file      PNG output path.
+#' @return ggplot object (invisibly), or NULL if rotation missing.
+plot_pca_loading_logfc <- function(pca_result, logfc_vec,
+                                   pcs = c(1, 2), contrast_label,
+                                   out_file) {
+    loadings <- pca_result$rotation
+    if (is.null(loadings)) {
+        warning("plot_pca_loading_logfc: no rotation matrix")
+        return(NULL)
+    }
+    pc_labels <- paste0("PC", pcs)
+    if (!all(pc_labels %in% colnames(loadings))) {
+        warning("plot_pca_loading_logfc: requested PCs not in rotation matrix")
+        return(NULL)
+    }
+
+    var_expl <- summary(pca_result)$importance[2, pcs] * 100
+
+    df <- data.frame(
+        feature = rownames(loadings),
+        x = loadings[, pc_labels[1]],
+        y = loadings[, pc_labels[2]],
+        stringsAsFactors = FALSE
+    )
+    df$log2FC <- logfc_vec[df$feature]
+    df <- df[is.finite(df$log2FC), , drop = FALSE]
+    if (!nrow(df)) return(NULL)
+
+    lim <- max(abs(df$log2FC), na.rm = TRUE)
+
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, colour = log2FC)) +
+        ggplot2::geom_point(size = 1.6, alpha = 0.85) +
+        ggplot2::scale_colour_gradient2(
+            low = "#2166AC", mid = "grey85", high = "#B2182B",
+            midpoint = 0, limits = c(-lim, lim),
+            name = "log2 FC"
+        ) +
+        ggplot2::labs(
+            title = paste0("PCA loadings coloured by log2FC: ", contrast_label),
+            x = sprintf("%s (%.1f%%)", pc_labels[1], var_expl[1]),
+            y = sprintf("%s (%.1f%%)", pc_labels[2], var_expl[2])
+        ) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            plot.title = ggplot2::element_text(face = "bold", size = 12, hjust = 0.5)
+        )
+
+    ggplot2::ggsave(out_file, plot = p, width = 6.5, height = 5)
+    invisible(p)
+}
