@@ -80,7 +80,25 @@ get_proteomics_expression_matrix <- function(inputs, config) {
     }
     
     feat_ids <- as.character(protein[[protein_id_col]])
-    
+
+    # Drop rows with NA/empty protein IDs instead of stopping
+    blank_mask <- is.na(feat_ids) | feat_ids == ""
+    if (any(blank_mask)) {
+      warning(sprintf(
+        "Protein ID column '%s': dropping %d row(s) with NA/empty values.",
+        protein_id_col, sum(blank_mask)
+      ))
+      protein  <- protein[!blank_mask, , drop = FALSE]
+      feat_ids <- feat_ids[!blank_mask]
+    }
+    if (anyDuplicated(feat_ids) > 0) {
+      dups <- unique(feat_ids[duplicated(feat_ids)])
+      stop(sprintf(
+        "Protein ID column '%s' contains duplicated IDs (e.g. %s).",
+        protein_id_col, paste(head(dups, 3), collapse = ", ")
+      ))
+    }
+
     # Identify numeric (sample) columns
     non_id_cols <- setdiff(colnames(protein), protein_id_col)
     is_numeric <- vapply(
