@@ -86,7 +86,8 @@ validate_lipidomics_config <- function(cfg) {
     norm <- cfg$normalization
     if (!is.null(norm)) {
         assert_one_of(norm$sample_norm, "normalization$sample_norm",
-                      c("none", "sum", "median", "pqn", "is"),
+                      c("none", "sum", "median", "pqn", "eigenms",
+                        "eigenms_forced", "is"),
                       allow_null = TRUE)
         assert_one_of(norm$transform, "normalization$transform",
                       c("none", "log2", "log10", "glog10"),
