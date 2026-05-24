@@ -31,7 +31,7 @@ modes:
       contrasts: "rna/contrasts.csv"
 
     id_columns:
-      gene_id_col: "gene_id"
+      gene_id: "gene_id"
       sample_col: "SampleID"
 
     normalization:
