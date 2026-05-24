@@ -187,7 +187,13 @@ preprocess_rna <- function(inputs, config, gene_lengths = NULL, verbose = FALSE)
       fr$used_threshold <- fixed_thr
     } else {
       plot_path <- file.path(config$paths$out, "rnaseq", "filtering_threshold_qc.png")
-      fr <- run_auto_filter_pipeline(norm_for_filter, meta2, sample_col, group_col, output_plot = plot_path)
+      fr <- run_auto_filter_pipeline(
+        norm_for_filter, meta2, sample_col, group_col,
+        output_plot = plot_path,
+        min_limit   = cfg$filtering$auto_filter$min      %||% 0.5,
+        max_limit   = cfg$filtering$auto_filter$max      %||% 2.0,
+        fallback    = cfg$filtering$auto_filter$fallback %||% 1.0
+      )
     }
   }
   

@@ -4,7 +4,7 @@
 #' Each feature (gene/protein) is assigned to a binary pattern based on correlation.
 #'
 #' How it works:
-#' 1) Groups are defined by cfg$clustering$steps$binary_patterns$group_col
+#' 1) Groups are defined by cfg$clustering$group_col
 #'    (e.g., "treatment" column with values: control, drugA, drugB)
 #' 2) Generate all binary patterns based on number of groups
 #'    - For 3 groups: 000, 001, 010, 011, 100, 101, 110, 111
