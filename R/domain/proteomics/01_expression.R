@@ -169,7 +169,14 @@ get_proteomics_expression_matrix <- function(inputs, config) {
     # Feature annotations (row_data)
     row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
     row_data <- apply_custom_annotation(row_data, cfg, config)
-    
+
+    # Align row_data to the assay matrix — get_measurements_per_sample_diann
+    # may have dropped rows with NA/empty protein_id, leaving row_data longer
+    # than assay_log2 and breaking length-tied downstream calls.
+    pid <- cfg$id_columns$protein_id
+    idx <- match(rownames(assay_log2), as.character(row_data[[pid]]))
+    row_data <- row_data[idx, , drop = FALSE]
+
   } else {
     stop(sprintf("Unsupported proteomics engine: %s", cfg$engine))
   }

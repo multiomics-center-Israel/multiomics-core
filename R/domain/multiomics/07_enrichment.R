@@ -556,6 +556,31 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
 
         if (!is.null(entrez_df) && nrow(entrez_df) > 0) return(entrez_df)
 
+        # SYMBOL -> ENTREZID fallback: handles configs where protein_id is
+        # a gene symbol column (e.g. DIA-NN "Genes") instead of UniProt.
+        sym_df <- tryCatch({
+            res <- AnnotationDbi::mapIds(
+                org_db,
+                keys = all_ids,
+                keytype = "SYMBOL",
+                column = "ENTREZID",
+                multiVals = "first"
+            )
+            df <- data.frame(
+                feature_id = names(res),
+                ENTREZID = as.character(res),
+                stringsAsFactors = FALSE
+            )
+            df <- df[!is.na(df$ENTREZID), ]
+            if (nrow(df) > 0) {
+                message("    Mapped ", nrow(df), "/", length(all_ids),
+                        " SYMBOL IDs to ENTREZID directly")
+            }
+            df
+        }, error = function(e) NULL)
+
+        if (!is.null(sym_df) && nrow(sym_df) > 0) return(sym_df)
+
         # Fallback: try via row_data WormBase/gene_id columns (C. elegans etc.)
         prot_pre <- harmonization_res$inputs$proteomics
         if (is.null(prot_pre) || is.null(prot_pre$row_data)) {
