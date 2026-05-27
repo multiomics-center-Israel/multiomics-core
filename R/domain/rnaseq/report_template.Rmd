@@ -1352,8 +1352,7 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
                          adjPval = plot_df$padj,
                          stringsAsFactors = FALSE)
     if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
-    list(widget = widget, plot_df = reg_df, ycap = ycap_v)
-    ggplotly(p, tooltip = "text")
+    list(widget = widget, plot_df = reg_df)
 }
 
 # Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
