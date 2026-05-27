@@ -69,21 +69,25 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
 
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-# Detect if we are already inside the rna output dir
+# Detect if we are already inside the rna output dir. When the Rmd sits at
+# the run root (alongside the pipeline summary), data files live under rna/;
+# when it sits inside rna/, data files live in the current directory.
 if (basename(run_dir) == "rna") {
-    prot_dir <- run_dir
+    rna_dir <- run_dir
     config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
 } else {
-    prot_dir <- file.path(run_dir, "rna")
+    rna_dir <- file.path(run_dir, "rna")
     config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
 }
-diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+# Keep prot_dir alias for backwards-compat in case any downstream chunk uses it.
+prot_dir <- rna_dir
+diag_dir <- file.path(rna_dir, "Diagnostic_plots")
 qc_post_dir <- file.path(diag_dir, "DE_plots")
-datasets_dir <- file.path(run_dir,  "Datasets")
-enrich_dir <- file.path(run_dir,"Enrichment")
+datasets_dir <- file.path(rna_dir, "Datasets")
+enrich_dir <- file.path(rna_dir, "Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
-filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "commentary")
+filter_plot <- file.path(rna_dir, "filtering_threshold_qc.png")
+commentary_dir <- file.path(rna_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
