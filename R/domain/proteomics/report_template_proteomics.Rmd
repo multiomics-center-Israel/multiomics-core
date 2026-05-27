@@ -249,8 +249,10 @@ show_methods <- report_cfg$show_methods %||% TRUE
 show_session_info <- report_cfg$show_session_info %||% TRUE
 force_pca <- report_cfg$force_pca %||% FALSE
 
-# Load DE summary data (used in multiple sections)
-de_summary_file <- file.path(qc_post_dir, "de_summary_all.tsv")
+# Load DE summary data (used in multiple sections). Use the same QC_post /
+# DE_plots fallback resolver as the PNG chunks so older runs (which wrote
+# de_summary_all.tsv under DE_plots/) still load the table.
+de_summary_file <- file.path(de_png_dir, "de_summary_all.tsv")
 de_data <- NULL
 if (file.exists(de_summary_file)) {
     de_data <- read.delim(de_summary_file, stringsAsFactors = FALSE, check.names = FALSE)
