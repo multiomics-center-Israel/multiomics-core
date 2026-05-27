@@ -107,6 +107,19 @@ if (basename(run_dir) == "proteomics") {
 }
 diag_dir <- file.path(prot_dir, "Diagnostic_plots")
 qc_post_dir <- file.path(diag_dir, "QC_post")
+# Backwards-compat: older runs wrote DE PNGs (volcano / MA / heatmaps) to
+# Diagnostic_plots/DE_plots/ before the QC_post layout was introduced.
+# Use that directory as a fallback when QC_post is absent or empty.
+de_plots_dir_legacy <- file.path(diag_dir, "DE_plots")
+de_png_dir <- if (dir.exists(qc_post_dir) &&
+                  length(list.files(qc_post_dir, pattern = "\\.png$")) > 0) {
+    qc_post_dir
+} else if (dir.exists(de_plots_dir_legacy) &&
+           length(list.files(de_plots_dir_legacy, pattern = "\\.png$")) > 0) {
+    de_plots_dir_legacy
+} else {
+    qc_post_dir
+}
 datasets_dir <- file.path(prot_dir, "Datasets")
 clustering_dir <- file.path(prot_dir, "Clustering")
 enrich_dir <- file.path(prot_dir, "Enrichment")
@@ -1504,7 +1517,7 @@ if (!is.null(de_data)) {
 ```{r volcano-plots-static, results='asis'}
 # Per-contrast static volcano: show padj + raw-pval variants as sub-tabs.
 # Default tab matches the cutoff-panel default (`default_ptype` in cutoff_panel_html).
-volcano_files <- list.files(qc_post_dir, pattern = "^volcano_.*_padj\\.png$",
+volcano_files <- list.files(de_png_dir, pattern = "^volcano_.*_padj\\.png$",
                             full.names = TRUE)
 padj_cut_vol <- prot_cfg$de$p_cutoff %||% 0.05
 lfc_cut_vol  <- prot_cfg$de$linear_fc_cutoff %||% 1.5
@@ -1538,7 +1551,7 @@ if (length(volcano_files) > 0) {
 } else {
     # Backwards-compat: fall back to legacy single volcano if pipeline did not
     # yet produce padj/pval variants
-    legacy_files <- list.files(qc_post_dir, pattern = "^volcano_.*\\.png$",
+    legacy_files <- list.files(de_png_dir, pattern = "^volcano_.*\\.png$",
                                full.names = TRUE)
     legacy_files <- legacy_files[!grepl("_(padj|pval)\\.png$", legacy_files)]
     if (length(legacy_files) > 0) {
@@ -1779,7 +1792,7 @@ cat("## MA Plots {.tabset}\n\n### Static {.tabset}\n\n")
 ```
 
 ```{r ma-plots-static, eval=show_ma_plots, results='asis'}
-ma_files <- list.files(qc_post_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
+ma_files <- list.files(de_png_dir, pattern = "^ma_.*\\.png$", full.names = TRUE)
 if (length(ma_files) > 0) {
     for (mf in ma_files) {
         cn <- gsub("^ma_|\\.png$", "", basename(mf))
@@ -1924,7 +1937,7 @@ cat("## Top DE Heatmaps {.tabset}\n\n")
 ```
 
 ```{r top-de-heatmaps, eval=show_top_de_heatmaps, results='asis'}
-heatmap_files <- list.files(qc_post_dir, pattern = "^heatmap_top.*\\.png$", full.names = TRUE)
+heatmap_files <- list.files(de_png_dir, pattern = "^heatmap_top.*\\.png$", full.names = TRUE)
 if (length(heatmap_files) > 0) {
     # Parse contrast names and sizes
     for (hf in heatmap_files) {
