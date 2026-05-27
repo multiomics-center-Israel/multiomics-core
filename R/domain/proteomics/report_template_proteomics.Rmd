@@ -1582,9 +1582,17 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
 
     id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
     gene_col <- if ("Genes" %in% names(df)) "Genes" else if (id_col %in% names(df)) id_col else names(df)[1]
+    # Pull supporting identifier columns if present so the tooltip can
+    # carry gene symbol + accession + protein description together.
+    accession_vals <- if (id_col %in% names(df)) df[[id_col]] else rep(NA_character_, nrow(df))
+    desc_vals      <- if ("First.Protein.Description" %in% names(df)) {
+        df[["First.Protein.Description"]]
+    } else rep(NA_character_, nrow(df))
 
     plot_df <- data.frame(
         protein = df[[gene_col]],
+        accession = accession_vals,
+        description = desc_vals,
         logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
         padj = as.numeric(df[[padj_col]]),
         stringsAsFactors = FALSE
@@ -1596,9 +1604,25 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
     )
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
+    # Tooltip: gene symbol + UniProt accession + protein description
+    # (skip lines that are NA / blank / equal to the gene symbol)
+    tooltip_lines <- vapply(seq_len(nrow(plot_df)), function(i) {
+        lines <- c(paste0("Gene: ", plot_df$protein[i]))
+        if (!is.na(plot_df$accession[i]) && nzchar(plot_df$accession[i]) &&
+            !identical(plot_df$accession[i], plot_df$protein[i])) {
+            lines <- c(lines, paste0("Accession: ", plot_df$accession[i]))
+        }
+        if (!is.na(plot_df$description[i]) && nzchar(plot_df$description[i])) {
+            lines <- c(lines, paste0("Description: ", plot_df$description[i]))
+        }
+        lines <- c(lines, paste0("log2FC: ", round(plot_df$logFC[i], 3)),
+                          paste0("padj: ", signif(plot_df$padj[i], 3)))
+        paste(lines, collapse = "\n")
+    }, character(1))
+    plot_df$tooltip <- tooltip_lines
+
     p <- ggplot(plot_df, aes(x = logFC, y = neglog10padj, color = Direction,
-                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
-                                           "\npadj: ", signif(padj, 3)))) +
+                              text = tooltip)) +
         geom_point(alpha = 0.6, size = 1.5) +
         scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dashed") +
