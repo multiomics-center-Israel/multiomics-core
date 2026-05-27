@@ -1440,9 +1440,10 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        p <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        vol_res <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                                   log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
+        if (!is.null(vol_res)) {
+            p <- vol_res$widget
             p$elementId <- paste0("volcano_plot_", clean_id)
             print(htmltools::tagList(p))
 
