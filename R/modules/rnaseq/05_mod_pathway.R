@@ -64,6 +64,20 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
     # ------------------------------------------------------------------
     # 3. Annotate genes (custom -> biomaRt -> OrgDb fallback)
     # ------------------------------------------------------------------
+    # Ensembl gene IDs from many quantifiers carry a version suffix
+    # (e.g. "ENSG00000290825.2"). biomaRt / org.Hs.eg.db key on the
+    # unversioned form, so look up against stripped IDs and then map
+    # the result back to the original versioned IDs that downstream
+    # tables (DE results, report) actually carry.
+    has_ensembl_version <- grepl("^ENS[A-Z]*G[0-9]+\\.[0-9]+$", all_gene_ids)
+    if (any(has_ensembl_version)) {
+        lookup_ids <- sub("\\.[0-9]+$", "", all_gene_ids)
+        versioned_for <- setNames(all_gene_ids, lookup_ids)
+    } else {
+        lookup_ids <- all_gene_ids
+        versioned_for <- NULL
+    }
+
     annotation_result <- NULL
     if (!isTRUE(ann_cfg$skip_annotation)) {
         anno_config <- list(
@@ -75,10 +89,16 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
                 fallback_chain = c("custom", "biomart", "orgdb", "keggrest")
             )
         )
-        annotation_result <- annotate_genes_v2(all_gene_ids, anno_config, verbose = TRUE)
+        annotation_result <- annotate_genes_v2(lookup_ids, anno_config, verbose = TRUE)
     }
 
     annotation_df <- if (!is.null(annotation_result)) annotation_result$annotation else NULL
+
+    # Restore versioned IDs so the saved gene_annotation.csv matches the
+    # FeatureID column in DE tables (the report joins on this key).
+    if (!is.null(annotation_df) && !is.null(versioned_for)) {
+        annotation_df$gene_id <- unname(versioned_for[annotation_df$gene_id])
+    }
 
     # ------------------------------------------------------------------
     # 4. Load gene sets (GO, KEGG, and/or custom GMT)
