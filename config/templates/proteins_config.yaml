@@ -216,6 +216,11 @@ modes:
       # Metadata columns to concatenate for informative sample column headers.
       # Set to null to keep original sample IDs:
       sample_label_cols: null
+      # Add per-group CV% columns (CV.<group>) to Final_results_{ALL,DE} for the
+      # groups appearing in any contrast. Proteomics CV is computed on linear
+      # intensities (2^log2) using observed values only (imputed values excluded;
+      # groups with <2 observations yield NA). Set to false to omit these columns.
+      group_cv: true
 
     # --------------------------------------------------------
     # Annotation / Organism

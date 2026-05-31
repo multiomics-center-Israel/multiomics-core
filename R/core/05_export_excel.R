@@ -368,9 +368,10 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             de_df <- de_df[order(de_df$Hierarchical_Order, na.last = TRUE), , drop = FALSE]
         }
 
-        # Reorder columns to: ID, annotations, expression, DE_stats, clustering, z-scores
+        # Reorder columns to: ID, annotations, expression, CV, DE_stats, clustering, z-scores
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
+        cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
         de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
@@ -379,18 +380,19 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         )
         zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
 
-        # Annotation columns = everything not in ID, expression, DE stats, clustering, z-scores, or 'order'
-        all_known <- c(id_cols, expr_cols, de_stat_cols, clustering_cols, zscore_cols, "order")
+        # Annotation columns = everything not in ID, expression, CV, DE stats, clustering, z-scores, or 'order'
+        all_known <- c(id_cols, expr_cols, cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
         annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
         expr_cols_present <- intersect(expr_cols, names(de_df))
 
-        # Build desired column order
+        # Build desired column order (CV columns sit right after the expression block)
         desired_order <- c(
             id_cols,
             annot_cols_present,
             expr_cols_present,
+            cv_cols_present,
             de_stat_cols,
             clustering_cols,
             zscore_cols
@@ -494,6 +496,111 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
     invisible(TRUE)
 }
 
+#' Per-row coefficient of variation (CV%) on a linear matrix
+#'
+#' Arithmetic CV expressed as a percentage: \code{100 * sd(x) / mean(x)} per
+#' row, using the sample (n-1) standard deviation (R's \code{stats::sd}).
+#' Intended for LINEAR, positive data only — CV is not meaningful on log-scale
+#' values (callers back-transform first).
+#'
+#' Edge cases (all return \code{NA_real_}, never 0 or Inf):
+#' - rows with fewer than 2 non-missing values (CV/sample-SD undefined),
+#' - rows whose mean is 0 or non-finite (division undefined).
+#'
+#' @param mat Numeric matrix (features x samples) on a linear scale. NAs are
+#'   dropped per row (\code{na.rm = TRUE}).
+#' @return Named numeric vector of CV% per row (names = \code{rownames(mat)}).
+cv_percent <- function(mat) {
+    mat <- as.matrix(mat)
+    if (nrow(mat) == 0L) return(stats::setNames(numeric(0), rownames(mat)))
+
+    n_obs <- rowSums(!is.na(mat))
+    means <- rowMeans(mat, na.rm = TRUE)
+    sds   <- apply(mat, 1, stats::sd, na.rm = TRUE)
+
+    cv <- 100 * sds / means
+    # Undefined cases -> NA (single/empty observations, or zero/non-finite mean)
+    cv[n_obs < 2L] <- NA_real_
+    cv[!is.finite(means) | means == 0] <- NA_real_
+    cv[!is.finite(cv)] <- NA_real_
+
+    if (!is.null(rownames(mat))) names(cv) <- rownames(mat)
+    cv
+}
+
+#' Per-group coefficient of variation (CV%) columns for contrast groups
+#'
+#' Computes \code{CV.<group>} columns (percent CV across the biological
+#' replicates of each group) for every group that appears in at least one
+#' contrast, i.e. \code{union(contrasts_df$Numerator, contrasts_df$Denominator)}.
+#' Group membership is resolved from \code{sample_meta}: samples sharing the
+#' same value in the \code{Factor} column are biological replicates.
+#'
+#' CV is computed on \code{expr_linear}, which MUST already be on a linear,
+#' positive scale (the caller is responsible for any back-transform — e.g.
+#' linear CPM for RNA-seq, \code{2^x} for proteomics/metabolomics). Math and
+#' edge-case handling are delegated to \code{\link{cv_percent}}.
+#'
+#' @param expr_linear Numeric matrix (features x samples), linear scale.
+#'   Column names must match \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding sample IDs that
+#'   match \code{colnames(expr_linear)}.
+#' @param contrasts_df Contrasts table with \code{Factor}, \code{Numerator},
+#'   \code{Denominator} columns.
+#' @param group_col Optional override for the grouping column. Defaults to the
+#'   (single) value of \code{contrasts_df$Factor}.
+#' @return A feature-indexed data.frame of \code{CV.<group>} columns
+#'   (rownames = \code{rownames(expr_linear)}), or \code{NULL} if CV cannot be
+#'   computed (missing inputs, no contrast groups, or ambiguous Factor).
+compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
+                                     contrasts_df, group_col = NULL) {
+    if (is.null(expr_linear) || is.null(sample_meta) || is.null(sample_id_col)) {
+        return(NULL)
+    }
+    if (!is.data.frame(contrasts_df) ||
+        !all(c("Numerator", "Denominator") %in% colnames(contrasts_df))) {
+        return(NULL)
+    }
+    if (!sample_id_col %in% colnames(sample_meta)) {
+        return(NULL)
+    }
+
+    # Resolve the grouping column: explicit override, else the contrasts' Factor
+    factor_col <- group_col %||% (if ("Factor" %in% colnames(contrasts_df)) {
+        unique(as.character(contrasts_df$Factor))
+    } else NULL)
+    factor_col <- factor_col[!is.na(factor_col) & factor_col %in% colnames(sample_meta)]
+    if (length(factor_col) != 1L) {
+        warning("compute_group_cv_columns: could not resolve a single grouping column; skipping CV.")
+        return(NULL)
+    }
+
+    # Groups that appear in at least one contrast (Q5: union of Num/Den)
+    groups <- unique(c(as.character(contrasts_df$Numerator),
+                       as.character(contrasts_df$Denominator)))
+    groups <- groups[!is.na(groups) & nzchar(groups)]
+    if (length(groups) == 0L) return(NULL)
+
+    expr_linear <- as.matrix(expr_linear)
+    meta_ids <- as.character(sample_meta[[sample_id_col]])
+    meta_grp <- as.character(sample_meta[[factor_col]])
+    col_grp  <- meta_grp[match(colnames(expr_linear), meta_ids)]
+
+    cv_list <- lapply(groups, function(g) {
+        cols <- which(col_grp == g)
+        if (length(cols) == 0L) {
+            return(rep(NA_real_, nrow(expr_linear)))
+        }
+        unname(cv_percent(expr_linear[, cols, drop = FALSE]))
+    })
+    names(cv_list) <- paste0("CV.", groups)
+
+    cv_df <- as.data.frame(cv_list, check.names = FALSE, stringsAsFactors = FALSE)
+    rownames(cv_df) <- rownames(expr_linear)
+    cv_df
+}
+
 #' Build final results table (generic for any mode)
 #'
 #' SEMANTICS (CRITICAL):
@@ -511,8 +618,12 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
 #' @param fc_is_signed Logical; if TRUE (default), FC is signed (linearFC/logFC).
 #'                     If FALSE, must provide fc_direction_col.
 #' @param fc_direction_col Optional; column name for direction if FC is unsigned ratio
+#' @param cv_cols Optional feature-indexed data.frame of per-group CV% columns
+#'   (e.g. from \code{\link{compute_group_cv_columns}}). When supplied, these
+#'   columns are inserted immediately after the per-sample expression block and
+#'   before the per-contrast statistics, matched by feature ID.
 #'
-#' @return data.frame with ID, annotations, expression, DE stats, pass_any_contrast
+#' @return data.frame with ID, annotations, expression, [CV.<group>], DE stats, pass_any_contrast
 build_final_results_generic <- function(
   summary_df,
   expr_df,
@@ -522,7 +633,8 @@ build_final_results_generic <- function(
   row_data = NULL,
   fc_is_signed = TRUE,
   fc_direction_col = NULL,
-  mode = "proteomics"  # FIX 2: Add mode parameter for column naming
+  mode = "proteomics",  # FIX 2: Add mode parameter for column naming
+  cv_cols = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -637,6 +749,20 @@ build_final_results_generic <- function(
         }
 
         base <- cbind(base, expr_matched)
+    }
+
+    # ============================================================
+    # ADD PER-GROUP CV COLUMNS (linear-scale CV%, after expression)
+    # ============================================================
+
+    if (!is.null(cv_cols) && is.data.frame(cv_cols) && ncol(cv_cols) > 0) {
+        if (is.null(rownames(cv_cols))) {
+            warning("cv_cols has no rownames. Cannot add per-group CV columns.")
+        } else {
+            cv_matched <- cv_cols[match(base[[feature_id_col]], rownames(cv_cols)), , drop = FALSE]
+            rownames(cv_matched) <- NULL
+            base <- cbind(base, cv_matched)
+        }
     }
 
     # ============================================================

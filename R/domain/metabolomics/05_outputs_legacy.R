@@ -21,7 +21,9 @@ build_final_results_metabolomics <- function(
     summary_df,
     contrast_labels,
     row_data       = NULL,
-    feature_id_col = "feature_id"
+    feature_id_col = "feature_id",
+    cv_contrasts_df = NULL,
+    config          = NULL
 ) {
     # Wrap contrast labels into contrasts_df for the generic API
     contrasts_df <- data.frame(
@@ -39,6 +41,10 @@ build_final_results_metabolomics <- function(
         }
     }
 
+    # Per-group CV requires the structured contrasts (Factor/Numerator/Denominator),
+    # which contrast_labels alone do not carry.
+    cv_cols <- build_group_cv_metabolomics(pre, cv_contrasts_df, config)
+
     build_final_results_generic(
         summary_df     = summary_df,
         expr_df        = pre$expr_work,
@@ -47,7 +53,69 @@ build_final_results_metabolomics <- function(
         annot_cols     = annot_cols,
         row_data       = rd,
         fc_is_signed   = TRUE,
-        mode           = "metabolomics"
+        mode           = "metabolomics",
+        cv_cols        = cv_cols
+    )
+}
+
+#' Build per-group CV columns for metabolomics final results
+#'
+#' CV is computed on the post-normalization LINEAR matrix, reconstructed from
+#' \code{expr_work} as \code{2^expr_work - pseudocount} (the production
+#' normalization paths — tss/pqn/eigenms — are always log2(x + pseudocount), so
+#' this inversion is exact; median/eigenms_forced make it approximate). This
+#' keeps metabolomics CV on normalized data, comparable to the RNA-seq and
+#' proteomics CV columns.
+#'
+#' Guard: if feature scaling is enabled (\code{normalization$scaling != "none"}),
+#' the back-transform is invalid (centering breaks positivity), so we fall back
+#' to the filtered PRE-normalization linear matrix (\code{expr_filt}) and the CV
+#' then includes technical variation that normalization would have removed (see
+#' the contract doc / column note).
+#'
+#' @param pre Metabolomics preprocessing results (uses \code{expr_work},
+#'   \code{expr_filt}, \code{meta}).
+#' @param contrasts_df Structured contrasts (Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag, sample-ID column, scale).
+#' @return Feature-indexed data.frame of \code{CV.<group>} columns, or NULL.
+build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
+    if (is.null(config) || is.null(contrasts_df)) return(NULL)
+    enabled <- config$modes$metabolomics$excel$group_cv %||% TRUE
+    if (!isTRUE(enabled)) return(NULL)
+    if (is.null(pre$expr_work) || is.null(pre$meta)) return(NULL)
+
+    cfg_mode      <- config$modes$metabolomics %||% list()
+    sample_id_col <- cfg_mode$effects$samples %||% "sample_id"
+    norm_cfg      <- cfg_mode$normalization %||% list()
+    scaling       <- tolower(norm_cfg$scaling %||% "none")
+    pseudocount   <- norm_cfg$pseudocount %||% 1
+
+    if (identical(scaling, "none")) {
+        # Exact (tss/pqn/eigenms) / approximate (median) post-normalization linear
+        expr_linear <- 2^as.matrix(pre$expr_work) - pseudocount
+        # Floor tiny negatives from approximate back-transform / drift (matches
+        # compute_linear_rsd()); keeps the value count for CV.
+        neg <- is.finite(expr_linear) & expr_linear < 0
+        expr_linear[neg] <- .Machine$double.eps
+    } else {
+        # Scaling enabled -> reconstruction invalid; use filtered pre-norm linear.
+        warning(sprintf(
+            "metabolomics group CV: feature scaling = '%s'; using pre-normalization 'expr_filt' (CV includes technical variation, not directly comparable to other omics).",
+            scaling
+        ))
+        if (is.null(pre$expr_filt)) return(NULL)
+        expr_linear <- as.matrix(pre$expr_filt)
+        # Align to the columns/features actually present in expr_work
+        common_cols <- intersect(colnames(pre$expr_work), colnames(expr_linear))
+        common_rows <- intersect(rownames(pre$expr_work), rownames(expr_linear))
+        expr_linear <- expr_linear[common_rows, common_cols, drop = FALSE]
+    }
+
+    compute_group_cv_columns(
+        expr_linear   = expr_linear,
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df
     )
 }
 
@@ -103,9 +171,12 @@ write_metabolomics_outputs <- function(pre, config, out_dir) {
 #' @param config Full config.
 #' @param out_dir Output directory.
 #' @param clustering_res Optional clustering results for Excel row ordering.
+#' @param inputs Optional loaded inputs; \code{inputs$contrasts} (Factor,
+#'   Numerator, Denominator) is used for per-group CV column resolution.
 #' @return Character vector of written file paths.
 write_metabolomics_final_results <- function(pre, de_res, config, out_dir,
-                                              clustering_res = NULL) {
+                                              clustering_res = NULL,
+                                              inputs = NULL) {
     if (is.null(de_res) || is.null(de_res$summary_df)) {
         message("metabolomics final_results: skipped (no DE results)")
         return(character(0))
@@ -126,7 +197,9 @@ write_metabolomics_final_results <- function(pre, de_res, config, out_dir,
         summary_df      = de_res$summary_df,
         contrast_labels = contrast_labels,
         row_data        = pre$row_data,
-        feature_id_col  = "feature_id"
+        feature_id_col  = "feature_id",
+        cv_contrasts_df = inputs$contrasts,
+        config          = config
     )
 
     # Write TSV
