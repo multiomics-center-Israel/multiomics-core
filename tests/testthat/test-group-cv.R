@@ -1,13 +1,25 @@
 # Tests for per-group CV% columns in Final_results_{ALL,DE}.
 #
-# T1-T4 are deliberately BASE-R ONLY (no Bioconductor, no openxlsx) so they can
-# be run in RStudio on Windows before pushing:
+# T1-T4 + the wiring tests (W1-W3) are deliberately BASE-R ONLY (no
+# Bioconductor, no openxlsx) so they can be run in RStudio on Windows before
+# pushing:
 #
 #   testthat::test_file("tests/testthat/test-group-cv.R")
 #
 # (run from the repo root). T5 — the opaque-bytes regression guard for the Excel
 # writer — lives in test-attach-final-results-xlsx-bytes.R and needs openxlsx, so
 # it is left for CI on Linux.
+#
+# Test map:
+#   T1 cv_percent math + edge cases (single-sample/mean-0/<2-observed -> NA)
+#   T2 back-transform identities + proteomics_log_offset resolution
+#   T3 CV originates in build_final_results_generic; ALL and DE agree
+#   T4 CV emitted only for contrast groups; group_cv flag fully suppresses
+#   W1 happy-path real-config wiring per omics (sample_id_col + Factor actually
+#      resolve against the matrix/meta columns -> finite CV, not all-NA)
+#   W2 sample-ID mismatch -> graceful all-NA (the symptom of a misconfigured ID
+#      column), never an error
+#   W3 multi-Factor contrasts -> warning + NULL (documented limitation)
 
 # ---- Self-contained sourcing of the functions under test --------------------
 # Locate and source only the pure builders/helpers (function definitions only;
@@ -26,6 +38,9 @@ find_repo_file <- function(rel) {
 
 source(find_repo_file("R/core/05_export_excel.R"))
 source(find_repo_file("R/domain/proteomics/06_outputs_legacy.R"))
+source(find_repo_file("R/domain/rnaseq/01_expression.R"))       # compute_cpm (base R)
+source(find_repo_file("R/domain/rnaseq/05_outputs_legacy.R"))   # build_group_cv_rnaseq
+source(find_repo_file("R/domain/metabolomics/05_outputs_legacy.R")) # build_group_cv_metabolomics
 
 
 # =============================================================================
@@ -223,4 +238,163 @@ test_that("group_cv flag = FALSE fully suppresses CV columns", {
     cfg_on$modes$proteomics$excel$group_cv <- TRUE
     cv_on <- build_group_cv_proteomics(pre, contrasts_df, cfg_on)
     expect_true(all(c("CV.A", "CV.B") %in% names(cv_on)))
+})
+
+
+# =============================================================================
+# W1 — Happy-path real-config wiring per omics
+#      (maps to: the silent failure mode where a misresolved sample_id_col /
+#       Factor makes col_grp all-NA and every CV column comes out all-NA)
+#
+# Each omics resolves sample_id_col from a DIFFERENT config path
+# (modes.<omics>.effects$samples) and the group from contrasts_df$Factor. These
+# tests build a fixture that mimics a real config — a realistic sample-ID column
+# name, a separate condition/group column, an expression matrix whose colnames
+# ARE those sample IDs, and a structured contrasts_df referencing the group
+# column — then run the actual per-omics builder and assert the CV columns carry
+# real finite numbers (not all-NA). A sample-ID/Factor mismatch would surface
+# here as all-NA, so these assertions are the wiring guard.
+# =============================================================================
+
+# Shared wiring fixture: 6 samples, two 3-replicate groups (ctrl/trt).
+wiring_meta <- function(sample_id_col = "SampleID", group_col = "condition") {
+    m <- data.frame(
+        x_id  = paste0("sample_", 1:6),
+        x_grp = c("ctrl", "ctrl", "ctrl", "trt", "trt", "trt"),
+        stringsAsFactors = FALSE
+    )
+    names(m) <- c(sample_id_col, group_col)
+    m
+}
+wiring_contrasts <- function(group_col = "condition") {
+    data.frame(
+        Contrast_name = "trt - ctrl", Factor = group_col,
+        Numerator = "trt", Denominator = "ctrl",
+        stringsAsFactors = FALSE
+    )
+}
+# A linear feature x sample matrix with within-group variation (so CV is finite
+# and > 0 for the multi-replicate groups).
+wiring_linear_matrix <- function(sample_ids) {
+    m <- matrix(c(
+        100, 120, 110, 300, 330, 360,   # F1
+         50,  55,  45, 200, 180, 220,   # F2
+         10,  11,   9,  40,  42,  38    # F3
+    ), nrow = 3, byrow = TRUE,
+    dimnames = list(c("F1", "F2", "F3"), sample_ids))
+    m
+}
+
+test_that("W1 rnaseq: real-config wiring yields finite CV (linear CPM)", {
+    meta <- wiring_meta()                          # SampleID / condition
+    counts <- wiring_linear_matrix(meta$SampleID)  # raw counts (compute_cpm input)
+    pre <- list(expr_filt = counts, meta = meta)
+    config <- list(modes = list(rna = list(
+        effects = list(samples = "SampleID")        # resolved sample_id_col
+        # excel$group_cv defaults to TRUE
+    )))
+
+    cv <- build_group_cv_rnaseq(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    # The wiring is correct only if real numbers come out (NOT all-NA).
+    expect_true(all(is.finite(cv$CV.ctrl)))
+    expect_true(all(is.finite(cv$CV.trt)))
+    expect_true(any(cv$CV.ctrl > 0))
+})
+
+test_that("W1 proteomics: real-config wiring yields finite CV (2^expr_filt)", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pre  <- list(expr_filt = log2(lin), meta = meta)  # log2 intensities (DIANN path)
+    config <- list(modes = list(proteomics = list(
+        effects = list(samples = "SampleID"),
+        input = list(format = "diann"), scale_in = "linear"
+    )))
+
+    cv <- build_group_cv_proteomics(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.finite(cv$CV.ctrl)))
+    expect_true(all(is.finite(cv$CV.trt)))
+    # Back-transform round-trips to the linear matrix, so CV matches linear CV.
+    expect_equal(cv$CV.ctrl[1], 100 * stats::sd(lin[1, 1:3]) / mean(lin[1, 1:3]))
+})
+
+test_that("W1 metabolomics: real-config wiring yields finite CV (2^expr_work - p)", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pseudo <- 1
+    pre  <- list(expr_work = log2(lin + pseudo), meta = meta)  # post-norm log2(x+p)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        normalization = list(scaling = "none", pseudocount = pseudo)
+    )))
+
+    cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.finite(cv$CV.ctrl)))
+    expect_true(all(is.finite(cv$CV.trt)))
+    # Reconstruction is exact here -> CV equals linear CV.
+    expect_equal(cv$CV.trt[1], 100 * stats::sd(lin[1, 4:6]) / mean(lin[1, 4:6]))
+})
+
+
+# =============================================================================
+# W2 — Sample-ID mismatch is graceful (all-NA), never an error
+#      (maps to: documenting that an all-NA CV column == a misconfigured ID col)
+# =============================================================================
+test_that("W2 sample-ID/matrix mismatch -> all-NA CV columns, no error", {
+    meta <- wiring_meta()                       # IDs: sample_1..sample_6
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    # Break the wiring: matrix colnames no longer match meta[[sample_id_col]].
+    colnames(lin) <- paste0("WRONG_", seq_len(ncol(lin)))
+
+    # IMPORTANT: when the resolved sample_id_col does not match the matrix
+    # column names, every sample maps to group NA, so each group's CV is all-NA.
+    # This is the documented symptom of a misconfigured ID column — readers who
+    # see an entirely-NA CV column should suspect a sample_id_col mismatch.
+    cv <- NULL
+    expect_error(
+        cv <- compute_group_cv_columns(lin, meta, "SampleID", wiring_contrasts()),
+        NA  # NA => assert that NO error is thrown
+    )
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.na(cv$CV.ctrl)))
+    expect_true(all(is.na(cv$CV.trt)))
+})
+
+
+# =============================================================================
+# W3 — Multiple distinct Factors in the contrasts table is unsupported
+#      (maps to: documented limitation — one grouping Factor per run)
+# =============================================================================
+test_that("W3 multi-Factor contrasts -> warning + NULL (no CV columns)", {
+    meta <- data.frame(
+        SampleID  = paste0("sample_", 1:4),
+        condition = c("ctrl", "ctrl", "trt", "trt"),
+        genotype  = c("wt", "ko", "wt", "ko"),
+        stringsAsFactors = FALSE
+    )
+    lin <- matrix(c(
+        100, 120, 300, 330,   # F1
+         50,  55, 200, 180    # F2
+    ), nrow = 2, byrow = TRUE,
+    dimnames = list(c("F1", "F2"), meta$SampleID))
+
+    # Two contrasts using two DIFFERENT Factor columns (both present in meta).
+    contrasts_df <- data.frame(
+        Contrast_name = c("trt - ctrl", "ko - wt"),
+        Factor        = c("condition", "genotype"),
+        Numerator     = c("trt", "ko"),
+        Denominator   = c("ctrl", "wt"),
+        stringsAsFactors = FALSE
+    )
+
+    expect_warning(
+        res <- compute_group_cv_columns(lin, meta, "SampleID", contrasts_df),
+        "single grouping column"
+    )
+    expect_null(res)
 })
