@@ -412,14 +412,15 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
 
-    # Proteomics DE summary strips spaces from contrast names;
-    # RNA-seq and metabolomics keep them as-is.  Only normalize for proteomics.
-    if (!mode %in% c("rna", "metabolomics")) {
+    # Proteomics DE summary strips spaces from contrast names; rna, metabolomics
+    # and lipidomics keep them as-is.  Only normalize for proteomics.
+    if (!mode %in% c("rna", "metabolomics", "lipidomics")) {
         contrast <- normalize_contrast_name(contrast)
     }
 
-    # RNA and metabolomics use identical column naming (no .imputs. infix)
-    if (mode %in% c("rna", "metabolomics")) {
+    # RNA-seq: no .imputs. infix; pass column is "<contrast>_pass"
+    # (see build_rnaseq_summary_df() in R/domain/rnaseq/04_de_summary.R).
+    if (mode == "rna") {
         list(
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
@@ -429,14 +430,20 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else if (mode %in% c("metabolomics", "lipidomics")) {
-        # Metabolomics/lipidomics use linearFC., P.Value., adj.P.Val. dot naming
+        # Metabolomics: identical to RNA-seq EXCEPT the pass column is
+        # "pass.<contrast>" (see build_de_summary() in
+        # R/domain/metabolomics/03_differential.R, which emits paste0("pass.", ctr)).
+        # rna and metabolomics share fc/p/padj/updown/manual naming but differ on
+        # the pass affix, so they need separate branches. Lipidomics is analysed
+        # through the metabolomics pipeline (no dedicated lipidomics DE step), so
+        # it reuses this naming; revisit if a lipidomics-specific DE is added.
         list(
-            fc     = paste0("linearFC.", contrast_safe),
-            p      = paste0("P.Value.", contrast_safe),
-            padj   = paste0("adj.P.Val.", contrast_safe),
-            pass   = paste0("pass.", contrast_safe),
-            updown = paste0("upDown.", contrast_safe),
-            manual = paste0("manual_cutoffs.", contrast_safe)
+            fc     = paste0("linearFC.", contrast),
+            p      = paste0("pvalue.", contrast),
+            padj   = paste0("padj.", contrast),
+            pass   = paste0("pass.", contrast),
+            updown = paste0("upDown.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
         )
     } else {
         # Proteomics (uses imputation naming)
@@ -666,6 +673,14 @@ build_final_results_generic <- function(
         pass_vals <- if (cols$pass %in% colnames(summary_df)) {
             summary_df[[cols$pass]][m]
         } else {
+            # Loud signal instead of a silent all-NA fallback: when the pass
+            # column the builder expects is absent, upDown would be blank for
+            # every row even when fc/p/padj are present (the see-saw bug, where
+            # get_contrast_cols() and the DE step disagree on the pass affix).
+            warning(sprintf(
+                "Contrast '%s' (mode '%s'): expected pass column '%s' not found in summary_df; upDown will be blank for all rows. Check get_contrast_cols() naming vs the DE step's pass column.",
+                cn, mode, cols$pass
+            ))
             rep(NA, length(m))
         }
 
