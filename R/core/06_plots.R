@@ -539,7 +539,7 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #' @param title Plot title
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
   # 1. Flexible Column Mapping
   # Try to find the logFC column
   lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
@@ -547,9 +547,14 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
   # Try to find the raw P-value column
   pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
-  
+
+  # Pick the y-axis p-value column per request. The "Raw P-value" tab must use
+  # the unadjusted p-value; previously this argument was ignored and every tab
+  # plotted padj, so the raw and adjusted volcanoes rendered identically.
+  y_col <- if (identical(pvalue_type, "pval") && !is.na(pval_col)) pval_col else padj_col
+
   # Validation check
-  if (is.na(lfc_col) || is.na(padj_col)) {
+  if (is.na(lfc_col) || is.na(y_col)) {
     stop(paste0(
       "plot_volcano: Could not find required columns. ",
       "Available: ", paste(colnames(de_tbl), collapse = ", ")
@@ -565,14 +570,14 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   # We create a local 'plot_df' so we don't mess with the original de_tbl
   plot_df <- as.data.frame(de_tbl)
   plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
-  
+  plot_df$.p <- as.numeric(plot_df[[y_col]])
+
   # Handle NAs (important for DESeq2)
-  plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
-  plot_df$.neglog10p <- -log10(pmax(plot_df$.padj_plot, 1e-300))
-  
-  # 4. Define Significance & Direction
-  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.padj_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
+  plot_df$.p_plot <- ifelse(is.na(plot_df$.p), 1, plot_df$.p)
+  plot_df$.neglog10p <- -log10(pmax(plot_df$.p_plot, 1e-300))
+
+  # 4. Define Significance & Direction (thresholded on the displayed p-value type)
+  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.p_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
   
   plot_df$.direction <- factor(
     ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
@@ -594,9 +599,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
     ggplot2::labs(
       title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", padj_col, "and", lfc_col),
+      subtitle = paste("Using:", y_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", padj_col, ")")
+      y = paste0("-log10(", y_col, ")")
     ) +
     ggplot2::theme_minimal()
 }
