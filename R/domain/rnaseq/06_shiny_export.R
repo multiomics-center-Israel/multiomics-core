@@ -208,7 +208,7 @@ build_shiny_payload_rnaseq <- function(
         # annot_cols = NULL by design).
         if (!is.null(payload$de_stats) && !is.null(inputs$contrasts)) {
             final_results <- tryCatch(
-                build_final_results_rnaseq(pre, de_stats_pre_annot, inputs$contrasts, pre$row_data),
+                build_final_results_rnaseq(pre, de_stats_pre_annot, inputs$contrasts, pre$row_data, config = config),
                 error = function(e) {
                     warning("[shiny_export] de_final_table: ", conditionMessage(e))
                     NULL

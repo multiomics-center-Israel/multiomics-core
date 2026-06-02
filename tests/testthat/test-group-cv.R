@@ -288,7 +288,8 @@ wiring_linear_matrix <- function(sample_ids) {
 test_that("W1 rnaseq: real-config wiring yields finite CV (linear CPM)", {
     meta <- wiring_meta()                          # SampleID / condition
     counts <- wiring_linear_matrix(meta$SampleID)  # raw counts (compute_cpm input)
-    pre <- list(expr_filt = counts, meta = meta)
+    # source_type "matrix" => genuine raw counts, on the CPM whitelist.
+    pre <- list(expr_filt = counts, meta = meta, info = list(source_type = "matrix"))
     config <- list(modes = list(rna = list(
         effects = list(samples = "SampleID")        # resolved sample_id_col
         # excel$group_cv defaults to TRUE
@@ -328,6 +329,7 @@ test_that("W1 metabolomics: real-config wiring yields finite CV (2^expr_work - p
     pre  <- list(expr_work = log2(lin + pseudo), meta = meta)  # post-norm log2(x+p)
     config <- list(modes = list(metabolomics = list(
         effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "pqn"),   # always-log2 -> provably invertible
         normalization = list(scaling = "none", pseudocount = pseudo)
     )))
 
@@ -397,4 +399,112 @@ test_that("W3 multi-Factor contrasts -> warning + NULL (no CV columns)", {
         "single grouping column"
     )
     expect_null(res)
+})
+
+
+# =============================================================================
+# G1 — Metabolomics log2-workspace guard (maps to: review finding #1)
+#      The 2^x reconstruction is only valid on a provably-log2 workspace. The
+#      only reachable non-log2 expr_work is chosen_norm="median" with a non-log2
+#      transform; that (and any unknown chosen_norm) must SKIP + warn, never
+#      produce wrong CV by inverting a non-log2 matrix.
+# =============================================================================
+test_that("G1 metab: median + non-log2 transform -> NULL + warning (no wrong CV)", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    # expr_work happens to be on a log10 base here; the guard must refuse to 2^ it.
+    pre  <- list(expr_work = log10(lin + 1), meta = meta)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "median"),
+        normalization = list(scaling = "none", transform = "log10", pseudocount = 1)
+    )))
+
+    expect_warning(
+        cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config),
+        "provably-log2"
+    )
+    expect_null(cv)
+})
+
+test_that("G1 metab: median + log2 transform IS invertible -> finite CV", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pseudo <- 1
+    pre  <- list(expr_work = log2(lin + pseudo), meta = meta)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "median"),
+        normalization = list(scaling = "none", transform = "log2", pseudocount = pseudo)
+    )))
+
+    cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.finite(cv$CV.ctrl)))
+    expect_equal(cv$CV.trt[1], 100 * stats::sd(lin[1, 4:6]) / mean(lin[1, 4:6]))
+})
+
+test_that("G1 metab: unknown chosen_norm -> NULL + warning (fail-safe)", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pre  <- list(expr_work = log2(lin + 1), meta = meta)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "some_future_method"),
+        normalization = list(scaling = "none", transform = "log2", pseudocount = 1)
+    )))
+
+    expect_warning(
+        cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config),
+        "provably-log2"
+    )
+    expect_null(cv)
+})
+
+
+# =============================================================================
+# G2 — RNA-seq raw-counts source-type whitelist (maps to: review finding #3)
+#      compute_cpm() (counts / colSums) is only valid on genuine raw counts.
+#      Only "matrix"/"tximport" are whitelisted; everything else (incl.
+#      "preprocessed" and any unknown/missing source_type) SKIPS + warns.
+# =============================================================================
+test_that("G2 rnaseq: preprocessed source_type -> NULL + warning (CPM meaningless)", {
+    meta <- wiring_meta()
+    vals <- wiring_linear_matrix(meta$SampleID)   # already-processed values, not counts
+    pre <- list(expr_filt = vals, meta = meta,
+                info = list(source_type = "preprocessed"))
+    config <- list(modes = list(rna = list(effects = list(samples = "SampleID"))))
+
+    expect_warning(
+        cv <- build_group_cv_rnaseq(pre, wiring_contrasts(), config),
+        "not a known raw-count type"
+    )
+    expect_null(cv)
+})
+
+test_that("G2 rnaseq: missing source_type -> NULL + warning (fail-safe whitelist)", {
+    meta <- wiring_meta()
+    counts <- wiring_linear_matrix(meta$SampleID)
+    pre <- list(expr_filt = counts, meta = meta)   # no info$source_type at all
+    config <- list(modes = list(rna = list(effects = list(samples = "SampleID"))))
+
+    expect_warning(
+        cv <- build_group_cv_rnaseq(pre, wiring_contrasts(), config),
+        "not a known raw-count type"
+    )
+    expect_null(cv)
+})
+
+test_that("G2 rnaseq: tximport source_type IS whitelisted -> finite CV", {
+    meta <- wiring_meta()
+    counts <- wiring_linear_matrix(meta$SampleID)
+    pre <- list(expr_filt = counts, meta = meta,
+                info = list(source_type = "tximport"))
+    config <- list(modes = list(rna = list(effects = list(samples = "SampleID"))))
+
+    cv <- build_group_cv_rnaseq(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.finite(cv$CV.ctrl)))
 })

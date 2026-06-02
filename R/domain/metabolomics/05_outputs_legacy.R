@@ -61,17 +61,23 @@ build_final_results_metabolomics <- function(
 #' Build per-group CV columns for metabolomics final results
 #'
 #' CV is computed on the post-normalization LINEAR matrix, reconstructed from
-#' \code{expr_work} as \code{2^expr_work - pseudocount} (the production
-#' normalization paths — tss/pqn/eigenms — are always log2(x + pseudocount), so
-#' this inversion is exact; median/eigenms_forced make it approximate). This
-#' keeps metabolomics CV on normalized data, comparable to the RNA-seq and
-#' proteomics CV columns.
+#' \code{expr_work} as \code{2^expr_work - pseudocount}. This inversion is only
+#' valid when the workspace is genuinely log2-based, so it is gated on a
+#' normalization whitelist (see below). This keeps metabolomics CV on normalized
+#' data, comparable to the RNA-seq and proteomics CV columns.
 #'
-#' Guard: if feature scaling is enabled (\code{normalization$scaling != "none"}),
-#' the back-transform is invalid (centering breaks positivity), so we fall back
-#' to the filtered PRE-normalization linear matrix (\code{expr_filt}) and the CV
-#' then includes technical variation that normalization would have removed (see
-#' the contract doc / column note).
+#' Guards (return \code{NULL}, never approximate an inverse):
+#' \itemize{
+#'   \item If feature scaling is enabled (\code{normalization$scaling != "none"}),
+#'     the back-transform is invalid (centering breaks positivity), so we fall
+#'     back to the filtered PRE-normalization linear matrix (\code{expr_filt});
+#'     the CV then includes technical variation that normalization would have
+#'     removed (see the contract doc / column note).
+#'   \item If the workspace is not provably log2 — i.e. \code{chosen_norm ==
+#'     "median"} with a non-log2 \code{normalization$transform} (log10/glog10/
+#'     none), or an unrecognized \code{chosen_norm} — we skip CV with a warning
+#'     rather than \code{2^}-inverting a non-log2 matrix into wrong numbers.
+#' }
 #'
 #' @param pre Metabolomics preprocessing results (uses \code{expr_work},
 #'   \code{expr_filt}, \code{meta}).
@@ -91,7 +97,28 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
     pseudocount   <- norm_cfg$pseudocount %||% 1
 
     if (identical(scaling, "none")) {
-        # Exact (tss/pqn/eigenms) / approximate (median) post-normalization linear
+        # The 2^x inverse is only valid on a genuinely log2 workspace. These
+        # normalization methods hardcode log2(x + pseudocount) regardless of
+        # config, so they are always invertible.
+        # MAINTAINER NOTE: any NEW normalization method that always log2-
+        # transforms MUST be added to this whitelist; otherwise CV will safely
+        # (but silently) skip for it via the guard below.
+        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced")
+        chosen_norm <- tolower(cfg_mode$preprocessing$chosen_norm %||% "")
+        transform   <- tolower(norm_cfg$transform %||% "log2")
+        # The median path honors the configurable transform, so it is only log2
+        # when transform == "log2". Everything outside the whitelist (incl.
+        # unknown chosen_norm) is not provably log2 -> skip rather than guess.
+        provably_log2 <- chosen_norm %in% always_log2_norms ||
+            (identical(chosen_norm, "median") && identical(transform, "log2"))
+        if (!isTRUE(provably_log2)) {
+            warning(sprintf(
+                "metabolomics group CV: chosen_norm='%s' with transform='%s' is not a provably-log2 workspace; skipping CV (a 2^x back-transform would produce wrong values on a non-log2 matrix).",
+                chosen_norm, transform
+            ))
+            return(NULL)
+        }
+        # Post-normalization linear matrix (exact inverse on the log2 workspace).
         expr_linear <- 2^as.matrix(pre$expr_work) - pseudocount
         # Floor tiny negatives from approximate back-transform / drift (matches
         # compute_linear_rsd()); keeps the value count for CV.

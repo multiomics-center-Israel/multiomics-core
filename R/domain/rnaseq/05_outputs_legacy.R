@@ -129,10 +129,13 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
 #'
 #' CV is computed on linear CPM (\code{compute_cpm} of the filtered raw counts),
 #' which is library-size-corrected and method-agnostic. Returns \code{NULL} when
-#' the feature is disabled (\code{modes$rna$excel$group_cv = false}) or inputs
-#' are unavailable.
+#' the feature is disabled (\code{modes$rna$excel$group_cv = false}), inputs are
+#' unavailable, or the input is not genuine raw counts (see the source-type
+#' whitelist below) — since \code{compute_cpm()} divides by column sums assuming
+#' counts, running it on already-processed values would yield meaningless CPM.
 #'
-#' @param pre RNA-seq preprocessing results (uses \code{expr_filt}, \code{meta}).
+#' @param pre RNA-seq preprocessing results (uses \code{expr_filt}, \code{meta},
+#'   \code{info$source_type}).
 #' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
 #' @param config Full pipeline config (for the feature flag + sample-ID column).
 #' @return Feature-indexed data.frame of \code{CV.<group>} columns, or NULL.
@@ -141,6 +144,21 @@ build_group_cv_rnaseq <- function(pre, contrasts_df, config = NULL) {
     enabled <- config$modes$rna$excel$group_cv %||% TRUE
     if (!isTRUE(enabled)) return(NULL)
     if (is.null(pre$expr_filt) || is.null(pre$meta)) return(NULL)
+
+    # WHITELIST: compute CV only when expr_filt is genuine raw counts, so
+    # compute_cpm() (counts / colSums) is valid. Anything else -- "preprocessed"
+    # (expr_filt holds already-processed values, not counts) or any future
+    # non-count source_type -- skips CV + warns. Fail-safe by construction: a new
+    # source_type can't silently produce garbage CPM until it is added here.
+    raw_count_sources <- c("matrix", "tximport")
+    source_type <- pre$info$source_type %||% attr(pre, "source_type") %||% NA_character_
+    if (!isTRUE(source_type %in% raw_count_sources)) {
+        warning(sprintf(
+            "RNA-seq group CV: source_type='%s' is not a known raw-count type (%s); skipping CV (compute_cpm() is only valid on raw counts).",
+            source_type, paste(raw_count_sources, collapse = "/")
+        ))
+        return(NULL)
+    }
 
     sample_id_col <- config$modes$rna$effects$samples %||% "SampleID"
     cpm_linear <- compute_cpm(pre$expr_filt)
