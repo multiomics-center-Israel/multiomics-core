@@ -69,21 +69,25 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
 
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
-# Detect if we are already inside the rna output dir
+# Detect if we are already inside the rna output dir. When the Rmd sits at
+# the run root (alongside the pipeline summary), data files live under rna/;
+# when it sits inside rna/, data files live in the current directory.
 if (basename(run_dir) == "rna") {
-    prot_dir <- run_dir
+    rna_dir <- run_dir
     config_path <- file.path(dirname(run_dir), "execution_info", "config_used.yaml")
 } else {
-    prot_dir <- file.path(run_dir, "rna")
+    rna_dir <- file.path(run_dir, "rna")
     config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
 }
-diag_dir <- file.path(run_dir,  "Diagnostic_plots")
+# Keep prot_dir alias for backwards-compat in case any downstream chunk uses it.
+prot_dir <- rna_dir
+diag_dir <- file.path(rna_dir, "Diagnostic_plots")
 qc_post_dir <- file.path(diag_dir, "DE_plots")
-datasets_dir <- file.path(run_dir,  "Datasets")
-enrich_dir <- file.path(run_dir,"Enrichment")
+datasets_dir <- file.path(rna_dir, "Datasets")
+enrich_dir <- file.path(rna_dir, "Enrichment")
 enrich_plot_dir <- file.path(enrich_dir, "plots")
-filter_plot <- file.path(dirname(run_dir), "rnaseq", "filtering_threshold_qc.png")
-commentary_dir <- file.path(run_dir, "commentary")
+filter_plot <- file.path(rna_dir, "filtering_threshold_qc.png")
+commentary_dir <- file.path(rna_dir, "commentary")
 
 # Load commentary if available
 commentary <- NULL
@@ -1348,8 +1352,7 @@ make_volcano_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.
                          adjPval = plot_df$padj,
                          stringsAsFactors = FALSE)
     if (!is.null(pass_flag)) reg_df$passFlag <- pass_flag
-    list(widget = widget, plot_df = reg_df, ycap = ycap_v)
-    ggplotly(p, tooltip = "text")
+    list(widget = widget, plot_df = reg_df)
 }
 
 # Discover contrasts from the canonical _padj variant (new dual-volcano scheme).
@@ -1437,9 +1440,10 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 </div>
 ', clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id, clean_id))
 
-        p <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
+        vol_res <- make_volcano_plotly(de_data, cn, rna_cfg$de$p_cutoff %||% 0.05,
                                   log2(rna_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
-        if (!is.null(p)) {
+        if (!is.null(vol_res)) {
+            p <- vol_res$widget
             p$elementId <- paste0("volcano_plot_", clean_id)
             print(htmltools::tagList(p))
 
