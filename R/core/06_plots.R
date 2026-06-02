@@ -740,21 +740,31 @@ save_per_cluster_heatmaps <- function(expr_mat, clusters, annotation_col, out_di
   for (ci in unique_clusters) {
     feats <- names(clusters[clusters == ci])
     valid_feats <- intersect(feats, rownames(expr_mat))
-    if (length(valid_feats) == 0) next
-    
+    # A heatmap needs >=2 features; a singleton (or empty) cluster would make
+    # plot_heatmap_core() abort and take the whole clustering target down with
+    # it. Skip those clusters instead.
+    if (length(valid_feats) < 2) next
+
     mat_sub <- expr_mat[valid_feats, , drop = FALSE]
     f_hm <- file.path(out_dir, sprintf("Partition_clustering_heatmap_cluster%d.png", ci))
-    
-    p <- plot_heatmap_core(
-      expr_mat       = mat_sub,
-      annotation_col = annotation_col,
-      title          = sprintf("Partition Cluster %d (%d features)", ci, length(valid_feats)),
-      scale_rows     = TRUE,
-      cluster_rows   = TRUE,
-      cluster_cols   = FALSE,
-      max_rows       = NULL,
-      ...
+
+    p <- tryCatch(
+      plot_heatmap_core(
+        expr_mat       = mat_sub,
+        annotation_col = annotation_col,
+        title          = sprintf("Partition Cluster %d (%d features)", ci, length(valid_feats)),
+        scale_rows     = TRUE,
+        cluster_rows   = TRUE,
+        cluster_cols   = FALSE,
+        max_rows       = NULL,
+        ...
+      ),
+      error = function(e) {
+        message(sprintf("  Skipping per-cluster heatmap for cluster %d: %s", ci, conditionMessage(e)))
+        NULL
+      }
     )
+    if (is.null(p)) next
     save_heatmap_to_file(p, f_hm)
     written <- c(written, f_hm)
   }
