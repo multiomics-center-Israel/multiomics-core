@@ -1430,16 +1430,27 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
             next
         }
 
-        # For multiple contrasts, take the minimum p-value per pathway
-        df_agg <- aggregate(
-            stats::as.formula(paste(pval_col, "~", pathway_col)),
-            data = df,
-            FUN = min
-        )
-        colnames(df_agg) <- c("pathway", paste0("pval_", om))
+        # NES column, where present (GSEA layers carry it; ORA layers don't)
+        nes_col <- if ("NES" %in% names(df)) "NES" else NULL
+
+        # For multiple contrasts, keep the single row with the minimum p-value
+        # per pathway. We select the row (rather than aggregate(min)) so the
+        # reported p-value and its NES come from the *same* contrast — NES is
+        # signed, so aggregating it independently of the p-value would mix
+        # directions and be meaningless.
+        ord <- order(df[[pval_col]], na.last = NA)
+        df_best <- df[ord, , drop = FALSE]
+        df_best <- df_best[!duplicated(df_best[[pathway_col]]), , drop = FALSE]
+
+        df_sub <- data.frame(pathway = df_best[[pathway_col]],
+                             stringsAsFactors = FALSE)
+        df_sub[[paste0("pval_", om)]] <- df_best[[pval_col]]
+        if (!is.null(nes_col)) {
+            df_sub[[paste0("nes_", om)]] <- df_best[[nes_col]]
+        }
 
         # Subset to target pathways
-        df_sub <- df_agg[df_agg$pathway %in% target_pathways, , drop = FALSE]
+        df_sub <- df_sub[df_sub$pathway %in% target_pathways, , drop = FALSE]
 
         # Merge
         merged <- merge(merged, df_sub, by = "pathway", all.x = TRUE)
@@ -1504,14 +1515,50 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # Select top N pathways by combined p-value
     top_pathways <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
 
-    pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
-    pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
-
     # Truncate long pathway names
     pathway_labels <- top_pathways$pathway
     pathway_labels <- ifelse(nchar(pathway_labels) > 50,
                              paste0(substr(pathway_labels, 1, 47), "..."),
                              pathway_labels)
+
+    # Prefer colouring by NES (signed → shows direction of enrichment) when the
+    # per-omics layers carry it. Falls back to -log10(p) for ORA-only runs.
+    nes_cols <- grep("^nes_", names(top_pathways), value = TRUE)
+    if (length(nes_cols) > 0) {
+        nes_matrix <- as.matrix(top_pathways[, nes_cols, drop = FALSE])
+        rownames(nes_matrix) <- pathway_labels
+        colnames(nes_matrix) <- gsub("^nes_", "", colnames(nes_matrix))
+
+        # Diverging green-white-red scale centred at 0: green = negative NES
+        # (down-regulated), red = positive NES (up-regulated). Symmetric limits
+        # so the white midpoint always lands on NES = 0.
+        max_abs <- max(abs(nes_matrix), na.rm = TRUE)
+        if (!is.finite(max_abs) || max_abs == 0) max_abs <- 1
+        breaks <- seq(-max_abs, max_abs, length.out = 51)
+        diverging <- colorRampPalette(
+            c("#1A9850", "#91CF60", "white", "#FC8D59", "#D73027"))(50)
+
+        if (requireNamespace("pheatmap", quietly = TRUE)) {
+            pheatmap::pheatmap(nes_matrix,
+                               cluster_rows = FALSE,
+                               cluster_cols = FALSE,
+                               main = "Cross-Omics Pathway Enrichment (NES)",
+                               color = diverging,
+                               breaks = breaks,
+                               fontsize_row = 7, fontsize_col = 10,
+                               angle_col = 45,
+                               na_col = "grey90",
+                               border_color = "grey80")
+        } else {
+            heatmap(nes_matrix, scale = "none", Colv = NA,
+                    main = "Cross-Omics Pathway Enrichment (NES)",
+                    col = diverging)
+        }
+        return(invisible(NULL))
+    }
+
+    pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
+    pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
     rownames(pval_matrix) <- pathway_labels
 
     # Transform to -log10(p)

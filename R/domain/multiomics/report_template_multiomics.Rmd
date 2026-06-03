@@ -1258,7 +1258,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers.")
+    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color represents the GSEA normalized enrichment score (NES) for each pathway in each omics layer, on a diverging green-white-red scale centred at 0: red = positive NES (up-regulated), green = negative NES (down-regulated), white = 0. The NES is taken from the most significant contrast per pathway. Grey cells indicate the pathway was not scored in that layer (or the layer used over-representation testing, which has no NES). For ORA-only runs the heatmap falls back to -log10(p-value) intensity.")
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
