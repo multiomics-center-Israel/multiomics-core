@@ -389,7 +389,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         de_res         = metab_de_res,
         config         = config,
         out_dir        = metab_out_dir,
-        clustering_res = metab_clustering_obj
+        clustering_res = metab_clustering_obj,
+        inputs         = metab_inputs
       ),
       format = "file"
     ),

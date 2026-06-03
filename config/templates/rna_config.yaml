@@ -174,6 +174,10 @@ modes:
       # Metadata columns to concatenate for informative sample column headers.
       # Set to null to keep original sample IDs:
       sample_label_cols: null
+      # Add per-group CV% columns (CV.<group>) to Final_results_{ALL,DE} for the
+      # groups appearing in any contrast. RNA-seq CV is computed on linear CPM
+      # (library-size-corrected). Set to false to omit these columns.
+      group_cv: true
 
     # --------------------------------------------------------
     # QC plot generation (threshold-based adaptive plotting)

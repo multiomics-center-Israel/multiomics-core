@@ -171,19 +171,39 @@ Add `"metabolomics"` branch (Section 3 above).
 ### 5a. Column layout (in order)
 
 ```
-┌─────────────┬──────────────────────┬───────────────┬─────────────────────┬──────────┐
-│  Group 1    │      Group 2         │   Group 3     │      Group 4        │ Group 5  │
-│  Feature ID │   Annotations        │  Expression   │  Per-contrast DE    │ Aggregate│
-├─────────────┼──────────────────────┼───────────────┼─────────────────────┼──────────┤
-│ feature_id  │ <annot_col_1>        │ <sample_1>    │ linearFC.<cn1>      │ pass_any │
-│             │ <annot_col_2>        │ <sample_2>    │ pvalue.<cn1>        │ _contrast│
-│             │ ...                  │ ...           │ padj.<cn1>          │          │
-│             │                      │ <sample_N>    │ upDown.<cn1>        │          │
-│             │                      │               │ manual_cutoffs.<cn1>│          │
-│             │                      │               │ linearFC.<cn2>      │          │
-│             │                      │               │ ...                 │          │
-└─────────────┴──────────────────────┴───────────────┴─────────────────────┴──────────┘
+┌─────────────┬──────────────────────┬───────────────┬────────────┬─────────────────────┬──────────┐
+│  Group 1    │      Group 2         │   Group 3     │  Group 3b  │      Group 4        │ Group 5  │
+│  Feature ID │   Annotations        │  Expression   │  Group CV  │  Per-contrast DE    │ Aggregate│
+├─────────────┼──────────────────────┼───────────────┼────────────┼─────────────────────┼──────────┤
+│ feature_id  │ <annot_col_1>        │ <sample_1>    │ CV.<grp1>  │ linearFC.<cn1>      │ pass_any │
+│             │ <annot_col_2>        │ <sample_2>    │ CV.<grp2>  │ pvalue.<cn1>        │ _contrast│
+│             │ ...                  │ ...           │ ...        │ padj.<cn1>          │          │
+│             │                      │ <sample_N>    │            │ upDown.<cn1>        │          │
+│             │                      │               │            │ manual_cutoffs.<cn1>│          │
+│             │                      │               │            │ linearFC.<cn2>      │          │
+│             │                      │               │            │ ...                 │          │
+└─────────────┴──────────────────────┴───────────────┴────────────┴─────────────────────┴──────────┘
 ```
+
+> **Group CV (`CV.<group>`)** — optional, gated by `modes.<omics>.excel.group_cv`
+> (default `true`). One column per group appearing in any contrast
+> (`union(Numerator, Denominator)`), holding the percent coefficient of
+> variation (`100 * sd/mean`, sample SD) across that group's biological
+> replicates, computed on a **linear** scale. Single-sample groups, zero means,
+> and (proteomics) groups with <2 observed values yield `NA`.
+>
+> **Per-omics linear scale:** RNA-seq uses linear CPM (`compute_cpm`);
+> proteomics uses `2^expr_filt` (observed/unimputed values only); metabolomics
+> uses the post-normalization linear matrix reconstructed as
+> `2^expr_work − pseudocount`.
+>
+> ⚠️ **Metabolomics comparability caveat:** the reconstruction is exact for
+> tss/pqn/eigenms normalization and approximate for median/eigenms_forced. If
+> feature scaling is enabled (`normalization.scaling != "none"`), the
+> back-transform is invalid and CV falls back to the **pre-normalization**
+> matrix (`expr_filt`); in that case metabolomics CV folds in technical
+> variation (drift, total-intensity) that normalization removes and is **not**
+> directly comparable to the RNA-seq/proteomics CV columns.
 
 ### 5b. Column specification
 
