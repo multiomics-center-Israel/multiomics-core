@@ -32,6 +32,12 @@ if (!"renv" %in% loadedNamespaces()) {
     RENV_CONFIG_AUTOLOADER_ENABLED   = "FALSE"
   )
 }
+# --- Null-coalescing operator ------------------------------------------------
+# run.R uses %||% before the pipeline's R/core sources are loaded, so define it
+# here. (Falls back from rlang's export, which may not be attached.)
+if (!exists("%||%", mode = "function")) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+}
 # --- Dependency check --------------------------------------------------------
 check_dependencies <- function(mode = "cli") {
   core_pkgs <- c("yaml", "jsonlite", "targets")
