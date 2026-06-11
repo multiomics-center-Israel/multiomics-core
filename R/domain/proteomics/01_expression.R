@@ -211,8 +211,14 @@ get_measurements_per_sample_diann <- function(protein, sample_map, meta, cfg, sc
   check_has_cols(protein, protein_id_col, df_name = "protein")
   feat_ids <- as.character(protein[[protein_id_col]])
   
-  if (anyNA(feat_ids) || any(feat_ids == "")) {
-    stop(sprintf("Protein ID column '%s' contains NA/empty values.", protein_id_col))
+  blank_mask <- is.na(feat_ids) | feat_ids == ""
+  if (any(blank_mask)) {
+    warning(sprintf(
+      "Protein ID column '%s': dropping %d row(s) with NA/empty values.",
+      protein_id_col, sum(blank_mask)
+    ))
+    protein  <- protein[!blank_mask, , drop = FALSE]
+    feat_ids <- feat_ids[!blank_mask]
   }
   if (anyDuplicated(feat_ids) > 0) {
     dups <- unique(feat_ids[duplicated(feat_ids)])
