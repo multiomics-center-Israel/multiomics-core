@@ -95,6 +95,15 @@ figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
 }
 
+# Helper: read a delimited metadata/table file, auto-detecting tab vs comma from
+# the header line. Metadata is frequently tab-separated (.txt), so a hardcoded
+# read.csv() silently collapses every column into one.
+read_delim_auto <- function(path, ...) {
+    l1 <- readLines(path, n = 1, warn = FALSE)
+    sep <- if (length(l1) && grepl("\t", l1)) "\t" else ","
+    read.delim(path, sep = sep, stringsAsFactors = FALSE, ...)
+}
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
 # Detect if we are already inside the proteomics output dir
@@ -339,7 +348,7 @@ make_dt(proj, "Analysis Parameters")
 ```{r params-design, results='asis'}
 meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
-    meta <- read.csv(meta_file, stringsAsFactors = FALSE)
+    meta <- read_delim_auto(meta_file)
     group_col <- prot_cfg$effects$color %||% "Condition"
 
     if (group_col %in% names(meta)) {
@@ -422,8 +431,7 @@ cat("# Technical Summary\n\n")
 tech <- prot_cfg$technical_report
 
 meta_ts <- tryCatch(
-    read.csv(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata),
-             stringsAsFactors = FALSE),
+    read_delim_auto(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)),
     error = function(e) NULL
 )
 group_col_ts <- prot_cfg$effects$color
@@ -1527,8 +1535,13 @@ default_ptype_vol <- "padj"  # matches cutoff_panel_html(default_ptype = "padj")
 if (length(volcano_files) > 0) {
     for (vf_padj in volcano_files) {
         suffix <- gsub("^volcano_|_padj\\.png$", "", basename(vf_padj))
-        # suffix may include "<contrast>_<de_source>" for proteomics (e.g. "A_vs_B_summary")
-        contrast_clean <- gsub("_", " ", suffix)
+        # suffix may include "<contrast>_<de_source>" for proteomics (e.g.
+        # "F_mut_vs_Ctr_table1"). Recover the bare contrast for the tab label by
+        # matching the known contrast names; keep `suffix` for file paths/commentary.
+        matched <- contrast_names[vapply(contrast_names,
+                                         function(cn) startsWith(suffix, cn), logical(1))]
+        contrast_display <- if (length(matched) > 0) matched[which.max(nchar(matched))] else suffix
+        contrast_clean <- gsub("_", " ", contrast_display)
         vf_pval <- sub("_padj\\.png$", "_pval.png", vf_padj)
         cat(sprintf("\n#### %s {.tabset}\n\n", contrast_clean))
 
@@ -1990,7 +2003,7 @@ explorer_json_str <- "{}"
 
 # Load expression data: use final_results.tsv which has per-sample columns + annotations
 meta_file_exp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
-meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+meta_df_exp <- if (file.exists(meta_file_exp)) read_delim_auto(meta_file_exp) else NULL
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
@@ -2855,7 +2868,9 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Ov
 ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora.*\\.csv$", full.names = TRUE)
 if (length(ora_files) > 0) {
     for (of in ora_files) {
-        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", basename(of))
+        # Keep the direction suffix (_ora_up / _ora_down) in the label, otherwise
+        # the up and down tables collapse to the same tab name (duplicate tabs).
+        label <- gsub("^pathway_|\\.csv$", "", basename(of))
         label_clean <- gsub("_", " ", label)
 
         ora_df <- read.csv(of, stringsAsFactors = FALSE)
@@ -2899,6 +2914,7 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: En
 ```
 
 ```{r clustered-tables, eval=has_clustered, results='asis'}
+cat("### Tables {.tabset}\n\n")
 clustered_files <- list.files(clustered_dir, pattern = "\\.csv$", full.names = TRUE)
 for (cf in clustered_files) {
     label <- gsub("^clustered_|\\.csv$", "", basename(cf))
@@ -2907,7 +2923,7 @@ for (cf in clustered_files) {
     cl_df <- read.csv(cf, stringsAsFactors = FALSE)
     if (nrow(cl_df) == 0) next
 
-    cat(sprintf("\n### %s\n\n", label_clean))
+    cat(sprintf("\n#### %s\n\n", label_clean))
     cat(sprintf("**%d clusters** from %d enriched terms\n\n",
                 nrow(cl_df), sum(cl_df$n_members)))
 
@@ -2934,7 +2950,7 @@ for (cf in clustered_files) {
 }
 ```
 
-### Clustered Dotplots {.tabset}
+### Dotplots {.tabset}
 
 ```{r clustered-dotplots-setup, include=FALSE}
 clustered_plot_dir <- file.path(enrich_dir, "clustered", "plots")

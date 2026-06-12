@@ -539,7 +539,8 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #' @param title Plot title
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pval"), ...) {
+  pvalue_type <- match.arg(pvalue_type)
   # 1. Flexible Column Mapping
   # Try to find the logFC column
   lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
@@ -547,7 +548,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
   padj_col <- intersect(c("padj", "adj.P.Val", "fdr"), colnames(de_tbl))[1]
   # Try to find the raw P-value column
   pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
-  
+
   # Validation check
   if (is.na(lfc_col) || is.na(padj_col)) {
     stop(paste0(
@@ -555,33 +556,37 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
       "Available: ", paste(colnames(de_tbl), collapse = ", ")
     ))
   }
-  
+
+  # Select which p-value column drives the y-axis, threshold line and coloring.
+  # Fall back to adjusted p-value if the raw p-value column is absent.
+  p_col <- if (pvalue_type == "pval" && !is.na(pval_col)) pval_col else padj_col
+
   # 2. Thresholds from config
   p_cut <- cfg$de$p_cutoff %||% 0.05
   lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
   log2fc_cut <- log2(lin_fc_cut)
-  
+
   # 3. Prepare Data
   # We create a local 'plot_df' so we don't mess with the original de_tbl
   plot_df <- as.data.frame(de_tbl)
   plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.padj <- as.numeric(plot_df[[padj_col]])
-  
+  plot_df$.p <- as.numeric(plot_df[[p_col]])
+
   # Handle NAs (important for DESeq2)
-  plot_df$.padj_plot <- ifelse(is.na(plot_df$.padj), 1, plot_df$.padj)
-  plot_df$.neglog10p <- -log10(pmax(plot_df$.padj_plot, 1e-300))
-  
+  plot_df$.p_plot <- ifelse(is.na(plot_df$.p), 1, plot_df$.p)
+  plot_df$.neglog10p <- -log10(pmax(plot_df$.p_plot, 1e-300))
+
   # 4. Define Significance & Direction
-  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.padj_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
-  
+  is_sig <- !is.na(plot_df$.logFC) & (plot_df$.p_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
+
   plot_df$.direction <- factor(
     ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
     levels = c("NS", "Down", "Up")
   )
-  
+
   # 5. Sorting (Significant points on top)
   plot_df <- plot_df[order(plot_df$.direction), ]
-  
+
   # 6. Plotting
   ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
@@ -594,9 +599,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, ...) {
     ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
     ggplot2::labs(
       title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", padj_col, "and", lfc_col),
+      subtitle = paste("Using:", p_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", padj_col, ")")
+      y = paste0("-log10(", p_col, ")")
     ) +
     ggplot2::theme_minimal()
 }
