@@ -618,3 +618,52 @@ build_expr_long <- function(expr_mat, sample_meta) {
 
     expr_long
 }
+
+#' Build the canonical feature_annot data.frame from a row_data table
+#'
+#' Standardises the per-omics \code{pre$row_data} feature-metadata table into the
+#' shape the Shiny contract expects for \code{feature_annot}: feature IDs as
+#' rownames, with every remaining column carried through as-is. Because each
+#' pipeline's \code{row_data} already holds exactly \code{[id_col] + the
+#' configured annotation columns}, this single rule reproduces the desired
+#' per-omics behaviour with no omics-specific logic — and any annotation column
+#' added upstream in future automatically flows into the payload.
+#'
+#' @param row_data Feature-metadata data.frame (or NULL). The feature ID may be
+#'   an explicit column and/or the rownames.
+#' @param id_col Name of the ID column to lift to rownames. If absent from
+#'   \code{row_data} (e.g. the rnaseq matrix/tximport branch names it literally
+#'   "gene_id", which can differ from \code{config$id_columns$gene_id}), the
+#'   first column is used as the key instead.
+#' @return A data.frame with rownames = feature IDs and the ID column dropped
+#'   from the body (0 columns is valid — a minimal feature-ID table), or NULL if
+#'   \code{row_data} is NULL.
+#' @export
+build_feature_annot <- function(row_data, id_col = NULL) {
+    if (is.null(row_data)) return(NULL)
+
+    rd <- as.data.frame(row_data, check.names = FALSE, stringsAsFactors = FALSE)
+
+    # Resolve the key column: prefer id_col, else fall back to the first column
+    # (mirrors the rnaseq de_stats-join fallback in 06_shiny_export.R).
+    key_col <- if (!is.null(id_col) && id_col %in% colnames(rd)) {
+        id_col
+    } else if (ncol(rd) > 0) {
+        colnames(rd)[1]
+    } else {
+        NULL
+    }
+
+    # Feature IDs live in rownames (so downstream Shiny code indexes by
+    # rownames(feature_annot), matching expr_norm/sample_meta) and the ID column
+    # is intentionally dropped from the body — the body is annotation columns
+    # only. Any future column in row_data is kept here automatically.
+    ids  <- if (!is.null(key_col)) as.character(rd[[key_col]]) else rownames(rd)
+    body <- rd[, setdiff(colnames(rd), key_col), drop = FALSE]
+
+    if (!is.null(ids) && length(ids) == nrow(body)) {
+        rownames(body) <- make.unique(ids)
+    }
+
+    body
+}
