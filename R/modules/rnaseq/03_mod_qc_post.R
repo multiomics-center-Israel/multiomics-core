@@ -260,10 +260,19 @@ get_rna_de_tables_qc_post <- function(summary_df, cfg, expr_mat) {
         log_fc <- log2(abs(lin_fc)) * sign(lin_fc)
 
         # Build Table
+        # Leave P.Value as NA when the contrast has no genuine raw p-value column.
+        # Filling it from padj would let the "pval" volcano silently masquerade as
+        # the "padj" plot; instead, plot_volcano(pvalue_type = "pval") should fail
+        # loudly and name the offending contrast.
+        raw_pval <- if (p_col_raw %in% colnames(summary_df)) {
+            summary_df[[p_col_raw]]
+        } else {
+            NA_real_
+        }
         de_tbl <- data.frame(
             FeatureID = summary_df[[src_id_col]],
             logFC = log_fc,
-            P.Value = if (p_col_raw %in% colnames(summary_df)) summary_df[[p_col_raw]] else summary_df[[p_col_adj]],
+            P.Value = raw_pval,
             adj.P.Val = summary_df[[p_col_adj]],
             stringsAsFactors = FALSE
         )
