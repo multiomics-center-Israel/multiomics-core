@@ -267,7 +267,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     fit2 <- limma::contrasts.fit(fit, contrast_matrix)
     # eBayes - moderated t-statistics with shrinkage of residual variance
     # (matches proteomics + RNA-seq DE for consistency across omics)
-    fit2 <- limma::eBayes(fit2)
+    fit2 <- limma::eBayes(fit2, robust = TRUE, trend = TRUE)
     de_model <- fit2
     
     # -- Extract per-contrast tables --
