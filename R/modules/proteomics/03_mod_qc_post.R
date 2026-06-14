@@ -53,12 +53,25 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
     # Volcano — emit one variant per p-value type so the report can show both
     if (do_volcano) {
       for (ptype in c("padj", "pval")) {
-        p_volcano <- plot_volcano(de_tbl,
-                                  cfg = cfg,
-                                  title = paste0("Volcano: ", cn, " (", de_source,
-                                                 ", ", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
-                                  pvalue_type = ptype
+        p_volcano <- tryCatch(
+          plot_volcano(de_tbl,
+                       cfg = cfg,
+                       title = paste0("Volcano: ", cn, " (", de_source,
+                                      ", ", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                       pvalue_type = ptype
+          ),
+          error = function(e) {
+            # padj must always work; only the raw-pval variant may be skipped
+            # (e.g. a contrast with no raw p-value column) so it doesn't abort
+            # the MA plots, heatmaps, and downstream report targets.
+            if (ptype == "pval") {
+              warning("Skipping pval volcano for ", cn, ": ", conditionMessage(e))
+              return(NULL)
+            }
+            stop(e)
+          }
         )
+        if (is.null(p_volcano)) next
         f_volcano <- file.path(out_qc_post,
                                sprintf("volcano_%s_%s_%s.png", cn, de_source, ptype))
         ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)

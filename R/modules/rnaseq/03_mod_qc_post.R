@@ -65,13 +65,27 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
         # Emit one volcano per p-value type (padj + raw pval)
         for (ptype in c("padj", "pval")) {
-            p_volcano <- plot_volcano(
-                de_tbl,
-                cfg = cfg,
-                title = paste0("Volcano: ", cn,
-                               " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
-                pvalue_type = ptype
+            p_volcano <- tryCatch(
+                plot_volcano(
+                    de_tbl,
+                    cfg = cfg,
+                    title = paste0("Volcano: ", cn,
+                                   " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                    pvalue_type = ptype
+                ),
+                error = function(e) {
+                    # padj must always work; only the raw-pval variant may be
+                    # skipped (e.g. a contrast with no raw p-value column), so a
+                    # missing pval doesn't abort MA plots, heatmaps, and the rest
+                    # of the qc_post target.
+                    if (ptype == "pval") {
+                        warning("Skipping pval volcano for ", cn, ": ", conditionMessage(e))
+                        return(NULL)
+                    }
+                    stop(e)
+                }
             )
+            if (is.null(p_volcano)) next
             f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, ptype))
             ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
             files <- c(files, f_volcano)

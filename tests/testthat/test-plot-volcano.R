@@ -70,6 +70,41 @@ test_that("pvalue_type='pval' errors when no raw p-value column exists", {
     )
 })
 
+test_that("qc_post caller pattern skips only the pval variant on all-NA raw p", {
+    # The volcano emit loops (rnaseq/proteomics/metabolomics qc_post) wrap each
+    # ptype in a tryCatch so a missing/all-NA raw p-value skips ONLY the pval
+    # plot (warning, no error), leaving padj + downstream targets intact. This
+    # replicates that wrapper to lock the contract.
+    de <- data.frame(
+        FeatureID = paste0("F", 1:3),
+        logFC     = c(1.0, -1.0, 0.2),
+        P.Value   = NA_real_,
+        adj.P.Val = c(0.01, 0.02, 0.9),
+        stringsAsFactors = FALSE
+    )
+
+    emit_one <- function(ptype) {
+        tryCatch(
+            plot_volcano(de, volcano_cfg, title = "x", pvalue_type = ptype),
+            error = function(e) {
+                if (ptype == "pval") {
+                    warning("Skipping pval volcano: ", conditionMessage(e))
+                    return(NULL)
+                }
+                stop(e)
+            }
+        )
+    }
+
+    # padj must succeed and yield a real plot (a thrown error fails the test).
+    p_padj <- emit_one("padj")
+    expect_s3_class(p_padj, "ggplot")
+
+    # pval must warn-and-skip (NULL), not abort the loop.
+    expect_warning(p_pval <- emit_one("pval"), "Skipping pval volcano")
+    expect_null(p_pval)
+})
+
 test_that("pvalue_type='pval' errors on an all-NA P.Value column (RNA fallback)", {
     # Mirrors get_rna_de_tables_qc_post leaving P.Value as NA for contrasts that
     # have no genuine raw p-value column, instead of silently copying padj.
