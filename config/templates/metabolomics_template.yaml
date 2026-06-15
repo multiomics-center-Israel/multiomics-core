@@ -167,7 +167,6 @@ modes:
       enabled: true
       group_col: "group"
       min_groups: 2
-      de_source: "any_contrast"
 
       steps:
         hierarchical:
