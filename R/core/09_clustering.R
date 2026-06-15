@@ -33,6 +33,7 @@
 #' @param corr_cutoff Minimum correlation threshold (overrides config)
 #' @param counts_cutoff_high Minimum count for "1" positions (overrides config)
 #' @param counts_cutoff_low Maximum count for "0" positions; NULL disables (overrides config)
+#' @param feature_term Noun used in pattern-plot titles ("genes" by default; pass "features" for non-transcriptomic omics such as metabolomics)
 #' @return List with files (paths), plots (ggplot objects), best (pattern assignments)
 run_binary_patterns <- function(expr_mat_corr,
                                 expr_mat_counts = NULL,
@@ -43,8 +44,9 @@ run_binary_patterns <- function(expr_mat_corr,
                                 summary_df = NULL,
                                 corr_cutoff = 0.8,
                                 counts_cutoff_high = 0,
-                                counts_cutoff_low = NULL, 
-                                annot_context = NULL) {
+                                counts_cutoff_low = NULL,
+                                annot_context = NULL,
+                                feature_term = "genes") {
   stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
   expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
@@ -236,7 +238,7 @@ run_binary_patterns <- function(expr_mat_corr,
       annotation_row_builder = TRUE,
       annotation_row_context = annot_context,
       out_file = f_hm,
-      title = sprintf("Pattern %s (%d genes)", pat, length(feats_pat)),
+      title = sprintf("Pattern %s (%d %s)", pat, length(feats_pat), feature_term),
       cluster_cols = FALSE
     )
     
@@ -1489,10 +1491,12 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
 #' @param cfg mode config.
 #' @param annot_context list of summary_df + cutoffs + id_col for row annotations.
 #' @param out_dir destination directory for binary-pattern outputs.
+#' @param feature_term Noun used in pattern-plot titles ("genes" by default; pass "features" for non-transcriptomic omics).
 #' @return list(files, plots, patterns, patterns_list, binary_best)
 .run_binary_patterns_step <- function(expr_mat_corr, expr_mat_counts, meta,
                                       de_features, summary_df, cfg,
-                                      annot_context, out_dir) {
+                                      annot_context, out_dir,
+                                      feature_term = "genes") {
   ensure_dir(out_dir)
   bcfg <- cfg$clustering$steps$binary_patterns %||% list()
   
@@ -1507,7 +1511,8 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
     counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
     counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
-    annot_context      = annot_context
+    annot_context      = annot_context,
+    feature_term       = feature_term
   )
   
   list(
