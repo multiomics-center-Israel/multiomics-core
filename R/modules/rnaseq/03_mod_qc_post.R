@@ -65,13 +65,27 @@ mod_rnaseq_qc_post <- function(pre, de_res, config, out_dir) {
 
         # Emit one volcano per p-value type (padj + raw pval)
         for (ptype in c("padj", "pval")) {
-            p_volcano <- plot_volcano(
-                de_tbl,
-                cfg = cfg,
-                title = paste0("Volcano: ", cn,
-                               " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
-                pvalue_type = ptype
+            p_volcano <- tryCatch(
+                plot_volcano(
+                    de_tbl,
+                    cfg = cfg,
+                    title = paste0("Volcano: ", cn,
+                                   " (", if (ptype == "padj") "adj.P.Val" else "P.Value", ")"),
+                    pvalue_type = ptype
+                ),
+                error = function(e) {
+                    # padj must always work; only the raw-pval variant may be
+                    # skipped (e.g. a contrast with no raw p-value column), so a
+                    # missing pval doesn't abort MA plots, heatmaps, and the rest
+                    # of the qc_post target.
+                    if (ptype == "pval") {
+                        warning("Skipping pval volcano for ", cn, ": ", conditionMessage(e))
+                        return(NULL)
+                    }
+                    stop(e)
+                }
             )
+            if (is.null(p_volcano)) next
             f_volcano <- file.path(out_qc_post, sprintf("volcano_%s_%s.png", cn, ptype))
             ggplot2::ggsave(f_volcano, plot = p_volcano, width = 8, height = 6, dpi = 150)
             files <- c(files, f_volcano)
@@ -260,10 +274,19 @@ get_rna_de_tables_qc_post <- function(summary_df, cfg, expr_mat) {
         log_fc <- log2(abs(lin_fc)) * sign(lin_fc)
 
         # Build Table
+        # Leave P.Value as NA when the contrast has no genuine raw p-value column.
+        # Filling it from padj would let the "pval" volcano silently masquerade as
+        # the "padj" plot; instead, plot_volcano(pvalue_type = "pval") should fail
+        # loudly and name the offending contrast.
+        raw_pval <- if (p_col_raw %in% colnames(summary_df)) {
+            summary_df[[p_col_raw]]
+        } else {
+            NA_real_
+        }
         de_tbl <- data.frame(
             FeatureID = summary_df[[src_id_col]],
             logFC = log_fc,
-            P.Value = if (p_col_raw %in% colnames(summary_df)) summary_df[[p_col_raw]] else summary_df[[p_col_adj]],
+            P.Value = raw_pval,
             adj.P.Val = summary_df[[p_col_adj]],
             stringsAsFactors = FALSE
         )
