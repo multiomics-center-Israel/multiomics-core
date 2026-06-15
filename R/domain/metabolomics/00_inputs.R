@@ -663,8 +663,8 @@ build_feature_ids <- function(data_df, id_cfg) {
   
   # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
   make_rt_mz_ids <- function() {
-    mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
-    rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
+    mz_vals <- if (has_mz) round(as.numeric(data_df[[mz_col]]), 2) else rep(NA_real_, nr)
+    rt_vals <- if (has_rt) round(as.numeric(data_df[[rt_col]]), 2) else rep(NA_real_, nr)
     both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
     
     fallback <- if (has_nm) {
