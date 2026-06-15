@@ -36,6 +36,11 @@ build_final_results_metabolomics <- function(
     annot_cols <- NULL
     if (!is.null(rd)) {
         available <- setdiff(colnames(rd), feature_id_col)
+        # Surface original_id directly after feature_id in the Excel output;
+        # leave column order untouched when it is absent.
+        if ("original_id" %in% available) {
+            available <- c("original_id", setdiff(available, "original_id"))
+        }
         if (length(available) > 0) {
             annot_cols <- setNames(available, available)
         }
