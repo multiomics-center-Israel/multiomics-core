@@ -118,6 +118,10 @@ modes:
       samples: "SampleID"
       color: "treatment"
       shape: "time"
+      # Metadata column(s) drawn as annotation bars on the QC heatmaps. Accepts a
+      # single column or a YAML list (e.g. [group, time]) for multiple bars; values
+      # not found in the metadata are skipped, and if unset it falls back to the
+      # primary color variable (effects.color). "group" here is the single-column option.
       heatmap_annotations: "group"
 
     # --------------------------------------------------------
