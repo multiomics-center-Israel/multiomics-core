@@ -74,6 +74,21 @@ modes:
       # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
       chosen_norm: null
 
+      # ---- Sample normalization (legacy / reference only) ----
+      # All methods (tss, median, pqn, eigenms) run in parallel; the ACTIVE
+      # choice is controlled by chosen_norm above, not by this field.
+      sample_norm: "pqn"
+
+      # ---- Transformation (applied inside the normalization branches) ----
+      transform: "log2"
+
+      # ---- Feature scaling ----
+      # Options: "none" | "center" | "auto" | "pareto" | "range"
+      scaling: "none"
+
+      # ---- Log pseudocount ----
+      pseudocount: 1
+
       # ---- Drift correction (LOESS) ----
       drift_correction:
         enabled: false
@@ -81,51 +96,6 @@ modes:
         qc_flag_col: "is_QC"
         loess_span: 0.75
         epsilon: 1.0e-8
-
-    # ==============================================================================
-    # Normalization & scaling (legacy reference — see preprocessing.chosen_norm)
-    # ==============================================================================
-    normalization:
-
-      # ---- Input state ----
-      input_already_normalized: false
-      # If TRUE → skip sample_norm but still allow transform/scaling
-
-      # ---- Sample normalization (legacy / reference only) ----
-      # NOTE:
-      # In the new pipeline, ALL methods run in parallel:
-      #   - TSS (total sum scaling)
-      #   - Median normalization (log shift)
-      #   - PQN
-      # The active normalization choice is controlled by
-      # preprocessing.chosen_norm (above), not by this field.
-      sample_norm: "pqn"
-
-      # ---- Transformation ----
-      # Applied in mod_met_log OR inside normalization branches
-      transform: "log2"
-
-      # ---- Scaling ----
-      # Feature scaling is not applied in the current metabolomics
-      # preprocessing and DE analysis path.
-      # This field is retained for backward compatibility only.
-      # Options: "none" | "auto" | "pareto" | "range"
-      scaling: "none"
-
-      # ---- Log pseudocount ----
-      pseudocount: 1
-
-      # ---- NA policy (legacy only) ----
-      # New pipeline handles missingness BEFORE normalization
-      na_policy: "keep"
-
-      # Internal standard column (if using IS normalization)
-      is_ref_col: null
-
-      # Biological factor column (if using bio_factor normalization).
-      # Name of a numeric column in metadata holding a per-sample value
-      # (e.g. "mg_protein"). Each sample is divided by its row's value.
-      biological_factor_col: null
 
     # ==============================================================================
     # Sample filtering (applied early, in mod_met_raw)

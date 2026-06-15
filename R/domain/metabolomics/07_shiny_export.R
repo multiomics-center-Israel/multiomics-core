@@ -58,7 +58,7 @@ build_shiny_payload_metabolomics <- function(
     modes <- config$modes %||% list()
     metab_cfg <- modes$metabolomics %||% list()
     de_cfg <- metab_cfg$de %||% list()
-    norm_cfg <- metab_cfg$normalization %||% list()
+    norm_cfg <- metab_cfg$preprocessing %||% list()
     preprocessing_cfg <- metab_cfg$preprocessing %||% list()
     effects_cfg <- metab_cfg$effects %||% list()
 

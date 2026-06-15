@@ -282,7 +282,7 @@ mod_met_filtered <- function(raw, config) {
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}.
 #'
 mod_met_log <- function(filtered, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   method      <- norm_cfg$transform   %||% "log2"
   pseudocount <- norm_cfg$pseudocount %||% 1
   
@@ -372,7 +372,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               norm_eigenms_forced = NULL) {
   cfg_mode <- config$modes$metabolomics
   pre_cfg  <- cfg_mode$preprocessing %||% list()
-  norm_cfg <- cfg_mode$normalization  %||% list()
+  norm_cfg <- cfg_mode$preprocessing  %||% list()
   
   chosen_norm <- tolower(pre_cfg$chosen_norm)
   
@@ -474,7 +474,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 #'
 mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   pre_cfg <- config$modes$metabolomics$preprocessing %||% list()
@@ -566,7 +566,7 @@ mod_met_normalize_linear <- function(data, method, config) {
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
 mod_met_normalize_eigenms <- function(data, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   # Extract group labels for EigenMS
@@ -604,7 +604,7 @@ mod_met_normalize_eigenms <- function(data, config) {
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
 mod_met_normalize_eigenms_forced <- function(data, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   cfg_mode  <- config$modes$metabolomics

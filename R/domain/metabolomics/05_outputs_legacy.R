@@ -92,7 +92,7 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
 
     cfg_mode      <- config$modes$metabolomics %||% list()
     sample_id_col <- cfg_mode$effects$samples %||% "sample_id"
-    norm_cfg      <- cfg_mode$normalization %||% list()
+    norm_cfg      <- cfg_mode$preprocessing %||% list()
     scaling       <- tolower(norm_cfg$scaling %||% "none")
     pseudocount   <- norm_cfg$pseudocount %||% 1
 

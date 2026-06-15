@@ -158,19 +158,16 @@ validate_metabolomics_config <- function(cfg) {
            "when files$sample_map is set")
   }
   
-  norm <- cfg$normalization
+  norm <- cfg$preprocessing
   if (!is.null(norm)) {
-    assert_one_of(norm$sample_norm, "normalization$sample_norm",
+    assert_one_of(norm$sample_norm, "preprocessing$sample_norm",
                   c("none", "sum", "median", "pqn", "is"),
                   allow_null = TRUE)
-    assert_one_of(norm$transform, "normalization$transform",
+    assert_one_of(norm$transform, "preprocessing$transform",
                   c("none", "log2", "log10"),
                   allow_null = TRUE)
-    assert_one_of(norm$scaling, "normalization$scaling",
+    assert_one_of(norm$scaling, "preprocessing$scaling",
                   c("none", "center", "auto", "pareto", "range"),
-                  allow_null = TRUE)
-    assert_one_of(norm$na_policy, "normalization$na_policy",
-                  c("keep", "zero", "min_half", "lod"),
                   allow_null = TRUE)
   }
   invisible(TRUE)
