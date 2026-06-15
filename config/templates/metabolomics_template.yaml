@@ -145,11 +145,7 @@ modes:
       # Used for QC-specific plots (e.g., drift, QC clustering)
       qc_flag_column: "treatment"
 
-      # Set true to generate the binary missingness heatmap (diagnostic_plots/)
-      missingness_heatmap: false
-
       thresholds:
-        min_samples_for_pca3d: 4
         max_samples_for_heatmaps: 120
 
     # ==============================================================================
