@@ -83,6 +83,10 @@ modes:
       transform: "log2"
 
       # ---- Feature scaling ----
+      # IMPORTANT: scaling must NOT be applied before differential analysis for
+      # metabolomics. Clustering and PCA use a built-in z-score that does NOT
+      # read this key, so leave "none" unless you specifically want the chosen
+      # matrix scaled for feature-selection workflows.
       # Options: "none" | "center" | "auto" | "pareto" | "range"
       scaling: "none"
 
