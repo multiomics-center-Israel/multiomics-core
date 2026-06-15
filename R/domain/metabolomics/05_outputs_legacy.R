@@ -73,13 +73,13 @@ build_final_results_metabolomics <- function(
 #'
 #' Guards (return \code{NULL}, never approximate an inverse):
 #' \itemize{
-#'   \item If feature scaling is enabled (\code{normalization$scaling != "none"}),
+#'   \item If feature scaling is enabled (\code{preprocessing$scaling != "none"}),
 #'     the back-transform is invalid (centering breaks positivity), so we fall
 #'     back to the filtered PRE-normalization linear matrix (\code{expr_filt});
 #'     the CV then includes technical variation that normalization would have
 #'     removed (see the contract doc / column note).
 #'   \item If the workspace is not provably log2 — i.e. \code{chosen_norm ==
-#'     "median"} with a non-log2 \code{normalization$transform} (log10/glog10/
+#'     "median"} with a non-log2 \code{preprocessing$transform} (log10/glog10/
 #'     none), or an unrecognized \code{chosen_norm} — we skip CV with a warning
 #'     rather than \code{2^}-inverting a non-log2 matrix into wrong numbers.
 #' }

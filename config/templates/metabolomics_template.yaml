@@ -138,7 +138,7 @@ modes:
       # groups appearing in any contrast. Metabolomics CV is computed on the
       # post-normalization linear matrix (2^expr_work - pseudocount), keeping it
       # comparable to the RNA-seq/proteomics CV. NOTE: if feature scaling is
-      # enabled (normalization.scaling != "none"), this back-transform is invalid
+      # enabled (preprocessing.scaling != "none"), this back-transform is invalid
       # and CV falls back to the PRE-normalization matrix, which then includes
       # technical variation. Set to false to omit these columns.
       group_cv: true
