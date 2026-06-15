@@ -1074,16 +1074,16 @@ save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir)
   
   group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
-  color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
-  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
+  color_col  <- cfg$clustering$steps$partition$profile_color_col  # NULL if not set
+  x_axis_col <- cfg$clustering$steps$partition$profile_x_axis_col %||% group_col
   
   if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
-    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+    warning(sprintf("clustering$steps$partition$profile_color_col '%s' not found in metadata; ignoring.",
                     color_col))
     color_col <- NULL
   }
   if (!(x_axis_col %in% colnames(meta))) {
-    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+    warning(sprintf("clustering$steps$partition$profile_x_axis_col '%s' not found in metadata; falling back to group_col.",
                     x_axis_col))
     x_axis_col <- group_col
   }

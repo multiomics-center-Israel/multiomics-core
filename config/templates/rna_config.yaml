@@ -125,8 +125,8 @@ modes:
           k_method: "silhouette"   # "silhouette" | "gap" — method for automatic K selection
           gap_B: 10                # Bootstrap samples for gap statistic (only used when k_method: "gap")
           nstart: 25
-          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
-          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
+          profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
+          profile_color_col: null    # Partition cluster PROFILE plot: optional color/linetype grouping column; not used for heatmaps
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8             # Minimum correlation to assign feature to pattern
