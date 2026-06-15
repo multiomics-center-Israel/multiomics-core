@@ -97,7 +97,6 @@ build_shiny_payload_metabolomics <- function(
 
     # expr_norm: Normalized expression (NO NAs allowed)
     # In metabolomics, expr_work is the normalized matrix
-    # Check for NA policy - if na_policy="zero", NAs were replaced
     payload$expr_norm <- pre$expr_work
 
     # expr_long: Long-format expression with metadata
@@ -108,7 +107,7 @@ build_shiny_payload_metabolomics <- function(
         na_count <- sum(is.na(payload$expr_norm))
         warning(
             "metabolomics expr_norm contains ", na_count, " NA values. ",
-            "Consider using na_policy='zero' in config or imputation. ",
+            "Consider tightening upstream missingness filtering or imputation. ",
             "Replacing NAs with row medians for contract compliance."
         )
         # Replace NAs with row medians as fallback
