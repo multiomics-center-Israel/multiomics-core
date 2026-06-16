@@ -1,5 +1,5 @@
 project:
-  dir: "."
+  dir: "../.."
   name: "Elah_Lipidomics_Test"
   analysis_round: "01"
 
