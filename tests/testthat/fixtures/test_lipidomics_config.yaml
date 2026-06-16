@@ -1,5 +1,5 @@
 project:
-  dir: "/home/multiomics-core"
+  dir: "."
   name: "Elah_Lipidomics_Test"
   analysis_round: "01"
 
