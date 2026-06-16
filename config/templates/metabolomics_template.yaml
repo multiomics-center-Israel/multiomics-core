@@ -122,7 +122,7 @@ modes:
       # single column or a YAML list (e.g. [group, time]) for multiple bars; values
       # not found in the metadata are skipped, and if unset it falls back to the
       # primary color variable (effects.color). "group" here is the single-column option.
-      heatmap_annotations: "group". #[group, time]
+      heatmap_annotations: "group"  # [group, time]
 
     # --------------------------------------------------------
     # Excel export configuration
