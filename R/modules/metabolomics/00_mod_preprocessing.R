@@ -506,7 +506,7 @@ mod_met_normalize_linear <- function(data, method, config) {
     }
   }
   
-  # PQN reference samples: use config$normalization$pqn_reference to specify
+  # PQN reference samples: use preprocessing.pqn_reference to specify
   # which sample(s) to use as the reference spectrum (e.g. a QC pool).
   # Options: a sample name, "pools" (auto-detect from is_QC/Pool columns),
   #          "median_pool" (middle pool by injection order), or null (default: all).
