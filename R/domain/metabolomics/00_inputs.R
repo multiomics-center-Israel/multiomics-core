@@ -158,6 +158,21 @@ validate_metabolomics_config <- function(cfg) {
            "when files$sample_map is set")
   }
   
+  # The pre-cleanup `normalization:` block was consolidated into `preprocessing:`.
+  # A lingering `normalization:` block is now silently ignored by the rest of the
+  # pipeline (which reads `preprocessing`), so reject it loudly rather than let
+  # stale sample_norm/transform/scaling/pseudocount settings be dropped and the
+  # analysis quietly run on defaults.
+  if (!is.null(cfg$normalization)) {
+    cli::cli_abort(c(
+      "metabolomics config still has a {.field normalization:} block, which is no longer read.",
+      "i" = "Normalization settings now live under {.field preprocessing:}.",
+      "*" = "Move {.field sample_norm}, {.field transform}, {.field scaling} and {.field pseudocount} into {.field preprocessing:}.",
+      "*" = "Then delete the old {.field normalization:} block.",
+      "x" = "Leaving it in place would silently fall back to defaults and change your results."
+    ))
+  }
+
   norm <- cfg$preprocessing
   if (!is.null(norm)) {
     assert_one_of(norm$sample_norm, "preprocessing$sample_norm",
