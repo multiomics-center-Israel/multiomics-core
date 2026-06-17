@@ -15,7 +15,7 @@ suppressPackageStartupMessages({
 # Source all R files (similar to _targets.R approach)
 # We assume the working directory is the project root or tests/testthat
 # standardized way to find root:
-root_dir <- if (dir.exists("R")) "." else "../.."
+root_dir <- normalizePath(if (dir.exists("R")) "." else "../..")
 
 r_files <- list.files(file.path(root_dir, "R"), pattern = "\\.[Rr]$", full.names = TRUE, recursive = TRUE)
 

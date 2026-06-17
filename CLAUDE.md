@@ -28,21 +28,29 @@ The rules below protect our architecture and our data. The last three sections (
 
 ```
 _targets.R         pipeline definition only — NO helper functions go here
-R/                 source of truth for every function
-  io.R               data input/output
-  qc.R               quality control
-  de.R               differential expression
-  plotting.R         plotting helpers
-  utils.R            small generic helpers
+R/                 source of truth for every function, in a strict 5-layer load order:
+  core/              generic utilities (io, validation, plotting, Excel export, clustering)
+  services/          external integrations (AI commentary)
+  domain/<omics>/    omics-specific logic (rnaseq, proteomics, metabolomics, multiomics)
+  modules/<omics>/   target-ready wrappers (mod_*) around domain logic
+  pipeline/<omics>/  {targets} orchestration (sourced LAST)
 tests/             testthat tests
-data-raw/          scripts that produce reference data
-data/              small reference data (gitted)
-docs/adr/          architecture decision records
+config/            YAML configs; templates/ is gitted, per-project configs are gitignored
 renv.lock          dependency lockfile — gitted, do NOT casually change
 _targets/          pipeline cache — gitignored, NEVER touch
 ```
 
-> If the user's repo layout differs from this list, follow what's actually in the repo and update this file accordingly — *but only after asking the user.*
+> **Repo map:** see `PROJECT_STRUCTURE.md` for the full scanned map (layers, per-file roles, config layout, Shiny contract) — read it after this file. If the layout here drifts from reality, fix it — *but only after asking the user.*
+
+---
+
+## Metabolomics specifics
+
+A few conventions specific to the metabolomics mode:
+
+- **`preprocessing` is the single source of truth for normalization.** `preprocessing.chosen_norm` selects the method (`tss`/`median`/`pqn`/`eigenms`/`eigenms_forced`; `null` = QC-review mode); `scaling`, `pseudocount`, `sample_norm` and `transform` live alongside it. There is **no separate `normalization:` block** and **no imputation stage** — only missingness *filtering*.
+- **Say "features"/"metabolites", not "genes".** User-facing plot titles and report text use "features"/"metabolites" and "differential abundance" — not "genes"/"differential expression". But **don't rename internal identifiers** (the `de:` config key, `de_res`/`de_tables`, DE targets, Shiny payload keys like `de_stats`): those are shared contracts, and the DE→DA rename of internal names is a deliberate, separate task.
+- **Final Excel: `original_id` comes immediately after `feature_id`.**
 
 ---
 
