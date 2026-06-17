@@ -178,8 +178,9 @@ validate_metabolomics_config <- function(cfg) {
     assert_one_of(norm$sample_norm, "preprocessing$sample_norm",
                   c("none", "sum", "median", "pqn", "is"),
                   allow_null = TRUE)
+    # Keep in sync with transform_metab() in 01_normalization.R.
     assert_one_of(norm$transform, "preprocessing$transform",
-                  c("none", "log2", "log10"),
+                  c("none", "log2", "log10", "glog10"),
                   allow_null = TRUE)
     assert_one_of(norm$scaling, "preprocessing$scaling",
                   c("none", "center", "auto", "pareto", "range"),
