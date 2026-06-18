@@ -11,7 +11,7 @@
 #' @param x Character scalar: contrast name (e.g., "1.56ppm vs. 0ppm")
 #' @return Character scalar with spaces removed (e.g., "1.56ppmvs.0ppm")
 normalize_contrast_name <- function(x) {
-    gsub(" ", "", x)
+  gsub(" ", "", x)
 }
 
 #' Load omics input files from config
@@ -23,79 +23,79 @@ normalize_contrast_name <- function(x) {
 #' @param mode One of "proteomics", "rna", or "metabolomics"
 #' @return List of loaded objects
 load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomics")) {
-    mode <- match.arg(mode)
-    cfg <- config$modes[[mode]]
-    if (is.null(cfg)) stop("No config for mode ", mode)
-
-    files <- cfg$files
-
-    # Determine required files based on mode and input format
-    is_preprocessed <- identical(cfg$input$format, "preprocessed")
-    required_files <- switch(mode,
-        proteomics = if (is_preprocessed) c("preprocessed_protein", "metadata", "contrasts") else c("protein", "metadata", "contrasts"),
-        rna = c("metadata", "contrasts"),
-        metabolomics = c("metadata"),   # contrasts can be inline in de.contrasts
-        character(0)
+  mode <- match.arg(mode)
+  cfg <- config$modes[[mode]]
+  if (is.null(cfg)) stop("No config for mode ", mode)
+  
+  files <- cfg$files
+  
+  # Determine required files based on mode and input format
+  is_preprocessed <- identical(cfg$input$format, "preprocessed")
+  required_files <- switch(mode,
+                           proteomics = if (is_preprocessed) c("preprocessed_protein", "metadata", "contrasts") else c("protein", "metadata", "contrasts"),
+                           rna = c("metadata", "contrasts"),
+                           metabolomics = c("metadata", "contrasts"),
+                           character(0)
+  )
+  
+  # Check 1: key completely missing from config
+  missing_keys <- setdiff(required_files, names(files))
+  if (length(missing_keys) > 0) {
+    stop(
+      sprintf(
+        "[%s] Missing required file key(s) in config$modes$%s$files: %s",
+        mode, mode, paste(missing_keys, collapse = ", ")
+      ),
+      call. = FALSE
     )
-
-    # Check 1: key completely missing from config
-    missing_keys <- setdiff(required_files, names(files))
-    if (length(missing_keys) > 0) {
-        stop(
-            sprintf(
-                "[%s] Missing required file key(s) in config$modes$%s$files: %s",
-                mode, mode, paste(missing_keys, collapse = ", ")
-            ),
-            call. = FALSE
-        )
+  }
+  
+  # Check 2: key present but set to null or empty string
+  for (nm in required_files) {
+    if (is.null(files[[nm]]) || !nzchar(files[[nm]])) {
+      stop(
+        sprintf(
+          "[%s] File '%s' is required but has null or empty path in config$modes$%s$files",
+          mode, nm, mode
+        ),
+        call. = FALSE
+      )
     }
-
-    # Check 2: key present but set to null or empty string
-    for (nm in required_files) {
-        if (is.null(files[[nm]]) || !nzchar(files[[nm]])) {
-            stop(
-                sprintf(
-                    "[%s] File '%s' is required but has null or empty path in config$modes$%s$files",
-                    mode, nm, mode
-                ),
-                call. = FALSE
-            )
-        }
+  }
+  
+  inputs <- list()
+  
+  for (nm in names(files)) {
+    rel <- files[[nm]]
+    # Skip NULL, empty, non-character (e.g. is_logtransformed: false),
+    # or multi-value entries (e.g. de_table: [...]) — only load scalar paths
+    if (is.null(rel) || !is.character(rel) || length(rel) != 1 || !nzchar(rel)) {
+      next
     }
-
-    inputs <- list()
-
-    for (nm in names(files)) {
-        rel <- files[[nm]]
-        # Skip NULL, empty, non-character (e.g. is_logtransformed: false),
-        # or multi-value entries (e.g. de_table: [...]) — only load scalar paths
-        if (is.null(rel) || !is.character(rel) || length(rel) != 1 || !nzchar(rel)) {
-            next
-        }
-        abs <- resolve_raw_path(config, rel)
-        if (dir.exists(abs)) next    # skip directory paths (e.g., data_dir)
-        if (!file.exists(abs)) stop("File not found: ", abs)
-
-        # Detect file type and load appropriately
-        ext <- tolower(tools::file_ext(abs))
-
-        if (ext == "rds") {
-            # RDS file - use readRDS (for tximport objects, etc.)
-            message(sprintf("[load_omics_inputs] Loading RDS file: %s", nm))
-            inputs[["txi"]] <- readRDS(abs)
-        } else {
-            inputs[[nm]] <- read_metab_file(abs)
-        }
+    abs <- resolve_raw_path(config, rel)
+    if (dir.exists(abs)) next    # skip directory paths (e.g., data_dir)
+    if (!file.exists(abs)) stop(sprintf("[%s] File '%s' not found at: %s", mode, nm, abs), call. = FALSE)
+    
+    # Detect file type and load appropriately
+    ext <- tolower(tools::file_ext(abs))
+    
+    if (ext == "rds") {
+      # RDS file - use readRDS (for tximport objects, etc.)
+      message(sprintf("[load_omics_inputs] Loading RDS file: %s", nm))
+      inputs[["txi"]] <- readRDS(abs)
+    } else {
+      inputs[[nm]] <- read_metab_file(abs)
     }
-
-    if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
-
-    # Validate contrasts file content (at least 1 row + expected columns)
-    if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
-        validate_contrasts_content(inputs$contrasts, mode)
-    }
-
-    inputs
+  }
+  
+  if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
+  
+  # Validate contrasts file content (at least 1 row + expected columns)
+  if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
+    validate_contrasts_content(inputs$contrasts, mode)
+  }
+  
+  inputs
 }
 
 #' Validate contrasts file content
@@ -107,38 +107,38 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
 #' @param mode Character string identifying the omics mode (for error messages)
 #' @return invisible(TRUE) on success, stops with error on failure
 validate_contrasts_content <- function(contrasts_df, mode = "omics") {
-    if (!is.data.frame(contrasts_df)) {
-        stop(
-            sprintf("[%s] Contrasts file did not load as a data frame.", mode),
-            call. = FALSE
-        )
-    }
-
-    if (nrow(contrasts_df) == 0) {
-        stop(
-            sprintf(
-                "[%s] Contrasts file is empty (0 rows). At least one contrast is required.",
-                mode
-            ),
-            call. = FALSE
-        )
-    }
-
-    required_cols <- c("Contrast_name", "Factor", "Numerator", "Denominator")
-    missing_cols <- setdiff(required_cols, colnames(contrasts_df))
-    if (length(missing_cols) > 0) {
-        stop(
-            sprintf(
-                "[%s] Contrasts file is missing required column(s): %s. Expected: %s",
-                mode,
-                paste(missing_cols, collapse = ", "),
-                paste(required_cols, collapse = ", ")
-            ),
-            call. = FALSE
-        )
-    }
-
-    invisible(TRUE)
+  if (!is.data.frame(contrasts_df)) {
+    stop(
+      sprintf("[%s] Contrasts file did not load as a data frame.", mode),
+      call. = FALSE
+    )
+  }
+  
+  if (nrow(contrasts_df) == 0) {
+    stop(
+      sprintf(
+        "[%s] Contrasts file is empty (0 rows). At least one contrast is required.",
+        mode
+      ),
+      call. = FALSE
+    )
+  }
+  
+  required_cols <- c("Contrast_name", "Factor", "Numerator", "Denominator")
+  missing_cols <- setdiff(required_cols, colnames(contrasts_df))
+  if (length(missing_cols) > 0) {
+    stop(
+      sprintf(
+        "[%s] Contrasts file is missing required column(s): %s. Expected: %s",
+        mode,
+        paste(missing_cols, collapse = ", "),
+        paste(required_cols, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  
+  invisible(TRUE)
 }
 
 # =============================================================================
@@ -152,27 +152,76 @@ validate_contrasts_content <- function(contrasts_df, mode = "omics") {
 #' @param filename Filename.
 #' @return The full path.
 save_tsv <- function(x, dir, filename) {
-    ensure_dir(dir)
-    path <- file.path(dir, filename)
-    readr::write_tsv(x, path)
-    path
+  ensure_dir(dir)
+  path <- file.path(dir, filename)
+  readr::write_tsv(x, path)
+  path
 }
 
 #' Save a data frame as TSV to a full path
 save_tsv_path <- function(x, path) {
-    ensure_dir(dirname(path))
-    readr::write_tsv(x, path)
-    path
+  ensure_dir(dirname(path))
+  readr::write_tsv(x, path)
+  path
+}
+
+#' Sanitize character columns: convert to UTF-8, replace NBSP, trim whitespace.
+#' Emits a warning listing affected columns and modification counts.
+sanitize_character_columns <- function(df, source = "input") {
+  chr_cols <- which(vapply(df, is.character, logical(1)))
+  if (length(chr_cols) == 0L) return(df)
+  
+  modified_summary <- character(0)
+  
+  for (j in chr_cols) {
+    orig <- df[[j]]
+    cleaned <- iconv(orig, from = "", to = "UTF-8", sub = "")
+    cleaned <- gsub("\u00A0", " ", cleaned, fixed = TRUE)
+    cleaned <- trimws(cleaned)
+    
+    n_changed <- sum(orig != cleaned, na.rm = TRUE)
+    if (n_changed > 0L) {
+      modified_summary <- c(modified_summary,
+                            sprintf("  - %s: %d value(s)", names(df)[j], n_changed))
+    }
+    df[[j]] <- cleaned
+  }
+  
+  if (length(modified_summary) > 0L) {
+    warning(
+      sprintf("Encoding/whitespace issues sanitized in %s:\n", source),
+      paste(modified_summary, collapse = "\n"),
+      call. = FALSE
+    )
+  }
+  
+  df
 }
 
 #' Read a table automatically detecting TSV vs CSV by extension
 read_table_auto <- function(path) {
-    ext <- tolower(tools::file_ext(path))
-    df <- if (ext %in% c("tsv", "txt")) {
-        readr::read_tsv(path, show_col_types = FALSE)
-    } else {
-        readr::read_csv(path, show_col_types = FALSE)
+  ext <- tolower(tools::file_ext(path))
+  read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+  df <- tryCatch(
+    read_fn(path, show_col_types = FALSE),
+    error = function(e) {
+      if (grepl("invalid.*UTF-8|invalid.*utf8", conditionMessage(e),
+                ignore.case = TRUE)) {
+        warning(
+          sprintf("Non-UTF-8 encoding detected in %s; re-reading as Latin1.",
+                  basename(path)),
+          call. = FALSE
+        )
+        read_fn(path, show_col_types = FALSE,
+                locale = readr::locale(encoding = "Latin1"))
+      } else {
+        stop(e)
+      }
     }
-    # Convert tibble to data.frame to support rownames and proper subsetting
-    as.data.frame(df)
+  )
+  # Convert tibble to data.frame to support rownames and proper subsetting
+  df <- as.data.frame(df)
+  # Sanitize character columns: NBSP, whitespace
+  df <- sanitize_character_columns(df, source = basename(path))
+  df
 }

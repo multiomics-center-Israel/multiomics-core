@@ -1,6 +1,6 @@
 # multiomics-core
 
-A modular and reproducible R framework for single-omics and multi-omics analyses (RNA-seq, proteomics, metabolomics, lipidomics).
+A modular and reproducible R framework for single-omics and multi-omics analyses (RNA-seq, proteomics, metabolomics, multi-omics integration).
 
 ### The project emphasizes
 
@@ -49,16 +49,18 @@ The onboarding guide explains:
 ```
 R/
 ├── core/         # Generic utilities (I/O, validation, QC, clustering, enrichment, plotting)
-├── domain/       # Omics-specific logic (proteomics, rnaseq, metabolomics)
+├── domain/       # Omics-specific logic (rnaseq, proteomics, metabolomics, multiomics)
 ├── modules/      # Pipeline steps (wrappers for domain logic)
 ├── pipeline/     # {targets} pipeline orchestration
 ├── services/     # External integrations (AI commentary)
 config/
-├── config.yaml              # Central configuration file
-├── templates/               # Analysis config templates
-docs/                         # Onboarding and developer documentation
-outputs/                      # Analysis outputs (git-ignored)
-_targets.R                    # {targets} pipeline definition
+├── templates/   # Analysis config templates (rna, proteins, metabolomics, multiomics)
+data/            # Example datasets and reference files
+docs/            # Onboarding, developer guide, ADRs, migration notes
+tests/           # testthat tests
+_targets.R       # {targets} pipeline definition
+run.R            # CLI entrypoint / wizard launcher
+renv.lock        # Locked dependency versions
 ```
 
 ------------------------------------------------------------------------
@@ -195,7 +197,7 @@ To run a single mode:
 ``` r
 tar_make(names = starts_with("prot_"))  # proteomics only
 tar_make(names = starts_with("rna_"))   # RNA-seq only
-tar_make(names = starts_with("met_"))   # metabolomics only
+tar_make(names = starts_with("met"))    # metabolomics only (matches met_* and metab_*)
 ```
 
 `{targets}` ensures that only steps affected by changes are recomputed.
@@ -260,9 +262,9 @@ qc_pca_scatter(
 
 ## Outputs
 
-All analysis outputs are written to the `outputs/` directory.
+All analysis outputs are written under `<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/`, where path components come from your config YAML (defaults: `paths.out: "outputs"`).
 
--   This directory is intentionally excluded from git
+-   The project directory lives outside the repository (set via `project.dir` in your config)
 -   Results should be shared by zipping the relevant output folder
 -   Each run is isolated by its configuration parameters
 
@@ -278,30 +280,29 @@ If you want to extend, modify, or maintain **multiomics-core**, see:
 
 ## Acknowledgments
 
--   AI-powered figure commentary uses scientific domain knowledge templates informed by [K-Dense AI claude-scientific-skills](https://github.com/K-Dense-AI/claude-scientific-skills) (MIT License). To enable AI commentary, clone their repository into the project root and set your API key (see below).
+-   AI-powered figure commentary uses scientific domain knowledge templates informed by [K-Dense AI claude-scientific-skills](https://github.com/K-Dense-AI/claude-scientific-skills) (MIT License). To enable AI commentary, clone their repository into the project root and configure credentials for your chosen backend (see below).
 -   Commentary generation is powered by [Claude](https://www.anthropic.com/) (Anthropic) or [GPT-4o](https://openai.com/) (OpenAI).
 
 ### AI commentary setup (optional)
 
-AI commentary requires your own API key. No keys are stored in or shared via this repository.
+Each backend has its own prerequisite. No credentials are stored in or shared via this repository.
 
-```bash
-# For Claude backend:
-export ANTHROPIC_API_KEY="your-key-here"
-
-# For OpenAI backend:
-export OPENAI_API_KEY="your-key-here"
-```
+-   `claude-code` (default): the [`claude` CLI](https://claude.ai/claude-code) must be installed, on your `PATH`, and authenticated (e.g. via `claude login`). The pipeline only checks that the CLI is on `PATH` — authentication is handled by the CLI itself.
+-   `claude`: set `ANTHROPIC_API_KEY="your-key-here"` in your environment (or `.Renviron`).
+-   `openai`: set `OPENAI_API_KEY="your-key-here"` in your environment (or `.Renviron`).
 
 Enable in your config YAML:
 
 ```yaml
 commentary:
   enabled: true
-  backend: "claude"   # or "openai" or "data-driven" (no API needed)
+  backend: "claude-code"   # "claude-code" (default) | "claude" | "openai"
+  claude_code_model: "sonnet"
+  max_tokens: 1500
+  max_retries: 2
 ```
 
-If no API key is set, the pipeline automatically falls back to data-driven commentary (no AI, no cost).
+If the configured backend's prerequisite is missing at runtime (`claude` CLI not on `PATH`, `ANTHROPIC_API_KEY` unset, or `OPENAI_API_KEY` unset), the pipeline emits a warning and silently falls back to data-driven commentary (no AI, no cost). Check the run log for a `Falling back to data-driven commentary` message to verify the backend you configured actually engaged.
 
 ------------------------------------------------------------------------
 
@@ -314,13 +315,10 @@ If no API key is set, the pipeline automatically falls back to data-driven comme
 -   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
 -   **RNA-seq**: Full pipeline (DESeq2), Batch correction (ComBat-Seq/SVA/RUV), Cell-type deconvolution (xCell2), Pathway enrichment (fGSEA/ORA)
 -   **Metabolomics**: Missingness classification (MNAR/MAR), Imputation (KNN + min/2), Normalization (TSS/Median/PQN with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
+-   **Multi-omics**: Integration (DIABLO, MOFA, SNF), Concordance analysis, RNA-protein correlation, Cross-omics enrichment (multiGSEA, multi-ORA), Loadings-based enrichment, Foundational analysis (correlations, WGCNA), Mechanistic inference (COSMOS, TF activity, mediation), Consensus across methods, Stability analysis (bootstrap, k-fold, cluster stability), Integrated reporting, AI commentary
 -   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection
 -   **Plots**: Volcano, MA, Heatmaps, Profile plots (3-color Up/Down/NS scheme)
 -   **Reporting**: Interactive HTML reports, Executive summaries, Pipeline summaries, AI figure commentary
 -   **Infrastructure**: Docker support, CLI wizard (`run.R`), Environment-variable config, Organism auto-detection, Multi-organism annotation
 -   **Architecture**: Strict dependency loading, `{targets}` orchestration, Unified config validation
-
-### Planned
-
--   Multi-omics integration and reporting
 

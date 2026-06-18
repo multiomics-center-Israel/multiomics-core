@@ -24,9 +24,8 @@ Stages 1 and 2 consume `metab_pre`, an adapter target that converts the new
 
 ```
 met_input_files ──► met_raw
-                        ├──► met_missingness_stats ──► met_missingness_plot (PNG)
+                        ├──► met_missingness_stats
                         └──► met_filtered
-                                  └──► met_imputed
                                             └──► met_log
                                                       ├──► met_norm_tss    ──► met_norm_tss_qc
                                                       ├──► met_norm_median ──► met_norm_median_qc
@@ -62,12 +61,6 @@ Operated on the **pre-filter** matrix to give the complete picture.
 - Special classes: `all_observed`, `all_missing`
 
 Threshold: `preprocessing.mnar_threshold` (default 0.3, sign-agnostic)
-
-### 3. Missingness heatmap (`met_missingness_plot`)
-
-Binary heatmap (dark = missing), columns sorted ascending by sample intensity
-to reveal MNAR patterns. Rows colour-annotated by MNAR/MAR class.
-
 Saved to: `diagnostic_plots/missingness_heatmap.png`
 
 ### 4. Missingness filtering (`met_filtered`)
@@ -77,16 +70,6 @@ Applied sequentially:
 1. **Samples first**: drop samples where `% missing > sample_missing_threshold`
 2. **Features second**: drop features where `% missing > feat_missing_threshold`
    (evaluated on the retained sample set)
-
-### 5. Imputation (`met_imputed`)
-
-Re-classifies missingness on the **filtered** matrix, then:
-
-- **MNAR features** → `min(observed) / 2` per feature
-  (global min/2 fallback for all-NA rows)
-- **MAR features** → `impute::impute.knn` (Bioconductor)
-  - `k` clamped to `min(knn_k, ncol - 1)`; column-mean fallback if `k < 1`
-  - All-NA MAR rows are logged and skipped
 
 ### 6. Log transformation (`met_log`)
 
@@ -228,7 +211,6 @@ tar_make()
 |---|---|
 | `chosen_norm` | `met_corrected`, `metab_pre`, Stage 1+2 |
 | `feat_missing_threshold` | `met_filtered` and all downstream |
-| `mnar_threshold` | `met_missingness_stats`, `met_imputed` and downstream |
 | `drift_correction.*` | `met_corrected`, `metab_pre`, Stage 1+2 |
 | Input data file | `met_input_files`, all `met_*`, all `metab_*` |
 | Normalization method params | Only the affected `met_norm_*` and downstream |

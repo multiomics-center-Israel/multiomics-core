@@ -135,6 +135,16 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "DE-significant rows from final results table (equivalent to Final_results_DE_P_*.xlsx content)"
         ),
+        all_final_xlsx = list(
+            type = "raw",
+            required = FALSE,
+            description = "Raw bytes of Final_results_ALL_P_<p_cutoff>.xlsx (writeBin to round-trip)"
+        ),
+        de_final_xlsx = list(
+            type = "raw",
+            required = FALSE,
+            description = "Raw bytes of Final_results_DE_P_<p_cutoff>.xlsx (writeBin to round-trip)"
+        ),
 
         # --- Clustering (4 keys) ---
         clust_partition = list(
@@ -204,7 +214,7 @@ get_payload_key_definitions <- function() {
 
 #' Get list of all canonical key names
 #'
-#' @return Character vector of canonical key names (27 keys)
+#' @return Character vector of canonical key names (29 keys)
 #' @export
 get_canonical_keys <- function() {
     names(get_payload_key_definitions())
@@ -234,7 +244,7 @@ get_optional_keys <- function() {
 
 #' Initialize empty canonical Shiny payload
 #'
-#' Creates a payload structure with all 27 canonical keys set to NULL.
+#' Creates a payload structure with all 29 canonical keys set to NULL.
 #' Use this as the starting point for all omics builders.
 #'
 #' @param source Character. Omics type: "rnaseq", "proteomics", or "metabolomics"
@@ -408,14 +418,14 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
   
   # 7. Config variable validation
   if (!is.null(payload$color)) {
-    if (!payload$color %in% colnames(payload$sample_meta)) {
+    if (!all(payload$color %in% colnames(payload$sample_meta))) {
       signal(paste0(prefix, " color '", payload$color,
                     "' not found in sample_meta columns"))
     }
   }
   
   if (!is.null(payload$shape)) {
-    if (!payload$shape %in% colnames(payload$sample_meta)) {
+    if (!all(payload$shape %in% colnames(payload$sample_meta))) {
       signal(paste0(prefix, " shape '", payload$shape,
                     "' not found in sample_meta columns"))
     }
@@ -607,4 +617,53 @@ build_expr_long <- function(expr_mat, sample_meta) {
     expr_long <- merge(expr_long, meta_df, by = "sample_id", all.x = TRUE)
 
     expr_long
+}
+
+#' Build the canonical feature_annot data.frame from a row_data table
+#'
+#' Standardises the per-omics \code{pre$row_data} feature-metadata table into the
+#' shape the Shiny contract expects for \code{feature_annot}: feature IDs as
+#' rownames, with every remaining column carried through as-is. Because each
+#' pipeline's \code{row_data} already holds exactly \code{[id_col] + the
+#' configured annotation columns}, this single rule reproduces the desired
+#' per-omics behaviour with no omics-specific logic — and any annotation column
+#' added upstream in future automatically flows into the payload.
+#'
+#' @param row_data Feature-metadata data.frame (or NULL). The feature ID may be
+#'   an explicit column and/or the rownames.
+#' @param id_col Name of the ID column to lift to rownames. If absent from
+#'   \code{row_data} (e.g. the rnaseq matrix/tximport branch names it literally
+#'   "gene_id", which can differ from \code{config$id_columns$gene_id}), the
+#'   first column is used as the key instead.
+#' @return A data.frame with rownames = feature IDs and the ID column dropped
+#'   from the body (0 columns is valid — a minimal feature-ID table), or NULL if
+#'   \code{row_data} is NULL.
+#' @export
+build_feature_annot <- function(row_data, id_col = NULL) {
+    if (is.null(row_data)) return(NULL)
+
+    rd <- as.data.frame(row_data, check.names = FALSE, stringsAsFactors = FALSE)
+
+    # Resolve the key column: prefer id_col, else fall back to the first column
+    # (mirrors the rnaseq de_stats-join fallback in 06_shiny_export.R).
+    key_col <- if (!is.null(id_col) && id_col %in% colnames(rd)) {
+        id_col
+    } else if (ncol(rd) > 0) {
+        colnames(rd)[1]
+    } else {
+        NULL
+    }
+
+    # Feature IDs live in rownames (so downstream Shiny code indexes by
+    # rownames(feature_annot), matching expr_norm/sample_meta) and the ID column
+    # is intentionally dropped from the body — the body is annotation columns
+    # only. Any future column in row_data is kept here automatically.
+    ids  <- if (!is.null(key_col)) as.character(rd[[key_col]]) else rownames(rd)
+    body <- rd[, setdiff(colnames(rd), key_col), drop = FALSE]
+
+    if (!is.null(ids) && length(ids) == nrow(body)) {
+        rownames(body) <- make.unique(ids)
+    }
+
+    body
 }

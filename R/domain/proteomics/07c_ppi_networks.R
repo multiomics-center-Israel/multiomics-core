@@ -81,6 +81,9 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     cfg <- config$modes$proteomics
     ppi_cfg <- cfg$ppi %||% list()
 
+    # Resolve organism name for OrgDb dispatch (used by subcellular + enrichment)
+    organism <- normalize_organism_name(cfg$annotation$organism %||% "Homo sapiens")
+
     # Set up output directories
     output_dir <- file.path(out_dir, "ppi_networks")
     plots_dir  <- file.path(output_dir, "plots")
@@ -188,7 +191,8 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     }
 
     # Subcellular localization
-    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, config, output_dir)
+
+    subcell_results <- analyze_subcellular_localization(sig_proteins, da_df, output_dir, organism = organism)
 
     # Network-based enrichment
     network_enrichment <- run_network_enrichment(
@@ -284,46 +288,61 @@ build_string_network <- function(proteins, species = 9606,
     })
 }
 
-build_string_network_api <- function(proteins, species, score_threshold) {
+build_string_network_api <- function(proteins, species, score_threshold,
+                                      chunk_size = 500) {
     message("  Using STRING API fallback...")
 
-    if (length(proteins) > 500) {
-        message("WARNING: Limiting to first 500 proteins for API query")
-        proteins <- proteins[1:500]
-    }
-
-    base_url <- "https://string-db.org/api/tsv/network"
     # Clean protein IDs: remove any containing "|" (empty gene symbols) and whitespace
     proteins <- proteins[!grepl("\\|", proteins) & nzchar(trimws(proteins))]
     if (length(proteins) == 0) {
         message("WARNING: No valid protein IDs for STRING API query")
         return(NULL)
     }
-    protein_list <- paste(proteins, collapse = "%0a")
 
-    url <- paste0(base_url, "?identifiers=", protein_list,
+    # Do NOT chunk: the /network endpoint returns edges only among submitted identifiers,
+    # so independent per-chunk queries silently drop all inter-chunk edges.
+    # Cap explicitly instead so truncation is visible and the user can install STRINGdb.
+    if (length(proteins) > chunk_size) {
+        message("WARNING: ", length(proteins), " proteins exceed the STRING API fallback ",
+                "limit (", chunk_size, "). Capping to ", chunk_size, " proteins. ",
+                "Install STRINGdb for complete cross-protein results.")
+        proteins <- proteins[seq_len(chunk_size)]
+    }
+
+    base_url <- "https://string-db.org/api/tsv/network"
+    url <- paste0(base_url,
+                  "?identifiers=", paste(proteins, collapse = "%0a"),
                   "&species=", species,
                   "&required_score=", score_threshold,
                   "&caller_identity=multiomics_pipeline")
+    combined <- tryCatch(
+        utils::read.delim(url(url), stringsAsFactors = FALSE),
+        error = function(e) {
+            message("WARNING: STRING API request failed: ", e$message)
+            NULL
+        }
+    )
+    if (is.null(combined) || nrow(combined) == 0) return(NULL)
 
-    tryCatch({
-        response <- utils::read.delim(url(url), stringsAsFactors = FALSE)
-        if (nrow(response) == 0) return(NULL)
+    required_cols <- c("preferredName_A", "preferredName_B", "score")
+    missing_cols  <- setdiff(required_cols, colnames(combined))
+    if (length(missing_cols) > 0) {
+        message("WARNING: STRING API response is missing expected network columns (",
+                paste(missing_cols, collapse = ", "), "). ",
+                "Got: ", paste(colnames(combined), collapse = ", "), ". ",
+                "Response may be a non-network payload (e.g. error text). Skipping.")
+        return(NULL)
+    }
 
-        graph <- igraph::graph_from_data_frame(
-            response[, c("preferredName_A", "preferredName_B", "score")], directed = FALSE
-        )
-        graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
+    graph <- igraph::graph_from_data_frame(
+        combined[, required_cols], directed = FALSE
+    )
+    graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
 
-        message("  API returned ", igraph::ecount(graph), " edges")
+    message("  API returned ", igraph::ecount(graph), " unique edges")
 
-        list(graph = graph, edges = response, mapping = NULL,
-             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
-
-    }, error = function(e) {
-        message("ERROR: STRING API failed: ", e$message)
-        NULL
-    })
+    list(graph = graph, edges = combined, mapping = NULL,
+         n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
 }
 
 get_species_name <- function(taxid) {
@@ -690,23 +709,20 @@ get_corum_database <- function(species) {
 # Subcellular Localization
 # -----------------------------------------------------------------------------
 
-analyze_subcellular_localization <- function(proteins, da_results, config, output_dir) {
+
+analyze_subcellular_localization <- function(proteins, da_results, output_dir,
+                                             organism = "Homo sapiens") {
     message("Analyzing subcellular localization...")
 
-    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg)) {
-        message("  No OrgDb available for organism '", organism, "'. Skipping subcellular localization.")
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping subcellular localization.")
         return(NULL)
     }
-    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  ", orgdb_pkg, " not installed. Skipping subcellular localization.")
-        return(NULL)
-    }
-    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     tryCatch({
-        go_cc <- AnnotationDbi::select(orgdb,
+        go_cc <- AnnotationDbi::select(org_db,
             keys = proteins, keytype = "SYMBOL", columns = c("GOALL", "ONTOLOGYALL"))
         go_cc <- go_cc[go_cc$ONTOLOGYALL == "CC" & !is.na(go_cc$GOALL), ]
         if (nrow(go_cc) == 0) return(NULL)
@@ -748,34 +764,45 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         return(NULL)
     }
 
-    organism <- config$modes$proteomics$annotation$organism %||% "Homo sapiens"
+
+    cfg_prot <- config$modes$proteomics
+    organism <- normalize_organism_name(cfg_prot$annotation$organism %||% "Homo sapiens")
     orgdb_pkg <- get_orgdb_package(organism)
-    if (is.null(orgdb_pkg)) {
-        message("  No OrgDb available for organism '", organism, "'. Skipping network enrichment.")
+    if (is.null(orgdb_pkg) || !requireNamespace(orgdb_pkg, quietly = TRUE)) {
+        message("  OrgDb package for '", organism, "' not available. Skipping network enrichment.")
         return(NULL)
     }
-    if (!requireNamespace(orgdb_pkg, quietly = TRUE)) {
-        message("  ", orgdb_pkg, " not installed. Skipping network enrichment.")
-        return(NULL)
-    }
-    orgdb <- getExportedValue(orgdb_pkg, orgdb_pkg)
+    org_db <- getExportedValue(orgdb_pkg, orgdb_pkg)
 
     enrichment_results <- list()
     community_df <- community_results$membership
     communities_ids <- unique(community_df$community)
+
+    # Batch all symbol → Entrez lookups in a single OrgDb call before the loop
+    all_comm_symbols <- unique(community_df$protein_name)
+    entrez_batch <- tryCatch(
+        AnnotationDbi::mapIds(org_db, keys = all_comm_symbols,
+                              keytype = "SYMBOL", column = "ENTREZID",
+                              multiVals = "first"),
+        error = function(e) {
+            message("  mapIds batch failed: ", e$message)
+            setNames(rep(NA_character_, length(all_comm_symbols)), all_comm_symbols)
+        }
+    )
 
     for (comm in communities_ids) {
         comm_proteins <- community_df$protein_name[community_df$community == comm]
         if (length(comm_proteins) < 3) next
 
         tryCatch({
-            entrez <- AnnotationDbi::mapIds(orgdb,
-                keys = comm_proteins, keytype = "SYMBOL", column = "ENTREZID")
+
+            entrez <- entrez_batch[comm_proteins]
             entrez <- entrez[!is.na(entrez)]
             if (length(entrez) < 3) next
 
             go_result <- clusterProfiler::enrichGO(
-                gene = entrez, OrgDb = orgdb,
+
+                gene = entrez, OrgDb = org_db,
                 ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.1
             )
 

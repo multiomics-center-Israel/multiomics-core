@@ -70,6 +70,14 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
                 "\nCheck the Rmd for errors.")
     })
 
+    rmarkdown::render(
+        input       = dest_rmd,
+        output_file = out_html,
+        output_dir  = run_dir,
+        quiet       = TRUE,
+        envir       = new.env(parent = globalenv())
+    )
+
     if (file.exists(out_html)) {
         message("Report rendered successfully: ", out_html)
     } else {

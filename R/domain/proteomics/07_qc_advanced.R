@@ -178,6 +178,19 @@ plot_top_de_heatmap <- function(de_tbl, expr_mat, meta, cfg, n_top = 50,
 
     mat_sub <- expr_mat[top_ids, , drop = FALSE]
 
+    # Replace UniProt FeatureID rownames with "GENE (accession)" when a
+    # gene symbol is available, so the heatmap reads biologically.
+    gene_col <- intersect(c("Genes", "gene_symbol", "Gene_Symbol"), names(de_tbl))[1]
+    if (!is.na(gene_col)) {
+        sym_lookup <- setNames(as.character(de_tbl[[gene_col]]),
+                               as.character(de_tbl$FeatureID))
+        syms <- sym_lookup[top_ids]
+        new_labels <- ifelse(!is.na(syms) & nzchar(syms) & syms != top_ids,
+                             paste0(syms, " (", top_ids, ")"),
+                             top_ids)
+        rownames(mat_sub) <- new_labels
+    }
+
     # Z-score rows
     mat_z <- t(scale(t(mat_sub)))
     mat_z[is.na(mat_z)] <- 0
@@ -203,7 +216,8 @@ plot_top_de_heatmap <- function(de_tbl, expr_mat, meta, cfg, n_top = 50,
             fontsize_row     = max(4, 10 - n_top / 10),
             main             = sprintf("Top %d DE Proteins — %s", length(top_ids), contrast_name),
             color            = grDevices::colorRampPalette(c("navy", "white", "firebrick3"))(100),
-            silent           = TRUE
+            silent           = TRUE,
+          border_color = NA
         )
     }, error = function(e) {
         message("Heatmap failed for ", contrast_name, ": ", e$message)

@@ -38,6 +38,7 @@ build_shiny_payload_rnaseq <- function(
     clustering_res = NULL,
     annot = NULL,
     trinotate_main = NULL,
+    xlsx_files = NULL,
     out_dir = NULL
 ) {
     # ============================================================
@@ -71,9 +72,13 @@ build_shiny_payload_rnaseq <- function(
     # contrasts: Contrast definitions
     payload$contrasts <- inputs$contrasts
 
-    # feature_annot: Feature annotations (gene symbols, descriptions)
-    if (!is.null(annot)) {
-        payload$feature_annot <- annot
+    # feature_annot: Feature annotations (gene symbols, descriptions).
+    # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
+    # the shared helper so future annotation columns flow through automatically.
+    payload$feature_annot <- if (!is.null(annot)) {
+        annot
+    } else {
+        build_feature_annot(pre$row_data, rna_cfg$id_columns$gene_id)
     }
 
     # ============================================================
@@ -121,6 +126,9 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(de_res$dds)) payload$de_model <- de_res$dds
 
         # de_stats: Full DE statistics table
+        # Snapshot the un-annotated shape for build_final_results_rnaseq(), which
+        # was designed to run with annot_cols = NULL (see 05_outputs_legacy.R:113).
+        de_stats_pre_annot <- NULL
         if (!is.null(de_res$tables)) {
             payload$de_stats <- build_rnaseq_summary_df(de_res$tables, de_cfg)
 
@@ -130,6 +138,32 @@ build_shiny_payload_rnaseq <- function(
                     payload$de_stats$feature_id <- payload$de_stats$FeatureID
                 } else if ("Gene" %in% names(payload$de_stats) && !"feature_id" %in% names(payload$de_stats)) {
                     payload$de_stats$feature_id <- payload$de_stats$Gene
+                }
+
+                # Capture the un-annotated snapshot before any row_data merge.
+                de_stats_pre_annot <- payload$de_stats
+
+                # Merge row_data annotation columns into de_stats (additive, skip on collision).
+                # tximport/matrix paths build a single-column row_data with just the gene ID
+                # (R/domain/rnaseq/03_preprocess.R:62,85), so this becomes a no-op there.
+                if (!is.null(pre$row_data) && ncol(pre$row_data) > 0) {
+                    gene_id_col <- rna_cfg$id_columns$gene_id
+                    if (is.null(gene_id_col) || !(gene_id_col %in% colnames(pre$row_data))) {
+                        fallback_col <- colnames(pre$row_data)[1]
+                        message(
+                            "[shiny_export] rna id_columns$gene_id (",
+                            gene_id_col %||% "<unset>",
+                            ") not in row_data; using first column '",
+                            fallback_col, "' as join key."
+                        )
+                        gene_id_col <- fallback_col
+                    }
+                    payload$de_stats <- annotate_de_stats(
+                        payload$de_stats,
+                        pre$row_data,
+                        id_col_de  = "feature_id",
+                        id_col_row = gene_id_col
+                    )
                 }
             }
         }
@@ -159,14 +193,26 @@ build_shiny_payload_rnaseq <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_rnaseq(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            payload$de_summary <- build_de_summary_counts_rnaseq(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
-        # Use payload$de_stats which was built above from de_res$tables
+        # Pass the un-annotated snapshot so build_final_results_rnaseq() keeps its
+        # pre-existing behavior (it expects to manage annotations itself, with
+        # annot_cols = NULL by design).
         if (!is.null(payload$de_stats) && !is.null(inputs$contrasts)) {
             final_results <- tryCatch(
-                build_final_results_rnaseq(pre, payload$de_stats, inputs$contrasts, pre$row_data),
+                build_final_results_rnaseq(pre, de_stats_pre_annot, inputs$contrasts, pre$row_data, config = config),
                 error = function(e) {
                     warning("[shiny_export] de_final_table: ", conditionMessage(e))
                     NULL
@@ -193,6 +239,11 @@ build_shiny_payload_rnaseq <- function(
             }
         }
     }
+
+    # ============================================================
+    # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
+    # ============================================================
+    payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
     # CLUSTERING (4 keys)
@@ -290,23 +341,26 @@ build_shiny_payload_rnaseq <- function(
 #'
 #' Thin wrapper around \code{\link{build_de_summary_counts_generic}} with
 #' RNA-seq naming conventions: \code{<contrast>_pass} pass columns and
-#' \code{linearFC.<contrast>} fold-change columns (with grep fallback).
+#' \code{linearFC.<contrast>} fold-change columns (exact match only —
+#' the grep-over-de_stats-columns fallback was removed because
+#' \code{de_stats} may now carry user-supplied annotation columns from
+#' \code{row_data}, which a regex could pick up).
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_rnaseq <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_rnaseq <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "_pass$",
-        extract_contrast = function(col) sub("_pass$", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0(cn, "_pass"),
+        fc_col_for   = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
-            if (fc %in% cols) return(fc)
-            # Fallback: grep search
-            hits <- grep(paste0("linearFC.*", cn), cols, value = TRUE)
-            if (length(hits) > 0) hits[1] else NULL
+            if (fc %in% cols) fc else NULL
         }
     )
 
@@ -338,3 +392,198 @@ save_shiny_payload_rnaseq <- function(..., out_file = "shiny_payload_rnaseq.rds"
 }
 
 
+# ============================================================
+# LEGACY BUILDER (DEPRECATED)
+# ============================================================
+
+#' Build legacy-compatible data structure for Shiny app
+#'
+#' @description
+#' DEPRECATED: Use build_shiny_payload_rnaseq() instead.
+#'
+#' This function is kept for backward compatibility only.
+#' It will be removed in a future version.
+#'
+#' @param pre Preprocessing results (from preprocess_rna)
+#' @param de_res DE results (from run_deseq2_de)
+#' @param inputs Input list (contrasts, metadata, etc.)
+#' @param config Full config object
+#' @param pca_res Optional: pre-computed PCA results
+#' @param clustering_res Optional: pre-computed clustering results
+#' @param annot Optional: external annotation data.frame
+#'
+#' @return A flat named list with ALL legacy keys (even if NULL)
+#'
+#' @export
+build_data_to_shiny_legacy_rna <- function(
+    pre,
+    de_res,
+    inputs,
+    config,
+    pca_res = NULL,
+    clustering_res = NULL,
+    annot = NULL
+) {
+    .Deprecated("build_shiny_payload_rnaseq")
+
+    legacy <- build_shiny_legacy_base(
+        legacy_source = "RNAseq pipeline",
+        pca_basename = "rna_pca_3d"
+    )
+
+    # Metadata
+    legacy$col_data <- pre$meta
+    legacy$contrasts_data <- inputs$contrasts
+
+    # Expression matrices
+    legacy$norm_counts <- pre$expr_filt
+    legacy$norm_log_counts <- pre$expr_work
+
+    # DESeq2 object
+    legacy$dds <- de_res$dds %||% NULL
+
+    # PCA objects
+    if (!is.null(pca_res)) {
+        legacy$norm_log_counts_pca <- pca_res$norm_log_counts_pca %||% NULL
+    }
+
+    # EFFECTS
+    modes <- config$modes %||% list()
+    rna <- modes$rna %||% list()
+    effects <- rna$effects %||% list()
+
+    primary_color <- NULL
+    if (!is.null(effects$color)) {
+        primary_color <- as.character(effects$color[[1]])
+    }
+
+    if (!is.null(effects$color)) {
+        # EFFECTS contains all aesthetic variables (shape if present + all colors)
+        legacy$EFFECTS <- c(effects$shape, effects$color)
+    } else {
+        legacy$EFFECTS <- NULL
+    }
+
+    # DE summary and stats
+    legacy$dds <- de_res$dds
+
+    legacy$stats_df <- build_rnaseq_summary_df(de_res$tables, config$modes$rna$de)
+    if (!is.null(legacy$stats_df) && "FeatureID" %in% names(legacy$stats_df) && !"Gene" %in% names(legacy$stats_df)) {
+        names(legacy$stats_df)[names(legacy$stats_df) == "FeatureID"] <- "Gene"
+    }
+
+    if (!is.null(legacy$stats_df) && "pass_any_contrast" %in% colnames(legacy$stats_df)) {
+        legacy$DE_genes_stats <- legacy$stats_df[
+            !is.na(legacy$stats_df$pass_any_contrast) & legacy$stats_df$pass_any_contrast == 1, ,
+            drop = FALSE
+        ]
+    }
+
+    # Heatmap data
+    legacy["mat2plot"] <- list(NULL)
+    legacy["de_expr_norm"] <- list(NULL)
+    if (!is.null(legacy$norm_log_counts) && !is.null(legacy$DE_genes_stats)) {
+        sig_genes <- legacy$DE_genes_stats$Gene
+        if (length(sig_genes) > 0) {
+            de_matrix <- legacy$norm_log_counts[rownames(legacy$norm_log_counts) %in% sig_genes, , drop = FALSE]
+            legacy$mat2plot <- assert_de_expr_matrix(de_matrix, context = "rnaseq export")
+            legacy$de_expr_norm <- legacy$mat2plot
+        }
+    }
+
+    de_heat <- de_res$pheatmap_data_DE_genes %||% de_res$pheatmap_data %||% NULL
+    clust_heat <- if (!is.null(clustering_res)) {
+        clustering_res$pheatmap_data_DE_genes %||% clustering_res$pheatmap_data %||% NULL
+    } else {
+        NULL
+    }
+    legacy$pheatmap_data_DE_genes <- de_heat %||% clust_heat %||% NULL
+
+    # Clustering results
+    if (!is.null(clustering_res)) {
+        src <- if (!is.null(clustering_res$objects)) clustering_res$objects else clustering_res
+
+        if (!is.null(src$patterns)) legacy$patterns <- src$patterns
+        if (!is.null(src$heatmaps)) legacy$heatmaps_by_pattern <- src$heatmaps
+        if (!is.null(src$clusters)) legacy$New_clusters <- src$clusters
+    }
+
+    # Annotation
+    legacy$annot <- annot
+
+    # Config parameters
+    de_cfg <- rna$de %||% list()
+    norm_cfg <- rna$normalization %||% list()
+
+    legacy$PADJ_CUTOFF <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05
+    legacy$DESEQ_PADJ_CUTOFF <- legacy$PADJ_CUTOFF
+
+    linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
+    legacy$LINEAR_FC_CUTOFF <- linear_fc
+    legacy$LOG_FC_CUTOFF <- log2(linear_fc)
+
+    legacy$NORM_METHOD <- norm_cfg$method %||% "TMMlogCPM"
+    legacy$GROUP <- primary_color %||% NULL
+
+    legacy
+}
+
+
+#' Save legacy data structure to RDS file
+#'
+#' @description DEPRECATED: Use save_shiny_payload_rnaseq() instead.
+#'
+#' @param ... Arguments passed to build_data_to_shiny_legacy_rna()
+#' @param out_file Output file path
+#' @return Path to saved file (invisibly)
+#' @export
+save_data_to_shiny_legacy_rna <- function(..., out_file = "data_to_shiny_legacy.rds") {
+    .Deprecated("save_shiny_payload_rnaseq")
+
+    legacy <- build_data_to_shiny_legacy_rna(...)
+
+    out_dir <- dirname(out_file)
+    if (!dir.exists(out_dir)) {
+        dir.create(out_dir, recursive = TRUE)
+    }
+
+    saveRDS(legacy, out_file)
+    message("Saved legacy export to: ", out_file)
+
+    invisible(out_file)
+}
+
+
+#' Load and validate legacy data structure
+#'
+#' @param file Path to legacy RDS file
+#' @param verbose Print diagnostic information
+#' @return The loaded legacy list
+#' @export
+load_legacy_rds <- function(file, verbose = TRUE) {
+    if (!file.exists(file)) {
+        stop("File not found: ", file)
+    }
+
+    legacy <- readRDS(file)
+
+    if (verbose) {
+        message("Loaded legacy export from: ", file)
+        message("  Version: ", legacy$legacy_version %||% legacy$payload_version %||% "unknown")
+        message("  Created: ", legacy$legacy_created_at %||% legacy$payload_created_at %||% "unknown")
+        message("  Source: ", legacy$legacy_source %||% legacy$payload_source %||% "unknown")
+        message("  Total keys: ", length(legacy))
+        message("  NULL keys: ", sum(sapply(legacy, is.null)))
+        message("  Non-NULL keys: ", sum(!sapply(legacy, is.null)))
+
+        critical <- c("col_data", "sample_meta", "norm_log_counts", "expr_norm", "stats_df", "de_stats")
+        for (key in critical) {
+            if (key %in% names(legacy)) {
+                status <- if (is.null(legacy[[key]])) "NULL" else "OK"
+                message("  [", status, "] ", key)
+            }
+        }
+    }
+
+    legacy
+}

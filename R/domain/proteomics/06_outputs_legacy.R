@@ -27,7 +27,8 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
             summary_df = de_res$summary_df,
             contrasts_df = inputs$contrasts,
             row_data = pre$row_data,
-            feature_id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID"
+            feature_id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID",
+            config = config
         )
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 
@@ -128,7 +129,10 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 #' @param feature_id_col The column name for unique identifiers (default "FeatureID").
 #'
 #' @return A consolidated dataframe with statistics, expression values, and Z-scores.
-build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL, feature_id_col = "FeatureID") {
+build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
+                                            feature_id_col = "FeatureID", config = NULL) {
+    cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
+
     build_final_results_generic(
         summary_df = summary_df,
         expr_df = pre$expr_filt,
@@ -140,6 +144,56 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
             "First.Protein.Description" = "First.Protein.Description"
         ),
         row_data = row_data %||% pre$row_data,
-        fc_is_signed = TRUE # linearFC is signed
+        fc_is_signed = TRUE, # linearFC is signed
+        cv_cols = cv_cols
+    )
+}
+
+#' Resolve the log2 pseudocount offset applied to the proteomics assay
+#'
+#' The pipeline applies \code{log2(x + 1)} only for preprocessed input declared
+#' on a linear scale (\code{R/domain/proteomics/01_expression.R}); the DIA-NN
+#' path and any already-log2 input use plain \code{log2(x)}. The exact inverse
+#' is therefore \code{2^x - offset}.
+#'
+#' @param config Full pipeline config.
+#' @return Numeric offset: 1 for preprocessed+linear input, else 0.
+proteomics_log_offset <- function(config) {
+    cfg <- config$modes$proteomics %||% list()
+    is_preprocessed <- identical(cfg$input$format, "preprocessed")
+    scale_in <- cfg$scale_in %||%
+        (if (isTRUE(cfg$files$is_logtransformed)) "log2" else "linear")
+    if (is_preprocessed && identical(scale_in, "linear")) 1 else 0
+}
+
+#' Build per-group CV columns for proteomics final results
+#'
+#' CV is computed on linear intensities, back-transformed from the unimputed
+#' log2 matrix (\code{2^expr_filt - offset}). Imputed values are intentionally
+#' excluded — \code{expr_filt} carries NAs for unobserved measurements, so CV
+#' uses observed values only and a group with <2 observations yields NA.
+#'
+#' @param pre Proteomics preprocessing results (uses \code{expr_filt}, \code{meta}).
+#' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag, sample-ID column, log scale).
+#' @return Feature-indexed data.frame of \code{CV.<group>} columns, or NULL.
+build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
+    if (is.null(config)) return(NULL)
+    enabled <- config$modes$proteomics$excel$group_cv %||% TRUE
+    if (!isTRUE(enabled)) return(NULL)
+    if (is.null(pre$expr_filt) || is.null(pre$meta)) return(NULL)
+
+    prot_cfg <- config$modes$proteomics %||% list()
+    sample_id_col <- prot_cfg$effects$samples %||%
+        prot_cfg$id_columns$sample_col %||% "SampleID"
+
+    offset <- proteomics_log_offset(config)
+    expr_linear <- 2^as.matrix(pre$expr_filt) - offset  # NAs (unobserved) preserved
+
+    compute_group_cv_columns(
+        expr_linear   = expr_linear,
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df
     )
 }

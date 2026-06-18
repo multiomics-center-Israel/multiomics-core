@@ -38,7 +38,7 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
     n_proteins_raw <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA
     n_proteins     <- if (!is.null(pre$expr_imp_single)) nrow(pre$expr_imp_single) else NA
 
-    group_col <- prot_cfg$effects$color %||% "Condition"
+    group_col <- prot_cfg$de_table$group_col %||% prot_cfg$effects$color %||% "Condition"
     n_groups <- NA
     groups <- character()
     if (!is.null(pre$meta) && !is.null(group_col) && group_col %in% names(pre$meta)) {
@@ -120,6 +120,7 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
                 fc_vals <- as.numeric(tbl[[fc_col]])
                 log2fc <- ifelse(is.na(fc_vals) | fc_vals == 0, NA_real_,
                                  log2(abs(fc_vals)) * sign(fc_vals))
+
             } else {
                 log2fc <- as.numeric(tbl[[fc_col]])
             }
@@ -292,7 +293,7 @@ generate_proteomics_summary_with_claude <- function(stats, comment_cfg) {
     )
 
     cmd <- sprintf(
-        "unset CLAUDECODE; claude --print --model %s --no-session-persistence %s",
+        "claude --print --model %s --no-session-persistence %s",
         model, shQuote(prompt)
     )
 

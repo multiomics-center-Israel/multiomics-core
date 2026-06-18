@@ -368,9 +368,10 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             de_df <- de_df[order(de_df$Hierarchical_Order, na.last = TRUE), , drop = FALSE]
         }
 
-        # Reorder columns to: ID, annotations, expression, DE_stats, clustering, z-scores
+        # Reorder columns to: ID, annotations, expression, CV, DE_stats, clustering, z-scores
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
+        cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
         de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
@@ -379,18 +380,19 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         )
         zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
 
-        # Annotation columns = everything not in ID, expression, DE stats, clustering, z-scores, or 'order'
-        all_known <- c(id_cols, expr_cols, de_stat_cols, clustering_cols, zscore_cols, "order")
+        # Annotation columns = everything not in ID, expression, CV, DE stats, clustering, z-scores, or 'order'
+        all_known <- c(id_cols, expr_cols, cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
         annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
         expr_cols_present <- intersect(expr_cols, names(de_df))
 
-        # Build desired column order
+        # Build desired column order (CV columns sit right after the expression block)
         desired_order <- c(
             id_cols,
             annot_cols_present,
             expr_cols_present,
+            cv_cols_present,
             de_stat_cols,
             clustering_cols,
             zscore_cols
@@ -408,19 +410,18 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 
 #' Get standard column names for a contrast
 #' @param contrast Contrast name
-#' @param mode "proteomics" (uses .imputs.) or "rna" (no .imputs.)
+#' @param mode "proteomics" (uses .imputs.), "rna" or "metabolomics" (no .imputs.)
 get_contrast_cols <- function(contrast, mode = "proteomics") {
     stopifnot(is.character(contrast), length(contrast) == 1, nzchar(contrast))
 
-    # Strip spaces to match summarize_limma_mult_imputation() convention
-    # (proteomics convention; RNA preserves original contrast names)
-    contrast_safe <- gsub(" ", "", contrast)
-    if (contrast_safe != contrast) {
-        message("Note: spaces removed from contrast name '", contrast, "' -> '", contrast_safe, "'")
+    # Proteomics DE summary strips spaces from contrast names; rna, metabolomics
+    # and lipidomics keep them as-is.  Only normalize for proteomics.
+    if (!mode %in% c("rna", "metabolomics", "lipidomics")) {
+        contrast <- normalize_contrast_name(contrast)
     }
 
-    # FIX 2: RNA doesn't use ".imputs." in column names
-    # RNA also preserves spaces in contrast names (from build_rnaseq_summary_df)
+    # RNA-seq: no .imputs. infix; pass column is "<contrast>_pass"
+    # (see build_rnaseq_summary_df() in R/domain/rnaseq/04_de_summary.R).
     if (mode == "rna") {
         list(
             fc     = paste0("linearFC.", contrast),
@@ -431,24 +432,30 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else if (mode %in% c("metabolomics", "lipidomics")) {
-        # Metabolomics/lipidomics use linearFC., P.Value., adj.P.Val. dot naming
+        # Metabolomics: identical to RNA-seq EXCEPT the pass column is
+        # "pass.<contrast>" (see build_de_summary() in
+        # R/domain/metabolomics/03_differential.R, which emits paste0("pass.", ctr)).
+        # rna and metabolomics share fc/p/padj/updown/manual naming but differ on
+        # the pass affix, so they need separate branches. Lipidomics is analysed
+        # through the metabolomics pipeline (no dedicated lipidomics DE step), so
+        # it reuses this naming; revisit if a lipidomics-specific DE is added.
         list(
-            fc     = paste0("linearFC.", contrast_safe),
-            p      = paste0("P.Value.", contrast_safe),
-            padj   = paste0("adj.P.Val.", contrast_safe),
-            pass   = paste0("pass.", contrast_safe),
-            updown = paste0("upDown.", contrast_safe),
-            manual = paste0("manual_cutoffs.", contrast_safe)
+            fc     = paste0("linearFC.", contrast),
+            p      = paste0("pvalue.", contrast),
+            padj   = paste0("padj.", contrast),
+            pass   = paste0("pass.", contrast),
+            updown = paste0("upDown.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
         )
     } else {
         # Proteomics (uses imputation naming)
         list(
-            fc     = paste0("linearFC.imputs.", contrast_safe),
-            p      = paste0("pvalue.imputs.", contrast_safe),
-            padj   = paste0("padj.imputs.", contrast_safe),
-            pass   = paste0("pass.imputs.", contrast_safe),
-            updown = paste0("upDown.imputs.", contrast_safe),
-            manual = paste0("manual_cutoffs.", contrast_safe)
+            fc     = paste0("linearFC.imputs.", contrast),
+            p      = paste0("pvalue.imputs.", contrast),
+            padj   = paste0("padj.imputs.", contrast),
+            pass   = paste0("pass.imputs.", contrast),
+            updown = paste0("upDown.imputs.", contrast),
+            manual = paste0("manual_cutoffs.", contrast)
         )
     }
 }
@@ -472,7 +479,7 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
 
     for (mcol in manual_cols) {
         contrast <- sub("^manual_cutoffs\\.", "", mcol)
-        cols <- get_contrast_cols(contrast)
+        cols <- get_contrast_cols(contrast, mode = mode)
         if (!all(c(cols$fc, cols$p, cols$padj) %in% names(final_results))) next
 
         fc_L <- openxlsx::int2col(match(cols$fc, names(final_results)))
@@ -496,6 +503,111 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
     invisible(TRUE)
 }
 
+#' Per-row coefficient of variation (CV%) on a linear matrix
+#'
+#' Arithmetic CV expressed as a percentage: \code{100 * sd(x) / mean(x)} per
+#' row, using the sample (n-1) standard deviation (R's \code{stats::sd}).
+#' Intended for LINEAR, positive data only — CV is not meaningful on log-scale
+#' values (callers back-transform first).
+#'
+#' Edge cases (all return \code{NA_real_}, never 0 or Inf):
+#' - rows with fewer than 2 non-missing values (CV/sample-SD undefined),
+#' - rows whose mean is 0 or non-finite (division undefined).
+#'
+#' @param mat Numeric matrix (features x samples) on a linear scale. NAs are
+#'   dropped per row (\code{na.rm = TRUE}).
+#' @return Named numeric vector of CV% per row (names = \code{rownames(mat)}).
+cv_percent <- function(mat) {
+    mat <- as.matrix(mat)
+    if (nrow(mat) == 0L) return(stats::setNames(numeric(0), rownames(mat)))
+
+    n_obs <- rowSums(!is.na(mat))
+    means <- rowMeans(mat, na.rm = TRUE)
+    sds   <- apply(mat, 1, stats::sd, na.rm = TRUE)
+
+    cv <- 100 * sds / means
+    # Undefined cases -> NA (single/empty observations, or zero/non-finite mean)
+    cv[n_obs < 2L] <- NA_real_
+    cv[!is.finite(means) | means == 0] <- NA_real_
+    cv[!is.finite(cv)] <- NA_real_
+
+    if (!is.null(rownames(mat))) names(cv) <- rownames(mat)
+    cv
+}
+
+#' Per-group coefficient of variation (CV%) columns for contrast groups
+#'
+#' Computes \code{CV.<group>} columns (percent CV across the biological
+#' replicates of each group) for every group that appears in at least one
+#' contrast, i.e. \code{union(contrasts_df$Numerator, contrasts_df$Denominator)}.
+#' Group membership is resolved from \code{sample_meta}: samples sharing the
+#' same value in the \code{Factor} column are biological replicates.
+#'
+#' CV is computed on \code{expr_linear}, which MUST already be on a linear,
+#' positive scale (the caller is responsible for any back-transform — e.g.
+#' linear CPM for RNA-seq, \code{2^x} for proteomics/metabolomics). Math and
+#' edge-case handling are delegated to \code{\link{cv_percent}}.
+#'
+#' @param expr_linear Numeric matrix (features x samples), linear scale.
+#'   Column names must match \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding sample IDs that
+#'   match \code{colnames(expr_linear)}.
+#' @param contrasts_df Contrasts table with \code{Factor}, \code{Numerator},
+#'   \code{Denominator} columns.
+#' @param group_col Optional override for the grouping column. Defaults to the
+#'   (single) value of \code{contrasts_df$Factor}.
+#' @return A feature-indexed data.frame of \code{CV.<group>} columns
+#'   (rownames = \code{rownames(expr_linear)}), or \code{NULL} if CV cannot be
+#'   computed (missing inputs, no contrast groups, or ambiguous Factor).
+compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
+                                     contrasts_df, group_col = NULL) {
+    if (is.null(expr_linear) || is.null(sample_meta) || is.null(sample_id_col)) {
+        return(NULL)
+    }
+    if (!is.data.frame(contrasts_df) ||
+        !all(c("Numerator", "Denominator") %in% colnames(contrasts_df))) {
+        return(NULL)
+    }
+    if (!sample_id_col %in% colnames(sample_meta)) {
+        return(NULL)
+    }
+
+    # Resolve the grouping column: explicit override, else the contrasts' Factor
+    factor_col <- group_col %||% (if ("Factor" %in% colnames(contrasts_df)) {
+        unique(as.character(contrasts_df$Factor))
+    } else NULL)
+    factor_col <- factor_col[!is.na(factor_col) & factor_col %in% colnames(sample_meta)]
+    if (length(factor_col) != 1L) {
+        warning("compute_group_cv_columns: could not resolve a single grouping column; skipping CV.")
+        return(NULL)
+    }
+
+    # Groups that appear in at least one contrast (Q5: union of Num/Den)
+    groups <- unique(c(as.character(contrasts_df$Numerator),
+                       as.character(contrasts_df$Denominator)))
+    groups <- groups[!is.na(groups) & nzchar(groups)]
+    if (length(groups) == 0L) return(NULL)
+
+    expr_linear <- as.matrix(expr_linear)
+    meta_ids <- as.character(sample_meta[[sample_id_col]])
+    meta_grp <- as.character(sample_meta[[factor_col]])
+    col_grp  <- meta_grp[match(colnames(expr_linear), meta_ids)]
+
+    cv_list <- lapply(groups, function(g) {
+        cols <- which(col_grp == g)
+        if (length(cols) == 0L) {
+            return(rep(NA_real_, nrow(expr_linear)))
+        }
+        unname(cv_percent(expr_linear[, cols, drop = FALSE]))
+    })
+    names(cv_list) <- paste0("CV.", groups)
+
+    cv_df <- as.data.frame(cv_list, check.names = FALSE, stringsAsFactors = FALSE)
+    rownames(cv_df) <- rownames(expr_linear)
+    cv_df
+}
+
 #' Build final results table (generic for any mode)
 #'
 #' SEMANTICS (CRITICAL):
@@ -513,8 +625,12 @@ fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config
 #' @param fc_is_signed Logical; if TRUE (default), FC is signed (linearFC/logFC).
 #'                     If FALSE, must provide fc_direction_col.
 #' @param fc_direction_col Optional; column name for direction if FC is unsigned ratio
+#' @param cv_cols Optional feature-indexed data.frame of per-group CV% columns
+#'   (e.g. from \code{\link{compute_group_cv_columns}}). When supplied, these
+#'   columns are inserted immediately after the per-sample expression block and
+#'   before the per-contrast statistics, matched by feature ID.
 #'
-#' @return data.frame with ID, annotations, expression, DE stats, pass_any_contrast
+#' @return data.frame with ID, annotations, expression, [CV.<group>], DE stats, pass_any_contrast
 build_final_results_generic <- function(
   summary_df,
   expr_df,
@@ -524,7 +640,8 @@ build_final_results_generic <- function(
   row_data = NULL,
   fc_is_signed = TRUE,
   fc_direction_col = NULL,
-  mode = "proteomics"  # FIX 2: Add mode parameter for column naming
+  mode = "proteomics",  # FIX 2: Add mode parameter for column naming
+  cv_cols = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -642,6 +759,20 @@ build_final_results_generic <- function(
     }
 
     # ============================================================
+    # ADD PER-GROUP CV COLUMNS (linear-scale CV%, after expression)
+    # ============================================================
+
+    if (!is.null(cv_cols) && is.data.frame(cv_cols) && ncol(cv_cols) > 0) {
+        if (is.null(rownames(cv_cols))) {
+            warning("cv_cols has no rownames. Cannot add per-group CV columns.")
+        } else {
+            cv_matched <- cv_cols[match(base[[feature_id_col]], rownames(cv_cols)), , drop = FALSE]
+            rownames(cv_matched) <- NULL
+            base <- cbind(base, cv_matched)
+        }
+    }
+
+    # ============================================================
     # ADD CONTRAST STATISTICS
     # ============================================================
 
@@ -668,6 +799,14 @@ build_final_results_generic <- function(
         pass_vals <- if (cols$pass %in% colnames(summary_df)) {
             summary_df[[cols$pass]][m]
         } else {
+            # Loud signal instead of a silent all-NA fallback: when the pass
+            # column the builder expects is absent, upDown would be blank for
+            # every row even when fc/p/padj are present (the see-saw bug, where
+            # get_contrast_cols() and the DE step disagree on the pass affix).
+            warning(sprintf(
+                "Contrast '%s' (mode '%s'): expected pass column '%s' not found in summary_df; upDown will be blank for all rows. Check get_contrast_cols() naming vs the DE step's pass column.",
+                cn, mode, cols$pass
+            ))
             rep(NA, length(m))
         }
 
@@ -781,6 +920,7 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
     mat_clean[idx_na] <- row_means[idx_na[,1]]
   }
 
+
   # hclust requires >= 2 rows; assign rank 1 for a single feature
   if (nrow(mat_clean) < 2) {
     ranks <- if (nrow(mat_clean) == 1) match(df[[id_col]], rownames(mat_clean)) else rep(NA_integer_, nrow(df))
@@ -791,10 +931,11 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
   # Simple clustering
   dists <- dist(mat_clean)
   hc <- hclust(dists, method = "complete")
-  
+
   # Create an order mapping
   ordered_ids <- rownames(mat_clean)[hc$order]
   ranks <- match(df[[id_col]], ordered_ids)
+
 
   # Use Hierarchical_Order if column exists, otherwise fall back to 'order'
   if ("Hierarchical_Order" %in% names(df)) {
@@ -803,4 +944,64 @@ add_default_order_if_missing <- function(df, expr_mat, id_col) {
     df$order <- ranks
   }
   return(df)
+}
+
+# ============================================================
+# Shiny-payload helpers
+# ============================================================
+
+# Keep these in sync with the sprintf() patterns in
+# write_final_results_excels_legacy_generic() (lines 80-81).
+.final_xlsx_all_pattern <- "Final_results_ALL_P_.*\\.xlsx$"
+.final_xlsx_de_pattern  <- "Final_results_DE_P_.*\\.xlsx$"
+
+#' Attach raw .xlsx bytes for Final_results_{ALL,DE} to a Shiny payload
+#'
+#' Adds two optional keys to a canonical Shiny payload:
+#'   - \code{all_final_xlsx}: raw bytes of \code{Final_results_ALL_P_<p>.xlsx}
+#'   - \code{de_final_xlsx}:  raw bytes of \code{Final_results_DE_P_<p>.xlsx}
+#'
+#' Both files are produced by
+#' \code{\link{write_final_results_excels_legacy_generic}}. The Shiny app can
+#' \code{writeBin()} either field to a temp file and re-open it as a workbook.
+#'
+#' Existing \code{de_final_table} (a data.frame) is left untouched. NULL-safe:
+#' if a matching path is absent from \code{xlsx_files} or the file does not
+#' exist on disk, the corresponding key stays NULL and a \code{message()} is
+#' emitted.
+#'
+#' @param payload Named list (canonical Shiny payload).
+#' @param xlsx_files Character vector of file paths returned by the legacy
+#'   exports target (e.g. \code{rna_outputs_legacy}, \code{metab_final_results},
+#'   or \code{excel_files} inside \code{mod_proteomics_exports}).
+#' @return \code{payload} with \code{all_final_xlsx} / \code{de_final_xlsx}
+#'   populated as \code{raw} vectors (or left NULL).
+#' @export
+attach_final_results_xlsx_bytes <- function(payload, xlsx_files) {
+    if (is.null(xlsx_files) || length(xlsx_files) == 0) {
+        message("[shiny payload] no xlsx_files provided; ",
+                "all_final_xlsx / de_final_xlsx left NULL")
+        return(payload)
+    }
+    xlsx_files <- as.character(xlsx_files)
+
+    read_one <- function(pattern, key) {
+        hits <- xlsx_files[grepl(pattern, basename(xlsx_files))]
+        if (length(hits) == 0) {
+            message(sprintf("[shiny payload] no match for %s; %s left NULL",
+                            pattern, key))
+            return(NULL)
+        }
+        path <- hits[[1]]
+        if (!file.exists(path)) {
+            message(sprintf("[shiny payload] file missing: %s; %s left NULL",
+                            path, key))
+            return(NULL)
+        }
+        readBin(path, what = "raw", n = file.info(path)$size)
+    }
+
+    payload$all_final_xlsx <- read_one(.final_xlsx_all_pattern, "all_final_xlsx")
+    payload$de_final_xlsx  <- read_one(.final_xlsx_de_pattern,  "de_final_xlsx")
+    payload
 }

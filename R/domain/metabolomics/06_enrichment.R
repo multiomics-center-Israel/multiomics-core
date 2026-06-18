@@ -610,14 +610,24 @@ run_metabolomics_ora <- function(pre, de_res, config) {
     contrast_name <- names(de_res$de_tables)[1]
     de_tbl <- de_res$de_tables[[contrast_name]]
 
-    sig_mask <- !is.na(de_tbl$P.Value) & de_tbl$P.Value < p_cutoff &
-                !is.na(de_tbl$logFC) & abs(de_tbl$logFC) >= lfc_cutoff
+    # Significance filtering: choose p-value column via config.
+    # Defaults to "P.Value" (raw) — MetaboAnalyst-style ORA convention.
+    # Set enr_cfg$pvalue_column = "adj.P.Val" for FDR-controlled filtering.
+    pval_col <- enr_cfg$pvalue_column %||% "P.Value"
+    if (!pval_col %in% colnames(de_tbl)) {
+      stop("metabolomics ORA: pvalue_column '", pval_col,
+           "' not found in DE table. Available columns: ",
+           paste(colnames(de_tbl), collapse = ", "))
+    }
+    
+    sig_mask <- !is.na(de_tbl[[pval_col]]) & de_tbl[[pval_col]] < p_cutoff &
+      !is.na(de_tbl$logFC) & abs(de_tbl$logFC) >= lfc_cutoff
     sig_features <- de_tbl$feature_id[sig_mask]
-
+    
     if (length(sig_features) == 0) {
-        message("metabolomics ORA: no significant features at p<", p_cutoff,
-                " |logFC|>=", round(lfc_cutoff, 3), " — skipping")
-        return(NULL)
+      message("metabolomics ORA: no significant features at ", pval_col, "<", p_cutoff,
+              " |logFC|>=", round(lfc_cutoff, 3), " — skipping")
+      return(NULL)
     }
 
     # Map significant feature IDs to the same compound namespace as bg_ids.

@@ -158,6 +158,8 @@ modes:
           k: null
           k_max: 20
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8
@@ -214,6 +216,11 @@ modes:
       # Metadata columns to concatenate for informative sample column headers.
       # Set to null to keep original sample IDs:
       sample_label_cols: null
+      # Add per-group CV% columns (CV.<group>) to Final_results_{ALL,DE} for the
+      # groups appearing in any contrast. Proteomics CV is computed on linear
+      # intensities (2^log2) using observed values only (imputed values excluded;
+      # groups with <2 observations yield NA). Set to false to omit these columns.
+      group_cv: true
 
     # --------------------------------------------------------
     # Annotation / Organism

@@ -206,13 +206,15 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     p_cfg <- cfg$modes$proteomics
 
     sample_col <- p_cfg$effects$samples %||% "SampleID"
-    group_col <- p_cfg$effects$color %||% "Condition"
+    group_col <- p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
+    
 
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
     annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
 
     assert_numeric_matrix(expr_imp, "expr_imp")
+    expr_imp <- align_matrix_to_meta(expr_imp, meta, sample_col)
     meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
 
     meta_aligned[[group_col]] <- factor(meta_aligned[[group_col]])
@@ -651,8 +653,9 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         cn <- colnames(raw)
 
         # Feature IDs
-        feat_col <- cn[cn %in% c(id_col, "FeatureID", "Protein.Group",
-                                  "protein_id", "feature_id")][1]
+        prot_id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
+        feat_col <- cn[cn %in% c(id_col, prot_id_col, "FeatureID", "ID",
+                                  "Protein.Group", "protein_id", "feature_id")][1]
         if (is.na(feat_col)) {
             unnamed_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
             feat_ids <- if (!is.na(unnamed_idx)) as.character(raw[[unnamed_idx]]) else rownames(raw)

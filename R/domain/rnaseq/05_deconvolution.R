@@ -67,8 +67,8 @@ run_deconvolution <- function(pre, de_res, cfg, out_dir) {
     deconv_dir <- file.path(out_dir, "Deconvolution")
     if (!dir.exists(deconv_dir)) dir.create(deconv_dir, recursive = TRUE)
 
-    group_col <- cfg$filtering$group_col %||% "condition"
-
+    group_col <-  cfg$filtering$group_col %||% cfg$de_table$group_col %||% cfg$effects$color %||% "Condition"
+    
     # Prepare expression for xCell2 (needs non-log CPM)
     expr_for_xcell <- prepare_expression_for_xcell(pre$expr_filt)
 
@@ -313,7 +313,8 @@ generate_deconvolution_plots <- function(xcell_results, diff_comp, metadata, gro
                 t(score_mat_scaled),
                 name = "z-score",
                 show_column_names = ncol(score_mat_scaled) <= 50,
-                column_title = "Cell Type Enrichment Scores"
+                column_title = "Cell Type Enrichment Scores",
+              rect_gp = grid::gpar(col = NA)
             )
             ComplexHeatmap::draw(ht)
             grDevices::dev.off()

@@ -59,20 +59,19 @@ modes:
     # ==============================================================================
     preprocessing:
 
-      # ---- Missingness filtering ----
-      feat_missing_threshold: 0.20
-      sample_missing_threshold: 0.30
-
-      # MNAR vs MAR classification (Spearman correlation)
-      mnar_threshold: 0.3
-
-      # ---- Imputation ----
-      knn_k: 10
-      epsilon: 1.0e-8
+      # ---- Missingness filtering (soft defaults) ----
+      # feat_missing_threshold:   drop a metabolite if it is missing in more
+      #                           than this fraction of samples (0.50 = drop
+      #                           only metabolites missing in >50% of samples).
+      # sample_missing_threshold: drop a sample if it is missing more than
+      #                           this fraction of metabolites. Set to 1.0 to
+      #                           disable sample filtering entirely.
+      feat_missing_threshold: 0.50
+      sample_missing_threshold: 1.0
 
       # ---- Normalization selection workflow ----
       # null  → QC review mode (compute all methods, stop after report)
-      # "tss" | "median" | "pqn" → full pipeline
+      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
       chosen_norm: null
 
       # ---- Drift correction (LOESS) ----
@@ -84,7 +83,7 @@ modes:
         epsilon: 1.0e-8
 
     # ==============================================================================
-    # Normalization & scaling (interpretation layer)
+    # Normalization & scaling (legacy reference — see preprocessing.chosen_norm)
     # ==============================================================================
     normalization:
 
@@ -98,7 +97,8 @@ modes:
       #   - TSS (total sum scaling)
       #   - Median normalization (log shift)
       #   - PQN
-      # chosen_norm (above) decides which one is used downstream
+      # The active normalization choice is controlled by
+      # preprocessing.chosen_norm (above), not by this field.
       sample_norm: "pqn"
 
       # ---- Transformation ----
@@ -106,14 +106,11 @@ modes:
       transform: "log2"
 
       # ---- Scaling ----
-      # IMPORTANT:
-      # Currently NOT applied in preprocessing pipeline.
-      # Intended for:
-      #   - QC / reporting layer
-      #   - downstream modeling (future)
-      #
+      # Feature scaling is not applied in the current metabolomics
+      # preprocessing and DE analysis path.
+      # This field is retained for backward compatibility only.
       # Options: "none" | "auto" | "pareto" | "range"
-      scaling: "pareto"
+      scaling: "none"
 
       # ---- Log pseudocount ----
       pseudocount: 1
@@ -159,12 +156,23 @@ modes:
       # Metadata columns to concatenate for informative sample column headers.
       # Set to null to keep original sample IDs:
       sample_label_cols: null
+      # Add per-group CV% columns (CV.<group>) to Final_results_{ALL,DE} for the
+      # groups appearing in any contrast. Metabolomics CV is computed on the
+      # post-normalization linear matrix (2^expr_work - pseudocount), keeping it
+      # comparable to the RNA-seq/proteomics CV. NOTE: if feature scaling is
+      # enabled (normalization.scaling != "none"), this back-transform is invalid
+      # and CV falls back to the PRE-normalization matrix, which then includes
+      # technical variation. Set to false to omit these columns.
+      group_cv: true
 
     qc:
       enabled: true
 
       # Used for QC-specific plots (e.g., drift, QC clustering)
       qc_flag_column: "treatment"
+
+      # Set true to generate the binary missingness heatmap (diagnostic_plots/)
+      missingness_heatmap: false
 
       thresholds:
         min_samples_for_pca3d: 4
@@ -203,6 +211,8 @@ modes:
           distance: "euclidean"
           k_max: 20
           nstart: 25
+          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
+          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
 
         binary_patterns:
           enabled: true
@@ -218,3 +228,7 @@ modes:
       libraries: []
       gmt_file: null
       mapping_file: null
+      # Which p-value column to use when filtering significant features for ORA:
+      #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
+      #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
+      pvalue_column: "P.Value"

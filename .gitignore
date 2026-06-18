@@ -52,6 +52,8 @@ data/*
 config/*.yaml
 !config/templates/*.yaml
 
+# bioskills
+bioSkills/
 # Third-party repos (referenced, not bundled)
 claude-scientific-skills/
 
@@ -60,7 +62,6 @@ scripts/*.R
 
 # User-specific environment variables
 .Renviron
-
 Rplots.pdf
 Rplot.png
 .lintr
@@ -86,3 +87,5 @@ _targets.yaml
 
 # Test output artifacts
 tests/testthat/test_outputs/
+
+results/ 

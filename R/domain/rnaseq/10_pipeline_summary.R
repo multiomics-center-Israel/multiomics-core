@@ -38,7 +38,7 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
     n_genes_raw <- if (!is.null(pre$expr_raw)) nrow(pre$expr_raw) else NA
     n_genes     <- if (!is.null(pre$expr_filt)) nrow(pre$expr_filt) else NA
 
-    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$effects$color
+    group_col <- rna_cfg$filtering$group_col %||% rna_cfg$de_table$group_col %||% rna_cfg$effects$color %||% "Condition"
     n_groups <- NA
     groups <- character()
     if (!is.null(pre$meta) && !is.null(group_col) && group_col %in% names(pre$meta)) {

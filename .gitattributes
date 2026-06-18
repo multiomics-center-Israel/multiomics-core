@@ -1,0 +1,144 @@
+# =============================================================================
+# .gitattributes
+# =============================================================================
+# Line-ending normalization, binary handling, and PR-diff hints.
+#
+# All text files are stored with LF in the repository and checked out as LF,
+# regardless of operating system. Editors on Windows (RStudio, VSCode) handle
+# LF without issue. This prevents the "phantom diff" problem where a file
+# appears modified just because Windows wrote CRLF line endings.
+
+# -----------------------------------------------------------------------------
+# Default: detect text files, store + check out with LF
+# -----------------------------------------------------------------------------
+* text=auto eol=lf
+
+# -----------------------------------------------------------------------------
+# Source code & config — explicit overrides (defensive, mostly redundant)
+# -----------------------------------------------------------------------------
+*.R          text eol=lf
+*.Rmd        text eol=lf
+*.Rproj      text eol=lf
+*.py         text eol=lf
+*.sh         text eol=lf
+*.yaml       text eol=lf
+*.yml        text eol=lf
+*.json       text eol=lf
+*.lock       text eol=lf
+*.md         text eol=lf
+*.txt        text eol=lf
+*.csv        text eol=lf
+*.tsv        text eol=lf
+*.html       text eol=lf
+*.svg        text eol=lf
+
+# -----------------------------------------------------------------------------
+# R package & dotfiles (no extension — must list explicitly)
+# -----------------------------------------------------------------------------
+DESCRIPTION  text eol=lf
+NAMESPACE    text eol=lf
+LICENSE      text eol=lf
+README       text eol=lf
+NEWS         text eol=lf
+.Rprofile    text eol=lf
+.Renviron    text eol=lf
+.lintr       text eol=lf
+
+# -----------------------------------------------------------------------------
+# Windows-only scripts — keep CRLF (won't run otherwise on Windows)
+# -----------------------------------------------------------------------------
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+*.vbs        text eol=crlf
+
+# -----------------------------------------------------------------------------
+# Bioinformatics text formats
+# (Usually .gitignored due to size — but if they sneak in, normalize anyway)
+# -----------------------------------------------------------------------------
+*.bed        text eol=lf
+*.gff        text eol=lf
+*.gff3       text eol=lf
+*.gtf        text eol=lf
+*.vcf        text eol=lf
+*.sam        text eol=lf
+*.fasta      text eol=lf
+*.fa         text eol=lf
+*.fastq      text eol=lf
+*.fq         text eol=lf
+
+# -----------------------------------------------------------------------------
+# Bioinformatics binary formats — never touch line endings
+# -----------------------------------------------------------------------------
+*.bam        binary
+*.bai        binary
+*.cram       binary
+*.crai       binary
+*.bcf        binary
+*.tbi        binary
+*.idx        binary
+*.bgz        binary
+*.fastq.gz   binary
+*.fq.gz      binary
+*.fasta.gz   binary
+
+# -----------------------------------------------------------------------------
+# Images & documents — binary
+# -----------------------------------------------------------------------------
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.pdf        binary
+*.xlsx       binary
+*.xls        binary
+*.pptx       binary
+*.docx       binary
+
+# -----------------------------------------------------------------------------
+# Scientific & R data — binary
+# -----------------------------------------------------------------------------
+*.rds        binary
+*.RData      binary
+*.h5         binary
+*.h5ad       binary
+*.parquet    binary
+*.feather    binary
+*.arrow      binary
+*.npy        binary
+*.npz        binary
+*.pkl        binary
+*.pickle     binary
+
+# -----------------------------------------------------------------------------
+# Archives & compression — binary
+# -----------------------------------------------------------------------------
+*.zip        binary
+*.tar        binary
+*.tar.gz     binary
+*.tgz        binary
+*.gz         binary
+*.bz2        binary
+*.xz         binary
+*.lz4        binary
+*.7z         binary
+
+# -----------------------------------------------------------------------------
+# Compiled libraries — binary
+# -----------------------------------------------------------------------------
+*.dll        binary
+*.so         binary
+*.dylib      binary
+
+# -----------------------------------------------------------------------------
+# Jupyter notebooks — pick ONE of the two below
+# -----------------------------------------------------------------------------
+# Default: treat as text — allows diffs in reviews
+*.ipynb      text eol=lf
+# Alternative: treat as binary — avoids merge conflicts on cell outputs
+# *.ipynb    binary
+
+# -----------------------------------------------------------------------------
+# PR-diff hints — collapse generated files in GitHub PR reviews
+# -----------------------------------------------------------------------------
+renv.lock           linguist-generated=true
+*.Rd                linguist-generated=true

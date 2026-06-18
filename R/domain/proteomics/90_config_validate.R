@@ -98,6 +98,7 @@ validate_proteomics_config <- function(cfg) {
         }
     }
 
+
     # 4c. Pathway databases validation
     if (!is.null(cfg$pathway$databases)) {
         valid_dbs <- c("all", "GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
@@ -140,11 +141,12 @@ validate_proteomics_config <- function(cfg) {
     }
 
     # 7. Clustering Settings (optional)
+
     if (!is.null(cfg$clustering)) {
         validate_clustering_config(cfg$clustering)
     }
 
-    # 6. PPI Settings (optional)
+    # 8. PPI Settings (optional)
     if (!is.null(cfg$ppi)) {
         assert_scalar_bool(cfg$ppi$enabled, "ppi$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$ppi$string_score_threshold, "ppi$string_score_threshold",
@@ -155,7 +157,7 @@ validate_proteomics_config <- function(cfg) {
                           allow_null = TRUE, min_val = 0)
     }
 
-    # 7. Advanced Stats Settings (optional)
+    # 9. Advanced Stats Settings (optional)
     if (!is.null(cfg$advanced_stats)) {
         assert_scalar_bool(cfg$advanced_stats$enabled, "advanced_stats$enabled", allow_null = TRUE)
         assert_scalar_num(cfg$advanced_stats$bootstrap_n, "advanced_stats$bootstrap_n",
@@ -166,7 +168,7 @@ validate_proteomics_config <- function(cfg) {
                            "advanced_stats$run_robust_regression", allow_null = TRUE)
     }
 
-    # 8. QC Settings (optional)
+    # 10. QC Settings (optional)
     if (!is.null(cfg$qc)) {
         assert_scalar_bool(cfg$qc$run_umap, "qc$run_umap", allow_null = TRUE)
         assert_scalar_num(cfg$qc$umap_n_neighbors, "qc$umap_n_neighbors",

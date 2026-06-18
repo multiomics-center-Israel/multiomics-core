@@ -44,6 +44,7 @@ build_shiny_payload_metabolomics <- function(
     enrichment_res = NULL,
     annot = NULL,
     include_legacy = TRUE,
+    xlsx_files = NULL,
     out_dir = NULL
 ) {
     # ============================================================
@@ -58,6 +59,7 @@ build_shiny_payload_metabolomics <- function(
     metab_cfg <- modes$metabolomics %||% list()
     de_cfg <- metab_cfg$de %||% list()
     norm_cfg <- metab_cfg$normalization %||% list()
+    preprocessing_cfg <- metab_cfg$preprocessing %||% list()
     effects_cfg <- metab_cfg$effects %||% list()
 
     # ============================================================
@@ -76,12 +78,14 @@ build_shiny_payload_metabolomics <- function(
     # contrasts: Contrast definitions
     payload$contrasts <- inputs$contrasts %||% NULL
 
-    # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.)
-    if (!is.null(annot)) {
-        payload$feature_annot <- annot
-    } else if (!is.null(pre$row_data)) {
-        # Use row_data as feature annotations if no external annot provided
-        payload$feature_annot <- pre$row_data
+    # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.).
+    # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
+    # the shared helper (feature_id -> rownames) so future annotation columns
+    # flow through automatically.
+    payload$feature_annot <- if (!is.null(annot)) {
+        annot
+    } else {
+        build_feature_annot(pre$row_data, "feature_id")
     }
 
     # ============================================================
@@ -136,6 +140,7 @@ build_shiny_payload_metabolomics <- function(
         # pca_scores: PCA scores data.frame with metadata
         payload$pca_scores <- pca_objects$pca_scores %||% NULL
 
+
         # pca_3d: 3D PCA plotly widget
         payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
         
@@ -168,6 +173,14 @@ build_shiny_payload_metabolomics <- function(
             if (!is.na(found_col) && !"feature_id" %in% names(payload$de_stats)) {
                 payload$de_stats$feature_id <- payload$de_stats[[found_col]]
             }
+
+            # Merge row_data annotation columns into de_stats (additive, skip on collision)
+            payload$de_stats <- annotate_de_stats(
+                payload$de_stats,
+                pre$row_data,
+                id_col_de  = "feature_id",
+                id_col_row = "feature_id"
+            )
         }
 
         # de_sig_stats: Subset of de_stats for significant features
@@ -195,7 +208,17 @@ build_shiny_payload_metabolomics <- function(
 
         # de_summary: Per-contrast summary counts
         if (!is.null(payload$de_stats)) {
-            payload$de_summary <- build_de_summary_counts_metabolomics(payload$de_stats, out_dir = out_dir)
+            contrasts_vec <- if (!is.null(inputs$contrasts) &&
+                                 "Contrast_name" %in% colnames(inputs$contrasts)) {
+                as.character(inputs$contrasts$Contrast_name)
+            } else {
+                character(0)
+            }
+            payload$de_summary <- build_de_summary_counts_metabolomics(
+                payload$de_stats,
+                contrasts = contrasts_vec,
+                out_dir   = out_dir
+            )
         }
 
         # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
@@ -203,6 +226,11 @@ build_shiny_payload_metabolomics <- function(
             payload$de_final_table <- payload$de_sig_stats
         }
     }
+
+    # ============================================================
+    # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
+    # ============================================================
+    payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
     # CLUSTERING (4 keys)
@@ -257,6 +285,7 @@ build_shiny_payload_metabolomics <- function(
     linear_fc <- de_cfg$linear_fc_cutoff %||% 1.5
     payload$log_fc_cutoff <- log2(linear_fc)
 
+    payload$fc_cutoff <- linear_fc
     # Build normalization method description
     norm_method <- paste0(
         norm_cfg$sample_norm %||% "none",
@@ -266,6 +295,12 @@ build_shiny_payload_metabolomics <- function(
         norm_cfg$scaling %||% "none"
     )
     payload$norm_method <- norm_method
+
+    # Selected normalization matrix for the metabolomics preprocessing DAG
+    # (one of "tss" | "median" | "pqn"; NULL in review mode).
+    # List-style assignment preserves the key when the value is NULL —
+    # `payload$chosen_norm <- NULL` would remove it from the list.
+    payload["chosen_norm"] <- list(preprocessing_cfg$chosen_norm)
 
     # Group and aesthetic variables (canonical: group, color)
     if (!is.null(effects_cfg$color)) {
@@ -365,16 +400,19 @@ build_shiny_payload_metabolomics <- function(
 #' metabolomics naming conventions: \code{pass.<contrast>} pass columns and
 #' \code{linearFC.<contrast>} fold-change columns.
 #'
-#' @param de_stats DE statistics data.frame with pass columns
-#' @param out_dir Optional: output directory to write TSV file. If provided, writes de_summary.tsv
-#' @return data.frame with columns: contrast, up, down, total (invisibly if file written)
+#' @param de_stats  DE statistics data.frame with pass columns.
+#' @param contrasts Character vector of contrast names to count.
+#' @param out_dir   Optional: output directory to write TSV file.  If provided,
+#'   writes de_summary_counts.tsv.
+#' @return data.frame with columns: contrast, up, down, total (invisibly if
+#'   file written).
 #' @keywords internal
-build_de_summary_counts_metabolomics <- function(de_stats, out_dir = NULL) {
+build_de_summary_counts_metabolomics <- function(de_stats, contrasts, out_dir = NULL) {
     result <- build_de_summary_counts_generic(
-        de_stats         = de_stats,
-        pass_pattern     = "^pass\\.",
-        extract_contrast = function(col) sub("^pass\\.", "", col),
-        find_fc_col      = function(cn, cols) {
+        de_stats     = de_stats,
+        contrasts    = contrasts,
+        pass_col_for = function(cn) paste0("pass.", cn),
+        fc_col_for   = function(cn, cols) {
             fc <- paste0("linearFC.", cn)
             if (fc %in% cols) fc else NULL
         }

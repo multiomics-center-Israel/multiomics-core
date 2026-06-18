@@ -8,9 +8,10 @@
 #' @param run_dir  The results run directory (e.g. outputs/project/Results_...)
 #' @param config   Full pipeline config list
 #' @param config_file Path to the original YAML config file (for embedding)
+#' @param report_type Type of report: "detailed" (default) or "short"
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
-render_proteomics_report <- function(run_dir, config, config_file = NULL) {
+render_proteomics_report <- function(run_dir, config, config_file = NULL, report_type = "detailed") {
 
     # Locate the canonical Rmd template shipped with multiomics-core
     template_path <- system.file("report_template_proteomics.Rmd",
@@ -22,13 +23,11 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
         src_dir <- system.file("R", "domain", "proteomics",
                                 package = "multiomics.core",
                                 mustWork = FALSE)
-        if (!nzchar(src_dir) || !file.exists(file.path(src_dir, "report_template_proteomics.Rmd"))) {
-            # When running via targets::tar_source(), try the working directory first
-            cwd_path <- file.path("R", "domain", "proteomics")
-            if (file.exists(file.path(cwd_path, "report_template_proteomics.Rmd"))) {
-                src_dir <- cwd_path
-            } else {
-                # Fallback to project root from config
+        if (!nzchar(src_dir)) {
+            # When running via targets::tar_source(), try the working directory first,
+            # then fall back to the project root from config
+            src_dir <- file.path("R", "domain", "proteomics")
+            if (!file.exists(file.path(src_dir, "report_template_proteomics.Rmd"))) {
                 proj_dir <- config$project$dir %||% "."
                 src_dir <- file.path(proj_dir, "R", "domain", "proteomics")
             }
@@ -41,6 +40,7 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
                 ". Skipping report generation.")
         return(NA_character_)
     }
+
 
     # Ensure run_dir exists.  The Rmd and its HTML output live in the *parent*
     # results directory (alongside the pptx / pipeline summary), not inside the
@@ -122,7 +122,7 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
                 "or set RSTUDIO_PANDOC to a folder containing pandoc.exe.")
     }
 
-    message("Rendering proteomics report to: ", out_html)
+    message("Rendering proteomics report (", report_type, ") to: ", out_html)
 
     render_err      <- NULL
     render_err_full <- NULL
@@ -130,6 +130,7 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
         rmarkdown::render(
             input       = dest_rmd,
             output_file = out_html,
+
             output_dir  = parent_dir,
             quiet       = FALSE,  # surface inner knitr errors to the pipeline log
             envir       = new.env(parent = globalenv())
@@ -144,6 +145,7 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL) {
         message(e$message)
         message("====================================\n")
     })
+
 
     # Fallback: if the render did not produce an output file (a setup chunk or
     # the pandoc step crashed), write a minimal HTML stub so downstream targets

@@ -28,7 +28,7 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
     }
 
     dirs <- create_legacy_output_dirs(out_dir)
-    out_qc <- file.path(dirs$diagnostic_plots, "QC_post")
+    out_qc <- file.path(dirs$diagnostic_plots, "DE_plots")
     ensure_dir(out_qc)
     out_ds <- dirs$datasets
 
@@ -97,7 +97,11 @@ mod_metabolomics_de <- function(pre, config, inputs, out_dir) {
                 ggplot2::ggsave(f_volcano, pv, width = 8, height = 6, dpi = 300)
                 pv
             }, error = function(e) {
-                warning("Volcano plot (", ptype, ") failed for ", ctr_label, ": ", e$message)
+                # padj must always work; only the raw-pval variant may be skipped
+                # (e.g. a contrast with no raw p-value column) so it doesn't abort
+                # the MA plot and downstream report targets.
+                if (ptype != "pval") stop(e)
+                warning("Skipping pval volcano for ", ctr_label, ": ", conditionMessage(e))
                 NULL
             })
             if (!is.null(p_volcano)) {
