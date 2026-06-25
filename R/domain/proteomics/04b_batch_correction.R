@@ -41,8 +41,13 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
     return(pre)
   }
 
-  expr <- pre$expr_filt
-  assert_numeric_matrix(expr, "expr_filt")
+  # ComBat/probatch need a complete matrix. preprocess_proteomics() already
+  # produces a single-imputation complete matrix (expr_imp_single); correct that
+  # rather than the NA-containing expr_filt. Downstream DE re-runs imputation on
+  # the (now complete) corrected matrix, where it is a no-op, so the corrected
+  # values flow straight into the limma fits.
+  expr <- pre$expr_imp_single %||% pre$expr_filt
+  assert_numeric_matrix(expr, "expr_imp_single")
   meta <- pre$meta
 
   sample_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
