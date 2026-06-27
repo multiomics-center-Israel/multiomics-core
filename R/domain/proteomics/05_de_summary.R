@@ -87,6 +87,13 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         pvalue_imputs <- apply(p_mat, 1, quantile, probs = q, na.rm = TRUE)
         padj_imputs <- apply(padj_mat, 1, quantile, probs = q, na.rm = TRUE)
 
+        # Gate the consensus call on the reported summary padj as well. Without
+        # this, a feature can clear the 8/10 vote yet have its summarized
+        # padj.imputs (the q-quantile) land just above the cutoff, so the volcano
+        # (which colours on padj.imputs) and the headline count disagree. Keeping
+        # both in sync guarantees pass.imputs == 1 implies padj.imputs <= cutoff.
+        pass_imputs <- ifelse(!is.na(pass_imputs) & padj_imputs <= p_cutoff, 1, NA)
+
         out[[paste0("sum.pass.", contrast_print)]] <- sum_pass
         out[[paste0("pass.imputs.", contrast_print)]] <- pass_imputs
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linearRatio_imputs
