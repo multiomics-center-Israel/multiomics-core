@@ -123,8 +123,49 @@ qc_pca_scatter <- function(expr_mat, meta, cfg, pcs = c(1, 2), out_file = NULL) 
   attr(p, "pca_result") <- res$pca_obj
   attr(p, "scores") <- scores # scores now include all metadata
   attr(p, "var_expl") <- var_expl
-  
+
   p
+}
+
+
+#' Write the labeled-PNG and scores-CSV companions for a PCA scatter
+#'
+#' The report template renders a "With Sample Names" tab and an interactive
+#' plotly tab from two side files (`*_labeled.png` and `*_scores.csv`) that the
+#' plain PCA PNG does not provide. This writes both from a plot returned by
+#' [qc_pca_scatter()], reusing its attached `scores` so the points stay
+#' identical to the plain PNG.
+#'
+#' @param p A ggplot from [qc_pca_scatter()] (carries `scores` as an attribute).
+#' @param out_dir Directory to write the companion files into.
+#' @param pcs Length-2 vector of the PCs `p` was built from, e.g. `c(1, 2)`.
+#' @return Character vector of file paths written (invisibly).
+write_pca_companions <- function(p, out_dir, pcs = c(1, 2)) {
+  scores <- attr(p, "scores")
+  if (is.null(scores)) {
+    warning("write_pca_companions(): plot has no `scores` attribute; skipping.")
+    return(invisible(character(0)))
+  }
+  pcs <- as.integer(pcs)
+  base <- sprintf("PCA_PC%d.vs.PC%d", pcs[1], pcs[2])
+
+  # Scores CSV powers the interactive plotly tab (needs sample + PC + color col).
+  f_scores <- file.path(out_dir, paste0(base, "_scores.csv"))
+  utils::write.csv(scores, f_scores, row.names = FALSE)
+
+  # Labeled PNG: same scatter with sample names. ggrepel keeps labels readable
+  # at small n; fall back to geom_text if the package is unavailable.
+  label_layer <- if (requireNamespace("ggrepel", quietly = TRUE)) {
+    ggrepel::geom_text_repel(ggplot2::aes(label = sample), size = 3,
+                             max.overlaps = Inf, show.legend = FALSE)
+  } else {
+    ggplot2::geom_text(ggplot2::aes(label = sample), size = 3,
+                       vjust = -0.6, show.legend = FALSE)
+  }
+  f_labeled <- file.path(out_dir, paste0(base, "_labeled.png"))
+  ggplot2::ggsave(f_labeled, plot = p + label_layer, width = 6, height = 5)
+
+  invisible(c(f_scores, f_labeled))
 }
 
 
