@@ -133,7 +133,7 @@ assert_omics_obj <- function(obj, stage = c("raw", "work"), sample_col) {
     invisible(TRUE)
 }
 
-assert_pre_contract <- function(pre, stage = c("proteomics", "rna", "metabolomics")) {
+assert_pre_contract <- function(pre, stage = c("proteomics", "rna", "metabolomics", "lipidomics")) {
     stage <- match.arg(stage)
     stopifnot(is.list(pre))
 
@@ -141,7 +141,8 @@ assert_pre_contract <- function(pre, stage = c("proteomics", "rna", "metabolomic
     stage_fields <- switch(stage,
         proteomics = c("expr_imp_single"),
         rna = character(0),
-        metabolomics = character(0)
+        metabolomics = character(0),
+        lipidomics = character(0)
     )
 
     required <- c(base_fields, stage_fields)
@@ -159,7 +160,7 @@ assert_pre_contract <- function(pre, stage = c("proteomics", "rna", "metabolomic
     invisible(TRUE)
 }
 
-assert_de_contract <- function(de_res, stage = c("proteomics", "rna", "metabolomics")) {
+assert_de_contract <- function(de_res, stage = c("proteomics", "rna", "metabolomics", "lipidomics")) {
     stage <- match.arg(stage)
     stopifnot(is.list(de_res))
 
@@ -167,7 +168,8 @@ assert_de_contract <- function(de_res, stage = c("proteomics", "rna", "metabolom
     stage_fields <- switch(stage,
         proteomics = c("method", "imputations"),
         rna = character(0),
-        metabolomics = character(0)
+        metabolomics = character(0),
+        lipidomics = character(0)
     )
 
     required <- c(base_fields, stage_fields)

@@ -4,11 +4,55 @@
 # Dispatches to format-specific parsers, builds the standard internal
 # representation, and applies normalization.
 #
-# Normalization reuses the metabolomics normalization functions:
-#   normalize_samples, transform_metab, scale_metab, apply_normalization_pipeline
+# Normalization reuses the metabolomics primitives:
+#   normalize_samples, transform_metab, scale_metab
+# composed here by apply_lipid_normalization() (this layer's only consumer of
+# the sample_norm -> transform -> scaling chain; metabolomics drives the same
+# primitives through its own module path).
 #
 # Reuses: assert_numeric_matrix, assert_meta_contract, align_meta_to_matrix,
 #         build_minimal_meta
+
+
+#' Apply the full normalization pipeline: sample_norm -> transform -> scaling
+#'
+#' Thin lipidomics-side wrapper that orchestrates the metabolomics
+#' normalization primitives (normalize_samples / transform_metab /
+#' scale_metab). Lives here because lipidomics is its only caller.
+#'
+#' @param mat       Numeric matrix (features x samples).
+#' @param norm_cfg  normalization config section.
+#' @param row_data  data.frame (for IS normalization only).
+#' @param groups    Character/factor vector of group labels per sample
+#'                  (required for eigenms; ignored by other methods).
+#' @param meta      Sample metadata data.frame (for bio_factor normalization).
+#' @return list(expr_norm, applied) where applied records what was done.
+apply_lipid_normalization <- function(mat, norm_cfg, row_data = NULL,
+                                      groups = NULL, meta = NULL) {
+    sample_norm <- norm_cfg$sample_norm %||% "none"
+    transform   <- norm_cfg$transform   %||% "none"
+    scaling     <- norm_cfg$scaling     %||% "none"
+    pseudocount <- norm_cfg$pseudocount %||% 1
+    is_ref_col     <- norm_cfg$is_ref_col            %||% NULL
+    bio_factor_col <- norm_cfg$biological_factor_col %||% NULL
+
+    mat <- normalize_samples(mat, method = sample_norm,
+                             ref_col = is_ref_col, row_data = row_data,
+                             groups = groups, meta = meta,
+                             bio_factor_col = bio_factor_col)
+    mat <- transform_metab(mat, method = transform, pseudocount = pseudocount)
+    mat <- scale_metab(mat, method = scaling)
+
+    list(
+        expr_norm = mat,
+        applied = list(
+            sample_norm = sample_norm,
+            transform   = transform,
+            scaling     = scaling,
+            pseudocount = if (transform != "none") pseudocount else NA
+        )
+    )
+}
 
 
 #' Preprocess lipidomics data
@@ -207,13 +251,13 @@ preprocess_lipidomics <- function(inputs, config) {
     # Pre-scaling matrix for logFC computation
     norm_cfg_no_scale <- norm_cfg
     norm_cfg_no_scale$scaling <- "none"
-    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data,
-                                                     groups = norm_groups, meta = meta)
+    pre_scale_result <- apply_lipid_normalization(expr_for_norm, norm_cfg_no_scale, row_data,
+                                                  groups = norm_groups, meta = meta)
     expr_log <- pre_scale_result$expr_norm
 
     # Full pipeline (with scaling)
-    norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data,
-                                                groups = norm_groups, meta = meta)
+    norm_result <- apply_lipid_normalization(expr_for_norm, norm_cfg, row_data,
+                                             groups = norm_groups, meta = meta)
     expr_work <- norm_result$expr_norm
 
     assert_numeric_matrix(expr_work, "lipid_expr_work")
@@ -381,7 +425,7 @@ apply_sample_filter_lipid <- function(sample_ids, meta, rules, sample_col) {
 #' Compare alternative normalization pipelines on a single matrix
 #'
 #' For each method spec (sample_norm/transform/scaling), applies
-#' apply_normalization_pipeline() and reports median RSD and PC1 variance —
+#' apply_lipid_normalization() and reports median RSD and PC1 variance —
 #' the same diagnostics used by mod_met_norm_comparison.
 #'
 #' @param expr_for_norm Numeric matrix (features x samples), pre-normalization.
@@ -397,7 +441,7 @@ evaluate_normalization_methods <- function(expr_for_norm, methods, row_data = NU
 
     run_norm <- function(spec, label) {
         tryCatch(
-            apply_normalization_pipeline(expr_for_norm, spec, row_data)$expr_norm,
+            apply_lipid_normalization(expr_for_norm, spec, row_data)$expr_norm,
             error = function(e) {
                 message("evaluate_normalization_methods: ", label, " failed: ",
                         conditionMessage(e))
