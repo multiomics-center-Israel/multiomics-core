@@ -89,6 +89,8 @@ tryCatch({
 cat("6. Running QC module...\n")
 out_dir <- file.path("test_outputs", "lipidomics")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+# Absolute so it stays valid when the report step renders from the repo root.
+out_dir <- normalizePath(out_dir, mustWork = TRUE)
 
 tryCatch({
   qc_res <- mod_lipidomics_qc_pre(pre, config, out_dir)
@@ -177,7 +179,12 @@ tryCatch({
 
 # ---- 10. Report rendering ----
 cat("10. Rendering HTML report...\n")
+# Report templates are resolved relative to the repo root (as in the real
+# pipeline run); testthat runs from tests/testthat, so render from the root
+# and restore the working directory afterwards.
+old_wd <- getwd()
 tryCatch({
+  setwd(config$project$dir)
   report_path <- mod_lipidomics_report(pre, qc_res, de_res, fs_res, class_res, config, out_dir)
   cat("   Report:", report_path, "\n")
   cat("   Exists:", file.exists(report_path), "\n")
@@ -185,7 +192,7 @@ tryCatch({
   cat("   PASS: report rendering\n\n")
 }, error = function(e) {
   cat("   FAIL: report rendering -", e$message, "\n\n")
-})
+}, finally = setwd(old_wd))
 
 # ---- Summary ----
 cat("=== Test Complete ===\n")
