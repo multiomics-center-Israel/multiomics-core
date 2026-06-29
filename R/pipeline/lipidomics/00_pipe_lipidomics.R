@@ -276,22 +276,6 @@ pipe_lipidomics <- function() {
                 pool_cv         = lipid_pool_cv
             ),
             format = "file"
-        ),
-
-        # ---- Lipid <-> {gene,protein,metabolite} links (Stage 4, optional) ----
-        # Cross-omics linkage via curated lipid-class -> KEGG pathway map +
-        # PubMed literature co-mention (IF > 15, recent N years). Gated on
-        # cfg$modes$lipidomics$links$enabled — falls through quickly when
-        # disabled.
-        tar_target(
-            lipid_links_res,
-            mod_lipid_links(
-                pre          = lipid_pre,
-                lipid_de_res = lipid_de_res,
-                config       = config,
-                out_dir      = lipid_out_dir
-            ),
-            format = "file"
         )
     )
 }
