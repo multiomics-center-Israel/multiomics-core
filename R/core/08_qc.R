@@ -317,6 +317,9 @@ prepare_qc_data <- function(expr, meta, cfg) {
   sample_col <- eff$samples
   color_col <- eff$color
   
+  # NEW: Extract shape column from config if it exists
+  shape_col <- eff$shape
+  
   # 3. Ensure Metadata is a base data.frame (safe against tibbles)
   meta <- as.data.frame(meta)
   
@@ -326,6 +329,11 @@ prepare_qc_data <- function(expr, meta, cfg) {
   }
   if (!color_col %in% colnames(meta)) {
     stop(sprintf("Color/Condition column '%s' not found in metadata.", color_col))
+  }
+  
+  # NEW: Validate shape column existence if defined in config
+  if (!is.null(shape_col) && !shape_col %in% colnames(meta)) {
+    stop(sprintf("Shape column '%s' defined in config but not found in metadata.", shape_col))
   }
   
   # FIX: Critical check for duplicates in metadata ID column
@@ -358,11 +366,17 @@ prepare_qc_data <- function(expr, meta, cfg) {
   }
   
   # 7. Create Generic Annotation (for pheatmap)
+  # Start with the mandatory Condition/Color column
   annot <- data.frame(
     Condition = meta_sub[[color_col]],
     row.names = sample_ids,
     stringsAsFactors = FALSE
   )
+  
+  # NEW: Dynamically add the shape column to the annotation data frame if present
+  if (!is.null(shape_col)) {
+    annot[[shape_col]] <- meta_sub[[shape_col]]
+  }
   
   list(
     expr = expr,
@@ -370,6 +384,7 @@ prepare_qc_data <- function(expr, meta, cfg) {
     annot = annot,
     sample_col = sample_col,
     color_col = color_col,
+    shape_col = shape_col, # Added to the returned list for traceability
     sample_ids = sample_ids
   )
 }

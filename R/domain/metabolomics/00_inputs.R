@@ -158,19 +158,30 @@ validate_metabolomics_config <- function(cfg) {
            "when files$sample_map is set")
   }
   
-  norm <- cfg$normalization
+  # The pre-cleanup `normalization:` block was consolidated into `preprocessing:`.
+  # A lingering `normalization:` block is now silently ignored by the rest of the
+  # pipeline (which reads `preprocessing`), so reject it loudly rather than let
+  # stale sample_norm/transform/scaling/pseudocount settings be dropped and the
+  # analysis quietly run on defaults.
+  if (!is.null(cfg$normalization)) {
+    stop("metabolomics config still has a 'normalization:' block, which is no longer read.\n",
+         "Normalization settings now live under 'preprocessing:'.\n",
+         "  - Move sample_norm, transform, scaling and pseudocount into 'preprocessing:'.\n",
+         "  - Then delete the old 'normalization:' block.\n",
+         "Leaving it in place would silently fall back to defaults and change your results.")
+  }
+
+  norm <- cfg$preprocessing
   if (!is.null(norm)) {
-    assert_one_of(norm$sample_norm, "normalization$sample_norm",
+    assert_one_of(norm$sample_norm, "preprocessing$sample_norm",
                   c("none", "sum", "median", "pqn", "is"),
                   allow_null = TRUE)
-    assert_one_of(norm$transform, "normalization$transform",
-                  c("none", "log2", "log10"),
+    # Keep in sync with transform_metab() in 01_normalization.R.
+    assert_one_of(norm$transform, "preprocessing$transform",
+                  c("none", "log2", "log10", "glog10"),
                   allow_null = TRUE)
-    assert_one_of(norm$scaling, "normalization$scaling",
+    assert_one_of(norm$scaling, "preprocessing$scaling",
                   c("none", "center", "auto", "pareto", "range"),
-                  allow_null = TRUE)
-    assert_one_of(norm$na_policy, "normalization$na_policy",
-                  c("keep", "zero", "min_half", "lod"),
                   allow_null = TRUE)
   }
   invisible(TRUE)
@@ -663,8 +674,8 @@ build_feature_ids <- function(data_df, id_cfg) {
   
   # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
   make_rt_mz_ids <- function() {
-    mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
-    rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
+    mz_vals <- if (has_mz) round(as.numeric(data_df[[mz_col]]), 2) else rep(NA_real_, nr)
+    rt_vals <- if (has_rt) round(as.numeric(data_df[[rt_col]]), 2) else rep(NA_real_, nr)
     both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
     
     fallback <- if (has_nm) {

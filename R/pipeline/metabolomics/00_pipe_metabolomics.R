@@ -277,7 +277,6 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
       metab_pre,
       {
         pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-        norm_cfg <- config$modes$metabolomics$normalization  %||% list()
         miss_stats <- met_missingness_stats$stats_df
         miss_samp  <- met_missingness_stats$samp_miss_df
         info <- list(

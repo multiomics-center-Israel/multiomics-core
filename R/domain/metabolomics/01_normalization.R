@@ -345,7 +345,7 @@ norm_internal_standard <- function(mat, ref_col = NULL, row_data = NULL) {
 norm_biological_factor <- function(mat, meta, factor_col) {
     if (is.null(meta) || is.null(factor_col) || !nzchar(factor_col)) {
         stop("biological_factor normalization requires both meta and ",
-             "biological_factor_col to be set in config.")
+             "a per-sample factor column (factor_col) to be provided.")
     }
     if (!factor_col %in% colnames(meta)) {
         stop("biological_factor: column '", factor_col,

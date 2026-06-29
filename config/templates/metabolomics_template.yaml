@@ -46,7 +46,7 @@ modes:
 
     # ---- Feature ID + sample mapping ----
     id_columns:
-      name_col: "feature_id"
+      name_col: "feature_id" # The original feature or name id that was delivered by the researcher (e.g: NameID/Name/...)
       mz_col: "m/z"
       rt_col: "RT [min]"
 
@@ -74,6 +74,25 @@ modes:
       # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
       chosen_norm: null
 
+      # ---- Sample normalization (legacy / reference only) ----
+      # All methods (tss, median, pqn, eigenms) run in parallel; the ACTIVE
+      # choice is controlled by chosen_norm above, not by this field.
+      sample_norm: "pqn"
+
+      # ---- Transformation (applied inside the normalization branches) ----
+      transform: "log2"
+
+      # ---- Feature scaling ----
+      # IMPORTANT: scaling must NOT be applied before differential analysis for
+      # metabolomics. Clustering and PCA use a built-in z-score that does NOT
+      # read this key, so leave "none" unless you specifically want the chosen
+      # matrix scaled for feature-selection workflows.
+      # Options: "none" | "center" | "auto" | "pareto" | "range"
+      scaling: "none"
+
+      # ---- Log pseudocount ----
+      pseudocount: 1
+
       # ---- Drift correction (LOESS) ----
       drift_correction:
         enabled: false
@@ -81,51 +100,6 @@ modes:
         qc_flag_col: "is_QC"
         loess_span: 0.75
         epsilon: 1.0e-8
-
-    # ==============================================================================
-    # Normalization & scaling (legacy reference — see preprocessing.chosen_norm)
-    # ==============================================================================
-    normalization:
-
-      # ---- Input state ----
-      input_already_normalized: false
-      # If TRUE → skip sample_norm but still allow transform/scaling
-
-      # ---- Sample normalization (legacy / reference only) ----
-      # NOTE:
-      # In the new pipeline, ALL methods run in parallel:
-      #   - TSS (total sum scaling)
-      #   - Median normalization (log shift)
-      #   - PQN
-      # The active normalization choice is controlled by
-      # preprocessing.chosen_norm (above), not by this field.
-      sample_norm: "pqn"
-
-      # ---- Transformation ----
-      # Applied in mod_met_log OR inside normalization branches
-      transform: "log2"
-
-      # ---- Scaling ----
-      # Feature scaling is not applied in the current metabolomics
-      # preprocessing and DE analysis path.
-      # This field is retained for backward compatibility only.
-      # Options: "none" | "auto" | "pareto" | "range"
-      scaling: "none"
-
-      # ---- Log pseudocount ----
-      pseudocount: 1
-
-      # ---- NA policy (legacy only) ----
-      # New pipeline handles missingness BEFORE normalization
-      na_policy: "keep"
-
-      # Internal standard column (if using IS normalization)
-      is_ref_col: null
-
-      # Biological factor column (if using bio_factor normalization).
-      # Name of a numeric column in metadata holding a per-sample value
-      # (e.g. "mg_protein"). Each sample is divided by its row's value.
-      biological_factor_col: null
 
     # ==============================================================================
     # Sample filtering (applied early, in mod_met_raw)
@@ -144,7 +118,11 @@ modes:
       samples: "SampleID"
       color: "treatment"
       shape: "time"
-      heatmap_annotations: "group"
+      # Metadata column(s) drawn as annotation bars on the QC heatmaps. Accepts a
+      # single column or a YAML list (e.g. [group, time]) for multiple bars; values
+      # not found in the metadata are skipped, and if unset it falls back to the
+      # primary color variable (effects.color). "group" here is the single-column option.
+      heatmap_annotations: "group"  # [group, time]
 
     # --------------------------------------------------------
     # Excel export configuration
@@ -160,7 +138,7 @@ modes:
       # groups appearing in any contrast. Metabolomics CV is computed on the
       # post-normalization linear matrix (2^expr_work - pseudocount), keeping it
       # comparable to the RNA-seq/proteomics CV. NOTE: if feature scaling is
-      # enabled (normalization.scaling != "none"), this back-transform is invalid
+      # enabled (preprocessing.scaling != "none"), this back-transform is invalid
       # and CV falls back to the PRE-normalization matrix, which then includes
       # technical variation. Set to false to omit these columns.
       group_cv: true
@@ -168,14 +146,10 @@ modes:
     qc:
       enabled: true
 
-      # Used for QC-specific plots (e.g., drift, QC clustering)
+      # Used for QC-specific plots (e.g., drift, QC clustering), (refer to the pooled or qc samples)
       qc_flag_column: "treatment"
 
-      # Set true to generate the binary missingness heatmap (diagnostic_plots/)
-      missingness_heatmap: false
-
       thresholds:
-        min_samples_for_pca3d: 4
         max_samples_for_heatmaps: 120
 
     # ==============================================================================
@@ -197,7 +171,6 @@ modes:
       enabled: true
       group_col: "group"
       min_groups: 2
-      de_source: "any_contrast"
 
       steps:
         hierarchical:
@@ -211,8 +184,9 @@ modes:
           distance: "euclidean"
           k_max: 20
           nstart: 25
-          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
-          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
+          # Only relevant in partition clustering to generate profile plots
+          profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
+          profile_color_col: null    # Partition cluster PROFILE plot: optional color/linetype grouping column; not used for heatmaps
 
         binary_patterns:
           enabled: true
