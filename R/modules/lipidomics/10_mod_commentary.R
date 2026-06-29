@@ -9,9 +9,15 @@
 #' @param qc_pre_obj  Result from mod_lipidomics_qc_pre() — list with PCA objects
 #' @param config      Full pipeline config
 #' @param out_dir     Lipidomics output directory (e.g. .../lipidomics)
+#' @param deps        Unused. Accepts the plot-producing analysis results so
+#'   targets forces those PNGs to be written before this target scans out_dir;
+#'   without it a parallel run can generate commentary before feature
+#'   selection / class / biomarker / pathway / clustering / enhanced-QC plots
+#'   exist, leaving those report sections without AI interpretation.
 #' @return Path to commentary_all.json (character, format = "file")
 #' @export
-mod_lipidomics_commentary <- function(de_res, qc_pre_obj = NULL, config, out_dir) {
+mod_lipidomics_commentary <- function(de_res, qc_pre_obj = NULL, config, out_dir,
+                                       deps = NULL) {
 
     lipid_cfg    <- config$modes$lipidomics
     comment_cfg  <- lipid_cfg$commentary %||% list()

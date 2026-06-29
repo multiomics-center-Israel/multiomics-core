@@ -87,7 +87,7 @@ validate_lipidomics_config <- function(cfg) {
     if (!is.null(norm)) {
         assert_one_of(norm$sample_norm, "normalization$sample_norm",
                       c("none", "sum", "median", "pqn", "eigenms",
-                        "eigenms_forced", "is"),
+                        "eigenms_forced", "is", "bio_factor"),
                       allow_null = TRUE)
         assert_one_of(norm$transform, "normalization$transform",
                       c("none", "log2", "log10", "glog10"),
@@ -130,6 +130,10 @@ read_lipid_file <- function(path, sheet = NULL) {
             readxl::read_excel(path)
         }
         as.data.frame(df)
+    } else if (ext == "tab") {
+        # The lipidomics wizard accepts .tab uploads, which read_table_auto()
+        # would parse with read_csv() (single column). Read as tab-delimited.
+        as.data.frame(readr::read_tsv(path, show_col_types = FALSE))
     } else {
         read_table_auto(path)
     }

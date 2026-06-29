@@ -208,7 +208,17 @@ pipe_lipidomics <- function() {
                 de_res     = lipid_de_res,
                 qc_pre_obj = lipid_qc_pre_obj,
                 config     = config,
-                out_dir    = lipid_out_dir
+                out_dir    = lipid_out_dir,
+                # Force all plot-producing targets to finish before scanning
+                # out_dir for figures (see mod_lipidomics_commentary `deps`).
+                deps       = list(
+                    lipid_feature_sel_res,
+                    lipid_class_res,
+                    lipid_biomarker_res,
+                    lipid_pathway_res,
+                    lipid_clustering_obj,
+                    lipid_qc_enhanced
+                )
             ),
             format = "file"
         ),

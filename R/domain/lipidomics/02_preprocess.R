@@ -200,14 +200,20 @@ preprocess_lipidomics <- function(inputs, config) {
     norm_cfg$transform   <- norm_cfg$transform   %||% "none"
     norm_cfg$scaling     <- norm_cfg$scaling     %||% "none"
 
+    # Extract group labels for methods that need them (e.g. eigenms)
+    group_col <- cfg$de$condition_column %||% cfg$effects$color %||% "sample_type"
+    norm_groups <- if (group_col %in% colnames(meta)) as.character(meta[[group_col]]) else NULL
+
     # Pre-scaling matrix for logFC computation
     norm_cfg_no_scale <- norm_cfg
     norm_cfg_no_scale$scaling <- "none"
-    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data)
+    pre_scale_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg_no_scale, row_data,
+                                                     groups = norm_groups, meta = meta)
     expr_log <- pre_scale_result$expr_norm
 
     # Full pipeline (with scaling)
-    norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data)
+    norm_result <- apply_normalization_pipeline(expr_for_norm, norm_cfg, row_data,
+                                                groups = norm_groups, meta = meta)
     expr_work <- norm_result$expr_norm
 
     assert_numeric_matrix(expr_work, "lipid_expr_work")
@@ -335,7 +341,10 @@ filter_features_by_group_missingness <- function(expr, meta, sample_col,
 get_sample_filter_rules_lipid <- function(cfg) {
     sf <- cfg$sample_filter
     if (is.null(sf) || !isTRUE(sf$enabled)) return(NULL)
-    sf$rules %||% NULL
+    # The web wizard writes exclusions (e.g. exclude_samples) directly under
+    # sample_filter rather than nesting them under sample_filter$rules; fall
+    # back to sf itself so those direct rules are honoured.
+    sf$rules %||% sf
 }
 
 

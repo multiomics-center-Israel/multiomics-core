@@ -47,6 +47,11 @@ compute_biomarker_metrics <- function(pre, config) {
     has_pROC <- requireNamespace("pROC", quietly = TRUE)
     has_pwr  <- requireNamespace("pwr",  quietly = TRUE)
 
+    # Fold change must come from the pre-scaling log matrix; expr_work may be
+    # centered/unit-variance scaled (e.g. scaling: auto), which would turn the
+    # group-mean difference into a standardized effect size, not a log2FC.
+    mat_log <- pre$expr_log %||% mat
+
     results <- lapply(seq_len(nrow(mat)), function(i) {
         x1 <- mat[i, idx1]
         x2 <- mat[i, idx2]
@@ -120,8 +125,12 @@ compute_biomarker_metrics <- function(pre, config) {
             }
         }, error = function(e) NA_real_)
 
-        # --- log2 fold change ---
-        log2fc <- m1 - m2   # already log-scale in expr_work
+        # --- log2 fold change (from pre-scaling log matrix) ---
+        l1 <- mat_log[i, idx1]
+        l2 <- mat_log[i, idx2]
+        l1 <- l1[!is.na(l1)]
+        l2 <- l2[!is.na(l2)]
+        log2fc <- if (length(l1) && length(l2)) mean(l1) - mean(l2) else NA_real_
 
         data.frame(
             feature_id = rownames(mat)[i],

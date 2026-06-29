@@ -234,7 +234,16 @@ harmonize_lipid_de <- function(lipid_de_res, row_data, contrast_labels = NULL) {
         rd <- data.frame(feature_id = character(0), ClassKey = character(0),
                          stringsAsFactors = FALSE)
     }
-    if (!"ClassKey" %in% colnames(rd)) rd$ClassKey <- NA_character_
+    # Translated-CSV and processed-wide inputs carry lipid_class but not
+    # ClassKey; fall back to it so lipids_to_pathways() (which drops rows with
+    # missing ClassKey) still finds the parsed class annotations.
+    if (!"ClassKey" %in% colnames(rd)) {
+        rd$ClassKey <- if ("lipid_class" %in% colnames(rd)) {
+            as.character(rd$lipid_class)
+        } else {
+            NA_character_
+        }
+    }
 
     rows <- list()
     for (ctr in contrast_labels) {

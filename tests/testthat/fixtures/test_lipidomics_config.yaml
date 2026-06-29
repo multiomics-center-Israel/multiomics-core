@@ -1,5 +1,8 @@
 project:
-  dir: "/home/multiomics-core"
+  # Checkout-relative: this integration test runs from the repository root
+  # (it sources R/core via root-relative paths), so "." resolves test_data/
+  # under whatever path the repo is checked out at.
+  dir: "."
   name: "Elah_Lipidomics_Test"
   analysis_round: "01"
 
