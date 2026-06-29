@@ -1,0 +1,65 @@
+project:
+  # Checkout-relative: this integration test runs from the repository root
+  # (it sources R/core via root-relative paths), so "." resolves test_data/
+  # under whatever path the repo is checked out at.
+  dir: "."
+  name: "Elah_Lipidomics_Test"
+  analysis_round: "01"
+
+paths:
+  raw: "."
+  out: "test_outputs"
+
+params:
+  seed: 1
+
+modes:
+  lipidomics:
+    input:
+      format: "translated_csv"
+      has_group_row: true
+
+    files:
+      data: "test_data/Elah_Translated_dataset.csv"
+
+    id_columns:
+      name_col: "Metabolite"
+
+    normalization:
+      sample_norm: "sum"
+      transform: "log2"
+      scaling: "auto"
+      pseudocount: 1
+      na_policy: "min_half"
+
+    sample_filter:
+      enabled: false
+
+    effects:
+      samples: "sample_id"
+      color: "condition"
+
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+    de:
+      method: "t_test_equal"
+      condition_column: "condition"
+      contrasts:
+        - "Ana - Oxy"
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+
+    rf:
+      run_rf: true
+      n_trees: 500
+      importance: "permutation"
+      top_n: 20
+      seed: 1234
+
+    plsda:
+      run_plsda: true
+      vip_top_n: 15

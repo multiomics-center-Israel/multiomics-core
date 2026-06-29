@@ -139,7 +139,12 @@ mod_met_raw <- function(inp, config) {
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
-  
+
+  # Populate KEGG column from HMDB → KEGG mapping so downstream modules
+  # (network, etc.) can use a uniform row_data$KEGG without re-reading the file.
+  row_data <- add_kegg_from_hmdb(row_data,
+                                 cfg$enrichment$mapping_file %||% NULL)
+
   list(
     expr_raw      = expr_raw,
     meta          = meta,

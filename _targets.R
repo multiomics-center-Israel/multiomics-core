@@ -70,7 +70,9 @@ tar_option_set(packages = available_pkgs)
 # Resolve config path once at plan-definition time so the literal path is
 # baked into the target command.  This ensures {targets} detects a change
 # when MULTIOMICS_CONFIG points to a different file between runs.
-config_path <- Sys.getenv("MULTIOMICS_CONFIG", "config.yaml")
+config_path <- Sys.getenv("MULTIOMICS_CONFIG", unset = "")
+if (!nzchar(config_path)) config_path <- file.path(getwd(), "config.yaml")
+config_path <- normalizePath(config_path, mustWork = TRUE)
 
 # ------------------------------------------------------------------------------
 # Targets definition
