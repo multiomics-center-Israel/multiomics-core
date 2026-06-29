@@ -6,8 +6,7 @@ feature filter, pool-CV QC, DE-aware structural plots, and a top-DE bar — and
 wire everything into `R/pipeline/lipidomics/templates/report_lipidomics.Rmd`.
 
 This file freezes the plan we agreed on before implementation, so the work can
-be picked up later. See `lipidomics_amir_sapir_run_memo.md` for L01 run state
-and known issues.
+be picked up later.
 
 ## Audit — what already exists (do NOT duplicate)
 
