@@ -23,6 +23,10 @@ cat("   Done sourcing.\n\n")
 # ---- 2. Load config ----
 cat("2. Loading config...\n")
 config <- load_config(testthat::test_path("fixtures", "test_lipidomics_config.yaml"))
+# Anchor project$dir to the repo root derived from the test location so data
+# paths resolve regardless of the working directory testthat runs under
+# (tests/testthat) or where the repo is checked out.
+config$project$dir <- normalizePath(testthat::test_path("..", ".."))
 cat("   Config loaded. Modes:", paste(names(config$modes), collapse = ", "), "\n\n")
 
 # ---- 3. Validate config ----
