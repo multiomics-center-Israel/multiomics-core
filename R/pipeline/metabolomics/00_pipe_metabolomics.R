@@ -24,7 +24,7 @@
 #                                                      └─ metab_pre (adapter)
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
   # -- Validate chosen_norm at plan-definition time --------------------------
-  valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced")
+  valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced", "bio_factor")
   if (!is.null(chosen_norm)) {
     chosen_norm <- tolower(chosen_norm)
     if (!chosen_norm %in% valid_norms) {
@@ -142,6 +142,10 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
     tar_target(
       met_norm_eigenms_forced,
       mod_met_normalize_eigenms_forced(met_filtered, config = config)
+    ),
+    tar_target(
+      met_norm_bio_factor,
+      mod_met_normalize_bio_factor(met_filtered, config = config)
     ),
     tar_target(
       met_norm_comparison,
@@ -269,7 +273,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         out_dir             = metab_out_dir,
         config              = config,
         norm_eigenms        = met_norm_eigenms,
-        norm_eigenms_forced = met_norm_eigenms_forced
+        norm_eigenms_forced = met_norm_eigenms_forced,
+        norm_bio_factor     = met_norm_bio_factor
       )
     ),
     # metab_pre ADAPTER — bridges met_* targets → existing contract
