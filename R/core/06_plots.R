@@ -379,9 +379,12 @@ plot_pca_scatter <- function(scores, color_col, shape_col = NULL,
   )
   
   if (!is.null(shape_col) && shape_col %in% colnames(scores)) {
+    # shape is a discrete aesthetic; a numeric column (e.g. replicate number)
+    # would error in ggplot, so coerce to factor here as the plotly path does.
+    scores[[shape_col]] <- as.factor(scores[[shape_col]])
     aes_args$shape <- rlang::sym(shape_col)
   }
-  
+
   p <- ggplot2::ggplot(scores, do.call(ggplot2::aes, aes_args)) +
     ggplot2::geom_point(size = 3) +
     ggplot2::labs(
