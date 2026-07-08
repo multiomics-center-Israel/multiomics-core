@@ -147,7 +147,7 @@ if ("proteomics" %in% active_modes) {
   prot$prot_de_method <- de_choices[de_idx]
 
   imp_choices <- c("perseus_like", "dep2", "qrilc", "minval", "none")
-  imp_labels <- c("perseus_like-style (recommended)", "DEP2 / MinDet", "QRILC (DEP workflow)", "MinVal (floor of minimum)", "None (complete cases)")
+  imp_labels <- c("Perseus-like (recommended)", "DEP2 / MinDet", "QRILC (DEP workflow)", "MinVal (floor of minimum)", "None (complete cases)")
   imp_idx <- which(imp_choices == prot$prot_imp_method)
   if (length(imp_idx) == 0) imp_idx <- 1
   imp_idx <- ask_choice("Imputation method:", imp_labels, default = imp_idx)

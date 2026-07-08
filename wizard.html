@@ -578,7 +578,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <div class="field">
       <label>Imputation</label>
       <select id="prot_imp_method" onchange="toggleImpParams()">
-        <option value="perseus_like">perseus_like-style (recommended)</option>
+        <option value="perseus_like">Perseus-like (recommended)</option>
         <option value="dep2">DEP2 / MinDet</option>
         <option value="qrilc">QRILC (DEP workflow)</option>
         <option value="minval">MinVal (floor of minimum)</option>
@@ -2277,7 +2277,7 @@ function generateProtYaml() {
 
   yaml += '\n    de:\n';
   yaml += '      method: ' + yamlStr(deMethod) + '\n';
-  yaml += '      use_fdr_for_pass1: ' + useAdj + '\n';
+  yaml += '      use_adj_for_pass1: ' + useAdj + '\n';
   yaml += '      p_cutoff: ' + v('prot_p_cutoff') + '\n';
   yaml += '      linear_fc_cutoff: ' + v('prot_fc_cutoff') + '\n';
   yaml += '      p_adjust_method: ' + yamlStr(pAdjustMethod) + '\n';
@@ -2285,7 +2285,7 @@ function generateProtYaml() {
   yaml += '      paired: ' + yamlBool(pairedOn) + '\n';
   yaml += '      pairing_col: ' + (pairingCol && pairingCol !== 'null' ? yamlStr(pairingCol) : 'null') + '\n';
 
-  yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
+  yaml += '\n    de_table:\n      id_col: "FeatureID"\n';
 
   yaml += '\n    clustering:\n';
   yaml += '      enabled: ' + yamlBool(checked('prot_clustering')) + '\n';

@@ -3806,7 +3806,7 @@ if (nzchar(trimws(stats_section_text))) {
 
     if (tolower(imp_method_m) != "none") {
         imp_desc <- switch(tolower(imp_method_m),
-            perseus_like = "Missing values were imputed using the perseus_like-style method (down-shifted normal distribution for MNAR, KNN for MCAR).",
+            perseus_like = "Missing values were imputed using the Perseus-like method (down-shifted normal distribution for MNAR, KNN for MCAR).",
             minprob = "Missing values were imputed using the MinProb method (random draws from a low-abundance distribution).",
             knn = "Missing values were imputed using K-nearest neighbours (KNN).",
             sprintf("Missing values were imputed using the %s method.", imp_method_m)

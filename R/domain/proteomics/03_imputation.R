@@ -35,7 +35,7 @@ impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
     stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus_like', 'dep2', 'qrilc', 'minval'.", method))
 }
 
-#' Impute proteomics expr_mat using perseus_like-style method
+#' Impute proteomics expr_mat using Perseus-like method
 impute_proteomics_perseus_like <- function(expr_mat, cfg, return_flags = FALSE) {
     width <- cfg$imputation$width %||% 0.3
     downshift <- cfg$imputation$downshift %||% 1.8
@@ -254,7 +254,7 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imps
 }
 
-#' perseus_like-style imputation (downshifted & narrowed normal distribution)
+#' Perseus-like imputation (downshifted & narrowed normal distribution)
 perseus_like_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
     expr_mat <- as.matrix(expr_mat)
     sample_cols <- colnames(expr_mat)

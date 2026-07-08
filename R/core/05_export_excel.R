@@ -12,7 +12,7 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     de_cfg <- config$modes[[mode]]$de
     if (is.null(de_cfg)) stop("No de config found for mode: ", mode)
 
-    FDR_ADJ <- isTRUE(de_cfg$use_fdr_for_pass1)
+    FDR_ADJ <- isTRUE(de_cfg$use_adj_for_pass1)
     P_CUTOFF <- de_cfg$p_cutoff %||% 0.05
     LINEAR_FC_CUTOFF <- de_cfg$linear_fc_cutoff %||% 1.5
 
@@ -463,7 +463,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config,
                                                 mode = "proteomics", start_row = 2) {
     de_cfg <- config$modes[[mode]]$de
-    use_fdr <- isTRUE(de_cfg$use_fdr_for_pass1)
+    use_fdr <- isTRUE(de_cfg$use_adj_for_pass1)
 
     manual_cols <- grep("^manual_cutoffs\\.", names(final_results), value = TRUE)
     if (length(manual_cols) == 0) {

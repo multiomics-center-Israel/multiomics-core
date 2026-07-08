@@ -13,7 +13,9 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         MIN_NO_PASSED <- 1L
     }
 
-    use_fdr_for_pass1 <- isTRUE(de_cfg$use_fdr_for_pass1)
+    # whether to use adjusted p-value in final results tables and plots
+    # (if FALSE the cutoff will use the raw p-value instead)
+    use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
     p_cutoff <- as.numeric(de_cfg$p_cutoff)
 
     linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff)
@@ -73,7 +75,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
             mark_pass1(runs_de_tables[[n]][[cn]],
                 p_cutoff    = p_cutoff,
                 lfc_cutoff  = lfc_cutoff,
-                use_adj     = use_fdr_for_pass1
+                use_adj     = use_adj_for_pass1
             )
         })
 
