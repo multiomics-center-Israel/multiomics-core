@@ -7,6 +7,7 @@
 #' @return imputed matrix or list(imputed, imputed_flag)
 impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
     method <- cfg$imputation$method %||% "perseus_like"
+    if (method == "perseus") method <- "perseus_like"
 
     if (method == "none") {
         # No imputation: return as-is (NAs remain)
@@ -222,6 +223,7 @@ impute_proteomics_minval <- function(expr_mat, cfg, return_flags = FALSE) {
 make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imp_cfg <- cfg$modes$proteomics$imputation
     method <- imp_cfg$method %||% "perseus_like"
+    if (method == "perseus") method <- "perseus_like"
     multi_imp <- imp_cfg$multi_imputation %||% TRUE
     n_imputations <- as.integer(imp_cfg$no_repetitions)
     seed_base <- cfg$params$seed

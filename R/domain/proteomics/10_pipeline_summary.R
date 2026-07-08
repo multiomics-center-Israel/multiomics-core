@@ -177,6 +177,7 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
 
     # --- Imputation info ---
     imp_method <- prot_cfg$imputation$method %||% "none"
+    if (imp_method == "perseus") imp_method <- "perseus_like"
     imp_width  <- prot_cfg$imputation$width %||% 0.2
     imp_down   <- prot_cfg$imputation$downshift %||% 1.6
 

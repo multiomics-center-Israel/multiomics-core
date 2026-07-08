@@ -691,6 +691,7 @@ if (file.exists(filt_stats_file)) {
     rows[[length(rows) + 1L]] <- c("Proteins in final dataset",
                                     format(nrow(de_data), big.mark = ","))
     imp_method <- prot_cfg$imputation$method %||% "none"
+if (imp_method == "perseus") imp_method <- "perseus_like"
     if (tolower(imp_method) != "none") {
         rows[[length(rows) + 1L]] <- c("Imputation method", imp_method)
     }
@@ -982,6 +983,7 @@ if (length(subset_pngs) > 0) {
 
 ```{r imputation-check, include=FALSE}
 imp_method <- prot_cfg$imputation$method %||% "none"
+if (imp_method == "perseus") imp_method <- "perseus_like"
 has_imputation <- tolower(imp_method) != "none" && isTRUE(show_imputation_qc)
 ```
 
@@ -3712,6 +3714,7 @@ cat("# Methods\n\n")
 
 ```{r methods-text, eval=show_methods, results='asis'}
 imp_method <- prot_cfg$imputation$method %||% "none"
+if (imp_method == "perseus") imp_method <- "perseus_like"
 de_method <- prot_cfg$de$method %||% "limma"
 padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5

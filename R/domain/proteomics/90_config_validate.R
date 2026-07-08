@@ -25,7 +25,7 @@ validate_proteomics_config <- function(cfg) {
 
     # 3. Imputation Settings
     if (!is.null(cfg$imputation) && !is.null(cfg$imputation$method)) {
-        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus_like", "dep2", "qrilc", "minval"))
+        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "perseus_like", "dep2", "qrilc", "minval"))
 
         # Only validate repetition/consensus params when multi_imputation is not explicitly FALSE
         if (!identical(cfg$imputation$multi_imputation, FALSE)) {
@@ -38,7 +38,7 @@ validate_proteomics_config <- function(cfg) {
         }
 
         # Method-specific validations
-        if (identical(cfg$imputation$method, "perseus_like")) {
+        if (cfg$imputation$method %in% c("perseus", "perseus_like")) {
             assert_scalar_num(cfg$imputation$width, "imputation$width", min_val = 0.0001)
             assert_scalar_num(cfg$imputation$downshift, "imputation$downshift", min_val = 0.0001)
         }
