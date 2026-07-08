@@ -1093,3 +1093,1202 @@ generate_clustered_dotplots <- function(clustered_dir, output_dir) {
     message("Generated ", length(plot_files), " clustered dotplots in ", output_dir)
     plot_files
 }
+
+
+# ==============================================================================
+# PHASE 1 — LOCAL OFFLINE ENRICHMENT (enrichment migration v2)
+# Local table-driven KEGG/GO loading, ranked gene lists, GSEA, cluster-based ORA.
+# Re-applied from reference branch claude/enrichment-migration-plan-cuduc.
+# No online resources. GO simplify is optional/gated (see run_cluster_ora).
+# ==============================================================================
+load_local_pathway_tables <- function(annotation_dir,
+                                      databases = c("KEGG", "GO_BP", "GO_MF", "GO_CC"),
+                                      feature_ids = NULL) {
+
+    if (!dir.exists(annotation_dir)) {
+        stop("Annotation directory not found: ", annotation_dir)
+    }
+
+    # Map database names to file pairs
+    file_map <- list(
+        KEGG  = list(gene = "KEGG_pathway2gene.tab", name = "KEGG_pathway2name.tab"),
+        GO_BP = list(gene = "GO2gene_BP.tab",        name = "GO2name_BP.tab"),
+        GO_MF = list(gene = "GO2gene_MF.tab",        name = "GO2name_MF.tab"),
+        GO_CC = list(gene = "GO2gene_CC.tab",        name = "GO2name_CC.tab")
+    )
+
+    result <- list()
+
+    for (db in databases) {
+        if (!db %in% names(file_map)) {
+            warning("Unknown database '", db, "' — skipping. ",
+                    "Valid: ", paste(names(file_map), collapse = ", "))
+            next
+        }
+
+        fmap <- file_map[[db]]
+        gene_file <- file.path(annotation_dir, fmap$gene)
+        name_file <- file.path(annotation_dir, fmap$name)
+
+        if (!file.exists(gene_file)) {
+            warning("TERM2GENE file not found for ", db, ": ", gene_file, " — skipping")
+            next
+        }
+        if (!file.exists(name_file)) {
+            warning("TERM2NAME file not found for ", db, ": ", name_file, " — skipping")
+            next
+        }
+
+        # Read two-column tab files.
+        # Legacy uses read.delim() with default header=TRUE, so files may have headers.
+        # We read with header=TRUE (matching legacy), then fall back to header=FALSE
+        # if the result has fewer than 2 rows (suggesting no header was present).
+        term2gene <- read.delim(gene_file, sep = "\t", header = TRUE,
+                                stringsAsFactors = FALSE, row.names = NULL)
+        term2name <- read.delim(name_file, sep = "\t", header = TRUE,
+                                stringsAsFactors = FALSE, row.names = NULL)
+        # If header=TRUE produced zero rows, retry without header
+        if (nrow(term2gene) == 0) {
+            term2gene <- read.delim(gene_file, sep = "\t", header = FALSE,
+                                    stringsAsFactors = FALSE, row.names = NULL)
+        }
+        if (nrow(term2name) == 0) {
+            term2name <- read.delim(name_file, sep = "\t", header = FALSE,
+                                    stringsAsFactors = FALSE, row.names = NULL)
+        }
+
+        # Validate column count
+        if (ncol(term2gene) < 2) {
+            warning(db, " TERM2GENE file has fewer than 2 columns: ", gene_file, " — skipping")
+            next
+        }
+        if (ncol(term2name) < 2) {
+            warning(db, " TERM2NAME file has fewer than 2 columns: ", name_file, " — skipping")
+            next
+        }
+
+        # Keep only first two columns, standardize names for clusterProfiler
+        term2gene <- term2gene[, 1:2, drop = FALSE]
+        term2name <- term2name[, 1:2, drop = FALSE]
+        colnames(term2gene) <- c("term", "gene")
+        colnames(term2name) <- c("term", "name")
+
+        # Remove NAs and empty values
+        term2gene <- term2gene[!is.na(term2gene$term) & !is.na(term2gene$gene) &
+                               nzchar(term2gene$term) & nzchar(term2gene$gene), , drop = FALSE]
+        term2name <- term2name[!is.na(term2name$term) & !is.na(term2name$name) &
+                               nzchar(term2name$term) & nzchar(term2name$name), , drop = FALSE]
+
+        if (nrow(term2gene) == 0) {
+            warning(db, " TERM2GENE table is empty after cleaning: ", gene_file, " — skipping")
+            next
+        }
+
+        # Overlap check against pipeline feature IDs
+        if (!is.null(feature_ids) && length(feature_ids) > 0) {
+            genes_in_db <- unique(term2gene$gene)
+            overlap <- length(intersect(genes_in_db, feature_ids))
+            pct <- round(100 * overlap / length(feature_ids), 1)
+            message("  ", db, ": ", nrow(term2gene), " gene-term pairs, ",
+                    length(unique(term2gene$term)), " terms, ",
+                    overlap, "/", length(feature_ids), " features overlap (", pct, "%)")
+            if (pct < 5) {
+                warning(db, ": very low overlap (", pct, "%) between TERM2GENE genes and ",
+                        "pipeline feature IDs. Check that gene ID types match.")
+            }
+        } else {
+            message("  ", db, ": ", nrow(term2gene), " gene-term pairs, ",
+                    length(unique(term2gene$term)), " terms")
+        }
+
+        result[[db]] <- list(TERM2GENE = term2gene, TERM2NAME = term2name)
+    }
+
+    if (length(result) == 0) {
+        warning("No local pathway tables loaded from: ", annotation_dir)
+    }
+
+    result
+}
+
+# ==============================================================================
+# RANKED GENE LIST BUILDERS (Phase 1 — enrichment migration)
+# ==============================================================================
+# These functions build named numeric vectors suitable for clusterProfiler::GSEA().
+# Each implements a specific ranking strategy from the legacy enrichment workflow.
+# Input: per-contrast DE tables from the current pipeline (FeatureID, log2FoldChange, pvalue).
+
+#' Build ranked gene list: -log10(pvalue), no direction
+#'
+#' Ranking value is always positive. Genes with the most significant p-values rank highest.
+#'
+#' @param de_table Data.frame with FeatureID and pvalue columns
+#' @return Named numeric vector (gene IDs as names, ranking values as elements), sorted descending
+rank_by_pval_wo_direction <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$pval), , drop = FALSE]
+    df$rank_val <- -log10(df$pval)
+    # Legacy: replace any NaN/Inf from log10(0) with 0
+    df$rank_val[!is.finite(df$rank_val)] <- 0
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: sign(FC) * -log10(pvalue)
+#'
+#' Signed ranking: positive values = upregulated and significant,
+#' negative values = downregulated and significant.
+#'
+#' @param de_table Data.frame with FeatureID, log2FoldChange, and pvalue columns
+#' @return Named numeric vector sorted descending
+rank_by_pval_with_direction <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        lfc  = de_table$log2FoldChange,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$lfc) & !is.na(df$pval), , drop = FALSE]
+    df$neg_log_p <- -log10(df$pval)
+    # Legacy: replace any NaN/Inf with 0
+    df$neg_log_p[!is.finite(df$neg_log_p)] <- 0
+    # Apply direction: positive LFC -> positive rank, negative LFC -> negative rank
+    # Legacy logic: if fc is NA, rank = 0; if fc > 0, rank = pval; else rank = -pval
+    # Since we already filtered NA lfc, just apply sign
+    df$rank_val <- ifelse(df$lfc > 0, df$neg_log_p, -df$neg_log_p)
+    # Note: lfc == 0 → treated as downregulated (-neg_log_p), matching legacy behavior
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: log2 of signed fold change
+#'
+#' Legacy behavior: converts linear FC via ifelse(fc > 0, fc, -1/fc), then log2,
+#' then signif(digits=4). The current pipeline provides log2FoldChange, so we
+#' recover linear FC first: linearFC = 2^log2FoldChange.
+#'
+#' @param de_table Data.frame with FeatureID, log2FoldChange, and pvalue columns
+#' @return Named numeric vector sorted descending
+rank_by_fc <- function(de_table) {
+    df <- data.frame(
+        gene = de_table$FeatureID,
+        lfc  = de_table$log2FoldChange,
+        pval = de_table$pvalue,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$lfc) & !is.na(df$pval), , drop = FALSE]
+
+    # Recover linear fold change from log2FC
+    # Legacy input is linearFC where: up = positive value > 1, down = negative value (e.g. -2)
+    # Convention: linearFC > 0 means upregulated, linearFC < 0 means downregulated
+    # From log2FC: if lfc >= 0, linearFC = 2^lfc (positive, > 1)
+    #              if lfc < 0,  linearFC = -(2^(-lfc)) = -(1/(2^lfc)) to get negative linear FC
+    # This matches the legacy convention where downregulated genes have negative linearFC.
+    linear_fc <- ifelse(df$lfc >= 0, 2^df$lfc, -(2^(-df$lfc)))
+
+    # Legacy transform: ifelse(fc > 0, fc, -1/fc) then log2
+    # Maps signed linear FC into a symmetric log2 scale:
+    #   fc = +2 → log2(2) = 1;  fc = -2 → log2(-1/(-2)) = log2(0.5) = -1
+    # Net effect is equivalent to log2FC, but we apply it to match legacy exactly.
+    fc_transformed <- ifelse(linear_fc > 0, linear_fc, -1 / linear_fc)
+    df$rank_val <- log2(fc_transformed)
+    # Legacy: signif(digits = 4)
+    df$rank_val <- signif(df$rank_val, digits = 4)
+
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build ranked gene list: minimum p-value across all contrasts
+#'
+#' For each gene, takes the minimum raw p-value across all provided contrasts,
+#' then ranks by -log10(min_pvalue). Always positive (no direction).
+#'
+#' @param de_tables Named list of DE tables (each with FeatureID and pvalue columns)
+#' @return Named numeric vector sorted descending
+rank_by_min_pval_any_contrast <- function(de_tables) {
+    if (length(de_tables) == 0) return(numeric(0))
+
+    # Collect pvalue columns from all contrasts, aligned by gene ID
+    pval_list <- lapply(de_tables, function(dt) {
+        df <- data.frame(
+            gene = dt$FeatureID,
+            pval = dt$pvalue,
+            stringsAsFactors = FALSE
+        )
+        df[!duplicated(df$gene), , drop = FALSE]
+    })
+
+    # Merge all contrasts by gene, keeping all genes (full outer join)
+    merged <- pval_list[[1]]
+    colnames(merged)[2] <- "pval_1"
+    if (length(pval_list) > 1) {
+        for (i in 2:length(pval_list)) {
+            p <- pval_list[[i]]
+            colnames(p)[2] <- paste0("pval_", i)
+            merged <- merge(merged, p, by = "gene", all = TRUE)
+        }
+    }
+
+    # Compute row-wise minimum pvalue (matching legacy: min(x, na.rm = TRUE), NA if all NA)
+    pval_cols <- grep("^pval_", colnames(merged), value = TRUE)
+    if (length(pval_cols) == 1) {
+        min_pval <- merged[[pval_cols]]
+    } else {
+        pval_mat <- as.matrix(merged[, pval_cols, drop = FALSE])
+        min_pval <- apply(pval_mat, 1, function(x) {
+            if (all(is.na(x))) NA else min(x, na.rm = TRUE)
+        })
+    }
+
+    df <- data.frame(
+        gene = merged$gene,
+        min_pval = min_pval,
+        stringsAsFactors = FALSE
+    )
+    df <- df[!is.na(df$min_pval), , drop = FALSE]
+    df$rank_val <- -log10(df$min_pval)
+    df$rank_val[!is.finite(df$rank_val)] <- 0
+    df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
+
+    ranks <- df$rank_val
+    names(ranks) <- df$gene
+    ranks
+}
+
+#' Build all ranked gene lists for GSEA
+#'
+#' Convenience wrapper that builds all four ranking variants from per-contrast DE tables.
+#'
+#' @param de_tables Named list of DE tables (each with FeatureID, log2FoldChange, pvalue)
+#' @return Nested list: ranking_method -> contrast_name -> named numeric vector.
+#'   The "any_contrast" method has a single entry keyed "any_contrast".
+build_ranked_gene_lists <- function(de_tables) {
+    ranked <- list(
+        pval_wo_direction   = list(),
+        pval_with_direction = list(),
+        fc                  = list()
+    )
+
+    for (contrast in names(de_tables)) {
+        dt <- de_tables[[contrast]]
+        ranked[["pval_wo_direction"]][[contrast]]   <- rank_by_pval_wo_direction(dt)
+        ranked[["pval_with_direction"]][[contrast]] <- rank_by_pval_with_direction(dt)
+        ranked[["fc"]][[contrast]]                  <- rank_by_fc(dt)
+    }
+
+    # Cross-contrast: minimum pvalue across all contrasts
+    ranked[["pval_wo_direction"]][["any_contrast"]] <- rank_by_min_pval_any_contrast(de_tables)
+
+    ranked
+}
+
+# ==============================================================================
+# LOCAL GSEA (Phase 1 — enrichment migration)
+# ==============================================================================
+
+#' Run GSEA using local TERM2GENE/TERM2NAME tables
+#'
+#' Wraps clusterProfiler::GSEA() with the legacy enrichment parameters.
+#' maxGSSize is set to the total number of unique genes in TERM2GENE (legacy behavior).
+#'
+#' @param ranked_genes Named numeric vector (gene IDs as names, ranking metric as values).
+#'   Must be sorted descending.
+#' @param term2gene Two-column data.frame: term ID, gene ID
+#' @param term2name Two-column data.frame: term ID, term name
+#' @param pvalueCutoff Adjusted p-value cutoff (default 0.05)
+#' @param pAdjustMethod P-value adjustment method (default "fdr")
+#' @return gseaResult object, or NULL if GSEA fails or produces no results
+run_gsea_local <- function(ranked_genes,
+                           term2gene,
+                           term2name,
+                           pvalueCutoff = 0.05,
+                           pAdjustMethod = "fdr") {
+
+    if (length(ranked_genes) == 0) {
+        message("    Empty ranked gene list — skipping GSEA")
+        return(NULL)
+    }
+
+    if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+        warning("clusterProfiler package required for GSEA. ",
+                "Install with: BiocManager::install('clusterProfiler')")
+        return(NULL)
+    }
+
+    # Legacy behavior: maxGSSize = total unique genes in the pathway database
+    nr_total_genes <- length(unique(term2gene[, 2]))
+
+    res <- tryCatch({
+        clusterProfiler::GSEA(
+            geneList      = ranked_genes,
+            TERM2GENE     = term2gene,
+            TERM2NAME     = term2name,
+            minGSSize     = 4,
+            maxGSSize     = nr_total_genes,
+            pAdjustMethod = pAdjustMethod,
+            pvalueCutoff  = pvalueCutoff
+        )
+    }, error = function(e) {
+        message("    GSEA failed: ", e$message)
+        NULL
+    })
+
+    res
+}
+
+#' Run independent enrichment jobs, in parallel when workers > 1
+#'
+#' Generic, method-agnostic orchestration layer for the enrichment engine. A
+#' "job" is any independent unit of enrichment work (e.g. one ORA over one gene
+#' set and one database, or one GSEA over one ranked list and one database).
+#' The same mechanism serves GO, KEGG, ORA, GSEA, and any future method
+#' (Reactome, WikiPathways, MSigDB, ...) — callers just supply their own flat
+#' job list and a pure worker function; the parallel logic lives here, once.
+#'
+#' Workers must be PURE compute: no file writing, no plotting, no messages
+#' (those belong in the caller's serial assembly step). Results are returned in
+#' the SAME order as `jobs`, so downstream assembly is deterministic regardless
+#' of worker count or scheduling.
+#'
+#' @param jobs List of opaque job descriptors.
+#' @param fun  Worker function mapping one job -> one result (pure compute).
+#' @param workers Integer. Controls only the backend, never the results:
+#'   `<= 1` uses a `future::sequential` plan (one job at a time, in-process);
+#'   `> 1` uses `future::multisession` with that many workers (Windows-safe,
+#'   separate processes). Both paths go through `future.apply::future_lapply()`
+#'   with `future.seed = TRUE`, which assigns each job an independent, reproducible
+#'   L'Ecuyer-CMRG RNG stream that is IDENTICAL regardless of backend or worker
+#'   count. This is what makes permutation-based methods (GSEA) return identical
+#'   results for `workers = 1`, `4`, or any N, and reproducible across runs. If
+#'   `future`/`future.apply` are not installed, it degrades to plain `lapply()`
+#'   (sequential; no per-job RNG streams).
+#' @return List of results, one per job, in input order.
+run_enrichment_jobs <- function(jobs, fun, workers = 1L) {
+    if (length(jobs) == 0) return(list())
+
+    have_future <- requireNamespace("future", quietly = TRUE) &&
+        requireNamespace("future.apply", quietly = TRUE)
+
+    if (!have_future) {
+        if (workers > 1) {
+            message("  future/future.apply not available — running sequentially. ",
+                    "Install with: renv::install(c('future', 'future.apply'))")
+        }
+        return(lapply(jobs, fun))
+    }
+
+    # NB: workers must capture ONLY the data they use. Callers build worker
+    # functions with a minimal environment (see .make_ora_worker()), which keeps
+    # exported globals tiny (~5 MiB here) — well under future's default 500 MiB
+    # guard. That guard is intentionally left at its default: it is a useful
+    # early warning if a future method ever starts broadcasting large objects.
+    # Route EVERY worker count through future_lapply(future.seed = TRUE). The
+    # RNG streams depend only on the job list + upstream seed, never on the plan
+    # or worker count, so results are worker-count-invariant and reproducible.
+    # Sequential plan for workers <= 1 keeps one-job-at-a-time, in-process
+    # semantics (no worker spawn) while sharing the identical RNG mechanism.
+    old_plan <- if (workers > 1) {
+        future::plan(future::multisession, workers = workers)
+    } else {
+        future::plan(future::sequential)
+    }
+    on.exit(future::plan(old_plan), add = TRUE)
+
+    future.apply::future_lapply(jobs, fun, future.seed = TRUE)
+}
+
+#' Run GSEA across all ranking methods, contrasts, and databases
+#'
+#' Orchestrator that runs run_gsea_local() for every combination of
+#' ranking method x contrast x database loaded from local tables.
+#' Jobs are independent and run in parallel when future.apply is available.
+#'
+#' @param ranked_genes Output of build_ranked_gene_lists()
+#' @param local_tables Output of load_local_pathway_tables()
+#' @param pvalueCutoff Adjusted p-value cutoff
+#' @param pAdjustMethod P-value adjustment method
+#' @param output_dir Directory for GSEA result CSVs
+#' @param workers Number of parallel workers (default 1 = sequential).
+#'   Parallelization uses future::plan(multisession) which is Windows-safe.
+#' @return Nested list compatible with downstream consumers:
+#'   contrast -> db_method_key -> data.frame with padj, NES, etc.
+run_gsea_all <- function(ranked_genes,
+                         local_tables,
+                         pvalueCutoff = 0.05,
+                         pAdjustMethod = "fdr",
+                         output_dir = NULL,
+                         workers = 1,
+                         per_pathway_artifacts = FALSE,
+                         max_terms_in_dotplot = 20) {
+
+    if (!is.null(output_dir)) {
+        dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    }
+
+    # ------------------------------------------------------------------
+    # 1. Build flat job list (lightweight identifiers only — data looked
+    #    up by reference inside the worker to avoid copying large tables
+    #    across serialized futures on Windows/multisession)
+    # ------------------------------------------------------------------
+    jobs <- list()
+    for (ranking_method in names(ranked_genes)) {
+        for (contrast in names(ranked_genes[[ranking_method]])) {
+            if (length(ranked_genes[[ranking_method]][[contrast]]) == 0) next
+
+            for (db_name in names(local_tables)) {
+                jobs[[length(jobs) + 1]] <- list(
+                    ranking_method = ranking_method,
+                    contrast       = contrast,
+                    db_name        = db_name
+                )
+            }
+        }
+    }
+
+    if (length(jobs) == 0) {
+        return(list(results = list(), plot_files = list()))
+    }
+
+    message("  ", length(jobs), " GSEA jobs to run",
+            if (workers > 1) paste0(" (", workers, " workers)") else " (sequential)")
+
+    # ------------------------------------------------------------------
+    # 2. Run GSEA computation (parallel or sequential)
+    # ------------------------------------------------------------------
+    run_one_gsea_job <- function(job) {
+        # Pure computation — no file I/O, no message() (avoids interleaved output).
+        # Looks up data from ranked_genes / local_tables by identifier.
+        ranked    <- ranked_genes[[job$ranking_method]][[job$contrast]]
+        term2gene <- local_tables[[job$db_name]]$TERM2GENE
+        term2name <- local_tables[[job$db_name]]$TERM2NAME
+
+        res <- tryCatch({
+            clusterProfiler::GSEA(
+                geneList      = ranked,
+                TERM2GENE     = term2gene,
+                TERM2NAME     = term2name,
+                minGSSize     = 4,
+                maxGSSize     = length(unique(term2gene[, 2])),
+                pAdjustMethod = pAdjustMethod,
+                pvalueCutoff  = pvalueCutoff
+            )
+        }, error = function(e) {
+            structure(list(message = e$message), class = "gsea_error")
+        })
+        list(
+            ranking_method = job$ranking_method,
+            contrast       = job$contrast,
+            db_name        = job$db_name,
+            gsea_result    = res
+        )
+    }
+
+    # Dispatch pure GSEA compute through the generic parallel orchestration
+    # layer. Assembly + all file I/O happen serially below (deterministic).
+    job_results <- run_enrichment_jobs(jobs, run_one_gsea_job, workers)
+
+    # ------------------------------------------------------------------
+    # 3. Assemble results and write files (serial, deterministic)
+    # ------------------------------------------------------------------
+    results <- list()
+    plot_files <- list()
+
+    for (jr in job_results) {
+        db_name        <- jr$db_name
+        ranking_method <- jr$ranking_method
+        contrast       <- jr$contrast
+        res            <- jr$gsea_result
+        result_key     <- paste0(db_name, "_gsea_", ranking_method)
+
+        # Handle failed jobs
+        if (inherits(res, "gsea_error")) {
+            message("  GSEA failed: ", db_name, " | ", ranking_method, " | ",
+                    contrast, " — ", res$message)
+            next
+        }
+
+        if (is.null(res) || nrow(as.data.frame(res)) == 0) {
+            message("  ", db_name, " | ", ranking_method, " | ", contrast,
+                    ": no results returned")
+            next
+        }
+
+        # Convert to data.frame for storage and downstream compatibility
+        res_df <- as.data.frame(res)
+        res_df$contrast <- contrast
+        res_df$database <- db_name
+        res_df$ranking_method <- ranking_method
+
+        # Ensure downstream-required columns exist
+        if ("p.adjust" %in% colnames(res_df) && !"padj" %in% colnames(res_df)) {
+            res_df$padj <- res_df$p.adjust
+        }
+        if ("Description" %in% colnames(res_df) && !"pathway" %in% colnames(res_df)) {
+            res_df$pathway <- res_df$Description
+        }
+
+        # Store in nested structure
+        if (is.null(results[[contrast]])) results[[contrast]] <- list()
+        results[[contrast]][[result_key]] <- res_df
+
+        n_sig <- sum(res_df$padj < 0.05, na.rm = TRUE)
+        message("  ", db_name, " | ", ranking_method, " | ", contrast,
+                ": ", n_sig, " significant (padj < 0.05)")
+
+        # Write CSV
+        if (!is.null(output_dir)) {
+            gsea_sub_dir <- file.path(output_dir, db_name,
+                                      paste0("ranking_by_", ranking_method),
+                                      contrast)
+            dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
+            csv_file <- file.path(gsea_sub_dir,
+                                  paste0("GSEA_results_", contrast, ".csv"))
+            write.csv(res_df, file = csv_file, row.names = FALSE)
+
+            # Generate dotplot if significant results exist.
+            # Primary: enrichplot::dotplot() on the gseaResult object.
+            # Fallback: basic ggplot2 scatterplot (visual approximation only).
+            if (n_sig >= 3) {
+                plot_file <- file.path(gsea_sub_dir,
+                                       paste0("GSEA_dotplot_", contrast, ".png"))
+                plot_key <- paste0(db_name, "_", ranking_method, "_", contrast)
+                show_n <- min(max_terms_in_dotplot, n_sig)
+
+                plotted <- FALSE
+
+                # Primary: enrichplot::dotplot on gseaResult S4 object
+                if (requireNamespace("enrichplot", quietly = TRUE)) {
+                    tryCatch({
+                        p <- enrichplot::dotplot(res, showCategory = show_n)
+                        ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                        plot_files[[plot_key]] <- plot_file
+                        plotted <- TRUE
+                    }, error = function(e) {
+                        message("    enrichplot::dotplot() failed: ", e$message,
+                                " — falling back to ggplot2")
+                    })
+                }
+
+                # Fallback: basic ggplot2 scatterplot (not equivalent to dotplot)
+                if (!plotted) {
+                    tryCatch({
+                        top <- head(res_df[order(res_df$padj), ], show_n)
+                        top$pathway_label <- substr(top$pathway, 1, 60)
+                        p <- ggplot2::ggplot(
+                            top,
+                            ggplot2::aes(x = NES, y = reorder(pathway_label, NES))
+                        ) +
+                            ggplot2::geom_point(
+                                ggplot2::aes(size = setSize, color = -log10(padj))
+                            ) +
+                            ggplot2::scale_color_gradient(
+                                low = "blue", high = "red", name = "-log10(padj)"
+                            ) +
+                            ggplot2::labs(
+                                title = paste("GSEA:", db_name, "|", ranking_method),
+                                subtitle = contrast,
+                                x = "Normalized Enrichment Score",
+                                y = "",
+                                size = "Gene Set Size"
+                            ) +
+                            ggplot2::theme_minimal() +
+                            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
+                        ggplot2::ggsave(plot_file, p, width = 10, height = 8)
+                        plot_files[[plot_key]] <- plot_file
+                    }, error = function(e) {
+                        message("    Fallback plot also failed: ", e$message)
+                    })
+                }
+            }
+
+            # ----------------------------------------------------------
+            # Per-pathway GSEA artifacts (gseaplot2 PNGs + core-gene CSVs).
+            # OFF by default to match the legacy workflow, where these were
+            # produced only during explicit, on-demand pathway exploration —
+            # not automatically for every significant pathway. Enable via
+            # config enrichment.gsea_per_pathway_artifacts: true.
+            # ----------------------------------------------------------
+            if (isTRUE(per_pathway_artifacts)) {
+                save_gsea_per_pathway_artifacts(
+                    gsea_result = res,
+                    res_df      = res_df,
+                    output_dir  = gsea_sub_dir
+                )
+            }
+        }
+    }
+
+    list(results = results, plot_files = plot_files)
+}
+
+# ==============================================================================
+# PER-PATHWAY GSEA ARTIFACTS (Phase 3 — legacy outputs)
+# ==============================================================================
+
+#' Save per-pathway GSEA artifacts: enrichment plots, core gene CSVs
+#'
+#' For each significant pathway in the GSEA result, produces:
+#'   - GSEA_plots/{pathway_id}.png  (enrichplot::gseaplot2)
+#'   - Excels_core_genes/{pathway_id}.csv  (core enrichment genes with stats)
+#'
+#' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
+#' @param res_df Data.frame version of the result (with padj, pathway, etc.)
+#' @param output_dir Base directory for this db/ranking/contrast combination
+#' @noRd
+save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir) {
+
+    if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
+
+    sig_rows <- res_df[!is.na(res_df$padj) & res_df$padj < 0.05, , drop = FALSE]
+    if (nrow(sig_rows) == 0) return(invisible(NULL))
+
+    # Directories
+    plots_dir <- file.path(output_dir, "GSEA_plots")
+    excel_dir <- file.path(output_dir, "Excels_core_genes")
+    dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(excel_dir, recursive = TRUE, showWarnings = FALSE)
+
+    has_enrichplot <- requireNamespace("enrichplot", quietly = TRUE)
+
+    for (i in seq_len(nrow(sig_rows))) {
+        pathway_id <- sig_rows$ID[i]
+        # Sanitize pathway ID for safe file names
+        safe_id <- gsub("[^a-zA-Z0-9_.-]", "_", pathway_id)
+
+        # --- GSEA plot (enrichplot::gseaplot2) ---
+        if (has_enrichplot) {
+            tryCatch({
+                plot_file <- file.path(plots_dir, paste0(safe_id, ".png"))
+                png(plot_file, width = 800, height = 600, res = 120)
+                print(enrichplot::gseaplot2(gsea_result, geneSetID = pathway_id,
+                                            title = sig_rows$Description[i]))
+                dev.off()
+            }, error = function(e) {
+                tryCatch(dev.off(), error = function(e2) NULL)
+                message("      gseaplot2 failed for ", pathway_id, ": ", e$message)
+            })
+        }
+
+        # --- Core genes extraction and CSV ---
+        core_genes_str <- sig_rows$core_enrichment[i]
+        if (is.null(core_genes_str) || is.na(core_genes_str) ||
+            !nzchar(core_genes_str)) next
+
+        core_genes <- strsplit(core_genes_str, "/")[[1]]
+        core_genes <- trimws(core_genes)
+        core_genes <- core_genes[nzchar(core_genes)]
+
+        if (length(core_genes) == 0) next
+
+        tryCatch({
+            # Build output data.frame: gene ID + stats from the ranked list
+            # The gseaResult@geneList contains the full ranked vector
+            gene_list <- gsea_result@geneList
+            matched_vals <- gene_list[core_genes]
+
+            core_df <- data.frame(
+                gene         = core_genes,
+                rank_value   = as.numeric(matched_vals),
+                stringsAsFactors = FALSE
+            )
+
+            csv_file <- file.path(excel_dir, paste0(safe_id, ".csv"))
+            write.csv(core_df, file = csv_file, row.names = FALSE)
+        }, error = function(e) {
+            message("      Core genes CSV failed for ", pathway_id, ": ", e$message)
+        })
+    }
+
+    invisible(NULL)
+}
+
+# ==============================================================================
+# CLUSTER-BASED ORA (Phase 2 — enrichment migration)
+# ==============================================================================
+# Reproduces the legacy Clusters_Enrichment_Test() behavior:
+#   - per-cluster enricher() with minGSSize=0, maxGSSize=10000, qvalueCutoff=1
+#   - merge_result() into compareClusterResult
+#   - GO simplify (cutoff=0.7, by="p.adjust", select_fun=min)
+#   - process_enrichment_table() with fold enrichment
+#   - enrichplot::dotplot() on the merged result
+
+#' Run cluster-based ORA for a single database
+#'
+#' Reproduces legacy Clusters_Enrichment_Test() behavior exactly.
+#'
+#' @param clusters Named vector: gene IDs as names, cluster labels as values.
+#' @param TERM2GENE Two-column data.frame (term ID, gene ID).
+#' @param TERM2NAME Two-column data.frame (term ID, term name).
+#' @param type "KEGG" or "GO". Controls simplify and @fun slot.
+#' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
+#' @param pAdjustMethod P-value adjustment method (default "fdr").
+#' @param outDir Output directory for CSV and dotplot files.
+#' @param file_name Base file name for outputs (no extension).
+#' @param maxCategory Max categories to show in dotplot (default 1000).
+#' @return List of 4 elements (matching legacy):
+#'   [[1]] allRes (compareClusterResult or NULL),
+#'   [[2]] allRes_simplify (compareClusterResult or NULL, GO only),
+#'   [[3]] enrichment_table (data.frame or NULL),
+#'   [[4]] enrichment_table_simplify (data.frame or NULL, GO only).
+#'   Returns list() if no clusters have significant enrichment.
+#' @export
+run_cluster_ora <- function(clusters,
+                            TERM2GENE,
+                            TERM2NAME,
+                            type = "KEGG",
+                            pvalueCutoff = 0.05,
+                            pAdjustMethod = "fdr",
+                            outDir = NULL,
+                            file_name = "enrichment",
+                            maxCategory = 1000,
+                            go_simplify = FALSE,
+                            orgdb = NULL,
+                            ont = NULL) {
+
+    # Thin wrapper: pure compute (parallel-safe) + serial file I/O. Kept for
+    # backward compatibility and direct callers/tests. The module orchestration
+    # calls run_cluster_ora_compute() and write_cluster_ora_outputs() separately
+    # so compute can run inside parallel workers while I/O stays serial.
+    res <- run_cluster_ora_compute(
+        clusters      = clusters,
+        TERM2GENE     = TERM2GENE,
+        TERM2NAME     = TERM2NAME,
+        type          = type,
+        pvalueCutoff  = pvalueCutoff,
+        pAdjustMethod = pAdjustMethod,
+        go_simplify   = go_simplify,
+        orgdb         = orgdb,
+        ont           = ont
+    )
+    if (length(res) == 0) return(list())
+    if (!is.null(outDir)) {
+        write_cluster_ora_outputs(res, outDir = outDir, file_name = file_name,
+                                  type = type, maxCategory = maxCategory)
+    }
+    res
+}
+
+#' Cluster ORA — pure computation (no file I/O), parallel-worker-safe
+#'
+#' The compute half of run_cluster_ora(): per-cluster `enricher()`, merge into a
+#' compareClusterResult, fold-enrichment processing, and the optional (gated) GO
+#' simplify. Writes no files, draws no plots — safe to run inside future workers.
+#' `enricher()` is deterministic (hypergeometric, no RNG), so results are
+#' identical regardless of worker count.
+#'
+#' @param clusters Named vector: gene IDs as names, cluster labels as values.
+#' @param TERM2GENE Two-column data.frame (term ID, gene ID).
+#' @param TERM2NAME Two-column data.frame (term ID, term name).
+#' @param type "KEGG" or "GO". Controls simplify and the @fun slot.
+#' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
+#' @param pAdjustMethod P-value adjustment method (default "fdr").
+#' @param go_simplify Whether to run GO simplify (default FALSE; GO only).
+#' @param orgdb Pre-installed OrgDb package name for simplify (or NULL).
+#' @param ont GO ontology ("BP"/"MF"/"CC") for simplify semData (or NULL).
+#' @return List of 4 elements (matching legacy):
+#'   [[1]] allRes (compareClusterResult or NULL),
+#'   [[2]] allRes_simplify (compareClusterResult or NULL, GO only),
+#'   [[3]] enrichment_table (data.frame or NULL),
+#'   [[4]] enrichment_table_simplify (data.frame or NULL, GO only).
+#'   Returns list() if no clusters have significant enrichment.
+#' @noRd
+run_cluster_ora_compute <- function(clusters,
+                                    TERM2GENE,
+                                    TERM2NAME,
+                                    type = "KEGG",
+                                    pvalueCutoff = 0.05,
+                                    pAdjustMethod = "fdr",
+                                    go_simplify = FALSE,
+                                    orgdb = NULL,
+                                    ont = NULL) {
+
+    if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+        warning("clusterProfiler required for cluster ORA. ",
+                "Install with: BiocManager::install('clusterProfiler')")
+        return(list())
+    }
+
+    # ------------------------------------------------------------------
+    # Input validation: clusters must be a named atomic vector
+    # ------------------------------------------------------------------
+    if (!is.atomic(clusters) || is.null(names(clusters))) {
+        warning("run_cluster_ora(): clusters must be a named atomic vector ",
+                "(gene IDs as names, cluster labels as values). Got: ",
+                class(clusters)[1])
+        return(list())
+    }
+    # Remove entries with NA names or NA labels
+    valid <- !is.na(names(clusters)) & nzchar(names(clusters)) & !is.na(clusters)
+    if (sum(valid) == 0) {
+        warning("run_cluster_ora(): no valid gene-cluster assignments after cleaning")
+        return(list())
+    }
+    clusters <- clusters[valid]
+
+    # Per-cluster enrichment
+    # Legacy: sort(unique(clusters)). Preserve numeric sort for integer labels,
+    # alphabetic sort for character labels.
+    allRes0 <- list()
+    genes_having_pathway <- unique(TERM2GENE[, 2])
+    cluster_labels <- sort(unique(clusters))
+
+    for (cluster_name in cluster_labels) {
+        genes_in_cluster <- names(clusters[clusters == cluster_name])
+        Genes <- intersect(genes_in_cluster, genes_having_pathway)
+
+        if (length(Genes) == 0) next
+
+        res <- tryCatch({
+            clusterProfiler::enricher(
+                Genes,
+                TERM2GENE     = TERM2GENE,
+                TERM2NAME     = TERM2NAME,
+                minGSSize     = 0,
+                maxGSSize     = 10000,
+                pAdjustMethod = pAdjustMethod,
+                pvalueCutoff  = pvalueCutoff,
+                qvalueCutoff  = 1
+            )
+        }, error = function(e) {
+            message("    enricher() failed for cluster ", cluster_name, ": ", e$message)
+            NULL
+        })
+
+        if (!is.null(res) &&
+            nrow(res@result) > 0 &&
+            nrow(res@result[res@result$p.adjust < pvalueCutoff, , drop = FALSE]) > 0) {
+            allRes0[[as.character(cluster_name)]] <- res
+        }
+    }
+
+    if (length(allRes0) == 0) {
+        return(list())
+    }
+
+    # Merge per-cluster results into a compareClusterResult
+    allRes <- clusterProfiler::merge_result(enrichResultList = allRes0)
+
+    # Process the enrichment table (fold enrichment, expanded ratios)
+    enrichment_table <- process_enrichment_table(allRes@compareClusterResult)
+
+    # Set @fun slot for enrichplot/simplify dispatch (legacy does this before CSV write)
+    # enricher() sets @fun = "enricher" but simplify() and dotplot() dispatch
+    # differently for enrichGO/enrichKEGG
+    if (type == "GO") {
+        allRes@fun <- "enrichGO"
+    } else {
+        allRes@fun <- "enrichKEGG"
+    }
+
+    # GO simplify — OPTIONAL and GATED.
+    # The ORA above (enricher over local TERM2GENE/TERM2NAME) is fully offline and
+    # always produces the UNSIMPLIFIED GO result. simplify() additionally requires
+    # GOSemSim semantic-similarity data built from a local, pre-installed OrgDb; it
+    # runs only when go_simplify=TRUE AND an explicit orgdb is installed. No online
+    # loading, no organism auto-detection. On any miss/failure: skip + warn, keep
+    # the unsimplified result.
+    allRes_simplify <- NULL
+    enrichment_table_simplify <- NULL
+
+    if (type == "GO" && isTRUE(go_simplify)) {
+        if (is.null(orgdb) || !nzchar(orgdb)) {
+            warning("GO simplify requested (go_simplify=TRUE) but no enrichment.orgdb ",
+                    "is configured. Skipping simplify; unsimplified GO ORA produced.")
+        } else if (!requireNamespace("GOSemSim", quietly = TRUE) ||
+                   !requireNamespace(orgdb, quietly = TRUE)) {
+            warning("GO simplify requested but GOSemSim and/or the OrgDb package '",
+                    orgdb, "' are not installed locally. ",
+                    "Skipping simplify; unsimplified GO ORA produced.")
+        } else {
+            sem_data <- tryCatch(
+                GOSemSim::godata(orgdb, ont = ont %||% "BP", computeIC = FALSE),
+                error = function(e) {
+                    message("    GOSemSim::godata() failed: ", e$message)
+                    NULL
+                }
+            )
+            if (!is.null(sem_data)) {
+                allRes_simplify <- tryCatch({
+                    clusterProfiler::simplify(
+                        allRes,
+                        cutoff     = 0.7,
+                        by         = "p.adjust",
+                        select_fun = min,
+                        measure    = "Wang",
+                        semData    = sem_data
+                    )
+                }, error = function(e) {
+                    message("    simplify() failed: ", e$message)
+                    NULL
+                })
+            }
+
+            if (!is.null(allRes_simplify)) {
+                enrichment_table_simplify <- process_enrichment_table(
+                    allRes_simplify@compareClusterResult
+                )
+            }
+        }
+    }
+
+    list(allRes, allRes_simplify, enrichment_table, enrichment_table_simplify)
+}
+
+#' Write cluster ORA outputs to disk (serial, deterministic — never in a worker)
+#'
+#' The I/O half of run_cluster_ora(): writes the enrichment CSV, the optional
+#' Simplify_* CSV, and the dotplot PDF. Split out so it can run in the serial
+#' assembly step while compute is parallelized. File content is identical to the
+#' pre-split behavior.
+#'
+#' @param ora_result The 4-element list returned by run_cluster_ora_compute().
+#' @param outDir Output directory for CSV and dotplot files.
+#' @param file_name Base file name for outputs (no extension).
+#' @param type "KEGG" or "GO".
+#' @param maxCategory Max categories to show in dotplot (default 1000).
+#' @return Invisibly NULL (called for its file-writing side effects).
+#' @noRd
+write_cluster_ora_outputs <- function(ora_result, outDir, file_name,
+                                      type = "KEGG", maxCategory = 1000) {
+    if (length(ora_result) == 0 || is.null(outDir)) return(invisible(NULL))
+
+    allRes                    <- ora_result[[1]]
+    enrichment_table          <- ora_result[[3]]
+    enrichment_table_simplify <- ora_result[[4]]
+
+    dir.create(outDir, recursive = TRUE, showWarnings = FALSE)
+
+    # Write enrichment CSV
+    if (!is.null(enrichment_table)) {
+        enrichment_table_file <- file.path(outDir, paste0(file_name, ".csv"))
+        write.csv(x = enrichment_table, file = enrichment_table_file,
+                  quote = TRUE, row.names = TRUE)
+    }
+
+    # Write simplify CSV (only when simplify ran and produced a table)
+    if (!is.null(enrichment_table_simplify)) {
+        simplify_file <- file.path(outDir, paste0("Simplify_", file_name, ".csv"))
+        write.csv(x = enrichment_table_simplify, file = simplify_file,
+                  quote = FALSE, row.names = TRUE)
+    }
+
+    # Dotplot
+    if (!is.null(allRes) && nrow(allRes@compareClusterResult) > 0) {
+        # Legacy font size heuristic
+        font.size <- if (nrow(allRes@compareClusterResult) > 50) 4 else 9
+
+        dot_plot_file <- file.path(outDir, paste0(file_name, ".pdf"))
+        tryCatch({
+            if (requireNamespace("enrichplot", quietly = TRUE)) {
+                p <- enrichplot::dotplot(allRes, showCategory = maxCategory,
+                                         font.size = font.size)
+                ggplot2::ggsave(filename = dot_plot_file, plot = p,
+                                dpi = 600, device = "pdf",
+                                width = 20, height = 20)
+            }
+        }, error = function(e) {
+            message("    Dotplot generation failed: ", e$message)
+        })
+    }
+
+    invisible(NULL)
+}
+
+
+#' Process clusterProfiler results table with fold enrichment
+#'
+#' Port of legacy process_clusterprofiler_results_table().
+#' Expands GeneRatio and BgRatio into numeric components and computes
+#' Fold_enrichment = (in_cluster_in_term / in_cluster) / (in_term / in_genome).
+#'
+#' @param clusterprofiler_results_table Data.frame from
+#'   compareClusterResult@@compareClusterResult or enrichResult@@result
+#' @return Data.frame with expanded ratio columns and Fold_enrichment
+#' @export
+process_enrichment_table <- function(clusterprofiler_results_table) {
+    MAX_NR_GENES_TO_SHOW <- 1000
+    text_to_show <- paste0("Too many to show (>", MAX_NR_GENES_TO_SHOW, ")")
+
+    et <- clusterprofiler_results_table
+
+    if (nrow(et) == 0) return(et)
+
+    # Split GeneRatio "k/n" into two numeric columns
+    if (!"GeneRatio" %in% colnames(et) || !"BgRatio" %in% colnames(et)) {
+        warning("process_enrichment_table: missing GeneRatio or BgRatio columns")
+        return(et)
+    }
+
+    gr_parts <- strsplit(as.character(et$GeneRatio), "/")
+    et$in_cluster_in_term <- as.numeric(vapply(gr_parts, `[`, character(1), 1))
+    et$in_cluster         <- as.numeric(vapply(gr_parts, `[`, character(1), 2))
+
+    # Split BgRatio "M/N" into two numeric columns
+    bg_parts <- strsplit(as.character(et$BgRatio), "/")
+    et$in_term    <- as.numeric(vapply(bg_parts, `[`, character(1), 1))
+    et$in_genome  <- as.numeric(vapply(bg_parts, `[`, character(1), 2))
+
+    # Fold enrichment: (k/n) / (M/N)
+    # Guard against division by zero (produces NaN/Inf)
+    denom <- (et$in_term / et$in_genome)
+    denom[denom == 0] <- NA
+    et$Fold_enrichment <- signif(
+        (et$in_cluster_in_term / et$in_cluster) / denom,
+        digits = 2
+    )
+
+    # Truncate geneID for very large gene lists
+    if ("geneID" %in% colnames(et) && "Count" %in% colnames(et)) {
+        et$geneID <- ifelse(et$Count <= MAX_NR_GENES_TO_SHOW,
+                            et$geneID, text_to_show)
+    }
+
+    et
+}
+
+# ==============================================================================
+# GENE LIST BUILDER FOR ORA (legacy orchestration layer)
+# ==============================================================================
+# The legacy enrichment workflow iterates over gene_lists[[clust_method]][[clust_round]],
+# where each entry is a named vector mapping gene IDs to cluster labels.
+# This includes contrast-derived "clusters" (up/down per contrast, all DE per contrast)
+# and actual clustering-derived assignments (partition, hierarchical, binary patterns).
+
+#' Build gene_lists structure for cluster-based ORA
+#'
+#' Constructs a nested list gene_lists[[method]][[round]] where each leaf is
+#' a named character/integer vector (gene IDs as names, cluster labels as values).
+#' This matches the legacy enrichment orchestration structure.
+#'
+#' @param de_tables Named list of per-contrast DE tables
+#'   (each with FeatureID, log2FoldChange, padj columns)
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL
+#' @param p_cutoff Adjusted p-value cutoff for DE significance (default 0.05)
+#' @param lfc_cutoff log2 fold change cutoff for DE significance (default log2(1.5))
+#' @return Named list: method -> round -> named vector (gene ID -> cluster label).
+#'   Returns empty list if no gene lists can be built.
+#' @export
+build_gene_lists <- function(de_tables,
+                             clustering_res = NULL,
+                             p_cutoff = 0.05,
+                             lfc_cutoff = log2(1.5)) {
+
+    gene_lists <- list()
+
+    # ------------------------------------------------------------------
+    # 1. Contrast-based gene lists (always available when DE tables exist)
+    # ------------------------------------------------------------------
+    if (length(de_tables) > 0) {
+
+        # "contrasts": per contrast, genes assigned to "up" or "down"
+        for (cn in names(de_tables)) {
+            dt <- de_tables[[cn]]
+            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
+                      !is.na(dt$log2FoldChange) &
+                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            if (nrow(sig) == 0) next
+            # Deduplicate by FeatureID (keep first occurrence)
+            sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
+
+            labels <- ifelse(sig$log2FoldChange > 0, "up", "down")
+            names(labels) <- sig$FeatureID
+            gene_lists[["contrasts"]][[cn]] <- labels
+        }
+
+        # "contrasts_wo_direction": per contrast, all DE genes in one cluster "all"
+        for (cn in names(de_tables)) {
+            dt <- de_tables[[cn]]
+            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
+                      !is.na(dt$log2FoldChange) &
+                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            if (nrow(sig) == 0) next
+            sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
+
+            labels <- rep("all", nrow(sig))
+            names(labels) <- sig$FeatureID
+            gene_lists[["contrasts_wo_direction"]][[cn]] <- labels
+        }
+
+        # "all_DE": union of DE genes across ALL contrasts, single cluster "all"
+        # (legacy gene_lists[["all_DE"]][["any_contrast"]]). One ORA run over the
+        # combined DE set, independent of contrast or direction.
+        all_de_ids <- character(0)
+        for (cn in names(de_tables)) {
+            dt <- de_tables[[cn]]
+            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
+                      !is.na(dt$log2FoldChange) &
+                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            all_de_ids <- c(all_de_ids, sig$FeatureID)
+        }
+        all_de_ids <- unique(all_de_ids[!is.na(all_de_ids)])
+        if (length(all_de_ids) > 0) {
+            gene_lists[["all_DE"]][["any_contrast"]] <-
+                setNames(rep("all", length(all_de_ids)), all_de_ids)
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 2. Clustering-derived gene lists (when clustering results available)
+    #
+    # ID-space alignment (M1): the DE-derived lists above use de_tables$FeatureID,
+    # which the pathway module may have stripped of a leading "Gene:" prefix.
+    # Clustering IDs come from clustering_res (unstripped), so we strip the same
+    # prefix here to keep partition/binary genes in the SAME ID space as the DE
+    # lists and the local TERM2GENE tables. sub() is a no-op when no prefix exists.
+    # ------------------------------------------------------------------
+    if (!is.null(clustering_res) && is.list(clustering_res$objects)) {
+        objs <- clustering_res$objects
+        eo   <- clustering_res$excel_order
+
+        # Partition clusters — sourced UNAMBIGUOUSLY (M2).
+        # objects$clusters is overwritten (hierarchical -> partition), so it is not
+        # a reliable "partition" signal by itself. excel_order$partition_clusters is
+        # set ONLY when partition ran (alongside hierarchical) -> prefer it. With no
+        # excel_order at all, hierarchical did not run and objects$clusters then holds
+        # partition clusters (partition-only run). If excel_order exists but
+        # partition_clusters is NULL, partition did NOT run and objects$clusters holds
+        # HIERARCHICAL cuts -> do NOT treat them as "partition" (legacy never ran ORA
+        # on hierarchical cuts).
+        partition_clusters <- NULL
+        if (!is.null(eo) && !is.null(eo$partition_clusters)) {
+            partition_clusters <- eo$partition_clusters
+        } else if (is.null(eo) && !is.null(objs$clusters)) {
+            partition_clusters <- objs$clusters
+        }
+        if (!is.null(partition_clusters) && length(partition_clusters) > 0) {
+            names(partition_clusters) <- sub("^Gene:", "", names(partition_clusters))
+            gene_lists[["partition"]][["k"]] <- partition_clusters
+        }
+
+        # Binary patterns: objects$patterns is a DATA.FRAME with feature_id +
+        # best_pattern columns (run_binary_patterns()$best). (M3: guard on nrow(),
+        # not length(), since length() of a data.frame counts columns, not rows.)
+        if (!is.null(objs$patterns) && is.data.frame(objs$patterns) &&
+            nrow(objs$patterns) > 0) {
+            bin_pattern <- objs$patterns[!is.na(objs$patterns$best_pattern), , drop = FALSE]
+            if (nrow(bin_pattern) > 0) {
+                clusters <- setNames(
+                    as.character(bin_pattern$best_pattern),
+                    sub("^Gene:", "", bin_pattern$feature_id)
+                )
+                gene_lists[["binary_patterns"]][["best"]] <- clusters
+            }
+        }
+    }
+
+    gene_lists
+}

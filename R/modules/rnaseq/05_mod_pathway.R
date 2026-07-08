@@ -1,3 +1,44 @@
+#' Build a pure-compute ORA worker with a minimal captured environment
+#'
+#' Returns a `function(job)` that computes cluster ORA for one job. Defining it
+#' here (not inside mod_rnaseq_pathway) bounds the closure's environment to just
+#' the arguments below, so future.apply serializes only these to parallel
+#' workers — not unrelated large objects (e.g. the expression matrix in `pre`)
+#' that would otherwise be captured from the module frame. The worker does pure
+#' computation only: no file I/O, no plotting, no messages.
+#'
+#' @param gene_lists Output of build_gene_lists().
+#' @param local_tables Output of load_local_pathway_tables().
+#' @param pval_cutoff,padj_method ORA thresholds passed to run_cluster_ora_compute().
+#' @param go_simplify,orgdb GO-simplify controls (gated; default off).
+#' @return A function(job) -> list(job, db_type, result), where result is the
+#'   4-element list from run_cluster_ora_compute() (or list() if not significant).
+#' @noRd
+.make_ora_worker <- function(gene_lists, local_tables, pval_cutoff, padj_method,
+                             go_simplify, orgdb) {
+    force(gene_lists); force(local_tables); force(pval_cutoff)
+    force(padj_method); force(go_simplify); force(orgdb)
+    function(job) {
+        clusters <- gene_lists[[job$clust_method]][[job$clust_round]]
+        tbl      <- local_tables[[job$db_name]]
+        db_type  <- if (grepl("^GO", job$db_name)) "GO" else "KEGG"
+        db_ont   <- if (db_type == "GO") sub("^GO_", "", job$db_name) else NULL
+
+        res <- run_cluster_ora_compute(
+            clusters      = clusters,
+            TERM2GENE     = tbl$TERM2GENE,
+            TERM2NAME     = tbl$TERM2NAME,
+            type          = db_type,
+            pvalueCutoff  = pval_cutoff,
+            pAdjustMethod = padj_method,
+            go_simplify   = go_simplify,
+            orgdb         = orgdb,
+            ont           = db_ont
+        )
+        list(job = job, db_type = db_type, result = res)
+    }
+}
+
 #' RNA-seq Pathway Analysis Module
 #'
 #' Orchestrates organism detection, gene annotation, gene set loading,
@@ -7,13 +48,18 @@
 #' @param pre     Preprocessed data list (with expr_filt, meta)
 #' @param config  Full pipeline config
 #' @param out_dir Output directory for the RNA mode (e.g. .../rna)
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL. Used only
+#'   by the local (offline) enrichment path: when provided (single-omics mode)
+#'   cluster-based ORA runs; when NULL (multiomics mode) ORA is skipped with a
+#'   warning and GSEA still runs. Ignored by the online fallback.
 #' @return List with annotation, pathway_results, and plot_files
 #' @export
-mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
+mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NULL) {
 
     rna_cfg <- config$modes$rna
     ann_cfg <- rna_cfg$annotation %||% list()
     pw_cfg  <- rna_cfg$pathway
+    enr_cfg <- rna_cfg$enrichment %||% list()
 
     # Skip entirely if pathway analysis is disabled
     if (is.null(pw_cfg) || isFALSE(pw_cfg$enabled)) {
@@ -41,6 +87,23 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
             de_tables[[cn]]$FeatureID <- sub("^Gene:", "", de_tables[[cn]]$FeatureID)
         }
         all_gene_ids <- sub("^Gene:", "", all_gene_ids)
+    }
+
+    # ------------------------------------------------------------------
+    # Route: local (offline, table-driven) enrichment vs. online fallback.
+    # The local path activates ONLY when enrichment.annotation_dir is set;
+    # if it is unset/empty the existing online behavior below runs unchanged.
+    # ------------------------------------------------------------------
+    annotation_dir <- enr_cfg$annotation_dir
+    if (!is.null(annotation_dir) && nzchar(annotation_dir)) {
+        return(.run_local_enrichment(
+            de_tables      = de_tables,
+            feature_ids    = all_gene_ids,
+            enr_cfg        = enr_cfg,
+            config         = config,
+            out_dir        = out_dir,
+            clustering_res = clustering_res
+        ))
     }
 
     # ------------------------------------------------------------------
@@ -174,4 +237,228 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir) {
         pathway_results = pathway_results,
         plot_files      = plot_files
     )
+}
+
+
+# ==============================================================================
+# LOCAL ENRICHMENT PATH (offline, table-driven) — enrichment migration v2
+# ==============================================================================
+
+#' Internal: run enrichment using local precomputed KEGG/GO tables
+#'
+#' Offline path activated by enrichment.annotation_dir. Runs cluster-based ORA
+#' (when clustering_res is available) and multi-method GSEA. Returns the same
+#' shape as mod_rnaseq_pathway: list(annotation, pathway_results, plot_files),
+#' with pathway_results a (possibly empty) named list of data.frames carrying a
+#' padj column for downstream compatibility.
+#'
+#' @param de_tables Named list of per-contrast DE tables.
+#' @param feature_ids All unique feature IDs (for the overlap guard).
+#' @param enr_cfg The config$modes$rna$enrichment section.
+#' @param config Full pipeline config.
+#' @param out_dir Output directory for the RNA mode.
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL.
+#' @return list(annotation, pathway_results, plot_files)
+#' @noRd
+.run_local_enrichment <- function(de_tables, feature_ids, enr_cfg, config,
+                                  out_dir, clustering_res = NULL) {
+
+    message("\n=== Local Enrichment (offline, table-driven) ===\n")
+
+    annotation_dir <- enr_cfg$annotation_dir
+
+    # Resolve a relative annotation_dir against the project dir if needed.
+    if (!dir.exists(annotation_dir)) {
+        project_dir <- config$project$dir
+        if (!is.null(project_dir) && nzchar(project_dir)) {
+            candidate <- file.path(project_dir, annotation_dir)
+            if (dir.exists(candidate)) annotation_dir <- candidate
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 1. Load local pathway tables (missing DBs are skipped + warned inside)
+    # ------------------------------------------------------------------
+    databases <- enr_cfg$databases %||% c("KEGG", "GO_BP", "GO_MF", "GO_CC")
+
+    message("Loading local pathway tables from: ", annotation_dir)
+    local_tables <- load_local_pathway_tables(
+        annotation_dir = annotation_dir,
+        databases      = databases,
+        feature_ids    = feature_ids
+    )
+
+    if (length(local_tables) == 0) {
+        warning("No local pathway tables loaded. Returning empty enrichment result.")
+        return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
+    }
+
+    enrich_dir  <- file.path(out_dir, "Enrichment")
+    pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
+    padj_method <- enr_cfg$padj_method   %||% "fdr"
+    rna_de_cfg  <- config$modes$rna$de %||% list()
+    go_simplify <- isTRUE(enr_cfg$go_simplify)
+    orgdb       <- enr_cfg$orgdb
+    # Single control for enrichment parallelism (ORA + GSEA). <=1 == sequential.
+    workers     <- enr_cfg$workers %||% 1
+
+    pathway_results <- list()
+    plot_files      <- list()
+
+    # ------------------------------------------------------------------
+    # 2. Cluster-based ORA across all gene-list methods
+    # ------------------------------------------------------------------
+    gene_lists <- build_gene_lists(
+        de_tables      = de_tables,
+        clustering_res = clustering_res,
+        p_cutoff       = rna_de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff     = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
+    )
+
+    if (length(gene_lists) > 0) {
+        message("\n--- Cluster-based ORA ---")
+
+        # Build a flat, method-agnostic ORA job list: one job per
+        # (collection x round x database). Each job is an independent enrichment
+        # unit; jobs run through the shared run_enrichment_jobs() orchestration
+        # layer (parallel compute when workers > 1). Build order (collection ->
+        # round -> database) is preserved by run_enrichment_jobs() and by the
+        # serial assembly loop below, so ora_results key order is identical to
+        # the previous sequential implementation.
+        ora_jobs <- list()
+        for (clust_method in names(gene_lists)) {
+            for (clust_round in names(gene_lists[[clust_method]])) {
+                clusters <- gene_lists[[clust_method]][[clust_round]]
+                if (length(clusters) == 0) next
+                for (db_name in names(local_tables)) {
+                    ora_jobs[[length(ora_jobs) + 1]] <- list(
+                        clust_method = clust_method,
+                        clust_round  = clust_round,
+                        db_name      = db_name
+                    )
+                }
+            }
+        }
+
+        if (length(ora_jobs) > 0) {
+            message("  ", length(ora_jobs), " ORA jobs to run",
+                    if (workers > 1) paste0(" (", workers, " workers)") else " (sequential)")
+
+            # Build the pure-compute worker with a MINIMAL captured environment
+            # (only the gene sets, tables, and scalar params it uses) — see
+            # .make_ora_worker(). This keeps future from serializing unrelated
+            # large objects (e.g. the expression matrix in `pre`) to workers.
+            run_one_ora_job <- .make_ora_worker(
+                gene_lists   = gene_lists,
+                local_tables = local_tables,
+                pval_cutoff  = pval_cutoff,
+                padj_method  = padj_method,
+                go_simplify  = go_simplify,
+                orgdb        = orgdb
+            )
+
+            ora_job_results <- run_enrichment_jobs(ora_jobs, run_one_ora_job, workers)
+
+            # Serial assembly + file writing (deterministic; never in a worker).
+            ora_results <- list()
+            for (jr in ora_job_results) {
+                job         <- jr$job
+                res         <- jr$result
+                result_base <- paste0(job$db_name, "_", job$clust_method, "_", job$clust_round)
+
+                if (length(res) == 0) {
+                    message("    ORA: ", result_base, " — no significant enrichment")
+                    next
+                }
+
+                write_cluster_ora_outputs(
+                    res,
+                    outDir      = file.path(enrich_dir, "ORA", job$db_name),
+                    file_name   = result_base,
+                    type        = jr$db_type,
+                    maxCategory = enr_cfg$max_terms_in_dotplot %||% 20
+                )
+
+                ora_results <- .store_ora_result(
+                    ora_results, res[[3]], paste0(result_base, "_ora"))
+                ora_results <- .store_ora_result(
+                    ora_results, res[[4]], paste0(result_base, "_ora_simplify"))
+
+                n_terms <- if (!is.null(res[[3]])) nrow(res[[3]]) else 0
+                message("    ORA: ", result_base, " — ", n_terms, " enriched terms")
+            }
+
+            if (length(ora_results) > 0) pathway_results[["cluster_ora"]] <- ora_results
+        }
+    } else {
+        message("Cluster-based ORA requires clustering results. ",
+                "Enable clustering in config to run ORA. GSEA will proceed.")
+    }
+
+    # ------------------------------------------------------------------
+    # 3. GSEA (multiple ranking methods; parallel when workers > 1)
+    # ------------------------------------------------------------------
+    message("\n--- GSEA ---")
+    ranked_genes <- build_ranked_gene_lists(de_tables)
+
+    gsea_dir  <- file.path(enrich_dir, "GSEA")
+    gsea_pval <- enr_cfg$gsea_pvalue_cutoff %||% pval_cutoff
+    gsea_padj <- enr_cfg$gsea_padj_method   %||% padj_method
+    # `workers` is defined once above and controls both ORA and GSEA.
+    # OFF by default (legacy parity); only emitted on demand when enabled.
+    per_pathway_artifacts <- isTRUE(enr_cfg$gsea_per_pathway_artifacts)
+
+    gsea_out <- run_gsea_all(
+        ranked_genes          = ranked_genes,
+        local_tables          = local_tables,
+        pvalueCutoff          = gsea_pval,
+        pAdjustMethod         = gsea_padj,
+        output_dir            = gsea_dir,
+        workers               = workers,
+        per_pathway_artifacts = per_pathway_artifacts,
+        max_terms_in_dotplot  = enr_cfg$max_terms_in_dotplot %||% 20
+    )
+
+    for (contrast in names(gsea_out$results)) {
+        if (is.null(pathway_results[[contrast]])) {
+            pathway_results[[contrast]] <- gsea_out$results[[contrast]]
+        } else {
+            pathway_results[[contrast]] <- c(
+                pathway_results[[contrast]], gsea_out$results[[contrast]])
+        }
+    }
+    plot_files <- c(plot_files, gsea_out$plot_files)
+
+    message("\n=== Local enrichment complete ===")
+    if (length(gene_lists) == 0) message("  ORA: skipped (no gene lists available)")
+
+    list(
+        annotation      = NULL,
+        pathway_results = pathway_results,
+        plot_files      = plot_files
+    )
+}
+
+
+#' Store an ORA result table in the accumulator with downstream-compatible columns
+#'
+#' Adds `padj` (from p.adjust) and `pathway` (from Description) columns when
+#' missing, so collect_pipeline_stats()/extract_enrichment_df() can consume it.
+#'
+#' @param ora_results Current accumulator list.
+#' @param df Data.frame from run_cluster_ora(), or NULL.
+#' @param key Storage key.
+#' @return Updated ora_results list.
+#' @noRd
+.store_ora_result <- function(ora_results, df, key) {
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(ora_results)
+
+    if ("p.adjust" %in% colnames(df) && !"padj" %in% colnames(df)) {
+        df$padj <- df$p.adjust
+    }
+    if ("Description" %in% colnames(df) && !"pathway" %in% colnames(df)) {
+        df$pathway <- df$Description
+    }
+    ora_results[[key]] <- df
+    ora_results
 }

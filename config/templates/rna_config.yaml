@@ -214,5 +214,55 @@ modes:
       sequencing: ""
       acknowledgment: ""
 
+    # --------------------------------------------------------
+    # Local (offline) enrichment — sibling of the online `pathway:` config.
+    #
+    # BACKWARD-COMPATIBILITY / ACTIVATION (annotation_dir):
+    #   - annotation_dir: ""  (empty/unset) -> the EXISTING ONLINE pathway
+    #     workflow runs exactly as it does today (organism detection, gene
+    #     annotation, online gene-set loading, fGSEA + ORA). Nothing changes.
+    #   - annotation_dir: "<path>"          -> activates the NEW local/offline,
+    #     table-driven enrichment workflow (KEGG/GO .tab files; no internet).
+    #   This switch exists to preserve backward compatibility with the current
+    #   project while adding the offline path.
+    #
+    # GO EXPANSION (preprocessing, NOT runtime):
+    #   Runtime enrichment does NOT perform GO expansion. The pipeline expects
+    #   PRE-GENERATED local GO annotation tables. GO expansion is a separate
+    #   preprocessing step (e.g. clusterProfiler::buildGOmap() during annotation
+    #   preparation). To reproduce the legacy behavior ("with GO expansion"),
+    #   the supplied GO2gene_*.tab tables must ALREADY contain the expanded GO
+    #   assignments (legacy used a "Func_annot_data_expanded" directory).
+    # --------------------------------------------------------
+    enrichment:
+      annotation_dir: ""               # empty -> online path (above); set -> offline local path
+      # databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]  # default = all four; missing files are skipped + warned
+      # max_terms_in_dotplot: 20       # legacy default. Display-only: number of pathways shown in dotplots.
+                                       # Does NOT affect enrichment calculations; all results stay in the output tables.
+      # gsea_per_pathway_artifacts: false  # legacy default. When false, GSEA result tables/dotplots are still
+                                           # produced, but NOT per-pathway gseaplot2 PNGs + core-gene CSVs for every
+                                           # significant pathway (legacy generated those only during explicit, on-demand
+                                           # pathway exploration). Set true to emit them for all significant pathways.
+      # GO simplify (intentionally differs from legacy):
+      #   The legacy workflow attempted GO simplify AUTOMATICALLY for every GO ORA.
+      #   Here it is DISABLED BY DEFAULT to avoid implicit, organism-specific
+      #   semantic-similarity (OrgDb/GOSemSim) dependencies. The pipeline ALWAYS
+      #   produces the regular (unsimplified) GO ORA results regardless. Simplify
+      #   remains available as an OPTIONAL feature only when explicitly enabled
+      #   AND a local, pre-installed OrgDb is configured (no auto-detect, no online).
+      # go_simplify: false             # keep false (default); true requires `orgdb` below
+      # orgdb: ""                      # explicit local OrgDb pkg for simplify only (e.g. "org.Hs.eg.db")
+      # pvalue_cutoff: 0.05            # ORA/GSEA adjusted-p cutoff
+      # workers: 1                     # single control for enrichment parallelism (ORA + GSEA).
+      #                                # <=1 = sequential (default). >1 runs independent enrichment
+      #                                # jobs in parallel via future.apply (multisession); identical
+      #                                # results regardless of worker count. Falls back to sequential
+      #                                # if future/future.apply are not installed.
+      # Expected files in annotation_dir (gene-based; GO tables pre-expanded):
+      #   KEGG_pathway2gene.tab   KEGG_pathway2name.tab
+      #   GO2gene_BP.tab          GO2name_BP.tab
+      #   GO2gene_MF.tab          GO2name_MF.tab
+      #   GO2gene_CC.tab          GO2name_CC.tab
+
 params:
   seed: 1

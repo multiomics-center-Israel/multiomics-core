@@ -150,7 +150,11 @@ extract_enrichment_df <- function(enrich_res) {
                 }
             }
         }
-        if (length(dfs) > 0) return(do.call(rbind, dfs))
+        # ORA and GSEA tables carry legitimately different columns (e.g. ORA has
+        # Fold_enrichment/Count, GSEA has NES/core_enrichment). bind_rows() aligns
+        # by name and NA-fills the missing method-specific columns, whereas rbind()
+        # requires identical schemas and aborts on heterogeneous inputs.
+        if (length(dfs) > 0) return(dplyr::bind_rows(dfs))
     }
 
     NULL

@@ -131,8 +131,10 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
         count_from_df <- function(df) {
             if (!is.data.frame(df) || !"padj" %in% names(df)) return(NULL)
             sig_pw <- df[!is.na(df$padj) & df$padj < 0.05, , drop = FALSE]
-            n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0
-            n_dn <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES < 0, na.rm = TRUE) else 0
+            # ORA tables have no NES column; keep the fallback integer (0L) so the
+            # downstream vapply(..., FUN.VALUE = 0L, ...) type template holds.
+            n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0L
+            n_dn <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES < 0, na.rm = TRUE) else 0L
             list(total = nrow(sig_pw), up = n_up, down = n_dn)
         }
 
