@@ -301,6 +301,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     orgdb       <- enr_cfg$orgdb
     # Single control for enrichment parallelism (ORA + GSEA). <=1 == sequential.
     workers     <- enr_cfg$workers %||% 1
+    # Reproducibility: the project's single seed (params$seed) is the source of
+    # truth for enrichment RNG. Threaded into run_enrichment_jobs() as an explicit
+    # future.seed, it makes GSEA identical across worker counts AND independent
+    # rebuilds. Falls back to 1L if params$seed is unset.
+    enr_seed    <- config$params$seed %||% 1L
 
     pathway_results <- list()
     plot_files      <- list()
@@ -357,7 +362,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                 orgdb        = orgdb
             )
 
-            ora_job_results <- run_enrichment_jobs(ora_jobs, run_one_ora_job, workers)
+            ora_job_results <- run_enrichment_jobs(ora_jobs, run_one_ora_job, workers, seed = enr_seed)
 
             # Serial assembly + file writing (deterministic; never in a worker).
             ora_results <- list()
@@ -416,7 +421,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         output_dir            = gsea_dir,
         workers               = workers,
         per_pathway_artifacts = per_pathway_artifacts,
-        max_terms_in_dotplot  = enr_cfg$max_terms_in_dotplot %||% 20
+        max_terms_in_dotplot  = enr_cfg$max_terms_in_dotplot %||% 20,
+        seed                  = enr_seed
     )
 
     for (contrast in names(gsea_out$results)) {

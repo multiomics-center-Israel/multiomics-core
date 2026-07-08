@@ -1469,15 +1469,20 @@ run_gsea_local <- function(ranked_genes,
 #' @param workers Integer. Controls only the backend, never the results:
 #'   `<= 1` uses a `future::sequential` plan (one job at a time, in-process);
 #'   `> 1` uses `future::multisession` with that many workers (Windows-safe,
-#'   separate processes). Both paths go through `future.apply::future_lapply()`
-#'   with `future.seed = TRUE`, which assigns each job an independent, reproducible
-#'   L'Ecuyer-CMRG RNG stream that is IDENTICAL regardless of backend or worker
-#'   count. This is what makes permutation-based methods (GSEA) return identical
-#'   results for `workers = 1`, `4`, or any N, and reproducible across runs. If
-#'   `future`/`future.apply` are not installed, it degrades to plain `lapply()`
-#'   (sequential; no per-job RNG streams).
+#'   separate processes). Both paths go through `future.apply::future_lapply()`.
+#' @param seed Integer reproducibility seed (the project's `params$seed`). Passed
+#'   as `future.seed = seed`, which derives each job's independent L'Ecuyer-CMRG
+#'   RNG stream **from this fixed integer** — so results depend only on `seed` and
+#'   job position, never on the ambient RNG state, the backend, or the worker
+#'   count. This is the single source of truth for enrichment reproducibility:
+#'   permutation-based methods (GSEA) return identical results for `workers = 1`,
+#'   `4`, or any N, and across independent pipeline rebuilds. (Using
+#'   `future.seed = TRUE` instead would key off the ambient RNG at call time, which
+#'   drifts between builds — the bug this replaces.) Method-agnostic: any future
+#'   RNG-using enrichment method inherits reproducibility for free. If
+#'   `future`/`future.apply` are not installed, it degrades to plain `lapply()`.
 #' @return List of results, one per job, in input order.
-run_enrichment_jobs <- function(jobs, fun, workers = 1L) {
+run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
     if (length(jobs) == 0) return(list())
 
     have_future <- requireNamespace("future", quietly = TRUE) &&
@@ -1496,11 +1501,11 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L) {
     # exported globals tiny (~5 MiB here) — well under future's default 500 MiB
     # guard. That guard is intentionally left at its default: it is a useful
     # early warning if a future method ever starts broadcasting large objects.
-    # Route EVERY worker count through future_lapply(future.seed = TRUE). The
-    # RNG streams depend only on the job list + upstream seed, never on the plan
-    # or worker count, so results are worker-count-invariant and reproducible.
-    # Sequential plan for workers <= 1 keeps one-job-at-a-time, in-process
-    # semantics (no worker spawn) while sharing the identical RNG mechanism.
+    # Route EVERY worker count through future_lapply with an EXPLICIT integer
+    # future.seed (see @param seed): RNG streams depend only on `seed` + job
+    # position — not on ambient RNG, backend, or worker count — so results are
+    # worker-count-invariant AND identical across independent rebuilds. Sequential
+    # plan for workers <= 1 keeps one-job-at-a-time, in-process semantics.
     old_plan <- if (workers > 1) {
         future::plan(future::multisession, workers = workers)
     } else {
@@ -1508,7 +1513,7 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L) {
     }
     on.exit(future::plan(old_plan), add = TRUE)
 
-    future.apply::future_lapply(jobs, fun, future.seed = TRUE)
+    future.apply::future_lapply(jobs, fun, future.seed = seed)
 }
 
 #' Run GSEA across all ranking methods, contrasts, and databases
@@ -1533,7 +1538,8 @@ run_gsea_all <- function(ranked_genes,
                          output_dir = NULL,
                          workers = 1,
                          per_pathway_artifacts = FALSE,
-                         max_terms_in_dotplot = 20) {
+                         max_terms_in_dotplot = 20,
+                         seed = 1L) {
 
     if (!is.null(output_dir)) {
         dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1599,7 +1605,9 @@ run_gsea_all <- function(ranked_genes,
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
-    job_results <- run_enrichment_jobs(jobs, run_one_gsea_job, workers)
+    # `seed` (the project's params$seed) fixes the per-job RNG streams so GSEA
+    # is reproducible across worker counts and independent rebuilds.
+    job_results <- run_enrichment_jobs(jobs, run_one_gsea_job, workers, seed = seed)
 
     # ------------------------------------------------------------------
     # 3. Assemble results and write files (serial, deterministic)

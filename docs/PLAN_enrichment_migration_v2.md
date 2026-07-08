@@ -1,6 +1,6 @@
 # Current Status
 
-Status: **Phase 1 COMPLETE and fully validated** (local & uncommitted). All Phase 1 validation tasks passed — see §4.4 for today's results. Implementation smoke-validated end-to-end and green; two latent downstream-consumer bugs were found, fixed, and verified: (1) `rna_pipeline_summary` integer/double (§4.2) and (2) `extract_enrichment_df()` `rbind` schema mismatch on heterogeneous ORA+GSEA tables (§4.3). Both multiomics (`clustering_res = NULL`) behavior and online-regression routing (`annotation_dir: ""`) are validated. Both fixes are in downstream consumers; the enrichment producer and its Phase 1 contract are unchanged. **Next engineering task before Phase 2: parallel enrichment execution (§12).** Nothing committed or pushed.
+Status: **Phase 1 COMPLETE and fully validated** (local & uncommitted). All Phase 1 validation tasks passed — see §4.4 for today's results. Implementation smoke-validated end-to-end and green; two latent downstream-consumer bugs were found, fixed, and verified: (1) `rna_pipeline_summary` integer/double (§4.2) and (2) `extract_enrichment_df()` `rbind` schema mismatch on heterogeneous ORA+GSEA tables (§4.3). Both multiomics (`clustering_res = NULL`) behavior and online-regression routing (`annotation_dir: ""`) are validated. Both fixes are in downstream consumers; the enrichment producer and its Phase 1 contract are unchanged. Parallel enrichment execution (§12) is implemented. **Phase 1 is committed locally** as `aaf8d8b` (not pushed/merged), followed by an **isolated RNG-reproducibility commit** (§12.1: `params$seed` → `future.seed`, making GSEA identical across worker counts and independent rebuilds; one-time GSEA-baseline shift, ORA unchanged). Phase 2 (legacy plots) is next, resuming from this fully reproducible baseline.
 
 Current Branch:
 feature/enrichment-migration-v2
@@ -323,9 +323,9 @@ Both existing methods now route through it:
 `enrichment.workers` (read once in `mod_rnaseq_pathway`) is the sole knob for the whole enrichment engine. It selects only the *backend*, never the results:
 - `workers <= 1` → `future::sequential` plan (one job at a time, in-process, no worker spawn).
 - `workers > 1` → `future::multisession` with that many workers (separate processes; Windows-safe).
-- **Both paths go through `future.apply::future_lapply(..., future.seed = TRUE)`.** `future.seed = TRUE` assigns each job an independent, reproducible L'Ecuyer-CMRG RNG stream that is **identical regardless of backend or worker count** — this is what makes permutation-based GSEA return identical results for `workers = 1`, `4`, or any N, and reproducible across repeated runs. If `future`/`future.apply` are unavailable, it degrades to plain `lapply()` (sequential; no per-job streams) with a message.
+- **Both paths go through `future.apply::future_lapply(..., future.seed = seed)`** where `seed` is the project's `params$seed` (see §12.1). An **explicit integer** `future.seed` derives each job's L'Ecuyer-CMRG RNG stream from that fixed seed + job position — **identical regardless of backend, worker count, or ambient RNG state** — so permutation-based GSEA returns identical results for `workers = 1`, `4`, or any N, and across independent pipeline rebuilds. If `future`/`future.apply` are unavailable, it degrades to plain `lapply()` (sequential; no per-job streams) with a message.
 
-**Reproducibility decision (important).** Early testing confirmed the RCA's concern: with `workers = 1` using plain `lapply` (ambient global RNG) and `workers = 4` using `future.seed` streams, **all 5 GSEA tables differed** (ORA was already identical — it has no RNG). Because `clusterProfiler::GSEA()` is permutation-based (`seed = FALSE`), the two RNG mechanisms diverge. The fix routes **every** worker count through `future_lapply(future.seed = TRUE)` (sequential plan for `workers <= 1`) so the RNG mechanism is shared and results are worker-count-invariant **and** reproducible across runs. This intentionally supersedes "`workers = 1` == plain-`lapply` behavior": the pre-parallel path used un-seeded ambient RNG and was itself non-reproducible run-to-run, so it was not a stable target; the seeded path is a strict correctness improvement (and aligns with the repo's reproducibility mandate).
+**Reproducibility decision (important).** Early testing confirmed the RCA's concern: with `workers = 1` using plain `lapply` (ambient global RNG) and `workers = 4` using `future.seed` streams, **all 5 GSEA tables differed** (ORA was already identical — it has no RNG). Because `clusterProfiler::GSEA()` is permutation-based (`seed = FALSE`), the two RNG mechanisms diverge. The fix routes **every** worker count through `future_lapply()` with a shared RNG mechanism (sequential plan for `workers <= 1`). Initially this used `future.seed = TRUE`, which fixed worker-count invariance but still keyed off ambient RNG (non-reproducible across rebuilds); it was subsequently replaced by an **explicit integer `future.seed = params$seed`** (see §12.1) for full reproducibility. This intentionally supersedes "`workers = 1` == plain-`lapply` behavior": the pre-parallel path used un-seeded ambient RNG and was itself non-reproducible run-to-run, so it was not a stable target; the seeded path is a strict correctness improvement (and aligns with the repo's reproducibility mandate).
 
 ### Validation results
 - **Unit tests:** 51 passed, 0 failed (`tests/testthat/test-enrichment-local.R`); the one warning is the intended invalid-cluster warning and its test passes — `run_cluster_ora()` still returns `list()` for invalid input (backward-compatible).
@@ -350,10 +350,38 @@ Both existing methods now route through it:
 - **`future.globals.maxSize` left at its 500 MiB default (by design).** The `.make_ora_worker()` factory keeps exported globals to ~5 MiB (measured: `local_tables` 2.4 + `gene_lists` 2.1 + scalars), verified to run under the default limit — so no bump is needed. The guard is deliberately *not* raised: it is a useful early warning if a future method ever starts broadcasting large objects. If a real dataset ever legitimately approached 500 MiB, the right response is to reconsider the data-passing architecture (don't broadcast large tables to every worker), not to silence the guard.
 - **Worker startup cost** (~1–2 s/worker) makes tiny runs not benefit; the win grows with GSEA job count.
 - If `future`/`future.apply` are absent at runtime, execution silently degrades to plain `lapply` (identical structure, no per-job RNG streams, no speedup).
-- **RNG scope of the guarantee.** `future.seed = TRUE` makes GSEA results **invariant to worker count** (verified: `workers = 1` ≡ `4`) and reproducible run-to-run **given a deterministic upstream RNG state at the enrichment call** (the pipeline establishes this via `params.seed`). It does not, by itself, pin GSEA to a fixed absolute seed independent of upstream RNG; if fully seed-pinned GSEA is ever required, pass an explicit integer seed through the orchestration layer (small, additive change — not needed for the current guarantee).
+- **RNG scope of the guarantee — fully resolved (§12.1).** The orchestration layer now passes an **explicit integer** `future.seed = params$seed`, so GSEA results are invariant to worker count **and** independent of the ambient RNG state — identical across separate pipeline rebuilds, not merely within one run. (The original `future.seed = TRUE` keyed off ambient RNG, which drifted between builds; see §12.1 for the fix.)
 - **Rendering tooling (environment, not code):** `rna_report` needs `pandoc` (via `rmarkdown`). A headless `Rscript` without `RSTUDIO_PANDOC` set will fail that target; a normal RStudio session (or setting `RSTUDIO_PANDOC` to RStudio's bundled pandoc) renders it fine. Unrelated to enrichment/parallelism.
 
 **Untouched.** Enrichment parameters, collections, ranking math; the Phase 1 downstream contract (incl. A12 heterogeneous tables); the online path; the report/Shiny consumers (structurally). This is a performance + reproducibility change with a zero-behavior-change guarantee *between worker counts*.
+
+## 12.1 Enrichment RNG architecture (`params$seed` → deterministic GSEA)
+
+**RNG architecture (single source of truth).** The project's one seed governs enrichment reproducibility:
+
+```
+config$params$seed
+        ↓  (mod_rnaseq_pathway: enr_seed <- config$params$seed %||% 1L)
+run_enrichment_jobs(jobs, fun, workers, seed = enr_seed)      # ORA and GSEA
+        ↓
+future.apply::future_lapply(jobs, fun, future.seed = seed)   # explicit integer
+        ↓
+clusterProfiler::GSEA(...)  # fgsea permutations use the future-assigned stream
+```
+
+`params$seed` is threaded through `mod_rnaseq_pathway()` into **both** enrichment dispatches (the ORA job list and, via `run_gsea_all(..., seed=)`, the GSEA job list). ORA (`enricher`) has no RNG so it is unaffected; GSEA (`fgsea`, `seed = FALSE`) uses the per-job L'Ecuyer stream that `future.seed` assigns.
+
+**Old behavior.** `future_lapply(..., future.seed = TRUE)` derived per-job RNG streams from the **ambient `.Random.seed` at call time**. That ambient state drifts between builds (targets' per-target seed, RNG consumed by the earlier ORA dispatch, RNG-kind switches, etc.), so GSEA permutation p-values — and thus which borderline pathways cross `padj < 0.05` — varied across independent pipeline rebuilds. It was invariant *within* a run (hence `workers = 1 ≡ 4` held), but **not** across rebuilds. Compounding this, `params$seed` was **not wired to enrichment at all** (only proteomics imputation read it), so the project's declared seed had no effect on GSEA.
+
+**New behavior.** `future_lapply(..., future.seed = seed)` with an **explicit integer** derives streams from that fixed seed + job position — **independent of ambient RNG, backend, and worker count**. GSEA is now identical across worker counts *and* across independent rebuilds, and `params$seed` is the single control.
+
+**Why `future.seed = TRUE` was replaced.** `TRUE` = "seed from current RNG state" (ambient-dependent, non-reproducible across builds); an integer = "seed from this fixed value" (ambient-independent, fully reproducible). Verified directly: two `future_lapply` calls under *different* ambient states give identical results with `future.seed = <int>` but different results with `future.seed = TRUE`.
+
+**Why this improves reproducibility.** Enrichment results now depend only on inputs + `params$seed`, nothing implicit. Re-running or rebuilding the pipeline yields byte-identical GSEA. Method-agnostic: any future RNG-using enrichment method routed through `run_enrichment_jobs()` inherits the same guarantee.
+
+**One-time baseline change (expected).** Because GSEA is now seeded deterministically from `params$seed` (previously ambient/unseeded), the **committed Phase 1 GSEA baseline shifts once** to this stable, reproducible set. **ORA is unchanged** (no RNG); `pathway_results` **structure** and all downstream contracts are unchanged. After this one-time shift, subsequent rebuilds are byte-identical.
+
+**Validation (this change) — PASS.** Three enrichment runs on the smoke config, each with a *different* ambient RNG state (`set.seed(999/1/424242)` before the call): (1) `workers = 1` (ambient 999) ≡ `workers = 4` (ambient 1) — all leaves byte-identical; (2) **ambient-independent** — `workers = 4` ambient 1 ≡ ambient 424242 (the "independent rebuild" property); (3) `workers = 1`/ambient 999 ≡ `workers = 4`/ambient 424242 — identical across *both* axes; (4) ORA identical across all three (deterministic). GSEA leaf counts were **stable at 5/5/5** (vs the 1-vs-2 drift observed under the old `future.seed = TRUE`). Conclusion: enrichment results now depend only on inputs + `params$seed`.
 
 ---
 
