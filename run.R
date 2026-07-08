@@ -793,12 +793,12 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
                           "DEP2 / MinDet — deterministic minimum (experimental)",
                           "None (complete cases only)"),
                         default = 1)
-  imp_method <- c("perseus", "dep2", "none")[imp_idx]
+  imp_method <- c("perseus_like", "dep2", "none")[imp_idx]
   imp_width <- "0.2"
   imp_downshift <- "1.6"
   dep2_method <- "MinDet"
-  if (imp_method == "perseus") {
-    cat("  Perseus parameters (press Enter for defaults):\n")
+  if (imp_method == "perseus_like") {
+    cat("  perseus_like parameters (press Enter for defaults):\n")
     imp_width <- ask("    Width (SD scaling for imputed distribution)", "0.2")
     imp_downshift <- ask("    Downshift (SDs below mean)", "1.6")
   } else if (imp_method == "dep2") {
@@ -1071,20 +1071,11 @@ modes:
       dep2_random_seed: 1
     de:
       method: "limma"
-      use_adj_for_pass1: true
+      use_fdr_for_pass1: true
       p_cutoff: %s
       linear_fc_cutoff: %s
     de_table:
       id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
-    qc_post:
-      enabled: true
-      de_source: "summary"
-      plots:
-        volcano: true
-        ma: true
-      outputs:
-        write_de_tables: true
     clustering:
       enabled: %s
       de_source: "any_contrast"

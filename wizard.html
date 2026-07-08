@@ -578,7 +578,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <div class="field">
       <label>Imputation</label>
       <select id="prot_imp_method" onchange="toggleImpParams()">
-        <option value="perseus">Perseus-style (recommended)</option>
+        <option value="perseus_like">perseus_like-style (recommended)</option>
         <option value="dep2">DEP2 / MinDet</option>
         <option value="qrilc">QRILC (DEP workflow)</option>
         <option value="minval">MinVal (floor of minimum)</option>
@@ -593,7 +593,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <span class="hint">Run 10 iterations, require 8/10 consensus for DE significance</span>
     </div>
   </div>
-  <div class="field-row conditional" id="prot_perseus_params">
+  <div class="field-row conditional" id="prot_perseus_like_params">
     <div class="field">
       <label>Width <span class="hint">(SD scaling)</span></label>
       <input type="number" id="prot_imp_width" value="0.2" step="0.1">
@@ -1685,8 +1685,8 @@ function syncFCFromLog2(prefix) {
 }
 
 function toggleImpParams() {
-  var field = document.getElementById('prot_perseus_params');
-  if (field) field.classList.toggle('visible', document.getElementById('prot_imp_method').value === 'perseus');
+  var field = document.getElementById('prot_perseus_like_params');
+  if (field) field.classList.toggle('visible', document.getElementById('prot_imp_method').value === 'perseus_like');
 }
 
 function togglePairedOption() {
@@ -2277,7 +2277,7 @@ function generateProtYaml() {
 
   yaml += '\n    de:\n';
   yaml += '      method: ' + yamlStr(deMethod) + '\n';
-  yaml += '      use_adj_for_pass1: ' + useAdj + '\n';
+  yaml += '      use_fdr_for_pass1: ' + useAdj + '\n';
   yaml += '      p_cutoff: ' + v('prot_p_cutoff') + '\n';
   yaml += '      linear_fc_cutoff: ' + v('prot_fc_cutoff') + '\n';
   yaml += '      p_adjust_method: ' + yamlStr(pAdjustMethod) + '\n';
@@ -2286,10 +2286,6 @@ function generateProtYaml() {
   yaml += '      pairing_col: ' + (pairingCol && pairingCol !== 'null' ? yamlStr(pairingCol) : 'null') + '\n';
 
   yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
-
-  yaml += '\n    qc_post:\n      enabled: true\n      de_source: "summary"\n';
-  yaml += '      plots:\n        volcano: true\n        ma: true\n';
-  yaml += '      outputs:\n        write_de_tables: true\n';
 
   yaml += '\n    clustering:\n';
   yaml += '      enabled: ' + yamlBool(checked('prot_clustering')) + '\n';

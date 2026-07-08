@@ -6,7 +6,7 @@
 #' @param return_flags if TRUE, return list(imputed, imputed_flag)
 #' @return imputed matrix or list(imputed, imputed_flag)
 impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
-    method <- cfg$imputation$method %||% "perseus"
+    method <- cfg$imputation$method %||% "perseus_like"
 
     if (method == "none") {
         # No imputation: return as-is (NAs remain)
@@ -16,8 +16,8 @@ impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
         return(expr_mat)
     }
 
-    if (method == "perseus") {
-        return(impute_proteomics_perseus(expr_mat, cfg, return_flags))
+    if (method == "perseus_like") {
+        return(impute_proteomics_perseus_like(expr_mat, cfg, return_flags))
     }
 
     if (method == "dep2") {
@@ -32,15 +32,15 @@ impute_proteomics <- function(expr_mat, cfg, return_flags = FALSE) {
         return(impute_proteomics_minval(expr_mat, cfg, return_flags))
     }
 
-    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus', 'dep2', 'qrilc', 'minval'.", method))
+    stop(sprintf("Unknown imputation method: '%s'. Supported: 'none', 'perseus_like', 'dep2', 'qrilc', 'minval'.", method))
 }
 
-#' Impute proteomics expr_mat using Perseus-style method
-impute_proteomics_perseus <- function(expr_mat, cfg, return_flags = FALSE) {
+#' Impute proteomics expr_mat using perseus_like-style method
+impute_proteomics_perseus_like <- function(expr_mat, cfg, return_flags = FALSE) {
     width <- cfg$imputation$width %||% 0.3
     downshift <- cfg$imputation$downshift %||% 1.8
 
-    res <- perseus_impute_with_flags(
+    res <- perseus_like_impute_with_flags(
         expr_mat = expr_mat,
         width = width,
         downshift = downshift
@@ -221,7 +221,7 @@ impute_proteomics_minval <- function(expr_mat, cfg, return_flags = FALSE) {
 #' Wrapper to run multiple imputations (with seed increments)
 make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imp_cfg <- cfg$modes$proteomics$imputation
-    method <- imp_cfg$method %||% "perseus"
+    method <- imp_cfg$method %||% "perseus_like"
     multi_imp <- imp_cfg$multi_imputation %||% TRUE
     n_imputations <- as.integer(imp_cfg$no_repetitions)
     seed_base <- cfg$params$seed
@@ -254,8 +254,8 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imps
 }
 
-#' Perseus-style imputation (downshifted & narrowed normal distribution)
-perseus_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
+#' perseus_like-style imputation (downshifted & narrowed normal distribution)
+perseus_like_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
     expr_mat <- as.matrix(expr_mat)
     sample_cols <- colnames(expr_mat)
     imputed_flag <- is.na(expr_mat)

@@ -95,7 +95,7 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
           de_res       = prot_de_res,
           config       = config,
           out_dir      = prot_out_dir,
-          de_source    = config$modes$proteomics$qc_post$de_source %||% "summary"
+          de_source    = "summary"
         )
       ),
       

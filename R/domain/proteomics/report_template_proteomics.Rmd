@@ -1027,7 +1027,7 @@ figure_legend("Per-sample boxplots of protein expression after normalization. Bo
 ```{r imp-hist-tab-heading, eval=has_imputation, results='asis'}
 cat("### Imputation Histograms\n")
 cat(sprintf("Imputation method: **%s**.\n\n", imp_method))
-if (tolower(imp_method) == "perseus") {
+if (tolower(imp_method) == "perseus_like") {
     imp_w <- prot_cfg$imputation$width %||% 0.3
     imp_s <- prot_cfg$imputation$downshift %||% 1.8
     cat(sprintf("Imputed values drawn from a downshifted normal distribution (downshift = %s SD, width = %s SD).\n\n",
@@ -3806,7 +3806,7 @@ if (nzchar(trimws(stats_section_text))) {
 
     if (tolower(imp_method_m) != "none") {
         imp_desc <- switch(tolower(imp_method_m),
-            perseus = "Missing values were imputed using the Perseus-style method (down-shifted normal distribution for MNAR, KNN for MCAR).",
+            perseus_like = "Missing values were imputed using the perseus_like-style method (down-shifted normal distribution for MNAR, KNN for MCAR).",
             minprob = "Missing values were imputed using the MinProb method (random draws from a low-abundance distribution).",
             knn = "Missing values were imputed using K-nearest neighbours (KNN).",
             sprintf("Missing values were imputed using the %s method.", imp_method_m)

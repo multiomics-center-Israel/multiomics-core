@@ -251,7 +251,7 @@ modes:
   proteomics:
     de:
       method: "limma"
-      use_adj_for_pass1: true
+      use_fdr_for_pass1: true
       p_cutoff: 0.1
       linear_fc_cutoff: 1.5
 ```

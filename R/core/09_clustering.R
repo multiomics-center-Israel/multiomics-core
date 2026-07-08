@@ -606,7 +606,7 @@ get_n_groups_from_effects <- function(pre, cfg) {
 #' Decide which clustering steps to run (data-driven)
 #'
 #' Hierarchical can always run when enabled.
-#' Partition + Binary patterns run only if n_groups >= min_groups (default 3).
+#' Partition + Binary patterns run only if n_groups > min_groups (default 2).
 #'
 #' @param pre pre object
 #' @param cfg proteomics mode config with $clustering
@@ -617,8 +617,8 @@ clustering_run_flags <- function(pre, cfg) {
     return(list(hierarchical = FALSE, partition = FALSE, binary_patterns = FALSE))
   }
   
-  # config defaults (safe)
-  min_groups <- cl$min_groups %||% 3L
+  # 
+  min_groups <- 2L # minimum groups that needed for clustering
   n_groups <- get_n_groups_from_effects(pre, cfg)
   
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE
@@ -636,7 +636,7 @@ clustering_run_flags <- function(pre, cfg) {
   bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
   
   # guards for data suitability
-  can_multi_group <- isTRUE(n_groups >= as.integer(min_groups))
+  can_multi_group <- isTRUE(n_groups > as.integer(min_groups))
   
   list(
     hierarchical    = hier_enabled,

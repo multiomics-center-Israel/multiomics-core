@@ -13,7 +13,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         MIN_NO_PASSED <- 1L
     }
 
-    use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
+    use_fdr_for_pass1 <- isTRUE(de_cfg$use_fdr_for_pass1)
     p_cutoff <- as.numeric(de_cfg$p_cutoff)
 
     linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff)
@@ -73,7 +73,7 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
             mark_pass1(runs_de_tables[[n]][[cn]],
                 p_cutoff    = p_cutoff,
                 lfc_cutoff  = lfc_cutoff,
-                use_adj     = use_adj_for_pass1
+                use_adj     = use_fdr_for_pass1
             )
         })
 
@@ -587,7 +587,7 @@ get_de_features <- function(de_res, cfg) {
 
     # Accept legacy + new column names (with safe defaults)
     id_col <- cfg$de_table$id_col %||% "FeatureID"
-    pass_any_col <- cfg$de_table$pass_any_col %||% "pass_any_contrast"
+    pass_any_col <- "pass_any_contrast"
 
     if (is.na(id_col) || is.null(id_col)) {
         stop("DE summary missing id column. Expected : ", id_col)

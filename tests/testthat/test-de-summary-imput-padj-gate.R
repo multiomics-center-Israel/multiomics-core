@@ -26,7 +26,7 @@ make_runs <- function(padj_by_feature, contrast = "A_vs_B") {
 
 make_cfg <- function(n_rep = 10, min_passed = 8) {
     list(modes = list(proteomics = list(
-        de = list(use_adj_for_pass1 = TRUE, p_cutoff = 0.05, linear_fc_cutoff = 1),
+        de = list(use_fdr_for_pass1 = TRUE, p_cutoff = 0.05, linear_fc_cutoff = 1),
         imputation = list(multi_imputation = TRUE, no_repetitions = n_rep, min_no_passed = min_passed),
         de_table = list(id_col = "FeatureID")
     )))

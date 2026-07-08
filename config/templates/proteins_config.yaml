@@ -82,12 +82,12 @@ modes:
     # --------------------------------------------------------
     imputation:
       multi_imputation: true  # false = single imputation (no consensus filter)
-      method: "perseus"    # "none" | "perseus" | "dep2" | "qrilc" | "minval"
+      method: "perseus_like"    # "none" | "perseus_like" | "dep2" | "qrilc" | "minval"
 
       no_repetitions: 10
       min_no_passed: 8
 
-      # Perseus-style parameters
+      # perseus_like-style parameters
       width: 0.2
       downshift: 1.6
 
@@ -103,7 +103,7 @@ modes:
     # --------------------------------------------------------
     de:
       method: "limma"           # "limma" | "ttest" | "welch" | "anova"
-      use_adj_for_pass1: true
+      use_fdr_for_pass1: true
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
       p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
@@ -116,19 +116,6 @@ modes:
     # --------------------------------------------------------
     de_table:
       id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
-
-    # --------------------------------------------------------
-    # QC_post (plots/tables that depend on DE results)
-    # --------------------------------------------------------
-    qc_post:
-      enabled: true
-      de_source: "table1"   # "summary" | "table1"
-      plots:
-        volcano: true
-        ma: true
-      outputs:
-        write_de_tables: true   # writes per-contrast tables derived from the chosen source
 
     # --------------------------------------------------------
     # Clustering (optional; enable only if you want it)
@@ -136,13 +123,6 @@ modes:
     clustering:
       enabled: false
       group_col: "Condition"        # metadata column for clustering group logic
-
-      # Which DE features to cluster.
-      # "any_contrast" = pass_any_col == 1
-      de_source: "any_contrast"
-
-      # Run steps that require multiple conditions only if enough groups exist
-      min_groups: 2
 
       steps:
         hierarchical:

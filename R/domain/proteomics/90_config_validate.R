@@ -25,7 +25,7 @@ validate_proteomics_config <- function(cfg) {
 
     # 3. Imputation Settings
     if (!is.null(cfg$imputation) && !is.null(cfg$imputation$method)) {
-        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus", "dep2", "qrilc", "minval"))
+        assert_one_of(cfg$imputation$method, "imputation$method", c("none", "perseus_like", "dep2", "qrilc", "minval"))
 
         # Only validate repetition/consensus params when multi_imputation is not explicitly FALSE
         if (!identical(cfg$imputation$multi_imputation, FALSE)) {
@@ -38,7 +38,7 @@ validate_proteomics_config <- function(cfg) {
         }
 
         # Method-specific validations
-        if (identical(cfg$imputation$method, "perseus")) {
+        if (identical(cfg$imputation$method, "perseus_like")) {
             assert_scalar_num(cfg$imputation$width, "imputation$width", min_val = 0.0001)
             assert_scalar_num(cfg$imputation$downshift, "imputation$downshift", min_val = 0.0001)
         }
@@ -188,9 +188,6 @@ validate_clustering_config <- function(clust_cfg) {
     assert_named_list(clust_cfg, "modes$proteomics$clustering")
     assert_scalar_bool(clust_cfg$enabled, "modes$proteomics$clustering$enabled")
 
-    assert_scalar_num(clust_cfg$min_groups, "modes$proteomics$clustering$min_groups",
-        allow_null = TRUE, min_val = 2
-    )
 
     if (!is.null(clust_cfg$de_source)) {
         assert_one_of(clust_cfg$de_source, "modes$proteomics$clustering$de_source", c("any_contrast"), allow_null = TRUE)
