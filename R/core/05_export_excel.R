@@ -432,13 +432,9 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else if (mode %in% c("metabolomics", "lipidomics")) {
-        # Metabolomics: identical to RNA-seq EXCEPT the pass column is
-        # "pass.<contrast>" (see build_de_summary() in
-        # R/domain/metabolomics/03_differential.R, which emits paste0("pass.", ctr)).
-        # rna and metabolomics share fc/p/padj/updown/manual naming but differ on
-        # the pass affix, so they need separate branches. Lipidomics is analysed
-        # through the metabolomics pipeline (no dedicated lipidomics DE step), so
-        # it reuses this naming; revisit if a lipidomics-specific DE is added.
+        # Metabolomics summary_df columns use pvalue./padj. prefixes
+        # (see load_precomputed_metabolomics_de and build_de_summary in
+        # R/domain/metabolomics/03_differential.R). Pass column is pass.<ctr>.
         list(
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
