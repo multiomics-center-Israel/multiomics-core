@@ -517,8 +517,8 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
 
         summary_df[[paste0("linearFC.", ctr)]]   <- signif(linear_fc_signed, 3)
         summary_df[[paste0("AveExpr.", ctr)]]    <- tbl$AveExpr
-        summary_df[[paste0("P.Value.", ctr)]]    <- tbl$P.Value
-        summary_df[[paste0("adj.P.Val.", ctr)]]  <- tbl$adj.P.Val
+        summary_df[[paste0("pvalue.", ctr)]]     <- tbl$P.Value
+        summary_df[[paste0("padj.", ctr)]]       <- tbl$adj.P.Val
 
         # Significance flag (uses raw P.Value, not adjusted)
         pass <- as.integer(
@@ -556,8 +556,8 @@ extract_contrast_table <- function(summary_df, contrast) {
         feature_id = summary_df$feature_id,
         logFC      = logfc,
         AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
-        P.Value    = summary_df[[paste0("P.Value.", contrast)]],
-        adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
+        P.Value    = summary_df[[paste0("pvalue.", contrast)]],
+        adj.P.Val  = summary_df[[paste0("padj.", contrast)]],
         stringsAsFactors = FALSE
     )
 }
