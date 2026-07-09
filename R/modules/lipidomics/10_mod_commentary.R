@@ -150,11 +150,11 @@ build_lipidomics_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
             if (is.null(name_col)) name_col <- names(sdf)[1]
 
             # Get all contrasts from column names
-            pval_cols <- grep("^P\\.Value", names(sdf), value = TRUE)
+            pval_cols <- grep("^pvalue\\.", names(sdf), value = TRUE)
             fc_cols   <- grep("^logFC", names(sdf), value = TRUE)
 
             for (pc in pval_cols) {
-                contrast_name <- sub("^P\\.Value\\.?", "", pc)
+                contrast_name <- sub("^pvalue\\.?", "", pc)
                 if (!nzchar(contrast_name)) contrast_name <- "main"
 
                 # Find matching FC column

@@ -61,8 +61,8 @@ extract_contrast_table <- function(summary_df, contrast) {
     feature_id = summary_df$feature_id,
     logFC      = logfc,
     AveExpr    = summary_df[[paste0("AveExpr.", contrast)]],
-    P.Value    = summary_df[[paste0("P.Value.", contrast)]],
-    adj.P.Val  = summary_df[[paste0("adj.P.Val.", contrast)]],
+    P.Value    = summary_df[[paste0("pvalue.", contrast)]],
+    adj.P.Val  = summary_df[[paste0("padj.", contrast)]],
     stringsAsFactors = FALSE
   )
 }
@@ -339,11 +339,21 @@ if (!is.null(pre$info$normalization)) {
 de_method <- if (!is.null(de_res$method)) de_res$method else "N/A"
 
 # DE contrasts
+# Source of truth is names(de_res$de_tables): these labels are what the DE
+# module used to name the volcano/MA PNGs and the summary_df columns, so
+# looking them up here guarantees a match. config$de$contrasts is only the
+# *requested* list and is empty whenever contrasts come from files$contrasts
+# (the standard pipeline path) — falling back to it would leave the DE section
+# blank even though the plots exist on disk.
 de_contrasts <- NULL
 if (!is.null(de_res) && !is.null(de_res$summary_df)) {
-  de_cfg       <- lipid_cfg$de %||% list()
-  de_contrasts <- de_cfg$contrasts
-  if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+  if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
+    de_contrasts <- names(de_res$de_tables)
+  } else {
+    de_cfg       <- lipid_cfg$de %||% list()
+    de_contrasts <- de_cfg$contrasts
+    if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+  }
 }
 
 # Lipid classes count
@@ -1769,7 +1779,7 @@ if (!is.null(de_res$summary_df) && requireNamespace("pheatmap", quietly = TRUE))
   # Heatmaps benefit from showing all significant lipids; the clustering
   # pattern reveals biology even for features with modest fold changes.
   sum_df <- de_res$summary_df
-  pval_cols <- grep("^P\\.Value", colnames(sum_df), value = TRUE)
+  pval_cols <- grep("^pvalue\\.", colnames(sum_df), value = TRUE)
   if (length(pval_cols) > 0) {
     pval_mat <- sum_df[, pval_cols, drop = FALSE]
     min_pval_per_feat <- apply(pval_mat, 1, function(x) min(x, na.rm = TRUE))
