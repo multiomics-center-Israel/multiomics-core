@@ -1,6 +1,7 @@
 # R/modules/lipidomics/05_mod_report.R
 #
-# Lipidomics HTML report module: renders both the basic and styled reports.
+# Lipidomics HTML report module: renders the styled report (matching the
+# RNA/proteomics/metabolomics look).
 
 
 #' Render lipidomics HTML report
@@ -10,7 +11,6 @@
 #' @param de_res          List from mod_lipidomics_de().
 #' @param feature_sel_res List from mod_lipidomics_feature_selection() (or NULL).
 #' @param class_res       List from mod_lipidomics_class_analysis() (or NULL).
-#' @param clustering_res  List from mod_lipidomics_clustering() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
 #' @return Character path to the rendered HTML file.
@@ -27,16 +27,11 @@ mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
     }
 
     template <- file.path("R", "pipeline", "lipidomics", "templates",
-                          "lipidomics_report.Rmd")
+                          "report_lipidomics.Rmd")
 
     if (!file.exists(template)) {
         stop("Report template not found at: ", template)
     }
-
-    out_file <- file.path(out_dir, "lipidomics_report.html")
-    ensure_dir(dirname(out_file))
-
-    message("Rendering lipidomics report -> ", out_file)
 
     # Attach module-level plots to sub-results
     rf_res_out    <- NULL
@@ -69,39 +64,24 @@ mod_lipidomics_report <- function(pre, qc_res, de_res, feature_sel_res,
         commentary_file = commentary_file
     )
 
+    # Render at the Results root (parent of the mode dir), with the Rmd copied
+    # alongside the HTML (matching the other omics' report layout).
+    results_root <- dirname(out_dir)
+    out_file <- file.path(results_root, "report_lipidomics.html")
+    dest_rmd <- file.path(results_root, "report_lipidomics.Rmd")
+    ensure_dir(results_root)
+    file.copy(template, dest_rmd, overwrite = TRUE)
+
+    message("Rendering lipidomics report -> ", out_file)
+
     rmarkdown::render(
-        input       = template,
+        input       = dest_rmd,
         output_file = basename(out_file),
-        output_dir  = dirname(out_file),
+        output_dir  = results_root,
         params      = render_params,
         envir       = new.env(parent = globalenv()),
         quiet       = TRUE
     )
-
-    # Also render the styled report (matching RNA/proteomics/metabolomics look)
-    # Place it at the Results root (parent of mode dir), with Rmd alongside
-    styled_template <- file.path("R", "pipeline", "lipidomics", "templates",
-                                  "report_lipidomics.Rmd")
-    if (file.exists(styled_template)) {
-        results_root <- dirname(out_dir)
-        dest_rmd <- file.path(results_root, "report_lipidomics.Rmd")
-        file.copy(styled_template, dest_rmd, overwrite = TRUE)
-        message("Rendering styled lipidomics report -> ",
-                file.path(results_root, "report_lipidomics.html"))
-        tryCatch({
-            rmarkdown::render(
-                input       = dest_rmd,
-                output_file = "report_lipidomics.html",
-                output_dir  = results_root,
-                params      = render_params,
-                envir       = new.env(parent = globalenv()),
-                quiet       = TRUE
-            )
-        }, error = function(e) {
-            warning("Styled report rendering failed: ", e$message,
-                    "\nOriginal report was generated successfully.")
-        })
-    }
 
     out_file
 }
