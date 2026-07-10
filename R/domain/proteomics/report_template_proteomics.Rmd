@@ -3795,6 +3795,7 @@ if (nzchar(trimws(stats_section_text))) {
     # Auto-generate from config
     de_method_m <- prot_cfg$de$method %||% "limma"
     imp_method_m <- prot_cfg$imputation$method %||% "none"
+    if (imp_method_m == "perseus") imp_method_m <- "perseus_like"  # legacy alias
     padj_m <- prot_cfg$de$p_cutoff %||% 0.05
     lfc_m <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 

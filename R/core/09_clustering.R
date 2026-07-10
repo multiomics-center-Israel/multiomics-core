@@ -617,7 +617,9 @@ clustering_run_flags <- function(pre, cfg) {
     return(list(hierarchical = FALSE, partition = FALSE, binary_patterns = FALSE))
   }
   
-  min_groups <- 2L # minimum number of groups needed for clustering
+  # min groups needed for multi-group clustering (partition + binary patterns);
+  # default 2 so 3+ group runs qualify, but an explicit config value still wins
+  min_groups <- cl$min_groups %||% 2L
   n_groups <- get_n_groups_from_effects(pre, cfg)
   
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE

@@ -2351,7 +2351,7 @@ if (!is.null(pathway_res$plots$enzyme_network)) {
 ```{r output-files}
 files_tbl <- data.frame(
   File = c(
-    "lipidomics_report.html",
+    "report_lipidomics.html",
     "de_summary_all.csv",
     "expression_matrix_normalized.csv"
   ),
