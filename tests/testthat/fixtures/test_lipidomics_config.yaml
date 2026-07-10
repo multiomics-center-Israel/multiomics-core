@@ -20,7 +20,7 @@ modes:
       has_group_row: true
 
     files:
-      data: "test_data/Elah_Translated_dataset.csv"
+      data: "test_data/synthetic_lipidomics.csv"
 
     id_columns:
       name_col: "Metabolite"
