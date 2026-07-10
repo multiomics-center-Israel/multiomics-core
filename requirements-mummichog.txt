@@ -1,0 +1,4 @@
+# Pinned Python environment for the mummichog pipeline stage (v2).
+# Installed into an ISOLATED venv (envs/mummichog) — never into the main pipeline env.
+# Regenerate the fully-resolved lockfile with setup-mummichog-venv.sh (pip freeze).
+mummichog==2.7.0

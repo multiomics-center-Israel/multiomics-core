@@ -74,6 +74,7 @@ wizard_defaults.json
 
 # Python virtual environments
 .mummichog_venv/
+envs/
 
 # Windows zone identifier files
 *:Zone.Identifier
