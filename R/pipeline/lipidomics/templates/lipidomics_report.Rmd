@@ -351,11 +351,20 @@ if (!is.null(perm)) {
 # Differential Expression {.tabset}
 
 ```{r de-setup}
+# Source of truth is names(de_res$de_tables): these labels key both the
+# summary_df columns and the volcano/MA PNG filenames. config$de$contrasts is
+# only the requested list and is empty whenever contrasts come from
+# files$contrasts (the standard path), so prefer de_tables names.
 de_contrasts <- NULL
 if (!is.null(de_res) && !is.null(de_res$summary_df)) {
-  de_cfg <- lipid_cfg$de %||% list()
-  de_contrasts <- de_cfg$contrasts
-  if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+  if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
+    de_contrasts <- names(de_res$de_tables)
+  } else {
+    de_cfg <- lipid_cfg$de %||% list()
+    raw    <- de_cfg$contrasts
+    if (is.list(raw)) raw <- unlist(raw)
+    de_contrasts <- if (length(raw)) vapply(raw, make_contrast_label, character(1), USE.NAMES = FALSE) else NULL
+  }
 }
 ```
 
@@ -376,7 +385,7 @@ if (!is.null(de_res) && !is.null(de_res$summary_df)) {
 ```{r de-tabs, results='asis'}
 if (!is.null(de_contrasts)) {
   for (ctr in de_contrasts) {
-    ctr_label <- make_contrast_label(ctr)
+    ctr_label <- ctr  # de_contrasts already holds canonical de_tables labels
 
     cat("\n## ", ctr, " {.tabset}\n\n", sep = "")
 
