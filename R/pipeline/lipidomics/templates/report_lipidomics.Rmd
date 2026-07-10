@@ -350,9 +350,12 @@ if (!is.null(de_res) && !is.null(de_res$summary_df)) {
   if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
     de_contrasts <- names(de_res$de_tables)
   } else {
-    de_cfg       <- lipid_cfg$de %||% list()
-    de_contrasts <- de_cfg$contrasts
-    if (is.list(de_contrasts)) de_contrasts <- unlist(de_contrasts)
+    de_cfg <- lipid_cfg$de %||% list()
+    raw    <- de_cfg$contrasts
+    if (is.list(raw)) raw <- unlist(raw)
+    # Convert raw "Num - Denom" strings into the same labels build_de_summary()
+    # would have produced, so de_contrasts always holds canonical labels.
+    de_contrasts <- if (length(raw)) vapply(raw, make_contrast_label, character(1), USE.NAMES = FALSE) else NULL
   }
 }
 
@@ -421,7 +424,7 @@ if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summar
   cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
 
   for (ctr in de_contrasts) {
-    ctr_label <- make_contrast_label(ctr)
+    ctr_label <- ctr  # de_contrasts already holds canonical de_tables labels
     ctr_tbl   <- tryCatch(extract_contrast_table(de_res$summary_df, ctr_label),
                            error = function(e) NULL)
     if (!is.null(ctr_tbl)) {
@@ -1016,7 +1019,7 @@ if (!is.null(de_res) && !is.null(de_res$summary_df)) {
 ```{r de-sections, results='asis', fig.width=10, fig.height=7}
 if (!is.null(de_contrasts)) {
   for (ctr in de_contrasts) {
-    ctr_label <- make_contrast_label(ctr)
+    ctr_label <- ctr  # de_contrasts already holds canonical de_tables labels
 
     ctr_tbl <- tryCatch(
       extract_contrast_table(de_res$summary_df, ctr_label),
