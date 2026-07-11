@@ -26,6 +26,7 @@ if [[ ! -f "${REQ_FILE}" ]]; then
 fi
 
 echo ">> Creating venv at ${VENV_DIR}"
+rm -rf "${VENV_DIR}"          # start from a clean venv so the lockfile is an exact reproduction
 python3 -m venv "${VENV_DIR}"
 
 echo ">> Upgrading pip"

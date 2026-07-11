@@ -312,6 +312,12 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
     .mmc_stop("Python executable not found: '", python, "'. ",
               "Set MUMMICHOG_PYTHON or run setup-mummichog-venv.sh.")
   }
+  # Resolve to an absolute path: processx changes to `wd` (out_dir) before exec,
+  # so a relative command (e.g. the default envs/mummichog/bin/python) would be
+  # looked up under out_dir and fail to start. Same reasoning for a file-backed
+  # model passed via `network`/-n; built-in names (human_mfn, worm) are not files.
+  python <- normalizePath(python, mustWork = TRUE)
+  if (file.exists(network)) network <- normalizePath(network, mustWork = TRUE)
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")
   }

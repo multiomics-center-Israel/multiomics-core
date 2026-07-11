@@ -250,8 +250,8 @@ tar_target(
   ),
   format = "file"
 ),
-tar_target(mummichog_pinned_pathways, read_mummichog_pathways(metab_mummichog_pinned_files)),
-tar_target(mummichog_pinned_modules,  read_mummichog_modules(metab_mummichog_pinned_files))
+tar_target(metab_mummichog_pinned_pathways, read_mummichog_pathways(metab_mummichog_pinned_files)),
+tar_target(metab_mummichog_pinned_modules,  read_mummichog_modules(metab_mummichog_pinned_files))
 ```
 
 It reads the same knobs `06b` uses, under `modes.metabolomics.enrichment.mummichog` in your config:
