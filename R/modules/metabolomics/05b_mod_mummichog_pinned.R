@@ -33,6 +33,13 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                                      "envs/mummichog/bin/python")) {
   mummi_cfg <- config$modes$metabolomics$enrichment$mummichog %||% list()
 
+  # Honor the same enable gate as the reticulate path (06b run_mummichog_all):
+  # do nothing — no input written, no venv invoked — unless explicitly enabled.
+  if (!isTRUE(mummi_cfg$enabled)) {
+    message("mummichog (pinned): disabled in config — skipping")
+    return(NULL)
+  }
+
   # Knobs mirror 06b_mummichog.R exactly, so both engines run comparably.
   p_cutoff <- mummi_cfg$p_cutoff       %||% 0.05
   n_perm   <- mummi_cfg$n_permutations %||% 100

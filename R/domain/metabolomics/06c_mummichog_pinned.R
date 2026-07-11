@@ -130,6 +130,33 @@
 .MMC_MZ_MIN <- 50
 .MMC_MZ_MAX <- 2000
 
+#' Stage the input file outside a directory that is about to be wiped
+#'
+#' run_mummichog() wipes out_dir at the start of each run. If the caller placed
+#' the input inside out_dir (a natural layout, e.g.
+#' write_mummichog_input(file.path(out_dir, "input.tsv"))), copy it to a tempfile
+#' outside out_dir and return that path so the input survives the wipe and
+#' mummichog can still read it; otherwise return the normalized path unchanged.
+#'
+#' @param infile  Path to the input table (must exist).
+#' @param out_dir Directory that will be wiped (need not exist yet).
+#' @return Absolute path to the input to actually read from.
+#' @noRd
+.mmc_stage_infile <- function(infile, out_dir) {
+  infile <- normalizePath(infile, mustWork = TRUE)
+  out_dir_abs <- normalizePath(out_dir, mustWork = FALSE)
+  inside <- infile == out_dir_abs ||
+    startsWith(infile, paste0(out_dir_abs, .Platform$file.sep))
+  if (inside) {
+    copy <- tempfile(fileext = ".tsv")
+    if (!file.copy(infile, copy, overwrite = TRUE)) {
+      .mmc_stop("failed to copy the input out of out_dir before wiping it.")
+    }
+    return(normalizePath(copy, mustWork = TRUE))
+  }
+  infile
+}
+
 
 # ==== input writer ==========================================================
 
@@ -321,7 +348,9 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")
   }
-  infile <- normalizePath(infile, mustWork = TRUE)
+  # out_dir is wiped below; if the input lives inside it, stage a copy outside
+  # first so unlink() cannot delete the input before mummichog reads it.
+  infile <- .mmc_stage_infile(infile, out_dir)
 
   unlink(out_dir, recursive = TRUE, force = TRUE)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)

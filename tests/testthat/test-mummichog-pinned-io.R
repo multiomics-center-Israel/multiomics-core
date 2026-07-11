@@ -115,3 +115,46 @@ test_that("readers fail loudly when an expected table is absent", {
   expect_error(read_mummichog_pathways(list_mummichog_files(empty)), "No pathway")
   expect_error(read_mummichog_modules(list_mummichog_files(empty)), "No modular")
 })
+
+test_that("an input placed inside out_dir is staged out so it survives the wipe", {
+  root    <- withr::local_tempdir()
+  out_dir <- file.path(root, "v2")
+  dir.create(out_dir, recursive = TRUE)
+  infile  <- file.path(out_dir, "input.tsv")           # nested INSIDE out_dir
+  lines   <- c("mz\trtime\tp-value\tt-score\tCompoundID",
+               "180.06\t50\t0.01\t2\tfeat_1")
+  writeLines(lines, infile)
+
+  staged <- .mmc_stage_infile(infile, out_dir)
+  # the staged copy must live OUTSIDE out_dir
+  expect_false(startsWith(staged, paste0(normalizePath(out_dir), .Platform$file.sep)))
+
+  unlink(out_dir, recursive = TRUE, force = TRUE)       # simulate run_mummichog's wipe
+  expect_true(file.exists(staged))                      # copy survives the wipe
+  expect_identical(readLines(staged), lines)            # content preserved
+})
+
+test_that("an input outside out_dir is left untouched", {
+  root    <- withr::local_tempdir()
+  out_dir <- file.path(root, "v2")
+  infile  <- file.path(root, "input.tsv")               # OUTSIDE out_dir
+  writeLines("x", infile)
+  expect_identical(.mmc_stage_infile(infile, out_dir),
+                   normalizePath(infile, mustWork = TRUE))
+})
+
+test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted", {
+  out_dir <- withr::local_tempdir()
+
+  cfg_off <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(enabled = FALSE)))))
+  expect_null(mod_mummichog_pinned(pre = NULL, de_res = NULL,
+                                   config = cfg_off, out_dir = out_dir))
+
+  cfg_omit <- list(modes = list(metabolomics = list(enrichment = list())))
+  expect_null(mod_mummichog_pinned(pre = NULL, de_res = NULL,
+                                   config = cfg_omit, out_dir = out_dir))
+
+  # nothing written, no venv invoked -> the output subdir is never created
+  expect_false(dir.exists(file.path(out_dir, "mummichog_pinned")))
+})
