@@ -336,8 +336,12 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
   args <- c(args, extra_args)
 
+  # Force a headless matplotlib backend: mummichog imports matplotlib.pyplot and
+  # writes figures, and a non-framework venv python on macOS must not reach for a
+  # GUI backend. "current" inherits the caller's environment.
   result <- processx::run(
     command = python, args = args, wd = out_dir,
+    env = c("current", MPLBACKEND = "Agg"),
     echo = TRUE, error_on_status = FALSE, timeout = timeout
   )
 

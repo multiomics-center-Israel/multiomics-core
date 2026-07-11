@@ -9,8 +9,9 @@
 # expected files appear — never exact values.
 
 test_that("pinned mummichog v2 runs end-to-end and emits the expected tree", {
-  skip_on_cran()
-
+  # No skip_on_cran(): this project runs tests via `Rscript tests/testthat.R`
+  # (NOT_CRAN unset), where skip_on_cran() would skip unconditionally. The venv
+  # availability gate below is the real, meaningful guard.
   py <- Sys.getenv("MUMMICHOG_PYTHON", "")
   if (!nzchar(py) || !file.exists(py)) {
     if (Sys.getenv("MUMMICHOG_SMOKE_INSTALL") != "1") {
