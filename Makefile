@@ -23,7 +23,7 @@ help:
 # copying .Renviron.example.
 setup: mummichog-lock
 	@venv="$${VENV_DIR:-envs/mummichog}"; \
-	case "$$venv" in /*) ;; *) venv="$$(pwd)/$$venv";; esac; \
+	case "$$venv" in /* | [A-Za-z]:*) ;; *) venv="$$(pwd)/$$venv";; esac; \
 	py="$$venv/bin/python"; \
 	[ -x "$$py" ] || py="$$venv/Scripts/python.exe"; \
 	if command -v cygpath >/dev/null 2>&1; then py="$$(cygpath -ma "$$py")"; fi; \
