@@ -214,25 +214,32 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
-### Setup
+### One-time setup
 
-The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d):
+The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d). Run **one command, once per machine (or checkout)**:
+
+``` bash
+make setup
+```
+
+That builds the venv (`envs/mummichog`) and records the interpreter path in the project-root `.Renviron` as `MUMMICHOG_PYTHON`. After that, R reads `.Renviron` on start and `targets::tar_make()` just works — no manual `export`, no re-thinking the Python environment. `make setup` is idempotent: rerun it any time (e.g. after a fresh checkout) and it updates the line in place. **`.Renviron` is machine-specific and `.gitignore`d — never commit it.**
+
+<details>
+<summary>What <code>make setup</code> does under the hood (and manual/advanced use)</summary>
 
 ``` bash
 make mummichog-venv                 # creates envs/mummichog, writes requirements-mummichog.lock
 # or, to reproduce the exact committed tree:
 make mummichog-lock                 # installs from requirements-mummichog.lock (USE_LOCK=1)
-```
 
-Then point the R wrapper at that interpreter (the default is `envs/mummichog/bin/python`):
-
-``` bash
+# then point the R wrapper at that interpreter yourself, if you prefer not to use .Renviron:
 export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
 ```
 
-On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (the pipeline picks the right default per platform).
+On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (both `make setup` and the pipeline pick the right path per platform). Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
 
-Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
+If the venv/interpreter is missing when the stage runs, the pipeline fails loudly and names the fix (`run make setup`) — it never silently builds a venv mid-run.
+</details>
 
 ### How to run
 
