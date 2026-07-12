@@ -259,7 +259,29 @@ tar_make(names = tidyselect::starts_with("met"))
 
 > **Interim limitation:** when enabled, mummichog results are written to disk (see below), but they are **not yet rendered** in the HTML report / PowerPoint / Shiny payload — the report's mummichog section stays hidden until a follow-up wires the pinned results into those outputs.
 >
-> **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` (without a custom `model_json`) is rejected with a clear error rather than silently run against the human network; custom-organism models via `model_ref` arrive in a follow-up.
+> **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` with no custom model is rejected with a clear error rather than silently run against the human network — supply an organism-specific model (see below).
+
+### Choosing a metabolic model
+
+The `-n` model is selected from the `mummichog` config block with this precedence:
+
+1.  **`model_ref`** — a published model fetched by URL and verified against its `sha256`, then cached under `envs/mummichog-models/<sha256>.json` (a gitignored dir). This is the preferred way to run organism-specific models without committing large JSON into the repo: the file is downloaded once, checked, and reused on later runs as long as its content still matches the digest. A sha256 mismatch is a hard error — an unverified model is never used.
+2.  **`model_json`** — a path to a local model JSON on the machine running the pipeline.
+3.  **built-in `human_mfn`** — mummichog's bundled human model (the default).
+
+``` yaml
+modes:
+  metabolomics:
+    organism: "Caenorhabditis elegans"     # non-human -> a custom model is required
+    enrichment:
+      mummichog:
+        enabled: true
+        model_ref:
+          url: https://example.org/models/cre_kegg_20260711.json
+          sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
+```
+
+Supplying any custom model (`model_ref` or `model_json`) also satisfies the human-only guard, so a non-human organism runs against its own network.
 
 ### Where outputs land
 

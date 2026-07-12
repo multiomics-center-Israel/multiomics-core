@@ -209,7 +209,7 @@ modes:
 
       # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
       # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
-      # model. Requires the pinned venv: `make mummichog-venv` then
+      # model by default. Requires the pinned venv: `make mummichog-venv` then
       # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
       mummichog:
         enabled: false
@@ -217,3 +217,17 @@ modes:
         n_permutations: 100
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
+
+        # Metabolic model (precedence: model_ref > model_json > built-in human).
+        # The built-in model is HUMAN ONLY: a non-human `organism` (above) with
+        # no custom model is refused, not silently run against human pathways.
+        #
+        #   model_ref  a published model fetched by URL and verified against its
+        #              sha256, then cached under envs/mummichog-models/<sha256>.json.
+        #              Preferred for organism-specific models (e.g. cre_kegg_*).
+        #   model_json a path to a local model JSON on this machine.
+        #
+        # model_ref:
+        #   url: https://example.org/models/cre_kegg_20260711.json
+        #   sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
+        # model_json: /path/to/local/model.json

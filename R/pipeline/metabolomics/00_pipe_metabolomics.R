@@ -346,7 +346,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
   # modes.metabolomics.enrichment.mummichog.enabled. Added to the CORE targets so
   # it also runs in multiomics mode (as the previous engine did), but only when
   # enabled — a disabled config never needs the Python venv. Runs on the built-in
-  # human_mfn model by default (custom model_ref support arrives in a follow-up).
+  # human_mfn model by default; a custom model via model_ref/model_json (06d)
+  # overrides it (required for non-human organisms).
   if (isTRUE(mummichog_enabled)) {
     analysis_core <- c(analysis_core, list(
       tar_target(
