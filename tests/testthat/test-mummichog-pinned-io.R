@@ -142,8 +142,9 @@ test_that("an input outside out_dir is left untouched", {
   out_dir <- file.path(root, "v2")
   infile  <- file.path(root, "input.tsv")               # OUTSIDE out_dir
   writeLines("x", infile)
+  # .mmc_stage_infile returns a winslash = "/" path; compare on the same convention
   expect_identical(.mmc_stage_infile(infile, out_dir),
-                   normalizePath(infile, mustWork = TRUE))
+                   normalizePath(infile, winslash = "/", mustWork = TRUE))
 })
 
 test_that(".mmc_default_python resolves to a platform-appropriate venv path", {
