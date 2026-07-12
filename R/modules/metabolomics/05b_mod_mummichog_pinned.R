@@ -1,22 +1,20 @@
 # R/modules/metabolomics/05b_mod_mummichog_pinned.R
 #
 # Target-ready wrapper around the pinned mummichog v2 engine (06c). It assembles
-# the input the SAME way 06b_mummichog.R does — same DE table, same m/z and
-# retention-time columns from row_data, retention time passed through unchanged
-# (minutes, no unit conversion), logFC as the statistic — so the pinned engine
-# and the reticulate engine can be cross-checked on identical input.
+# the input from DE results joined to feature annotations — DE table, m/z and
+# retention-time columns from row_data (RT passed through unchanged, in minutes),
+# logFC as the statistic.
 #
-# This wrapper is defined but NOT wired into 00_pipe_metabolomics.R in this PR;
-# see the README for the opt-in tar_target snippet. Returns a character vector of
-# produced files for a format = "file" target.
+# Wired into 00_pipe_metabolomics.R (analysis outputs) as the metab_mummichog_*
+# targets, added only when modes.metabolomics.enrichment.mummichog.enabled is
+# true. Returns a character vector of produced files for a format = "file" target.
 
 
 #' Run pinned mummichog v2 enrichment for metabolomics
 #'
 #' Builds the mummichog input from DE results joined to feature annotations,
 #' then runs the isolated, version-pinned mummichog v2 subprocess (06c). Knobs
-#' are read from the same config keys 06b uses
-#' (config$modes$metabolomics$enrichment$mummichog).
+#' are read from config$modes$metabolomics$enrichment$mummichog.
 #'
 #' @param pre     Preprocessing results; uses `pre$row_data` for m/z and RT.
 #' @param de_res  DE results from mod_metabolomics_de(); uses de_tables[[1]]
@@ -33,14 +31,15 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                                      .mmc_default_python())) {
   mummi_cfg <- config$modes$metabolomics$enrichment$mummichog %||% list()
 
-  # Honor the same enable gate as the reticulate path (06b run_mummichog_all):
-  # do nothing — no input written, no venv invoked — unless explicitly enabled.
+  # Enable gate: do nothing — no input written, no venv invoked — unless the
+  # config explicitly enables mummichog. The DAG also only adds this target when
+  # enabled; this guard additionally covers direct callers.
   if (!isTRUE(mummi_cfg$enabled)) {
     message("mummichog (pinned): disabled in config — skipping")
     return(NULL)
   }
 
-  # Knobs mirror 06b_mummichog.R exactly, so both engines run comparably.
+  # Analysis knobs from config (sensible defaults when unset).
   p_cutoff <- mummi_cfg$p_cutoff       %||% 0.05
   n_perm   <- mummi_cfg$n_permutations %||% 100
   ppm      <- mummi_cfg$tolerance_ppm  %||% 10
@@ -51,11 +50,12 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     "negative" = "negative",
     "pos_default"
   )
-  # A custom model JSON (e.g. one built by 06b) can be supplied to compare
-  # organism-for-organism; otherwise mummichog's built-in human model is used.
+  # An optional local model JSON (model_json) selects a custom metabolic network;
+  # otherwise mummichog's built-in human model is used. (URL+sha256 model_ref is
+  # a follow-up.)
   network <- mummi_cfg$model_json %||% "human_mfn"
 
-  # -- Extract the DE table (same precedence as 06b) --------------------------
+  # -- Extract the DE table ---------------------------------------------------
   de_table <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
     de_res$de_tables[[1]]
   } else if (!is.null(de_res$summary_df)) {
@@ -74,7 +74,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     }
   }
 
-  # -- Locate m/z and RT in the annotations (same candidates as 06b) ----------
+  # -- Locate m/z and RT columns in the feature annotations -------------------
   row_data <- pre$row_data
   mz_col <- .mmc_find_col(row_data,
                           c("m/z", "mz", "m.z", "MZ", "Mass", "m.z."),
@@ -106,8 +106,8 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   stats_tbl <- data.frame(
     feature_id     = as.character(merged$feature_id),
     mz             = as.numeric(merged[[mz_col]]),
-    # Retention time passed through unchanged (minutes, as in 06b). mummichog
-    # only uses RT for relative coelution grouping, so the unit must simply match.
+    # Retention time passed through unchanged (minutes). mummichog only uses RT
+    # for relative coelution grouping, so the unit must simply be consistent.
     retention_time = as.numeric(merged[[rt_col]]),
     p_value        = merged$P.Value,
     statistic      = merged$logFC,

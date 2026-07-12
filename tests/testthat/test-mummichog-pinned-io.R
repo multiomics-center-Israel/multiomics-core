@@ -171,3 +171,12 @@ test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted
   # nothing written, no venv invoked -> the output subdir is never created
   expect_false(dir.exists(file.path(out_dir, "mummichog_pinned")))
 })
+
+test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled", {
+  skip_if_not_installed("targets")
+  library(targets)
+  on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
+  off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
+  # enabling adds exactly the three metab_mummichog_pinned_* targets
+  expect_equal(length(on) - length(off), 3L)
+})

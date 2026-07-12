@@ -212,10 +212,7 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 
 ## Mummichog pathway analysis (pinned v2, isolated venv)
 
-The metabolomics mode can run [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment. There are **two independent engines** in the repo:
-
--   **`06b_mummichog.R`** — runs mummichog via `{reticulate}` and builds custom KEGG organism models (honey bee, *E. coli*, human…) with `{KEGGREST}`. This is the current default path.
--   **`06c_mummichog_pinned.R`** — runs the **version-pinned** `mummichog==2.7.0` as an isolated subprocess via `{processx}`, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. This is the new, reproducible engine documented here.
+The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
 ### Setup
 
@@ -239,24 +236,7 @@ Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummicho
 
 ### How to run
 
-The pinned stage is **not wired into the metabolomics DAG by default** (it coexists with `06b`). To enable it, add these targets to `R/pipeline/metabolomics/00_pipe_metabolomics.R` (they slot in beside `metab_enrichment_res`):
-
-``` r
-tar_target(
-  metab_mummichog_pinned_files,
-  mod_mummichog_pinned(
-    pre     = metab_pre,
-    de_res  = metab_de_res,
-    config  = config,
-    out_dir = metab_out_dir
-  ),
-  format = "file"
-),
-tar_target(metab_mummichog_pinned_pathways, read_mummichog_pathways(metab_mummichog_pinned_files)),
-tar_target(metab_mummichog_pinned_modules,  read_mummichog_modules(metab_mummichog_pinned_files))
-```
-
-It reads the same knobs `06b` uses, under `modes.metabolomics.enrichment.mummichog` in your config:
+It's wired into the metabolomics DAG (as `metab_mummichog_pinned_*` targets) and is **opt-in via config** — set `enabled: true` under `modes.metabolomics.enrichment.mummichog`. When disabled or omitted, the targets aren't added to the graph and the Python venv is never needed.
 
 ``` yaml
 modes:
@@ -268,14 +248,13 @@ modes:
         n_permutations: 100
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
-        # model_json: /path/to/ame_metabolic_model.json  # optional: reuse a 06b organism model
 ```
 
 Then run as usual:
 
 ``` r
 library(targets)
-tar_make(names = starts_with("met"))
+tar_make(names = tidyselect::starts_with("met"))
 ```
 
 ### Where outputs land
@@ -291,10 +270,6 @@ To map pathways back to your feature ids, `join_features_to_results()` uses the 
 ### Stochasticity caveat
 
 mummichog v2 estimates null distributions by **random permutation with no seed control**, so p-values and rankings vary slightly between runs on identical input. `{targets}` only re-runs the stage when its inputs change, so this doesn't cause spurious rebuilds — but do **not** expect bit-identical reruns, and don't assert exact equality in tests.
-
-### Cross-checking against `06b`
-
-For a like-for-like comparison on the same organism, build the KEGG model with `06b` and pass it to the pinned engine via `model_json` (the `-n` argument), so both engines use the same metabolic network on the same input.
 
 ------------------------------------------------------------------------
 

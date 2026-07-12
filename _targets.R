@@ -130,7 +130,8 @@ list(
     
     if (!is.null(cfg_raw$modes$metabolomics)) {
       met_chosen <- cfg_raw$modes$metabolomics$preprocessing$chosen_norm
-      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics))
+      met_mcg    <- isTRUE(cfg_raw$modes$metabolomics$enrichment$mummichog$enabled)
+      mode_targets <- c(mode_targets, pipe_metabolomics(chosen_norm = met_chosen, skip_outputs = has_multiomics, mummichog_enabled = met_mcg))
     }
     
     

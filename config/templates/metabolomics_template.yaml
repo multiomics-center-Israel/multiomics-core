@@ -206,3 +206,14 @@ modes:
       #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
+
+      # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
+      # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
+      # model. Requires the pinned venv: `make mummichog-venv` then
+      # `export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"`.
+      mummichog:
+        enabled: false
+        p_cutoff: 0.05
+        n_permutations: 100
+        tolerance_ppm: 10
+        ionization_mode: pos_default   # pos_default | positive | negative
