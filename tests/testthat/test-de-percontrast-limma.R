@@ -136,6 +136,52 @@ test_that("a protein at the floor in both groups of a contrast is NA there, test
     expect_false(is.na(de_A$logFC[de_A$FeatureID == "test_only_A"]))
 })
 
+test_that("min_val-imputed matrix (no NAs) is still filtered by the per-contrast floor", {
+    # Mirrors the real Serge input: values are floored to a repeated minimum, and
+    # the observed mask carries no NA information (all TRUE). The per-contrast floor
+    # detection must still drop floor-in-both proteins.
+    samples <- c("C1", "C2", "C3", "A1", "A2", "A3", "B1", "B2", "B3")
+    groups  <- c("Ctrl", "Ctrl", "Ctrl", "A", "A", "A", "B", "B", "B")
+    FL <- 6.0
+    expr <- rbind(
+        up_in_A   = c(10.0, 10.1, 9.9, 13.0, 13.1, 12.9, 10.0, 10.1,  9.9),
+        onlyA     = c(  FL,   FL,  FL, 14.0, 14.1, 13.9,   FL,   FL,   FL),
+        all_floor = c(  FL,   FL,  FL,   FL,   FL,   FL,   FL,   FL,   FL)
+    )
+    colnames(expr) <- samples
+    observed <- matrix(TRUE, nrow(expr), ncol(expr), dimnames = dimnames(expr))
+
+    meta <- data.frame(SampleName = samples, Group = groups, stringsAsFactors = FALSE)
+    prot_tbl <- data.frame(
+        Protein.Group = rownames(expr), Protein.Names = rownames(expr),
+        Genes = rownames(expr), First.Protein.Description = rownames(expr),
+        stringsAsFactors = FALSE
+    )
+    contrasts_df <- data.frame(
+        Contrast_name = c("A_vs_Ctrl", "B_vs_Ctrl"), Factor = "Group",
+        Numerator = c("A", "B"), Denominator = c("Ctrl", "Ctrl"),
+        stringsAsFactors = FALSE
+    )
+    cfg <- make_percontrast_fixture()$cfg
+
+    res <- suppressMessages(run_limma_percontrast_proteomics(
+        expr_imp = expr, observed = observed, meta = meta,
+        contrasts_df = contrasts_df, prot_tbl = prot_tbl, cfg = cfg
+    ))
+    de_A <- res$de_tables[["A_vs_Ctrl"]]
+    de_B <- res$de_tables[["B_vs_Ctrl"]]
+
+    # all_floor: at the floor in both groups of both contrasts -> NA everywhere.
+    expect_true(is.na(de_A$logFC[de_A$FeatureID == "all_floor"]))
+    expect_true(is.na(de_B$logFC[de_B$FeatureID == "all_floor"]))
+    # onlyA: floor in Ctrl and B -> dropped in B_vs_Ctrl, tested (large +) in A_vs_Ctrl.
+    expect_true(is.na(de_B$logFC[de_B$FeatureID == "onlyA"]))
+    expect_false(is.na(de_A$logFC[de_A$FeatureID == "onlyA"]))
+    expect_gt(de_A$logFC[de_A$FeatureID == "onlyA"], 3)
+    # up_in_A: above floor in both groups -> tested in both contrasts.
+    expect_false(is.na(de_A$logFC[de_A$FeatureID == "up_in_A"]))
+})
+
 test_that("the summary honours linear_fc_cutoff = 1.5 (blocks a significant sub-1.5 protein)", {
     fx <- make_percontrast_fixture()
     res <- run_limma_percontrast_proteomics(

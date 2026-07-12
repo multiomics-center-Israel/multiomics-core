@@ -411,15 +411,29 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
             return(assemble(make_empty(), cn))
         }
 
-        # Per-contrast filter: keep proteins observed (non-floor pre-imputation) in
-        # at least one control OR one test replicate; drop floor-in-both.
-        keep <- (rowSums(observed[, ctrl_samp, drop = FALSE], na.rm = TRUE) > 0) |
-                (rowSums(observed[, test_samp, drop = FALSE], na.rm = TRUE) > 0)
+        # Per-contrast filter: keep a protein only if it is observed above the
+        # imputation floor in at least one control OR one test replicate; drop
+        # floor-in-both. The floor is detected per contrast as the repeated minimum
+        # of that contrast's subset - min_val-imputed matrices spike at the floor,
+        # and that floor is not stored as NA so the observed mask alone can't see it.
+        # When the minimum is not a spike (continuous data) nothing is treated as
+        # floored, so this reduces to the pre-imputation observed mask. The NA-based
+        # `observed` still applies for pipelines that impute internally.
+        sub_samp <- c(ctrl_samp, test_samp)
+        sub_mat <- expr_imp[, sub_samp, drop = FALSE]
+        floor_val <- suppressWarnings(min(sub_mat, na.rm = TRUE))
+        is_floored <- is.finite(floor_val) && sum(sub_mat == floor_val, na.rm = TRUE) >= 2L
+        obs_sub <- observed[, sub_samp, drop = FALSE] & !is.na(sub_mat)
+        if (is_floored) obs_sub <- obs_sub & (sub_mat > floor_val)
+
+        keep <- (rowSums(obs_sub[, ctrl_samp, drop = FALSE], na.rm = TRUE) > 0) |
+                (rowSums(obs_sub[, test_samp, drop = FALSE], na.rm = TRUE) > 0)
+        message(sprintf("  %s: %d/%d proteins pass floor filter%s", cn, sum(keep), n_prot,
+                        if (is_floored) sprintf(" (floor=%.4g)", floor_val) else " (no floor detected)"))
 
         if (!any(keep)) return(assemble(make_empty(), cn))
 
-        sub_samp <- c(ctrl_samp, test_samp)
-        sub_expr <- expr_imp[keep, sub_samp, drop = FALSE]
+        sub_expr <- sub_mat[keep, , drop = FALSE]
 
         # Two-group design; "test - control" so a positive logFC = higher in test.
         grp <- factor(ifelse(sub_samp %in% test_samp, "test", "control"),
@@ -433,9 +447,10 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
                               sort.by = "none", number = Inf)
 
         # Re-expand kept-protein results into the full protein set (NA elsewhere).
+        # topTable(sort.by = "none") preserves input row order, so fill by the kept
+        # positions directly - robust even when a single protein is kept.
         res_df <- make_empty()
-        m <- match(rownames(tt), rownames(res_df))
-        res_df[m, result_cols] <- tt[, result_cols]
+        res_df[which(keep), result_cols] <- tt[, result_cols]
 
         assemble(res_df, cn)
     })
