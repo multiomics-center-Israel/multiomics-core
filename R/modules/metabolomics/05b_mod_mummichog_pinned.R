@@ -55,6 +55,23 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # a follow-up.)
   network <- mummi_cfg$model_json %||% "human_mfn"
 
+  # The built-in model is human. Refuse to silently run human pathways on a
+  # non-human organism — that would produce species-mismatched results with no
+  # warning. Require a custom model (model_json now; model_ref in a follow-up) or
+  # a human organism. Organism comes from the general metabolomics key or the
+  # legacy mummichog.organisms.
+  if (identical(network, "human_mfn")) {
+    org <- config$modes$metabolomics$organism %||% mummi_cfg$organisms
+    org <- tolower(trimws(paste(unlist(org), collapse = " ")))
+    if (nzchar(org) && !grepl("human|homo sapiens|\\bhsa\\b", org)) {
+      .mmc_stop(
+        "configured organism ('", org, "') is non-human, but the pinned engine's ",
+        "built-in model is human-only. Supply a custom model via 'model_json' ",
+        "(URL+sha256 'model_ref' support is coming), or set the organism to human."
+      )
+    }
+  }
+
   # -- Extract the DE table ---------------------------------------------------
   de_table <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
     de_res$de_tables[[1]]

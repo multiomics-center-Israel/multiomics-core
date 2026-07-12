@@ -257,6 +257,10 @@ library(targets)
 tar_make(names = tidyselect::starts_with("met"))
 ```
 
+> **Interim limitation:** when enabled, mummichog results are written to disk (see below), but they are **not yet rendered** in the HTML report / PowerPoint / Shiny payload — the report's mummichog section stays hidden until a follow-up wires the pinned results into those outputs.
+>
+> **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` (without a custom `model_json`) is rejected with a clear error rather than silently run against the human network; custom-organism models via `model_ref` arrive in a follow-up.
+
 ### Where outputs land
 
 Under `<metab_out_dir>/mummichog_pinned/`:

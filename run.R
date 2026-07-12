@@ -1397,6 +1397,15 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
         if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
       }
       run_mummichog <- ask_yn("Enable mummichog pathway analysis? (m/z-based, pinned engine)", FALSE)
+      if (run_mummichog &&
+          !grepl("homo sapiens|human", tolower(selected_organism))) {
+        cat(sprintf(
+          paste0("  WARNING: the pinned mummichog engine currently ships only the built-in\n",
+                 "  HUMAN model. With organism '%s' the run will stop with a clear error\n",
+                 "  until a custom model is supplied (model_ref, coming soon). Enable\n",
+                 "  mummichog only for human data for now.\n"),
+          selected_organism))
+      }
     }
     # AI Commentary
     cat("\n--- [METAB] AI Commentary ---\n")
