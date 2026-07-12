@@ -52,6 +52,7 @@ make_percontrast_fixture <- function() {
         effects    = list(samples = "SampleName", color = "Group"),
         id_columns = list(
             protein_id    = "Protein.Group",
+            sample_col    = "SampleName",
             protein_annot = c("Protein.Group", "Protein.Names", "Genes",
                               "First.Protein.Description")
         ),
@@ -65,6 +66,13 @@ make_percontrast_fixture <- function() {
     list(expr = expr, observed = observed, meta = meta, prot_tbl = prot_tbl,
          contrasts_df = contrasts_df, cfg = cfg)
 }
+
+test_that("config validation accepts de.method = limma_percontrast", {
+    cfg <- make_percontrast_fixture()$cfg$modes$proteomics
+    cfg$de$method <- "limma_percontrast"
+    cfg$de$control_condition <- "Ctrl"
+    expect_error(validate_proteomics_config(cfg), NA)
+})
 
 test_that("auto_generate_control_contrasts references every non-control level", {
     meta <- make_percontrast_fixture()$meta
