@@ -29,22 +29,26 @@ echo ">> Creating venv at ${VENV_DIR}"
 rm -rf "${VENV_DIR}"          # start from a clean venv so the lockfile is an exact reproduction
 python3 -m venv "${VENV_DIR}"
 
+# venv Python lives under bin/ on Unix and Scripts/ on Windows (e.g. Git-Bash).
+VENV_PY="${VENV_DIR}/bin/python"
+[ -x "${VENV_PY}" ] || VENV_PY="${VENV_DIR}/Scripts/python.exe"
+
 echo ">> Upgrading pip"
-"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_PY}" -m pip install --upgrade pip
 
 if [[ "${USE_LOCK}" == "1" && -f "${LOCK_FILE}" ]]; then
   echo ">> Installing pinned tree from ${LOCK_FILE}"
-  "${VENV_DIR}/bin/python" -m pip install -r "${LOCK_FILE}"
+  "${VENV_PY}" -m pip install -r "${LOCK_FILE}"
 else
   echo ">> Installing ${REQ_FILE}"
-  "${VENV_DIR}/bin/python" -m pip install -r "${REQ_FILE}"
+  "${VENV_PY}" -m pip install -r "${REQ_FILE}"
   echo ">> Freezing resolved tree to ${LOCK_FILE}"
-  "${VENV_DIR}/bin/python" -m pip freeze > "${LOCK_FILE}"
+  "${VENV_PY}" -m pip freeze > "${LOCK_FILE}"
 fi
 
 echo ">> Smoke test: mummichog imports and reports its version"
-"${VENV_DIR}/bin/python" -c "from mummichog.config import VERSION; print('mummichog', VERSION)"
+"${VENV_PY}" -c "from mummichog.config import VERSION; print('mummichog', VERSION)"
 
 echo
 echo "Done. Point the R wrapper at this interpreter:"
-echo "  export MUMMICHOG_PYTHON=\"\$(pwd)/${VENV_DIR}/bin/python\""
+echo "  export MUMMICHOG_PYTHON=\"\$(pwd)/${VENV_PY}\""
