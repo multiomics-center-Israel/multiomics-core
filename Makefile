@@ -22,8 +22,10 @@ help:
 # specific, gitignored file) — the user adds the line themselves, e.g. by
 # copying .Renviron.example.
 setup: mummichog-lock
-	@py="$$(pwd)/envs/mummichog/bin/python"; \
-	[ -x "$$py" ] || py="$$(pwd)/envs/mummichog/Scripts/python.exe"; \
+	@venv="$${VENV_DIR:-envs/mummichog}"; \
+	case "$$venv" in /*) ;; *) venv="$$(pwd)/$$venv";; esac; \
+	py="$$venv/bin/python"; \
+	[ -x "$$py" ] || py="$$venv/Scripts/python.exe"; \
 	if command -v cygpath >/dev/null 2>&1; then py="$$(cygpath -ma "$$py")"; fi; \
 	echo ""; \
 	echo "[setup] Venv ready. Add this line to your .Renviron (gitignored):"; \
