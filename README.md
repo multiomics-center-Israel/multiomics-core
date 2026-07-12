@@ -216,23 +216,29 @@ The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathw
 
 ### One-time setup
 
-The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d). Run **one command, once per machine (or checkout)**:
+The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d). Once per machine (or checkout):
 
 ``` bash
 make setup
 ```
 
-That builds the venv (`envs/mummichog`) and records the interpreter path in the project-root `.Renviron` as `MUMMICHOG_PYTHON`. After that, R reads `.Renviron` on start and `targets::tar_make()` just works — no manual `export`, no re-thinking the Python environment. `make setup` is idempotent: rerun it any time (e.g. after a fresh checkout) and it updates the line in place. **`.Renviron` is machine-specific and `.gitignore`d — never commit it.**
+That builds the venv (`envs/mummichog`) and **prints the exact `MUMMICHOG_PYTHON=<path>` line for this checkout**. Add that line to your `.Renviron` — if you don't have one yet, copy the tracked template and fill it in:
+
+``` bash
+cp .Renviron.example .Renviron        # then set MUMMICHOG_PYTHON to the line make setup printed
+```
+
+After that, R reads `.Renviron` on start and `targets::tar_make()` just works — no manual `export` each session. **`.Renviron` is machine-specific and `.gitignore`d — never commit it** (that's why `make setup` prints the line for you to add rather than writing the file itself). A relative path works if you always start R from the project root, but the absolute path `make setup` prints is more robust.
 
 <details>
-<summary>What <code>make setup</code> does under the hood (and manual/advanced use)</summary>
+<summary>Manual / advanced use</summary>
 
 ``` bash
 make mummichog-venv                 # creates envs/mummichog, writes requirements-mummichog.lock
 # or, to reproduce the exact committed tree:
 make mummichog-lock                 # installs from requirements-mummichog.lock (USE_LOCK=1)
 
-# then point the R wrapper at that interpreter yourself, if you prefer not to use .Renviron:
+# instead of .Renviron, you can export the interpreter path per shell:
 export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
 ```
 

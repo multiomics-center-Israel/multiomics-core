@@ -376,8 +376,8 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           extra_args = character()) {
   if (!nzchar(python) || !file.exists(python)) {
     .mmc_stop("Python executable not found: '", python, "'. ",
-              "Run `make setup` once per machine to build the pinned venv and ",
-              "record MUMMICHOG_PYTHON in .Renviron, or set MUMMICHOG_PYTHON yourself.")
+              "Run `make setup` once per machine to build the pinned venv and print ",
+              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
   }
   # Resolve to an absolute path: processx changes to `wd` (out_dir) before exec,
   # so a relative command (e.g. the default envs/mummichog/bin/python) would be

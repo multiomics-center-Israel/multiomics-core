@@ -4,3 +4,10 @@
 # The pipeline reads this variable to locate your project config.
 # If unset, it defaults to "config.yaml" in the project root.
 MULTIOMICS_CONFIG=/path/to/your/config.yaml
+
+# Path to the pinned mummichog venv's Python interpreter. Only needed when the
+# metabolomics mummichog stage is enabled. Build the venv and print the exact
+# line for your machine with `make setup`.
+# A relative path works if you always start R from the project root, but an
+# ABSOLUTE path is more robust (e.g. /home/you/multiomics-core/envs/mummichog/bin/python).
+MUMMICHOG_PYTHON=envs/mummichog/bin/python
