@@ -19,6 +19,39 @@ auto_generate_contrasts <- function(meta, group_col) {
     df
 }
 
+#' Generate one contrast per non-control level, each against the control
+#'
+#' Used by the "limma_percontrast" DE method: every other level of `group_col` is
+#' contrasted against `control` (the denominator), so ratios read as test/control.
+#'
+#' @param meta      data.frame with sample metadata
+#' @param group_col character, column name defining biological groups
+#' @param control   character, the control/reference level (used as denominator)
+#' @return data.frame with Contrast_name, Factor, Numerator, Denominator
+auto_generate_control_contrasts <- function(meta, group_col, control) {
+    lvls <- sort(unique(as.character(meta[[group_col]])))
+    lvls <- lvls[!is.na(lvls) & nzchar(lvls)]
+    if (!control %in% lvls) {
+        stop("control_condition '", control, "' is not a level of '", group_col,
+             "'. Available levels: ", paste(lvls, collapse = ", "))
+    }
+    test_lvls <- setdiff(lvls, control)
+    if (length(test_lvls) < 1) {
+        stop("No non-control levels in '", group_col,
+             "' to contrast against control '", control, "'.")
+    }
+    df <- data.frame(
+        Contrast_name = paste0(test_lvls, "_vs_", control),
+        Factor        = group_col,
+        Numerator     = test_lvls,
+        Denominator   = control,
+        stringsAsFactors = FALSE
+    )
+    message(sprintf("Generated %d control-referenced contrast(s) vs '%s': %s",
+                    nrow(df), control, paste(df$Contrast_name, collapse = ", ")))
+    df
+}
+
 #' Proteomics DE module (orchestration only)
 #'
 #' Runs DE according to cfg$de$method (currently supports "limma").
@@ -86,6 +119,52 @@ mod_proteomics_de <- function(pre, inputs, config, verbose = FALSE) {
             runs_de_tables = runs_de_tables,
             summary_df = summary_df,
             de_model = runs[[1]]$fit2
+        ))
+    }
+
+    if (identical(method, "limma_percontrast")) {
+        # Each contrast is tested on its own two-group matrix (control + one test
+        # condition). When contrasts are not given explicitly, build them as
+        # each-non-control vs control from cfg$de$control_condition.
+        if (is.null(inputs$contrasts)) {
+            control_cond <- cfg$de$control_condition
+            if (is.null(control_cond) || !nzchar(control_cond)) {
+                stop("de.method 'limma_percontrast' requires de.control_condition ",
+                     "(the control/reference level) when contrasts are not provided.")
+            }
+            group_col <- cfg$de_table$group_col %||% cfg$effects$color %||% "Condition"
+            contrasts_df <- auto_generate_control_contrasts(pre$meta, group_col, control_cond)
+        }
+
+        # Observed (pre-imputation) mask drives the per-contrast protein filter.
+        observed <- !is.na(pre$expr_filt)
+
+        runs <- lapply(seq_along(imputations), function(i) {
+            if (isTRUE(verbose)) message(sprintf("limma_percontrast on imputation: %d / %d", i, length(imputations)))
+            run_limma_percontrast_proteomics(
+                expr_imp     = imputations[[i]],
+                observed     = observed,
+                meta         = pre$meta,
+                contrasts_df = contrasts_df,
+                prot_tbl     = pre$row_data,
+                cfg          = config
+            )
+        })
+
+        runs_de_tables <- lapply(runs, function(x) x$de_tables)
+
+        summary_df <- summarize_limma_mult_imputation(
+            runs_de_tables = runs_de_tables,
+            config         = config
+        )
+
+        return(list(
+            method = "limma_percontrast",
+            imputations = imputations,
+            runs = runs,
+            runs_de_tables = runs_de_tables,
+            summary_df = summary_df,
+            de_model = NULL
         ))
     }
 
