@@ -70,6 +70,7 @@
 #' @noRd
 .mmc_exists_nofollow <- function(path) {
   if (!nzchar(path)) return(FALSE)
+  path <- path.expand(path)           # expand ~ / ~user; does NOT resolve symlinks
   link <- Sys.readlink(path)          # "" if not a link, target if a link, NA if absent
   file.exists(path) || (!is.na(link) && nzchar(link))
 }
@@ -87,10 +88,13 @@
 #' Python detects the venv (via pyvenv.cfg). Only prefix a relative path with
 #' the working directory; leave the final (possibly symlinked) component alone.
 #'
-#' @param path A file path.
+#' @param path A file path (may be relative, absolute, or home-relative).
 #' @return An absolute path with any symlink in the final component preserved.
 #' @noRd
 .mmc_abs_keep_symlink <- function(path) {
+  # Expand ~ / ~user first (path.expand does NOT resolve symlinks), so a
+  # home-relative MUMMICHOG_PYTHON becomes absolute instead of <cwd>/~/....
+  path <- path.expand(path)
   # Already absolute? POSIX "/...", Windows drive "C:...", or UNC "\\\\host".
   if (grepl("^(/|[A-Za-z]:|\\\\\\\\)", path)) return(path)
   file.path(getwd(), path)

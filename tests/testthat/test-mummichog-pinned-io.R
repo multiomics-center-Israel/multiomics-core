@@ -163,6 +163,13 @@ test_that(".mmc_abs_keep_symlink makes a relative path absolute", {
   expect_true(endsWith(abs, rel))
 })
 
+test_that(".mmc_abs_keep_symlink expands ~ instead of treating it as relative", {
+  skip_if(identical(path.expand("~"), "~"), "no home dir to expand")
+  out <- .mmc_abs_keep_symlink("~/envs/mummichog/bin/python")
+  expect_identical(out, path.expand("~/envs/mummichog/bin/python"))
+  expect_false(grepl("~", out, fixed = TRUE))   # not <cwd>/~/...
+})
+
 test_that(".mmc_abs_keep_symlink leaves an absolute path untouched", {
   p <- if (.Platform$OS.type == "windows") {
     "C:/venvs/mummichog/Scripts/python.exe"
