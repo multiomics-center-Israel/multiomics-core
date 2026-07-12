@@ -71,8 +71,15 @@ modes:
 
       # ---- Normalization selection workflow ----
       # null  → QC review mode (compute all methods, stop after report)
-      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
+      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" | "bio_factor"
+      #   → full pipeline
       chosen_norm: null
+
+      # ---- Biological-factor normalization (chosen_norm: "bio_factor") ----
+      # Divide each sample by a measured per-sample covariate (e.g. total
+      # protein) before log2. Names the metadata column holding that value;
+      # required only when chosen_norm = "bio_factor".
+      biological_factor_col: null
 
       # ---- Sample normalization (legacy / reference only) ----
       # All methods (tss, median, pqn, eigenms) run in parallel; the ACTIVE
