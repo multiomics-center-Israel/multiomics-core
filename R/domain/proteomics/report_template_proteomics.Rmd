@@ -95,6 +95,23 @@ figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
 }
 
+# Helper: build a unique, informative display label per protein.
+# Prefer a real gene symbol; fall back to the accession when the symbol is
+# missing or a generic DIA-NN token (e.g. "uncharacterized", "protein") — which
+# is the norm for non-model organisms where symbols are absent or non-unique.
+# Any remaining duplicate labels are disambiguated with the accession so every
+# protein stays individually selectable in the explorer and volcano.
+protein_display_label <- function(gene, accession) {
+    gene <- as.character(gene); accession <- as.character(accession)
+    generic <- c("uncharacterized", "uncharacterized protein", "protein",
+                 "hypothetical protein", "putative protein", "putative", "unknown")
+    bad <- is.na(gene) | !nzchar(trimws(gene)) | tolower(trimws(gene)) %in% generic
+    lab <- ifelse(bad & !is.na(accession) & nzchar(accession), accession, gene)
+    dup <- duplicated(lab) | duplicated(lab, fromLast = TRUE)
+    ifelse(dup & !is.na(accession) & nzchar(accession) & lab != accession,
+           paste0(lab, " (", accession, ")"), lab)
+}
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
 # Detect if we are already inside the proteomics output dir
@@ -985,7 +1002,7 @@ imp_method <- prot_cfg$imputation$method %||% "none"
 has_imputation <- tolower(imp_method) != "none" && isTRUE(show_imputation_qc)
 ```
 
-```{r identified-proteins-barplot, results='asis', fig.height=5, fig.width=11}
+```{r identified-proteins-barplot, results='asis', fig.height=7, fig.width=9}
 # Barplot: number of proteins identified (non-missing) per sample, colored by
 # group, with the count printed above each bar. Counts from the RAW input
 # pg_matrix (before the min-count filter and before imputation), so the totals
@@ -1028,18 +1045,21 @@ if (file.exists(bar_raw_file) && exists("meta") && is.data.frame(meta)) {
                                  n_identified = as.integer(n_id),
                                  Group = grp_map[expr_cols_b],
                                  stringsAsFactors = FALSE)
-            # Order bars by group then sample so the colors cluster together
+            # Order bars by group then sample so the colors cluster together.
+            # rev() so the first group/sample sits at the top after coord_flip.
             bar_df <- bar_df[order(bar_df$Group, bar_df$sample), ]
-            bar_df$sample <- factor(bar_df$sample, levels = bar_df$sample)
+            bar_df$sample <- factor(bar_df$sample, levels = rev(bar_df$sample))
 
+            # Horizontal bars: 24 vertical bars with rotated labels are unreadable;
+            # laying them out horizontally puts the count legibly at each bar end.
             p_bar <- ggplot(bar_df, aes(x = sample, y = n_identified, fill = Group)) +
                 geom_col() +
-                geom_text(aes(label = n_identified), vjust = -0.35, size = 3) +
-                scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+                geom_text(aes(label = n_identified), hjust = -0.15, size = 3) +
+                scale_y_continuous(expand = expansion(mult = c(0, 0.10))) +
+                coord_flip() +
                 labs(x = NULL, y = "Identified proteins") +
                 theme_minimal(base_size = 12) +
-                theme(axis.text.x = element_text(angle = 45, hjust = 1),
-                      panel.grid.major.x = element_blank())
+                theme(panel.grid.major.y = element_blank())
             print(p_bar)
             figure_legend("Number of proteins identified (non-missing) per sample in the raw pg_matrix, before filtering and imputation, colored by group; the count is printed above each bar.")
         } else {
@@ -1658,7 +1678,7 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
     } else rep(NA_character_, nrow(df))
 
     plot_df <- data.frame(
-        protein = df[[gene_col]],
+        protein = protein_display_label(df[[gene_col]], accession_vals),
         accession = accession_vals,
         description = desc_vals,
         logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
@@ -2105,14 +2125,15 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
     protein_ids <- rownames(norm_expr_exp)
     protein_display <- protein_ids
 
-    # Use Genes column from de_data if available
+    # Label each protein with an informative, unique name: gene symbol where a
+    # real one exists, otherwise the accession. Without this, non-model proteins
+    # whose Genes column is "uncharacterized" all collapse to one label and can
+    # no longer be selected individually.
     if (!is.null(de_data) && "Genes" %in% names(de_data)) {
         id_col_map <- prot_cfg$de_table$id_col %||% "FeatureID"
         if (id_col_map %in% names(de_data)) {
             gene_map <- setNames(de_data$Genes, de_data[[id_col_map]])
-            mapped <- gene_map[protein_ids]
-            has_map <- !is.na(mapped) & nzchar(mapped)
-            protein_display[has_map] <- mapped[has_map]
+            protein_display <- protein_display_label(gene_map[protein_ids], protein_ids)
         }
     }
 
