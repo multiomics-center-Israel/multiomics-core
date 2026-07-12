@@ -353,6 +353,18 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
     }
 
     # Align the observed mask to the working matrix (rows unchanged by column align).
+    if (!is.matrix(observed)) {
+        stop("run_limma_percontrast_proteomics: observed must be a matrix (proteins x samples).")
+    }
+    if (is.null(rownames(observed)) || is.null(colnames(observed))) {
+        stop("run_limma_percontrast_proteomics: observed must have rownames and colnames.")
+    }
+    miss_r <- setdiff(rownames(expr_imp), rownames(observed))
+    miss_c <- setdiff(colnames(expr_imp), colnames(observed))
+    if (length(miss_r) > 0 || length(miss_c) > 0) {
+        stop("run_limma_percontrast_proteomics: observed dimnames must cover expr_imp (missing rows: ",
+             length(miss_r), ", missing cols: ", length(miss_c), ").")
+    }
     observed <- observed[rownames(expr_imp), colnames(expr_imp), drop = FALSE]
     storage.mode(observed) <- "logical"
 
