@@ -45,6 +45,44 @@
 #' @noRd
 .mmc_stop <- function(...) stop(paste0("[mummichog] ", ...), call. = FALSE)
 
+#' Platform-appropriate default path to the pinned venv's Python
+#'
+#' `python -m venv` puts the interpreter under bin/ on Unix and Scripts/ on
+#' Windows, so the documented default must branch on the platform.
+#' @return Relative path to the venv Python for the current OS.
+#' @noRd
+.mmc_default_python <- function() {
+  if (.Platform$OS.type == "windows") {
+    "envs/mummichog/Scripts/python.exe"
+  } else {
+    "envs/mummichog/bin/python"
+  }
+}
+
+#' Fail unless the given interpreter has the exact pinned mummichog version
+#'
+#' Guards reproducibility: if MUMMICHOG_PYTHON points at a stale or shared
+#' environment with a different mummichog, results would carry misleading
+#' "2.7.0" provenance. Query the actual version and abort on any mismatch.
+#'
+#' @param python   Path to the interpreter to probe.
+#' @param expected Exact version string required.
+#' @return Invisibly `expected` on success; aborts otherwise.
+#' @noRd
+.mmc_check_mummichog_version <- function(python, expected = "2.7.0") {
+  probe <- processx::run(
+    python, c("-c", "from mummichog.config import VERSION; print(VERSION)"),
+    error_on_status = FALSE
+  )
+  got <- trimws(probe$stdout)
+  if (probe$status != 0 || !identical(got, expected)) {
+    .mmc_stop("expected mummichog ", expected, " at '", python, "' but found '",
+              if (nzchar(got)) got else "<none>",
+              "'. Rebuild the pinned venv (setup-mummichog-venv.sh) or fix MUMMICHOG_PYTHON.")
+  }
+  invisible(expected)
+}
+
 #' Find the first matching column name in a data.frame
 #'
 #' Tries exact candidates first, then a case-insensitive regex fallback. Used to
@@ -327,7 +365,7 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #' @return Sorted character vector of all produced files plus the manifest.
 run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           python = Sys.getenv("MUMMICHOG_PYTHON",
-                                              "envs/mummichog/bin/python"),
+                                              .mmc_default_python()),
                           network = "human_mfn",
                           mode = "pos_default",
                           instrument_ppm = 10,
@@ -344,6 +382,9 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   # looked up under out_dir and fail to start. Same reasoning for a file-backed
   # model passed via `network`/-n; built-in names (human_mfn, worm) are not files.
   python <- normalizePath(python, mustWork = TRUE)
+  # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
+  # before we record 2.7.0 provenance and run it.
+  .mmc_check_mummichog_version(python, "2.7.0")
   if (file.exists(network)) network <- normalizePath(network, mustWork = TRUE)
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")

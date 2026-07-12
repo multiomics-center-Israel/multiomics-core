@@ -143,6 +143,15 @@ test_that("an input outside out_dir is left untouched", {
                    normalizePath(infile, mustWork = TRUE))
 })
 
+test_that(".mmc_default_python resolves to a platform-appropriate venv path", {
+  dp <- .mmc_default_python()
+  if (.Platform$OS.type == "windows") {
+    expect_match(dp, "Scripts/python\\.exe$")
+  } else {
+    expect_match(dp, "bin/python$")
+  }
+})
+
 test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted", {
   out_dir <- withr::local_tempdir()
 

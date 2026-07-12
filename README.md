@@ -233,6 +233,8 @@ Then point the R wrapper at that interpreter (the default is `envs/mummichog/bin
 export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
 ```
 
+On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (the pipeline picks the right default per platform).
+
 Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
 
 ### How to run

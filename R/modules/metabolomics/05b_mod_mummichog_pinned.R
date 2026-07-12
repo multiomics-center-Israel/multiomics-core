@@ -30,7 +30,7 @@
 #'   manifest), suitable for a format = "file" target.
 mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                  python = Sys.getenv("MUMMICHOG_PYTHON",
-                                                     "envs/mummichog/bin/python")) {
+                                                     .mmc_default_python())) {
   mummi_cfg <- config$modes$metabolomics$enrichment$mummichog %||% list()
 
   # Honor the same enable gate as the reticulate path (06b run_mummichog_all):
