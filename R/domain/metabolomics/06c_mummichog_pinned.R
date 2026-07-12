@@ -78,7 +78,8 @@
   if (probe$status != 0 || !identical(got, expected)) {
     .mmc_stop("expected mummichog ", expected, " at '", python, "' but found '",
               if (nzchar(got)) got else "<none>",
-              "'. Rebuild the pinned venv (setup-mummichog-venv.sh) or fix MUMMICHOG_PYTHON.")
+              "'. Rebuild the pinned venv with `make setup` (or `make mummichog-lock`) ",
+              "or fix MUMMICHOG_PYTHON.")
   }
   invisible(expected)
 }
@@ -375,7 +376,8 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           extra_args = character()) {
   if (!nzchar(python) || !file.exists(python)) {
     .mmc_stop("Python executable not found: '", python, "'. ",
-              "Set MUMMICHOG_PYTHON or run setup-mummichog-venv.sh.")
+              "Run `make setup` once per machine to build the pinned venv and print ",
+              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
   }
   # Resolve to an absolute path: processx changes to `wd` (out_dir) before exec,
   # so a relative command (e.g. the default envs/mummichog/bin/python) would be

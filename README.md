@@ -214,25 +214,41 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 
 The metabolomics mode runs [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment via a **version-pinned, isolated engine** (`R/domain/metabolomics/06c_mummichog_pinned.R`): `mummichog==2.7.0` invoked as a `{processx}` subprocess in a dedicated venv, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. It runs on mummichog's built-in `human_mfn` model by default.
 
-### Setup
+### One-time setup
 
-The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d):
+The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d). Once per machine (or checkout):
+
+``` bash
+make setup
+```
+
+That builds the venv (`envs/mummichog`) and **prints the exact `MUMMICHOG_PYTHON=<path>` line for this checkout**. Add just that line to your `.Renviron` (create the file in the project root if you don't have one — it's `.gitignore`d):
+
+``` bash
+# append the line make setup printed, e.g.:
+echo 'MUMMICHOG_PYTHON=/abs/path/to/envs/mummichog/bin/python' >> .Renviron
+```
+
+> If you'd rather start from the tracked template with `cp .Renviron.example .Renviron`, also **set or remove its `MULTIOMICS_CONFIG=/path/to/your/config.yaml` placeholder** — an active dummy value there overrides the `config.yaml` default and makes `tar_make()` fail before it reaches mummichog.
+
+After that, R reads `.Renviron` on start and `targets::tar_make()` just works — no manual `export` each session. **`.Renviron` is machine-specific and `.gitignore`d — never commit it** (that's why `make setup` prints the line for you to add rather than writing the file itself). A relative path works if you always start R from the project root, but the absolute path `make setup` prints is more robust.
+
+<details>
+<summary>Manual / advanced use</summary>
 
 ``` bash
 make mummichog-venv                 # creates envs/mummichog, writes requirements-mummichog.lock
 # or, to reproduce the exact committed tree:
 make mummichog-lock                 # installs from requirements-mummichog.lock (USE_LOCK=1)
-```
 
-Then point the R wrapper at that interpreter (the default is `envs/mummichog/bin/python`):
-
-``` bash
+# instead of .Renviron, you can export the interpreter path per shell:
 export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
 ```
 
-On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (the pipeline picks the right default per platform).
+On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (both `make setup` and the pipeline pick the right path per platform). Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
 
-Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
+If the venv/interpreter is missing when the stage runs, the pipeline fails loudly and names the fix (`run make setup`) — it never silently builds a venv mid-run.
+</details>
 
 ### How to run
 
