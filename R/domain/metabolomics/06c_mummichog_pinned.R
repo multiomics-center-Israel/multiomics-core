@@ -181,16 +181,18 @@
 #' @return Absolute path to the input to actually read from.
 #' @noRd
 .mmc_stage_infile <- function(infile, out_dir) {
-  infile <- normalizePath(infile, mustWork = TRUE)
-  out_dir_abs <- normalizePath(out_dir, mustWork = FALSE)
-  inside <- infile == out_dir_abs ||
-    startsWith(infile, paste0(out_dir_abs, .Platform$file.sep))
+  # winslash = "/" so the prefix comparison is separator-consistent on Windows:
+  # normalizePath() there returns "\" while .Platform$file.sep is "/", so mixing
+  # them made startsWith() miss the inside-out_dir case (input then got wiped).
+  infile <- normalizePath(infile, winslash = "/", mustWork = TRUE)
+  out_dir_abs <- normalizePath(out_dir, winslash = "/", mustWork = FALSE)
+  inside <- infile == out_dir_abs || startsWith(infile, paste0(out_dir_abs, "/"))
   if (inside) {
     copy <- tempfile(fileext = ".tsv")
     if (!file.copy(infile, copy, overwrite = TRUE)) {
       .mmc_stop("failed to copy the input out of out_dir before wiping it.")
     }
-    return(normalizePath(copy, mustWork = TRUE))
+    return(normalizePath(copy, winslash = "/", mustWork = TRUE))
   }
   infile
 }

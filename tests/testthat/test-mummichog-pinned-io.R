@@ -126,8 +126,11 @@ test_that("an input placed inside out_dir is staged out so it survives the wipe"
   writeLines(lines, infile)
 
   staged <- .mmc_stage_infile(infile, out_dir)
-  # the staged copy must live OUTSIDE out_dir
-  expect_false(startsWith(staged, paste0(normalizePath(out_dir), .Platform$file.sep)))
+  # the staged copy must live OUTSIDE out_dir (compare with a consistent separator)
+  expect_false(startsWith(
+    normalizePath(staged, winslash = "/"),
+    paste0(normalizePath(out_dir, winslash = "/"), "/")
+  ))
 
   unlink(out_dir, recursive = TRUE, force = TRUE)       # simulate run_mummichog's wipe
   expect_true(file.exists(staged))                      # copy survives the wipe
