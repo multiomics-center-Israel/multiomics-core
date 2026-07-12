@@ -277,7 +277,7 @@ modes:
       mummichog:
         enabled: true
         model_ref:
-          url: https://example.org/models/cre_kegg_20260711.json
+          url: https://github.com/multiomics-center-Israel/multiomics-annotation-prep/releases/download/cre_kegg_20260711/cre_kegg_20260711.json
           sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
 ```
 
