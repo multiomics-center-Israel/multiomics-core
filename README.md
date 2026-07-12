@@ -210,6 +210,94 @@ For a detailed introduction, tutorials, and best practices, see the official **t
 
 ------------------------------------------------------------------------
 
+## Mummichog pathway analysis (pinned v2, isolated venv)
+
+The metabolomics mode can run [mummichog](http://mummichog.org) for m/z-based pathway/network enrichment. There are **two independent engines** in the repo:
+
+-   **`06b_mummichog.R`** — runs mummichog via `{reticulate}` and builds custom KEGG organism models (honey bee, *E. coli*, human…) with `{KEGGREST}`. This is the current default path.
+-   **`06c_mummichog_pinned.R`** — runs the **version-pinned** `mummichog==2.7.0` as an isolated subprocess via `{processx}`, depending only on light R packages (`readr`, `processx`, `jsonlite`) — no Bioconductor. This is the new, reproducible engine documented here.
+
+### Setup
+
+The pinned engine calls Python in a dedicated venv, kept out of git (`envs/` is `.gitignore`d):
+
+``` bash
+make mummichog-venv                 # creates envs/mummichog, writes requirements-mummichog.lock
+# or, to reproduce the exact committed tree:
+make mummichog-lock                 # installs from requirements-mummichog.lock (USE_LOCK=1)
+```
+
+Then point the R wrapper at that interpreter (the default is `envs/mummichog/bin/python`):
+
+``` bash
+export MUMMICHOG_PYTHON="$(pwd)/envs/mummichog/bin/python"
+```
+
+On Windows the venv interpreter is at `envs\mummichog\Scripts\python.exe` instead (the pipeline picks the right default per platform).
+
+Both `requirements-mummichog.txt` (the top-level pin) and `requirements-mummichog.lock` (the fully-resolved tree) are committed.
+
+### How to run
+
+The pinned stage is **not wired into the metabolomics DAG by default** (it coexists with `06b`). To enable it, add these targets to `R/pipeline/metabolomics/00_pipe_metabolomics.R` (they slot in beside `metab_enrichment_res`):
+
+``` r
+tar_target(
+  metab_mummichog_pinned_files,
+  mod_mummichog_pinned(
+    pre     = metab_pre,
+    de_res  = metab_de_res,
+    config  = config,
+    out_dir = metab_out_dir
+  ),
+  format = "file"
+),
+tar_target(metab_mummichog_pinned_pathways, read_mummichog_pathways(metab_mummichog_pinned_files)),
+tar_target(metab_mummichog_pinned_modules,  read_mummichog_modules(metab_mummichog_pinned_files))
+```
+
+It reads the same knobs `06b` uses, under `modes.metabolomics.enrichment.mummichog` in your config:
+
+``` yaml
+modes:
+  metabolomics:
+    enrichment:
+      mummichog:
+        enabled: true
+        p_cutoff: 0.05
+        n_permutations: 100
+        tolerance_ppm: 10
+        ionization_mode: pos_default   # pos_default | positive | negative
+        # model_json: /path/to/ame_metabolic_model.json  # optional: reuse a 06b organism model
+```
+
+Then run as usual:
+
+``` r
+library(targets)
+tar_make(names = starts_with("met"))
+```
+
+### Where outputs land
+
+Under `<metab_out_dir>/mummichog_pinned/`:
+
+-   `input.tsv` and `input.tsv.idmap.tsv` — the exact table sent to mummichog (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
+-   `v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
+-   `v2/mummichog_manifest.tsv` and `v2/runner.log`.
+
+To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
+
+### Stochasticity caveat
+
+mummichog v2 estimates null distributions by **random permutation with no seed control**, so p-values and rankings vary slightly between runs on identical input. `{targets}` only re-runs the stage when its inputs change, so this doesn't cause spurious rebuilds — but do **not** expect bit-identical reruns, and don't assert exact equality in tests.
+
+### Cross-checking against `06b`
+
+For a like-for-like comparison on the same organism, build the KEGG model with `06b` and pass it to the pinned engine via `model_json` (the `-n` argument), so both engines use the same metabolic network on the same input.
+
+------------------------------------------------------------------------
+
 ## Running preprocessing interactively (example)
 
 For exploratory work or debugging:
