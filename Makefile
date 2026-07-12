@@ -15,13 +15,16 @@ help:
 	@echo "                  and freeze requirements-mummichog.lock."
 	@echo "  mummichog-lock  Recreate the venv from the committed lockfile exactly."
 
-# One-time machine setup: build the venv, then print the exact MUMMICHOG_PYTHON
-# line for this checkout. We do NOT write .Renviron (it is a protected,
-# machine-specific, gitignored file) — the user adds the line themselves, e.g.
-# by copying .Renviron.example.
-setup: mummichog-venv
+# One-time machine setup: build the venv from the COMMITTED lockfile (via
+# mummichog-lock, so the install is reproducible and never re-freezes the
+# tracked requirements-mummichog.lock), then print the exact MUMMICHOG_PYTHON
+# line for this checkout. We do NOT write .Renviron (a protected, machine-
+# specific, gitignored file) — the user adds the line themselves, e.g. by
+# copying .Renviron.example.
+setup: mummichog-lock
 	@py="$$(pwd)/envs/mummichog/bin/python"; \
 	[ -x "$$py" ] || py="$$(pwd)/envs/mummichog/Scripts/python.exe"; \
+	if command -v cygpath >/dev/null 2>&1; then py="$$(cygpath -ma "$$py")"; fi; \
 	echo ""; \
 	echo "[setup] Venv ready. Add this line to your .Renviron (gitignored):"; \
 	echo ""; \
