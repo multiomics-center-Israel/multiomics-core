@@ -171,3 +171,55 @@ test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted
   # nothing written, no venv invoked -> the output subdir is never created
   expect_false(dir.exists(file.path(out_dir, "mummichog_pinned")))
 })
+
+test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled", {
+  skip_if_not_installed("targets")
+  library(targets)
+  on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
+  off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
+  # enabling adds exactly the three metab_mummichog_pinned_* targets
+  expect_equal(length(on) - length(off), 3L)
+
+  # the stage lives in analysis_core, so it is also present in multiomics runs
+  # (skip_outputs = TRUE), matching the pre-switch behaviour
+  mo_on  <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = TRUE)
+  mo_off <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = FALSE)
+  expect_equal(length(mo_on) - length(mo_off), 3L)
+})
+
+test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Mus musculus",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+  expect_error(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    "non-human"
+  )
+})
+
+test_that("a configured model bypasses the organism guard (human-only) check", {
+  # model_json set -> network != human_mfn -> guard skipped; the call then fails
+  # later on the missing DE table, NOT with the organism error.
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Mus musculus",
+    enrichment = list(mummichog = list(enabled = TRUE, model_json = "/tmp/model.json")))))
+  expect_error(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    "DE table"
+  )
+})
+
+test_that("a human organism passes the guard (fails later, not on organism)", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Homo sapiens",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+  err <- tryCatch(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    error = function(e) conditionMessage(e)
+  )
+  expect_false(grepl("non-human", err))   # cleared the organism guard
+  expect_match(err, "DE table")           # stopped later, as expected
+})

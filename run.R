@@ -1346,7 +1346,6 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   run_rf <- FALSE
   run_plsda <- FALSE
   selected_organism <- "Homo sapiens"
-  kegg_org_code <- "hsa"
   run_enrichment <- FALSE
   gmt_file <- "null"
   run_mummichog <- FALSE
@@ -1371,24 +1370,20 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
     # Organism
     cat("\n--- [METAB] Organism ---\n")
-    cat("Used for mummichog pathway analysis (KEGG organism-specific models).\n\n")
+    cat("Used for pathway / enrichment analysis.\n\n")
     org_idx <- ask_choice("Which organism does your data come from?",
                           c("Human (Homo sapiens)",
                             "Mouse (Mus musculus)",
                             "Rat (Rattus norvegicus)",
                             "Zebrafish (Danio rerio)",
                             "C. elegans (Caenorhabditis elegans)",
-                            "Other (type KEGG organism code, e.g. 'ame' for honey bee)"),
+                            "Other (type the organism name)"),
                           default = 1)
-    # Latin names -> KEGG organism codes for mummichog
-    kegg_codes <- c("hsa", "mmu", "rno", "dre", "cel", "other")
     organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus",
                         "Danio rerio", "Caenorhabditis elegans", "other")
     selected_organism <- organism_names[org_idx]
-    kegg_org_code <- kegg_codes[org_idx]
-    if (kegg_org_code == "other") {
+    if (selected_organism == "other") {
       selected_organism <- ask("Organism name (e.g. 'Apis mellifera')")
-      kegg_org_code <- ask("KEGG organism code (e.g. 'ame' — see https://www.kegg.jp/kegg/catalog/org_list.html)")
     }
     # Enrichment
     cat("\n--- [METAB] Pathway Enrichment ---\n")
@@ -1401,7 +1396,16 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
         gmt_path <- validate_file(gmt_ans, "GMT file")
         if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
       }
-      run_mummichog <- ask_yn(sprintf("Enable mummichog pathway analysis? (uses KEGG %s model)", kegg_org_code), FALSE)
+      run_mummichog <- ask_yn("Enable mummichog pathway analysis? (m/z-based, pinned engine)", FALSE)
+      if (run_mummichog &&
+          !grepl("homo sapiens|human", tolower(selected_organism))) {
+        cat(sprintf(
+          paste0("  WARNING: the pinned mummichog engine currently ships only the built-in\n",
+                 "  HUMAN model. With organism '%s' the run will stop with a clear error\n",
+                 "  until a custom model is supplied (model_ref, coming soon). Enable\n",
+                 "  mummichog only for human data for now.\n"),
+          selected_organism))
+      }
     }
     # AI Commentary
     cat("\n--- [METAB] AI Commentary ---\n")
@@ -1563,18 +1567,16 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     input_yaml <- sprintf('    input:\n      format: "%s"\n      sheet: null',
                           input_format)
   }
-  # Build mummichog section
+  # Build mummichog section (pinned engine; built-in human_mfn model by default)
   mummichog_yaml <- ""
   if (run_mummichog) {
-    mummichog_yaml <- sprintf('
+    mummichog_yaml <- '
       mummichog:
         enabled: true
-        organisms:
-          - %s
         p_cutoff: 0.05
         tolerance_ppm: 10
         n_permutations: 100
-        ionization_mode: null', kegg_org_code)
+        ionization_mode: pos_default'
   }
   # Build preprocessing section (with relaxed thresholds for multi-level)
   if (is_multi_level) {

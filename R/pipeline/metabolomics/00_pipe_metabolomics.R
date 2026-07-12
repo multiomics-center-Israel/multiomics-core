@@ -22,7 +22,8 @@
 #                    │    │
 #                    └────┴──── [chosen_norm] ──→ met_corrected
 #                                                      └─ metab_pre (adapter)
-pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
+pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
+                              mummichog_enabled = FALSE) {
   # -- Validate chosen_norm at plan-definition time --------------------------
   valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced")
   if (!is.null(chosen_norm)) {
@@ -341,6 +342,34 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
   # ==================================================================
   # ANALYSIS MODE — Output targets (skipped when multiomics is active)
   # ==================================================================
+  # Pinned mummichog v2 stage (06c/05b), opt-in via
+  # modes.metabolomics.enrichment.mummichog.enabled. Added to the CORE targets so
+  # it also runs in multiomics mode (as the previous engine did), but only when
+  # enabled — a disabled config never needs the Python venv. Runs on the built-in
+  # human_mfn model by default (custom model_ref support arrives in a follow-up).
+  if (isTRUE(mummichog_enabled)) {
+    analysis_core <- c(analysis_core, list(
+      tar_target(
+        metab_mummichog_pinned_files,
+        mod_mummichog_pinned(
+          pre     = metab_pre,
+          de_res  = metab_de_res,
+          config  = config,
+          out_dir = metab_out_dir
+        ),
+        format = "file"
+      ),
+      tar_target(
+        metab_mummichog_pinned_pathways,
+        read_mummichog_pathways(metab_mummichog_pinned_files)
+      ),
+      tar_target(
+        metab_mummichog_pinned_modules,
+        read_mummichog_modules(metab_mummichog_pinned_files)
+      )
+    ))
+  }
+
   if (skip_outputs) {
     return(c(base_targets, analysis_core))
   }
@@ -466,6 +495,6 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
       format = "file"
     )
   )
-  
+
   c(base_targets, analysis_core, analysis_outputs)
 }

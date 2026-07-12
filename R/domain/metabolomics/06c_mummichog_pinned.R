@@ -1,11 +1,11 @@
 # R/domain/metabolomics/06c_mummichog_pinned.R
 #
 # Version-pinned mummichog v2 engine, run as an ISOLATED Python subprocess via
-# processx (never imported into R). Companion to 06b_mummichog.R, which takes a
-# different route (reticulate + KEGGREST organism models). The two coexist:
-#   * 06b  — reticulate, builds custom KEGG organism models (bee/E. coli/human).
-#   * 06c  — processx, pinned venv (mummichog==2.7.0), light deps only
-#            (readr/processx/jsonlite), built-in metabolic models by default.
+# processx (never imported into R): pinned venv (mummichog==2.7.0), light deps
+# only (readr/processx/jsonlite), built-in metabolic model by default. This is
+# the canonical mummichog engine (it replaced an earlier reticulate/KEGGREST
+# implementation). Wired into the metabolomics DAG via mod_mummichog_pinned()
+# (05b), gated by modes.metabolomics.enrichment.mummichog.enabled.
 #
 # Design principles:
 #   * Do NOT import mummichog internals. Call `python -m mummichog.main` only.
@@ -86,8 +86,7 @@
 #' Find the first matching column name in a data.frame
 #'
 #' Tries exact candidates first, then a case-insensitive regex fallback. Used to
-#' locate messy m/z and retention-time columns (e.g. "m/z", "RT [min]"). Mirrors
-#' the detection used in 06b_mummichog.R so both engines pick the same columns.
+#' locate messy m/z and retention-time columns (e.g. "m/z", "RT [min]").
 #'
 #' @param df         A data.frame.
 #' @param candidates Character vector of exact column names to try, in order.
@@ -355,8 +354,7 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #' @param project        Output identifier; simple charset only (validated).
 #' @param python         Path to the venv python that has mummichog installed.
 #' @param network        Metabolic model: "human_mfn" / "worm", or a path to a
-#'                        custom model JSON (e.g. one produced by 06b) for a
-#'                        like-for-like organism comparison.
+#'                        custom model JSON for an organism-specific analysis.
 #' @param mode           Ionization mode: "pos_default" / "positive" / "negative".
 #' @param instrument_ppm Instrument accuracy in ppm (integer).
 #' @param permutations   Number of permutations for the null distribution.
