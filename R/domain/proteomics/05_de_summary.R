@@ -296,6 +296,154 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     )
 }
 
+#' Run per-contrast (two-group vs control) limma for proteomics
+#'
+#' Unlike \code{run_limma_proteomics()}, which fits one pooled model over every
+#' condition, this fits each contrast on its own two-group matrix (the control
+#' samples plus that one test condition's samples). Each contrast is filtered and
+#' moderated independently, so the eBayes variance and the BH adjustment use only
+#' the two groups being compared - matching the per-contrast notebook workflow.
+#'
+#' Proteins are kept per contrast only when observed (non-floor / non-missing in
+#' the pre-imputation matrix) in at least one control or one test replicate. Kept
+#' proteins are fit with limma; dropped proteins are re-expanded into the full
+#' protein set as NA, so every returned table stays row-aligned to \code{expr_imp}
+#' and remains compatible with \code{summarize_limma_mult_imputation()}. NA rows
+#' read as "not tested" (they cannot pass \code{mark_pass1()}), which reproduces
+#' the outer-join / NA-where-untested wide table.
+#'
+#' This path never re-log-transforms: limma is fit directly on the log2 imputed
+#' matrix, so the double-log failure mode cannot occur here.
+#'
+#' @param expr_imp  Numeric matrix (proteins x samples), log2, imputed.
+#' @param observed  Logical matrix (proteins x samples): TRUE where the value was
+#'   observed pre-imputation (i.e. \code{!is.na(pre$expr_filt)}). Row/column names
+#'   must cover \code{expr_imp}.
+#' @param meta      Sample metadata data.frame.
+#' @param contrasts_df  Contrasts table (Contrast_name, Factor, Numerator, Denominator);
+#'   Denominator is the control group.
+#' @param prot_tbl  Protein annotation table.
+#' @param cfg       Full config list.
+#' @return List compatible with \code{run_limma_proteomics()} output.
+#' @export
+run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts_df,
+                                              prot_tbl, cfg) {
+    p_cfg <- cfg$modes$proteomics
+
+    sample_col <- p_cfg$effects$samples %||% "SampleID"
+    group_col <- p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
+
+    protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
+    default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
+    annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
+
+    assert_numeric_matrix(expr_imp, "expr_imp")
+    expr_imp <- align_matrix_to_meta(expr_imp, meta, sample_col)
+    meta_aligned <- align_meta_to_expr(expr_imp, meta, p_cfg)
+
+    # Double-log guard: this path fits on the already-log2 matrix and never re-logs,
+    # but flag obviously linear-scale input so a mis-declared matrix is caught early
+    # rather than surfacing later as compressed fold-changes.
+    max_val <- suppressWarnings(max(expr_imp, na.rm = TRUE))
+    if (is.finite(max_val) && max_val > 40) {
+        warning("run_limma_percontrast_proteomics: matrix max ", round(max_val, 1),
+                " looks linear-scale; expected log2 intensities. Check upstream transform.")
+    }
+
+    # Align the observed mask to the working matrix (rows unchanged by column align).
+    observed <- observed[rownames(expr_imp), colnames(expr_imp), drop = FALSE]
+    storage.mode(observed) <- "logical"
+
+    ann <- align_annotations_to_expr(expr_imp, prot_tbl, protein_id_col, annot_cols)
+    feature_id <- ann[[protein_id_col]]
+    annot_out <- setdiff(annot_cols, protein_id_col)
+
+    de_table_cfg <- p_cfg$de_table %||% list()
+    target_id_col <- de_table_cfg$id_col %||% "FeatureID"
+    adj_method <- p_cfg$de$p_adjust_method %||% "BH"
+
+    result_cols <- c("logFC", "AveExpr", "t", "P.Value", "adj.P.Val", "B")
+    groups <- as.character(meta_aligned[[group_col]])
+    n_prot <- nrow(expr_imp)
+
+    make_empty <- function() {
+        empty <- as.data.frame(matrix(NA_real_, nrow = n_prot, ncol = length(result_cols),
+                                      dimnames = list(rownames(expr_imp), result_cols)))
+        empty
+    }
+
+    assemble <- function(res_df, cn) {
+        df_out <- data.frame(
+            TEMP_ID_COL = feature_id,
+            Contrast = cn,
+            ann[, annot_out, drop = FALSE],
+            res_df[, result_cols],
+            check.names = FALSE,
+            row.names = NULL
+        )
+        names(df_out)[names(df_out) == "TEMP_ID_COL"] <- target_id_col
+        df_out
+    }
+
+    de_tables <- lapply(seq_len(nrow(contrasts_df)), function(ci) {
+        cn <- contrasts_df$Contrast_name[ci]
+        test_group <- contrasts_df$Numerator[ci]     # test / numerator
+        ctrl_group <- contrasts_df$Denominator[ci]   # control / denominator
+
+        test_samp <- colnames(expr_imp)[groups == test_group]
+        ctrl_samp <- colnames(expr_imp)[groups == ctrl_group]
+
+        if (length(test_samp) < 2 || length(ctrl_samp) < 2) {
+            warning("Contrast '", cn, "': not enough samples (test=", length(test_samp),
+                    ", control=", length(ctrl_samp), "). Returning NA column.")
+            return(assemble(make_empty(), cn))
+        }
+
+        # Per-contrast filter: keep proteins observed (non-floor pre-imputation) in
+        # at least one control OR one test replicate; drop floor-in-both.
+        keep <- (rowSums(observed[, ctrl_samp, drop = FALSE], na.rm = TRUE) > 0) |
+                (rowSums(observed[, test_samp, drop = FALSE], na.rm = TRUE) > 0)
+
+        if (!any(keep)) return(assemble(make_empty(), cn))
+
+        sub_samp <- c(ctrl_samp, test_samp)
+        sub_expr <- expr_imp[keep, sub_samp, drop = FALSE]
+
+        # Two-group design; "test - control" so a positive logFC = higher in test.
+        grp <- factor(ifelse(sub_samp %in% test_samp, "test", "control"),
+                      levels = c("control", "test"))
+        design <- stats::model.matrix(~ 0 + grp)
+        colnames(design) <- c("control", "test")
+        cmat <- limma::makeContrasts(test - control, levels = design)
+
+        fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(sub_expr, design), cmat))
+        tt <- limma::topTable(fit2, coef = 1, adjust.method = adj_method,
+                              sort.by = "none", number = Inf)
+
+        # Re-expand kept-protein results into the full protein set (NA elsewhere).
+        res_df <- make_empty()
+        m <- match(rownames(tt), rownames(res_df))
+        res_df[m, result_cols] <- tt[, result_cols]
+
+        assemble(res_df, cn)
+    })
+
+    names(de_tables) <- contrasts_df$Contrast_name
+
+    list(
+        expr_imp = expr_imp,
+        meta_aligned = meta_aligned,
+        design = NULL,
+        contrast_formulas = setNames(
+            paste(contrasts_df$Numerator, contrasts_df$Denominator, sep = " - "),
+            contrasts_df$Contrast_name
+        ),
+        contrast_matrix = NULL,
+        fit2 = NULL,
+        de_tables = de_tables
+    )
+}
+
 #' Run t-test or Welch's t-test differential analysis for proteomics
 #'
 #' Performs per-contrast t-tests on an imputed expression matrix.
