@@ -69,7 +69,10 @@ validate_proteomics_config <- function(cfg) {
     # 4. de Settings
     if (!is.null(cfg$de)) {
         if (!is.null(cfg$de$method)) {
-            assert_one_of(cfg$de$method, "de$method", c("limma", "ttest", "welch", "anova"), allow_null = TRUE)
+            assert_one_of(cfg$de$method, "de$method", c("limma", "limma_percontrast", "ttest", "welch", "anova"), allow_null = TRUE)
+        }
+        if (!is.null(cfg$de$control_condition)) {
+            assert_scalar_chr(cfg$de$control_condition, "de$control_condition", allow_null = TRUE)
         }
         assert_scalar_num(cfg$de$p_cutoff, "de$p_cutoff",
             allow_null = TRUE, min_val = .Machine$double.eps, max_val = 1
