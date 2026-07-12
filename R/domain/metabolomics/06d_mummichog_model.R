@@ -135,27 +135,34 @@ mmc_resolve_model <- function(model_ref,
 #'   (model_ref), the configured local path (model_json), or `"human_mfn"`.
 mmc_select_model <- function(mummi_cfg, organism = NULL,
                              cache_dir = "envs/mummichog-models") {
-  # 1. model_ref: fetch-and-verify a pinned remote model (highest precedence).
-  if (!is.null(mummi_cfg$model_ref)) {
-    return(mmc_resolve_model(mummi_cfg$model_ref, cache_dir = cache_dir))
+  # Resolve the model by precedence:
+  #   1. model_ref  — fetch-and-verify a pinned remote model (cached path).
+  #   2. model_json — a local custom model, passed through as-is; run_mummichog()
+  #      normalises it if it exists (a non-file value is left for mummichog to
+  #      reject), matching the pre-model_ref behaviour.
+  #   3. built-in "human_mfn".
+  network <- if (!is.null(mummi_cfg$model_ref)) {
+    mmc_resolve_model(mummi_cfg$model_ref, cache_dir = cache_dir)
+  } else if (!is.null(mummi_cfg$model_json)) {
+    mummi_cfg$model_json
+  } else {
+    "human_mfn"
   }
 
-  # 2. model_json: a local custom model. Passed through as-is; run_mummichog()
-  #    normalises it if it exists (a non-file value is left for mummichog to
-  #    reject), matching the pre-model_ref behaviour.
-  if (!is.null(mummi_cfg$model_json)) {
-    return(mummi_cfg$model_json)
+  # The built-in model is human-only. Refuse to run it on a non-human organism
+  # whether it was selected by default OR named explicitly (e.g.
+  # model_json: human_mfn) — a species mismatch here would otherwise pass with
+  # no warning. Guard on the RESOLVED model, not the config source.
+  if (identical(network, "human_mfn")) {
+    org <- organism %||% mummi_cfg$organisms
+    org <- tolower(trimws(paste(unlist(org), collapse = " ")))
+    if (nzchar(org) && !grepl("human|homo sapiens|\\bhsa\\b", org)) {
+      .mmc_stop(
+        "configured organism ('", org, "') is non-human, but the pinned engine's ",
+        "built-in model is human-only. Supply a custom model via 'model_ref' ",
+        "(URL + sha256) or 'model_json' (a local path), or set the organism to human."
+      )
+    }
   }
-
-  # 3. built-in human_mfn — refuse to run it on a non-human organism.
-  org <- organism %||% mummi_cfg$organisms
-  org <- tolower(trimws(paste(unlist(org), collapse = " ")))
-  if (nzchar(org) && !grepl("human|homo sapiens|\\bhsa\\b", org)) {
-    .mmc_stop(
-      "configured organism ('", org, "') is non-human, but the pinned engine's ",
-      "built-in model is human-only. Supply a custom model via 'model_ref' ",
-      "(URL + sha256) or 'model_json' (a local path), or set the organism to human."
-    )
-  }
-  "human_mfn"
+  network
 }

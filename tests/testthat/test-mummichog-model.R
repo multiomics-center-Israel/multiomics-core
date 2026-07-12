@@ -127,6 +127,22 @@ test_that("mmc_select_model refuses a non-human organism with no custom model", 
   )
 })
 
+test_that("model_json: human_mfn on a non-human organism is still guarded", {
+  # The guard keys on the RESOLVED model, so naming the built-in model
+  # explicitly via model_json must not smuggle it past the check.
+  expect_error(
+    mmc_select_model(list(model_json = "human_mfn"), organism = "Mus musculus",
+                     cache_dir = withr::local_tempdir()),
+    "non-human"
+  )
+  # ...but human_mfn on a human organism is fine
+  expect_identical(
+    mmc_select_model(list(model_json = "human_mfn"), organism = "Homo sapiens",
+                     cache_dir = withr::local_tempdir()),
+    "human_mfn"
+  )
+})
+
 test_that("a model_ref supplies a real model, so a non-human organism passes", {
   skip_if_not_installed("yaml")
   cache   <- withr::local_tempdir()
