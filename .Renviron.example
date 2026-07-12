@@ -6,8 +6,10 @@
 MULTIOMICS_CONFIG=/path/to/your/config.yaml
 
 # Path to the pinned mummichog venv's Python interpreter. Only needed when the
-# metabolomics mummichog stage is enabled. Build the venv and print the exact
-# line for your machine with `make setup`.
-# A relative path works if you always start R from the project root, but an
-# ABSOLUTE path is more robust (e.g. /home/you/multiomics-core/envs/mummichog/bin/python).
-MUMMICHOG_PYTHON=envs/mummichog/bin/python
+# metabolomics mummichog stage is enabled. Leave it COMMENTED to use the
+# platform-aware default (envs/mummichog/bin/python on Unix,
+# envs/mummichog/Scripts/python.exe on Windows). To pin an explicit path, run
+# `make setup` — it prints the exact line for your machine — then uncomment and
+# set it below. An ABSOLUTE path is the most robust
+# (e.g. /home/you/multiomics-core/envs/mummichog/bin/python).
+# MUMMICHOG_PYTHON=envs/mummichog/bin/python

@@ -28,11 +28,13 @@ setup: mummichog-lock
 	[ -x "$$py" ] || py="$$venv/Scripts/python.exe"; \
 	if command -v cygpath >/dev/null 2>&1; then py="$$(cygpath -ma "$$py")"; fi; \
 	echo ""; \
-	echo "[setup] Venv ready. Add this line to your .Renviron (gitignored):"; \
+	echo "[setup] Venv ready. Add this line to your .Renviron (create the file if you"; \
+	echo "        don't have one — it lives in the project root and is gitignored):"; \
 	echo ""; \
 	echo "    MUMMICHOG_PYTHON=$$py"; \
 	echo ""; \
-	echo "[setup] No .Renviron yet?  cp .Renviron.example .Renviron  and set the path above."; \
+	echo "[setup] (.Renviron.example shows the format. Add just the line above — don't"; \
+	echo "        copy the whole template unless you also set its MULTIOMICS_CONFIG.)"; \
 	echo "[setup] Then start a fresh R session; targets::tar_make() picks it up."
 
 # Build the pinned venv from requirements-mummichog.txt and refresh the lockfile.
