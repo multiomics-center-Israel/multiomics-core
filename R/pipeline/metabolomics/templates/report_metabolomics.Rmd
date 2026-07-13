@@ -2286,7 +2286,7 @@ cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activit
 
 ```{r mummichog-bubble, fig.width=11, fig.height=8, results='asis'}
 safe_print_plot(mummi_plot)
-figure_legend("Mummichog pathway analysis. Each bubble is a pathway: x = enrichment ratio (overlapping features / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = 0.05 cutoff; the most significant pathways are labelled.")
+figure_legend(sprintf("Mummichog pathway analysis. Each bubble is a pathway: x = enrichment ratio (overlapping features / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", p_cut))
 ```
 
 ## Results Table
