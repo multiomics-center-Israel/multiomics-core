@@ -385,6 +385,45 @@ write_mummichog_manifest <- function(files, manifest_file) {
 
 # ==== runner ================================================================
 
+#' Assemble the `python -m mummichog.main` argument vector
+#'
+#' Pure builder split out of run_mummichog() so the CLI flags are unit-testable
+#' without a live subprocess. SHORT flags only: mummichog 2.7.0's getopt long
+#' options for --cutoff and --force_primary_ion are declared without a trailing
+#' "=", so they cannot take a value — the short forms (-c, -z) do.
+#'
+#' @param infile,project,network,mode Resolved run inputs.
+#' @param instrument_ppm,permutations Run parameters.
+#' @param cutoff Optional significance cutoff; NULL = mummichog's auto cutoff.
+#' @param force_primary_ion Optional logical. NULL leaves mummichog 2.7.0's
+#'   default (force_primary_ion = TRUE, i.e. require a primary ion). TRUE/FALSE
+#'   emit `-z True` / `-z False`; `-z` takes a VALUE in 2.7.0 (getopt "z:"), so a
+#'   bare -z is invalid, and FALSE is what allows non-primary adducts through.
+#' @param extra_args Extra CLI args appended verbatim.
+#' @return Character vector of arguments following the interpreter.
+#' @noRd
+.mmc_build_cli_args <- function(infile, project, network, mode,
+                                instrument_ppm, permutations,
+                                cutoff = NULL, force_primary_ion = NULL,
+                                extra_args = character()) {
+  # `-m mummichog.main` is Python's module flag; the later `-m <mode>` is
+  # mummichog's ionization mode (Python passes it through).
+  args <- c("-m", "mummichog.main",
+            "-f", infile,
+            "-o", project,
+            "-n", network,
+            "-m", mode,
+            "-u", as.character(instrument_ppm),
+            "-p", as.character(permutations))
+  if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
+  # Only emit -z when explicitly set, so an unset config leaves mummichog's
+  # default (require primary ion) exactly as-is.
+  if (!is.null(force_primary_ion)) {
+    args <- c(args, "-z", if (isTRUE(force_primary_ion)) "True" else "False")
+  }
+  c(args, extra_args)
+}
+
 #' Run mummichog v2 as an isolated subprocess
 #'
 #' Invokes `python -m mummichog.main` in the pinned venv with the working
@@ -402,6 +441,9 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #' @param permutations   Number of permutations for the null distribution.
 #' @param cutoff         Optional significance p-value cutoff; NULL = mummichog's
 #'                        automated cutoff.
+#' @param force_primary_ion Optional logical passed to mummichog's `-z`. NULL
+#'                        keeps 2.7.0's default (require a primary ion); FALSE
+#'                        emits `-z False` to allow non-primary adducts.
 #' @param timeout        Seconds before the process is killed.
 #' @param extra_args     Extra CLI args passed through verbatim.
 #' @return Sorted character vector of all produced files plus the manifest.
@@ -413,6 +455,7 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           instrument_ppm = 10,
                           permutations = 100,
                           cutoff = NULL,
+                          force_primary_ion = NULL,
                           timeout = 3600,
                           extra_args = character()) {
   if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
@@ -443,19 +486,8 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   out_dir <- normalizePath(out_dir, mustWork = TRUE)
   log_file <- file.path(out_dir, "runner.log")
 
-  # Short flags only: mummichog's getopt long options for --cutoff and
-  # --force_primary_ion are declared WITHOUT an "=", so they would not accept a
-  # value. The first `-m mummichog.main` is Python's module flag; the later
-  # `-m <mode>` is mummichog's ionization mode (Python passes it through).
-  args <- c("-m", "mummichog.main",
-            "-f", infile,
-            "-o", project,
-            "-n", network,
-            "-m", mode,
-            "-u", as.character(instrument_ppm),
-            "-p", as.character(permutations))
-  if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
-  args <- c(args, extra_args)
+  args <- .mmc_build_cli_args(infile, project, network, mode, instrument_ppm,
+                              permutations, cutoff, force_primary_ion, extra_args)
 
   # Force a headless matplotlib backend: mummichog imports matplotlib.pyplot and
   # writes figures, and a non-framework venv python on macOS must not reach for a

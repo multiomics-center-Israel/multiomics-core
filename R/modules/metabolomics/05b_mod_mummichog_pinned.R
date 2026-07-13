@@ -50,6 +50,10 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     "negative" = "negative",
     "pos_default"
   )
+  # Optional mummichog -z (force primary ion). NULL when unset -> mummichog
+  # 2.7.0's default (require a primary ion); set false to allow non-primary
+  # adducts. Passed through to run_mummichog_v2().
+  force_primary_ion <- mummi_cfg$force_primary_ion
   # Select the metabolic model (06d): a URL+sha256 `model_ref` (fetched, verified
   # and cached) wins, then a local `model_json` path, then the built-in human
   # model. Falling back to human on a non-human organism is refused there rather
@@ -144,7 +148,8 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     mode           = mode_flag,
     instrument_ppm = ppm,
     permutations   = n_perm,
-    cutoff         = p_cutoff
+    cutoff         = p_cutoff,
+    force_primary_ion = force_primary_ion
   )
 
   sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"), result_files)))

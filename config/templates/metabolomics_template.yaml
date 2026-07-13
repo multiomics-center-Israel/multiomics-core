@@ -218,6 +218,14 @@ modes:
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
 
+        # Force primary ion (mummichog's -z). mummichog 2.7.0 REQUIRES a primary
+        # ion (M+H[+] / M-H[-]) to be present before accepting a metabolite
+        # prediction, which reduces noise from irrelevant adducts — this is the
+        # engine's default. Set false to allow non-primary adducts (emits
+        # `-z False`). Omit to keep the default. Maps to MetaboAnalyst's
+        # force_primary_ion option.
+        force_primary_ion: true
+
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # The built-in model is HUMAN ONLY: a non-human `organism` (above) with
         # no custom model is refused, not silently run against human pathways.
