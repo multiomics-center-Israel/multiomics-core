@@ -59,16 +59,13 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
         if (is.null(res1) || is.null(res2)) next
 
-        # Standardize 'term' column helper
+        # Standardize 'term' column helper. Our per-omic enrichment tables key the
+        # gene set on `pathway` (e.g. "GO:0000027") with the readable label in
+        # `pathway_name`; other callers may use term/ID/Description. Match on the
+        # stable ID so both omics align on the same key.
         get_term_col <- function(df) {
-            if ("term" %in% colnames(df)) {
-                return(df$term)
-            }
-            if ("ID" %in% colnames(df)) {
-                return(df$ID)
-            }
-            if ("Description" %in% colnames(df)) {
-                return(df$Description)
+            for (col in c("term", "ID", "pathway", "Description")) {
+                if (col %in% colnames(df)) return(as.character(df[[col]]))
             }
             return(rownames(df))
         }
@@ -76,13 +73,18 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         res1$term <- get_term_col(res1)
         res2$term <- get_term_col(res2)
 
-        # Build ID → pathway name lookup
+        # Build term-ID → readable-name lookup. Prefer pathway/pathway_name (our
+        # schema); fall back to ID/pathway for the clusterProfiler-style shape.
         id_to_name <- character(0)
         for (df_tmp in list(res1, res2)) {
-            if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-                nms <- setNames(df_tmp$pathway, df_tmp$ID)
-                id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+            if ("pathway" %in% colnames(df_tmp) && "pathway_name" %in% colnames(df_tmp)) {
+                nms <- setNames(as.character(df_tmp$pathway_name), as.character(df_tmp$pathway))
+            } else if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
+                nms <- setNames(as.character(df_tmp$pathway), as.character(df_tmp$ID))
+            } else {
+                next
             }
+            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
         }
 
         # Union of terms
@@ -1408,9 +1410,14 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         summary$n_omics_support_pval <- summary$n_omics_support
     }
 
-    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only
-    summary <- summary[order(is.na(summary$pooled_pvalue), summary$pooled_pvalue,
-                             summary$metabolomics_padj), ]
+    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only.
+    # metabolomics_padj only exists when metab_ora was supplied; order() rejects a
+    # NULL key ("argument N is not a vector"), so add it only when present.
+    sort_keys <- list(is.na(summary$pooled_pvalue), summary$pooled_pvalue)
+    if (!is.null(summary$metabolomics_padj)) {
+        sort_keys <- c(sort_keys, list(summary$metabolomics_padj))
+    }
+    summary <- summary[do.call(order, sort_keys), ]
 
     # Drop internal helper column
     summary$norm_id <- NULL
@@ -1464,8 +1471,10 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         padj_map <- setNames(om_res$padj, om_res$pathway)
         count_map <- setNames(om_res$Count, om_res$pathway)
 
-        matched_padj <- padj_map[top$pathway]
-        matched_count <- count_map[top$pathway]
+        # unname: a lookup miss yields an NA-named element, which data.frame()
+        # would otherwise promote to a (missing) row name and abort.
+        matched_padj <- unname(padj_map[top$pathway])
+        matched_count <- unname(count_map[top$pathway])
 
         plot_data[[om]] <- data.frame(
             pathway = top$pathway,
@@ -1482,8 +1491,8 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         met_count_map <- setNames(metab_ora$setSize, normalize_kegg_pathway_id(metab_ora$ID))
         norm_top_ids <- normalize_kegg_pathway_id(top$ID)
 
-        matched_padj <- met_padj_map[norm_top_ids]
-        matched_count <- met_count_map[norm_top_ids]
+        matched_padj <- unname(met_padj_map[norm_top_ids])
+        matched_count <- unname(met_count_map[norm_top_ids])
 
         plot_data[["Metabolomics"]] <- data.frame(
             pathway = top$pathway,
@@ -1496,8 +1505,10 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
 
     plot_df <- do.call(rbind, plot_data)
     plot_df$neg_log10_padj <- pmin(plot_df$neg_log10_padj, 15)
-    # Remove entries where pathway was not found in the per-omics results
-    plot_df <- plot_df[plot_df$neg_log10_padj > 0, ]
+    # Remove entries where pathway was not found in the per-omics results. Guard
+    # against NA scores (pathways with no pooled/per-omic padj) — an NA in the
+    # logical index yields NA row names and aborts the subset.
+    plot_df <- plot_df[!is.na(plot_df$neg_log10_padj) & plot_df$neg_log10_padj > 0, ]
 
     if (nrow(plot_df) == 0) return(invisible(NULL))
 

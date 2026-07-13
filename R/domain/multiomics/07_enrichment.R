@@ -132,16 +132,26 @@ extract_enrichment_df <- function(enrich_res) {
         return(enrich_res$enrichment_df)
     }
 
-    # $pathway_results slot (nested by contrast)
-    if (!is.null(enrich_res$pathway_results) && is.list(enrich_res$pathway_results)) {
-        # Collect data frames from all contrasts
+    # Contrast-keyed collection. The per-contrast results live either under a
+    # $pathway_results slot (RNA) or at the top level of the list keyed by
+    # contrast name (proteomics: list(<contrast> = list(custom_fgsea = df))).
+    contrast_list <- if (!is.null(enrich_res$pathway_results) &&
+                         is.list(enrich_res$pathway_results)) {
+        enrich_res$pathway_results
+    } else if (is.list(enrich_res)) {
+        enrich_res
+    } else {
+        NULL
+    }
+
+    if (!is.null(contrast_list)) {
         dfs <- list()
-        for (contrast_name in names(enrich_res$pathway_results)) {
-            contrast_res <- enrich_res$pathway_results[[contrast_name]]
+        for (contrast_name in names(contrast_list)) {
+            contrast_res <- contrast_list[[contrast_name]]
             if (is.data.frame(contrast_res) && nrow(contrast_res) > 0) {
                 dfs[[contrast_name]] <- contrast_res
             } else if (is.list(contrast_res)) {
-                # May have sub-results (e.g., KEGG, GO)
+                # May have sub-results (e.g., custom_fgsea, KEGG, GO)
                 for (sub_name in names(contrast_res)) {
                     sub_res <- contrast_res[[sub_name]]
                     if (is.data.frame(sub_res) && nrow(sub_res) > 0) {
@@ -150,7 +160,9 @@ extract_enrichment_df <- function(enrich_res) {
                 }
             }
         }
-        if (length(dfs) > 0) return(do.call(rbind, dfs))
+        # Sub-results (e.g. fgsea vs ORA) can carry different columns, so bind by
+        # name and fill gaps rather than rbind (which requires identical columns).
+        if (length(dfs) > 0) return(dplyr::bind_rows(dfs))
     }
 
     NULL
@@ -1038,6 +1050,11 @@ get_organism_db <- function(organism) {
 
 #' Get KEGG organism code
 get_kegg_organism <- function(organism) {
+    # A missing/blank organism (e.g. no global.organism set) must return NULL, not
+    # error: list[[character(0)]] throws "attempt to select less than one element".
+    if (is.null(organism) || length(organism) != 1L || is.na(organism) || !nzchar(organism)) {
+        return(NULL)
+    }
     kegg_map <- list(
         c_elegans = "cel",
         "Caenorhabditis elegans" = "cel",
