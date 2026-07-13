@@ -7,17 +7,45 @@
 # GMT READING
 # ==============================================================================
 
-#' Read GMT file for custom gene sets
+#' Read GMT file(s) for custom gene sets
 #'
-#' @param gmt_file Path to GMT file
-#' @return Named list of gene sets (character vectors)
+#' Accepts a single path or a character vector / list of paths. Multiple files
+#' are read and merged into one collection so a config can point one omic's
+#' `gmt_file` at several GMTs (e.g. GO + KEGG). Set names that repeat across
+#' files keep the first occurrence.
+#'
+#' @param gmt_file Path to a GMT file, or a vector/list of GMT paths.
+#' @return Named list of gene sets (character vectors), with a `descriptions`
+#'   attribute mapping set name to its GMT description column.
 #' @export
 read_gmt <- function(gmt_file) {
-    if (!file.exists(gmt_file)) {
-        stop("GMT file not found: ", gmt_file)
+    paths <- unlist(gmt_file, use.names = FALSE)
+
+    # Merge branch: read each file singly, then concatenate (first name wins).
+    if (length(paths) > 1) {
+        merged <- list()
+        descriptions <- character()
+        for (gf in paths) {
+            gs <- read_gmt(gf)
+            new <- setdiff(names(gs), names(merged))
+            merged[new] <- gs[new]
+            d <- attr(gs, "descriptions")
+            if (!is.null(d)) {
+                d_new <- d[intersect(names(d), new)]
+                descriptions[names(d_new)] <- d_new
+            }
+        }
+        message("Merged ", length(merged), " gene sets from ",
+                length(paths), " GMT files")
+        attr(merged, "descriptions") <- descriptions
+        return(merged)
     }
 
-    lines <- readLines(gmt_file)
+    if (!file.exists(paths)) {
+        stop("GMT file not found: ", paths)
+    }
+
+    lines <- readLines(paths)
     gene_sets <- list()
     descriptions <- character()
 
@@ -63,10 +91,14 @@ load_gene_sets <- function(organism,
     gene_sets <- list()
     org_info <- get_organism_info(organism)
 
-    # Custom GMT takes priority
-    if (!is.null(gmt_file) && file.exists(gmt_file)) {
-        gene_sets$custom <- read_gmt(gmt_file)
-        message("Loaded custom gene sets from: ", gmt_file)
+    # Custom GMT takes priority. gmt_file may be a vector/list of paths (GO +
+    # KEGG, etc.); keep only those that exist and merge via read_gmt().
+    gmt_paths <- unlist(gmt_file, use.names = FALSE)
+    gmt_paths <- gmt_paths[nzchar(gmt_paths) & file.exists(gmt_paths)]
+    if (length(gmt_paths) > 0) {
+        gene_sets$custom <- read_gmt(gmt_paths)
+        message("Loaded custom gene sets from: ",
+                paste(gmt_paths, collapse = ", "))
 
         # Validate GMT coverage against annotation features if available
         if (!is.null(annotation) && "gene_id" %in% colnames(annotation)) {
