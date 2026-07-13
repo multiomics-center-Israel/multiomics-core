@@ -1551,9 +1551,13 @@ run_gsea_all <- function(ranked_genes,
     }
 
     # ------------------------------------------------------------------
-    # 1. Build flat job list (lightweight identifiers only — data looked
-    #    up by reference inside the worker to avoid copying large tables
-    #    across serialized futures on Windows/multisession)
+    # 1. Build flat job list. Each job carries its OWN ranked vector
+    #    (`ranked`), not a reference into `ranked_genes`. This keeps the whole
+    #    `ranked_genes` structure OUT of the worker closure's environment, so it
+    #    is never broadcast as a future global — the per-job vectors ride in the
+    #    `jobs` iteration list (sent one-at-a-time to workers, held once on the
+    #    master), keeping exported globals ~= local_tables regardless of the
+    #    number of contrasts. (`local_tables` stays a captured global: small.)
     # ------------------------------------------------------------------
     jobs <- list()
     for (ranking_method in names(ranked_genes)) {
@@ -1564,7 +1568,8 @@ run_gsea_all <- function(ranked_genes,
                 jobs[[length(jobs) + 1]] <- list(
                     ranking_method = ranking_method,
                     contrast       = contrast,
-                    db_name        = db_name
+                    db_name        = db_name,
+                    ranked         = ranked_genes[[ranking_method]][[contrast]]
                 )
             }
         }
@@ -1582,8 +1587,10 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     run_one_gsea_job <- function(job) {
         # Pure computation — no file I/O, no message() (avoids interleaved output).
-        # Looks up data from ranked_genes / local_tables by identifier.
-        ranked    <- ranked_genes[[job$ranking_method]][[job$contrast]]
+        # `job$ranked` is this job's own ranked vector (see job-build above), so
+        # the whole `ranked_genes` is NOT captured; only `local_tables` (small)
+        # is looked up as a captured global.
+        ranked    <- job$ranked
         term2gene <- local_tables[[job$db_name]]$TERM2GENE
         term2name <- local_tables[[job$db_name]]$TERM2NAME
 
