@@ -257,6 +257,13 @@ show_expression_heatmap <- report_cfg$show_expression_heatmap %||% TRUE
 show_imputation_qc <- report_cfg$show_imputation_qc %||% TRUE
 # Default-off after April 2026 reviewer feedback (Michal/Vered): keep volcano only.
 show_ma_plots <- report_cfg$show_ma_plots %||% FALSE
+# Interactive sample-vs-sample scatter in the QC Sample Similarity section.
+# Off by default (opt-in per config) to keep the shared report lean.
+show_sample_scatter <- report_cfg$show_sample_scatter %||% FALSE
+# Imputation-aware interactive views (per-contrast mask from the pre-imputation
+# matrix). Off by default; opt-in per config.
+show_volcano_nonimputed <- report_cfg$show_volcano_nonimputed %||% FALSE
+show_ma_imputation <- report_cfg$show_ma_imputation %||% FALSE
 show_top_de_heatmaps <- report_cfg$show_top_de_heatmaps %||% TRUE
 show_protein_explorer <- report_cfg$show_protein_explorer %||% TRUE
 show_peptide_explorer <- report_cfg$show_peptide_explorer %||% TRUE
@@ -1153,7 +1160,7 @@ figure_legend("Boxplot of protein expression values after imputation. Boxes show
 render_commentary("imputation_boxplot")
 ```
 
-```{r similarity-heading, eval=show_distance || show_correlation, results='asis'}
+```{r similarity-heading, eval=show_distance || show_correlation || show_sample_scatter, results='asis'}
 cat("## Sample Similarity {.tabset}\n\n")
 cat("Pairwise sample correlation and distance metrics assess overall reproducibility within and between experimental groups. High within-group correlation and clear between-group separation indicate good data quality and a detectable biological signal.\n\n")
 ```
@@ -1199,6 +1206,165 @@ figure_legend("Pairwise Pearson correlation heatmap of protein expression profil
 
 ```{r commentary-correlation, eval=show_correlation, results='asis'}
 render_commentary("sample_correlation")
+```
+
+```{r sample-scatter-heading, eval=show_sample_scatter, results='asis'}
+cat("### Sample-vs-Sample Scatter\n\n")
+cat("Per-protein log2 intensities for any two samples or group means, one point per protein. Choose the X and Y axis below; the dashed line is y = x, and the Pearson correlation of the two selections is shown above the plot. Useful for judging pairwise reproducibility and spotting outlier samples.\n\n")
+```
+
+```{r sample-scatter-data, eval=show_sample_scatter, include=FALSE}
+# Self-contained expression loader (mirrors the Protein Explorer data chunk) so
+# the scatter works here in QC even when the explorer section is off / renders later.
+scatter_ready <- FALSE
+scatter_json_str <- "{}"
+
+meta_file_sc  <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
+meta_df_sc    <- if (file.exists(meta_file_sc)) read.csv(meta_file_sc, stringsAsFactors = FALSE) else NULL
+group_col_sc  <- prot_cfg$effects$color %||% "Condition"
+sample_col_sc <- prot_cfg$effects$samples %||% "SampleID"
+
+expr_sc <- NULL
+if (!is.null(meta_df_sc) && sample_col_sc %in% names(meta_df_sc)) {
+    meta_ids_sc   <- as.character(meta_df_sc[[sample_col_sc]])
+    final_file_sc <- file.path(datasets_dir, "final_results.tsv")
+    if (file.exists(final_file_sc)) {
+        final_df_sc <- tryCatch(
+            read.delim(final_file_sc, stringsAsFactors = FALSE, check.names = FALSE),
+            error = function(e) NULL)
+        if (!is.null(final_df_sc)) {
+            id_col_sc <- prot_cfg$de_table$id_col %||% "FeatureID"
+            keep_sc   <- intersect(meta_ids_sc, names(final_df_sc))
+            if (length(keep_sc) >= 2 && id_col_sc %in% names(final_df_sc)) {
+                expr_sc <- final_df_sc[, keep_sc, drop = FALSE]
+                rownames(expr_sc) <- final_df_sc[[id_col_sc]]
+            }
+        }
+    }
+}
+
+if (!is.null(expr_sc) && ncol(expr_sc) >= 2) {
+    expr_mat_sc <- as.matrix(expr_sc)
+
+    # Label each protein with a gene symbol where a real one exists, else the
+    # accession (keeps non-model "uncharacterized" proteins individually named).
+    prot_labels_sc <- rownames(expr_mat_sc)
+    if (!is.null(de_data) && "Genes" %in% names(de_data)) {
+        id_col_map_sc <- prot_cfg$de_table$id_col %||% "FeatureID"
+        if (id_col_map_sc %in% names(de_data)) {
+            gene_map_sc <- setNames(de_data$Genes, de_data[[id_col_map_sc]])
+            prot_labels_sc <- protein_display_label(gene_map_sc[rownames(expr_mat_sc)], rownames(expr_mat_sc))
+        }
+    }
+
+    grp_map_sc <- if (group_col_sc %in% names(meta_df_sc)) {
+        setNames(as.character(meta_df_sc[[group_col_sc]]), as.character(meta_df_sc[[sample_col_sc]]))
+    } else NULL
+    sample_groups_sc <- if (!is.null(grp_map_sc)) unname(grp_map_sc[colnames(expr_mat_sc)]) else rep(NA_character_, ncol(expr_mat_sc))
+
+    # One selectable column per sample, then one per group mean.
+    col_opts_sc <- list()
+    for (j in seq_len(ncol(expr_mat_sc))) {
+        glab <- sample_groups_sc[j]
+        lbl  <- if (!is.na(glab)) sprintf("%s (%s)", colnames(expr_mat_sc)[j], glab) else colnames(expr_mat_sc)[j]
+        col_opts_sc[[length(col_opts_sc) + 1L]] <- list(
+            label = lbl, values = round(as.numeric(expr_mat_sc[, j]), 3))
+    }
+    if (!is.null(grp_map_sc)) {
+        for (g in unique(sample_groups_sc[!is.na(sample_groups_sc)])) {
+            cols_g <- which(sample_groups_sc == g)
+            mv <- rowMeans(expr_mat_sc[, cols_g, drop = FALSE], na.rm = TRUE)
+            col_opts_sc[[length(col_opts_sc) + 1L]] <- list(
+                label = sprintf("mean: %s", g), values = round(as.numeric(mv), 3))
+        }
+    }
+
+    scatter_json_str <- jsonlite::toJSON(
+        list(proteins = prot_labels_sc, columns = col_opts_sc),
+        auto_unbox = TRUE, na = "null")
+    scatter_ready <- TRUE
+}
+```
+
+```{r sample-scatter-missing, eval=show_sample_scatter && !scatter_ready, results='asis'}
+cat("*Sample scatter not available (expression matrix or sample metadata missing).*\n\n")
+```
+
+```{r sample-scatter-ui, eval=show_sample_scatter && scatter_ready, results='asis'}
+cat('
+<div style="margin: 12px 0 16px 0; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+<label><strong>X axis:</strong> <select id="scatter_x" onchange="renderSampleScatter()" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;"></select></label>
+<label><strong>Y axis:</strong> <select id="scatter_y" onchange="renderSampleScatter()" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;"></select></label>
+<span id="scatter_corr" style="font-size: 0.95em; color: #333;"></span>
+</div>
+<div id="scatter_plot" style="width: 100%; min-height: 500px;"></div>
+')
+```
+
+```{r sample-scatter-js, eval=show_sample_scatter && scatter_ready, results='asis'}
+cat('<script>\nvar sampleScatterData = ')
+cat(scatter_json_str)
+cat(';\n')
+cat('
+(function() {
+    function fillSelect(id, defaultIdx) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        for (var i = 0; i < sampleScatterData.columns.length; i++) {
+            var o = document.createElement("option");
+            o.value = i; o.text = sampleScatterData.columns[i].label;
+            sel.appendChild(o);
+        }
+        sel.selectedIndex = defaultIdx;
+    }
+    function pearson(x, y) {
+        var n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+        for (var i = 0; i < x.length; i++) {
+            var a = x[i], b = y[i];
+            if (a === null || b === null || isNaN(a) || isNaN(b)) continue;
+            n++; sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b;
+        }
+        if (n < 2) return NaN;
+        var cov = sxy - sx * sy / n;
+        var vx = sxx - sx * sx / n, vy = syy - sy * sy / n;
+        if (vx <= 0 || vy <= 0) return NaN;
+        return cov / Math.sqrt(vx * vy);
+    }
+    window.renderSampleScatter = function() {
+        var xi = +document.getElementById("scatter_x").value;
+        var yi = +document.getElementById("scatter_y").value;
+        var cx = sampleScatterData.columns[xi], cy = sampleScatterData.columns[yi];
+        var xs = cx.values, ys = cy.values, txt = sampleScatterData.proteins;
+        var lo = Infinity, hi = -Infinity;
+        for (var i = 0; i < xs.length; i++) {
+            var a = xs[i], b = ys[i];
+            if (a !== null && !isNaN(a)) { if (a < lo) lo = a; if (a > hi) hi = a; }
+            if (b !== null && !isNaN(b)) { if (b < lo) lo = b; if (b > hi) hi = b; }
+        }
+        var pts = { x: xs, y: ys, text: txt, mode: "markers", type: "scattergl",
+                    marker: { size: 4, color: "#377eb8", opacity: 0.5 },
+                    hovertemplate: "%{text}<br>" + cx.label + ": %{x}<br>" + cy.label + ": %{y}<extra></extra>" };
+        var diag = { x: [lo, hi], y: [lo, hi], mode: "lines", type: "scatter",
+                     line: { dash: "dash", color: "#888" }, hoverinfo: "skip", showlegend: false };
+        var r = pearson(xs, ys);
+        var corr = document.getElementById("scatter_corr");
+        if (corr) corr.textContent = isNaN(r) ? "" : ("Pearson r = " + r.toFixed(3));
+        Plotly.react("scatter_plot", [pts, diag],
+            { margin: { t: 10, r: 10 }, xaxis: { title: cx.label }, yaxis: { title: cy.label },
+              showlegend: false },
+            { responsive: true, displaylogo: false });
+    };
+    function initSampleScatter() {
+        if (typeof Plotly === "undefined") { setTimeout(initSampleScatter, 300); return; }
+        fillSelect("scatter_x", 0);
+        fillSelect("scatter_y", Math.min(1, sampleScatterData.columns.length - 1));
+        renderSampleScatter();
+    }
+    if (document.readyState === "complete") initSampleScatter();
+    else window.addEventListener("load", initSampleScatter);
+})();
+</script>
+')
 ```
 
 ```{r expr-heatmap-heading, eval=show_expression_heatmap, results='asis'}
@@ -1899,6 +2065,89 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
 }
 ```
 
+```{r impute-mask-setup, eval=show_volcano_nonimputed || show_ma_imputation, include=FALSE}
+# Per-contrast imputation mask from the pre-imputation matrix. A protein counts
+# as imputed for a contrast if it had any NA among that contrast's own samples
+# (numerator + denominator groups) before imputation.
+impute_mask_ready <- FALSE
+unimp_mat <- NULL
+
+unimp_file <- file.path(datasets_dir, "protein_log2_filtered_unimputed.tsv")
+if (file.exists(unimp_file)) {
+    unimp_df <- tryCatch(read.delim(unimp_file, stringsAsFactors = FALSE, check.names = FALSE),
+                         error = function(e) NULL)
+    if (!is.null(unimp_df) && ncol(unimp_df) >= 2) {
+        unimp_mat <- as.matrix(unimp_df[, -1, drop = FALSE])
+        rownames(unimp_mat) <- as.character(unimp_df[[1]])
+    }
+}
+
+meta_file_imp  <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
+meta_df_imp    <- if (file.exists(meta_file_imp)) read.csv(meta_file_imp, stringsAsFactors = FALSE) else NULL
+group_col_imp  <- prot_cfg$effects$color %||% "Group"
+sample_col_imp <- prot_cfg$effects$samples %||% "SampleName"
+
+contr_file_imp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$contrasts %||% "")
+contr_df_imp <- if (nzchar(prot_cfg$files$contrasts %||% "") && file.exists(contr_file_imp)) {
+    tryCatch(read.csv(contr_file_imp, stringsAsFactors = FALSE), error = function(e) NULL)
+} else NULL
+
+impute_mask_ready <- !is.null(unimp_mat) && !is.null(meta_df_imp) &&
+    group_col_imp %in% names(meta_df_imp) && sample_col_imp %in% names(meta_df_imp)
+
+# Named logical (by FeatureID); TRUE = imputed in this contrast, NA if unknown.
+contrast_imputed_flag <- function(cn) {
+    if (!isTRUE(impute_mask_ready)) return(NULL)
+    groups <- NULL
+    if (!is.null(contr_df_imp) && "Contrast_name" %in% names(contr_df_imp)) {
+        row <- contr_df_imp[contr_df_imp$Contrast_name == cn, , drop = FALSE]
+        if (nrow(row) == 1) groups <- c(row$Numerator[1], row$Denominator[1])
+    }
+    if (is.null(groups)) groups <- strsplit(cn, "_vs_", fixed = TRUE)[[1]]
+    samples <- as.character(meta_df_imp[[sample_col_imp]])[meta_df_imp[[group_col_imp]] %in% groups]
+    samples <- intersect(samples, colnames(unimp_mat))
+    if (length(samples) == 0) return(NULL)
+    setNames(as.logical(apply(is.na(unimp_mat[, samples, drop = FALSE]), 1, any)),
+             rownames(unimp_mat))
+}
+```
+
+```{r volcano-nonimputed, eval=show_volcano_nonimputed, results='asis', fig.height=6}
+cat("### Non-imputed only {.tabset}\n\n")
+cat("Interactive volcano restricted to proteins with no imputed values among each contrast's own samples (numerator + denominator groups), from the pre-imputation matrix (protein_log2_filtered_unimputed.tsv).\n\n")
+if (!isTRUE(impute_mask_ready)) {
+    cat("*Non-imputed volcano not available (pre-imputation matrix or metadata missing).*\n\n")
+} else if (!is.null(de_data) && length(contrast_names) > 0) {
+    id_col_ni <- prot_cfg$de_table$id_col %||% "FeatureID"
+    for (cn in contrast_names) {
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+        flag <- contrast_imputed_flag(cn)
+        if (is.null(flag) || !(id_col_ni %in% names(de_data))) {
+            cat("*No imputation mask available for this contrast.*\n\n"); next
+        }
+        de_flag <- flag[as.character(de_data[[id_col_ni]])]
+        keep_rows <- !is.na(de_flag) & !de_flag
+        n_keep <- sum(keep_rows); n_tot <- nrow(de_data)
+        if (n_keep == 0) { cat("*No fully-observed proteins for this contrast.*\n\n"); next }
+        vol_res <- make_volcano_plotly_prot(de_data[keep_rows, , drop = FALSE], cn,
+                                            prot_cfg$de$p_cutoff %||% 0.05,
+                                            log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean)
+        if (!is.null(vol_res)) {
+            p <- vol_res$widget
+            p$elementId <- paste0("volcano_ni_plot_", clean_id)
+            print(htmltools::tagList(p))
+            figure_legend(sprintf("Non-imputed proteins only: %d of %d proteins were fully observed in this contrast's samples.",
+                                  n_keep, n_tot))
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Non-imputed volcano requires DE data.\n")
+}
+```
+
 ```{r ma-plots-heading, eval=show_ma_plots, results='asis'}
 cat("## MA Plots {.tabset}\n\n### Static {.tabset}\n\n")
 ```
@@ -1924,7 +2173,7 @@ cat("### Interactive {.tabset}\n\n")
 cat("MA plots show the relationship between average expression (A, x-axis) and log-fold-change (M, y-axis). They help assess whether fold-change estimates are independent of expression level and whether the data is properly normalized.\n\n")
 ```
 
-```{r ma-interactive-setup, eval=show_ma_plots, include=FALSE}
+```{r ma-interactive-setup, eval=show_ma_plots || show_ma_imputation, include=FALSE}
 # Load expression data from final_results.tsv for MA plot (has per-sample columns)
 ma_expr_df <- NULL
 ma_final_file <- file.path(datasets_dir, "final_results.tsv")
@@ -1935,7 +2184,7 @@ if (file.exists(ma_final_file)) {
     )
 }
 
-make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL) {
+make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), title = NULL, impute_flag = NULL) {
     padj_col <- paste0("padj.imputs.", contrast)
     lfc_col <- paste0("linearFC.imputs.", contrast)
     if (!(padj_col %in% names(df)) || !(lfc_col %in% names(df))) return(NULL)
@@ -1974,6 +2223,7 @@ make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut 
     # average log2 intensity — use directly as the A axis (no extra log)
     plot_df <- data.frame(
         protein = df[[gene_col]],
+        feat = as.character(df[[id_col]]),
         logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
         padj = as.numeric(df[[padj_col]]),
         baseMean = baseMean,
@@ -1986,12 +2236,26 @@ make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut 
     )
     plot_df$Direction <- factor(plot_df$Direction, levels = c("NS", "Down", "Up"))
 
-    p <- ggplot(plot_df, aes(x = baseMean, y = logFC, color = Direction,
-                              text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
-                                           "\nMean log2 intensity: ", round(baseMean, 2),
-                                           "\npadj: ", signif(padj, 3)))) +
-        geom_point(alpha = 0.6, size = 1.5) +
-        scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
+    if (!is.null(impute_flag)) {
+        imp <- impute_flag[as.character(plot_df$feat)]
+        plot_df$Status <- factor(ifelse(is.na(imp), "Unknown", ifelse(imp, "Imputed", "Observed")),
+                                 levels = c("Observed", "Imputed", "Unknown"))
+        p <- ggplot(plot_df, aes(x = baseMean, y = logFC, color = Status,
+                                  text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
+                                               "\nMean log2 intensity: ", round(baseMean, 2),
+                                               "\npadj: ", signif(padj, 3),
+                                               "\nImputation: ", Status))) +
+            geom_point(alpha = 0.6, size = 1.5) +
+            scale_color_manual(values = c("Observed" = "grey70", "Imputed" = "#d95f02", "Unknown" = "grey85"))
+    } else {
+        p <- ggplot(plot_df, aes(x = baseMean, y = logFC, color = Direction,
+                                  text = paste0("Protein: ", protein, "\nlog2FC: ", round(logFC, 3),
+                                               "\nMean log2 intensity: ", round(baseMean, 2),
+                                               "\npadj: ", signif(padj, 3)))) +
+            geom_point(alpha = 0.6, size = 1.5) +
+            scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red"))
+    }
+    p <- p +
         geom_hline(yintercept = c(-lfc_cut, lfc_cut), linetype = "dashed", alpha = 0.5) +
         geom_hline(yintercept = 0, color = "black", linewidth = 0.3) +
         labs(title = title, x = "Mean log2 Intensity", y = "log2 Fold Change") +
@@ -2041,6 +2305,32 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
     }
 } else {
     cat("Interactive MA plots require DE data.\n")
+}
+```
+
+```{r ma-imputation, eval=show_ma_imputation, results='asis', fig.height=6}
+cat("### Colored by imputation {.tabset}\n\n")
+cat("Interactive MA coloured by whether each protein had any imputed value among the contrast's own samples (numerator + denominator groups), from the pre-imputation matrix (protein_log2_filtered_unimputed.tsv).\n\n")
+if (!isTRUE(impute_mask_ready)) {
+    cat("*Imputation-coloured MA not available (pre-imputation matrix or metadata missing).*\n\n")
+} else if (!is.null(de_data) && length(contrast_names) > 0 && exists("make_ma_plotly_prot")) {
+    for (cn in contrast_names) {
+        contrast_clean <- gsub("_", " ", cn)
+        clean_id <- gsub("[^a-zA-Z0-9]", "_", cn)
+        cat(sprintf("\n#### %s\n\n", contrast_clean))
+        ma_res <- make_ma_plotly_prot(de_data, ma_expr_df, cn, prot_cfg$de$p_cutoff %||% 0.05,
+                                      log2(prot_cfg$de$linear_fc_cutoff %||% 1.5), contrast_clean,
+                                      impute_flag = contrast_imputed_flag(cn))
+        if (!is.null(ma_res)) {
+            p <- ma_res$widget
+            p$elementId <- paste0("ma_imp_plot_", clean_id)
+            print(htmltools::tagList(p))
+            figure_legend("Points coloured by imputation status (Observed vs Imputed) for this contrast.")
+        }
+        cat("\n\n")
+    }
+} else {
+    cat("Imputation-coloured MA requires DE data.\n")
 }
 ```
 
