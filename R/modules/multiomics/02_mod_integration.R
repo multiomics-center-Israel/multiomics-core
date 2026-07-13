@@ -107,32 +107,6 @@ mod_multiomics_integration <- function(harmonization_res, de_results = NULL,
         }, error = function(e) warning("DIABLO feature heatmap failed: ", e$message))
     }
 
-    # Post-processing: loading plots colored by log2FC
-    if (!is.null(results$diablo) && !is.null(de_results)) {
-        tryCatch({
-            plot_diablo_loadings_log2fc(
-                diablo_results = results$diablo,
-                de_results = de_results,
-                config = config,
-                out_dir = diablo_dir,
-                mae = mae_subset
-            )
-        }, error = function(e) warning("DIABLO log2FC loading plot failed: ", e$message))
-    }
-
-    if (!is.null(results$mofa_results) && !is.null(de_results)) {
-        mofa_dir <- file.path(out_dir, "mofa")
-        tryCatch({
-            plot_mofa_loadings_log2fc(
-                mofa_results = results$mofa_results,
-                de_results = de_results,
-                config = config,
-                out_dir = mofa_dir,
-                mae = mae_subset
-            )
-        }, error = function(e) warning("MOFA2 log2FC weight plot failed: ", e$message))
-    }
-
     message("\nIntegration analysis complete")
 
     list(

@@ -979,11 +979,21 @@ run_meta_integration <- function(integration_results, mae_data, config, output_d
     )
     write.csv(meta_df, file.path(output_dir, "meta_integration_results.csv"), row.names = FALSE)
 
+    # Per-sample original group, aligned to common_samples (for plotting)
+    group_vec <- NULL
+    if (!is.null(mae_data$metadata)) {
+        gcol <- mae_data$config$design$condition_column %||% "condition"
+        if (gcol %in% colnames(mae_data$metadata)) {
+            group_vec <- mae_data$metadata[[gcol]][match(common_samples, rownames(mae_data$metadata))]
+        }
+    }
+
     return(list(
         factors = meta_factors,
         clusters = meta_clusters,
         pca = meta_pca,
-        condition_association = condition_assoc
+        condition_association = condition_assoc,
+        group = group_vec
     ))
 }
 
@@ -1168,22 +1178,30 @@ plot_meta_integration <- function(meta_integration, plots_dir) {
     factors$cluster <- factor(meta_integration$clusters)
     factors$sample_id <- rownames(meta_integration$factors)
 
+    has_group <- !is.null(meta_integration$group)
+    if (has_group) factors$group <- factor(meta_integration$group)
+
     # Variance explained
     var_exp <- summary(meta_integration$pca)$importance[2, 1:2] * 100
 
-    base_aes <- ggplot2::aes(x = PC1, y = PC2, color = cluster)
+    base_aes <- if (has_group) {
+        ggplot2::aes(x = PC1, y = PC2, color = group, shape = cluster)
+    } else {
+        ggplot2::aes(x = PC1, y = PC2, color = cluster)
+    }
     base_labs <- ggplot2::labs(
         title = "Meta-Integration: Combined Latent Space",
         subtitle = "PCA of concatenated latent factors from all methods",
         x = paste0("Meta-PC1 (", round(var_exp[1], 1), "%)"),
         y = paste0("Meta-PC2 (", round(var_exp[2], 1), "%)"),
-        color = "Cluster"
+        color = if (has_group) "Group" else "Cluster",
+        shape = "Cluster"
     )
 
     # Unlabeled version
     p <- ggplot2::ggplot(factors, base_aes) +
         ggplot2::geom_point(size = 3, alpha = 0.7) +
-        ggplot2::stat_ellipse(level = 0.95) +
+        ggplot2::stat_ellipse(ggplot2::aes(group = cluster), level = 0.95) +
         base_labs +
         ggplot2::theme_minimal()
 
@@ -1193,7 +1211,7 @@ plot_meta_integration <- function(meta_integration, plots_dir) {
     # Labeled version (with sample names)
     p_labeled <- ggplot2::ggplot(factors, base_aes) +
         ggplot2::geom_point(size = 3, alpha = 0.7) +
-        ggplot2::stat_ellipse(level = 0.95) +
+        ggplot2::stat_ellipse(ggplot2::aes(group = cluster), level = 0.95) +
         base_labs +
         ggplot2::theme_minimal()
 

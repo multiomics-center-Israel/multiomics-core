@@ -1325,6 +1325,18 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # Sort by combined p-value
     meta_results <- meta_results[order(meta_results$combined_pval), ]
 
+    # Attach readable GO term names (GO ID -> name) from the per-omics tables,
+    # so the heatmap and meta CSV can show labels rather than bare GO IDs.
+    name_lookup <- do.call(rbind, lapply(pathway_tables, function(df) {
+        if (all(c("pathway", "pathway_name") %in% names(df)))
+            unique(df[, c("pathway", "pathway_name")]) else NULL
+    }))
+    if (!is.null(name_lookup)) {
+        name_lookup <- name_lookup[!duplicated(name_lookup$pathway), , drop = FALSE]
+        meta_results$pathway_name <- name_lookup$pathway_name[
+            match(meta_results$pathway, name_lookup$pathway)]
+    }
+
     # Generate plots
     plots <- list()
     if (!is.null(out_dir) && nrow(meta_results) > 0) {
@@ -1503,11 +1515,14 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
-    # Truncate long pathway names
-    pathway_labels <- top_pathways$pathway
-    pathway_labels <- ifelse(nchar(pathway_labels) > 50,
-                             paste0(substr(pathway_labels, 1, 47), "..."),
-                             pathway_labels)
+    # Row labels: readable GO term name + GO ID (fall back to ID when name missing).
+    # Appending the ID also guarantees unique rownames for pheatmap.
+    go_id   <- top_pathways$pathway
+    go_name <- if ("pathway_name" %in% names(top_pathways)) top_pathways$pathway_name else NA_character_
+    missing <- is.na(go_name) | !nzchar(go_name)
+    go_name[missing] <- go_id[missing]
+    go_name <- ifelse(nchar(go_name) > 50, paste0(substr(go_name, 1, 47), "..."), go_name)
+    pathway_labels <- paste0(go_name, " (", go_id, ")")
     rownames(pval_matrix) <- pathway_labels
 
     # Transform to -log10(p)
@@ -1734,6 +1749,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
                 org_db = org_db,
+                config = config,
                 out_dir = diablo_dir,
                 top_n = top_n
             ),
@@ -1757,6 +1773,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
                 org_db = org_db,
+                config = config,
                 out_dir = mofa_dir,
                 top_n = top_n
             ),
@@ -1775,7 +1792,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 #' Run enrichment on DIABLO top loadings per component
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
-                                            out_dir, top_n = 50) {
+                                            config = NULL, out_dir, top_n = 50) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -1827,7 +1844,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -1878,7 +1896,7 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 #' Run enrichment on MOFA2 top weights per factor
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
-                                         out_dir, top_n = 50) {
+                                         config = NULL, out_dir, top_n = 50) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -1929,7 +1947,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -2041,12 +2060,17 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
 #' Handles GENE_N synthetic IDs from the harmonized MAE by translating
 #' them to WBGene IDs via the gene_protein_mapping table.
 enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
-                                 organism, kegg_org, org_db) {
+                                organism, kegg_org, org_db, config = NULL) {
 
-    if (is.null(kegg_org) || is.null(org_db)) return(NULL)
-
-    # Resolve IDs using the actual omics type
+    # Native namespace (EHI_ / XP_) — needed for both KEGG and GMT paths.
     resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res, omics_type)
+
+    # Non-model organism (no KEGG/OrgDb): fall back to the omic's custom GO GMT,
+    # mirroring run_multi_ora_gmt(). Otherwise keep the existing KEGG ORA.
+    if (is.null(kegg_org) || is.null(org_db)) {
+        return(enrich_feature_list_gmt(resolved_ids, omics_type,
+                                       harmonization_res, config))
+    }
 
     # Map ALL features to ENTREZ (needed for both query and universe)
     # Then filter to only the query features for the enrichment test
@@ -2132,6 +2156,56 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
     result <- result[order(result$pvalue), ]
     message("    Found ", nrow(result), " enriched KEGG pathways")
     result
+}
+
+
+#' GMT-based ORA over a loadings feature list (non-model fallback)
+#'
+#' Runs GO ORA on a set of top-loading features using the omic's custom GMT,
+#' for organisms without a KEGG organism / OrgDb. Mirrors run_multi_ora_gmt().
+#'
+#' @param resolved_ids Native-namespace feature ids (EHI_/XP_) of top loadings.
+#' @param omics_type One of "transcriptomics"/"proteomics".
+#' @param harmonization_res Harmonization result (for the universe).
+#' @param config Full pipeline config (for the per-omic gmt_file).
+#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, setSize) or NULL.
+enrich_feature_list_gmt <- function(resolved_ids, omics_type,
+                                    harmonization_res, config) {
+    if (is.null(config)) return(NULL)
+    cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")[[omics_type]]
+    if (is.null(cfg_key)) return(NULL)
+    gmt_path <- config$modes[[cfg_key]]$pathway$gmt_file
+    if (is.null(gmt_path) || !nzchar(gmt_path)) return(NULL)
+    gmt_abs <- resolve_raw_path(config, gmt_path)
+    if (!file.exists(gmt_abs)) return(NULL)
+    gs <- gmt_to_term2gene(gmt_abs)
+    if (is.null(gs) || nrow(gs$t2g) == 0) return(NULL)
+
+    pre_data <- harmonization_res$inputs[[omics_type]]
+    universe <- NULL
+    if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
+        universe <- resolve_gene_n_ids(rownames(pre_data$expr_work),
+                                       harmonization_res, omics_type)
+    }
+
+    ora <- run_multi_ora_enricher(
+        sig_genes = unique(resolved_ids),
+        universe  = universe,
+        term2gene = gs$t2g,
+        term2name = gs$t2n,
+        label     = paste0(omics_type, " loadings")
+    )
+    if (is.null(ora) || nrow(ora) == 0) return(NULL)
+
+    data.frame(
+        pathway   = ora$pathway,
+        ID        = ora$ID,
+        pvalue    = ora$pvalue,
+        padj      = ora$padj,
+        GeneRatio = ora$GeneRatio,
+        setSize   = ora$Count,
+        stringsAsFactors = FALSE
+    )
 }
 
 

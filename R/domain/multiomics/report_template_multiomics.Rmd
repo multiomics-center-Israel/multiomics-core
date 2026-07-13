@@ -191,6 +191,31 @@ if (file.exists(mapping_file)) {
         error = function(e) NULL
     )
 }
+
+# Join descriptions onto the mapping table (order-preserving, appends columns)
+if (!is.null(gene_protein_mapping)) {
+    rna_annot_file <- file.path(cfg$project$dir, cfg$paths$raw,
+        "Serge_Ankri_June2026/RNAseq/ehi_gene_annotation.csv")
+    if (file.exists(rna_annot_file)) {
+        ra <- tryCatch(read.csv(rna_annot_file, stringsAsFactors = FALSE),
+                       error = function(e) NULL)
+        if (!is.null(ra) && all(c("gene_id", "gene_description") %in% colnames(ra))) {
+            idx <- match(gene_protein_mapping$gene_id, ra$gene_id)
+            gene_protein_mapping$gene_name        <- ra$gene_name[idx]
+            gene_protein_mapping$gene_description <- ra$gene_description[idx]
+        }
+    }
+    prot_annot_file <- file.path(cfg$project$dir, cfg$paths$raw,
+                                 cfg$modes$proteomics$files$protein)
+    if (file.exists(prot_annot_file)) {
+        pa <- tryCatch(read.delim(prot_annot_file, stringsAsFactors = FALSE,
+                                  check.names = FALSE), error = function(e) NULL)
+        if (!is.null(pa) && "Protein.Group" %in% colnames(pa) && "Genes" %in% colnames(pa)) {
+            idx <- match(gene_protein_mapping$protein_id, pa$Protein.Group)
+            gene_protein_mapping$protein_symbol <- pa$Genes[idx]
+        }
+    }
+}
 ```
 
 ```{r force-dependencies, include=FALSE}
@@ -263,6 +288,86 @@ kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
 
 ```{r rna-prot-note, eval=has_transcriptomics && !has_rna_prot, results='asis'}
 cat("*No RNA-protein correlation results found. This analysis requires both transcriptomics and proteomics data.*\n")
+```
+
+## RNA vs Protein log2FC
+
+```{r rna-prot-log2fc, eval=has_transcriptomics}
+# RNA-vs-protein differential concordance from the per-contrast DE tables that
+# feed the volcano plots. RNA FeatureID = EHI_ gene_id; protein FeatureID = XP_
+# Protein.Group; the EHI_<->XP_ bridge is gene_protein_mapping.csv. Contrasts are
+# matched by identical file name so RNA and protein compare the same condition.
+results_parent <- dirname(run_dir)
+rna_enr  <- file.path(results_parent, "rna", "Enrichment")
+prot_enr <- file.path(results_parent, "proteomics", "Enrichment")
+
+rp_pairs <- NULL
+if (!is.null(gene_protein_mapping) &&
+    all(c("gene_id", "protein_id") %in% colnames(gene_protein_mapping)) &&
+    dir.exists(rna_enr) && dir.exists(prot_enr)) {
+
+    rna_v  <- list.files(rna_enr,  "^pathway_volcano_data_.*\\.csv$")
+    prot_v <- list.files(prot_enr, "^pathway_volcano_data_.*\\.csv$")
+    shared <- intersect(rna_v, prot_v)
+    map_sub <- unique(gene_protein_mapping[, c("gene_id", "protein_id")])
+
+    rp_pairs <- do.call(rbind, lapply(shared, function(bn) {
+        rna_df  <- tryCatch(read.csv(file.path(rna_enr, bn),  stringsAsFactors = FALSE), error = function(e) NULL)
+        prot_df <- tryCatch(read.csv(file.path(prot_enr, bn), stringsAsFactors = FALSE), error = function(e) NULL)
+        if (is.null(rna_df) || is.null(prot_df)) return(NULL)
+        if (!all(c("FeatureID", "log2FC") %in% colnames(rna_df)))  return(NULL)
+        if (!all(c("FeatureID", "log2FC") %in% colnames(prot_df))) return(NULL)
+
+        m <- merge(map_sub, rna_df[, c("FeatureID", "log2FC")],
+                   by.x = "gene_id", by.y = "FeatureID")
+        names(m)[names(m) == "log2FC"] <- "rna_log2FC"
+        m <- merge(m, prot_df[, c("FeatureID", "log2FC")],
+                   by.x = "protein_id", by.y = "FeatureID")
+        names(m)[names(m) == "log2FC"] <- "protein_log2FC"
+        if (nrow(m) == 0) return(NULL)
+
+        m$te_log2FC <- m$protein_log2FC - m$rna_log2FC
+        m$contrast  <- gsub("_", " ", sub("\\.csv$", "", sub("^pathway_volcano_data_", "", bn)))
+        m[is.finite(m$rna_log2FC) & is.finite(m$protein_log2FC), ]
+    }))
+}
+
+if (is.null(rp_pairs) || nrow(rp_pairs) < 3) {
+    cat("*No matched RNA/protein log2FC pairs were found for this run.*\n")
+} else {
+    cor_labs <- sapply(split(rp_pairs, rp_pairs$contrast), function(d) {
+        rp <- cor(d$rna_log2FC, d$protein_log2FC, method = "pearson")
+        rs <- cor(d$rna_log2FC, d$protein_log2FC, method = "spearman")
+        sprintf("Pearson r = %.3f | Spearman rho = %.3f | n = %d", rp, rs, nrow(d))
+    })
+    rp_pairs$facet <- paste0(rp_pairs$contrast, "\n(", cor_labs[rp_pairs$contrast], ")")
+
+    p <- ggplot2::ggplot(rp_pairs, ggplot2::aes(x = rna_log2FC, y = protein_log2FC)) +
+        ggplot2::geom_hline(yintercept = 0, color = "gray90") +
+        ggplot2::geom_vline(xintercept = 0, color = "gray90") +
+        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey60") +
+        ggplot2::geom_point(alpha = 0.5, size = 1.4, color = "steelblue") +
+        ggplot2::geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.5) +
+        ggplot2::facet_wrap(~ facet, scales = "free") +
+        ggplot2::theme_minimal() +
+        ggplot2::labs(
+            title = "RNA vs Protein Differential Expression (log2FC)",
+            x = "RNA log2 fold change",
+            y = "Protein log2 fold change"
+        )
+    print(p)
+
+    tbl <- rp_pairs[, c("contrast", "gene_id", "protein_id",
+                        "rna_log2FC", "protein_log2FC", "te_log2FC")]
+    tbl <- tbl[order(-(abs(tbl$rna_log2FC) + abs(tbl$protein_log2FC))), ]
+    rp_dt <- make_dt(tbl, caption = "RNA vs protein log2FC per mapped gene-protein pair")
+}
+# Widgets only auto-render as a top-level expression, not from inside if/for.
+if (exists("rp_dt")) rp_dt
+```
+
+```{r rna-prot-log2fc-legend, eval=has_transcriptomics, results='asis'}
+figure_legend("RNA-seq log2 fold change (x) versus proteomics log2 fold change (y) for each mapped gene-protein pair, one panel per contrast. Solid line is an OLS fit; the dashed diagonal marks equal RNA and protein change. Sources: RNA DESeq2 and proteomics limma per-contrast fold changes (pathway_volcano_data_<contrast>.csv in rna/Enrichment and proteomics/Enrichment); pairing via gene_protein_mapping.csv (gene_id EHI_ to protein_id XP_). Pearson and Spearman coefficients and n shown per panel. Single contrast, hypothesis-generating.")
 ```
 
 ## Concordance Distribution
@@ -397,6 +502,32 @@ for (gp in gsea_pngs) {
 }
 ```
 
+```{r multigsea-table, eval=has_multigsea}
+# GSEA results as a table: GO term name + GO ID + per-omic -log10(padj) scores.
+# Source = pairwise scatter CSVs written by 07b_multigsea_plots.R (cols term, label, x, y).
+gsea_csvs <- list.files(multigsea_dir, pattern = "^multigsea_.*_vs_.*\\.csv$", full.names = TRUE)
+gsea_tables <- list()
+for (gc in gsea_csvs) {
+    pair_name <- gsub("^multigsea_|\\.csv$", "", basename(gc))
+    parts <- strsplit(pair_name, "_vs_")[[1]]
+    om1 <- tools::toTitleCase(parts[1]); om2 <- tools::toTitleCase(parts[2])
+    gsea_df <- read.csv(gc, stringsAsFactors = FALSE)
+    if (nrow(gsea_df) == 0) next
+    if (all(c("x", "y") %in% names(gsea_df)))
+        gsea_df <- gsea_df[order(-(gsea_df$x + gsea_df$y)), ]
+    display_cols <- intersect(c("label", "term", "x", "y"), colnames(gsea_df))
+    tbl <- gsea_df[, display_cols, drop = FALSE]
+    col_labels <- c(label = "GO Term", term = "GO ID",
+                    x = paste0(om1, " -log10(padj)"), y = paste0(om2, " -log10(padj)"))
+    colnames(tbl) <- col_labels[display_cols]
+    gsea_tables[[length(gsea_tables) + 1]] <- make_dt(head(tbl, 200),
+        caption = paste0("MultiGSEA enriched GO terms - ", gsub("_", " ", pair_name)),
+        pageLength = 15)
+}
+# tagList renders every collected widget (a bare for-loop print() emits nothing).
+htmltools::tagList(gsea_tables)
+```
+
 ## Per-Contrast MultiGSEA {.tabset .unnumbered}
 
 ```{r multigsea-per-contrast, eval=has_multigsea, results='asis'}
@@ -449,54 +580,6 @@ if (file.exists(ora_issues_file)) {
 } else {
     cat("*No Multi-ORA results found.*\n")
 }
-```
-
-### All Contrasts (Pooled) {.unnumbered}
-
-```{r multi-ora-plots, eval=has_multi_ora, results='asis'}
-# Pooled barplot
-pooled_bp <- file.path(multi_ora_dir, "multi_ora_pooled_barplot.png")
-if (file.exists(pooled_bp)) {
-    cat("\n#### Pooled Multi-ORA {.unnumbered}\n\n")
-    cat(sprintf("![Pooled Multi-ORA](%s)\n\n", pooled_bp))
-    figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation in KEGG pathways using Fisher's exact test. Red dashed line marks padj = 0.05.")
-}
-
-# Dot plot
-dotplot <- file.path(multi_ora_dir, "multi_ora_dotplot.png")
-if (file.exists(dotplot)) {
-    cat("\n#### Pooled vs Per-Omics Comparison {.unnumbered}\n\n")
-    cat(sprintf("![Multi-ORA Dot Plot](%s)\n\n", dotplot))
-    figure_legend("Multi-ORA dot plot comparing per-omics and pooled enrichment results. Each dot represents a pathway; x-axis is -log10(padj), dot size reflects gene count, and color indicates the source (pooled or individual omics). Red dashed line marks padj = 0.05.")
-}
-
-# Omics support barplot
-support_bp <- file.path(multi_ora_dir, "multi_ora_support_barplot.png")
-if (file.exists(support_bp)) {
-    cat("\n#### Omics Support per Pathway {.unnumbered}\n\n")
-    cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
-    figure_legend("Multi-ORA omics support barplot. Bar length shows pooled enrichment significance (-log10 p-value). Color indicates the number of individual omics layers that independently support each pathway (padj < 0.05).")
-}
-
-# Summary table
-multi_ora_csv <- file.path(multi_ora_dir, "multi_ora_results.csv")
-if (file.exists(multi_ora_csv)) {
-    cat("\n#### Top Multi-ORA Pathways {.unnumbered}\n\n")
-    mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
-    mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
-    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(mora_show))
-    mora_show <- mora_show[, display_cols, drop = FALSE]
-    col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
-                    metabolomics_padj = "Metab padj", n_omics_support = "# Omics Supporting")
-    colnames(mora_show) <- col_labels[display_cols]
-    # Format numeric columns (signif handles NA gracefully)
-    for (nc in intersect(c("Pooled padj", "Metab padj"), colnames(mora_show))) {
-        mora_show[[nc]] <- signif(mora_show[[nc]], 3)
-    }
-    knitr::kable(mora_show, row.names = FALSE, caption = "Top multi-ORA enriched KEGG pathways (gene-based + metabolite compound ORA)")
-}
-
-render_commentary("multi_ora")
 ```
 
 ### Per-Contrast Multi-ORA {.tabset .unnumbered}
@@ -878,69 +961,6 @@ render_commentary("gene_protein_mapping")
 
 ---
 
-# Sample Concordance Across Omics
-
-```{r mantel-setup, include=FALSE}
-foundational_dir <- file.path(run_dir, "foundational", "foundational")
-mantel_heatmap <- file.path(foundational_dir, "plots", "mantel_test_heatmap.png")
-mantel_csv <- file.path(foundational_dir, "tables", "mantel_test_results.csv")
-clustering_consistency_plot <- file.path(foundational_dir, "plots", "sample_clustering_consistency.png")
-condition_separation_plot <- file.path(foundational_dir, "plots", "sample_condition_separation.png")
-has_mantel <- file.exists(mantel_heatmap)
-has_clustering <- file.exists(clustering_consistency_plot)
-has_separation <- file.exists(condition_separation_plot)
-
-# Find per-omics correlation heatmaps
-mantel_corr_heatmaps <- list.files(
-    file.path(foundational_dir, "plots"),
-    pattern = "^mantel_corr_heatmap_.*\\.png$",
-    full.names = TRUE
-)
-has_corr_heatmaps <- length(mantel_corr_heatmaps) > 0
-```
-
-```{r clustering-consistency, eval=FALSE, results='asis'}
-# Removed: Clustering Consistency and Condition Separation plots
-# were not informative for this analysis
-```
-
-```{r group-dist-setup, include=FALSE}
-group_dist_scatter <- file.path(foundational_dir, "plots", "sample_within_vs_cross_group_distance.png")
-group_dist_boxplot <- file.path(foundational_dir, "plots", "sample_group_distance_boxplot.png")
-has_group_dist <- file.exists(group_dist_scatter) || file.exists(group_dist_boxplot)
-```
-
-```{r group-dist-section, eval=has_group_dist, results='asis'}
-cat("## Per-Sample Within vs Cross-Group Distance\n\n")
-cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. Samples below the diagonal are closer to their own group; samples above the diagonal are ambiguous or misplaced.\n\n")
-```
-
-```{r group-dist-scatter, eval=file.exists(group_dist_scatter), results='asis'}
-knitr::include_graphics(group_dist_scatter)
-figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points below the diagonal line indicate samples that are closer to their own condition group. Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
-render_commentary("sample_group_distances")
-```
-
-```{r group-dist-boxplot, eval=file.exists(group_dist_boxplot), results='asis'}
-knitr::include_graphics(group_dist_boxplot)
-figure_legend("Distribution of within-group and cross-group mean distances across all samples per omics layer. Clear separation between the two distributions indicates strong condition effect in that omics layer.")
-```
-
-```{r group-dist-table, eval=has_group_dist}
-group_dist_csv <- file.path(foundational_dir, "tables", "sample_within_vs_cross_group_distances.csv")
-if (file.exists(group_dist_csv)) {
-    df <- read.csv(group_dist_csv, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        df$within_group_dist <- round(df$within_group_dist, 2)
-        df$cross_group_dist <- round(df$cross_group_dist, 2)
-        df$dist_ratio <- round(df$dist_ratio, 3)
-        make_dt(df, caption = "Per-sample within-group vs cross-group distances")
-    }
-}
-```
-
----
-
 # Integration Results {.tabset}
 
 ```{r integration-note, eval=!has_integration, results='asis'}
@@ -1028,27 +1048,6 @@ if (file.exists(hm) && has_latent_hm) {
     cat(sprintf("![DIABLO Feature Heatmap](%s)\n\n", hm))
     figure_legend("Heatmap of top DIABLO features across omics layers. Values are z-scored per feature. Rows are clustered by Euclidean distance. The color bar on the left indicates the omics source layer.")
     render_commentary("diablo_feature_heatmap")
-}
-```
-
-```{r diablo-loadings-log2fc, eval=has_diablo, results='asis'}
-lfc_plots <- list.files(diablo_dir, pattern = "diablo_loadings_log2fc_.*\\.png$", full.names = TRUE)
-if (length(lfc_plots) > 0) {
-    cat("\n### Loadings Colored by log2FC {.unnumbered}\n\n")
-    # Deduplicate: normalize contrast labels and keep only unique contrasts
-    seen_contrasts <- character(0)
-    for (lp in lfc_plots) {
-        contrast_label <- gsub("diablo_loadings_log2fc_|\\.png$", "", basename(lp))
-        contrast_label <- gsub("\\.", " ", contrast_label)
-        # Normalize for dedup: collapse whitespace, lowercase comparison key
-        dedup_key <- tolower(gsub("\\s+", "", contrast_label))
-        if (dedup_key %in% seen_contrasts) next
-        seen_contrasts <- c(seen_contrasts, dedup_key)
-        cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
-        cat(sprintf("![DIABLO Loadings log2FC - %s](%s)\n\n", contrast_label, lp))
-    }
-    figure_legend("DIABLO loadings (Component 1 vs Component 2) colored by log2 fold-change from differential expression. Red indicates upregulation, blue indicates downregulation. Faceted by omics layer; top features are labeled.")
-    render_commentary("diablo_loadings_log2fc")
 }
 ```
 
@@ -1199,25 +1198,6 @@ if (length(main_files) > 0) {
 }
 ```
 
-```{r mofa-loadings-log2fc, eval=has_mofa, results='asis'}
-mofa_lfc_plots <- list.files(mofa_dir, pattern = "mofa_loadings_log2fc_.*\\.png$", full.names = TRUE)
-if (length(mofa_lfc_plots) > 0) {
-    cat("\n### Weights Colored by log2FC {.unnumbered}\n\n")
-    seen_contrasts <- character(0)
-    for (lp in mofa_lfc_plots) {
-        contrast_label <- gsub("mofa_loadings_log2fc_|\\.png$", "", basename(lp))
-        contrast_label <- gsub("\\.", " ", contrast_label)
-        dedup_key <- tolower(gsub("\\s+", "", contrast_label))
-        if (dedup_key %in% seen_contrasts) next
-        seen_contrasts <- c(seen_contrasts, dedup_key)
-        cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
-        cat(sprintf("![MOFA2 Weights log2FC - %s](%s)\n\n", contrast_label, lp))
-    }
-    figure_legend("MOFA2 weights (Factor 1 vs Factor 2) colored by log2 fold-change from differential expression. Red indicates upregulation, blue indicates downregulation. Faceted by omics view; top features are labeled.")
-    render_commentary("mofa_loadings_log2fc")
-}
-```
-
 ## Loadings-Based Pathway Enrichment {.tabset}
 
 ```{r loadings-enrich-note, eval=!has_loadings_enrich, results='asis'}
@@ -1242,7 +1222,7 @@ if (length(diablo_le_plots) > 0) {
         ), quiet = TRUE))
         cat("\n\n")
     }
-    figure_legend("KEGG pathway enrichment of top DIABLO loading features per component and omics layer. For gene-based omics (transcriptomics, proteomics), standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.")
+    figure_legend("GO/KEGG pathway enrichment of top DIABLO loading features per component and omics layer. For gene-based omics (transcriptomics, proteomics), standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.")
 } else if (dir.exists(diablo_le_dir)) {
     cat("\n### DIABLO Loadings Enrichment\n\n")
     cat("*No enriched pathways found for DIABLO loadings. This can occur when top features do not map to KEGG pathways or when enrichment p-values do not meet the significance threshold.*\n\n")
@@ -1277,7 +1257,7 @@ if (length(mofa_le_plots) > 0) {
         ), quiet = TRUE))
         cat("\n\n")
     }
-    figure_legend("KEGG pathway enrichment of top MOFA2 weight features per factor and omics view. For gene-based omics, standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.")
+    figure_legend("GO/KEGG pathway enrichment of top MOFA2 weight features per factor and omics view. For gene-based omics, standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.")
 } else if (dir.exists(mofa_le_dir)) {
     cat("\n### MOFA2 Weights Enrichment\n\n")
     cat("*No enriched pathways found for MOFA2 weights. This can occur when top features do not map to KEGG pathways or when enrichment p-values do not meet the significance threshold.*\n\n")
@@ -1323,7 +1303,7 @@ if (has_meta_pca || has_meta_pca_labeled) {
             '```{r meta-pca-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             meta_pca_plot
         ), quiet = TRUE))
-        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, colored by consensus cluster assignment. Ellipses show 95% confidence regions per cluster.")
+        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, colored by original group, shaped by consensus cluster assignment. Ellipses show 95% confidence regions per cluster.")
     }
 
     if (has_meta_pca_labeled) {
@@ -1382,329 +1362,6 @@ if (file.exists(robust_csv)) {
     if (nrow(robust_df) > 0) {
         make_dt(robust_df, caption = "Robust Features Across Integration Methods", pageLength = 15)
     }
-}
-```
-
----
-
-# Mechanistic & Causal Inference {.tabset}
-
-```{r mech-setup, include=FALSE}
-mechanistic_dir <- file.path(run_dir, "mechanistic", "mechanistic")
-has_mechanistic <- dir.exists(mechanistic_dir) &&
-    (length(list.files(file.path(mechanistic_dir, "plots"), "\\.png$")) > 0 ||
-     length(list.files(file.path(mechanistic_dir, "tables"), "\\.csv$")) > 0)
-```
-
-```{r mech-note, eval=!has_mechanistic, results='asis'}
-cat("*Mechanistic inference was not run or produced no results. Enable in config: `mechanistic.run_mechanistic: true`*\n")
-```
-
-## Protein-Metabolite Correlations
-
-```{r mech-prot-metab-summary, eval=has_mechanistic, results='asis'}
-pm_csv <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant_pairs.csv")
-if (file.exists(pm_csv)) {
-    pm_df <- read.csv(pm_csv, stringsAsFactors = FALSE)
-    n_prot <- length(unique(pm_df$protein))
-    n_metab <- length(unique(pm_df$metabolite))
-    cat(sprintf("\n**Features shown:** %d proteins x %d metabolites. ", n_prot, n_metab))
-    cat("Feature selection: differentially expressed features (pass\\_any filter from DE analysis) are used when available; otherwise the top variable features by variance are selected. ")
-    cat(sprintf("Up to 100 proteins and 50 metabolites are included.\n\n"))
-    render_commentary("protein_metabolite_correlations")
-} else {
-    cat("*No significant protein-metabolite pairs available. Requires both proteomics and metabolomics data with sufficient overlapping samples.*\n\n")
-}
-```
-
-```{r mech-prot-metab-table, eval=has_mechanistic}
-pm_pairs <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant_pairs.csv")
-if (file.exists(pm_pairs)) {
-    df <- read.csv(pm_pairs, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        display_cols <- c("protein", "gene_symbol", "metabolite", "correlation",
-                          "padj", "ec_number", "enzyme_metabolite_link",
-                          "is_transcription_factor")
-        display_cols <- intersect(display_cols, colnames(df))
-        df_display <- df[, display_cols, drop = FALSE]
-        make_dt(df_display,
-                caption = "Significant protein-metabolite pairs (padj < 0.2, |r| > 0.7). EC = enzyme commission number; enzyme_metabolite_link = known KEGG enzyme-substrate/product relationship; is_transcription_factor = dorothea TF database.")
-    }
-} else {
-    cat("*No significant protein-metabolite pairs found at the current thresholds.*\n\n")
-}
-```
-
-## Mediation: RNA -> Protein -> Phenotype
-
-```{r mech-mediation-prop, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_mediation_proportion_barplot.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-med-prop-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Proportion of the RNA effect on phenotype that is mediated through protein levels. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating — the sequential ignorability assumption (no unmeasured confounders) is untestable.")
-    render_commentary("mediation_proportion")
-} else {
-    cat("*RNA -> Protein -> Phenotype mediation not available. Requires both transcriptomics and proteomics data with >= 10 common samples and the `mediation` R package.*\n\n")
-}
-```
-
-```{r mech-mediation-decomp, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_mediation_effect_decomposition.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-med-decomp-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Decomposition of total effect into ACME (Average Causal Mediation Effect, the indirect/mediated path) and ADE (Average Direct Effect, not through protein).")
-}
-```
-
-```{r mech-mediation-table, eval=has_mechanistic}
-med_csv <- file.path(mechanistic_dir, "tables", "mech_mediation_analysis_results.csv")
-if (file.exists(med_csv)) {
-    df <- read.csv(med_csv, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        if ("rho_at_acme_zero" %in% colnames(df)) {
-            df$sensitivity <- ifelse(
-                is.na(df$rho_at_acme_zero), "N/A",
-                ifelse(is.infinite(df$rho_at_acme_zero), "Robust (ACME never zero)",
-                ifelse(abs(df$rho_at_acme_zero) > 0.3, "Robust",
-                ifelse(abs(df$rho_at_acme_zero) > 0.1, "Moderate", "Fragile")))
-            )
-        }
-        make_dt(df, caption = "Mediation analysis: RNA -> Protein -> Phenotype")
-    }
-}
-```
-
-```{r mech-mediation-sens-legend, eval=has_mechanistic, results='asis'}
-med_csv <- file.path(mechanistic_dir, "tables", "mech_mediation_analysis_results.csv")
-if (file.exists(med_csv)) {
-    df <- read.csv(med_csv, stringsAsFactors = FALSE)
-    if ("rho_at_acme_zero" %in% colnames(df)) {
-        cat("\n**Sensitivity interpretation (rho\\_at\\_acme\\_zero):** The rho value at which the mediation effect (ACME) would become zero under unmeasured confounding. |rho| > 0.3 = robust; |rho| < 0.1 = fragile (easily explained by confounders).\n\n")
-    }
-}
-```
-
-## Protein -> Metabolite -> Phenotype Mediation
-
-```{r mech-prot-metab-med-plot, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_prot_metab_mediation_barplot.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-pm-med-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Protein -> Metabolite -> Phenotype mediation. Tests whether each protein's effect on the phenotype is mediated through its best-correlated metabolite. Does not require RNA-seq — uses proteomics + metabolomics directly. Red dashed line marks 10% mediation threshold. Results are hypothesis-generating.")
-    render_commentary("prot_metab_mediation")
-} else {
-    cat("*No significant Protein -> Metabolite -> Phenotype mediation results. This can occur when protein-metabolite correlations do not significantly mediate the phenotype association.*\n\n")
-}
-```
-
-```{r mech-prot-metab-med-table, eval=has_mechanistic}
-pm_csv <- file.path(mechanistic_dir, "tables", "mech_prot_metab_mediation_results.csv")
-if (file.exists(pm_csv)) {
-    df <- read.csv(pm_csv, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        if ("rho_at_acme_zero" %in% colnames(df)) {
-            df$sensitivity <- ifelse(
-                is.na(df$rho_at_acme_zero), "N/A",
-                ifelse(is.infinite(df$rho_at_acme_zero), "Robust (ACME never zero)",
-                ifelse(abs(df$rho_at_acme_zero) > 0.3, "Robust",
-                ifelse(abs(df$rho_at_acme_zero) > 0.1, "Moderate", "Fragile")))
-            )
-        }
-        make_dt(df, caption = "Protein -> Metabolite -> Phenotype mediation")
-    }
-}
-```
-
-## Multi-Layer Mediation: Protein -> Metabolite -> Phenotype
-
-```{r mech-multilayer-plot, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_multilayer_mediation_barplot.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-ml-med-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Multi-layer mediation testing whether protein effects on phenotype are mediated through metabolite levels.")
-    render_commentary("multilayer_mediation")
-} else {
-    cat("*Multi-layer mediation not available. Requires transcriptomics, proteomics, and metabolomics data with overlapping features.*\n\n")
-}
-```
-
-```{r mech-multilayer-table, eval=has_mechanistic}
-ml_csv <- file.path(mechanistic_dir, "tables", "mech_multilayer_mediation_results.csv")
-if (file.exists(ml_csv)) {
-    df <- read.csv(ml_csv, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        make_dt(df, caption = "Multi-layer mediation: Protein -> Metabolite -> Phenotype")
-    }
-}
-```
-
-## COSMOS Causal Network
-
-```{r cosmos-network, eval=has_mechanistic, results='asis'}
-cosmos_plot <- file.path(mechanistic_dir, "plots", "cosmos_causal_network.png")
-if (file.exists(cosmos_plot)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r cosmos-net-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        cosmos_plot
-    ), quiet = TRUE))
-    figure_legend("COSMOS causal network connecting deregulated transcription factors to metabolites through known signaling and metabolic interactions.")
-    render_commentary("cosmos_network")
-} else {
-    organism <- cfg$global$organism %||% "unknown"
-    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
-        cat("*COSMOS causal network was not generated. Requires TF activity estimation plus cosmosR, CARNIVAL, and decoupleR packages.*\n\n")
-    } else {
-        cat(sprintf("*COSMOS causal network is not available for %s. COSMOS requires human or mouse prior knowledge networks.*\n\n", organism))
-    }
-}
-```
-
-```{r cosmos-tables, eval=has_mechanistic}
-cosmos_edges <- file.path(mechanistic_dir, "tables", "cosmos_network_edges.csv")
-cosmos_nodes <- file.path(mechanistic_dir, "tables", "cosmos_network_nodes.csv")
-
-if (file.exists(cosmos_nodes)) {
-    df <- read.csv(cosmos_nodes, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        make_dt(df, caption = "COSMOS network nodes")
-    }
-}
-
-if (file.exists(cosmos_edges)) {
-    df <- read.csv(cosmos_edges, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        make_dt(df, caption = "COSMOS network edges")
-    }
-}
-```
-
-## TF Activity
-
-```{r mech-tf-heatmap, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_tf_activity_heatmap.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-tf-hm-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Transcription factor activity inferred from target gene expression using dorothea/decoupleR regulons.")
-    render_commentary("tf_activity")
-} else {
-    organism <- cfg$global$organism %||% "unknown"
-    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
-        cat("*TF activity inference not available. Requires transcriptomics expression data and the decoupleR/dorothea package.*\n\n")
-    } else {
-        cat(sprintf("*TF activity inference is not available for %s. Dorothea TF regulons only cover human and mouse.*\n\n", organism))
-    }
-}
-```
-
-```{r mech-tf-barplot, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_tf_activity_barplot.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-tf-bp-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Top differentially active transcription factors between conditions.")
-}
-```
-
-## Pathway Activity (PROGENy)
-
-```{r mech-pathway-heatmap, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_pathway_activity_heatmap.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-pa-hm-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("PROGENy pathway activity inferred from proteomics data using decoupleR weighted mean.")
-    render_commentary("pathway_activity")
-} else {
-    organism <- cfg$global$organism %||% "unknown"
-    if (tolower(organism) %in% c("human", "homo_sapiens", "mouse", "mus_musculus")) {
-        cat("*Pathway activity estimation via PROGENy was not available. The decoupleR package may not be installed.*\n\n")
-    } else {
-        cat(sprintf("*PROGENy pathway activity is not available for %s. PROGENy only supports human and mouse.*\n\n", organism))
-    }
-}
-```
-
-```{r mech-pathway-barplot, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_pathway_activity_barplot.png")
-if (file.exists(p)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-pa-bp-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Pathway activity differences between conditions.")
-}
-```
-
-```{r mech-pathway-table, eval=has_mechanistic}
-pa_csv <- file.path(mechanistic_dir, "tables", "mech_pathway_activity_associations.csv")
-if (file.exists(pa_csv)) {
-    df <- read.csv(pa_csv, stringsAsFactors = FALSE)
-    if (nrow(df) > 0) {
-        make_dt(df, caption = "Pathway activity associations with condition")
-    }
-}
-```
-
-## Regulatory / Co-expression Network {.tabset}
-
-```{r mech-network, eval=has_mechanistic, results='asis'}
-p <- file.path(mechanistic_dir, "plots", "mech_regulatory_network.png")
-network_rds <- file.path(mechanistic_dir, "plots", "mech_regulatory_network_interactive.rds")
-
-p_gs <- file.path(mechanistic_dir, "plots", "mech_regulatory_network_genesymbol.png")
-
-if (file.exists(p)) {
-    cat("\n### Static (Feature ID) {.unnumbered}\n\n")
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-network-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-    figure_legend("Co-expression network inferred using GENIE3/ARACNe/correlation. Red nodes = hub regulators (high degree); blue nodes = non-hubs. Node size is proportional to degree (number of connections). Edges represent predicted co-regulatory relationships (association-based, not causal).")
-    render_commentary("regulatory_network")
-}
-
-if (file.exists(p_gs)) {
-    cat("\n### Static (Gene Symbol) {.unnumbered}\n\n")
-    cat(knitr::knit_child(text = sprintf(
-        '```{r mech-network-gs-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p_gs
-    ), quiet = TRUE))
-    figure_legend("Same network as above but with gene symbol labels where available. Hub nodes (red) and non-hub nodes (blue) are labeled with gene symbols for easier biological interpretation.")
-}
-
-if (file.exists(network_rds)) {
-    cat("\n### Interactive {.unnumbered}\n\n")
-    net_widget <- readRDS(network_rds)
-    cat(knitr::knit_child(text = c(
-        '```{r mech-network-interactive, echo=FALSE, fig.height=8}',
-        'net_widget',
-        '```'
-    ), envir = environment(), quiet = TRUE))
-    cat("\n\n")
-    figure_legend("Interactive network visualization. Hover over nodes to see feature name, gene symbol (if available), and degree. Drag nodes to rearrange. Scroll to zoom. Red = hub nodes, blue = non-hubs.")
-}
-
-if (!file.exists(p) && !file.exists(network_rds)) {
-    cat("*No regulatory network plot available.*\n")
 }
 ```
 
