@@ -105,7 +105,9 @@ plot_mummichog_bubble <- function(pathways, title, subtitle = NULL,
 #' @param pathways A data.frame of mummichog pathway results (see
 #'   `plot_mummichog_bubble()`).
 #' @return A data.frame with columns `Pathway`, `Overlap`, `Pathway size`,
-#'   `Enrichment ratio`, `p-value`, sorted by `p-value`; or `NULL` when empty.
+#'   `Enrichment ratio`, `p.value`, sorted by `p.value`; or `NULL` when empty.
+#'   The p-value column is named `p.value` (dot, not hyphen) so the report's
+#'   `make_dt()` formatter renders it in scientific notation rather than rounding.
 build_mummichog_pathway_table <- function(pathways) {
   if (is.null(pathways) || !is.data.frame(pathways) || nrow(pathways) == 0) {
     return(NULL)
@@ -128,9 +130,9 @@ build_mummichog_pathway_table <- function(pathways) {
     "Overlap"          = overlap,
     "Pathway size"     = pathway_size,
     "Enrichment ratio" = round(overlap / pathway_size, 3),
-    "p-value"          = pval
+    "p.value"          = pval
   )
-  out[order(out[["p-value"]]), , drop = FALSE]
+  out[order(out[["p.value"]]), , drop = FALSE]
 }
 
 #' Compose the mummichog report plot title and subtitle

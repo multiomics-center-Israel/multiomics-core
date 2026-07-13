@@ -55,8 +55,8 @@ test_that("build_mummichog_pathway_table sorts by p and adds enrichment ratio", 
   expect_s3_class(tb, "data.frame")
   expect_identical(colnames(tb),
                    c("Pathway", "Overlap", "Pathway size",
-                     "Enrichment ratio", "p-value"))
-  expect_equal(tb[["p-value"]], sort(pw[["p-value"]]))         # ascending by p
+                     "Enrichment ratio", "p.value"))
+  expect_equal(tb[["p.value"]], sort(pw[["p-value"]]))         # ascending by p
   expect_equal(tb[["Enrichment ratio"]][1], round(5 / 10, 3)) # smallest-p row first
   expect_equal(nrow(tb), nrow(pw))
 })
