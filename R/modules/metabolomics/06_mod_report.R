@@ -143,6 +143,19 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         mummi_table <- build_mummichog_pathway_table(mummichog_pathways)
     }
 
+    # Save standalone presentation exports (PNG + PDF plot, TSV + CSV table)
+    # alongside the other Diagnostic_plots, in addition to embedding them in the
+    # HTML. Reuses the objects already built above; the engine's mcg_* result
+    # files are untouched. Paths are returned so the format = "file" target
+    # tracks them.
+    mummi_contrast <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
+        names(de_res$de_tables)[1]
+    } else {
+        NULL
+    }
+    mummi_exports <- save_mummichog_exports(mummi_plot, mummi_table, out_dir,
+                                            contrast_label = mummi_contrast)
+
     render_params <- list(
 
         pre                = pre,
@@ -197,7 +210,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         })
     }
 
-    out_file
+    unique(c(out_file, mummi_exports))
 }
 
 

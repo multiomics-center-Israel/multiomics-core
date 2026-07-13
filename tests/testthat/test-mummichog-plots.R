@@ -96,3 +96,38 @@ test_that("mummichog_report_titles composes title/subtitle by model precedence",
   # no contrast -> NULL subtitle
   expect_null(mummichog_report_titles(cfg_builtin, list())$subtitle)
 })
+
+test_that("save_mummichog_exports writes the table as TSV + CSV", {
+  tmp <- withr::local_tempdir()
+  tb  <- build_mummichog_pathway_table(make_pw())
+
+  paths <- save_mummichog_exports(NULL, tb, tmp, contrast_label = "LL vs HL")
+
+  tsv <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_table_LL_vs_HL.tsv")
+  csv <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_table_LL_vs_HL.csv")
+  expect_setequal(paths, c(tsv, csv))
+  expect_true(file.exists(tsv))
+  expect_true(file.exists(csv))
+  # round-trips with the same rows
+  back <- readr::read_tsv(tsv, show_col_types = FALSE)
+  expect_equal(nrow(back), nrow(tb))
+})
+
+test_that("save_mummichog_exports writes the plot as PNG + PDF (when a device exists)", {
+  skip_if_not(isTRUE(capabilities("png")), "no PNG graphics device")
+  tmp <- withr::local_tempdir()
+  p   <- plot_mummichog_bubble(make_pw(), title = "T")
+
+  paths <- save_mummichog_exports(p, NULL, tmp, contrast_label = "LL_vs_HL")
+
+  png <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_bubble_LL_vs_HL.png")
+  pdf <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_bubble_LL_vs_HL.pdf")
+  expect_true(all(c(png, pdf) %in% paths))
+  expect_true(file.exists(png))
+  expect_true(file.exists(pdf))
+})
+
+test_that("save_mummichog_exports is a no-op when there is nothing to save", {
+  tmp <- withr::local_tempdir()
+  expect_length(save_mummichog_exports(NULL, NULL, tmp), 0)
+})
