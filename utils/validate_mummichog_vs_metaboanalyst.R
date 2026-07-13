@@ -27,8 +27,9 @@
 # ==== CONFIG (edit these, or override with same-named env vars) ==============
 cfg <- list(
   # Technician's MetaboAnalyst PEAK INPUT for 24h HL-LL (the table she
-  # submitted): columns m.z, r.t, p.value, t.score (RT required for v2).
-  ma_input   = Sys.getenv("MA_INPUT",  "MetaboAnalyst Files/Mummichog/24h HL-LL/mummichog_input.txt"),
+  # submitted): columns m.z, r.t, mode, t.score, p.value. Set the path to wherever
+  # the MetaboAnalyst files live on your machine.
+  ma_input   = Sys.getenv("MA_INPUT",  "MetaboAnalyst Files/Mummichog/24h HL-LL/FOR UPLOAD HL vs LL 24h.csv"),
   # Technician's MetaboAnalyst mummichog pathway OUTPUT to compare against.
   ma_output  = Sys.getenv("MA_OUTPUT", "MetaboAnalyst Files/Mummichog/24h HL-LL/mummichog_pathway_enrichment_mummichog.csv"),
 
@@ -45,13 +46,21 @@ cfg <- list(
   permutations = as.numeric(Sys.getenv("PERMUTATIONS", "100")),
   cutoff       = suppressWarnings(as.numeric(Sys.getenv("CUTOFF", ""))),  # NA -> mummichog's auto cutoff
 
+  # MetaboAnalyst can run MIXED ionization (a per-feature `mode` column), but the
+  # pinned engine (standalone mummichog 2.7.0) applies a SINGLE global mode. Set
+  # MODE_FILTER (e.g. "Positive") to run on that subset only — and compare against
+  # a MATCHING single-mode MetaboAnalyst reference. Leave "" for single-mode input.
+  mode_filter = Sys.getenv("MODE_FILTER", ""),
+
   # If you already have our pathway table from a prior run, point here to SKIP
   # running the engine and just compare (e.g. .../mcg_pathwayanalysis_*.tsv).
   our_pathways = Sys.getenv("OUR_PATHWAYS", ""),
 
-  # Optional: name the reference p-value / pathway columns explicitly if
-  # auto-detection picks the wrong one (see notes below).
-  ref_pcol    = Sys.getenv("REF_PCOL",    ""),
+  # Reference p-value / pathway columns. REF_PCOL defaults to "P(Fisher)" — the
+  # confirmed MetaboAnalyst mummichog p-value for this run (== integ
+  # Mummichog_Pvals). NB our engine reports mummichog's PERMUTATION p, not Fisher,
+  # so expect rank agreement rather than identical values. Override if needed.
+  ref_pcol    = Sys.getenv("REF_PCOL",    "P(Fisher)"),
   ref_pathcol = Sys.getenv("REF_PATHCOL", ""),
 
   out_dir = Sys.getenv("OUT_DIR", "mummichog_validation_24h_HL_LL")
@@ -106,6 +115,33 @@ if (nzchar(cfg$our_pathways)) {
 } else {
   stopifnot("MetaboAnalyst input not found" = file.exists(cfg$ma_input))
   peaks <- read_table_any(cfg$ma_input)
+
+  # Ionization mode: the pinned engine runs ONE global mode and ignores any
+  # per-feature `mode` column. If the input is mixed-mode, report the split and
+  # either subset to MODE_FILTER (honest single-mode run) or warn loudly.
+  mode_col <- find_col(peaks, c("mode", "Mode", "ion_mode", "ionization"),
+                       "^mode$|ion")
+  if (!is.null(mode_col)) {
+    modes <- tolower(trimws(as.character(peaks[[mode_col]])))
+    tab   <- table(modes)
+    message("Per-feature mode column '", mode_col, "': ",
+            paste(sprintf("%s=%d", names(tab), as.integer(tab)), collapse = ", "))
+    if (nzchar(cfg$mode_filter)) {
+      keep <- modes == tolower(trimws(cfg$mode_filter))
+      message("MODE_FILTER='", cfg$mode_filter, "' -> keeping ", sum(keep), "/",
+              length(keep), " features.")
+      peaks <- peaks[keep, , drop = FALSE]
+      if (nrow(peaks) == 0L) {
+        stop("No features match MODE_FILTER='", cfg$mode_filter, "'.")
+      }
+    } else if (length(tab) > 1L) {
+      warning("Input is MIXED-mode but MODE_FILTER is unset: running all features ",
+              "under a single '", cfg$mode, "' mode is NOT apples-to-apples with a ",
+              "mixed MetaboAnalyst run. Set MODE_FILTER (e.g. Positive) and compare ",
+              "against a matching single-mode reference, or add mixed-mode support (B3).",
+              call. = FALSE)
+    }
+  }
 
   mz_c <- find_col(peaks, c("m.z", "m/z", "mz", "mass"), "^m[./]?z$")
   rt_c <- find_col(peaks, c("r.t", "rt", "retention_time", "RT"), "^r[._]?t$|retention")
