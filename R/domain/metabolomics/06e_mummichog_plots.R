@@ -188,10 +188,11 @@ mummichog_report_titles <- function(config, de_res) {
 
 #' Save the mummichog report plot and table as standalone files
 #'
-#' Writes the presentation exports for the pinned mummichog stage alongside the
-#' other Diagnostic_plots: the bubble plot as PNG + PDF and the sorted pathway
-#' table as TSV + CSV. These are report artefacts derived from the pinned
-#' results — the engine's own result files (mcg_*.tsv) are left untouched.
+#' Writes the presentation exports for the pinned mummichog stage into the
+#' `mummichog_pinned/` folder, next to the engine's result tree: the bubble plot
+#' as PNG + PDF and the sorted pathway table as TSV + CSV. These are report
+#' artefacts derived from the pinned results — the engine's own result files
+#' (mcg_*.tsv) are left untouched.
 #'
 #' Each ggsave is guarded (matching the DE/enrichment modules): a device
 #' failure warns and skips that file rather than aborting report generation, so
@@ -200,14 +201,18 @@ mummichog_report_titles <- function(config, de_res) {
 #' @param plot   A ggplot from `plot_mummichog_bubble()`, or NULL.
 #' @param table  A data.frame from `build_mummichog_pathway_table()`, or NULL.
 #' @param out_dir Metabolomics mode output directory (metab_out_dir); files land
-#'   in its `Diagnostic_plots/` subdirectory.
+#'   in its `mummichog_pinned/` subdirectory.
 #' @param contrast_label Optional contrast tag woven into the filenames
 #'   (e.g. `"LL_vs_HL"`); sanitised to a safe token.
 #' @return Character vector of the files written (may be empty).
 save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) {
   if (is.null(plot) && is.null(table)) return(character(0))
 
-  plot_dir <- create_legacy_output_dirs(out_dir)$diagnostic_plots
+  # Write next to the engine's result tree (same dir as mod_mummichog_pinned()),
+  # so every mummichog artefact sits together under mummichog_pinned/. The stage
+  # runs first and only wipes its v2/ subdir, so these top-level files persist.
+  dest_dir <- file.path(out_dir, "mummichog_pinned")
+  ensure_dir(dest_dir)
   suffix <- if (!is.null(contrast_label) && nzchar(contrast_label)) {
     paste0("_", gsub("[^A-Za-z0-9]+", "_", contrast_label))
   } else {
@@ -216,8 +221,8 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) 
   written <- character(0)
 
   if (!is.null(plot)) {
-    for (f in c(file.path(plot_dir, paste0("mummichog_pathway_bubble", suffix, ".png")),
-                file.path(plot_dir, paste0("mummichog_pathway_bubble", suffix, ".pdf")))) {
+    for (f in c(file.path(dest_dir, paste0("mummichog_pathway_bubble", suffix, ".png")),
+                file.path(dest_dir, paste0("mummichog_pathway_bubble", suffix, ".pdf")))) {
       ok <- tryCatch({
         ggplot2::ggsave(f, plot, width = 11, height = 8, dpi = 300)
         TRUE
@@ -231,8 +236,8 @@ save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) 
   }
 
   if (!is.null(table)) {
-    tsv <- file.path(plot_dir, paste0("mummichog_pathway_table", suffix, ".tsv"))
-    csv <- file.path(plot_dir, paste0("mummichog_pathway_table", suffix, ".csv"))
+    tsv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".tsv"))
+    csv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".csv"))
     readr::write_tsv(table, tsv)
     readr::write_csv(table, csv)
     written <- c(written, tsv, csv)

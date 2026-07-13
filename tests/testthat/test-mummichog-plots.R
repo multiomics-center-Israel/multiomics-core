@@ -103,8 +103,8 @@ test_that("save_mummichog_exports writes the table as TSV + CSV", {
 
   paths <- save_mummichog_exports(NULL, tb, tmp, contrast_label = "LL vs HL")
 
-  tsv <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_table_LL_vs_HL.tsv")
-  csv <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_table_LL_vs_HL.csv")
+  tsv <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_table_LL_vs_HL.tsv")
+  csv <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_table_LL_vs_HL.csv")
   expect_setequal(paths, c(tsv, csv))
   expect_true(file.exists(tsv))
   expect_true(file.exists(csv))
@@ -120,8 +120,8 @@ test_that("save_mummichog_exports writes the plot as PNG + PDF (when a device ex
 
   paths <- save_mummichog_exports(p, NULL, tmp, contrast_label = "LL_vs_HL")
 
-  png <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_bubble_LL_vs_HL.png")
-  pdf <- file.path(tmp, "Diagnostic_plots", "mummichog_pathway_bubble_LL_vs_HL.pdf")
+  png <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_bubble_LL_vs_HL.png")
+  pdf <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_bubble_LL_vs_HL.pdf")
   expect_true(all(c(png, pdf) %in% paths))
   expect_true(file.exists(png))
   expect_true(file.exists(pdf))
