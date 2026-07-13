@@ -2376,7 +2376,7 @@ if (!is.null(params$network_res)) {
 # actually rendered, not the retired enrichment_res$mummichog.
 if (!is.null(mummi_table)) {
   files_tbl <- rbind(files_tbl, data.frame(
-    File = "mummichog_pinned/",
+    File = "metabolomics/mummichog_pinned/",
     Description = "Mummichog pathway analysis: input, v2 result tree, and pathway tables",
     stringsAsFactors = FALSE))
 }
@@ -2435,9 +2435,13 @@ if (!is.null(enrichment_res)) {
     cat(sprintf(" Pathway enrichment analysis was performed using %s.",
                 paste(enrich_methods, collapse = ", ")))
   }
-  if (!is.null(mummi_table)) {
-    cat(" Additionally, mummichog (Li et al., 2013) m/z-based pathway analysis was performed as a single run over all features using the version-pinned engine.")
-  }
+}
+
+# mummichog runs from its own mummichog.enabled gate, independent of
+# enrichment.run_enrichment (which may leave enrichment_res NULL). Document it
+# whenever its results rendered — outside the enrichment guard above.
+if (!is.null(mummi_table)) {
+  cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was performed as a single run over all features using the version-pinned engine.")
 }
 
 if (!is.null(rf_res) || !is.null(plsda_res)) {
