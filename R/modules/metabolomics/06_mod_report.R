@@ -84,7 +84,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     config, out_dir,
                                     qc_comparison_file = NULL,
                                     qc_suite_files     = NULL,
-                                    commentary_file    = NULL) {
+                                    commentary_file    = NULL,
+                                    mummichog_pathways = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -126,6 +127,22 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         }
     }
 
+    # Build the pinned-mummichog bubble plot + results table from the pathway
+    # table the stage already produced (06e). Both are NULL when mummichog is
+    # disabled or produced nothing, which keeps the report section hidden.
+    mummi_plot  <- NULL
+    mummi_table <- NULL
+    if (!is.null(mummichog_pathways) && is.data.frame(mummichog_pathways) &&
+        nrow(mummichog_pathways) > 0) {
+        ttl   <- mummichog_report_titles(config, de_res)
+        p_cut <- config$modes$metabolomics$enrichment$mummichog$p_cutoff %||% 0.05
+        mummi_plot  <- plot_mummichog_bubble(mummichog_pathways,
+                                             title    = ttl$title,
+                                             subtitle = ttl$subtitle,
+                                             p_cutoff = p_cut)
+        mummi_table <- build_mummichog_pathway_table(mummichog_pathways)
+    }
+
     render_params <- list(
 
         pre                = pre,
@@ -139,7 +156,9 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         config             = config,
         qc_comparison_file = qc_comparison_file,
         qc_suite_files     = qc_suite_files,
-        commentary_file    = commentary_file
+        commentary_file    = commentary_file,
+        mummichog_plot     = mummi_plot,
+        mummichog_table    = mummi_table
     )
 
 
