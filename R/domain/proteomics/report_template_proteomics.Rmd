@@ -2867,6 +2867,11 @@ if (!pathway_enabled) {
 
 ```{r pathway-method-note, eval=has_enrichment, results='asis'}
 cat("**Method:** Pathway enrichment analysis was performed using gene set enrichment approaches. Proteins were mapped to gene symbols for compatibility with standard pathway databases.\n\n")
+# Optional project-specific note on where the gene sets came from (set via
+# pathway.gene_set_note in config). Kept in config, not the shared template,
+# so organism-specific wording does not leak into every proteomics report.
+gs_note <- prot_cfg$pathway$gene_set_note
+if (!is.null(gs_note) && nzchar(gs_note)) cat("**Gene sets:** ", gs_note, "\n\n", sep = "")
 cat("**Key metrics:**\n\n")
 cat("- **NES (Normalized Enrichment Score)**: Positive NES = enrichment in up-regulated proteins; negative NES = enrichment in down-regulated proteins.\n")
 cat("- **padj**: Benjamini-Hochberg adjusted p-value. Pathways with padj < 0.05 are significant.\n")
