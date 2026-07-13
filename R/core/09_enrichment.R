@@ -1521,6 +1521,57 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
     future.apply::future_lapply(jobs, fun, future.seed = seed)
 }
 
+#' Build a pure-compute GSEA worker with a minimal captured environment
+#'
+#' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
+#' nested inside run_gsea_all) bounds the closure's environment to just the
+#' arguments below — so future.apply serializes only `local_tables` + scalars,
+#' never the `run_gsea_all` frame (which holds the large `jobs` list of per-job
+#' ranked vectors and `ranked_genes`). The per-job ranked vector arrives in
+#' `job$ranked` (built in run_gsea_all); the worker does pure computation only
+#' (no file I/O, no messages), with fgsea forced serial via SerialParam.
+#' Analogous to .make_ora_worker().
+#'
+#' @param local_tables Output of load_local_pathway_tables().
+#' @param pvalueCutoff GSEA adjusted-p cutoff.
+#' @param pAdjustMethod P-value adjustment method.
+#' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
+#' @noRd
+.make_gsea_worker <- function(local_tables, pvalueCutoff, pAdjustMethod) {
+    force(local_tables); force(pvalueCutoff); force(pAdjustMethod)
+    function(job) {
+        ranked    <- job$ranked
+        term2gene <- local_tables[[job$db_name]]$TERM2GENE
+        term2name <- local_tables[[job$db_name]]$TERM2NAME
+
+        res <- tryCatch({
+            clusterProfiler::GSEA(
+                geneList      = ranked,
+                TERM2GENE     = term2gene,
+                TERM2NAME     = term2name,
+                minGSSize     = 4,
+                maxGSSize     = length(unique(term2gene[, 2])),
+                pAdjustMethod = pAdjustMethod,
+                pvalueCutoff  = pvalueCutoff,
+                # Serial fgsea inside each job. Outer parallelism is future.apply
+                # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
+                # SnowParam spawns a 14-worker SOCK cluster PER job, which is
+                # nested parallelism — the source of "error writing to
+                # connection" failures under RStudio — and redundant here.
+                BPPARAM       = BiocParallel::SerialParam()
+            )
+        }, error = function(e) {
+            structure(list(message = e$message), class = "gsea_error")
+        })
+        list(
+            ranking_method = job$ranking_method,
+            contrast       = job$contrast,
+            db_name        = job$db_name,
+            gsea_result    = res
+        )
+    }
+}
+
 #' Run GSEA across all ranking methods, contrasts, and databases
 #'
 #' Orchestrator that runs run_gsea_local() for every combination of
@@ -1585,41 +1636,14 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     # 2. Run GSEA computation (parallel or sequential)
     # ------------------------------------------------------------------
-    run_one_gsea_job <- function(job) {
-        # Pure computation — no file I/O, no message() (avoids interleaved output).
-        # `job$ranked` is this job's own ranked vector (see job-build above), so
-        # the whole `ranked_genes` is NOT captured; only `local_tables` (small)
-        # is looked up as a captured global.
-        ranked    <- job$ranked
-        term2gene <- local_tables[[job$db_name]]$TERM2GENE
-        term2name <- local_tables[[job$db_name]]$TERM2NAME
-
-        res <- tryCatch({
-            clusterProfiler::GSEA(
-                geneList      = ranked,
-                TERM2GENE     = term2gene,
-                TERM2NAME     = term2name,
-                minGSSize     = 4,
-                maxGSSize     = length(unique(term2gene[, 2])),
-                pAdjustMethod = pAdjustMethod,
-                pvalueCutoff  = pvalueCutoff,
-                # Serial fgsea inside each job. Outer parallelism is future.apply
-                # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
-                # SnowParam spawns a 14-worker SOCK cluster PER job, which is
-                # nested parallelism — the source of "error writing to
-                # connection" failures under RStudio — and redundant here.
-                BPPARAM       = BiocParallel::SerialParam()
-            )
-        }, error = function(e) {
-            structure(list(message = e$message), class = "gsea_error")
-        })
-        list(
-            ranking_method = job$ranking_method,
-            contrast       = job$contrast,
-            db_name        = job$db_name,
-            gsea_result    = res
-        )
-    }
+    # Build the worker via a factory (NOT a nested closure). A closure defined
+    # inside run_gsea_all() would carry this whole execution frame — including
+    # the large `jobs` list (which holds every per-job ranked vector) and
+    # `ranked_genes` — as its environment, and future would serialize all of it
+    # (the 500 MiB-globals failure). The factory bounds the worker's environment
+    # to only `local_tables` + scalars; the ranked vectors ride in `jobs` (the
+    # future_lapply iteration list, sent per-job, not a broadcast global).
+    run_one_gsea_job <- .make_gsea_worker(local_tables, pvalueCutoff, pAdjustMethod)
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
