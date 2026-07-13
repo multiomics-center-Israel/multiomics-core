@@ -38,6 +38,17 @@ test_that("force_primary_ion = TRUE emits `-z True`", {
   expect_identical(z_value(args), "True")
 })
 
+test_that("quoted / string boolean values coerce (YAML may pass a string)", {
+  expect_identical(z_value(base_args(force_primary_ion = "true")),  "True")
+  expect_identical(z_value(base_args(force_primary_ion = "false")), "False")
+  expect_identical(z_value(base_args(force_primary_ion = "no")),    "False")
+})
+
+test_that("a non-logical force_primary_ion errors loudly (never silent -z False)", {
+  expect_error(base_args(force_primary_ion = "ture"), "force_primary_ion")
+  expect_error(base_args(force_primary_ion = "maybe"), "force_primary_ion")
+})
+
 test_that("cutoff and force_primary_ion coexist, extra_args stay last", {
   args <- base_args(cutoff = 0.05, force_primary_ion = FALSE,
                     extra_args = c("--flag", "x"))

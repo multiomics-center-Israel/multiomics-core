@@ -385,6 +385,30 @@ write_mummichog_manifest <- function(files, manifest_file) {
 
 # ==== runner ================================================================
 
+#' Coerce a config flag to a single logical (TRUE/FALSE), or fail loudly
+#'
+#' NULL passes through (unset). Accepts a real logical scalar, 0/1, and the usual
+#' boolean spellings (true/false, t/f, yes/no, on/off) — YAML normally yields a
+#' logical, but a QUOTED value or a typo arrives as a string. Anything
+#' unrecognised is a hard error rather than a silent default, so a bad
+#' `force_primary_ion` can never quietly relax mummichog's primary-ion filter.
+#'
+#' @param x   The raw config value.
+#' @param key Config key name, for the error message.
+#' @return TRUE/FALSE, or NULL when `x` is NULL.
+#' @noRd
+.mmc_as_flag <- function(x, key = "value") {
+  if (is.null(x)) return(NULL)
+  if (is.logical(x) && length(x) == 1L && !is.na(x)) return(x)
+  v <- tolower(trimws(as.character(x)))
+  if (length(v) == 1L && !is.na(v)) {
+    if (v %in% c("true", "t", "yes", "y", "on", "1"))  return(TRUE)
+    if (v %in% c("false", "f", "no", "n", "off", "0")) return(FALSE)
+  }
+  .mmc_stop("'", key, "' must be true or false; got '",
+            paste(as.character(x), collapse = ", "), "'.")
+}
+
 #' Assemble the `python -m mummichog.main` argument vector
 #'
 #' Pure builder split out of run_mummichog() so the CLI flags are unit-testable
@@ -417,9 +441,11 @@ write_mummichog_manifest <- function(files, manifest_file) {
             "-p", as.character(permutations))
   if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
   # Only emit -z when explicitly set, so an unset config leaves mummichog's
-  # default (require primary ion) exactly as-is.
-  if (!is.null(force_primary_ion)) {
-    args <- c(args, "-z", if (isTRUE(force_primary_ion)) "True" else "False")
+  # default (require primary ion) exactly as-is. Coerce to a strict logical first
+  # so a quoted/typo'd config value errors instead of silently relaxing to False.
+  fpi <- .mmc_as_flag(force_primary_ion, "force_primary_ion")
+  if (!is.null(fpi)) {
+    args <- c(args, "-z", if (fpi) "True" else "False")
   }
   c(args, extra_args)
 }
