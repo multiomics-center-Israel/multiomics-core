@@ -264,7 +264,10 @@ modes:
         n_permutations: 100
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
+        force_primary_ion: true        # require a primary ion; false allows non-primary adducts
 ```
+
+`force_primary_ion` maps to mummichog's `-z`. mummichog 2.7.0 **requires a primary ion** (`M+H[+]` for positive, `M-H[-]` for negative) to be present before accepting a metabolite prediction — this filters out noise from irrelevant adducts and is the engine's **default**. Set `force_primary_ion: false` to relax that (emits `-z False`, keeping adduct-only predictions); omit the key to keep the default. It maps to MetaboAnalyst's `force_primary_ion` option.
 
 Then run as usual:
 
