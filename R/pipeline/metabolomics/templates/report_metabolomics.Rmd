@@ -28,6 +28,8 @@ params:
   qc_suite_files: NULL
   commentary_file: NULL
   config: NULL
+  mummichog_plot: NULL
+  mummichog_table: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -307,6 +309,8 @@ de_res         <- params$de_res
 rf_res         <- params$rf_res
 plsda_res      <- params$plsda_res
 enrichment_res <- params$enrichment_res
+mummi_plot     <- params$mummichog_plot
+mummi_table    <- params$mummichog_table
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -2256,119 +2260,44 @@ if (!is.null(net) && !is.null(net$graph)) {
 
 ---
 
-`r if (is.null(enrichment_res$mummichog) || !show_mummichog) "<!--"`
+`r if (is.null(mummi_plot) || !show_mummichog) "<!--"`
 
 # Mummichog Pathway Analysis (m/z-based) {.tabset}
 
-```{r mummichog-description, results='asis'}
+```{r mummichog-methodology, results='asis'}
 mummi_cfg <- metab_cfg$enrichment$mummichog %||% list()
-mummi_res <- enrichment_res$mummichog
-
-# Organism labels
-org_labels <- list(
-  ame     = "Apis mellifera (honey bee)",
-  eco     = "Escherichia coli K-12",
-  ame_eco = "Combined: Apis mellifera + E. coli",
-  hsa     = "Homo sapiens (human)",
-  dme     = "Drosophila melanogaster (fruit fly)",
-  cel     = "Caenorhabditis elegans (worm)",
-  sce     = "Saccharomyces cerevisiae (yeast)"
-)
-
-organisms <- mummi_cfg$organisms
-if (is.list(organisms)) organisms <- unlist(organisms)
-org_display <- vapply(gsub("\\+", "_", organisms), function(o) {
-  org_labels[[o]] %||% o
-}, character(1))
-
-p_cut   <- mummi_cfg$p_cutoff %||% 0.05
-ppm     <- mummi_cfg$tolerance_ppm %||% 10
+p_cut   <- mummi_cfg$p_cutoff       %||% 0.05
+ppm     <- mummi_cfg$tolerance_ppm  %||% 10
 n_perm  <- mummi_cfg$n_permutations %||% 100
 
 cat("## Methodology\n\n")
-cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) performs pathway enrichment analysis directly from mass spectrometry features (m/z values) without requiring prior metabolite identification. ")
-cat("This approach leverages the fact that metabolic pathways are defined by sets of metabolites with known exact masses; by testing whether significant m/z features map to pathway members more often than expected by chance, mummichog bypasses the identification bottleneck of traditional approaches.\n\n")
-
-cat("**Algorithm:**\n\n")
-cat("1. All input m/z features are matched to candidate KEGG compounds using mass tolerance and common adduct patterns\n")
-cat("2. Significant features (p < ", p_cut, ") are separated from the full reference list\n")
-cat(sprintf("3. For each pathway, the overlap between significant features and pathway members is calculated\n"))
-cat(sprintf("4. Empirical p-values are estimated by %d permutations of the significant feature list\n\n", n_perm))
+cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) performs pathway enrichment analysis directly from mass-spectrometry features (m/z values) without requiring prior metabolite identification. ")
+cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Results below are a single mummichog run over all features.\n\n")
 
 cat("**Parameters:**\n\n")
 cat(sprintf("- Significance cutoff: p < %s\n", p_cut))
 cat(sprintf("- Mass tolerance: %d ppm\n", ppm))
 cat(sprintf("- Permutations: %d\n\n", n_perm))
 
-cat("**Reference organism models:**\n\n")
-cat("Since no genome-scale metabolic model exists for the study organism, ")
-cat("pathway analysis was performed using the closest available KEGG organism models as proxies:\n\n")
-for (i in seq_along(organisms)) {
-  org_clean <- gsub("\\+", "_", organisms[i])
-  cat(sprintf("- **%s** (`%s`)\n", org_display[i], organisms[i]))
-}
-cat("\n")
-if (any(grepl("\\+", organisms))) {
-  cat("The combined model merges pathways from both organisms, prefixed by organism code, to enable cross-kingdom pathway analysis in a single run.\n\n")
-}
-
 cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123.*\n\n")
 ```
 
-```{r mummi-dynamic-organisms, results='asis', fig.width=12, fig.height=8}
-# KEGG organism code -> display name mapping
-org_display <- c(
-  hsa = "Human (*Homo sapiens*)", mmu = "Mouse (*Mus musculus*)",
-  rno = "Rat (*Rattus norvegicus*)", dre = "Zebrafish (*Danio rerio*)",
-  cel = "*C. elegans*", dme = "*Drosophila melanogaster*",
-  sce = "*S. cerevisiae*", ame = "Honey Bee (*Apis mellifera*)",
-  eco = "*E. coli*"
-)
+## Bubble Plot
 
-mummi_results <- enrichment_res$mummichog$results
-mummi_orgs <- names(mummi_results)
-mummi_orgs <- mummi_orgs[!vapply(mummi_results, is.null, logical(1))]
+```{r mummichog-bubble, fig.width=11, fig.height=8, results='asis'}
+safe_print_plot(mummi_plot)
+figure_legend(sprintf("Mummichog pathway analysis. Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", p_cut))
+```
 
-for (org in mummi_orgs) {
-  org_label <- org_display[org] %||% org
-  cat(sprintf("\n## %s {.tabset}\n\n", org_label))
+## Results Table
 
-  # Lollipop
-  loll_key <- paste0("mummichog_", org, "_lollipop")
-  if (!is.null(enrichment_res$plots[[loll_key]])) {
-    cat("### Lollipop Plot\n\n")
-    print(enrichment_res$plots[[loll_key]])
-    cat(sprintf('\n<p class="figure-legend">Mummichog lollipop plot for %s KEGG metabolic model. Point size indicates the number of significant EmpiricalCompounds overlapping each pathway.</p>\n\n', org))
-  }
-
-  # Barplot
-  bar_key <- paste0("mummichog_", org, "_barplot")
-  if (!is.null(enrichment_res$plots[[bar_key]])) {
-    cat("### Barplot\n\n")
-    print(enrichment_res$plots[[bar_key]])
-    cat(sprintf('\n<p class="figure-legend">Mummichog barplot for %s pathways ranked by significance.</p>\n\n', org))
-  }
-
-  # Table
-  if (!is.null(mummi_results[[org]]$table)) {
-    cat("### Results Table\n\n")
-    dt <- make_dt(mummi_results[[org]]$table,
-                  caption = sprintf("Mummichog Pathway Enrichment - %s", org))
-    # Force DT widget to render in loop
-    print(htmltools::tagList(dt))
-    cat("\n\n")
-  }
-}
-
-# Cross-organism heatmap (only if multiple organisms)
-if (length(mummi_orgs) > 1 && !is.null(enrichment_res$plots$mummichog_organism_heatmap)) {
-  cat("\n## Cross-Organism Comparison\n\n")
-  print(enrichment_res$plots$mummichog_organism_heatmap)
-  cat('\n<p class="figure-legend">Cross-organism comparison heatmap showing pathway enrichment significance across different metabolic models.</p>\n\n')
+```{r mummichog-table}
+if (!is.null(mummi_table)) {
+  make_dt(mummi_table, caption = "Mummichog Pathway Enrichment")
 }
 ```
 
-`r if (is.null(enrichment_res$mummichog) || !show_mummichog) "-->"`
+`r if (is.null(mummi_plot) || !show_mummichog) "-->"`
 
 ---
 
@@ -2442,16 +2371,14 @@ if (!is.null(params$network_res)) {
     stringsAsFactors = FALSE))
 }
 
-# Add mummichog outputs
-if (!is.null(enrichment_res$mummichog)) {
-  mummi_orgs <- names(enrichment_res$mummichog$results)
-  mummi_orgs <- mummi_orgs[!vapply(enrichment_res$mummichog$results, is.null, logical(1))]
-  for (org in mummi_orgs) {
-    files_tbl <- rbind(files_tbl, data.frame(
-      File = paste0("mummichog_", org, "_results.tsv"),
-      Description = paste0("Mummichog pathway enrichment results (", org, " model)"),
-      stringsAsFactors = FALSE))
-  }
+# Add mummichog outputs. The pinned engine writes a whole result tree (not
+# per-organism files), so list its directory. Gate on the pinned results we
+# actually rendered, not the retired enrichment_res$mummichog.
+if (!is.null(mummi_table)) {
+  files_tbl <- rbind(files_tbl, data.frame(
+    File = "metabolomics/mummichog_pinned/",
+    Description = "Mummichog pathway analysis: input, v2 result tree, and pathway tables",
+    stringsAsFactors = FALSE))
 }
 
 make_dt(files_tbl, "Key Output Files")
@@ -2508,14 +2435,13 @@ if (!is.null(enrichment_res)) {
     cat(sprintf(" Pathway enrichment analysis was performed using %s.",
                 paste(enrich_methods, collapse = ", ")))
   }
-  if (!is.null(enrichment_res$mummichog)) {
-    mummi_cfg_m <- metab_cfg$enrichment$mummichog %||% list()
-    orgs_m <- mummi_cfg_m$organisms
-    if (is.list(orgs_m)) orgs_m <- unlist(orgs_m)
-    cat(sprintf(
-      " Additionally, mummichog (Li et al., 2013) m/z-based pathway analysis was performed using KEGG metabolic models for %s.",
-      paste(orgs_m, collapse = ", ")))
-  }
+}
+
+# mummichog runs from its own mummichog.enabled gate, independent of
+# enrichment.run_enrichment (which may leave enrichment_res NULL). Document it
+# whenever its results rendered — outside the enrichment guard above.
+if (!is.null(mummi_table)) {
+  cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was performed as a single run over all features using the version-pinned engine.")
 }
 
 if (!is.null(rf_res) || !is.null(plsda_res)) {

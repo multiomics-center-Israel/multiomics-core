@@ -367,7 +367,18 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       tar_target(
         metab_mummichog_pinned_modules,
         read_mummichog_modules(metab_mummichog_pinned_files)
+      ),
+      # Report-facing alias: an always-defined symbol the report target can
+      # depend on (the pinned pathways when enabled, NULL otherwise), so the
+      # report never references a target that only conditionally exists.
+      tar_target(
+        metab_mummichog_report_pathways,
+        metab_mummichog_pinned_pathways
       )
+    ))
+  } else {
+    analysis_core <- c(analysis_core, list(
+      tar_target(metab_mummichog_report_pathways, NULL)
     ))
   }
 
@@ -466,7 +477,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         out_dir            = metab_out_dir,
         qc_comparison_file = NULL,
         qc_suite_files     = NULL,
-        commentary_file    = metab_commentary
+        commentary_file    = metab_commentary,
+        mummichog_pathways = metab_mummichog_report_pathways
       ),
       format = "file"
     ),
