@@ -156,6 +156,58 @@ test_that(".mmc_default_python resolves to a platform-appropriate venv path", {
   }
 })
 
+test_that(".mmc_abs_keep_symlink makes a relative path absolute", {
+  rel <- file.path("envs", "mummichog", "bin", "python")
+  abs <- .mmc_abs_keep_symlink(rel)
+  expect_true(startsWith(abs, getwd()))
+  expect_true(endsWith(abs, rel))
+})
+
+test_that(".mmc_abs_keep_symlink expands ~ instead of treating it as relative", {
+  skip_if(identical(path.expand("~"), "~"), "no home dir to expand")
+  out <- .mmc_abs_keep_symlink("~/envs/mummichog/bin/python")
+  expect_identical(out, path.expand("~/envs/mummichog/bin/python"))
+  expect_false(grepl("~", out, fixed = TRUE))   # not <cwd>/~/...
+})
+
+test_that(".mmc_abs_keep_symlink leaves an absolute path untouched", {
+  p <- if (.Platform$OS.type == "windows") {
+    "C:/venvs/mummichog/Scripts/python.exe"
+  } else {
+    "/opt/venvs/mummichog/bin/python"
+  }
+  expect_identical(.mmc_abs_keep_symlink(p), p)
+})
+
+test_that(".mmc_abs_keep_symlink does NOT resolve a symlinked interpreter", {
+  # Reproduces the macOS/Linux venv bug: bin/python is a symlink to the base
+  # interpreter; normalizePath() would resolve it (losing the venv), we must not.
+  skip_on_os("windows")
+  tmp    <- withr::local_tempdir()
+  target <- file.path(tmp, "python3.11")
+  link   <- file.path(tmp, "python")
+  writeLines("#!/bin/sh", target)
+  if (!file.symlink(target, link)) skip("cannot create symlinks in this sandbox")
+
+  kept <- .mmc_abs_keep_symlink(link)                  # link is already absolute
+  expect_identical(kept, link)                         # returned verbatim...
+  expect_false(identical(kept, normalizePath(link)))   # ...not the resolved target
+  # both still resolve to the same real file — we only avoided the resolution
+  expect_identical(normalizePath(kept), normalizePath(target))
+})
+
+test_that(".mmc_exists_nofollow treats even a dangling symlink as present", {
+  skip_on_os("windows")
+  tmp  <- withr::local_tempdir()
+  link <- file.path(tmp, "python")
+  if (!file.symlink(file.path(tmp, "missing-target"), link)) {
+    skip("cannot create symlinks in this sandbox")
+  }
+  expect_true(.mmc_exists_nofollow(link))                 # the link node exists
+  expect_false(file.exists(link))                         # though its target does not
+  expect_false(.mmc_exists_nofollow(file.path(tmp, "nope")))
+})
+
 test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted", {
   out_dir <- withr::local_tempdir()
 

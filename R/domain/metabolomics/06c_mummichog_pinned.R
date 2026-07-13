@@ -59,6 +59,47 @@
   }
 }
 
+#' Does a path exist, treating a symlink as present even if unresolved?
+#'
+#' `file.exists()` follows symlinks. We only want to confirm the configured
+#' interpreter path is a real directory entry, without depending on where a
+#' symlink points — see `.mmc_abs_keep_symlink()` for why we must not resolve it.
+#'
+#' @param path A file path.
+#' @return TRUE if `path` exists as a file/dir or is a symlink (even a dangling one).
+#' @noRd
+.mmc_exists_nofollow <- function(path) {
+  if (!nzchar(path)) return(FALSE)
+  path <- path.expand(path)           # expand ~ / ~user; does NOT resolve symlinks
+  link <- Sys.readlink(path)          # "" if not a link, target if a link, NA if absent
+  file.exists(path) || (!is.na(link) && nzchar(link))
+}
+
+#' Make a path absolute WITHOUT resolving symlinks
+#'
+#' processx runs the engine with `wd = out_dir`, so a relative command (the
+#' default `envs/mummichog/bin/python`) would be looked up under out_dir and
+#' fail — the interpreter path must be absolute. But `normalizePath()` also
+#' *canonicalises* it, following symlinks, and that BREAKS a venv: a venv's
+#' `bin/python` is typically a symlink to the base interpreter, and running the
+#' resolved target (e.g. /Library/Frameworks/.../python3.11) starts the BASE
+#' environment with no venv site-packages — so mummichog isn't importable and
+#' the 2.7.0 check fails with "found <none>". Invoke the venv symlink itself so
+#' Python detects the venv (via pyvenv.cfg). Only prefix a relative path with
+#' the working directory; leave the final (possibly symlinked) component alone.
+#'
+#' @param path A file path (may be relative, absolute, or home-relative).
+#' @return An absolute path with any symlink in the final component preserved.
+#' @noRd
+.mmc_abs_keep_symlink <- function(path) {
+  # Expand ~ / ~user first (path.expand does NOT resolve symlinks), so a
+  # home-relative MUMMICHOG_PYTHON becomes absolute instead of <cwd>/~/....
+  path <- path.expand(path)
+  # Already absolute? POSIX "/...", Windows drive "C:...", or UNC "\\\\host".
+  if (grepl("^(/|[A-Za-z]:|\\\\\\\\)", path)) return(path)
+  file.path(getwd(), path)
+}
+
 #' Fail unless the given interpreter has the exact pinned mummichog version
 #'
 #' Guards reproducibility: if MUMMICHOG_PYTHON points at a stale or shared
@@ -374,16 +415,18 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           cutoff = NULL,
                           timeout = 3600,
                           extra_args = character()) {
-  if (!nzchar(python) || !file.exists(python)) {
+  if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
     .mmc_stop("Python executable not found: '", python, "'. ",
               "Run `make setup` once per machine to build the pinned venv and print ",
               "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
   }
-  # Resolve to an absolute path: processx changes to `wd` (out_dir) before exec,
-  # so a relative command (e.g. the default envs/mummichog/bin/python) would be
-  # looked up under out_dir and fail to start. Same reasoning for a file-backed
-  # model passed via `network`/-n; built-in names (human_mfn, worm) are not files.
-  python <- normalizePath(python, mustWork = TRUE)
+  # Make the interpreter path absolute (processx runs with wd = out_dir, so a
+  # relative command would be looked up there) but do NOT canonicalise it:
+  # normalizePath() follows symlinks, and a venv bin/python is usually a symlink
+  # to the base interpreter — running the resolved target loses the venv (and its
+  # mummichog). See .mmc_abs_keep_symlink(). The model path below is a plain file,
+  # so resolving it is fine; built-in names (human_mfn, worm) are not files.
+  python <- .mmc_abs_keep_symlink(python)
   # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
   # before we record 2.7.0 provenance and run it.
   .mmc_check_mummichog_version(python, "2.7.0")

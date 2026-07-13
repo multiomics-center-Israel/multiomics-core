@@ -27,7 +27,12 @@ fi
 
 echo ">> Creating venv at ${VENV_DIR}"
 rm -rf "${VENV_DIR}"          # start from a clean venv so the lockfile is an exact reproduction
-python3 -m venv "${VENV_DIR}"
+# --copies: put a real copy of the interpreter in the venv instead of a symlink.
+# A symlinked bin/python can be canonicalised back to the base interpreter by
+# anything that resolves paths, which then runs WITHOUT the venv (no mummichog).
+# A copy is immune. The R engine also invokes the configured path without
+# resolving symlinks, so this is defence-in-depth for macOS/Linux.
+python3 -m venv --copies "${VENV_DIR}"
 
 # venv Python lives under bin/ on Unix and Scripts/ on Windows (e.g. Git-Bash).
 VENV_PY="${VENV_DIR}/bin/python"
