@@ -179,15 +179,27 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     contrast_names <- paste0("contrast_", seq_along(de_tables))
   }
 
+  # -- Preflight the shared runner ONCE ---------------------------------------
+  # The interpreter + pinned-version check is the same for every contrast, so a
+  # broken/stale venv is a stage-level setup error, not a per-contrast no-result.
+  # Fail loud here, BEFORE the loop, so it isn't masked by the per-contrast
+  # tryCatch below (which is meant only for per-contrast data failures).
+  python <- .mmc_preflight_runner(python)
+
   # -- Run mummichog per contrast, into its own subdir ------------------------
   # A single contrast failing (bad DE table, empty overlap, ...) yields a NULL
   # result for that contrast + a warning; the rest still run and the report
   # section hides gracefully for the failed one.
   mummi_dir <- file.path(out_dir, "mummichog_pinned")
+  # Sanitise contrast names into subdir names, de-duplicating so two labels that
+  # collapse to the same token (e.g. "A-B" and "A_B") get distinct dirs instead
+  # of clobbering each other's on-disk results. sep = "_" keeps names in charset.
+  contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", contrast_names),
+                               sep = "_")
   results <- list()
   for (i in seq_along(de_tables)) {
     contrast     <- contrast_names[[i]]
-    contrast_dir <- file.path(mummi_dir, gsub("[^A-Za-z0-9]+", "_", contrast))
+    contrast_dir <- file.path(mummi_dir, contrast_dirs[[i]])
     results[[contrast]] <- tryCatch(
       .mmc_run_one_contrast(
         de_table          = de_tables[[i]],

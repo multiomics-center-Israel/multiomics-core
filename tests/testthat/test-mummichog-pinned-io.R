@@ -279,3 +279,35 @@ test_that("a human organism passes the guard (fails later, not on organism)", {
   expect_false(grepl("non-human", err))   # cleared the organism guard
   expect_match(err, "m/z")                # stopped later, as expected
 })
+
+test_that(".mmc_preflight_runner aborts on a missing interpreter", {
+  expect_error(.mmc_preflight_runner("/nonexistent/bin/python"),
+               "Python executable not found")
+  expect_error(.mmc_preflight_runner(""), "Python executable not found")
+})
+
+test_that("mod_mummichog_pinned fails loud on a broken venv, not per-contrast quietly", {
+  # A broken/stale interpreter is a SHARED setup error, identical for every
+  # contrast, so it must abort the whole stage up front — NOT be swallowed by the
+  # per-contrast tryCatch into warnings + an empty (silently missing) section.
+  pre <- list(row_data = data.frame(
+    check.names = FALSE,
+    feature_id  = c("F1", "F2"),
+    "m/z"       = c(100.1, 200.2),
+    RT          = c(1.0, 2.0)
+  ))
+  de <- list(de_tables = list(
+    "A_vs_B" = data.frame(feature_id = c("F1", "F2"),
+                          P.Value = c(0.01, 0.5), logFC = c(1.2, -0.3))
+  ))
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Homo sapiens",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+
+  expect_error(
+    mod_mummichog_pinned(pre = pre, de_res = de, config = cfg,
+                         out_dir = withr::local_tempdir(),
+                         python  = "/nonexistent/bin/python"),
+    "Python executable not found"
+  )
+})

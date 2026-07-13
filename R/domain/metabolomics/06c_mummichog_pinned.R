@@ -125,6 +125,35 @@
   invisible(expected)
 }
 
+#' Preflight the shared mummichog runner
+#'
+#' Validates the environment every run shares — the venv interpreter exists and
+#' carries the pinned mummichog version — and returns its absolute path. Split
+#' out so a caller that runs the engine many times (e.g. once per contrast) can
+#' fail loud ONCE up front on a broken or stale venv, instead of letting a
+#' per-run `tryCatch` downgrade that setup error into an empty result.
+#'
+#' @param python Path to the interpreter (may be relative or a venv symlink).
+#' @return The absolute interpreter path (symlink preserved); aborts otherwise.
+#' @noRd
+.mmc_preflight_runner <- function(python) {
+  if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
+    .mmc_stop("Python executable not found: '", python, "'. ",
+              "Run `make setup` once per machine to build the pinned venv and print ",
+              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
+  }
+  # Make the interpreter path absolute (processx runs with wd = out_dir, so a
+  # relative command would be looked up there) but do NOT canonicalise it:
+  # normalizePath() follows symlinks, and a venv bin/python is usually a symlink
+  # to the base interpreter — running the resolved target loses the venv (and its
+  # mummichog). See .mmc_abs_keep_symlink().
+  python <- .mmc_abs_keep_symlink(python)
+  # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
+  # before we record 2.7.0 provenance and run it.
+  .mmc_check_mummichog_version(python, "2.7.0")
+  python
+}
+
 #' Find the first matching column name in a data.frame
 #'
 #' Tries exact candidates first, then a case-insensitive regex fallback. Used to
@@ -484,21 +513,10 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           force_primary_ion = NULL,
                           timeout = 3600,
                           extra_args = character()) {
-  if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
-    .mmc_stop("Python executable not found: '", python, "'. ",
-              "Run `make setup` once per machine to build the pinned venv and print ",
-              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
-  }
-  # Make the interpreter path absolute (processx runs with wd = out_dir, so a
-  # relative command would be looked up there) but do NOT canonicalise it:
-  # normalizePath() follows symlinks, and a venv bin/python is usually a symlink
-  # to the base interpreter — running the resolved target loses the venv (and its
-  # mummichog). See .mmc_abs_keep_symlink(). The model path below is a plain file,
-  # so resolving it is fine; built-in names (human_mfn, worm) are not files.
-  python <- .mmc_abs_keep_symlink(python)
-  # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
-  # before we record 2.7.0 provenance and run it.
-  .mmc_check_mummichog_version(python, "2.7.0")
+  # Validate the shared runner (interpreter exists, pinned version) and take its
+  # absolute path. Kept here too — defensive when run_mummichog() is called
+  # directly — even though mod_mummichog_pinned() also preflights before its loop.
+  python <- .mmc_preflight_runner(python)
   if (file.exists(network)) network <- normalizePath(network, mustWork = TRUE)
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")
