@@ -350,30 +350,32 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
   # overrides it (required for non-human organisms).
   if (isTRUE(mummichog_enabled)) {
     analysis_core <- c(analysis_core, list(
+      # Per-contrast run: a named list keyed by contrast, each element
+      # list(files, pathways). In-memory (not format = "file") because it holds
+      # the per-contrast pathway tibbles the report needs.
       tar_target(
-        metab_mummichog_pinned_files,
+        metab_mummichog_pinned,
         mod_mummichog_pinned(
           pre     = metab_pre,
           de_res  = metab_de_res,
           config  = config,
           out_dir = metab_out_dir
-        ),
+        )
+      ),
+      # Derived file target for {targets} file-tracking: every produced file
+      # across all contrasts (mcg result trees incl. mcg_modularanalysis_*,
+      # inputs, id-maps, manifests).
+      tar_target(
+        metab_mummichog_pinned_files,
+        sort(unique(unlist(lapply(metab_mummichog_pinned, `[[`, "files")))),
         format = "file"
       ),
-      tar_target(
-        metab_mummichog_pinned_pathways,
-        read_mummichog_pathways(metab_mummichog_pinned_files)
-      ),
-      tar_target(
-        metab_mummichog_pinned_modules,
-        read_mummichog_modules(metab_mummichog_pinned_files)
-      ),
       # Report-facing alias: an always-defined symbol the report target can
-      # depend on (the pinned pathways when enabled, NULL otherwise), so the
+      # depend on (per-contrast pathways when enabled, NULL otherwise), so the
       # report never references a target that only conditionally exists.
       tar_target(
         metab_mummichog_report_pathways,
-        metab_mummichog_pinned_pathways
+        lapply(metab_mummichog_pinned, `[[`, "pathways")
       )
     ))
   } else {

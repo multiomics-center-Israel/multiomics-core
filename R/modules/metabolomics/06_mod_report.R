@@ -127,34 +127,22 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         }
     }
 
-    # Build the pinned-mummichog bubble plot + results table from the pathway
-    # table the stage already produced (06e). Both are NULL when mummichog is
-    # disabled or produced nothing, which keeps the report section hidden.
-    mummi_plot  <- NULL
-    mummi_table <- NULL
-    if (!is.null(mummichog_pathways) && is.data.frame(mummichog_pathways) &&
-        nrow(mummichog_pathways) > 0) {
-        ttl   <- mummichog_report_titles(config, de_res)
-        p_cut <- config$modes$metabolomics$enrichment$mummichog$p_cutoff %||% 0.05
-        mummi_plot  <- plot_mummichog_bubble(mummichog_pathways,
-                                             title    = ttl$title,
-                                             subtitle = ttl$subtitle,
-                                             p_cutoff = p_cut)
-        mummi_table <- build_mummichog_pathway_table(mummichog_pathways)
-    }
+    # Build per-contrast mummichog report sections (06e) from the per-contrast
+    # pathway tables. Empty list when mummichog is disabled or no contrast has a
+    # result, which keeps the report section hidden.
+    mummi_sections <- build_mummichog_report_sections(mummichog_pathways, config)
 
-    # Save standalone presentation exports (PNG + PDF plot, TSV + CSV table)
-    # into the mummichog_pinned/ folder (next to the engine's result tree), in
-    # addition to embedding them in the HTML. Reuses the objects already built
-    # above; the engine's mcg_* result files are untouched. Paths are returned
-    # so the format = "file" target tracks them.
-    mummi_contrast <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
-        names(de_res$de_tables)[1]
-    } else {
-        NULL
+    # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
+    # CSV table) into mummichog_pinned/, named by contrast, in addition to
+    # embedding them in the HTML. The engine's mcg_* result files are untouched.
+    # Paths are returned so the format = "file" target tracks them.
+    mummi_exports <- character(0)
+    for (contrast in names(mummi_sections)) {
+        s <- mummi_sections[[contrast]]
+        mummi_exports <- c(mummi_exports,
+                           save_mummichog_exports(s$plot, s$table, out_dir,
+                                                  contrast_label = contrast))
     }
-    mummi_exports <- save_mummichog_exports(mummi_plot, mummi_table, out_dir,
-                                            contrast_label = mummi_contrast)
 
     render_params <- list(
 
@@ -170,8 +158,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         qc_comparison_file = qc_comparison_file,
         qc_suite_files     = qc_suite_files,
         commentary_file    = commentary_file,
-        mummichog_plot     = mummi_plot,
-        mummichog_table    = mummi_table
+        mummichog_sections = mummi_sections
     )
 
 

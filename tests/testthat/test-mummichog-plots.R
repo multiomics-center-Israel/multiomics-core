@@ -131,3 +131,39 @@ test_that("save_mummichog_exports is a no-op when there is nothing to save", {
   tmp <- withr::local_tempdir()
   expect_length(save_mummichog_exports(NULL, NULL, tmp), 0)
 })
+
+test_that("mummichog_report_titles uses an explicit contrast for the subtitle", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Coelastrella",
+    enrichment = list(mummichog = list(model_json = "/m/cre.json")))))
+  t <- mummichog_report_titles(cfg, contrast = "HL_48h_vs_LL_48h")
+  expect_identical(t$subtitle, "HL_48h vs LL_48h, all features")
+  expect_match(t$title, "Coelastrella")
+})
+
+test_that("build_mummichog_report_sections builds one section per usable contrast", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  by_contrast <- list(
+    "HL_24h_vs_LL_24h" = make_pw(),
+    "HL_48h_vs_LL_48h" = make_pw(),
+    "empty_contrast"   = NULL             # no result -> dropped
+  )
+  secs <- build_mummichog_report_sections(by_contrast, cfg)
+
+  expect_named(secs, c("HL_24h_vs_LL_24h", "HL_48h_vs_LL_48h"))
+  for (nm in names(secs)) {
+    expect_s3_class(secs[[nm]]$plot, "ggplot")
+    expect_s3_class(secs[[nm]]$table, "data.frame")
+    expect_true(nzchar(secs[[nm]]$title))
+  }
+  expect_match(secs[["HL_24h_vs_LL_24h"]]$subtitle, "HL_24h vs LL_24h")
+})
+
+test_that("build_mummichog_report_sections returns empty list on NULL/empty input", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list()))))
+  expect_length(build_mummichog_report_sections(NULL, cfg), 0)
+  expect_length(build_mummichog_report_sections(list(), cfg), 0)
+  expect_length(build_mummichog_report_sections(list(a = NULL), cfg), 0)
+})

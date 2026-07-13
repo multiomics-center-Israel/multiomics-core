@@ -229,14 +229,15 @@ test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled
   library(targets)
   on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
   off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
-  # enabling adds exactly the three metab_mummichog_pinned_* targets
-  expect_equal(length(on) - length(off), 3L)
+  # enabling adds metab_mummichog_pinned + _files + _report_pathways (3); disabled
+  # adds only the report alias (1) -> net +2
+  expect_equal(length(on) - length(off), 2L)
 
   # the stage lives in analysis_core, so it is also present in multiomics runs
   # (skip_outputs = TRUE), matching the pre-switch behaviour
   mo_on  <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = TRUE)
   mo_off <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = FALSE)
-  expect_equal(length(mo_on) - length(mo_off), 3L)
+  expect_equal(length(mo_on) - length(mo_off), 2L)
 })
 
 test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
@@ -252,15 +253,18 @@ test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
 
 test_that("a configured model bypasses the organism guard (human-only) check", {
   # model_json set -> network != human_mfn -> guard skipped; the call then fails
-  # later on the missing DE table, NOT with the organism error.
+  # later (here on the missing m/z annotations, pre = NULL), NOT with the
+  # organism error.
   cfg <- list(modes = list(metabolomics = list(
     organism   = "Mus musculus",
     enrichment = list(mummichog = list(enabled = TRUE, model_json = "/tmp/model.json")))))
-  expect_error(
+  err <- tryCatch(
     mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
                          out_dir = withr::local_tempdir()),
-    "DE table"
+    error = function(e) conditionMessage(e)
   )
+  expect_false(grepl("non-human", err))   # model_json bypassed the organism guard
+  expect_match(err, "m/z")                # stopped later, as expected
 })
 
 test_that("a human organism passes the guard (fails later, not on organism)", {
@@ -273,5 +277,5 @@ test_that("a human organism passes the guard (fails later, not on organism)", {
     error = function(e) conditionMessage(e)
   )
   expect_false(grepl("non-human", err))   # cleared the organism guard
-  expect_match(err, "DE table")           # stopped later, as expected
+  expect_match(err, "m/z")                # stopped later, as expected
 })

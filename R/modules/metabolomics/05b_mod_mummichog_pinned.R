@@ -5,27 +5,99 @@
 # retention-time columns from row_data (RT passed through unchanged, in minutes),
 # logFC as the statistic.
 #
-# Wired into 00_pipe_metabolomics.R (analysis outputs) as the metab_mummichog_*
-# targets, added only when modes.metabolomics.enrichment.mummichog.enabled is
-# true. Returns a character vector of produced files for a format = "file" target.
+# Wired into 00_pipe_metabolomics.R as the metab_mummichog_pinned target, added
+# only when modes.metabolomics.enrichment.mummichog.enabled is true. Runs
+# mummichog once PER CONTRAST and returns a per-contrast list of results.
 
 
-#' Run pinned mummichog v2 enrichment for metabolomics
+#' Run the pinned mummichog engine for a single contrast
 #'
-#' Builds the mummichog input from DE results joined to feature annotations,
-#' then runs the isolated, version-pinned mummichog v2 subprocess (06c). Knobs
-#' are read from config$modes$metabolomics$enrichment$mummichog.
+#' Assembles the mummichog input from one contrast's DE table joined to the
+#' shared m/z / RT annotations, runs the v2 subprocess into `contrast_dir`, and
+#' reads back that contrast's pathway table. Independent of other contrasts.
+#'
+#' @param de_table One contrast's DE table (feature_id, P.Value, logFC).
+#' @param row_data Feature annotations (shared); m/z, RT, feature_id.
+#' @param mz_col,rt_col Column names located once by the caller.
+#' @param contrast_label Human-readable contrast name (for messages).
+#' @param contrast_dir Per-contrast output dir (mummichog_pinned/<contrast>/).
+#' @param network,mode,instrument_ppm,permutations,cutoff,force_primary_ion,python
+#'   Run parameters (a single global model + params for every contrast).
+#' @return list(files = character vector, pathways = tibble or NULL).
+#' @noRd
+.mmc_run_one_contrast <- function(de_table, row_data, mz_col, rt_col,
+                                  contrast_label, contrast_dir,
+                                  network, mode, instrument_ppm, permutations,
+                                  cutoff, force_primary_ion, python) {
+  for (col in c("feature_id", "P.Value", "logFC")) {
+    if (!col %in% names(de_table)) {
+      .mmc_stop("contrast '", contrast_label,
+                "': DE table missing required column '", col, "'.")
+    }
+  }
+  merged <- merge(de_table, row_data[, c("feature_id", mz_col, rt_col)],
+                  by = "feature_id")
+  stats_tbl <- data.frame(
+    feature_id     = as.character(merged$feature_id),
+    mz             = as.numeric(merged[[mz_col]]),
+    # Retention time passed through unchanged (minutes); mummichog only uses RT
+    # for relative coelution grouping, so the unit must simply be consistent.
+    retention_time = as.numeric(merged[[rt_col]]),
+    p_value        = merged$P.Value,
+    statistic      = merged$logFC,
+    stringsAsFactors = FALSE
+  )
+  stats_tbl <- stats_tbl[stats::complete.cases(stats_tbl), , drop = FALSE]
+  if (nrow(stats_tbl) == 0L) {
+    .mmc_stop("contrast '", contrast_label,
+              "': no complete features after joining DE with m/z / RT.")
+  }
+
+  input_file <- write_mummichog_input(
+    stats_tbl = stats_tbl,
+    path      = file.path(contrast_dir, "input.tsv"),
+    mz_col = "mz", rt_col = "retention_time",
+    p_col = "p_value", stat_col = "statistic", id_col = "feature_id"
+  )
+  result_files <- run_mummichog_v2(
+    infile         = input_file,
+    out_dir        = file.path(contrast_dir, "v2"),
+    project        = "mcg_pinned",
+    python         = python,
+    network        = network,
+    mode           = mode,
+    instrument_ppm = instrument_ppm,
+    permutations   = permutations,
+    cutoff         = cutoff,
+    force_primary_ion = force_primary_ion
+  )
+  files <- sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"),
+                         result_files)))
+  # Read this contrast's pathway table for the report; a run that produced none
+  # -> NULL so the report section hides for this contrast instead of erroring.
+  pathways <- tryCatch(read_mummichog_pathways(files), error = function(e) NULL)
+  list(files = files, pathways = pathways)
+}
+
+#' Run pinned mummichog v2 enrichment for metabolomics, per contrast
+#'
+#' Runs the isolated, version-pinned mummichog v2 subprocess (06c) once for each
+#' DE contrast independently — each contrast's own p-values define its
+#' significant set against all features, using a single global model + params.
+#' Knobs are read from config$modes$metabolomics$enrichment$mummichog.
 #'
 #' @param pre     Preprocessing results; uses `pre$row_data` for m/z and RT.
-#' @param de_res  DE results from mod_metabolomics_de(); uses de_tables[[1]]
-#'                (falls back to summary_df, or a bare data.frame), with columns
-#'                feature_id, P.Value, logFC.
+#' @param de_res  DE results from mod_metabolomics_de(); each contrast in
+#'                `de_tables` (falls back to summary_df, or a bare data.frame) is
+#'                run independently. DE tables need columns feature_id, P.Value,
+#'                logFC.
 #' @param config  Full pipeline config.
 #' @param out_dir Output directory for the metabolomics mode.
 #' @param python  Path to the pinned venv python (defaults to $MUMMICHOG_PYTHON,
 #'                else envs/mummichog/bin/python).
-#' @return Character vector of produced file paths (input, id-map, result tree,
-#'   manifest), suitable for a format = "file" target.
+#' @return Named list keyed by contrast, each element `list(files, pathways)`
+#'   (`pathways` is NULL when that contrast produced no result); NULL when
+#'   mummichog is disabled in config.
 mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                  python = Sys.getenv("MUMMICHOG_PYTHON",
                                                      .mmc_default_python())) {
@@ -64,26 +136,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     cache_dir = "envs/mummichog-models"
   )
 
-  # -- Extract the DE table ---------------------------------------------------
-  de_table <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
-    de_res$de_tables[[1]]
-  } else if (!is.null(de_res$summary_df)) {
-    de_res$summary_df
-  } else if (is.data.frame(de_res)) {
-    de_res
-  } else {
-    NULL
-  }
-  if (is.null(de_table)) {
-    .mmc_stop("could not extract a DE table (expected de_res$de_tables / $summary_df / a data.frame).")
-  }
-  for (col in c("feature_id", "P.Value", "logFC")) {
-    if (!col %in% names(de_table)) {
-      .mmc_stop("DE table missing required column '", col, "'.")
-    }
-  }
-
-  # -- Locate m/z and RT columns in the feature annotations -------------------
+  # -- Locate m/z and RT columns (shared across contrasts) --------------------
   row_data <- pre$row_data
   mz_col <- .mmc_find_col(row_data,
                           c("m/z", "mz", "m.z", "MZ", "Mass", "m.z."),
@@ -100,7 +153,6 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     .mmc_stop("No retention time column found in row_data. Columns: ",
               paste(names(row_data), collapse = ", "))
   }
-
   if (!"feature_id" %in% names(row_data)) {
     row_data$feature_id <- if ("Metabolite" %in% names(row_data)) {
       row_data$Metabolite
@@ -109,48 +161,55 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
     }
   }
 
-  # -- Merge DE + annotations, build the canonical stats table ----------------
-  merged <- merge(de_table, row_data[, c("feature_id", mz_col, rt_col)],
-                  by = "feature_id")
-  stats_tbl <- data.frame(
-    feature_id     = as.character(merged$feature_id),
-    mz             = as.numeric(merged[[mz_col]]),
-    # Retention time passed through unchanged (minutes). mummichog only uses RT
-    # for relative coelution grouping, so the unit must simply be consistent.
-    retention_time = as.numeric(merged[[rt_col]]),
-    p_value        = merged$P.Value,
-    statistic      = merged$logFC,
-    stringsAsFactors = FALSE
-  )
-  stats_tbl <- stats_tbl[stats::complete.cases(stats_tbl), , drop = FALSE]
-  if (nrow(stats_tbl) == 0L) {
-    .mmc_stop("no complete features after joining DE results with m/z / RT annotations.")
+  # -- Resolve the set of contrasts to run ------------------------------------
+  # Each contrast runs mummichog INDEPENDENTLY: its own DE p-values define the
+  # significant set (Lsig) against Lref = all features. Prefer the named
+  # per-contrast de_tables; fall back to a single table for non-standard de_res.
+  de_tables <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
+    de_res$de_tables
+  } else if (!is.null(de_res$summary_df)) {
+    list(contrast = de_res$summary_df)
+  } else if (is.data.frame(de_res)) {
+    list(contrast = de_res)
+  } else {
+    .mmc_stop("could not extract any DE table (expected de_res$de_tables / $summary_df / a data.frame).")
+  }
+  contrast_names <- names(de_tables)
+  if (is.null(contrast_names) || any(!nzchar(contrast_names))) {
+    contrast_names <- paste0("contrast_", seq_along(de_tables))
   }
 
-  # -- Write input, run the pinned v2 engine ----------------------------------
-  mummi_dir  <- file.path(out_dir, "mummichog_pinned")
-  input_file <- write_mummichog_input(
-    stats_tbl = stats_tbl,
-    path      = file.path(mummi_dir, "input.tsv"),
-    mz_col    = "mz",
-    rt_col    = "retention_time",
-    p_col     = "p_value",
-    stat_col  = "statistic",
-    id_col    = "feature_id"
-  )
-
-  result_files <- run_mummichog_v2(
-    infile         = input_file,
-    out_dir        = file.path(mummi_dir, "v2"),
-    project        = "mcg_pinned",
-    python         = python,
-    network        = network,
-    mode           = mode_flag,
-    instrument_ppm = ppm,
-    permutations   = n_perm,
-    cutoff         = p_cutoff,
-    force_primary_ion = force_primary_ion
-  )
-
-  sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"), result_files)))
+  # -- Run mummichog per contrast, into its own subdir ------------------------
+  # A single contrast failing (bad DE table, empty overlap, ...) yields a NULL
+  # result for that contrast + a warning; the rest still run and the report
+  # section hides gracefully for the failed one.
+  mummi_dir <- file.path(out_dir, "mummichog_pinned")
+  results <- list()
+  for (i in seq_along(de_tables)) {
+    contrast     <- contrast_names[[i]]
+    contrast_dir <- file.path(mummi_dir, gsub("[^A-Za-z0-9]+", "_", contrast))
+    results[[contrast]] <- tryCatch(
+      .mmc_run_one_contrast(
+        de_table          = de_tables[[i]],
+        row_data          = row_data,
+        mz_col            = mz_col,
+        rt_col            = rt_col,
+        contrast_label    = contrast,
+        contrast_dir      = contrast_dir,
+        network           = network,
+        mode              = mode_flag,
+        instrument_ppm    = ppm,
+        permutations      = n_perm,
+        cutoff            = p_cutoff,
+        force_primary_ion = force_primary_ion,
+        python            = python
+      ),
+      error = function(e) {
+        warning("mummichog (pinned): contrast '", contrast, "' failed: ",
+                conditionMessage(e), call. = FALSE)
+        list(files = character(0), pathways = NULL)
+      }
+    )
+  }
+  results
 }
