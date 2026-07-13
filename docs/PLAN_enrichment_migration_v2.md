@@ -383,6 +383,28 @@ clusterProfiler::GSEA(...)  # fgsea permutations use the future-assigned stream
 
 **Validation (this change) — PASS.** Three enrichment runs on the smoke config, each with a *different* ambient RNG state (`set.seed(999/1/424242)` before the call): (1) `workers = 1` (ambient 999) ≡ `workers = 4` (ambient 1) — all leaves byte-identical; (2) **ambient-independent** — `workers = 4` ambient 1 ≡ ambient 424242 (the "independent rebuild" property); (3) `workers = 1`/ambient 999 ≡ `workers = 4`/ambient 424242 — identical across *both* axes; (4) ORA identical across all three (deterministic). GSEA leaf counts were **stable at 5/5/5** (vs the 1-vs-2 drift observed under the old `future.seed = TRUE`). Conclusion: enrichment results now depend only on inputs + `params$seed`.
 
+## 12.2 No nested parallelism — `fgsea` runs serially inside each GSEA job
+
+**Root cause (found during RStudio validation).** `clusterProfiler::GSEA()` has no `BPPARAM` argument, so `fgsea` uses `BiocParallel::bpparam()`, which on **Windows defaults to `SnowParam` with (here) 14 SOCK workers**. Every GSEA job therefore spawned — and tore down — a 14-worker PSOCK cluster, *independent of* our `future` plan or `workers` setting. That is **nested parallelism**: `future.apply` fans out GSEA jobs, and each job then spun up its own SOCK cluster.
+
+**Why it was problematic in our architecture.** The nested SOCK cluster is fragile and environment-dependent: in headless `Rscript` it usually worked (which is why earlier validation "passed"), but in an **RStudio session** the master→worker `serialize(data, node$con)` send failed with *"error writing to connection"* (`sendData.SOCKnode`). Because GSEA dispatch is fail-soft, every GSEA job was silently swallowed and `rna_pathway_res` completed with **only `cluster_ora`** (ORA has no `BiocParallel`, so all ORA jobs succeeded). Even when it didn't fail outright, the flaky cluster **silently dropped jobs** (a smoke run showed 3 GSEA leaves where 5 were expected). With `workers > 1` it would be strictly worse — `future` multisession workers each spawning a 14-worker SOCK cluster. The repeated "project is out-of-sync" renv messages were child SOCK workers each autoloading renv on startup.
+
+**Fix.** Pass `BPPARAM = BiocParallel::SerialParam()` to **both** `clusterProfiler::GSEA()` call sites (`run_gsea_all()`'s per-job worker, and `run_gsea_local()`). Each GSEA job now runs `fgsea` **in a single process**; the *only* parallelism is the outer `future.apply` job fan-out controlled by `workers`. Execution model:
+
+```
+future.apply distributes independent GSEA jobs   (controlled by `workers`)
+        ↓
+each job calls clusterProfiler::GSEA()
+        ↓
+fgsea runs with BiocParallel::SerialParam()       (no inner SOCK cluster)
+```
+
+No new config option; no new dependency (`BiocParallel` is already a `fgsea`/`clusterProfiler` dependency); ORA untouched; the §12.1 RNG architecture (`params$seed` → integer `future.seed`) is unchanged and still the sole GSEA RNG source.
+
+**Biological results unchanged (no new baseline shift).** `SerialParam` and the old `SnowParam` produce **byte-identical** GSEA results per job (verified: same result digest); the fix only makes all jobs run *reliably*. It is not a numeric baseline shift — it recovers jobs the flaky cluster was dropping.
+
+**Validation — PASS.** `parse` + `tar_validate` + unit tests (51/0) clean. `tar_invalidate(rna_pathway_res)` + rebuild: all 7 ORA and all GSEA jobs completed; **no "error writing to connection"; no trailing `SOCKnode` serialize error**; renv child-worker messages dropped from ~14×7 to just the main process; `names(pathway_results)` = `cluster_ora, G.vs.Sy, any_contrast, Mud.vs.Sw` with **5 GSEA leaves** (was silently ORA-only in RStudio before). `workers = 1` ≡ `workers = 4` — 12 leaves each, all byte-identical (and `workers = 4` no longer nests SOCK clusters). Exposed during independent **RStudio** validation; committed as an isolated robustness fix.
+
 ---
 
 # 13. Phase 2 Preparation (start tomorrow)

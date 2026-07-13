@@ -1440,7 +1440,12 @@ run_gsea_local <- function(ranked_genes,
             minGSSize     = 4,
             maxGSSize     = nr_total_genes,
             pAdjustMethod = pAdjustMethod,
-            pvalueCutoff  = pvalueCutoff
+            pvalueCutoff  = pvalueCutoff,
+            # Run fgsea serially: our parallelism is the outer future.apply job
+            # fan-out, so fgsea's default (Windows) SnowParam SOCK cluster would
+            # be nested parallelism — fragile ("error writing to connection")
+            # and redundant. SerialParam keeps each GSEA job single-process.
+            BPPARAM       = BiocParallel::SerialParam()
         )
     }, error = function(e) {
         message("    GSEA failed: ", e$message)
@@ -1590,7 +1595,13 @@ run_gsea_all <- function(ranked_genes,
                 minGSSize     = 4,
                 maxGSSize     = length(unique(term2gene[, 2])),
                 pAdjustMethod = pAdjustMethod,
-                pvalueCutoff  = pvalueCutoff
+                pvalueCutoff  = pvalueCutoff,
+                # Serial fgsea inside each job. Outer parallelism is future.apply
+                # over jobs (see run_enrichment_jobs); fgsea's default (Windows)
+                # SnowParam spawns a 14-worker SOCK cluster PER job, which is
+                # nested parallelism — the source of "error writing to
+                # connection" failures under RStudio — and redundant here.
+                BPPARAM       = BiocParallel::SerialParam()
             )
         }, error = function(e) {
             structure(list(message = e$message), class = "gsea_error")
