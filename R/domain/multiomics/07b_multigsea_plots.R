@@ -832,8 +832,14 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     org_db <- get_organism_db(organism)
 
     if (is.null(kegg_org) || is.null(org_db)) {
-        message("Multi-ORA: organism annotation not available for ", organism)
-        return(NULL)
+        # No KEGG organism / OrgDb (e.g. non-model organisms): fall back to
+        # GMT-based ORA when the omics blocks supply custom gene sets.
+        gmt_res <- run_multi_ora_gmt(de_results, harmonization_res, config, out_dir)
+        if (is.null(gmt_res)) {
+            message("Multi-ORA: organism annotation not available for ", organism,
+                    " and no usable per-omic GMT gene sets")
+        }
+        return(gmt_res)
     }
 
     # --- Collect per-omics significant KEGG gene IDs ---
@@ -1309,6 +1315,211 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
 
     # Fallback: Fisher's exact test
     run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff)
+}
+
+
+#' Convert a GMT file to clusterProfiler TERM2GENE / TERM2NAME frames
+#'
+#' Reuses \code{read_gmt()} (a named list of gene vectors carrying a
+#' \code{descriptions} attribute) and reshapes it for
+#' \code{clusterProfiler::enricher}.
+#'
+#' @param gmt_file Path to a GMT file.
+#' @return A list with \code{t2g} (data.frame term, gene) and \code{t2n}
+#'   (data.frame term, name), or NULL if the file has no usable gene sets.
+gmt_to_term2gene <- function(gmt_file) {
+    gs <- tryCatch(read_gmt(gmt_file), error = function(e) NULL)
+    if (is.null(gs) || length(gs) == 0) return(NULL)
+    descr <- attr(gs, "descriptions")
+    t2g <- data.frame(
+        term = rep(names(gs), lengths(gs)),
+        gene = unlist(gs, use.names = FALSE),
+        stringsAsFactors = FALSE
+    )
+    t2n <- if (!is.null(descr)) {
+        data.frame(term = names(descr), name = unname(descr), stringsAsFactors = FALSE)
+    } else NULL
+    list(t2g = t2g, t2n = t2n)
+}
+
+
+#' Run ORA with clusterProfiler::enricher against a custom TERM2GENE
+#'
+#' GMT-based counterpart to \code{run_multi_ora_kegg()}; returns the same
+#' data.frame shape so the shared multi-ORA summary and plots consume it
+#' unchanged.
+#'
+#' @param sig_genes Significant feature IDs (native namespace, e.g. EHI_ / XP_).
+#' @param universe All tested feature IDs (shared background).
+#' @param term2gene data.frame(term, gene) gene-set membership.
+#' @param term2name Optional data.frame(term, name) for readable pathway labels.
+#' @param label Label used in progress messages.
+#' @param pval_cutoff Adjusted-p cutoff (falls back to raw p < 0.05).
+#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, Count, geneID), or NULL.
+run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = NULL,
+                                   label = "pooled", pval_cutoff = 0.1) {
+
+    if (length(sig_genes) < 3) {
+        message("    ", label, ": too few significant genes (", length(sig_genes), ")")
+        return(NULL)
+    }
+
+    ora_res <- tryCatch({
+        res <- clusterProfiler::enricher(
+            gene = sig_genes,
+            universe = universe,
+            TERM2GENE = term2gene,
+            TERM2NAME = term2name,
+            minGSSize = 5,
+            maxGSSize = 500,
+            pvalueCutoff = 1.0
+        )
+        if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
+            df <- as.data.frame(res)
+            out <- data.frame(
+                pathway   = if (!is.null(df$Description)) df$Description else df$ID,
+                ID        = df$ID,
+                pvalue    = df$pvalue,
+                padj      = df$p.adjust,
+                GeneRatio = df$GeneRatio,
+                Count     = df$Count,
+                geneID    = df$geneID,
+                stringsAsFactors = FALSE
+            )
+            padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
+            if (nrow(padj_hits) > 0) return(padj_hits)
+            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+            if (nrow(pval_hits) > 0) {
+                message("    ", label, ": padj too strict, using pvalue < 0.05 (",
+                        nrow(pval_hits), " pathways)")
+                return(pval_hits)
+            }
+        }
+        NULL
+    }, error = function(e) {
+        message("    ", label, " enricher ORA failed: ", e$message)
+        NULL
+    })
+
+    if (!is.null(ora_res)) {
+        message("    ", label, ": ", nrow(ora_res), " enriched pathways")
+    }
+    ora_res
+}
+
+
+#' GMT-based multi-omics ORA (fallback when no KEGG/OrgDb organism)
+#'
+#' Runs over-representation analysis on the pooled and per-omic significant
+#' gene-based DE features using each omic's custom GMT
+#' (\code{modes.<omic>.pathway.gmt_file}), via \code{clusterProfiler::enricher}.
+#' The per-omic GMTs share pathway IDs across namespaces (e.g. EHI_ for RNA and
+#' XP_ for proteomics), so their TERM2GENE tables are row-bound into one
+#' collection and a pooled mixed-namespace hit list enriches against it — each
+#' omic's hits match that omic's members under the same term. A gene measured in
+#' two omics contributes once per omic (pooled multi-omic evidence).
+#'
+#' Per-contrast ORA is intentionally not run here: the multi-omics runs are
+#' single-contrast, so pooled + per-omic already covers the whole comparison.
+#'
+#' @param de_results Named list of DE results per omics.
+#' @param harmonization_res Harmonization result (for \code{extract_de_tables}).
+#' @param config Full config object.
+#' @param out_dir Output directory for results and plots.
+#' @return list(pooled, per_omics, metabolomics, combined, plots), or NULL.
+run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
+
+    gene_omics   <- c("transcriptomics", "proteomics")
+    omic_cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")
+
+    per_omics_sig  <- list()
+    per_omics_univ <- list()
+    per_omics_t2g  <- list()
+    per_omics_t2n  <- list()
+
+    for (om in intersect(gene_omics, names(de_results))) {
+        gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
+        if (is.null(gmt_path) || !nzchar(gmt_path)) next
+        gmt_abs <- resolve_raw_path(config, gmt_path)
+        if (!file.exists(gmt_abs)) {
+            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
+            next
+        }
+        gs <- gmt_to_term2gene(gmt_abs)
+        if (is.null(gs) || nrow(gs$t2g) == 0) next
+
+        de_tables <- extract_de_tables(de_results[[om]], om, harmonization_res)
+        if (is.null(de_tables) || length(de_tables) == 0) next
+
+        sig <- character(0); univ <- character(0)
+        for (nm in names(de_tables)) {
+            df  <- de_tables[[nm]]
+            fid <- as.character(df$feature_id)
+            univ <- c(univ, fid)
+            s <- fid[!is.na(df$padj) & df$padj < 0.05]
+            if (length(s) < 5) s <- fid[!is.na(df$pvalue) & df$pvalue < 0.05]
+            sig <- c(sig, s)
+        }
+        sig  <- unique(sig[!is.na(sig)])
+        univ <- unique(univ[!is.na(univ)])
+        if (length(sig) == 0) next
+
+        per_omics_sig[[om]]  <- sig
+        per_omics_univ[[om]] <- univ
+        per_omics_t2g[[om]]  <- gs$t2g
+        per_omics_t2n[[om]]  <- gs$t2n
+        message("  Multi-ORA (GMT) ", om, ": ", length(sig), " sig / ",
+                length(univ), " tested features")
+    }
+
+    if (length(per_omics_sig) == 0) {
+        message("Multi-ORA (GMT): no gene-based omics with a usable GMT + sig features")
+        return(NULL)
+    }
+
+    comb_t2g    <- unique(do.call(rbind, per_omics_t2g))
+    comb_t2n    <- unique(do.call(rbind, Filter(Negate(is.null), per_omics_t2n)))
+    pooled_sig  <- unique(unlist(per_omics_sig))
+    pooled_univ <- unique(unlist(per_omics_univ))
+
+    message("  Running pooled GMT ORA...")
+    pooled_ora <- run_multi_ora_enricher(pooled_sig, pooled_univ, comb_t2g, comb_t2n, "pooled")
+
+    per_omics_ora <- list()
+    for (om in names(per_omics_sig)) {
+        message("  Running per-omics GMT ORA for ", om, "...")
+        per_omics_ora[[om]] <- run_multi_ora_enricher(
+            per_omics_sig[[om]], per_omics_univ[[om]],
+            per_omics_t2g[[om]], per_omics_t2n[[om]], om)
+    }
+
+    combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, NULL)
+    if (is.null(combined) || nrow(combined) == 0) {
+        message("Multi-ORA (GMT): no enriched pathways found")
+        return(NULL)
+    }
+    write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
+    message("  Multi-ORA (GMT) found ", nrow(combined), " enriched pathways (pooled)")
+
+    plots <- list()
+    if (!is.null(pooled_ora) && nrow(pooled_ora) > 0) {
+        plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
+        png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
+        tryCatch(
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)"),
+            error = function(e) { plot.new(); text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2) }
+        )
+        dev.off()
+    }
+    plots$dotplot <- file.path(out_dir, "multi_ora_dotplot.png")
+    tryCatch(plot_multi_ora_dotplot(combined, per_omics_ora, NULL, out_dir),
+             error = function(e) message("  Multi-ORA dot plot failed: ", e$message))
+    plots$support_barplot <- file.path(out_dir, "multi_ora_support_barplot.png")
+    tryCatch(plot_multi_ora_support(combined, out_dir),
+             error = function(e) message("  Multi-ORA support plot failed: ", e$message))
+
+    list(pooled = pooled_ora, per_omics = per_omics_ora, metabolomics = NULL,
+         combined = combined, plots = plots)
 }
 
 
