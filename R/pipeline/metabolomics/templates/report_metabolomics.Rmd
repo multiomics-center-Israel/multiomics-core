@@ -402,6 +402,8 @@ cat("</div>\n")
 # ---- DE breakdown per contrast -------------------------------------------
 if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summary_df)) {
   padj_cut <- metab_cfg$de$p_cutoff %||% 0.05
+  # Match the DE significance gate (build_de_summary): adjusted (default) or raw.
+  pcol_de <- if (isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE)) "adj.P.Val" else "P.Value"
   if (!is.null(metab_cfg$de$logfc_cutoff)) {
     log2_lfc <- metab_cfg$de$logfc_cutoff
   } else {
@@ -417,7 +419,8 @@ if (!is.null(de_contrasts) && length(de_contrasts) > 0 && !is.null(de_res$summar
     ctr_tbl   <- tryCatch(extract_contrast_table(de_res$summary_df, ctr_label),
                            error = function(e) NULL)
     if (!is.null(ctr_tbl)) {
-      sig   <- !is.na(ctr_tbl$P.Value) & ctr_tbl$P.Value <= padj_cut &
+      pv    <- ctr_tbl[[pcol_de]]
+      sig   <- !is.na(pv) & pv <= padj_cut &
                !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc
       n_up   <- sum(sig & ctr_tbl$logFC > 0, na.rm = TRUE)
       n_down <- sum(sig & ctr_tbl$logFC < 0, na.rm = TRUE)
@@ -532,11 +535,13 @@ if (!is.null(pre$meta) && cond_col %in% colnames(pre$meta)) {
 ## Pipeline Settings
 
 ```{r params-pipeline}
+pcut_label <- if (isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE))
+  "Adjusted p-value Cutoff" else "Raw p-value Cutoff"
 settings <- data.frame(
   Parameter = c(
     "Normalization",
     "DE Method",
-    "Adjusted p-value Cutoff",
+    pcut_label,
     "Linear FC Cutoff",
     "Random Forest",
     "PLS-DA",
@@ -859,6 +864,10 @@ if (exists("cutoff_panel_html")) {
 ```{r de-prep, include=FALSE}
 # Prepare shared data used across DE sub-sections
 padj_cut_de <- metab_cfg$de$p_cutoff %||% 0.05
+# Match the DE significance gate (build_de_summary): adjusted (default) or raw.
+use_adj_de     <- isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE)
+pcol_de        <- if (use_adj_de) "adj.P.Val" else "P.Value"
+ptype_label_de <- if (use_adj_de) "adjusted p-value" else "raw p-value"
 # logfc_cutoff is applied directly to |logFC| (in the transform's scale).
 # linear_fc_cutoff is a backwards-compat alias converted via log2().
 if (!is.null(metab_cfg$de$logfc_cutoff)) {
@@ -915,7 +924,7 @@ if (!is.null(de_res) && !is.null(de_res$summary_df)) {
   n_sig_any <- sum(de_res$summary_df$pass_any_contrast == 1, na.rm = TRUE)
   if (n_sig_any == 0) {
     n_samp <- ncol(pre$expr_work)
-    cat("\n> **Note:** No features reached significance (p-value < ",
+    cat("\n> **Note:** No features reached significance (", ptype_label_de, " < ",
         padj_cut_de, " and |logFC| >= ", round(log2_lfc_de, 2),
         "). With only **", n_samp, " samples**, the test has limited power. ",
         "Consider increasing sample size, relaxing thresholds, or using a ",
@@ -938,15 +947,16 @@ if (!is.null(de_contrasts)) {
     # Add Name column
     ctr_tbl$Name <- vapply(ctr_tbl$feature_id, resolve_name, character(1), USE.NAMES = FALSE)
 
-    # Direction column for coloring (uses raw P.Value)
+    # Direction + y-axis use the selected p-value column (adjusted by default)
+    .pv_de <- ctr_tbl[[pcol_de]]
     ctr_tbl$Direction <- ifelse(
-      !is.na(ctr_tbl$P.Value) & ctr_tbl$P.Value <= padj_cut_de &
+      !is.na(.pv_de) & .pv_de <= padj_cut_de &
         !is.na(ctr_tbl$logFC) & abs(ctr_tbl$logFC) >= log2_lfc_de,
       ifelse(ctr_tbl$logFC > 0, "Up", "Down"), "NS"
     )
     ctr_tbl$Direction <- factor(ctr_tbl$Direction, levels = c("NS", "Down", "Up"))
     ctr_tbl$neglog10_pval <- pmin(-log10(pmax(
-      ifelse(is.na(ctr_tbl$P.Value), 1, ctr_tbl$P.Value), 1e-300
+      ifelse(is.na(.pv_de), 1, .pv_de), 1e-300
     )), 50)
 
     # ================================================================
@@ -1018,7 +1028,7 @@ if (!is.null(de_contrasts)) {
         ggplot2::scale_color_manual(values = c("NS" = "grey70", "Down" = "blue", "Up" = "red")) +
         ggplot2::geom_vline(xintercept = c(-log2_lfc_de, log2_lfc_de), linetype = "dashed", alpha = 0.5) +
         ggplot2::geom_hline(yintercept = -log10(padj_cut_de), linetype = "dashed", alpha = 0.5) +
-        ggplot2::labs(x = "log2(FC)", y = "-log10(P.Value)") +
+        ggplot2::labs(x = "log2(FC)", y = paste0("-log10(", pcol_de, ")")) +
         ggplot2::theme_minimal()
 
       vol_plotly <- plotly::ggplotly(vol_p, tooltip = "text")
