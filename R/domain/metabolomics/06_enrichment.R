@@ -100,8 +100,12 @@ read_hmdb_kegg_map <- function(path) {
 #' @param row_data     data.frame with feature annotations.
 #' @param expr_mat     Expression matrix (features x samples).
 #' @param mapping_file Optional path to HMDB-to-KEGG mapping TSV.
-#' @return list(expr_mapped, compound_names) with remapped rownames.
-map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL) {
+#' @param annotated_only Logical. When TRUE, restrict the universe to features
+#'   carrying a KEGG compound ID (drop name-only features). Use with a KEGG-based
+#'   GMT so the background matches the pathway namespace (MetaboAnalyst-style).
+#' @return list(expr_mapped, compound_names, feature_map) with remapped rownames.
+map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL,
+                                         annotated_only = FALSE) {
     # Align the expression matrix to the annotation rows. row_data can be a
     # filtered subset of expr_mat (e.g. missingness filtering drops features, so
     # expr_raw ends up with more rows than row_data); matching by feature id
@@ -163,6 +167,20 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
         compound_names[has_kegg] <- kegg_id[has_kegg]
         message("enrichment: using KEGG IDs from '", kegg_col, "' for ",
                 sum(has_kegg), " features")
+    }
+
+    # Optionally restrict the universe to features carrying a KEGG compound ID.
+    # With a KEGG-based GMT, name-only features can never match a pathway, so
+    # keeping them only inflates the background; MetaboAnalyst-style ORA uses the
+    # KEGG-mappable set as the reference. Detect KEGG IDs by their Cxxxxx shape
+    # (set above from the KEGG column or the HMDB->KEGG mapping).
+    if (isTRUE(annotated_only)) {
+        is_kegg <- grepl("^C[0-9]{5}$", trimws(compound_names))
+        n_drop  <- sum(!is_kegg & !is.na(compound_names))
+        compound_names[!is_kegg] <- NA_character_
+        message("enrichment: restricting background to ",
+                sum(is_kegg, na.rm = TRUE), " KEGG-annotated features (dropped ",
+                n_drop, " name-only).")
     }
 
     # Per-feature id -> compound map, keyed by the feature ids callers hold
@@ -301,8 +319,9 @@ run_metabolomics_qea <- function(pre, config) {
     # ---- Prepare QEA data ----
     # Map features to compound IDs and transpose into the samples-by-compounds
     # layout expected by globaltest. The result is written to a temp TSV.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(
+        pre$row_data, pre$expr_raw, mapping_file,
+        annotated_only = identical(tolower(enr_cfg$background %||% "all"), "annotated"))
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
         return(NULL)
@@ -504,8 +523,9 @@ run_metabolomics_ssgsea <- function(pre, config) {
 
     # ---- Build expression matrix with compound IDs ----
     # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(
+        pre$row_data, pre$expr_raw, mapping_file,
+        annotated_only = identical(tolower(enr_cfg$background %||% "all"), "annotated"))
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {
         message("metabolomics ssGSEA: too few features — skipping")
@@ -690,8 +710,9 @@ run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build background (all measured features mapped to IDs) ----
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(
+        pre$row_data, pre$expr_raw, mapping_file,
+        annotated_only = identical(tolower(enr_cfg$background %||% "all"), "annotated"))
     bg_ids <- mapped$compound_names
     if (length(bg_ids) < 5) {
         message("metabolomics ORA: too few background compounds — skipping")
@@ -882,8 +903,9 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     de_tbl <- de_res$de_tables[[contrast_name]]
 
     # Map feature IDs to the compound namespace via the aligned per-feature map.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(
+        pre$row_data, pre$expr_raw, mapping_file,
+        annotated_only = identical(tolower(enr_cfg$background %||% "all"), "annotated"))
     de_tbl$compound_id <- mapped$feature_map[de_tbl$feature_id]
     de_tbl <- de_tbl[!is.na(de_tbl$compound_id) & nzchar(de_tbl$compound_id), ]
     de_tbl <- de_tbl[!is.na(de_tbl$logFC), ]

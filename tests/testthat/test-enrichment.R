@@ -199,6 +199,29 @@ test_that(".sanitize_contrast produces file-safe labels", {
     expect_equal(.sanitize_contrast("x/y:z"), "x_y_z")
 })
 
+test_that("map_compounds_for_enrichment restricts to KEGG when annotated_only=TRUE", {
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f2", "f3", "f4"),
+        Name       = c("Glucose", "Citrate", "Pyruvate", "Alanine"),
+        KEGG       = c("C00031", "", "C00022", ""),   # only f1, f3 carry KEGG
+        stringsAsFactors = FALSE
+    )
+
+    res <- map_compounds_for_enrichment(row_data, expr, annotated_only = TRUE)
+
+    # Background is the KEGG-annotated set only; name-only features are dropped.
+    expect_equal(sort(unname(res$compound_names)), c("C00022", "C00031"))
+    expect_equal(nrow(res$expr_mapped), 2L)
+    expect_equal(unname(res$feature_map[["f1"]]), "C00031")
+    expect_true(is.na(res$feature_map[["f2"]]))
+
+    # Default (annotated_only = FALSE) keeps name-only features in the background.
+    res_all <- map_compounds_for_enrichment(row_data, expr)
+    expect_equal(nrow(res_all$expr_mapped), 4L)
+})
+
 test_that("map_compounds_for_enrichment aligns a filtered row_data to a larger matrix", {
     # expr_mat carries an extra feature (f2) that was dropped from row_data
     # upstream (e.g. by missingness filtering), so nrow(expr) != nrow(row_data).
