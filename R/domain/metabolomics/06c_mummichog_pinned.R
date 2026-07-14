@@ -594,6 +594,40 @@ read_mummichog_pathways <- function(files) {
   readr::read_tsv(tsv[[1]], show_col_types = FALSE)
 }
 
+#' Read per-contrast mummichog pathway tables from a flat file list
+#'
+#' The per-contrast stage writes each contrast's outputs under
+#' `mummichog_pinned/<contrast>/...` and tracks every file in one flat
+#' `format = "file"` target. This regroups that flat list by contrast directory
+#' — the path segment directly under `mummichog_pinned/` — and reads each
+#' contrast's pathway table, so the report can render one section per contrast
+#' without the stage having to hold the tables in memory.
+#'
+#' @param files Character vector of mummichog output files across all contrasts.
+#' @return A named list keyed by contrast (the sanitised subdir name), each a
+#'   pathway tibble. Contrasts that produced no pathway table are omitted, so
+#'   the report simply shows no section for them; an empty list results when
+#'   `files` is empty or none live under `mummichog_pinned/`.
+read_mummichog_pathways_by_contrast <- function(files) {
+  if (length(files) == 0) return(list())
+  # Contrast = the path segment immediately under mummichog_pinned/ (paths are
+  # built with file.path(), i.e. "/"-separated on the supported platforms).
+  pat   <- ".*/mummichog_pinned/([^/]+)/.*"
+  under <- grepl(pat, files)
+  files <- files[under]
+  if (length(files) == 0) return(list())
+  contrast <- sub(pat, "\\1", files)
+
+  out <- list()
+  for (nm in unique(contrast)) {
+    grp <- files[contrast == nm]
+    # A contrast with no pathway table -> read errors -> NULL, and `out[[nm]] <-
+    # NULL` simply omits it (no section rendered) rather than aborting the read.
+    out[[nm]] <- tryCatch(read_mummichog_pathways(grp), error = function(e) NULL)
+  }
+  out
+}
+
 #' Read the mummichog module-analysis table
 #' @param files Character vector of mummichog output files.
 #' @return A tibble of module results.

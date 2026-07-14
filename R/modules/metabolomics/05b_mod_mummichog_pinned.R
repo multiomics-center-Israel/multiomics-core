@@ -5,16 +5,21 @@
 # retention-time columns from row_data (RT passed through unchanged, in minutes),
 # logFC as the statistic.
 #
-# Wired into 00_pipe_metabolomics.R as the metab_mummichog_pinned target, added
-# only when modes.metabolomics.enrichment.mummichog.enabled is true. Runs
-# mummichog once PER CONTRAST and returns a per-contrast list of results.
+# Wired into 00_pipe_metabolomics.R as the metab_mummichog_pinned_files target
+# (format = "file"), added only when
+# modes.metabolomics.enrichment.mummichog.enabled is true. Runs mummichog once
+# PER CONTRAST and returns the flat list of every file produced across all
+# contrasts; the report reads each contrast's pathway table back from those files.
 
 
 #' Run the pinned mummichog engine for a single contrast
 #'
 #' Assembles the mummichog input from one contrast's DE table joined to the
-#' shared m/z / RT annotations, runs the v2 subprocess into `contrast_dir`, and
-#' reads back that contrast's pathway table. Independent of other contrasts.
+#' shared m/z / RT annotations and runs the v2 subprocess into `contrast_dir`.
+#' Independent of other contrasts. Returns only the produced file paths — the
+#' per-contrast pathway tables are read back downstream from the tracked files
+#' (see `read_mummichog_pathways_by_contrast()`), keeping the side-effecting run
+#' inside the `format = "file"` target so it self-heals on output deletion.
 #'
 #' @param de_table One contrast's DE table (feature_id, P.Value, logFC).
 #' @param row_data Feature annotations (shared); m/z, RT, feature_id.
@@ -23,7 +28,8 @@
 #' @param contrast_dir Per-contrast output dir (mummichog_pinned/<contrast>/).
 #' @param network,mode,instrument_ppm,permutations,cutoff,force_primary_ion,python
 #'   Run parameters (a single global model + params for every contrast).
-#' @return list(files = character vector, pathways = tibble or NULL).
+#' @return Character vector of files this contrast produced (input, id-map,
+#'   result tree, manifest).
 #' @noRd
 .mmc_run_one_contrast <- function(de_table, row_data, mz_col, rt_col,
                                   contrast_label, contrast_dir,
@@ -71,12 +77,7 @@
     cutoff         = cutoff,
     force_primary_ion = force_primary_ion
   )
-  files <- sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"),
-                         result_files)))
-  # Read this contrast's pathway table for the report; a run that produced none
-  # -> NULL so the report section hides for this contrast instead of erroring.
-  pathways <- tryCatch(read_mummichog_pathways(files), error = function(e) NULL)
-  list(files = files, pathways = pathways)
+  sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"), result_files)))
 }
 
 #' Run pinned mummichog v2 enrichment for metabolomics, per contrast
@@ -95,9 +96,9 @@
 #' @param out_dir Output directory for the metabolomics mode.
 #' @param python  Path to the pinned venv python (defaults to $MUMMICHOG_PYTHON,
 #'                else envs/mummichog/bin/python).
-#' @return Named list keyed by contrast, each element `list(files, pathways)`
-#'   (`pathways` is NULL when that contrast produced no result); NULL when
-#'   mummichog is disabled in config.
+#' @return Character vector of every file produced across all contrasts
+#'   (per-contrast inputs, id-maps, result trees, manifests), suitable for a
+#'   `format = "file"` target; NULL when mummichog is disabled in config.
 mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
                                  python = Sys.getenv("MUMMICHOG_PYTHON",
                                                      .mmc_default_python())) {
@@ -196,11 +197,11 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # of clobbering each other's on-disk results. sep = "_" keeps names in charset.
   contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", contrast_names),
                                sep = "_")
-  results <- list()
+  files <- list()
   for (i in seq_along(de_tables)) {
     contrast     <- contrast_names[[i]]
     contrast_dir <- file.path(mummi_dir, contrast_dirs[[i]])
-    results[[contrast]] <- tryCatch(
+    files[[i]] <- tryCatch(
       .mmc_run_one_contrast(
         de_table          = de_tables[[i]],
         row_data          = row_data,
@@ -219,9 +220,13 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
       error = function(e) {
         warning("mummichog (pinned): contrast '", contrast, "' failed: ",
                 conditionMessage(e), call. = FALSE)
-        list(files = character(0), pathways = NULL)
+        character(0)
       }
     )
   }
-  results
+  # Flat, de-duplicated file list across all contrasts. This is the value of the
+  # format = "file" target, so deleting any tracked output re-runs the whole
+  # stage (regenerating every contrast). The report reads per-contrast pathway
+  # tables back from these paths via read_mummichog_pathways_by_contrast().
+  sort(unique(unlist(files, use.names = FALSE)))
 }

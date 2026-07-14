@@ -116,6 +116,34 @@ test_that("readers fail loudly when an expected table is absent", {
   expect_error(read_mummichog_modules(list_mummichog_files(empty)), "No modular")
 })
 
+test_that("read_mummichog_pathways_by_contrast groups a flat file list by contrast", {
+  root <- withr::local_tempdir()
+  mk <- function(contrast, with_pw = TRUE) {
+    cdir <- file.path(root, "mummichog_pinned", contrast)
+    tdir <- file.path(cdir, "v2", "1699999999.99.mcg_pinned", "tables")
+    dir.create(tdir, recursive = TRUE, showWarnings = FALSE)
+    writeLines("x", file.path(cdir, "input.tsv"))     # always present
+    if (with_pw) {
+      writeLines(c("pathway\tp-value", "PathA\t0.01"),
+                 file.path(tdir, "mcg_pathwayanalysis_mcg_pinned.tsv"))
+    }
+  }
+  mk("A_vs_B"); mk("C_vs_D"); mk("E_vs_F", with_pw = FALSE)
+
+  files <- list.files(file.path(root, "mummichog_pinned"),
+                      recursive = TRUE, full.names = TRUE)
+  files <- c(files, file.path(root, "stray.txt"))     # not under a contrast dir
+
+  res <- read_mummichog_pathways_by_contrast(files)
+  # only contrasts with a pathway table appear; E_vs_F (input only) is omitted
+  expect_setequal(names(res), c("A_vs_B", "C_vs_D"))
+  expect_s3_class(res[["A_vs_B"]], "data.frame")
+  expect_equal(nrow(res[["C_vs_D"]]), 1L)
+
+  expect_length(read_mummichog_pathways_by_contrast(character(0)), 0)
+  expect_length(read_mummichog_pathways_by_contrast(NULL), 0)
+})
+
 test_that("an input placed inside out_dir is staged out so it survives the wipe", {
   root    <- withr::local_tempdir()
   out_dir <- file.path(root, "v2")
@@ -229,15 +257,15 @@ test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled
   library(targets)
   on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
   off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
-  # enabling adds metab_mummichog_pinned + _files + _report_pathways (3); disabled
-  # adds only the report alias (1) -> net +2
-  expect_equal(length(on) - length(off), 2L)
+  # enabling adds _files (the format="file" per-contrast run) + _report_pathways
+  # (the read-back) = 2; disabled adds only the report alias (1) -> net +1
+  expect_equal(length(on) - length(off), 1L)
 
   # the stage lives in analysis_core, so it is also present in multiomics runs
   # (skip_outputs = TRUE), matching the pre-switch behaviour
   mo_on  <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = TRUE)
   mo_off <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = FALSE)
-  expect_equal(length(mo_on) - length(mo_off), 2L)
+  expect_equal(length(mo_on) - length(mo_off), 1L)
 })
 
 test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
