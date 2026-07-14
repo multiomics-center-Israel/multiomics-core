@@ -116,6 +116,22 @@ test_that("readers fail loudly when an expected table is absent", {
   expect_error(read_mummichog_modules(list_mummichog_files(empty)), "No modular")
 })
 
+test_that(".mmc_check_run_outputs salvages a non-zero exit when the pathway table exists", {
+  ok  <- c("/x/v2/1699.p/tables/mcg_pathwayanalysis_p.tsv", "/x/v2/runner.log")
+  bad <- c("/x/v2/runner.log")
+
+  # the known result.html rescale_color crash: non-zero exit BUT the pathway
+  # table was already written -> salvage with a warning, don't abort
+  expect_warning(res <- .mmc_check_run_outputs(1L, ok, "log.txt"), "salvaging")
+  expect_true(res)
+  # non-zero exit with no pathway table -> a real failure
+  expect_error(.mmc_check_run_outputs(1L, bad, "log.txt"), "no pathway table")
+  # clean exit with outputs -> silent success
+  expect_silent(.mmc_check_run_outputs(0L, ok, "log.txt"))
+  # clean exit that produced nothing usable -> error
+  expect_error(.mmc_check_run_outputs(0L, bad, "log.txt"), "no expected v2 outputs")
+})
+
 # Build a flat mummichog_pinned/<dir>/... file list under `root`; one subdir per
 # entry, each with an input.tsv and (unless with_pw = FALSE) a pathway table.
 .mk_contrast_tree <- function(root, dirs, with_pw = rep(TRUE, length(dirs))) {

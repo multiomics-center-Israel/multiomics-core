@@ -479,6 +479,42 @@ write_mummichog_manifest <- function(files, manifest_file) {
   c(args, extra_args)
 }
 
+#' Decide a mummichog run's outcome from its exit status and produced files
+#'
+#' mummichog 2.7.0 can crash while rendering `result.html` (the known
+#' `rescale_color` "max() arg is an empty sequence" bug) AFTER it has already
+#' written the pathway table, exiting non-zero even though the enrichment
+#' succeeded. Treating every non-zero exit as fatal therefore discards otherwise
+#' complete contrasts. Salvage instead: a non-zero exit with the pathway table
+#' present is a warning, not an error; a non-zero exit with no table is a real
+#' failure; and a clean exit that produced nothing usable still fails.
+#'
+#' @param status   The subprocess exit status.
+#' @param files    Files discovered in the result tree (basenames inspected).
+#' @param log_file Path to the runner log, quoted in messages.
+#' @return Invisibly TRUE when the run is usable; aborts on a real failure.
+#' @noRd
+.mmc_check_run_outputs <- function(status, files, log_file) {
+  base <- basename(files)
+  has_pathways <- any(grepl("^mcg_pathwayanalysis.*\\.(tsv|csv|xlsx)$", base))
+  has_v2 <- any(base == "result.html") ||
+    any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|csv|xlsx)$", base))
+
+  if (status != 0) {
+    if (!has_pathways) {
+      .mmc_stop("mummichog exited with status ", status,
+                " and produced no pathway table (a real failure). See: ", log_file)
+    }
+    warning("mummichog exited non-zero (status ", status, ") but the pathway ",
+            "table is present — likely the known result.html rescale_color bug; ",
+            "salvaging results. See: ", log_file, call. = FALSE)
+  } else if (!has_v2) {
+    .mmc_stop("mummichog finished but no expected v2 outputs were found. See: ",
+              log_file)
+  }
+  invisible(TRUE)
+}
+
 #' Run mummichog v2 as an isolated subprocess
 #'
 #' Invokes `python -m mummichog.main` in the pinned venv with the working
@@ -556,17 +592,9 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   if (isTRUE(result$timeout)) {
     .mmc_stop("mummichog timed out after ", timeout, "s. See: ", log_file)
   }
-  if (result$status != 0) {
-    .mmc_stop("mummichog exited with status ", result$status, ". See: ", log_file)
-  }
 
   files <- unique(c(list_mummichog_files(out_dir), log_file))
-  base  <- basename(files)
-  has_v2 <- any(base == "result.html") ||
-    any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|xlsx)$", base))
-  if (!has_v2) {
-    .mmc_stop("mummichog finished but no expected v2 outputs were found. See: ", log_file)
-  }
+  .mmc_check_run_outputs(result$status, files, log_file)
 
   manifest_file <- write_mummichog_manifest(
     files, file.path(out_dir, "mummichog_manifest.tsv")
