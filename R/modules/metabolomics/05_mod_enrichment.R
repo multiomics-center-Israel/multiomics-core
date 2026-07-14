@@ -19,7 +19,8 @@
 #' @param config  Full config.
 #' @param out_dir Output directory for this mode.
 #' @return list(qea, ssgsea, ora, gsea, plots, files).
-mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir) {
+mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
+                                        inputs = NULL) {
     assert_pre_contract(pre, stage = "metabolomics")
 
     enr_cfg <- config$modes$metabolomics$enrichment %||% list()
@@ -230,19 +231,57 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir) {
                                                    out_enr, out_ds))
     }
 
+    # ---- Per-contrast QEA & ssGSEA ----
+    # QEA/ssGSEA are group-based (not DE-driven), so the global runs above use
+    # the whole condition column (and ssGSEA yields no stats when there are more
+    # than two groups). To get per-contrast results we subset the samples to each
+    # contrast's two groups — read from inputs$contrasts (Factor + Numerator/
+    # Denominator) — and re-run each method on that subset. The global qea/ssgsea
+    # are kept for backward compatibility; the per-contrast sets feed the report.
+    qea_by_contrast    <- list()
+    ssgsea_by_contrast <- list()
+    cond_col <- enr_cfg$condition_column %||%
+                config$modes$metabolomics$de$condition_column %||%
+                config$modes$metabolomics$effects$color %||% "sample_type"
+    sample_col <- config$modes$metabolomics$effects$samples %||% "sample_id"
+    if (!is.null(de_res) && !is.null(de_res$de_tables) &&
+        length(de_res$de_tables) > 0 && !is.null(inputs)) {
+        for (ct in names(de_res$de_tables)) {
+            grp <- .resolve_contrast_groups(inputs, ct, cond_col)
+            if (is.null(grp)) {
+                warning("metabolomics QEA/ssGSEA: could not resolve the two groups ",
+                        "for contrast '", ct, "' from inputs$contrasts — skipping.")
+                next
+            }
+            pre_sub <- .subset_pre_to_groups(pre, grp$group_col, grp$groups, sample_col)
+            if (is.null(pre_sub)) {
+                warning("metabolomics QEA/ssGSEA: too few samples for contrast '",
+                        ct, "' (groups ", paste(grp$groups, collapse = " vs "),
+                        ") — skipping.")
+                next
+            }
+            q <- .mod_metab_qea_contrast(pre_sub, config, ct, out_enr, out_ds)
+            if (!is.null(q)) { qea_by_contrast[[ct]] <- q; files <- c(files, q$files) }
+            s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds)
+            if (!is.null(s)) { ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files) }
+        }
+    }
+
     # mummichog now runs as its own pinned {targets} stage (06c/05b), wired into
     # the metabolomics DAG when modes.metabolomics.enrichment.mummichog.enabled is
     # true — it is no longer produced here. See mod_mummichog_pinned().
 
     list(
-        qea              = qea_res,
-        ssgsea           = ssgsea_res,
-        ora              = ora_res,
-        gsea             = gsea_res,
-        ora_by_contrast  = ora_by_contrast,
-        gsea_by_contrast = gsea_by_contrast,
-        plots            = plots,
-        files            = unique(files)
+        qea                = qea_res,
+        ssgsea             = ssgsea_res,
+        ora                = ora_res,
+        gsea               = gsea_res,
+        qea_by_contrast    = qea_by_contrast,
+        ssgsea_by_contrast = ssgsea_by_contrast,
+        ora_by_contrast    = ora_by_contrast,
+        gsea_by_contrast   = gsea_by_contrast,
+        plots              = plots,
+        files              = unique(files)
     )
 }
 
@@ -396,4 +435,142 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir) {
         }
     }
     files
+}
+
+
+# ==============================================================================
+# Per-contrast QEA / ssGSEA helpers
+# ==============================================================================
+
+#' Resolve a contrast label to its two groups (from inputs$contrasts)
+#'
+#' Looks the contrast up in \code{inputs$contrasts} (a data.frame with
+#' Numerator/Denominator, optionally Contrast_name and Factor) and returns the
+#' grouping column and the two group values. Matches on Contrast_name first,
+#' then on the "Num - Den" / "Num_vs_Den" label styles.
+#'
+#' @param inputs        Loaded inputs list (uses \code{$contrasts}).
+#' @param contrast_label A key of \code{de_res$de_tables}.
+#' @param fallback_col  Grouping column to use when the contrast has no Factor.
+#' @return list(group_col, groups) or NULL when it cannot be resolved.
+.resolve_contrast_groups <- function(inputs, contrast_label, fallback_col) {
+    ct_df <- inputs$contrasts
+    if (is.null(ct_df) || !is.data.frame(ct_df) ||
+        !all(c("Numerator", "Denominator") %in% colnames(ct_df))) {
+        return(NULL)
+    }
+    row <- NULL
+    if ("Contrast_name" %in% colnames(ct_df)) {
+        hit <- which(as.character(ct_df$Contrast_name) == contrast_label)
+        if (length(hit) >= 1) row <- ct_df[hit[1], , drop = FALSE]
+    }
+    if (is.null(row)) {
+        lab_dash <- paste(ct_df$Numerator, ct_df$Denominator, sep = " - ")
+        lab_vs   <- paste(ct_df$Numerator, ct_df$Denominator, sep = "_vs_")
+        hit <- which(lab_dash == contrast_label | lab_vs == contrast_label)
+        if (length(hit) >= 1) row <- ct_df[hit[1], , drop = FALSE]
+    }
+    if (is.null(row)) return(NULL)
+
+    group_col <- if ("Factor" %in% colnames(ct_df) &&
+                     !is.na(row$Factor) && nzchar(as.character(row$Factor))) {
+        as.character(row$Factor)
+    } else {
+        fallback_col
+    }
+    list(group_col = group_col,
+         groups    = c(as.character(row$Numerator), as.character(row$Denominator)))
+}
+
+#' Subset a preprocessing object to the samples in a given set of groups
+#'
+#' Keeps the metadata rows (and the matching expression-matrix columns) whose
+#' \code{group_col} value is one of \code{groups}. row_data (features) is left
+#' unchanged. Returns NULL when fewer than two samples remain.
+#'
+#' @param pre        Preprocessing list (expr_*, meta, row_data).
+#' @param group_col  Metadata column defining the groups.
+#' @param groups     Character vector of group values to keep.
+#' @param sample_col Metadata column holding sample ids (matches matrix columns).
+#' @return A pre-like list subset to the requested samples, or NULL.
+.subset_pre_to_groups <- function(pre, group_col, groups, sample_col) {
+    meta <- pre$meta
+    if (is.null(meta) || !group_col %in% colnames(meta)) return(NULL)
+    keep_rows <- as.character(meta[[group_col]]) %in% groups
+    if (sum(keep_rows) < 2) return(NULL)
+    keep_ids <- as.character(meta[[sample_col]][keep_rows])
+
+    sub <- pre
+    sub$meta <- meta[keep_rows, , drop = FALSE]
+    for (m in c("expr_raw", "expr_work", "expr_filt", "expr_log")) {
+        if (!is.null(pre[[m]])) {
+            cols   <- intersect(colnames(pre[[m]]), keep_ids)
+            sub[[m]] <- pre[[m]][, cols, drop = FALSE]
+        }
+    }
+    sub
+}
+
+#' Run QEA for one contrast (on a two-group subset) and render/save its outputs
+#'
+#' @param pre_sub Two-group subset of the preprocessing object.
+#' @param config,contrast,out_enr,out_ds As in the other per-contrast helpers.
+#' @return list(res, plots, files) or NULL when the contrast yields no table.
+.mod_metab_qea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds) {
+    res <- tryCatch(
+        run_metabolomics_qea(pre_sub, config),
+        error = function(e) {
+            warning("metabolomics QEA failed for '", contrast, "': ", e$message)
+            NULL
+        }
+    )
+    if (is.null(res) || is.null(res$table)) return(NULL)
+
+    sfx   <- .sanitize_contrast(contrast)
+    files <- save_tsv(res$table, out_ds,
+                      paste0("enrichment_qea_", sfx, "_results.tsv"))
+    rendered <- .render_enrichment_plots(
+        res$table,
+        specs = list(
+            lollipop = function(t) plot_qea_lollipop(t, top_n = 20,
+                          title = paste0("QEA — ", contrast)),
+            barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
+                          title = paste0("QEA — ", contrast))
+        ),
+        prefix = "enrichment_qea", sfx = sfx, out_enr = out_enr
+    )
+    list(res = res, plots = rendered$plots, files = c(files, rendered$files))
+}
+
+#' Run ssGSEA for one contrast (on a two-group subset) and render/save outputs
+#'
+#' The two-group subset is exactly what ssGSEA's Wilcoxon step needs, so a
+#' dataset with more than two groups still yields per-contrast ssGSEA results.
+#'
+#' @inheritParams .mod_metab_qea_contrast
+#' @return list(res, plots, files) or NULL when the contrast yields no table.
+.mod_metab_ssgsea_contrast <- function(pre_sub, config, contrast, out_enr, out_ds) {
+    res <- tryCatch(
+        run_metabolomics_ssgsea(pre_sub, config),
+        error = function(e) {
+            warning("metabolomics ssGSEA failed for '", contrast, "': ", e$message)
+            NULL
+        }
+    )
+    if (is.null(res) || is.null(res$table)) return(NULL)
+
+    sfx   <- .sanitize_contrast(contrast)
+    files <- save_tsv(res$table, out_ds,
+                      paste0("enrichment_ssgsea_", sfx, "_results.tsv"))
+    rendered <- .render_enrichment_plots(
+        res$table,
+        specs = list(
+            lollipop = function(t) plot_ssgsea_lollipop(t, top_n = 20,
+                          title = paste0("ssGSEA — ", contrast)),
+            barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
+                          title = paste0("ssGSEA — ", contrast))
+        ),
+        prefix = "enrichment_ssgsea", sfx = sfx, out_enr = out_enr
+    )
+    list(res = res, plots = rendered$plots, files = c(files, rendered$files))
 }

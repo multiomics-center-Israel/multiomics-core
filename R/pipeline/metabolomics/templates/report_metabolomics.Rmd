@@ -1943,26 +1943,48 @@ if (!is.null(plsda_res$vip_df)) {
 ### Lollipop Plot
 
 ```{r qea-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$qea_lollipop)) {
-  safe_print_plot(enrichment_res$plots$qea_lollipop)
-  figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plot showing the top enriched metabolic pathways. Bar length represents statistical significance; color indicates enrichment score direction.")
+qeabc <- enrichment_res$qea_by_contrast
+if (is.null(qeabc) || length(qeabc) == 0) {
+  if (!is.null(enrichment_res$plots$qea_lollipop)) safe_print_plot(enrichment_res$plots$qea_lollipop)
+} else {
+  for (ct in names(qeabc)) {
+    p <- qeabc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plots, one per contrast (two-group comparison each). Bar length represents statistical significance.")
 ```
 
 ### Barplot
 
 ```{r qea-barplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$qea_barplot)) {
-  safe_print_plot(enrichment_res$plots$qea_barplot)
-  figure_legend("Barplot of QEA enriched pathways ranked by significance. Pathways are ordered from most to least significant.")
+qeabc <- enrichment_res$qea_by_contrast
+if (is.null(qeabc) || length(qeabc) == 0) {
+  if (!is.null(enrichment_res$plots$qea_barplot)) safe_print_plot(enrichment_res$plots$qea_barplot)
+} else {
+  for (ct in names(qeabc)) {
+    p <- qeabc[[ct]]$plots$barplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("QEA barplots, one per contrast, ranked by significance.")
 ```
 
 ### Results Table
 
 ```{r qea-table}
-if (!is.null(enrichment_res$qea$table)) {
-  make_dt(enrichment_res$qea$table, caption = "QEA Pathway Enrichment")
+qeabc <- enrichment_res$qea_by_contrast
+qea_tbl <- if (!is.null(qeabc) && length(qeabc) > 0) {
+  do.call(rbind, lapply(names(qeabc), function(ct) {
+    t <- qeabc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$qea$table
+}
+if (!is.null(qea_tbl)) {
+  make_dt(qea_tbl, caption = "QEA Pathway Enrichment — all contrasts")
 }
 ```
 
@@ -1975,19 +1997,31 @@ if (!is.null(enrichment_res$qea$table)) {
 ### Lollipop Plot
 
 ```{r ssgsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ssgsea_lollipop)) {
-  safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
-  figure_legend("ssGSEA lollipop plot showing the top enriched metabolic pathways based on single-sample Gene Set Enrichment Analysis scores.")
+ssbc <- enrichment_res$ssgsea_by_contrast
+if (is.null(ssbc) || length(ssbc) == 0) {
+  if (!is.null(enrichment_res$plots$ssgsea_lollipop)) safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
+} else {
+  for (ct in names(ssbc)) {
+    p <- ssbc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("ssGSEA lollipop plots, one per contrast (two-group comparison each), based on single-sample GSEA scores.")
 ```
 
 ### Barplot
 
 ```{r ssgsea-barplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ssgsea_barplot)) {
-  safe_print_plot(enrichment_res$plots$ssgsea_barplot)
-  figure_legend("Barplot of ssGSEA enrichment results, showing pathway enrichment scores ranked by significance.")
+ssbc <- enrichment_res$ssgsea_by_contrast
+if (is.null(ssbc) || length(ssbc) == 0) {
+  if (!is.null(enrichment_res$plots$ssgsea_barplot)) safe_print_plot(enrichment_res$plots$ssgsea_barplot)
+} else {
+  for (ct in names(ssbc)) {
+    p <- ssbc[[ct]]$plots$barplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("ssGSEA barplots, one per contrast, ranked by significance.")
 ```
 
 ### Boxplots (static)
@@ -2117,8 +2151,18 @@ if (!is.null(enrichment_res$ssgsea$scores) &&
 ### Results Table
 
 ```{r ssgsea-table}
-if (!is.null(enrichment_res$ssgsea$table)) {
-  make_dt(enrichment_res$ssgsea$table, caption = "ssGSEA Pathway Enrichment")
+ssbc <- enrichment_res$ssgsea_by_contrast
+ssgsea_tbl_all <- if (!is.null(ssbc) && length(ssbc) > 0) {
+  do.call(rbind, lapply(names(ssbc), function(ct) {
+    t <- ssbc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$ssgsea$table
+}
+if (!is.null(ssgsea_tbl_all)) {
+  make_dt(ssgsea_tbl_all, caption = "ssGSEA Pathway Enrichment — all contrasts")
 }
 ```
 

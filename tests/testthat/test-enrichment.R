@@ -200,6 +200,36 @@ test_that(".sanitize_contrast produces file-safe labels", {
     expect_equal(.sanitize_contrast("x/y:z"), "x_y_z")
 })
 
+test_that(".resolve_contrast_groups maps a contrast to its two groups", {
+    inputs <- list(contrasts = data.frame(
+        Contrast_name = c("A_vs_B", "C_vs_D"),
+        Factor        = c("group", "group"),
+        Numerator     = c("A", "C"),
+        Denominator   = c("B", "D"),
+        stringsAsFactors = FALSE
+    ))
+    g <- .resolve_contrast_groups(inputs, "A_vs_B", "group")
+    expect_equal(g$group_col, "group")
+    expect_equal(sort(g$groups), c("A", "B"))
+    expect_null(.resolve_contrast_groups(inputs, "not_a_contrast", "group"))
+})
+
+test_that(".subset_pre_to_groups keeps only the requested groups' samples", {
+    pre <- list(
+        expr_raw = matrix(seq_len(12), nrow = 2,
+                          dimnames = list(c("f1", "f2"), paste0("S", 1:6))),
+        meta = data.frame(sample_id = paste0("S", 1:6),
+                          group = c("A", "A", "B", "B", "C", "C"),
+                          stringsAsFactors = FALSE)
+    )
+    sub <- .subset_pre_to_groups(pre, "group", c("A", "B"), "sample_id")
+    expect_equal(ncol(sub$expr_raw), 4L)
+    expect_equal(sort(colnames(sub$expr_raw)), c("S1", "S2", "S3", "S4"))
+    expect_equal(nrow(sub$meta), 4L)
+    # Fewer than two samples in the requested groups -> NULL.
+    expect_null(.subset_pre_to_groups(pre, "group", "Z", "sample_id"))
+})
+
 test_that("map_compounds_for_enrichment restricts to KEGG when annotated_only=TRUE", {
     expr <- matrix(seq_len(12), nrow = 4,
                    dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
