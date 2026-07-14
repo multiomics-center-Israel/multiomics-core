@@ -609,7 +609,8 @@ read_mummichog_pathways <- function(files) {
 #'   the map is absent), each a pathway tibble. Contrasts that produced no
 #'   pathway table are omitted, so the report simply shows no section for them;
 #'   an empty list results when `files` is empty or none live under
-#'   `mummichog_pinned/`.
+#'   `mummichog_pinned/`. A pathway table that exists but cannot be parsed
+#'   raises (rather than being silently dropped as if the contrast had no result).
 read_mummichog_pathways_by_contrast <- function(files) {
   if (length(files) == 0) return(list())
   # Tolerate Windows backslash separators (some paths come from normalizePath(),
@@ -640,10 +641,13 @@ read_mummichog_pathways_by_contrast <- function(files) {
   out <- list()
   for (dir in unique(contrast)) {
     grp <- keep[contrast == dir]
-    # A contrast with no pathway table -> read errors -> NULL; only assign
-    # non-NULL results (an `out[[x]] <- NULL` would drop the key anyway).
-    pw <- tryCatch(read_mummichog_pathways(grp), error = function(e) NULL)
-    if (!is.null(pw)) out[[label_of(dir)]] <- pw
+    # Distinguish "this contrast produced no pathway table" (expected — skip it
+    # quietly so the report just omits the section) from "the table exists but
+    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
+    # a genuine parse error surfaces via read_mummichog_pathways() rather than
+    # silently dropping a contrast whose results are actually broken.
+    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
+    out[[label_of(dir)]] <- read_mummichog_pathways(grp)
   }
   out
 }
