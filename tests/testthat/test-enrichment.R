@@ -169,7 +169,8 @@ test_that("map_compounds_for_enrichment prefers KEGG IDs and aligns feature_map"
         stringsAsFactors = FALSE
     )
 
-    res <- map_compounds_for_enrichment(row_data, expr)
+    # annotated_only = FALSE exercises the name-fallback + alignment path.
+    res <- map_compounds_for_enrichment(row_data, expr, annotated_only = FALSE)
 
     # KEGG IDs win where present (any prefix stripped); Name is the fallback.
     expect_equal(unname(res$feature_map["f1"]), "C00031")
@@ -217,8 +218,8 @@ test_that("map_compounds_for_enrichment restricts to KEGG when annotated_only=TR
     expect_equal(unname(res$feature_map[["f1"]]), "C00031")
     expect_true(is.na(res$feature_map[["f2"]]))
 
-    # Default (annotated_only = FALSE) keeps name-only features in the background.
-    res_all <- map_compounds_for_enrichment(row_data, expr)
+    # With annotated_only = FALSE, name-only features stay in the background.
+    res_all <- map_compounds_for_enrichment(row_data, expr, annotated_only = FALSE)
     expect_equal(nrow(res_all$expr_mapped), 4L)
 })
 
