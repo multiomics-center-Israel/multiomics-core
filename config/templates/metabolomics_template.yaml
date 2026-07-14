@@ -162,9 +162,10 @@ modes:
       condition_column: "group"
 
       p_cutoff: 0.05
-      pval_cutoff: 0.05
+      # true (default) = gate significance on BH-adjusted p (padj);
+      # false = raw p-value
+      use_adjusted_pval: true
       linear_fc_cutoff: 1.5
-      robust_ebayes: true
 
     # ---- Clustering ----
     clustering:
