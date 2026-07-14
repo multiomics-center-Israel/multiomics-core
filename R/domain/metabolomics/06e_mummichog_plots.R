@@ -200,7 +200,9 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   pathway tibble (or NULL). Also tolerates a single tibble (one contrast).
 #' @param config Full pipeline config (for titles + the p-value cutoff line).
 #' @return A named list keyed by contrast, each `list(title, subtitle, plot,
-#'   table)`; empty list when there is nothing to show.
+#'   table, slug)`. `slug` is a filesystem-safe, de-duplicated token for the
+#'   contrast (mirrors the engine's per-contrast directory naming) so the
+#'   standalone exports never collide. Empty list when there is nothing to show.
 build_mummichog_report_sections <- function(pathways_by_contrast, config) {
   if (is.null(pathways_by_contrast)) return(list())
   # Tolerate a bare single tibble (name it "contrast").
@@ -224,6 +226,15 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config) {
     if (is.null(plot)) next            # nothing plottable -> skip this contrast
     sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
                                  plot = plot, table = tbl)
+  }
+
+  # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
+  # make.unique idiom the engine uses for contrast directories), so two labels
+  # that collapse to the same token get distinct export filenames instead of
+  # overwriting each other. Used by save_mummichog_exports() for the suffix.
+  if (length(sections) > 0) {
+    slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(sections)), sep = "_")
+    for (i in seq_along(sections)) sections[[i]]$slug <- slugs[[i]]
   }
   sections
 }

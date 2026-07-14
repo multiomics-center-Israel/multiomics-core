@@ -156,8 +156,23 @@ test_that("build_mummichog_report_sections builds one section per usable contras
     expect_s3_class(secs[[nm]]$plot, "ggplot")
     expect_s3_class(secs[[nm]]$table, "data.frame")
     expect_true(nzchar(secs[[nm]]$title))
+    expect_true(nzchar(secs[[nm]]$slug))
   }
   expect_match(secs[["HL_24h_vs_LL_24h"]]$subtitle, "HL_24h vs LL_24h")
+})
+
+test_that("build_mummichog_report_sections gives colliding labels distinct slugs", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  # two distinct labels that sanitise to the same token must not share a slug,
+  # else their standalone exports would overwrite each other
+  secs  <- build_mummichog_report_sections(
+    list("A-B" = make_pw(), "A_B" = make_pw()), cfg)
+  slugs <- vapply(secs, `[[`, character(1), "slug")
+
+  expect_named(secs, c("A-B", "A_B"))                    # display keys keep originals
+  expect_length(unique(slugs), 2L)                       # slugs are unique
+  expect_true(all(grepl("^[A-Za-z0-9_]+$", slugs)))      # filesystem-safe
 })
 
 test_that("build_mummichog_report_sections returns empty list on NULL/empty input", {

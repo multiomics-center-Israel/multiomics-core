@@ -133,15 +133,16 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     mummi_sections <- build_mummichog_report_sections(mummichog_pathways, config)
 
     # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
-    # CSV table) into mummichog_pinned/, named by contrast, in addition to
-    # embedding them in the HTML. The engine's mcg_* result files are untouched.
-    # Paths are returned so the format = "file" target tracks them.
+    # CSV table) into mummichog_pinned/, named by the section's de-duplicated
+    # slug (so labels that collapse to the same token don't overwrite each
+    # other), in addition to embedding them in the HTML. The engine's mcg_*
+    # result files are untouched. Paths are returned so the file target tracks them.
     mummi_exports <- character(0)
     for (contrast in names(mummi_sections)) {
         s <- mummi_sections[[contrast]]
         mummi_exports <- c(mummi_exports,
                            save_mummichog_exports(s$plot, s$table, out_dir,
-                                                  contrast_label = contrast))
+                                                  contrast_label = s$slug))
     }
 
     render_params <- list(
