@@ -88,6 +88,9 @@ load_precomputed_metabolomics_de <- function(config) {
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
+    # Match the computed-DE path (build_de_summary): gate on the adjusted
+    # (default) or raw p-value per de$use_adjusted_pval.
+    use_adjusted_pval <- isTRUE(de_cfg$use_adjusted_pval %||% TRUE)
 
     # Derive contrast labels from file names
     contrast_labels <- vapply(de_files, function(f) {
@@ -154,9 +157,10 @@ load_precomputed_metabolomics_de <- function(config) {
         summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
         summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
 
+        pcol <- if (isTRUE(use_adjusted_pval)) tbl$adj.P.Val[idx] else tbl$P.Value[idx]
         pass <- as.integer(
-            !is.na(tbl$adj.P.Val[idx]) &
-            tbl$adj.P.Val[idx] < padj_cutoff &
+            !is.na(pcol) &
+            pcol < padj_cutoff &
             abs(tbl$logFC[idx]) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
