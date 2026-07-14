@@ -199,6 +199,14 @@ modes:
     # ---- Enrichment ----
     enrichment:
       run_enrichment: false
+      # Enrichment engine for the m/z-based pathway analysis:
+      #   mummichog       - standalone, version-pinned Python engine (DEFAULT; the
+      #                     current behaviour, unchanged). Uses the `mummichog:` block.
+      #   metaboanalystr  - isolated, version-pinned MetaboAnalystR engine (opt-in).
+      #                     The only way to get MetaboAnalyst's mixed-mode / GSEA /
+      #                     integrated / QEA. Uses the `metaboanalystr:` block below.
+      # Absent or "mummichog" => the standalone path, byte-identical to before.
+      engine: mummichog
       libraries: []
       gmt_file: null
       mapping_file: null
@@ -239,3 +247,29 @@ modes:
         #   url: https://github.com/multiomics-center-Israel/multiomics-annotation-prep/releases/download/cre_kegg_20260711/cre_kegg_20260711.json
         #   sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
         # model_json: /path/to/local/model.json
+
+      # MetaboAnalystR engine (OPTIONAL, isolated + version-pinned) — only consulted
+      # when `engine: metaboanalystr` above. Runs in a SEPARATE pinned renv project
+      # via an Rscript subprocess (never in the main R environment), mirroring the
+      # mummichog venv isolation. Requires: `make metaboanalystr` then
+      # `export METABOANALYSTR_RSCRIPT="$(pwd)/envs/metaboanalystr/bin/Rscript"`.
+      metaboanalystr:
+        p_cutoff: 0.05
+        tolerance_ppm: 10
+        # positive | negative | mixed. "mixed" does per-feature +/- adduct matching
+        # and REQUIRES per-feature polarity (derived from the Reference Ion / Adducts
+        # column) — added in a later phase; use positive/negative for now.
+        ionization_mode: positive
+        permutations: 100
+        # Which analyses to run: mummichog | gsea | integrated | qea.
+        analyses: [mummichog]
+        # Built-in MetaboAnalyst KEGG library for the peak analyses. cre =
+        # Chlamydomonas reinhardtii [KEGG] — the same organism selected in the
+        # MetaboAnalyst GUI. The hosted <lib>.qs is pre-fetched + sha256-pinned
+        # (see metaboanalystr-libs.tsv); no runtime download.
+        lib: cre_kegg
+        lib_version: current       # KEGG pathway library version (PerformPSEA libVersion)
+        # QEA (quantitative enrichment on identified compounds) — a later phase.
+        qea:
+          id_column: KEGG          # compound-ID column used for KEGG cross-referencing
+          libraries: [kegg]        # SMPDB dropped (human-only, N/A for a non-human organism)
