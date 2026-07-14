@@ -233,6 +233,11 @@ run_metabolomics_qea <- function(pre, config) {
     cfg      <- config$modes$metabolomics
     enr_cfg  <- cfg$enrichment %||% list()
 
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
+
     # Guard: skip when enrichment is disabled in config
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics QEA: disabled in config — skipping")
@@ -458,6 +463,11 @@ run_metabolomics_ssgsea <- function(pre, config) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
+
     # Guard: skip when enrichment is disabled in config
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics ssGSEA: disabled — skipping")
@@ -618,6 +628,11 @@ run_metabolomics_ssgsea <- function(pre, config) {
 run_metabolomics_ora <- function(pre, de_res, config) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
+
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
 
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics ORA: disabled — skipping")
@@ -795,6 +810,11 @@ run_metabolomics_ora <- function(pre, de_res, config) {
 run_metabolomics_gsea <- function(pre, de_res, config) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
+
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
 
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics GSEA: disabled — skipping")
