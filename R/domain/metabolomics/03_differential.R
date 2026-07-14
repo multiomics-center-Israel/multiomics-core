@@ -268,7 +268,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = NULL),
             t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
             t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
             wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
@@ -323,12 +323,7 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
         stop("Package 'limma' is required for limma DE.")
     }
 
-    # Impute NAs with row means (limma cannot handle NA)
     mat_imp <- mat
-    for (i in seq_len(nrow(mat_imp))) {
-        nas <- is.na(mat_imp[i, ])
-        if (any(nas)) mat_imp[i, nas] <- mean(mat_imp[i, !nas], na.rm = TRUE)
-    }
 
     design <- stats::model.matrix(~ 0 + condition)
     colnames(design) <- levels(condition)
@@ -522,12 +517,13 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
 
         # Significance flag (uses raw P.Value, not adjusted)
         pass <- as.integer(
-            !is.na(tbl$P.Value) &
-            tbl$P.Value < padj_cutoff &
+          !is.na(tbl$adj.P.Val) &
+            tbl$adj.P.Val < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
     }
+    
 
     # Aggregate pass flag across contrasts
     pass_cols <- grep("^pass\\.", colnames(summary_df), value = TRUE)
