@@ -200,6 +200,9 @@ modes:
     # ---- Enrichment ----
     enrichment:
       run_enrichment: false
+      # Build the DE-metabolite KEGG network step (writes the report "Network/"
+      # HTML). Off by default; set true to build it.
+      run_network: false
       libraries: []
       gmt_file: null
       mapping_file: null
