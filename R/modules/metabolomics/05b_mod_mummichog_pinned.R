@@ -26,13 +26,18 @@
 #' @param mz_col,rt_col Column names located once by the caller.
 #' @param contrast_label Human-readable contrast name (for messages).
 #' @param contrast_dir Per-contrast output dir (mummichog_pinned/<contrast>/).
+#' @param project Per-contrast mummichog `-o` project id. MUST be unique across
+#'   contrasts: mummichog names its outputs after it (`mcg_pathwayanalysis_<project>.tsv`
+#'   and the `<timestamp>.<project>/` tree), so a shared id makes every contrast's
+#'   tables identically named — fragile for any downstream keying and confusing
+#'   on disk. A unique id makes every output path and basename self-distinct.
 #' @param network,mode,instrument_ppm,permutations,cutoff,force_primary_ion,python
 #'   Run parameters (a single global model + params for every contrast).
 #' @return Character vector of files this contrast produced (input, id-map,
 #'   result tree, manifest).
 #' @noRd
 .mmc_run_one_contrast <- function(de_table, row_data, mz_col, rt_col,
-                                  contrast_label, contrast_dir,
+                                  contrast_label, contrast_dir, project,
                                   network, mode, instrument_ppm, permutations,
                                   cutoff, force_primary_ion, python) {
   for (col in c("feature_id", "P.Value", "logFC")) {
@@ -68,7 +73,7 @@
   result_files <- run_mummichog_v2(
     infile         = input_file,
     out_dir        = file.path(contrast_dir, "v2"),
-    project        = "mcg_pinned",
+    project        = project,
     python         = python,
     network        = network,
     mode           = mode,
@@ -195,6 +200,9 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # Sanitise contrast names into subdir names, de-duplicating so two labels that
   # collapse to the same token (e.g. "A-B" and "A_B") get distinct dirs instead
   # of clobbering each other's on-disk results. sep = "_" keeps names in charset.
+  # The same unique token is also mummichog's per-contrast `-o` project id, so
+  # each contrast's outputs are uniquely NAMED (mcg_pathwayanalysis_<token>.tsv),
+  # not just placed in separate subdirs — no identically-named tables anywhere.
   contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", contrast_names),
                                sep = "_")
   files  <- vector("list", length(de_tables))
@@ -210,6 +218,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
         rt_col            = rt_col,
         contrast_label    = contrast,
         contrast_dir      = contrast_dir,
+        project           = contrast_dirs[[i]],
         network           = network,
         mode              = mode_flag,
         instrument_ppm    = ppm,

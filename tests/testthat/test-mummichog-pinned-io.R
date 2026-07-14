@@ -141,6 +141,9 @@ test_that(".mmc_check_run_outputs salvages a non-zero exit when the pathway tabl
     dir.create(tdir, recursive = TRUE, showWarnings = FALSE)
     writeLines("x", file.path(cdir, "input.tsv"))     # always present
     if (isTRUE(with_pw[[i]])) {
+      # NB: identical basename across every contrast dir on purpose — this is
+      # the shared-filename case, and the reader must group by contrast DIR (not
+      # basename) so no contrast's table is dropped when names collide.
       writeLines(c("pathway\tp-value", "PathA\t0.01"),
                  file.path(tdir, "mcg_pathwayanalysis_mcg_pinned.tsv"))
     }
