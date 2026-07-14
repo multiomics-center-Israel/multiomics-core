@@ -184,6 +184,21 @@ test_that("map_compounds_for_enrichment prefers KEGG IDs and aligns feature_map"
     expect_true(all(c("C00031", "Citrate", "C00022") %in% res$compound_names))
 })
 
+test_that(".resolve_enrichment_contrast picks the requested or first contrast", {
+    de_res <- list(de_tables = list(A = data.frame(x = 1), B = data.frame(x = 2)))
+    expect_equal(.resolve_enrichment_contrast(NULL, de_res, "ORA"), "A")
+    expect_equal(.resolve_enrichment_contrast("B", de_res, "ORA"), "B")
+    expect_warning(res <- .resolve_enrichment_contrast("Z", de_res, "ORA"),
+                   "not found")
+    expect_equal(res, "A")
+})
+
+test_that(".sanitize_contrast produces file-safe labels", {
+    expect_equal(.sanitize_contrast("HL_48h_vs_HL_24h"), "HL_48h_vs_HL_24h")
+    expect_equal(.sanitize_contrast("A vs B (control)"), "A_vs_B_control")
+    expect_equal(.sanitize_contrast("x/y:z"), "x_y_z")
+})
+
 test_that("map_compounds_for_enrichment aligns a filtered row_data to a larger matrix", {
     # expr_mat carries an extra feature (f2) that was dropped from row_data
     # upstream (e.g. by missingness filtering), so nrow(expr) != nrow(row_data).

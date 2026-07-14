@@ -627,6 +627,28 @@ run_metabolomics_ssgsea <- function(pre, config) {
 }
 
 
+# ==== CONTRAST SELECTION (shared by ORA / GSEA) ==============================
+
+#' Resolve which DE contrast an enrichment method should use
+#'
+#' Returns \code{contrast} when it names an existing \code{de_res$de_tables}
+#' entry; otherwise falls back to the first contrast (warning when a non-NULL
+#' name was not found). Callers guarantee \code{de_res$de_tables} is non-empty.
+#'
+#' @param contrast Requested contrast name, or NULL for the first.
+#' @param de_res   DE results carrying a named \code{de_tables} list.
+#' @param method   Short method label used only in the warning message.
+#' @return A single contrast name (a key of \code{de_res$de_tables}).
+.resolve_enrichment_contrast <- function(contrast, de_res, method) {
+    available <- names(de_res$de_tables)
+    if (is.null(contrast)) return(available[1])
+    if (contrast %in% available) return(contrast)
+    warning("metabolomics ", method, ": contrast '", contrast,
+            "' not found; using '", available[1], "'.")
+    available[1]
+}
+
+
 # ==== ORA VIA FISHER'S EXACT TEST =============================================
 
 #' Run Over-Representation Analysis (ORA) using Fisher's exact test
@@ -639,8 +661,11 @@ run_metabolomics_ssgsea <- function(pre, config) {
 #' @param pre     Preprocessing results (expr_raw, meta, row_data).
 #' @param de_res  DE results from run_metabolomics_de() (must contain de_tables).
 #' @param config  Full pipeline config.
-#' @return list(table, method) or NULL.
-run_metabolomics_ora <- function(pre, de_res, config) {
+#' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
+#'   test. Defaults to the first contrast; an unknown name falls back to the
+#'   first with a warning.
+#' @return list(table, contrast, method) or NULL.
+run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
@@ -680,7 +705,7 @@ run_metabolomics_ora <- function(pre, de_res, config) {
         return(NULL)
     }
 
-    contrast_name <- names(de_res$de_tables)[1]
+    contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "ORA")
     de_tbl <- de_res$de_tables[[contrast_name]]
 
     # Significance filtering: choose p-value column via config.
@@ -821,8 +846,11 @@ run_metabolomics_ora <- function(pre, de_res, config) {
 #' @param pre     Preprocessing results.
 #' @param de_res  DE results from run_metabolomics_de().
 #' @param config  Full pipeline config.
+#' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
+#'   rank. Defaults to the first contrast; an unknown name falls back to the
+#'   first with a warning.
 #' @return list(table, ranks, contrast, method) or NULL.
-run_metabolomics_gsea <- function(pre, de_res, config) {
+run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
@@ -850,7 +878,7 @@ run_metabolomics_gsea <- function(pre, de_res, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build ranked list from DE log2FC ----
-    contrast_name <- names(de_res$de_tables)[1]
+    contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "GSEA")
     de_tbl <- de_res$de_tables[[contrast_name]]
 
     # Map feature IDs to the compound namespace via the aligned per-feature map.
