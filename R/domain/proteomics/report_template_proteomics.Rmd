@@ -112,6 +112,23 @@ protein_display_label <- function(gene, accession) {
            paste0(lab, " (", accession, ")"), lab)
 }
 
+# Label an enrichment row's source ontology from its set id / name. GO sets are
+# keyed GO:xxxxxxx (names carry [BP]/[MF]/[CC]); the bridged KEGG sets are keyed
+# ehiNNNNN ("... - Entamoeba histolytica"). Used to separate GO vs KEGG in the
+# merged-custom enrichment tables.
+pathway_db_label <- function(ids, names = NULL) {
+    ids <- if (is.null(ids)) character(0) else as.character(ids)
+    lab <- ifelse(grepl("^GO:", ids), "GO",
+           ifelse(grepl("^ehi[0-9]", ids), "KEGG", NA_character_))
+    if (!is.null(names)) {
+        nm <- as.character(names)
+        lab[is.na(lab) & grepl("\\[(BP|MF|CC)\\]", nm)] <- "GO"
+        lab[is.na(lab) & grepl("Entamoeba histolytica$", nm)] <- "KEGG"
+    }
+    lab[is.na(lab)] <- "Other"
+    lab
+}
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
 # Detect if we are already inside the proteomics output dir
@@ -3194,6 +3211,8 @@ if (length(fgsea_files) > 0) {
                 show_cols <- intersect(c("pathway", "pval", "padj", "NES", "size"), names(sig))
             }
             sig_show <- sig[, show_cols]
+            sig_show <- cbind(Database = pathway_db_label(sig$pathway, sig$pathway_name),
+                              sig_show, stringsAsFactors = FALSE)
             sig_show$Direction <- ifelse(sig_show$NES > 0, "Up-regulated", "Down-regulated")
             n_up <- sum(sig_show$Direction == "Up-regulated")
             n_down <- sum(sig_show$Direction == "Down-regulated")
@@ -3256,7 +3275,12 @@ if (length(ora_files) > 0) {
                 show_cols <- intersect(c("Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "Count"), names(sig))
             }
             if (length(show_cols) > 0) {
-                print(htmltools::tagList(make_dt(head(sig[, show_cols], 30), paste("ORA -", label_clean))))
+                ora_show <- sig[, show_cols, drop = FALSE]
+                id_lab   <- if ("pathway" %in% names(sig)) sig$pathway else sig$pathway_name
+                name_lab <- if ("pathway_name" %in% names(sig)) sig$pathway_name else sig[["Description"]]
+                ora_show <- cbind(Database = pathway_db_label(id_lab, name_lab),
+                                  ora_show, stringsAsFactors = FALSE)
+                print(htmltools::tagList(make_dt(head(ora_show, 30), paste("ORA -", label_clean))))
             }
         } else {
             cat("No significant pathways (padj < 0.05).\n\n")
