@@ -276,7 +276,7 @@ library(targets)
 tar_make(names = tidyselect::starts_with("met"))
 ```
 
-> **Interim limitation:** when enabled, mummichog results are written to disk (see below), but they are **not yet rendered** in the HTML report / PowerPoint / Shiny payload — the report's mummichog section stays hidden until a follow-up wires the pinned results into those outputs.
+> **Per-contrast:** mummichog runs **independently for each differential-abundance contrast** (each contrast's own p-values define its significant set against all features, sharing one model + params). Every contrast with a result renders as its own tab in the HTML report's mummichog section and gets its own files on disk (see below).
 >
 > **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` with no custom model is rejected with a clear error rather than silently run against the human network — supply an organism-specific model (see below).
 
@@ -304,11 +304,13 @@ Supplying any custom model (`model_ref` or `model_json`) also satisfies the huma
 
 ### Where outputs land
 
-Under `<metab_out_dir>/mummichog_pinned/`:
+Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<contrast>/`, the contrast name sanitised to `A-Za-z0-9_`):
 
--   `input.tsv` and `input.tsv.idmap.tsv` — the exact table sent to mummichog (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
--   `v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
--   `v2/mummichog_manifest.tsv` and `v2/runner.log`.
+-   `<contrast>/input.tsv` and `<contrast>/input.tsv.idmap.tsv` — the exact table sent to mummichog for that contrast (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
+-   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
+-   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
+
+Plus, directly under `mummichog_pinned/`, the report's presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 
 To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
 

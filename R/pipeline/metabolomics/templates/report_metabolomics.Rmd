@@ -28,8 +28,7 @@ params:
   qc_suite_files: NULL
   commentary_file: NULL
   config: NULL
-  mummichog_plot: NULL
-  mummichog_table: NULL
+  mummichog_sections: NULL
 ---
 
 ```{r setup, include=FALSE}
@@ -309,8 +308,7 @@ de_res         <- params$de_res
 rf_res         <- params$rf_res
 plsda_res      <- params$plsda_res
 enrichment_res <- params$enrichment_res
-mummi_plot     <- params$mummichog_plot
-mummi_table    <- params$mummichog_table
+mummi_sections <- params$mummichog_sections %||% list()
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -2260,7 +2258,7 @@ if (!is.null(net) && !is.null(net$graph)) {
 
 ---
 
-`r if (is.null(mummi_plot) || !show_mummichog) "<!--"`
+`r if (length(mummi_sections) == 0 || !show_mummichog) "<!--"`
 
 # Mummichog Pathway Analysis (m/z-based) {.tabset}
 
@@ -2272,7 +2270,7 @@ n_perm  <- mummi_cfg$n_permutations %||% 100
 
 cat("## Methodology\n\n")
 cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) performs pathway enrichment analysis directly from mass-spectrometry features (m/z values) without requiring prior metabolite identification. ")
-cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Results below are a single mummichog run over all features.\n\n")
+cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Each contrast below is an INDEPENDENT mummichog run over all features (that contrast's own p-values define its significant set).\n\n")
 
 cat("**Parameters:**\n\n")
 cat(sprintf("- Significance cutoff: p < %s\n", p_cut))
@@ -2282,22 +2280,28 @@ cat(sprintf("- Permutations: %d\n\n", n_perm))
 cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123.*\n\n")
 ```
 
-## Bubble Plot
+```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
+# One tab per contrast, each with a Bubble Plot + Results Table sub-tab.
+for (contrast in names(mummi_sections)) {
+  s     <- mummi_sections[[contrast]]
+  label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
+  cat(sprintf("\n## %s {.tabset}\n\n", label))
 
-```{r mummichog-bubble, fig.width=11, fig.height=8, results='asis'}
-safe_print_plot(mummi_plot)
-figure_legend(sprintf("Mummichog pathway analysis. Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", p_cut))
-```
+  cat("### Bubble Plot\n\n")
+  safe_print_plot(s$plot)
+  figure_legend(sprintf("Mummichog pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", label, p_cut))
 
-## Results Table
-
-```{r mummichog-table}
-if (!is.null(mummi_table)) {
-  make_dt(mummi_table, caption = "Mummichog Pathway Enrichment")
+  cat("\n\n### Results Table\n\n")
+  if (!is.null(s$table)) {
+    # print() forces the DT widget to render inside the loop.
+    print(htmltools::tagList(
+      make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
+  }
+  cat("\n\n")
 }
 ```
 
-`r if (is.null(mummi_plot) || !show_mummichog) "-->"`
+`r if (length(mummi_sections) == 0 || !show_mummichog) "-->"`
 
 ---
 
@@ -2374,7 +2378,7 @@ if (!is.null(params$network_res)) {
 # Add mummichog outputs. The pinned engine writes a whole result tree (not
 # per-organism files), so list its directory. Gate on the pinned results we
 # actually rendered, not the retired enrichment_res$mummichog.
-if (!is.null(mummi_table)) {
+if (length(mummi_sections) > 0) {
   files_tbl <- rbind(files_tbl, data.frame(
     File = "metabolomics/mummichog_pinned/",
     Description = "Mummichog pathway analysis: input, v2 result tree, and pathway tables",
@@ -2440,8 +2444,8 @@ if (!is.null(enrichment_res)) {
 # mummichog runs from its own mummichog.enabled gate, independent of
 # enrichment.run_enrichment (which may leave enrichment_res NULL). Document it
 # whenever its results rendered — outside the enrichment guard above.
-if (!is.null(mummi_table)) {
-  cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was performed as a single run over all features using the version-pinned engine.")
+if (length(mummi_sections) > 0) {
+  cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was run independently for each differential-abundance contrast — each contrast's own p-values define its significant set against all features — using the version-pinned engine.")
 }
 
 if (!is.null(rf_res) || !is.null(plsda_res)) {
