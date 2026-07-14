@@ -399,6 +399,19 @@ if (!is.null(de_res$summary_df) && "pass_any_contrast" %in% colnames(de_res$summ
   metric_card(format(n_de_total, big.mark = ","), "DE Metabolites", color = "#c0392b")
 }
 
+# Metabolites included in enrichment (background). Same across contrasts, read
+# from the ORA table (the only method table that records the background size).
+enr_bg <- if (!is.null(enrichment_res$ora$table) &&
+              "bg_size" %in% names(enrichment_res$ora$table) &&
+              nrow(enrichment_res$ora$table) > 0) {
+  enrichment_res$ora$table$bg_size[1]
+} else {
+  NA_integer_
+}
+if (!is.na(enr_bg)) {
+  metric_card(format(enr_bg, big.mark = ","), "In Enrichment", color = "#2c7a7b")
+}
+
 cat("</div>\n")
 
 # ---- DE breakdown per contrast -------------------------------------------
