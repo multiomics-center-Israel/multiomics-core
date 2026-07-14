@@ -156,3 +156,30 @@ test_that("add_pathway_names handles GO terms", {
     expect_true("pathway_name" %in% names(result))
     expect_true(nzchar(result$pathway_name[1]))
 })
+
+# --- Tests for map_compounds_for_enrichment (metabolomics ID mapping) ---
+
+test_that("map_compounds_for_enrichment prefers KEGG IDs and aligns feature_map", {
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f2", "f3", "f4"),
+        Name       = c("Glucose", "", "Citrate", "Pyruvate"),
+        KEGG       = c("C00031", "", "", "cpd:C00022"),
+        stringsAsFactors = FALSE
+    )
+
+    res <- map_compounds_for_enrichment(row_data, expr)
+
+    # KEGG IDs win where present (any prefix stripped); Name is the fallback.
+    expect_equal(unname(res$feature_map["f1"]), "C00031")
+    expect_equal(unname(res$feature_map["f4"]), "C00022")
+    expect_equal(unname(res$feature_map["f3"]), "Citrate")
+
+    # f2 has neither a name nor a KEGG id, so it drops out of the background —
+    # but the map must still resolve the LATER features correctly. This is the
+    # regression guard for the previous positional-misalignment bug, where
+    # dropping f2 shifted every subsequent feature's compound by one.
+    expect_false("" %in% res$compound_names)
+    expect_true(all(c("C00031", "Citrate", "C00022") %in% res$compound_names))
+})
