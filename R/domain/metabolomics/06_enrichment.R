@@ -102,6 +102,21 @@ read_hmdb_kegg_map <- function(path) {
 #' @param mapping_file Optional path to HMDB-to-KEGG mapping TSV.
 #' @return list(expr_mapped, compound_names) with remapped rownames.
 map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL) {
+    # Align the expression matrix to the annotation rows. row_data can be a
+    # filtered subset of expr_mat (e.g. missingness filtering drops features, so
+    # expr_raw ends up with more rows than row_data); matching by feature id
+    # keeps compound_names (taken from row_data) and the matrix rows in lockstep.
+    # Without this, the logical filtering below indexes a mismatched matrix and
+    # errors, which the module's tryCatch turns into a silent NULL for every
+    # enrichment method.
+    if (!is.null(row_data) && "feature_id" %in% colnames(row_data) &&
+        !is.null(rownames(expr_mat))) {
+        common <- intersect(as.character(row_data$feature_id), rownames(expr_mat))
+        row_data <- row_data[match(common, as.character(row_data$feature_id)), ,
+                             drop = FALSE]
+        expr_mat <- expr_mat[common, , drop = FALSE]
+    }
+
     # Extract compound names from row_data
     if ("Name" %in% colnames(row_data)) {
         compound_names <- as.character(row_data$Name)

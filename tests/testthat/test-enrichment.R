@@ -183,3 +183,25 @@ test_that("map_compounds_for_enrichment prefers KEGG IDs and aligns feature_map"
     expect_false("" %in% res$compound_names)
     expect_true(all(c("C00031", "Citrate", "C00022") %in% res$compound_names))
 })
+
+test_that("map_compounds_for_enrichment aligns a filtered row_data to a larger matrix", {
+    # expr_mat carries an extra feature (f2) that was dropped from row_data
+    # upstream (e.g. by missingness filtering), so nrow(expr) != nrow(row_data).
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f3", "f4"),
+        Name       = c("Glucose", "Citrate", "Pyruvate"),
+        KEGG       = c("C00031", "C00158", "C00022"),
+        stringsAsFactors = FALSE
+    )
+
+    # Must not error despite the row-count mismatch, and must use the row_data
+    # feature set (dropping the extra f2), keeping compounds correctly aligned.
+    res <- map_compounds_for_enrichment(row_data, expr)
+
+    expect_equal(nrow(res$expr_mapped), 3L)
+    expect_equal(sort(unname(res$compound_names)), c("C00022", "C00031", "C00158"))
+    expect_equal(unname(res$feature_map["f3"]), "C00158")
+    expect_false("f2" %in% names(res$feature_map))
+})
