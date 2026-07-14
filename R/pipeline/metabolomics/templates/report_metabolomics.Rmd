@@ -2156,6 +2156,10 @@ ssgsea_tbl_all <- if (!is.null(ssbc) && length(ssbc) > 0) {
   do.call(rbind, lapply(names(ssbc), function(ct) {
     t <- ssbc[[ct]]$res$table
     if (is.null(t) || nrow(t) == 0) return(NULL)
+    # Drop per-contrast mean_<group> columns: their names differ across
+    # contrasts, which would break rbind ("names do not match previous names").
+    # The full per-contrast tables (with means) are still in the *_results.tsv.
+    t <- t[, !grepl("^mean_", names(t)), drop = FALSE]
     cbind(contrast = ct, t, stringsAsFactors = FALSE)
   }))
 } else {
