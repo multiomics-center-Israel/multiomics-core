@@ -1,115 +1,62 @@
 # R/domain/metabolomics/08_metabolite_network.R
 #
-# Metabolite network construction using KEGG reaction pairs.
+# Metabolite network construction from a pinned KEGG reaction-pair reference.
 # Builds interactive HTML networks of DE metabolites connected by known
-# biochemical reactions (substrate-product pairs from KEGG).
+# biochemical reactions (substrate-product pairs from KEGG). The reaction pairs
+# are read from a precomputed, checksum-pinned reference (see 08b) — this module
+# never queries KEGG.
 #
-# Dependencies: KEGGREST, igraph, plotly, htmlwidgets
+# Dependencies: igraph, plotly, htmlwidgets
 
 
-# ==== KEGG REACTION PAIR FETCHING ============================================
+# ==== REACTION-PAIR FILTERING ================================================
 
-#' Fetch KEGG reaction pairs for a set of compound IDs
+#' Filter a reaction-pair reference to undirected edges among a set of compounds
 #'
-#' Queries KEGG for all reactions involving the given compounds and extracts
-#' substrate-product pairs. Returns only edges where BOTH compounds are in
-#' the input set.
+#' Pure — no I/O and no KEGG access. Keeps reference rows where BOTH the
+#' substrate and product are in `kegg_ids` (self-pairs excluded), collapses them
+#' to undirected compound pairs, and aggregates the contributing reactions so
+#' provenance survives the edge collapse.
 #'
-#' @param kegg_ids Character vector of KEGG compound IDs (e.g., "C00022").
-#' @return data.frame with columns: from, to (KEGG compound IDs).
-fetch_kegg_reaction_pairs <- function(kegg_ids) {
-    if (!requireNamespace("KEGGREST", quietly = TRUE))
-        stop("KEGGREST package required for KEGG reaction pair fetching")
+#' @param reaction_pairs data.frame with columns `reaction_id`, `substrate_id`,
+#'   `product_id` (the validated reference); extra columns are ignored.
+#' @param kegg_ids Character vector of KEGG compound IDs (C#####) to keep.
+#' @return data.frame, one row per undirected pair: `from`, `to` (KEGG IDs,
+#'   `from` <= `to`), `reaction_ids` (";"-joined, sorted unique reaction IDs) and
+#'   `n_reactions` (count of unique reactions). Ordered by `from`, `to`.
+filter_reaction_pairs_to_features <- function(reaction_pairs, kegg_ids) {
+    empty <- data.frame(from = character(0), to = character(0),
+                        reaction_ids = character(0), n_reactions = integer(0),
+                        stringsAsFactors = FALSE)
+    if (is.null(reaction_pairs) || nrow(reaction_pairs) == 0) return(empty)
 
     kegg_ids <- unique(kegg_ids)
-    message("Fetching KEGG reactions for ", length(kegg_ids), " compounds...")
+    keep <- reaction_pairs$substrate_id %in% kegg_ids &
+            reaction_pairs$product_id %in% kegg_ids &
+            reaction_pairs$substrate_id != reaction_pairs$product_id
+    rp <- reaction_pairs[keep, , drop = FALSE]
+    if (nrow(rp) == 0) return(empty)
 
-    # Step 1: Find all reactions involving our compounds
-    # Use KEGG LINK to get compound -> reaction mappings
-    all_edges <- data.frame(from = character(0), to = character(0),
-                            stringsAsFactors = FALSE)
+    # Undirected: order the two endpoints so A-B and B-A collapse to one edge.
+    a <- pmin(rp$substrate_id, rp$product_id)
+    b <- pmax(rp$substrate_id, rp$product_id)
+    key <- paste(a, b, sep = "\r")
 
-    # Batch queries: KEGGREST::keggLink returns compound-reaction links
-    # Process in batches of 10 to respect API limits
-    batch_size <- 10
-    reaction_ids <- character(0)
-
-    for (i in seq(1, length(kegg_ids), by = batch_size)) {
-        batch <- kegg_ids[i:min(i + batch_size - 1, length(kegg_ids))]
-        tryCatch({
-            # keggLink("reaction", "cpd:CXXXXX") returns reaction IDs for compound
-            links <- KEGGREST::keggLink("reaction", paste0("cpd:", batch))
-            if (length(links) > 0) {
-                reaction_ids <- c(reaction_ids, unique(unname(links)))
-            }
-            Sys.sleep(0.3)  # rate limit
-        }, error = function(e) {
-            message("  Warning: KEGG query failed for batch starting at ", batch[1],
-                    ": ", e$message)
-        })
-    }
-
-    reaction_ids <- unique(reaction_ids)
-    # Strip "rn:" prefix if present
-    reaction_ids <- sub("^rn:", "", reaction_ids)
-    message("  Found ", length(reaction_ids), " reactions involving input compounds")
-
-    if (length(reaction_ids) == 0) return(all_edges)
-
-    # Step 2: For each reaction, get substrate and product compounds
-    # Process in batches of 10
-    for (i in seq(1, length(reaction_ids), by = batch_size)) {
-        batch <- reaction_ids[i:min(i + batch_size - 1, length(reaction_ids))]
-        tryCatch({
-            rxn_data <- KEGGREST::keggGet(batch)
-            for (rxn in rxn_data) {
-                # Extract compound IDs from EQUATION field
-                substrates <- character(0)
-                products   <- character(0)
-
-                if (!is.null(rxn$EQUATION)) {
-                    # EQUATION format: "C00001 + C00002 <=> C00003 + C00004"
-                    parts <- strsplit(rxn$EQUATION, "<=>")[[1]]
-                    if (length(parts) == 2) {
-                        substrates <- regmatches(parts[1],
-                                                 gregexpr("C[0-9]{5}", parts[1]))[[1]]
-                        products   <- regmatches(parts[2],
-                                                 gregexpr("C[0-9]{5}", parts[2]))[[1]]
-                    }
-                }
-
-                # Create edges: every substrate-product pair where BOTH are in our set
-                sub_in <- substrates[substrates %in% kegg_ids]
-                prod_in <- products[products %in% kegg_ids]
-
-                if (length(sub_in) > 0 && length(prod_in) > 0) {
-                    pairs <- expand.grid(from = sub_in, to = prod_in,
-                                         stringsAsFactors = FALSE)
-                    # Remove self-loops
-                    pairs <- pairs[pairs$from != pairs$to, ]
-                    if (nrow(pairs) > 0) {
-                        all_edges <- rbind(all_edges, pairs)
-                    }
-                }
-            }
-            Sys.sleep(0.3)  # rate limit
-        }, error = function(e) {
-            message("  Warning: KEGG reaction fetch failed for batch: ", e$message)
-        })
-    }
-
-    # Deduplicate edges (treat as undirected)
-    if (nrow(all_edges) > 0) {
-        all_edges <- unique(all_edges)
-        # Normalize: always put smaller ID first for undirected dedup
-        normalized <- t(apply(all_edges, 1, function(row) sort(row)))
-        all_edges <- unique(data.frame(from = normalized[, 1],
-                                       to = normalized[, 2],
-                                       stringsAsFactors = FALSE))
-    }
-
-    message("  Found ", nrow(all_edges), " unique reaction pair edges")
-    all_edges
+    rid_by_pair <- split(rp$reaction_id, key)
+    keys <- sort(names(rid_by_pair))
+    parts <- strsplit(keys, "\r", fixed = TRUE)
+    out <- data.frame(
+        from = vapply(parts, `[`, character(1), 1L),
+        to   = vapply(parts, `[`, character(1), 2L),
+        # reaction_ids: unique + deterministically sorted before joining;
+        # n_reactions: count of unique reactions (edge provenance, corr. #5).
+        reaction_ids = vapply(keys, function(k)
+            paste(sort(unique(rid_by_pair[[k]])), collapse = ";"), character(1)),
+        n_reactions = vapply(keys, function(k)
+            length(unique(rid_by_pair[[k]])), integer(1)),
+        stringsAsFactors = FALSE, row.names = NULL
+    )
+    out[order(out$from, out$to), , drop = FALSE]
 }
 
 
@@ -119,16 +66,20 @@ fetch_kegg_reaction_pairs <- function(kegg_ids) {
 #'
 #' @param de_res           data.frame with columns: feature_id, logFC, P.Value.
 #' @param feature_annotations data.frame with columns: feature_id, KEGG, plus others.
+#' @param reaction_pairs   Validated KEGG reaction-pair reference (from
+#'   `read_kegg_reaction_pairs()`): columns reaction_id, substrate_id,
+#'   product_id, ... Edges are derived from this — no KEGG queries are made.
 #' @param p_cutoff         P-value cutoff for DE significance (default 0.05).
+#' @param remove_isolated  Drop nodes with no edges (default TRUE).
 #' @return list with:
-#'   - graph: igraph object
+#'   - graph: igraph object (edge attrs: reaction_ids, n_reactions)
 #'   - nodes: data.frame (name, kegg_id, logFC, pvalue, neg_log10p, direction, color, size)
-#'   - edges: data.frame (from, to)
+#'   - edges: data.frame (from, to, reaction_ids, n_reactions, from_name, to_name)
 #'   - n_total_de: total DE metabolites
 #'   - n_with_kegg: DE metabolites with valid KEGG IDs
 #'   - n_connected: DE metabolites with at least one edge
-build_de_metabolite_network <- function(de_res, feature_annotations, p_cutoff = 0.05,
-                                        remove_isolated = TRUE) {
+build_de_metabolite_network <- function(de_res, feature_annotations, reaction_pairs,
+                                        p_cutoff = 0.05, remove_isolated = TRUE) {
     if (!requireNamespace("igraph", quietly = TRUE))
         stop("igraph package required")
 
@@ -151,8 +102,11 @@ build_de_metabolite_network <- function(de_res, feature_annotations, p_cutoff = 
         return(NULL)
     }
 
-    # Fetch reaction pair edges
-    edges <- fetch_kegg_reaction_pairs(kegg_mets$KEGG)
+    # Reaction pair edges from the pinned reference (no KEGG queries).
+    message("Building network from pinned reaction-pair reference (",
+            nrow(reaction_pairs), " reference rows)")
+    edges <- filter_reaction_pairs_to_features(reaction_pairs, kegg_mets$KEGG)
+    message("  ", nrow(edges), " undirected reaction-pair edge(s) among DE metabolites")
 
     # Build node data
     nodes <- data.frame(
@@ -189,8 +143,10 @@ build_de_metabolite_network <- function(de_res, feature_annotations, p_cutoff = 
     }
 
     if (nrow(edges) > 0) {
+        # Columns 1-2 are the endpoints; reaction_ids / n_reactions ride along as
+        # edge attributes so reaction provenance survives the edge collapse.
         g <- igraph::graph_from_data_frame(
-            edges[, c("from_name", "to_name")],
+            edges[, c("from_name", "to_name", "reaction_ids", "n_reactions")],
             directed = FALSE,
             vertices = nodes$name
         )

@@ -14,9 +14,19 @@
 #' @param pre     Preprocessing results (needs row_data for KEGG IDs).
 #' @param config  Full pipeline config.
 #' @param out_dir Output directory for this mode.
+#' @param reaction_pairs Validated KEGG reaction-pair reference (from
+#'   `read_kegg_reaction_pairs()`). When NULL — no reference configured — the
+#'   network is skipped (NOT run against live KEGG).
 #' @return list with graph, nodes, edges, counts, and output file path.
-#'   Returns NULL if network cannot be built (no KEGG IDs).
-mod_metabolomics_network <- function(de_res, pre, config, out_dir) {
+#'   Returns NULL if network cannot be built (no reference, or no KEGG IDs).
+mod_metabolomics_network <- function(de_res, pre, config, out_dir,
+                                     reaction_pairs = NULL) {
+    if (is.null(reaction_pairs)) {
+        message("metabolomics network: no reaction-pair reference configured ",
+                "(modes.metabolomics.network.reference) — skipping")
+        return(NULL)
+    }
+
     metab_cfg <- config$modes$metabolomics
 
     # Extract DE table from mod_metabolomics_de() output
@@ -51,6 +61,7 @@ mod_metabolomics_network <- function(de_res, pre, config, out_dir) {
         build_de_metabolite_network(
             de_res              = de_table,
             feature_annotations = feature_ann,
+            reaction_pairs      = reaction_pairs,
             p_cutoff            = p_cutoff,
             remove_isolated     = TRUE
         ),

@@ -405,15 +405,6 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       )
     ),
     tar_target(
-      metab_network,
-      mod_metabolomics_network(
-        de_res  = metab_de_res,
-        pre     = metab_pre,
-        config  = config,
-        out_dir = metab_out_dir
-      )
-    ),
-    tar_target(
       metab_standard_outputs,
       write_metabolomics_outputs(
         pre     = metab_pre,
@@ -509,5 +500,67 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
     )
   )
 
-  c(base_targets, analysis_core, analysis_outputs)
+  # ==================================================================
+  # Metabolite network (pinned KEGG reaction-pair reference)
+  # ==================================================================
+  # The network consumes a precomputed, checksum-pinned reference (built by
+  # multiomic-annotation-prep) and NEVER queries KEGG. It runs only when a
+  # reference is configured under modes.metabolomics.network.reference (a
+  # local_path or a url); when unconfigured the stage is skipped (metab_network
+  # is NULL) rather than run against live KEGG. A configured-but-invalid
+  # reference (missing file, checksum mismatch, bad schema) is a hard error —
+  # there is no live-KEGG fallback.
+  net_ref <- config$modes$metabolomics$network$reference
+  network_ref_configured <- !is.null(net_ref) &&
+    (!is.null(net_ref$local_path) || !is.null(net_ref$url))
+
+  if (network_ref_configured) {
+    network_targets <- list(
+      tar_target(
+        metab_network_ref_file,
+        resolve_pinned_asset(
+          config$modes$metabolomics$network$reference,
+          cache_dir = "envs/kegg-refs",
+          ext       = ".tsv.gz"
+        ),
+        format = "file"
+      ),
+      tar_target(
+        metab_network_ref,
+        read_kegg_reaction_pairs(
+          metab_network_ref_file,
+          expected_schema_version =
+            config$modes$metabolomics$network$reference$schema_version %||% 1L,
+          expected_method =
+            config$modes$metabolomics$network$reference$pair_definition_method %||%
+              "equation_side_cartesian_product"
+        )
+      ),
+      tar_target(
+        metab_network,
+        mod_metabolomics_network(
+          de_res         = metab_de_res,
+          pre            = metab_pre,
+          config         = config,
+          out_dir        = metab_out_dir,
+          reaction_pairs = metab_network_ref
+        )
+      )
+    )
+  } else {
+    network_targets <- list(
+      tar_target(
+        metab_network,
+        mod_metabolomics_network(
+          de_res         = metab_de_res,
+          pre            = metab_pre,
+          config         = config,
+          out_dir        = metab_out_dir,
+          reaction_pairs = NULL
+        )
+      )
+    )
+  }
+
+  c(base_targets, analysis_core, analysis_outputs, network_targets)
 }

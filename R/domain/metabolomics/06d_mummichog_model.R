@@ -20,22 +20,21 @@
 
 #' sha256 digest of a file's contents (lowercase hex)
 #'
+#' Thin alias over the generic `.sha256_file()` (core/01b), kept because the
+#' mummichog model tests reference this name directly.
+#'
 #' @param path Path to the file to hash.
 #' @return A 64-character lowercase hex string.
 #' @noRd
-.mmc_sha256_file <- function(path) {
-  tolower(digest::digest(path, algo = "sha256", file = TRUE, serialize = FALSE))
-}
+.mmc_sha256_file <- function(path) .sha256_file(path)
 
 #' Resolve a URL+sha256 model reference to a verified, cached local file
 #'
-#' Downloads the model referenced by `model_ref` (a mapping with `url` and
-#' `sha256`) unless a verified copy is already cached, checks its sha256, and
-#' returns the path to the cached file. The download is fetched to a scratch
-#' file and only published into the cache once its digest matches — a mismatch
-#' is a hard error, never a silent "use what we got". The cache is keyed on the
-#' expected digest (`<sha256>.json`), so a present-but-corrupt entry is treated
-#' as a miss and re-fetched rather than trusted.
+#' Thin wrapper over the generic `resolve_pinned_asset()` (core/01b) — the
+#' single URL/cache/sha256 implementation — pinning the cache extension to
+#' ".json" for mummichog models. `model_ref` is a mapping with `url` and
+#' `sha256`; the download is verified against the checksum and cached under
+#' `<cache_dir>/<sha256>.json`, and a mismatch is a hard error.
 #'
 #' @param model_ref  A list with `url` (single non-empty string) and `sha256`
 #'                   (single 64-char hex string).
@@ -55,65 +54,8 @@
 mmc_resolve_model <- function(model_ref,
                               cache_dir = "envs/mummichog-models",
                               downloader = curl::curl_download) {
-  # -- validate the model_ref block ------------------------------------------
-  if (!is.list(model_ref)) {
-    .mmc_stop("model_ref must be a mapping with 'url' and 'sha256'.")
-  }
-  url    <- model_ref$url
-  sha256 <- model_ref$sha256
-  if (is.null(url) || !is.character(url) || length(url) != 1L || !nzchar(url)) {
-    .mmc_stop("model_ref$url must be a single non-empty string.")
-  }
-  if (is.null(sha256) || !is.character(sha256) || length(sha256) != 1L) {
-    .mmc_stop("model_ref$sha256 must be a single 64-character hex sha256 digest.")
-  }
-  sha256 <- tolower(trimws(sha256))
-  if (!grepl("^[0-9a-f]{64}$", sha256)) {
-    .mmc_stop("model_ref$sha256 must be a 64-character hex sha256 digest; got '",
-              sha256, "'.")
-  }
-
-  # -- cache hit: an existing file whose content still hashes as expected -----
-  cache_file <- file.path(cache_dir, paste0(sha256, ".json"))
-  if (file.exists(cache_file) &&
-      identical(.mmc_sha256_file(cache_file), sha256)) {
-    return(normalizePath(cache_file, winslash = "/", mustWork = TRUE))
-  }
-
-  # -- download to a scratch file, verify, then publish into the cache --------
-  if (!dir.exists(cache_dir)) {
-    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
-  }
-  tmp <- tempfile("mmc-model-", fileext = ".json")
-  on.exit(unlink(tmp, force = TRUE), add = TRUE)
-
-  tryCatch(
-    downloader(url, tmp),
-    error = function(e) {
-      .mmc_stop("failed to download model from '", url, "': ",
-                conditionMessage(e))
-    }
-  )
-  if (!file.exists(tmp) || file.info(tmp)$size == 0) {
-    .mmc_stop("download of '", url, "' produced no data.")
-  }
-
-  got <- .mmc_sha256_file(tmp)
-  if (!identical(got, sha256)) {
-    .mmc_stop("sha256 mismatch for model downloaded from '", url, "': expected ",
-              sha256, " but got ", got,
-              ". Refusing to use an unverified model.")
-  }
-
-  # Publish atomically where possible. file.rename can fail across filesystems
-  # (scratch tempdir vs the project's cache dir); fall back to copy + cleanup.
-  if (!file.rename(tmp, cache_file)) {
-    if (!file.copy(tmp, cache_file, overwrite = TRUE)) {
-      .mmc_stop("could not write the verified model into the cache at '",
-                cache_file, "'.")
-    }
-  }
-  normalizePath(cache_file, winslash = "/", mustWork = TRUE)
+  resolve_pinned_asset(model_ref, cache_dir = cache_dir, ext = ".json",
+                       downloader = downloader)
 }
 
 #' Select the mummichog `-n` model from config, honouring model precedence

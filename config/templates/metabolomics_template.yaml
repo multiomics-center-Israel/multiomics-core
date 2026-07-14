@@ -231,3 +231,27 @@ modes:
         #   url: https://github.com/multiomics-center-Israel/multiomics-annotation-prep/releases/download/cre_kegg_20260711/cre_kegg_20260711.json
         #   sha256: c403c96fbec8df9ae34b828fec01270c8ea3940acc36e4e5ff770868dc8b912b
         # model_json: /path/to/local/model.json
+
+    # ---- Metabolite network (KEGG reaction pairs) ----
+    # Interactive DE-metabolite network whose edges are KEGG substrate->product
+    # compound pairs. Edges come from a precomputed, checksum-PINNED reference
+    # built by multiomic-annotation-prep (equation_side_cartesian_product) — the
+    # pipeline NEVER queries KEGG live. The stage runs only when a reference is
+    # configured here; otherwise it is skipped (it is never run against live
+    # KEGG). A configured-but-invalid reference is a hard error (no fallback).
+    #
+    # DE significance still uses de.p_cutoff (above); isolated nodes are dropped
+    # — this stage adds no new behavioural knobs, only the reference pin.
+    network:
+      reference:
+        # A pre-provisioned local copy (dev / cluster / shared filesystem).
+        # sha256 is MANDATORY and is verified even for local_path. Do NOT commit
+        # a real machine-specific path here — set it via an untracked local
+        # config override. Leave null to skip the network stage.
+        local_path: null      # e.g. /path/to/kegg_reaction_pairs_cross_side_YYYYMMDD.tsv.gz
+        # Public pinned URL (distribution pending licensing review; no auth).
+        url: null
+        sha256: null          # 64-hex; REQUIRED for local_path AND url
+        # Contract the reference must satisfy (validated against its header):
+        schema_version: 1
+        pair_definition_method: equation_side_cartesian_product
