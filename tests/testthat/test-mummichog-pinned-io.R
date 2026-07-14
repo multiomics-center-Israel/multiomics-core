@@ -116,29 +116,51 @@ test_that("readers fail loudly when an expected table is absent", {
   expect_error(read_mummichog_modules(list_mummichog_files(empty)), "No modular")
 })
 
-test_that("read_mummichog_pathways_by_contrast groups a flat file list by contrast", {
-  root <- withr::local_tempdir()
-  mk <- function(contrast, with_pw = TRUE) {
-    cdir <- file.path(root, "mummichog_pinned", contrast)
+# Build a flat mummichog_pinned/<dir>/... file list under `root`; one subdir per
+# entry, each with an input.tsv and (unless with_pw = FALSE) a pathway table.
+.mk_contrast_tree <- function(root, dirs, with_pw = rep(TRUE, length(dirs))) {
+  for (i in seq_along(dirs)) {
+    cdir <- file.path(root, "mummichog_pinned", dirs[[i]])
     tdir <- file.path(cdir, "v2", "1699999999.99.mcg_pinned", "tables")
     dir.create(tdir, recursive = TRUE, showWarnings = FALSE)
     writeLines("x", file.path(cdir, "input.tsv"))     # always present
-    if (with_pw) {
+    if (isTRUE(with_pw[[i]])) {
       writeLines(c("pathway\tp-value", "PathA\t0.01"),
                  file.path(tdir, "mcg_pathwayanalysis_mcg_pinned.tsv"))
     }
   }
-  mk("A_vs_B"); mk("C_vs_D"); mk("E_vs_F", with_pw = FALSE)
+  list.files(file.path(root, "mummichog_pinned"), recursive = TRUE,
+             full.names = TRUE)
+}
 
-  files <- list.files(file.path(root, "mummichog_pinned"),
-                      recursive = TRUE, full.names = TRUE)
+test_that("read_mummichog_pathways_by_contrast recovers original labels from the map", {
+  root  <- withr::local_tempdir()
+  files <- .mk_contrast_tree(root, c("HL_LL", "LL_HL", "NoData"),
+                             with_pw = c(TRUE, TRUE, FALSE))
+  # map the sanitised dirs back to the real (space-containing) contrast labels
+  readr::write_tsv(
+    data.frame(dir      = c("HL_LL", "LL_HL", "NoData"),
+               contrast = c("HL vs LL", "LL vs HL", "no data")),
+    file.path(root, "mummichog_pinned", "contrasts.tsv")
+  )
+  files <- list.files(file.path(root, "mummichog_pinned"), recursive = TRUE,
+                      full.names = TRUE)   # re-list to include contrasts.tsv
+
+  res <- read_mummichog_pathways_by_contrast(files)
+  # keyed by ORIGINAL labels; the contrast with no pathway table is omitted
+  expect_setequal(names(res), c("HL vs LL", "LL vs HL"))
+  expect_s3_class(res[["HL vs LL"]], "data.frame")
+  expect_equal(nrow(res[["LL vs HL"]]), 1L)
+})
+
+test_that("read_mummichog_pathways_by_contrast falls back to dir names without a map", {
+  root  <- withr::local_tempdir()
+  files <- .mk_contrast_tree(root, c("A_vs_B", "C_vs_D"))
   files <- c(files, file.path(root, "stray.txt"))     # not under a contrast dir
 
   res <- read_mummichog_pathways_by_contrast(files)
-  # only contrasts with a pathway table appear; E_vs_F (input only) is omitted
-  expect_setequal(names(res), c("A_vs_B", "C_vs_D"))
+  expect_setequal(names(res), c("A_vs_B", "C_vs_D"))  # sanitised dir names
   expect_s3_class(res[["A_vs_B"]], "data.frame")
-  expect_equal(nrow(res[["C_vs_D"]]), 1L)
 
   expect_length(read_mummichog_pathways_by_contrast(character(0)), 0)
   expect_length(read_mummichog_pathways_by_contrast(NULL), 0)

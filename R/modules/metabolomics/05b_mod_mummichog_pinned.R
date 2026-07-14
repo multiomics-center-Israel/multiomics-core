@@ -197,7 +197,8 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # of clobbering each other's on-disk results. sep = "_" keeps names in charset.
   contrast_dirs <- make.unique(gsub("[^A-Za-z0-9]+", "_", contrast_names),
                                sep = "_")
-  files <- list()
+  files  <- vector("list", length(de_tables))
+  errors <- vector("list", length(de_tables))
   for (i in seq_along(de_tables)) {
     contrast     <- contrast_names[[i]]
     contrast_dir <- file.path(mummi_dir, contrast_dirs[[i]])
@@ -220,6 +221,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
       error = function(e) {
         warning("mummichog (pinned): contrast '", contrast, "' failed: ",
                 conditionMessage(e), call. = FALSE)
+        errors[[i]] <<- conditionMessage(e)
         character(0)
       }
     )
@@ -228,5 +230,30 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # format = "file" target, so deleting any tracked output re-runs the whole
   # stage (regenerating every contrast). The report reads per-contrast pathway
   # tables back from these paths via read_mummichog_pathways_by_contrast().
-  sort(unique(unlist(files, use.names = FALSE)))
+  produced <- sort(unique(unlist(files, use.names = FALSE)))
+
+  # If NOTHING was produced across every contrast, the failure is systemic — a
+  # shared runner/config problem (e.g. an invalid knob validated inside the
+  # engine), not one contrast's data — so fail loud rather than let the report
+  # silently hide an enabled stage. Isolated per-contrast data failures are still
+  # skipped as long as at least one contrast succeeds. (The python preflight
+  # above already catches interpreter/version issues before any work.)
+  if (length(produced) == 0L) {
+    first <- Filter(Negate(is.null), errors)
+    .mmc_stop("every contrast failed with no mummichog output — likely a shared ",
+              "config/runner problem, not per-contrast data. First error: ",
+              if (length(first)) first[[1]] else "unknown")
+  }
+
+  # Record the sanitised-dir -> original-contrast map so the report can label
+  # tabs, subtitles and exports with the real contrast names — the flat file list
+  # otherwise only carries the sanitised directory names.
+  dir.create(mummi_dir, recursive = TRUE, showWarnings = FALSE)
+  map_file <- file.path(mummi_dir, "contrasts.tsv")
+  readr::write_tsv(
+    data.frame(dir = contrast_dirs, contrast = contrast_names,
+               stringsAsFactors = FALSE),
+    map_file
+  )
+  sort(unique(c(produced, map_file)))
 }

@@ -604,26 +604,46 @@ read_mummichog_pathways <- function(files) {
 #' without the stage having to hold the tables in memory.
 #'
 #' @param files Character vector of mummichog output files across all contrasts.
-#' @return A named list keyed by contrast (the sanitised subdir name), each a
-#'   pathway tibble. Contrasts that produced no pathway table are omitted, so
-#'   the report simply shows no section for them; an empty list results when
-#'   `files` is empty or none live under `mummichog_pinned/`.
+#' @return A named list keyed by the original contrast label (recovered from the
+#'   stage's `contrasts.tsv` map; falls back to the sanitised subdir name when
+#'   the map is absent), each a pathway tibble. Contrasts that produced no
+#'   pathway table are omitted, so the report simply shows no section for them;
+#'   an empty list results when `files` is empty or none live under
+#'   `mummichog_pinned/`.
 read_mummichog_pathways_by_contrast <- function(files) {
   if (length(files) == 0) return(list())
-  # Contrast = the path segment immediately under mummichog_pinned/ (paths are
-  # built with file.path(), i.e. "/"-separated on the supported platforms).
+  # Tolerate Windows backslash separators (some paths come from normalizePath(),
+  # which uses "\\" there): match on a "/"-normalised copy, read from originals.
+  norm <- gsub("\\\\", "/", files)
+
+  # Recover original contrast labels from the sanitised-dir -> contrast map the
+  # stage writes, so report tabs/subtitles show the real DE contrast name rather
+  # than the sanitised directory token. Absent map -> fall back to the dir name.
+  label_of <- function(dir) dir
+  is_map   <- grepl("/mummichog_pinned/contrasts\\.tsv$", norm)
+  if (any(is_map)) {
+    m <- tryCatch(readr::read_tsv(files[is_map][[1]], show_col_types = FALSE),
+                  error = function(e) NULL)
+    if (!is.null(m) && all(c("dir", "contrast") %in% names(m))) {
+      lut <- stats::setNames(as.character(m$contrast), as.character(m$dir))
+      label_of <- function(dir) if (!is.na(lut[dir])) unname(lut[dir]) else dir
+    }
+  }
+
+  # Contrast dir = the path segment immediately under mummichog_pinned/.
   pat   <- ".*/mummichog_pinned/([^/]+)/.*"
-  under <- grepl(pat, files)
-  files <- files[under]
-  if (length(files) == 0) return(list())
-  contrast <- sub(pat, "\\1", files)
+  under <- grepl(pat, norm)
+  if (!any(under)) return(list())
+  keep     <- files[under]                 # original paths, for reading
+  contrast <- sub(pat, "\\1", norm[under])
 
   out <- list()
-  for (nm in unique(contrast)) {
-    grp <- files[contrast == nm]
-    # A contrast with no pathway table -> read errors -> NULL, and `out[[nm]] <-
-    # NULL` simply omits it (no section rendered) rather than aborting the read.
-    out[[nm]] <- tryCatch(read_mummichog_pathways(grp), error = function(e) NULL)
+  for (dir in unique(contrast)) {
+    grp <- keep[contrast == dir]
+    # A contrast with no pathway table -> read errors -> NULL; only assign
+    # non-NULL results (an `out[[x]] <- NULL` would drop the key anyway).
+    pw <- tryCatch(read_mummichog_pathways(grp), error = function(e) NULL)
+    if (!is.null(pw)) out[[label_of(dir)]] <- pw
   }
   out
 }
