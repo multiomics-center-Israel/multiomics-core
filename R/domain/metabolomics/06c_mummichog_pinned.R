@@ -538,14 +538,32 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   if (isTRUE(result$timeout)) {
     .mmc_stop("mummichog timed out after ", timeout, "s. See: ", log_file)
   }
-  if (result$status != 0) {
-    .mmc_stop("mummichog exited with status ", result$status, ". See: ", log_file)
-  }
 
   files <- unique(c(list_mummichog_files(out_dir), log_file))
   base  <- basename(files)
-  has_v2 <- any(base == "result.html") ||
-    any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|xlsx)$", base))
+  has_tables <- any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|xlsx)$", base))
+
+  # mummichog 2.7.0 can complete the pathway/modular analysis and then crash in
+  # its HTML reporting (a known fragility, e.g. reporting.py rescale_color() does
+  # max() over an empty compound fold-change dict). That non-zero exit must not
+  # sink the whole pipeline when the analysis tables — the only outputs the
+  # pipeline consumes downstream — were already written. So on a non-zero exit,
+  # proceed with a warning IF the result tables exist, and abort only when
+  # nothing usable was produced (a genuine early failure).
+  if (result$status != 0) {
+    if (has_tables) {
+      warning("[mummichog] exited with status ", result$status,
+              " but the pathway/module tables were produced — the failure was ",
+              "most likely in mummichog's HTML reporting, not the analysis. ",
+              "Proceeding with the result tables (result.html may be incomplete). ",
+              "See: ", log_file, call. = FALSE)
+    } else {
+      .mmc_stop("mummichog exited with status ", result$status,
+                " before producing any result tables. See: ", log_file)
+    }
+  }
+
+  has_v2 <- any(base == "result.html") || has_tables
   if (!has_v2) {
     .mmc_stop("mummichog finished but no expected v2 outputs were found. See: ", log_file)
   }
