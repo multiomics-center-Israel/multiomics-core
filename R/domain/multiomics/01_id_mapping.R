@@ -16,16 +16,8 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
     gene_ids <- rownames(rna_data$expr_work)
     protein_ids <- rownames(prot_data$expr_work)
 
-    # Check for custom mapping file: modes > multiomics, then global
-    custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
-    if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
-        # Fallback: global.gene_protein_mapping (relative to data dir)
-        gpm <- config$global$gene_protein_mapping
-        if (!is.null(gpm) && nzchar(gpm)) {
-            custom_map_file <- file.path(config$project$dir, config$paths$raw, gpm)
-        }
-    }
-
+    # Check for custom mapping file (resolved from config)
+    custom_map_file <- resolve_gene_protein_mapping_file(config)
     if (!is.null(custom_map_file) && file.exists(custom_map_file)) {
         message("Using gene-protein mapping file: ", basename(custom_map_file))
         return(load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids))
@@ -49,6 +41,49 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
     ))
 
     mapping_df
+}
+
+
+#' Resolve the custom gene-protein mapping file path from config
+#'
+#' Looks up the mapping file first under the multiomics mode, then the global
+#' setting (resolved relative to the raw data directory). Returns NULL when no
+#' path is configured.
+#'
+#' @param config Full config object.
+#' @return Character path to the mapping file, or NULL if none is configured.
+resolve_gene_protein_mapping_file <- function(config) {
+    custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
+    if (!is.null(custom_map_file) && file.exists(custom_map_file)) {
+        return(custom_map_file)
+    }
+    gpm <- config$global$gene_protein_mapping
+    if (!is.null(gpm) && nzchar(gpm)) {
+        return(file.path(config$project$dir, config$paths$raw, gpm))
+    }
+    NULL
+}
+
+
+#' Build a gene-protein mapping from scratch for a given set of IDs
+#'
+#' Reads the configured custom mapping file directly and filters it to the
+#' supplied gene and protein IDs. Deliberately independent of the harmonized
+#' MultiAssayExperiment, so downstream steps (e.g. concordance) can rebuild the
+#' mapping from the original ID space rather than trusting harmonized
+#' (\code{GENE_*}) feature IDs.
+#'
+#' @param gene_ids Character vector of RNA-seq gene IDs, in their original space.
+#' @param protein_ids Character vector of proteomics protein IDs, original space.
+#' @param config Full config object.
+#' @return Data frame (gene_id, protein_id, mapping_source[, gene_symbol]), or
+#'   NULL if no custom mapping file is configured or it cannot be read.
+build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
+    custom_map_file <- resolve_gene_protein_mapping_file(config)
+    if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
+        return(NULL)
+    }
+    load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids)
 }
 
 
