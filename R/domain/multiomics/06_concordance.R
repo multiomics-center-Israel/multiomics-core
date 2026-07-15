@@ -124,30 +124,59 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
     concordance_list <- list()
     plots <- list()
 
-    # Try RNA-protein concordance via gene-protein mapping
+    # RNA-protein concordance. Rebuild the gene-protein mapping FROM SCRATCH
+    # from the DE feature IDs (original ID space) rather than trusting the
+    # harmonized MAE, then join the per-omic DE log2FCs through it. The reported
+    # correlation and the scatter plot are both driven from this joined,
+    # checkable table (see analyze_rna_protein_concordance()).
     if ("transcriptomics" %in% names(de_flat) &&
-        "proteomics" %in% names(de_flat) &&
-        !is.null(gene_protein_mapping)) {
+        "proteomics" %in% names(de_flat)) {
 
-        rna_prot <- tryCatch({
-            analyze_rna_protein_concordance(
-                rna_de = de_flat$transcriptomics,
-                prot_de = de_flat$proteomics,
-                mapping = gene_protein_mapping,
-                config = config,
-                out_dir = out_dir
-            )
-        }, error = function(e) {
-            warning("RNA-protein concordance failed: ", e$message)
-            NULL
-        })
+        fresh_mapping <- tryCatch(
+            build_gene_protein_mapping_from_ids(
+                gene_ids = de_flat$transcriptomics$feature_id,
+                protein_ids = de_flat$proteomics$feature_id,
+                config = config
+            ),
+            error = function(e) {
+                warning("From-scratch gene-protein mapping failed: ", e$message)
+                NULL
+            }
+        )
 
-        if (!is.null(rna_prot) && !is.null(rna_prot$concordance_table) &&
-            nrow(rna_prot$concordance_table) > 0) {
-            concordance_list[["transcriptomics_vs_proteomics"]] <- rna_prot
-            plots <- c(plots, rna_prot$plots)
-            message("  DE-based RNA-protein concordance: ",
-                    nrow(rna_prot$concordance_table), " matched features")
+        # Fall back only to the mapping passed in (still not the MAE); never to
+        # the MAE group-mean path for this pair.
+        if (is.null(fresh_mapping) || nrow(fresh_mapping) == 0) {
+            fresh_mapping <- gene_protein_mapping
+        }
+
+        if (is.null(fresh_mapping) || nrow(fresh_mapping) == 0) {
+            warning("No gene-protein mapping available; skipping RNA-protein ",
+                    "concordance (the MAE fallback is deliberately not used here)")
+        } else {
+            rna_prot <- tryCatch({
+                analyze_rna_protein_concordance(
+                    rna_de = de_flat$transcriptomics,
+                    prot_de = de_flat$proteomics,
+                    mapping = fresh_mapping,
+                    config = config,
+                    out_dir = out_dir
+                )
+            }, error = function(e) {
+                warning("RNA-protein concordance failed: ", e$message)
+                NULL
+            })
+
+            if (!is.null(rna_prot) && !is.null(rna_prot$concordance_table) &&
+                nrow(rna_prot$concordance_table) > 0) {
+                concordance_list[["transcriptomics_vs_proteomics"]] <- rna_prot
+                plots <- c(plots, rna_prot$plots)
+                message("  RNA-protein concordance (from-scratch mapping): ",
+                        nrow(rna_prot$concordance_table), " matched features")
+            } else {
+                warning("RNA-protein concordance produced no matched features; ",
+                        "not substituting the MAE group-mean fallback for this pair")
+            }
         }
     }
 
@@ -166,6 +195,10 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
 
             # Skip if already handled by DE-based approach
             if (pair_name %in% names(concordance_list)) next
+            # Never use the MAE group-mean fallback for RNA-protein: that pair
+            # must come from the from-scratch mapping join (a checkable table
+            # with original IDs and both log2FCs), handled above.
+            if (setequal(pair, c("transcriptomics", "proteomics"))) next
 
             mae_conc <- tryCatch({
                 compute_mae_concordance(mae, pair[1], pair[2], config, out_dir)
@@ -419,8 +452,18 @@ analyze_rna_protein_concordance <- function(rna_de, prot_de, mapping, config, ou
         dev.off()
     }
 
+    # Transparent, checkable table: original IDs (gene_id, protein_id) side by
+    # side with both log2FCs. The reported correlation (stats) and the scatter
+    # plot are both computed from `merged`, so this written table is the exact
+    # source of the reported r.
+    id_cols <- intersect(c("gene_id", "protein_id", "mapping_source", "gene_symbol"),
+                         names(merged))
+    concordance_table <- merged[, c(id_cols, "logFC_rna", "padj_rna",
+                                    "logFC_prot", "padj_prot", "concordance"),
+                                drop = FALSE]
+
     list(
-        concordance_table = merged,
+        concordance_table = concordance_table,
         stats = stats,
         plots = plots
     )
