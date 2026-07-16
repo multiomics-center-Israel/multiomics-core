@@ -83,7 +83,13 @@ build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
     if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
         return(NULL)
     }
-    load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids)
+    tryCatch(
+        load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids),
+        error = function(e) {
+            warning("Could not read gene-protein mapping file: ", e$message)
+            NULL
+        }
+    )
 }
 
 
