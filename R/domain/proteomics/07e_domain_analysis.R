@@ -49,6 +49,10 @@ run_domain_analysis <- function(de_res, config, out_dir) {
     if (!id_col %in% colnames(summary_df)) {
         id_col <- intersect(c("FeatureID", cfg$id_columns$protein_id), colnames(summary_df))[1]
     }
+    if (is.na(id_col) || !nzchar(id_col) || !id_col %in% colnames(summary_df)) {
+        stop("Domain analysis: could not determine ID column in summary_df. Available: ",
+             paste(colnames(summary_df), collapse = ", "))
+    }
     sig_proteins <- summary_df[[id_col]][sig_mask]
 
     # Genes may be "SYMBOL | description" (custom-mapped) and/or ";"-joined;
