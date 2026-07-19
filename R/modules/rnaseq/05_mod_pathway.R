@@ -102,7 +102,8 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
             enr_cfg        = enr_cfg,
             config         = config,
             out_dir        = out_dir,
-            clustering_res = clustering_res
+            clustering_res = clustering_res,
+            pre            = pre
         ))
     }
 
@@ -258,10 +259,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 #' @param config Full pipeline config.
 #' @param out_dir Output directory for the RNA mode.
 #' @param clustering_res Result from mod_rnaseq_clustering(), or NULL.
+#' @param pre Preprocessed data list (expr_work normalized matrix + meta). Used
+#'   only in the serial output stage to build the rich per-pathway core-gene
+#'   tables and (opt-in) per-pathway expression heatmaps; never sent to workers.
 #' @return list(annotation, pathway_results, plot_files)
 #' @noRd
 .run_local_enrichment <- function(de_tables, feature_ids, enr_cfg, config,
-                                  out_dir, clustering_res = NULL) {
+                                  out_dir, clustering_res = NULL, pre = NULL) {
 
     message("\n=== Local Enrichment (offline, table-driven) ===\n")
 
@@ -297,7 +301,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
     padj_method <- enr_cfg$padj_method   %||% "fdr"
     rna_de_cfg  <- config$modes$rna$de %||% list()
-    go_simplify <- isTRUE(enr_cfg$go_simplify)
+    # GO simplify defaults to TRUE (legacy parity). Offline: the compute layer
+    # collapses redundant GO terms with the Wang measure over GO.db (no OrgDb, no
+    # network). If GO.db/GOSemSim are missing it warns and skips softly (the
+    # unsimplified GO ORA is always produced) — the pipeline never fails.
+    go_simplify <- isTRUE(enr_cfg$go_simplify %||% TRUE)
     orgdb       <- enr_cfg$orgdb
     # Single control for enrichment parallelism (ORA + GSEA). <=1 == sequential.
     workers     <- enr_cfg$workers %||% 1
@@ -306,6 +314,23 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # future.seed, it makes GSEA identical across worker counts AND independent
     # rebuilds. Falls back to 1L if params$seed is unset.
     enr_seed    <- config$params$seed %||% 1L
+    # Enrichment output toggles. Rich-by-default: all default TRUE except the
+    # high-volume per-pathway heatmaps (opt-in). Set any to false to disable.
+    #   modes.rna.enrichment.plots.<name> and .gsea.per_pathway_artifacts
+    plots_cfg           <- enr_cfg$plots %||% list()
+    gsea_cfg            <- enr_cfg$gsea  %||% list()
+    do_dotplot          <- isTRUE(plots_cfg$dotplot             %||% TRUE)
+    do_ridgeplot        <- isTRUE(plots_cfg$ridgeplot           %||% TRUE)
+    do_ridgeplot_all    <- isTRUE(plots_cfg$ridgeplot_all_genes %||% TRUE)
+    do_pathway_heatmaps <- isTRUE(plots_cfg$pathway_heatmaps    %||% FALSE)
+    do_shared_genes     <- isTRUE(plots_cfg$shared_genes        %||% TRUE)
+    # per-pathway gseaplot2 + rich core-gene tables. New key gsea.per_pathway_artifacts
+    # (default TRUE); the legacy flat key enrichment.gsea_per_pathway_artifacts is
+    # still honored for backward compatibility. `%||%` chains on NULL, so an
+    # explicit `false` at either key is respected.
+    per_pathway_artifacts <- isTRUE(
+        gsea_cfg$per_pathway_artifacts %||%
+        enr_cfg$gsea_per_pathway_artifacts %||% TRUE)
 
     pathway_results <- list()
     plot_files      <- list()
@@ -376,12 +401,15 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                     next
                 }
 
+                unit_dir <- ora_unit_dir(
+                    file.path(enrich_dir, "ORA"),
+                    job$db_name, job$clust_method, job$clust_round)
                 write_cluster_ora_outputs(
                     res,
-                    outDir      = file.path(enrich_dir, "ORA", job$db_name),
-                    file_name   = result_base,
-                    type        = jr$db_type,
-                    maxCategory = enr_cfg$max_terms_in_dotplot %||% 20
+                    unit_dir     = unit_dir,
+                    type         = jr$db_type,
+                    maxCategory  = enr_cfg$max_terms_in_dotplot %||% 20,
+                    shared_genes = do_shared_genes
                 )
 
                 ora_results <- .store_ora_result(
@@ -410,8 +438,31 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     gsea_pval <- enr_cfg$gsea_pvalue_cutoff %||% pval_cutoff
     gsea_padj <- enr_cfg$gsea_padj_method   %||% padj_method
     # `workers` is defined once above and controls both ORA and GSEA.
-    # OFF by default (legacy parity); only emitted on demand when enabled.
-    per_pathway_artifacts <- isTRUE(enr_cfg$gsea_per_pathway_artifacts)
+    # `per_pathway_artifacts` and the plot toggles are resolved once at the top.
+
+    # Rich per-pathway core-gene tables + expression heatmaps need a per-gene
+    # context (expression + DE stats + z-scores) and the normalized expression
+    # matrix + sample annotation. Built ONCE here in the serial stage from
+    # de_tables + `pre`; passed only into run_gsea_all()'s serial writer (never
+    # into a worker). NULL when `pre` is unavailable -> falls back to the minimal
+    # gene/rank_value table and skips heatmaps (fail-soft).
+    gene_context   <- NULL
+    heatmap_expr   <- NULL
+    annotation_col <- NULL
+    if ((per_pathway_artifacts || do_pathway_heatmaps) && !is.null(pre)) {
+        gene_context <- tryCatch(
+            .build_gene_context(de_tables, pre, rna_de_cfg),
+            error = function(e) {
+                warning("Could not build per-pathway gene context: ",
+                        conditionMessage(e)); NULL
+            })
+        if (do_pathway_heatmaps && !is.null(pre$expr_work)) {
+            heatmap_expr   <- pre$expr_work
+            annotation_col <- tryCatch(
+                build_heatmap_annotation_col(pre$meta, config$modes$rna),
+                error = function(e) NULL)
+        }
+    }
 
     gsea_out <- run_gsea_all(
         ranked_genes          = ranked_genes,
@@ -422,6 +473,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         workers               = workers,
         per_pathway_artifacts = per_pathway_artifacts,
         max_terms_in_dotplot  = enr_cfg$max_terms_in_dotplot %||% 20,
+        dotplot               = do_dotplot,
+        ridgeplot             = do_ridgeplot,
+        ridgeplot_all_genes   = do_ridgeplot_all,
+        pathway_heatmaps      = do_pathway_heatmaps,
+        gene_context          = gene_context,
+        expr_mat              = heatmap_expr,
+        annotation_col        = annotation_col,
         seed                  = enr_seed
     )
 
@@ -467,4 +525,46 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     }
     ora_results[[key]] <- df
     ora_results
+}
+
+
+#' Build a per-gene context table for rich per-pathway core-gene outputs
+#'
+#' Assembles one row per feature carrying all-contrast DE statistics (reusing
+#' \code{build_rnaseq_summary_df()} so no DE-column logic is duplicated) plus the
+#' normalized per-sample expression and per-gene z-scores. Keyed by the feature
+#' ID in the first column so the core-gene writer can left-join by core gene.
+#' This is the offline-path equivalent of the columns in \code{final_results.tsv}
+#' (annotation columns are omitted — RNA final_results carries none either).
+#'
+#' @param de_tables Named list of per-contrast DE tables.
+#' @param pre Preprocessed data list (uses \code{pre$expr_work}).
+#' @param de_cfg The \code{modes.rna.de} config section.
+#' @return A data.frame (first column = FeatureID) or NULL on failure/empty.
+#' @noRd
+.build_gene_context <- function(de_tables, pre, de_cfg = list()) {
+    summ <- tryCatch(build_rnaseq_summary_df(de_tables, de_cfg),
+                     error = function(e) NULL)
+    if (is.null(summ) || !is.data.frame(summ) || nrow(summ) == 0) return(NULL)
+
+    id_col <- if ("FeatureID" %in% names(summ)) "FeatureID" else names(summ)[1]
+    summ   <- summ[, c(id_col, setdiff(names(summ), id_col)), drop = FALSE]
+
+    expr <- pre$expr_work
+    if (!is.null(expr)) {
+        expr <- as.matrix(expr)
+        idx  <- match(summ[[id_col]], rownames(expr))
+        sub  <- expr[idx, , drop = FALSE]           # NA rows for unmatched genes
+        # Per-gene z-scores across samples (scale() works column-wise -> transpose).
+        z <- tryCatch(t(scale(t(sub))), error = function(e) NULL)
+        expr_df <- as.data.frame(sub, stringsAsFactors = FALSE, check.names = FALSE)
+        summ <- cbind(summ, expr_df)
+        if (!is.null(z)) {
+            colnames(z) <- paste0(colnames(expr), ".zscore")
+            summ <- cbind(summ, as.data.frame(z, stringsAsFactors = FALSE,
+                                              check.names = FALSE))
+        }
+    }
+    rownames(summ) <- NULL
+    summ
 }

@@ -1521,6 +1521,61 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
     future.apply::future_lapply(jobs, fun, future.seed = seed)
 }
 
+# ==============================================================================
+# ENRICHMENT OUTPUT LAYOUT — centralized path builders
+# ==============================================================================
+# All enrichment output paths are constructed HERE (one place per subsystem) so
+# the directory layout is defined once, not scattered across file.path() calls.
+# The analysis context lives in the DIRECTORY path; filenames within a unit are
+# short and fixed (results.csv, dotplot.pdf/png, ...) — no db/method/contrast/
+# collection tokens repeated in the filename. GO_BP/GO_MF/GO_CC/KEGG all use the
+# identical structure (db is just a directory level).
+
+#' Directory for one GSEA result unit: <db>/ranking_by_<method>/<contrast>
+#'
+#' @param gsea_root The GSEA root (e.g. Enrichment/GSEA).
+#' @param db_name Database (GO_BP/GO_MF/GO_CC/KEGG).
+#' @param ranking_method Ranking method (fc / pval_with_direction / pval_wo_direction).
+#' @param contrast Contrast (or the `any_contrast` pseudo-contrast).
+#' @return The unit directory path (not created).
+#' @noRd
+gsea_unit_dir <- function(gsea_root, db_name, ranking_method, contrast) {
+    file.path(gsea_root, db_name,
+              paste0("ranking_by_", ranking_method), contrast)
+}
+
+#' Directory for one ORA result unit under Enrichment/ORA/<db>/
+#'
+#' Maps the gene-list collection + round to the nested layout:
+#'   all_DE               -> <db>/all_DE/any_contrast
+#'   contrasts            -> <db>/contrasts/with_direction/<round>
+#'   contrasts_wo_direction -> <db>/contrasts/without_direction/<round>
+#'   partition            -> <db>/clustering/partition
+#'   binary_patterns      -> <db>/clustering/binary_patterns
+#' Unknown collections fall back to <db>/<clust_method>/<clust_round> so nothing
+#' is ever written outside ORA/<db>/.
+#'
+#' @param ora_root The ORA root (e.g. Enrichment/ORA).
+#' @param db_name Database (GO_BP/GO_MF/GO_CC/KEGG).
+#' @param clust_method Collection: all_DE / contrasts / contrasts_wo_direction /
+#'   partition / binary_patterns.
+#' @param clust_round Round within the collection (contrast name, "any_contrast",
+#'   "k", or "best").
+#' @return The unit directory path (not created).
+#' @noRd
+ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
+    db_dir <- file.path(ora_root, db_name)
+    switch(clust_method,
+        all_DE                 = file.path(db_dir, "all_DE", clust_round),
+        contrasts              = file.path(db_dir, "contrasts", "with_direction", clust_round),
+        contrasts_wo_direction = file.path(db_dir, "contrasts", "without_direction", clust_round),
+        partition              = file.path(db_dir, "clustering", "partition"),
+        binary_patterns        = file.path(db_dir, "clustering", "binary_patterns"),
+        # fallback: keep any unforeseen collection inside ORA/<db>/
+        file.path(db_dir, clust_method, clust_round)
+    )
+}
+
 #' Build a pure-compute GSEA worker with a minimal captured environment
 #'
 #' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
@@ -1595,6 +1650,13 @@ run_gsea_all <- function(ranked_genes,
                          workers = 1,
                          per_pathway_artifacts = FALSE,
                          max_terms_in_dotplot = 20,
+                         dotplot = TRUE,
+                         ridgeplot = FALSE,
+                         ridgeplot_all_genes = FALSE,
+                         pathway_heatmaps = FALSE,
+                         gene_context = NULL,
+                         expr_mat = NULL,
+                         annotation_col = NULL,
                          seed = 1L) {
 
     if (!is.null(output_dir)) {
@@ -1701,20 +1763,18 @@ run_gsea_all <- function(ranked_genes,
 
         # Write CSV
         if (!is.null(output_dir)) {
-            gsea_sub_dir <- file.path(output_dir, db_name,
-                                      paste0("ranking_by_", ranking_method),
-                                      contrast)
+            # Unit dir: GSEA/<db>/ranking_by_<method>/<contrast>/. Filenames are
+            # short and fixed (context is already in the path).
+            gsea_sub_dir <- gsea_unit_dir(output_dir, db_name, ranking_method, contrast)
             dir.create(gsea_sub_dir, recursive = TRUE, showWarnings = FALSE)
-            csv_file <- file.path(gsea_sub_dir,
-                                  paste0("GSEA_results_", contrast, ".csv"))
+            csv_file <- file.path(gsea_sub_dir, "results.csv")
             write.csv(res_df, file = csv_file, row.names = FALSE)
 
-            # Generate dotplot if significant results exist.
+            # Generate dotplot if significant results exist (config-gated).
             # Primary: enrichplot::dotplot() on the gseaResult object.
             # Fallback: basic ggplot2 scatterplot (visual approximation only).
-            if (n_sig >= 3) {
-                plot_file <- file.path(gsea_sub_dir,
-                                       paste0("GSEA_dotplot_", contrast, ".png"))
+            if (isTRUE(dotplot) && n_sig >= 3) {
+                plot_file <- file.path(gsea_sub_dir, "dotplot.png")
                 plot_key <- paste0(db_name, "_", ranking_method, "_", contrast)
                 show_n <- min(max_terms_in_dotplot, n_sig)
 
@@ -1766,18 +1826,53 @@ run_gsea_all <- function(ranked_genes,
             }
 
             # ----------------------------------------------------------
-            # Per-pathway GSEA artifacts (gseaplot2 PNGs + core-gene CSVs).
-            # OFF by default to match the legacy workflow, where these were
-            # produced only during explicit, on-demand pathway exploration —
-            # not automatically for every significant pathway. Enable via
-            # config enrichment.gsea_per_pathway_artifacts: true.
+            # Per-pathway GSEA artifacts (gseaplot2 PNGs + rich core-gene CSVs +
+            # optional expression heatmaps). The per-pathway loop runs when EITHER
+            # gsea.per_pathway_artifacts (plots + core-gene tables) OR
+            # plots.pathway_heatmaps is enabled; each artifact is gated inside.
+            # `gene_context`/`expr_mat`/`annotation_col` are used only here in the
+            # serial stage — never captured by the bounded GSEA worker.
             # ----------------------------------------------------------
-            if (isTRUE(per_pathway_artifacts)) {
+            if (isTRUE(per_pathway_artifacts) || isTRUE(pathway_heatmaps)) {
                 save_gsea_per_pathway_artifacts(
-                    gsea_result = res,
-                    res_df      = res_df,
-                    output_dir  = gsea_sub_dir
+                    gsea_result    = res,
+                    res_df         = res_df,
+                    output_dir     = file.path(gsea_sub_dir, "per_pathway"),
+                    gene_context   = gene_context,
+                    expr_mat       = expr_mat,
+                    annotation_col = annotation_col,
+                    plots          = isTRUE(per_pathway_artifacts),
+                    heatmaps       = isTRUE(pathway_heatmaps)
                 )
+            }
+
+            # GSEA ridgeplots (legacy ridgeplot_edited / ridgeplot_edited1).
+            # Additive, config-gated, fail-soft; serial stage only (never in a
+            # worker). Leading-edge -> ridgeplot/plot.png + data.csv; all-genes ->
+            # ridgeplot/plot_all_genes.png + data_all_genes.csv (same dir).
+            if (isTRUE(ridgeplot) || isTRUE(ridgeplot_all_genes)) {
+                ridge_key <- paste0(db_name, "_", ranking_method, "_", contrast)
+                ridge_dir <- file.path(gsea_sub_dir, "ridgeplot")
+                if (isTRUE(ridgeplot)) {
+                    rp <- plot_gsea_ridgeplot(
+                        gsea_result     = res,
+                        out_dir         = ridge_dir,
+                        show_category   = max_terms_in_dotplot,
+                        x_axis_title    = paste0("ranking (", ranking_method, ")"),
+                        core_enrichment = TRUE
+                    )
+                    if (!is.null(rp)) plot_files[[paste0("ridge_", ridge_key)]] <- rp
+                }
+                if (isTRUE(ridgeplot_all_genes)) {
+                    rpa <- plot_gsea_ridgeplot(
+                        gsea_result     = res,
+                        out_dir         = ridge_dir,
+                        show_category   = max_terms_in_dotplot,
+                        x_axis_title    = paste0("ranking (", ranking_method, ")"),
+                        core_enrichment = FALSE
+                    )
+                    if (!is.null(rpa)) plot_files[[paste0("ridge_allG_", ridge_key)]] <- rpa
+                }
             }
         }
     }
@@ -1789,43 +1884,94 @@ run_gsea_all <- function(ranked_genes,
 # PER-PATHWAY GSEA ARTIFACTS (Phase 3 — legacy outputs)
 # ==============================================================================
 
-#' Save per-pathway GSEA artifacts: enrichment plots, core gene CSVs
+#' Save per-pathway GSEA artifacts: enrichment plots, core-gene tables, heatmaps
 #'
-#' For each significant pathway in the GSEA result, produces:
-#'   - GSEA_plots/{pathway_id}.png  (enrichplot::gseaplot2)
-#'   - Excels_core_genes/{pathway_id}.csv  (core enrichment genes with stats)
+#' For each significant pathway in the GSEA result, produces (each gated):
+#'   - plots/{pathway_id}.png            enrichplot::gseaplot2  (needs `plots`)
+#'   - core_genes/{pathway_id}.csv       leading-edge genes with stats
+#'   - heatmaps_all_genes/{pathway_id}.png   expression heatmap, all pathway
+#'                                           genes (needs `heatmaps` + `expr_mat`)
+#'   - heatmaps_core_genes/{pathway_id}.png  expression heatmap, leading-edge only
+#'
+#' The core-gene CSV is enriched by left-joining `gene_context` (a per-gene table
+#' of expression / DE stats / z-scores, built omics-specifically upstream and
+#' keyed by its first column). When `gene_context` is NULL it falls back to the
+#' minimal `gene, rank_value` table. All artifacts are fail-soft; this runs only
+#' in the serial output stage, never inside a parallel worker.
 #'
 #' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
 #' @param res_df Data.frame version of the result (with padj, pathway, etc.)
-#' @param output_dir Base directory for this db/ranking/contrast combination
+#' @param output_dir The per_pathway/ directory for this GSEA unit.
+#' @param gene_context Optional per-gene data.frame (first column = gene ID)
+#'   with annotation / expression / DE / z-score columns to enrich core-gene CSVs.
+#' @param expr_mat Optional feature x sample expression matrix for heatmaps.
+#' @param annotation_col Optional pheatmap column-annotation data.frame.
+#' @param plots Logical: emit gseaplot2 PNGs (default TRUE).
+#' @param heatmaps Logical: emit per-pathway expression heatmaps (default FALSE).
+#' @param max_heatmap_genes Cap on genes drawn per heatmap (guards huge sets).
 #' @noRd
-save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir) {
+save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
+                                            gene_context = NULL, expr_mat = NULL,
+                                            annotation_col = NULL,
+                                            plots = TRUE, heatmaps = FALSE,
+                                            max_heatmap_genes = 500) {
 
     if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
 
     sig_rows <- res_df[!is.na(res_df$padj) & res_df$padj < 0.05, , drop = FALSE]
     if (nrow(sig_rows) == 0) return(invisible(NULL))
 
-    # Directories
-    plots_dir <- file.path(output_dir, "GSEA_plots")
-    excel_dir <- file.path(output_dir, "Excels_core_genes")
-    dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+    # Directories (create only those we will populate)
+    plots_dir <- file.path(output_dir, "plots")
+    excel_dir <- file.path(output_dir, "core_genes")
+    hm_all_dir  <- file.path(output_dir, "heatmaps_all_genes")
+    hm_core_dir <- file.path(output_dir, "heatmaps_core_genes")
+    if (isTRUE(plots)) dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
     dir.create(excel_dir, recursive = TRUE, showWarnings = FALSE)
+    do_heatmaps <- isTRUE(heatmaps) && !is.null(expr_mat)
+    if (do_heatmaps) {
+        expr_mat <- as.matrix(expr_mat)
+        dir.create(hm_all_dir,  recursive = TRUE, showWarnings = FALSE)
+        dir.create(hm_core_dir, recursive = TRUE, showWarnings = FALSE)
+    }
 
     has_enrichplot <- requireNamespace("enrichplot", quietly = TRUE)
+    ctx_key <- if (!is.null(gene_context) && ncol(gene_context) > 0) {
+        names(gene_context)[1]
+    } else NULL
+    gene_list <- gsea_result@geneList  # full ranked vector (gene -> value)
+
+    # Helper: write one expression heatmap for a gene set (fail-soft).
+    write_pathway_heatmap <- function(genes, out_png, title) {
+        feats <- intersect(genes, rownames(expr_mat))
+        if (length(feats) < 2) return(invisible(NULL))  # need >=2 rows to cluster
+        if (length(feats) > max_heatmap_genes) feats <- feats[seq_len(max_heatmap_genes)]
+        tryCatch({
+            hm <- plot_heatmap_core(
+                expr_mat[feats, , drop = FALSE],
+                annotation_col = annotation_col,
+                title          = title,
+                scale_rows     = TRUE,
+                silent         = TRUE
+            )
+            save_heatmap_to_file(hm, out_png)
+        }, error = function(e) {
+            message("      pathway heatmap failed for ", title, ": ", e$message)
+        })
+    }
 
     for (i in seq_len(nrow(sig_rows))) {
         pathway_id <- sig_rows$ID[i]
-        # Sanitize pathway ID for safe file names
-        safe_id <- gsub("[^a-zA-Z0-9_.-]", "_", pathway_id)
+        safe_id    <- gsub("[^a-zA-Z0-9_.-]", "_", pathway_id)  # safe file name
+        pw_title   <- sig_rows$Description[i]
 
         # --- GSEA plot (enrichplot::gseaplot2) ---
-        if (has_enrichplot) {
+        if (isTRUE(plots) && has_enrichplot) {
             tryCatch({
                 plot_file <- file.path(plots_dir, paste0(safe_id, ".png"))
                 png(plot_file, width = 800, height = 600, res = 120)
                 print(enrichplot::gseaplot2(gsea_result, geneSetID = pathway_id,
-                                            title = sig_rows$Description[i]))
+                                            title = pw_title))
                 dev.off()
             }, error = function(e) {
                 tryCatch(dev.off(), error = function(e2) NULL)
@@ -1833,37 +1979,166 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir) {
             })
         }
 
-        # --- Core genes extraction and CSV ---
+        # Leading-edge (core) genes for this pathway.
         core_genes_str <- sig_rows$core_enrichment[i]
-        if (is.null(core_genes_str) || is.na(core_genes_str) ||
-            !nzchar(core_genes_str)) next
+        core_genes <- if (is.null(core_genes_str) || is.na(core_genes_str) ||
+                          !nzchar(core_genes_str)) {
+            character(0)
+        } else {
+            g <- trimws(strsplit(core_genes_str, "/", fixed = TRUE)[[1]])
+            g[nzchar(g)]
+        }
 
-        core_genes <- strsplit(core_genes_str, "/")[[1]]
-        core_genes <- trimws(core_genes)
-        core_genes <- core_genes[nzchar(core_genes)]
+        # --- Core-gene CSV (rich when gene_context supplied) ---
+        if (length(core_genes) > 0) {
+            tryCatch({
+                if (!is.null(ctx_key)) {
+                    idx <- match(core_genes, gene_context[[ctx_key]])
+                    core_df <- gene_context[idx, , drop = FALSE]
+                    core_df$rank_value <- as.numeric(gene_list[core_genes])
+                    # Keep genes with no context row but record their id/rank.
+                    core_df[[ctx_key]] <- core_genes
+                } else {
+                    core_df <- data.frame(
+                        gene       = core_genes,
+                        rank_value = as.numeric(gene_list[core_genes]),
+                        stringsAsFactors = FALSE
+                    )
+                }
+                write.csv(core_df, file = file.path(excel_dir, paste0(safe_id, ".csv")),
+                          row.names = FALSE)
+            }, error = function(e) {
+                message("      Core genes CSV failed for ", pathway_id, ": ", e$message)
+            })
+        }
 
-        if (length(core_genes) == 0) next
-
-        tryCatch({
-            # Build output data.frame: gene ID + stats from the ranked list
-            # The gseaResult@geneList contains the full ranked vector
-            gene_list <- gsea_result@geneList
-            matched_vals <- gene_list[core_genes]
-
-            core_df <- data.frame(
-                gene         = core_genes,
-                rank_value   = as.numeric(matched_vals),
-                stringsAsFactors = FALSE
-            )
-
-            csv_file <- file.path(excel_dir, paste0(safe_id, ".csv"))
-            write.csv(core_df, file = csv_file, row.names = FALSE)
-        }, error = function(e) {
-            message("      Core genes CSV failed for ", pathway_id, ": ", e$message)
-        })
+        # --- Per-pathway expression heatmaps (all genes + core genes) ---
+        if (do_heatmaps) {
+            all_genes <- tryCatch(as.character(gsea_result@geneSets[[pathway_id]]),
+                                  error = function(e) character(0))
+            write_pathway_heatmap(all_genes, file.path(hm_all_dir, paste0(safe_id, ".png")),
+                                  paste0(pw_title, " (all genes)"))
+            if (length(core_genes) > 0) {
+                write_pathway_heatmap(core_genes, file.path(hm_core_dir, paste0(safe_id, ".png")),
+                                      paste0(pw_title, " (leading edge)"))
+            }
+        }
     }
 
     invisible(NULL)
+}
+
+#' Plot a GSEA ridgeplot (per-pathway distribution of gene ranking values)
+#'
+#' Faithful, robust adaptation of the legacy `ridgeplot_edited()`. For the top
+#' `show_category` pathways of a GSEA result, draws ridgeline densities of the
+#' per-gene ranking values (the leading-edge / core genes' values from the
+#' gseaResult's geneList), filled by `-log10(p.adjust)`, ordered by NES. Writes
+#' a PNG and a CSV of the underlying data next to it.
+#'
+#' Pure plotting — no enrichment computation, no RNG (deterministic given the
+#' result), and safe to call only in the serial output stage (never in a
+#' worker). Fail-soft: on any missing dependency, empty/invalid result, or
+#' plotting error it emits a warning and returns NULL without stopping the
+#' pipeline.
+#'
+#' @param gsea_result A clusterProfiler `gseaResult` S4 object.
+#' @param out_dir Output directory (the unit's `ridgeplot/` folder). Writes
+#'   `plot.png` and `data.csv` here.
+#' @param show_category Max pathways to show (reuses `max_terms_in_dotplot`).
+#' @param fill Fill column: "p.adjust" (default), "pvalue", or "qvalue".
+#' @param x_axis_title X-axis label (e.g. the ranking method).
+#' @param core_enrichment When TRUE (default, legacy `ridgeplot_edited`) the
+#'   density uses only each pathway's leading-edge/core genes and writes
+#'   `plot.png`/`data.csv`. When FALSE (legacy `ridgeplot_edited1(core=FALSE)`)
+#'   it uses every ranked gene in the pathway and writes
+#'   `plot_all_genes.png`/`data_all_genes.csv`.
+#' @return Invisibly the PNG path if written, else NULL.
+#' @noRd
+plot_gsea_ridgeplot <- function(gsea_result, out_dir, show_category = 20,
+                                fill = "p.adjust", x_axis_title = "ranking value",
+                                core_enrichment = TRUE) {
+    if (!requireNamespace("ggridges", quietly = TRUE)) {
+        warning("ggridges not installed; skipping GSEA ridgeplot: ", out_dir)
+        return(invisible(NULL))
+    }
+
+    valid <- tryCatch(
+        !is.null(gsea_result) && methods::is(gsea_result, "gseaResult") &&
+            nrow(gsea_result@result) > 0,
+        error = function(e) FALSE
+    )
+    if (!isTRUE(valid)) {
+        warning("GSEA ridgeplot skipped (empty/invalid result): ", out_dir)
+        return(invisible(NULL))
+    }
+    # Two legacy variants (ridgeplot_edited1 with core_enrichment T/F): the
+    # leading-edge ridgeplot uses only each pathway's core genes; the "all genes"
+    # variant uses every ranked gene in the pathway. Distinct short filenames so
+    # both live side-by-side in the same ridgeplot/ dir.
+    if (isTRUE(core_enrichment)) {
+        out_file  <- file.path(out_dir, "plot.png")
+        data_file <- file.path(out_dir, "data.csv")
+    } else {
+        out_file  <- file.path(out_dir, "plot_all_genes.png")
+        data_file <- file.path(out_dir, "data_all_genes.csv")
+    }
+
+    out <- tryCatch({
+        x <- gsea_result
+        if (fill == "qvalue") fill <- "qvalues"
+        if (!fill %in% colnames(x@result)) fill <- "p.adjust"
+
+        n   <- min(show_category, nrow(x@result))
+        rdf <- x@result[seq_len(n), , drop = FALSE]
+
+        # Per-pathway gene sets: leading-edge (core_enrichment column) or, for the
+        # all-genes variant, the pathway's full ranked membership (@geneSets).
+        if (isTRUE(core_enrichment)) {
+            gs2id <- strsplit(as.character(rdf$core_enrichment), "/", fixed = TRUE)
+        } else {
+            gs2id <- x@geneSets[as.character(rdf$ID)]
+        }
+        names(gs2id) <- rdf$ID
+
+        genes2values <- x@geneList  # named ranking vector (gene -> value)
+        gs2val <- lapply(gs2id, function(g) {
+            v <- genes2values[g]; v[!is.na(v)]
+        })
+        keep   <- vapply(gs2val, length, integer(1)) > 0
+        gs2val <- gs2val[keep]
+        rdf    <- rdf[keep, , drop = FALSE]
+        if (nrow(rdf) < 1) stop("no ranking values for any pathway's core genes")
+
+        len <- vapply(gs2val, length, integer(1))
+        ord <- order(rdf$NES, decreasing = FALSE)
+
+        df <- data.frame(
+            category = rep(rdf$Description, times = len),
+            fillval  = rep(-log10(rdf[[fill]]), times = len),
+            value    = unlist(gs2val, use.names = FALSE),
+            stringsAsFactors = FALSE
+        )
+        df$category <- factor(df$category, levels = rdf$Description[ord])
+
+        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+        # Underlying-data CSV (legacy parity).
+        utils::write.csv(df, file = data_file, row.names = FALSE)
+
+        fill_lab <- paste0("-log10(", fill, ")")
+        p <- ggplot2::ggplot(df, ggplot2::aes(x = value, y = category, fill = fillval)) +
+            ggridges::geom_density_ridges() +
+            ggplot2::scale_fill_continuous(low = "blue", high = "red", name = fill_lab) +
+            ggplot2::labs(x = x_axis_title, y = NULL) +
+            ggplot2::theme_minimal()
+
+        ggplot2::ggsave(out_file, p, width = 8, height = 8, dpi = 150)
+        out_file
+    }, error = function(e) {
+        warning("GSEA ridgeplot failed for ", out_dir, ": ", conditionMessage(e))
+        NULL
+    })
+    invisible(out)
 }
 
 # ==============================================================================
@@ -1886,8 +2161,8 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir) {
 #' @param type "KEGG" or "GO". Controls simplify and @fun slot.
 #' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
 #' @param pAdjustMethod P-value adjustment method (default "fdr").
-#' @param outDir Output directory for CSV and dotplot files.
-#' @param file_name Base file name for outputs (no extension).
+#' @param outDir ORA unit directory to write into (results.csv / dotplot.pdf /
+#'   simplify.csv). NULL skips file writing.
 #' @param maxCategory Max categories to show in dotplot (default 1000).
 #' @return List of 4 elements (matching legacy):
 #'   [[1]] allRes (compareClusterResult or NULL),
@@ -1903,7 +2178,6 @@ run_cluster_ora <- function(clusters,
                             pvalueCutoff = 0.05,
                             pAdjustMethod = "fdr",
                             outDir = NULL,
-                            file_name = "enrichment",
                             maxCategory = 1000,
                             go_simplify = FALSE,
                             orgdb = NULL,
@@ -1926,10 +2200,45 @@ run_cluster_ora <- function(clusters,
     )
     if (length(res) == 0) return(list())
     if (!is.null(outDir)) {
-        write_cluster_ora_outputs(res, outDir = outDir, file_name = file_name,
+        write_cluster_ora_outputs(res, unit_dir = outDir,
                                   type = type, maxCategory = maxCategory)
     }
     res
+}
+
+# Per-process cache of GO semantic-similarity data, keyed by ontology. The Wang
+# measure (legacy simplify default) derives term similarity from the GO DAG in
+# GO.db and needs NO organism OrgDb, so one semData per ontology (BP/MF/CC) is
+# reused across all ORA jobs in a process instead of being rebuilt each call
+# (godata() is slow). In multisession workers each process keeps its own cache.
+.enrich_semdata_cache <- new.env(parent = emptyenv())
+
+#' Build (and cache) GO Wang semantic-similarity data for an ontology — offline
+#'
+#' Reproduces the legacy `simplify()` dependency: `GOSemSim::godata(ont=...)`
+#' over `GO.db` only, with no OrgDb and no network. Returns NULL (never errors)
+#' when GO.db / GOSemSim are unavailable so callers can skip-and-warn.
+#'
+#' @param ont GO ontology: "BP", "MF", or "CC" (NULL -> "BP").
+#' @return A `GOSemSimDATA` object, or NULL if it could not be built.
+#' @noRd
+.go_semdata <- function(ont) {
+    key <- as.character(ont %||% "BP")
+    cached <- .enrich_semdata_cache[[key]]
+    if (!is.null(cached)) return(cached)
+    if (!requireNamespace("GOSemSim", quietly = TRUE) ||
+        !requireNamespace("GO.db", quietly = TRUE)) {
+        return(NULL)
+    }
+    sem <- tryCatch(
+        GOSemSim::godata(ont = key),   # Wang: GO DAG from GO.db, no OrgDb
+        error = function(e) {
+            message("    GOSemSim::godata(ont=", key, ") failed: ", e$message)
+            NULL
+        }
+    )
+    if (!is.null(sem)) .enrich_semdata_cache[[key]] <- sem
+    sem
 }
 
 #' Cluster ORA — pure computation (no file I/O), parallel-worker-safe
@@ -1946,8 +2255,10 @@ run_cluster_ora <- function(clusters,
 #' @param type "KEGG" or "GO". Controls simplify and the @fun slot.
 #' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
 #' @param pAdjustMethod P-value adjustment method (default "fdr").
-#' @param go_simplify Whether to run GO simplify (default FALSE; GO only).
-#' @param orgdb Pre-installed OrgDb package name for simplify (or NULL).
+#' @param go_simplify Whether to run GO simplify (default FALSE; GO only). Uses
+#'   the Wang measure over GO.db — offline, no OrgDb.
+#' @param orgdb Reserved for future IC-based similarity measures (which require an
+#'   organism OrgDb). Not used by the default Wang simplify. (or NULL).
 #' @param ont GO ontology ("BP"/"MF"/"CC") for simplify semData (or NULL).
 #' @return List of 4 elements (matching legacy):
 #'   [[1]] allRes (compareClusterResult or NULL),
@@ -2044,49 +2355,38 @@ run_cluster_ora_compute <- function(clusters,
         allRes@fun <- "enrichKEGG"
     }
 
-    # GO simplify — OPTIONAL and GATED.
-    # The ORA above (enricher over local TERM2GENE/TERM2NAME) is fully offline and
-    # always produces the UNSIMPLIFIED GO result. simplify() additionally requires
-    # GOSemSim semantic-similarity data built from a local, pre-installed OrgDb; it
-    # runs only when go_simplify=TRUE AND an explicit orgdb is installed. No online
-    # loading, no organism auto-detection. On any miss/failure: skip + warn, keep
-    # the unsimplified result.
+    # GO simplify — legacy-equivalent, fully offline.
+    # The ORA above (enricher over local TERM2GENE/TERM2NAME) always produces the
+    # UNSIMPLIFIED GO result. simplify() collapses redundant GO terms using the
+    # DEFAULT Wang measure, whose semantic similarity is derived from the GO DAG in
+    # GO.db — organism-agnostic and needing NO OrgDb (exactly what the legacy
+    # Clusters_Enrichment_Test() did: a bare simplify(allRes, cutoff=0.7, ...)).
+    # The `orgdb` argument is retained ONLY for future IC-based measures
+    # (Resnik/Lin/Jiang/Rel), which additionally need an organism OrgDb; it is not
+    # used for the Wang default. On any missing package / failure: skip + warn,
+    # keep the unsimplified result — the pipeline never fails.
     allRes_simplify <- NULL
     enrichment_table_simplify <- NULL
 
     if (type == "GO" && isTRUE(go_simplify)) {
-        if (is.null(orgdb) || !nzchar(orgdb)) {
-            warning("GO simplify requested (go_simplify=TRUE) but no enrichment.orgdb ",
-                    "is configured. Skipping simplify; unsimplified GO ORA produced.")
-        } else if (!requireNamespace("GOSemSim", quietly = TRUE) ||
-                   !requireNamespace(orgdb, quietly = TRUE)) {
-            warning("GO simplify requested but GOSemSim and/or the OrgDb package '",
-                    orgdb, "' are not installed locally. ",
-                    "Skipping simplify; unsimplified GO ORA produced.")
+        sem_data <- .go_semdata(ont)
+        if (is.null(sem_data)) {
+            warning("GO simplify requested (go_simplify=TRUE) but GO.db/GOSemSim ",
+                    "are not installed. Skipping simplify; unsimplified GO ORA produced.")
         } else {
-            sem_data <- tryCatch(
-                GOSemSim::godata(orgdb, ont = ont %||% "BP", computeIC = FALSE),
-                error = function(e) {
-                    message("    GOSemSim::godata() failed: ", e$message)
-                    NULL
-                }
-            )
-            if (!is.null(sem_data)) {
-                allRes_simplify <- tryCatch({
-                    clusterProfiler::simplify(
-                        allRes,
-                        cutoff     = 0.7,
-                        by         = "p.adjust",
-                        select_fun = min,
-                        measure    = "Wang",
-                        semData    = sem_data
-                    )
-                }, error = function(e) {
-                    message("    simplify() failed: ", e$message)
-                    NULL
-                })
-            }
-
+            allRes_simplify <- tryCatch({
+                clusterProfiler::simplify(
+                    allRes,
+                    cutoff     = 0.7,
+                    by         = "p.adjust",
+                    select_fun = min,
+                    measure    = "Wang",
+                    semData    = sem_data
+                )
+            }, error = function(e) {
+                message("    simplify() failed: ", e$message)
+                NULL
+            })
             if (!is.null(allRes_simplify)) {
                 enrichment_table_simplify <- process_enrichment_table(
                     allRes_simplify@compareClusterResult
@@ -2100,39 +2400,42 @@ run_cluster_ora_compute <- function(clusters,
 
 #' Write cluster ORA outputs to disk (serial, deterministic — never in a worker)
 #'
-#' The I/O half of run_cluster_ora(): writes the enrichment CSV, the optional
-#' Simplify_* CSV, and the dotplot PDF. Split out so it can run in the serial
-#' assembly step while compute is parallelized. File content is identical to the
-#' pre-split behavior.
+#' The I/O half of run_cluster_ora(): writes the enrichment table, the optional
+#' simplify table, and the dotplot into the ORA unit directory, plus (optionally)
+#' the shared-gene heatmaps under `unit_dir/shared_genes/`. Split out so it can
+#' run in the serial assembly step while compute is parallelized. Filenames are
+#' short and fixed — the analysis context (db / collection / round) is in the
+#' unit directory path (see ora_unit_dir()).
 #'
 #' @param ora_result The 4-element list returned by run_cluster_ora_compute().
-#' @param outDir Output directory for CSV and dotplot files.
-#' @param file_name Base file name for outputs (no extension).
+#' @param unit_dir The ORA unit directory (from ora_unit_dir()).
 #' @param type "KEGG" or "GO".
 #' @param maxCategory Max categories to show in dotplot (default 1000).
+#' @param shared_genes Logical; when TRUE also emit the legacy ORA shared-gene
+#'   heatmaps (gene<->term / term<->term) via plot_ora_shared_genes(). Additive
+#'   and fail-soft; default FALSE (callers pass the config toggle).
 #' @return Invisibly NULL (called for its file-writing side effects).
 #' @noRd
-write_cluster_ora_outputs <- function(ora_result, outDir, file_name,
-                                      type = "KEGG", maxCategory = 1000) {
-    if (length(ora_result) == 0 || is.null(outDir)) return(invisible(NULL))
+write_cluster_ora_outputs <- function(ora_result, unit_dir,
+                                      type = "KEGG", maxCategory = 1000,
+                                      shared_genes = FALSE) {
+    if (length(ora_result) == 0 || is.null(unit_dir)) return(invisible(NULL))
 
     allRes                    <- ora_result[[1]]
     enrichment_table          <- ora_result[[3]]
     enrichment_table_simplify <- ora_result[[4]]
 
-    dir.create(outDir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(unit_dir, recursive = TRUE, showWarnings = FALSE)
 
-    # Write enrichment CSV
+    # Enrichment result table
     if (!is.null(enrichment_table)) {
-        enrichment_table_file <- file.path(outDir, paste0(file_name, ".csv"))
-        write.csv(x = enrichment_table, file = enrichment_table_file,
+        write.csv(x = enrichment_table, file = file.path(unit_dir, "results.csv"),
                   quote = TRUE, row.names = TRUE)
     }
 
-    # Write simplify CSV (only when simplify ran and produced a table)
+    # Simplify table (only when GO simplify ran and produced a table)
     if (!is.null(enrichment_table_simplify)) {
-        simplify_file <- file.path(outDir, paste0("Simplify_", file_name, ".csv"))
-        write.csv(x = enrichment_table_simplify, file = simplify_file,
+        write.csv(x = enrichment_table_simplify, file = file.path(unit_dir, "simplify.csv"),
                   quote = FALSE, row.names = TRUE)
     }
 
@@ -2141,7 +2444,7 @@ write_cluster_ora_outputs <- function(ora_result, outDir, file_name,
         # Legacy font size heuristic
         font.size <- if (nrow(allRes@compareClusterResult) > 50) 4 else 9
 
-        dot_plot_file <- file.path(outDir, paste0(file_name, ".pdf"))
+        dot_plot_file <- file.path(unit_dir, "dotplot.pdf")
         tryCatch({
             if (requireNamespace("enrichplot", quietly = TRUE)) {
                 p <- enrichplot::dotplot(allRes, showCategory = maxCategory,
@@ -2155,7 +2458,161 @@ write_cluster_ora_outputs <- function(ora_result, outDir, file_name,
         })
     }
 
+    # Legacy ORA shared-gene heatmaps (additive, config-gated, fail-soft) →
+    # unit_dir/shared_genes/cluster_<label>_{genes_to_terms,terms_to_terms}.{csv,pdf}
+    if (isTRUE(shared_genes) && !is.null(allRes)) {
+        plot_ora_shared_genes(allRes@compareClusterResult,
+                              file.path(unit_dir, "shared_genes"))
+    }
+
     invisible(NULL)
+}
+
+#' Plot ORA shared-gene heatmaps (gene<->term and term<->term overlap)
+#'
+#' Faithful, robust port of the legacy `plot_shared_genes()` (file outputs only).
+#' For each cluster in a compareClusterResult table, produces two views:
+#'   - gene<->term: a binary term x gene membership matrix (which genes drive
+#'     which enriched terms);
+#'   - term<->term: a term x term Jaccard overlap matrix (percent shared genes,
+#'     `100 * 2|A∩B| / (|A|+|B|)`).
+#' Each is rendered with `pheatmap` (PDF) and written as a CSV, reordered by the
+#' heatmap's row/column clustering. Large clusters (legacy gates: >20 terms, or
+#' >200 genes for the gene<->term view) skip the PDF and write the CSV only.
+#'
+#' Pure plotting — no enrichment computation, no RNG (deterministic). Call only
+#' in the serial output stage (never in a worker). Fail-soft: missing deps, too
+#' few terms/genes, or any plotting error → warn and skip, never stop the
+#' pipeline. The legacy `plotly`/`htmltools` interactive return is intentionally
+#' NOT ported (that is deferred report/UI work).
+#'
+#' Note (corrected legacy quirk): the term<->term matrix holds overlap *percent*
+#' (0–100); legacy hard-coded `breaks = seq(0, 1, 0.01)` (a 0–1 range) which does
+#' not cover the data. Here the RdYlBu gradient is mapped across the actual 0–100
+#' range so the heatmap renders correctly — a display-only correction.
+#'
+#' @param ora_df Data.frame with `Cluster`, `ID`, `Description`, `geneID`
+#'   (slash-separated genes) — i.e. `allRes@compareClusterResult`.
+#' @param out_dir Output directory (the unit's `shared_genes/` folder). Files are
+#'   `cluster_<label>_genes_to_terms.{csv,pdf}` and `..._terms_to_terms.{csv,pdf}`
+#'   — the analysis context is already in the parent path, so it is not repeated.
+#' @return Invisibly a character vector of files written (may be empty).
+#' @noRd
+plot_ora_shared_genes <- function(ora_df, out_dir) {
+    if (is.null(ora_df) || !is.data.frame(ora_df) || nrow(ora_df) == 0 ||
+        is.null(out_dir)) {
+        return(invisible(character(0)))
+    }
+    if (!all(c("Cluster", "ID", "Description", "geneID") %in% colnames(ora_df))) {
+        warning("plot_ora_shared_genes(): missing required columns; skipping ",
+                out_dir)
+        return(invisible(character(0)))
+    }
+    if (!requireNamespace("pheatmap", quietly = TRUE)) {
+        warning("pheatmap not installed; skipping ORA shared-gene plots: ", out_dir)
+        return(invisible(character(0)))
+    }
+
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # Render one matrix view: heatmap PDF (small case only) + a CSV reordered by
+    # the heatmap's clustering. Always writes the CSV (falls back to the matrix's
+    # original order if the heatmap can't be drawn, e.g. a constant/degenerate
+    # matrix), so the data is preserved even when the plot is skipped. `big`
+    # suppresses the PDF (legacy behavior for large clusters). Returns the paths
+    # written. Fail-soft.
+    render_view <- function(mat, view, cl, big, small_args) {
+        base  <- paste0("cluster_", cl, "_", view)
+        pdf_f <- file.path(out_dir, paste0(base, ".pdf"))
+        csv_f <- file.path(out_dir, paste0(base, ".csv"))
+        constant <- length(unique(as.vector(mat))) <= 1  # clustering meaningless
+
+        hm <- NULL
+        if (!constant) {
+            hm <- tryCatch({
+                if (big) {
+                    pheatmap::pheatmap(mat, cluster_rows = TRUE, cluster_cols = TRUE,
+                                       silent = TRUE, legend = isTRUE(small_args$legend))
+                } else {
+                    do.call(pheatmap::pheatmap, c(list(
+                        mat = mat, cluster_rows = TRUE, cluster_cols = TRUE,
+                        treeheight_col = 0, treeheight_row = 0,
+                        width = 5, height = 5, border_color = "white",
+                        main = paste("Cluster", cl), filename = pdf_f, silent = TRUE
+                    ), small_args))
+                }
+            }, error = function(e) {
+                message("      ", view, " heatmap failed (cluster ", cl, "): ", e$message)
+                NULL
+            })
+        }
+
+        ord_r <- if (!is.null(hm)) hm$tree_row$order else seq_len(nrow(mat))
+        ord_c <- if (!is.null(hm)) hm$tree_col$order else seq_len(ncol(mat))
+        utils::write.csv(mat[ord_r, ord_c, drop = FALSE], quote = TRUE,
+                         row.names = TRUE, file = csv_f)
+
+        if (!big && !is.null(hm) && file.exists(pdf_f)) c(pdf_f, csv_f) else csv_f
+    }
+
+    written <- character(0)
+    for (cl in unique(ora_df$Cluster)) {
+        cl_res <- tryCatch({
+            TEMP <- stats::na.omit(ora_df[ora_df$Cluster == cl, , drop = FALSE])
+            term_genes <- strsplit(as.character(TEMP$geneID), "/", fixed = TRUE)
+            all_genes  <- unique(unlist(term_genes))
+            n_terms <- nrow(TEMP)
+
+            # Legacy guard: need >1 term and >1 gene to build meaningful matrices.
+            # (if/else, not return() — a bare return() inside tryCatch would exit
+            # the whole function, skipping the remaining clusters.)
+            if (n_terms <= 1 || length(all_genes) <= 1) {
+                character(0)
+            } else {
+                # ---- gene <-> term: binary membership (rows = terms, cols = genes) ----
+                g2t <- matrix(0L, nrow = n_terms, ncol = length(all_genes),
+                              dimnames = list(TEMP$Description, all_genes))
+                for (i in seq_len(n_terms)) g2t[i, term_genes[[i]]] <- 1L
+                g2t_color <- if (length(unique(as.vector(g2t))) == 2) {
+                    grDevices::colorRampPalette(c("white", "pink"))(2)
+                } else {
+                    grDevices::colorRampPalette(c("pink"))(2)
+                }
+                f_g2t <- render_view(
+                    g2t, "genes_to_terms", cl,
+                    big = n_terms > 20 || length(all_genes) > 200,
+                    small_args = list(color = g2t_color, legend = FALSE,
+                                      cellheight = 10, fontsize_row = 5, fontsize_col = 1)
+                )
+
+                # ---- term <-> term: Jaccard overlap percent (0-100) ----
+                t2t <- matrix(0, nrow = n_terms, ncol = n_terms,
+                              dimnames = list(TEMP$Description, TEMP$Description))
+                for (i in seq_len(n_terms)) for (j in seq_len(n_terms)) {
+                    gi <- term_genes[[i]]; gj <- term_genes[[j]]
+                    t2t[i, j] <- 100 * 2 * length(intersect(gi, gj)) / (length(gi) + length(gj))
+                }
+                t2t_color <- grDevices::colorRampPalette(
+                    rev(RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")))(100)
+                f_t2t <- render_view(
+                    t2t, "terms_to_terms", cl,
+                    big = n_terms > 20,
+                    small_args = list(color = t2t_color,
+                                      breaks = seq(0, 100, length.out = 101),  # corrected range (see @note)
+                                      legend = TRUE, fontsize_row = 5, fontsize_col = 5)
+                )
+
+                c(f_g2t, f_t2t)
+            }
+        }, error = function(e) {
+            warning("plot_ora_shared_genes(): cluster ", cl, " failed in ",
+                    out_dir, ": ", conditionMessage(e))
+            character(0)
+        })
+        written <- c(written, cl_res)
+    }
+
+    invisible(written)
 }
 
 

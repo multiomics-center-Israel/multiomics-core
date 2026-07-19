@@ -7136,6 +7136,11 @@
       "Maintainer": "Kamil Slowikowski <kslowikowski@gmail.com>",
       "Repository": "CRAN"
     },
+    "ggridges": {
+      "Package": "ggridges",
+      "Version": "0.5.7",
+      "Source": "Repository"
+    },
     "ggtangle": {
       "Package": "ggtangle",
       "Version": "0.1.1",

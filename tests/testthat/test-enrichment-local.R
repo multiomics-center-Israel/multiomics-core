@@ -234,3 +234,131 @@ test_that("run_cluster_ora returns empty list for invalid clusters", {
                            TERM2NAME = data.frame(term = "p1", name = "P1"))
     expect_equal(length(res), 0)
 })
+
+# ---------------------------------------------------------------------------
+# Phase 2 enrichment plots — fail-soft behavior (synthetic; no real data)
+# ---------------------------------------------------------------------------
+
+test_that("plot_gsea_ridgeplot is fail-soft on NULL/invalid input", {
+    tmp <- withr::local_tempdir()
+    out_dir <- file.path(tmp, "ridgeplot")
+    # Second arg is now the output DIRECTORY (writes plot.png / data.csv inside).
+    expect_warning(expect_null(plot_gsea_ridgeplot(NULL, out_dir)))
+    expect_false(file.exists(file.path(out_dir, "plot.png")))
+    expect_warning(expect_null(plot_gsea_ridgeplot(data.frame(a = 1), out_dir)))
+    expect_false(file.exists(file.path(out_dir, "plot.png")))
+})
+
+test_that("plot_ora_shared_genes is fail-soft on empty / malformed input", {
+    tmp <- withr::local_tempdir()
+    # NULL and non-data.frame -> empty, no error, no files
+    expect_equal(length(plot_ora_shared_genes(NULL, tmp)), 0)
+    expect_equal(length(plot_ora_shared_genes(list(), tmp)), 0)
+    # missing required columns -> warns + empty
+    expect_warning(res <- plot_ora_shared_genes(data.frame(a = 1, b = 2), tmp))
+    expect_equal(length(res), 0)
+    # zero-row frame with the right columns -> empty, no files
+    empty_df <- data.frame(Cluster = character(), ID = character(),
+                           Description = character(), geneID = character())
+    expect_equal(length(plot_ora_shared_genes(empty_df, tmp)), 0)
+})
+
+test_that("plot_ora_shared_genes writes genes_to_terms + terms_to_terms per cluster", {
+    skip_if_not_installed("pheatmap")
+    tmp <- withr::local_tempdir()
+    # Two clusters, two terms each, overlapping genes -> non-degenerate matrices.
+    df <- data.frame(
+        Cluster     = c("1", "1", "2", "2"),
+        ID          = c("GO:1", "GO:2", "GO:3", "GO:4"),
+        Description = c("term one", "term two", "term three", "term four"),
+        geneID      = c("g1/g2/g3", "g2/g3/g4", "g5/g6", "g6/g7/g8"),
+        stringsAsFactors = FALSE
+    )
+    files <- plot_ora_shared_genes(df, tmp)
+    # CSVs are always written (both views, both clusters) = 4 CSVs minimum.
+    # Filenames carry the cluster label: cluster_<label>_{genes,terms}_to_terms.csv
+    csvs <- list.files(tmp, pattern = "\\.csv$")
+    expect_true(any(grepl("genes_to_terms", csvs)))
+    expect_true(any(grepl("terms_to_terms", csvs)))
+    expect_true(any(grepl("cluster_1_", csvs)))
+    expect_true(all(file.info(file.path(tmp, csvs))$size > 0))
+    # single-term cluster is skipped (legacy guard)
+    df1 <- df[1, , drop = FALSE]
+    expect_equal(length(plot_ora_shared_genes(df1, withr::local_tempdir())), 0)
+})
+
+test_that("plot_gsea_ridgeplot all-genes variant is fail-soft and uses distinct name", {
+    tmp <- withr::local_tempdir()
+    out_dir <- file.path(tmp, "ridgeplot")
+    # core_enrichment = FALSE -> legacy "all genes" variant. Fail-soft on NULL,
+    # and it must target plot_all_genes.png (not plot.png).
+    expect_warning(expect_null(
+        plot_gsea_ridgeplot(NULL, out_dir, core_enrichment = FALSE)))
+    expect_false(file.exists(file.path(out_dir, "plot_all_genes.png")))
+    expect_false(file.exists(file.path(out_dir, "plot.png")))
+})
+
+test_that("save_gsea_per_pathway_artifacts is fail-soft on NULL input", {
+    tmp <- withr::local_tempdir()
+    expect_null(save_gsea_per_pathway_artifacts(NULL, data.frame(), tmp))
+    # No result, no output_dir -> no-op, no error
+    expect_null(save_gsea_per_pathway_artifacts(NULL, data.frame(), NULL))
+})
+
+test_that(".go_semdata caches per ontology (no rebuild on hit)", {
+    # Seed the cache with sentinels; a cache hit must return them WITHOUT calling
+    # GOSemSim::godata() (keeps this fast and independent of GO.db). Seed "BP" too
+    # so the NULL->"BP" mapping also hits the cache and never triggers a build.
+    assign("CC", "SENTINEL_CC", envir = .enrich_semdata_cache)
+    assign("BP", "SENTINEL_BP", envir = .enrich_semdata_cache)
+    on.exit({
+        rm("CC", envir = .enrich_semdata_cache)
+        rm("BP", envir = .enrich_semdata_cache)
+    }, add = TRUE)
+    expect_identical(.go_semdata("CC"), "SENTINEL_CC")
+    expect_identical(.go_semdata(NULL), "SENTINEL_BP")  # NULL -> "BP" key
+})
+
+test_that(".go_semdata builds GO Wang semData offline from GO.db (no OrgDb)", {
+    skip_if_not_installed("GOSemSim")
+    skip_if_not_installed("GO.db")
+    # The crux of the legacy-parity fix: GO simplify's Wang semantic data is built
+    # from the GO DAG in GO.db, with NO organism OrgDb and no network. Build the
+    # smallest ontology (CC) to keep this affordable. (~tens of seconds.)
+    if (exists("CC", envir = .enrich_semdata_cache)) rm("CC", envir = .enrich_semdata_cache)
+    on.exit(if (exists("CC", envir = .enrich_semdata_cache))
+                rm("CC", envir = .enrich_semdata_cache), add = TRUE)
+    sem <- .go_semdata("CC")
+    expect_false(is.null(sem))
+    expect_s4_class(sem, "GOSemSimDATA")
+    expect_identical(.go_semdata("CC"), sem)  # second call is a cache hit
+})
+
+test_that(".build_gene_context assembles DE stats + expression + z-scores", {
+    skip_if_not(exists("build_rnaseq_summary_df"),
+                "build_rnaseq_summary_df not available")
+    genes <- paste0("g", 1:6)
+    mk <- function(seed) {
+        withr::with_seed(seed, data.frame(
+            FeatureID      = genes,
+            log2FoldChange = rnorm(6),
+            pvalue         = runif(6),
+            padj           = runif(6),
+            stringsAsFactors = FALSE
+        ))
+    }
+    de_tables <- list(A.vs.B = mk(1), A.vs.C = mk(2))
+    expr <- matrix(withr::with_seed(3, rnorm(6 * 4)), nrow = 6,
+                   dimnames = list(genes, paste0("S", 1:4)))
+    pre <- list(expr_work = expr, meta = data.frame(SampleID = paste0("S", 1:4)))
+
+    ctx <- .build_gene_context(de_tables, pre, list(p_cutoff = 0.05))
+    expect_s3_class(ctx, "data.frame")
+    expect_equal(names(ctx)[1], "FeatureID")           # keyed by feature id first
+    expect_true(all(genes %in% ctx$FeatureID))
+    # per-contrast DE columns present (from build_rnaseq_summary_df)
+    expect_true(any(grepl("^linearFC\\.", names(ctx))))
+    # per-sample expression + z-score columns appended
+    expect_true(all(paste0("S", 1:4) %in% names(ctx)))
+    expect_true(any(grepl("\\.zscore$", names(ctx))))
+})

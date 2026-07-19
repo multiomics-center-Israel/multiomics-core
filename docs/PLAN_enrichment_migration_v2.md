@@ -1,21 +1,21 @@
 # Current Status
 
-Status: **Phase 1 COMPLETE and fully validated** (local & uncommitted). All Phase 1 validation tasks passed — see §4.4 for today's results. Implementation smoke-validated end-to-end and green; two latent downstream-consumer bugs were found, fixed, and verified: (1) `rna_pipeline_summary` integer/double (§4.2) and (2) `extract_enrichment_df()` `rbind` schema mismatch on heterogeneous ORA+GSEA tables (§4.3). Both multiomics (`clustering_res = NULL`) behavior and online-regression routing (`annotation_dir: ""`) are validated. Both fixes are in downstream consumers; the enrichment producer and its Phase 1 contract are unchanged. Parallel enrichment execution (§12) is implemented. **Phase 1 is committed locally** as `aaf8d8b` (not pushed/merged), followed by an **isolated RNG-reproducibility commit** (§12.1: `params$seed` → `future.seed`, making GSEA identical across worker counts and independent rebuilds; one-time GSEA-baseline shift, ORA unchanged). Phase 2 (legacy plots) is next, resuming from this fully reproducible baseline.
+Status: **Phase 2 COMPLETE and fully validated** (committed locally on the branch; not pushed/merged). Phase 2 restored full legacy enrichment-output parity: output-layout reorganization (§14), the ported plotting/artifact set (§15) — GSEA ridgeplots (leading-edge + all-genes), per-pathway `gseaplot2`, rich per-pathway core-gene tables, per-pathway expression heatmaps (all + core genes) — and the corrected **offline GO-simplify** (Wang/GO.db, no OrgDb; §15.1 item 1). See **§16** for the Phase 2 sign-off summary, final config defaults, and validation results. Phase 1 (+ §12 parallel execution + §12.1 RNG reproducibility) remains committed and unchanged beneath it.
 
 Current Branch:
 feature/enrichment-migration-v2
 
 Current Approved Phase:
-Phase 1 – RNAseq Local Enrichment Core — **implementation + validation COMPLETE** (uncommitted)
+**Phase 2 – Legacy enrichment plots & output parity: COMPLETE** (committed locally). Phase 1 (+ §12 parallel exec) committed at `aaf8d8b`; engine fixes at `68f3375`/`7adaeb5`/`1036372`/`8bad337`; Phase 2 closes on top.
 
 Next Planned Phase:
-Parallel enrichment execution (§12) — **IMPLEMENTED & validated** (workers=1 ≡ workers=4, identical results). **Next: Phase 2** – Legacy enrichment plots (gated; §13 preparation)
+**Phase 3 – Proteomics adaptation** (gated; investigation-first — see §6 and the roadmap in §16.4). Not started. Phase 4 (HTML report integration) remains planning-only.
 
 Implementation Started:
-Yes — Phase 1 complete in the working tree, NOT committed/pushed. A reduced "smoke" config drove a full RNA single-omics run end-to-end (green). Two latent downstream bugs were fixed (`R/domain/rnaseq/10_pipeline_summary.R` §4.2; `R/domain/multiomics/07_enrichment.R` §4.3). Today's validation (§4.4) closed every remaining Phase 1 item: unit tests, `tar_validate()`, full smoke run, offline ORA + GSEA, exec summary / Shiny payload / HTML report, both downstream fixes verified, multiomics `clustering_res = NULL` behavior (GSEA + DE-derived ORA; partition & binary ORA omitted), and online-regression routing (`annotation_dir: ""` → legacy online path, local path bypassed, expected non-model-organism behavior). Remaining before any code tomorrow: the commit decision only.
+Yes. **Committed locally** (not pushed/merged): Phase 1 + §12 parallel execution (`aaf8d8b`), engine fixes (`68f3375` seed, `7adaeb5` nested-parallelism, `1036372`/`8bad337` globals bounding), and now **Phase 2 legacy output parity** (single commit — see §16). Validation: 84 unit tests, `tar_validate()`, smoke, and a full `Analysis_01` (GO_BP/MF/CC, workers=4, simplify + per-pathway artifacts + both ridgeplots + pathway heatmaps) — `tar_outdated()` returns `character(0)`.
 
 Merged to Main:
-No
+No — all commits are **local only** on `feature/enrichment-migration-v2`, **not pushed, not merged**.
 
 ---
 
@@ -476,3 +476,239 @@ No new config option; no new dependency (`BiocParallel` is already a `fgsea`/`cl
 - [ ] Decide plot config toggles (prefer reusing existing options; avoid `renv.lock` changes unless a new dep is approved).
 - [ ] Implement in the recommended order (ridgeplots → shared-gene → heatmaps), fail-soft.
 - [ ] Add tests + run the smoke config; visual-review outputs; confirm green + unchanged downstream.
+
+### Phase 2 — Implementation Progress (in progress; local, uncommitted)
+
+**Approved scope (confirmed):** plot generation only — **(1) GSEA ridgeplots**, **(2) ORA shared-gene plots**. Deferred: expression heatmaps (Phase 2b), cluster profiles (already implemented), manual clustering, any report/UI integration. Additive · fail-soft · deterministic · worker-count-independent · zero change to enrichment results or the Phase 1 contract.
+
+**Legacy source confirmed present:** `Projects/Uri_Gat/Functions_for_clustering_and_enrichment_1.0.R` — `ridgeplot_edited()` @805, `plot_shared_genes()` @656.
+
+**Dependency added:** `ggridges` 0.5.7 — the only new package; required for `ggridges::geom_density_ridges()` (no ridgeline geom exists elsewhere in the project). Added via `renv::install()` + `renv::record()` (1 lockfile record; no hand-edit, no snapshot sweep). `plot_shared_genes` needs no new package (`pheatmap` + `RColorBrewer` present; base `strsplit` instead of `stringi`; the `plotly`/`htmltools` interactive return is intentionally **not** ported — that is deferred report/UI integration).
+
+**Sub-step 1 — GSEA ridgeplots: IMPLEMENTED + validated.**
+- `plot_gsea_ridgeplot(gsea_result, out_file, show_category, fill, x_axis_title)` in `R/core/09_enrichment.R` — top-N pathways (reuses `max_terms_in_dotplot`), leading-edge genes from the result's `core_enrichment` column (no DOSE/enrichplot internals), ranking values from `@geneList`, `ggridges` density ridges filled by `-log10(p.adjust)`, ordered by NES. Writes a PNG + an underlying-data CSV. Fully guarded (`tryCatch`, empty/invalid checks) → warns and returns `NULL`, never stops the pipeline.
+- Called in the **serial** assembly loop of `run_gsea_all()` (next to the dotplot, where the `gseaResult` object is in scope) — never inside a worker — gated by a new `ridgeplot` parameter.
+- Config: `modes.rna.enrichment.plots.ridgeplot` (**default `true`** = legacy behavior), resolved in the module and threaded through; `shared_genes` toggle added alongside (default `true`).
+- **Validation:** real result → PNG (~147 KB) + CSV in the correct `Enrichment/GSEA/<db>/ranking_by_<method>/<contrast>/` location; empty/`NULL`/non-gseaResult inputs → warning, no file, no crash. **Additivity proven:** plots-ON vs plots-OFF give byte-identical `pathway_results`, GSEA result CSVs (5/5) and ORA result CSVs (7/7); ridgeplot files appear only when enabled (5 PNG + 5 CSV, non-empty). Worker-count invariance of results is inherited from Phase 1 (compute path unchanged) and plotting is serial (worker-independent). (Smoke-green confirmation is recorded once for the combined Phase 2 below.)
+
+**Sub-step 2 — ORA shared-gene plots: IMPLEMENTED + validated.**
+- `plot_ora_shared_genes(ora_df, outDir, file_name)` in `R/core/09_enrichment.R` — a faithful port of the legacy `plot_shared_genes()` (file outputs only). For each ORA cluster it builds a **gene↔term** binary membership matrix and a **term↔term** Jaccard-overlap-% matrix (`100·2|A∩B|/(|A|+|B|)`), renders each as a `pheatmap` PDF and writes the reordered matrix as a CSV. Large clusters (legacy gates: >20 terms, or >200 genes for gene↔term) skip the PDF and write the CSV only. Uses base `strsplit` (no `stringi`); the legacy `plotly`/`htmltools` interactive return is **not** ported (deferred UI work). Fully guarded (`tryCatch` per cluster + per view); missing deps / too few terms/genes / degenerate (constant) matrices → warn/skip, never crash. Robustness added over legacy: the CSV is always written (falls back to the matrix's original order if the heatmap can't be drawn), and the term↔term `breaks` were corrected to the true 0–100 range (legacy hard-coded 0–1, a display bug).
+- Called in the **serial** ORA writer `write_cluster_ora_outputs()` (where the `compareClusterResult` is in scope) — never inside a worker — gated by a new `shared_genes` parameter.
+- Config: `modes.rna.enrichment.plots.shared_genes` (**default `true`** = legacy behavior), resolved in the module and threaded through.
+- **Validation:** real ORA result (5 clusters) → per-cluster `Cluster_<c>_genes2term_<base>.{pdf,csv}` and `Cluster_<c>_term2term_<base>.{pdf,csv}` in `Enrichment/ORA/<db>/`, non-empty, correct naming; degenerate cluster → CSV-only (fallback); NULL / missing-columns / empty / single-term inputs → warn/skip, no files, no crash. Unit tests added (`test-enrichment-local.R`): fail-soft paths + a synthetic two-cluster render (66 tests pass, 0 fail).
+
+**Additivity (both plots ON vs OFF, workers=4, seeded): PASS** — `pathway_results` byte-identical; **GSEA** result CSVs byte-identical; **ORA** result CSVs byte-identical (7 tables); ridgeplot PNGs 5 (ON) / 0 (OFF); shared-gene files 50 (ON) / 0 (OFF). The only new outputs are the plot files.
+
+**Full smoke `tar_make` (seeded baseline): GREEN** — rebuilt `rna_pathway_res` + downstream; no errored targets; `tar_outdated()` empty. Output tree has 3 GSEA ridgeplot PNGs and 16 ORA shared-gene PDFs + 34 CSVs; `rna_pathway_res` structure unchanged (7 ORA + 3 GSEA leaves); `rna_pipeline_summary` / `rna_shiny_payload` / `rna_report` / `rna_exec_summary` all built. (The `serialize()/SOCKnode` line in the log is a benign `future` teardown artifact — the store is green.)
+
+**Cross-process GSEA determinism (verifying §12.1): CONFIRMED** — the same GSEA under `future.seed = params$seed` in two *separate* R processes produced identical result digests. The seeded scheme reproduces GSEA across independent rebuilds, not just within one run.
+
+**Files touched (Phase 2):** `R/core/09_enrichment.R` (add `plot_gsea_ridgeplot`, `plot_ora_shared_genes`; `run_gsea_all` gains a `ridgeplot` param + serial call; `write_cluster_ora_outputs` gains a `shared_genes` param + serial call), `R/modules/rnaseq/05_mod_pathway.R` (resolve `plots` toggles; pass `ridgeplot` + `shared_genes`), `config/templates/rna_config.yaml` (`plots` block), `tests/testthat/test-enrichment-local.R` (Phase 2 plot tests), `renv.lock` (`ggridges`). Enrichment computation, ORA/GSEA algorithms, `pathway_results`, report, Shiny, exec summary, proteomics, multiomics — untouched.
+
+---
+
+# 14. Output Layout Reorganization (post-Phase-2, pre-commit; local, uncommitted)
+
+**Goal.** Restructure the on-disk enrichment output tree into a self-describing, human-navigable hierarchy where the *path* carries the context (database → collection/ranking → contrast) and the *filenames* are short and fixed. **Output-only change:** no biological calculation, ORA/GSEA result *content*, RNG behavior, worker behavior, or in-memory `pathway_results` keys were touched — only the directories and filenames the producers write to. Approved with the explicit constraint "keep the change limited to output paths, filenames, tests, and documentation."
+
+### 14.1 Old vs new layout
+
+**ORA — old:** flat, context-in-filename under `Enrichment/ORA/<db>/`, e.g. `GO_BP_contrasts_G.vs.Sy.csv`, `GO_BP_contrasts_G.vs.Sy_dotplot.pdf`, `Cluster_1_genes2term_GO_BP_partition_k.pdf` — the `<db>_<collection>_<round>` tuple repeated in every basename.
+
+**ORA — new:** one directory per enrichment *unit*, fixed filenames inside:
+
+```
+Enrichment/ORA/<db>/
+  contrasts/with_direction/<contrast>/      results.csv  dotplot.pdf  shared_genes/
+  contrasts/without_direction/<contrast>/   results.csv  dotplot.pdf  shared_genes/
+  all_DE/any_contrast/                      results.csv  dotplot.pdf  shared_genes/
+  clustering/partition/                     results.csv  dotplot.pdf  shared_genes/
+  clustering/binary_patterns/               results.csv  dotplot.pdf  shared_genes/
+      shared_genes/cluster_<label>_genes_to_terms.{csv,pdf}
+      shared_genes/cluster_<label>_terms_to_terms.{csv,pdf}
+```
+
+**GSEA — old:** `Enrichment/GSEA/<db>/ranking_by_<method>/<contrast>/GSEA_results_<contrast>.csv`, `GSEA_dotplot_<contrast>.png`, `GSEA_ridgeplot_<contrast>.{png,csv}` — the `<contrast>` token repeated in every basename.
+
+**GSEA — new:** fixed filenames inside the existing `ranking_by_<method>/<contrast>/` unit dir:
+
+```
+Enrichment/GSEA/<db>/ranking_by_<method>/<contrast>/
+  results.csv
+  dotplot.png
+  ridgeplot/{plot.png, data.csv}
+  per_pathway/{plots/, core_genes/}     # only when gsea_per_pathway_artifacts: true
+```
+
+`ranking_by_fc`, `ranking_by_pval_with_direction`, `ranking_by_pval_wo_direction` are preserved verbatim; the `any_contrast` pseudo-contrast still appears only under `ranking_by_pval_wo_direction`.
+
+### 14.2 Naming rules (applied uniformly)
+
+- The path holds the context; filenames are short and **fixed** (`results.csv`, `dotplot.{pdf,png}`, `ridgeplot/plot.png`, `ridgeplot/data.csv`). No `db`/`contrast`/`method` token is repeated in a basename once it is already in the path (verified: **0** basenames contain a db token).
+- **Identical structure for every database** — GO_BP / GO_MF / GO_CC / KEGG share one code path; **no KEGG special-casing** (verified structurally by the unit test and the path helpers; the validation run had GO-only DBs).
+- Collection → directory mapping: `contrasts`→`contrasts/with_direction`; `contrasts_wo_direction`→`contrasts/without_direction`; `all_DE`(round `any_contrast`)→`all_DE/any_contrast`; `partition`→`clustering/partition`; `binary_patterns`→`clustering/binary_patterns`.
+- Shared-gene filenames keep the **cluster label** (`cluster_1_…`, `cluster_up_…`, binary-pattern labels like `cluster_00011_…`) and use `genes_to_terms` / `terms_to_terms` consistently (replacing legacy `genes2term`/`term2term`).
+
+### 14.3 Path-building architecture
+
+All path logic is centralized in **two pure helper functions** in `R/core/09_enrichment.R` (no scattered `file.path()` in the writers):
+
+- `gsea_unit_dir(gsea_root, db_name, ranking_method, contrast)` → `<root>/<db>/ranking_by_<method>/<contrast>`.
+- `ora_unit_dir(ora_root, db_name, clust_method, clust_round)` → `switch(clust_method, …)` producing the five collection directories above.
+
+The writers (`run_gsea_all`, `write_cluster_ora_outputs`, `plot_gsea_ridgeplot`, `plot_ora_shared_genes`) and the module ORA loop call these helpers and append fixed filenames. `write_cluster_ora_outputs(ora_result, unit_dir, …)` and `plot_ora_shared_genes(ora_df, out_dir)` dropped their old `file_name` argument; `plot_gsea_ridgeplot(gsea_result, out_dir, …)` now takes an output *directory*. The in-memory `result_base` (`<db>_<method>_<round>`) is retained **only** for the `pathway_results` keys — those are unchanged, so every in-memory consumer is unaffected.
+
+### 14.4 Backward-compatibility
+
+Grepped all of `R/`: **no internal consumer reads the offline ORA/GSEA files from disk.** The RNA HTML report reads only the *online*-path files (`pathway_*_fgsea.csv`, `Enrichment/plots/*.png`); the exec summary / Shiny payload / `collect_pipeline_stats` / `extract_enrichment_df` / `get_pathway_highlights` all consume the in-memory `pathway_results` object; multiomics uses a different enrichment subsystem. ⇒ only producers + tests + docs changed; no consumer edits, no duplicate files. Dead `GSEA_enrichment/` directory (defined in `create_legacy_output_dirs()` but never written or read) removed from `R/core/00_paths.R` and `PROJECT_STRUCTURE.md`.
+
+### 14.5 Validation results
+
+- **Unit tests** (`test-enrichment-local.R`): **67 pass, 0 fail** (Phase 2 tests updated to the new signatures/filenames — `plot_gsea_ridgeplot(…, out_dir)`, `plot_ora_shared_genes(df, out_dir)`, `genes_to_terms`/`terms_to_terms`, cluster-label assertions).
+- **Parse + helper check:** all three changed R files parse; the two helpers produce the exact intended paths for all five ORA collections and GSEA (including identical KEGG mapping).
+- **`tar_validate()`:** OK (pipeline parses, no dependency errors).
+- **Full `Analysis_01` rebuild** (`config.yaml`: GO_BP+GO_MF+GO_CC, `workers: 4`, `ridgeplot: true`, `shared_genes: true`, `gsea_per_pathway_artifacts: false`; `rna_pathway_res` recomputed, 8 upstream targets cached; 40 min): produced **808 files** into a **clean** `Analysis_01/rna/Enrichment/` (0 files pre-dating the run). **64 ORA `results.csv`** across all five collections × 3 DBs; **80 GSEA `results.csv`** across 3 rankings × contrasts × 3 DBs (+`any_contrast` under `pval_wo_direction` only). GSEA units carry `results.csv` + `dotplot.png` + `ridgeplot/{plot.png,data.csv}`. **Leak checks all 0:** no flat ORA CSVs, no `GSEA_results_*`/`GSEA_dotplot_*`/`GSEA_ridgeplot_*` long names, no `genes2term`/`term2term`, no db token in any basename. GO_BP/GO_MF/GO_CC show identical structure. Result-CSV column schemas unchanged (ORA retains `Cluster`/`Fold_enrichment`; GSEA retains `NES`/`contrast`/`database`/`ranking_method`/`padj`/`pathway`).
+- **Results unchanged / worker-invariance:** the change is confined to serial-I/O output *paths*, which are deterministic pure functions of job identity (db, method, contrast, collection, round) — independent of worker count. No compute, RNG, or worker code changed, so `workers=1 ≡ workers=4` and result content are unchanged **by construction** (worker-invariance and cross-process GSEA determinism were already proven empirically in §12/§13). A byte-diff against the previous layout was not possible because the prior `Enrichment/` had already been removed before the run.
+
+### 14.6 Files touched (reorganization)
+
+`R/core/09_enrichment.R` (add `gsea_unit_dir`/`ora_unit_dir`; rewrite the file-writing sections of `run_gsea_all`, `write_cluster_ora_outputs`, `plot_gsea_ridgeplot`, `plot_ora_shared_genes`, `save_gsea_per_pathway_artifacts`, and the `run_cluster_ora` wrapper to the new dir+fixed-filename scheme), `R/modules/rnaseq/05_mod_pathway.R` (ORA loop computes `ora_unit_dir(...)`; `result_base` kept only for in-memory keys), `R/core/00_paths.R` (remove dead `gsea_enrichment` dir), `PROJECT_STRUCTURE.md` (drop `GSEA_enrichment/`), `tests/testthat/test-enrichment-local.R` (new signatures/filenames). Enrichment computation, ORA/GSEA algorithms, `pathway_results` structure and keys, RNG, worker logic, report, Shiny, exec summary, proteomics, multiomics — untouched. **Uncommitted** (per instruction: do not commit/push/merge; Phase 3 not started).
+
+---
+
+# 15. Legacy-parity output completion (post-audit; local, uncommitted)
+
+A parity audit (comparing `Projects/Uri_Gat/outputs/Results/{GSEA_GO,Enrichment_GO}` against the current offline `Enrichment/`) found the current output at **functional parity with intentional differences**, with a handful of legacy artifact types either config-gated-off, content-reduced, or deferred. This section closes those gaps so the default configuration produces legacy-level richness, while making every expensive artifact independently switchable. **Output-only** change: no biological calculation, ORA/GSEA statistics, RNG, or parallelization architecture touched.
+
+### 15.1 What was implemented
+
+1. **GO simplify default → `true`, offline via Wang/GO.db (no OrgDb).** Was `false` **and** wrongly gated on an explicit `orgdb`. Root-cause investigation of the legacy `Clusters_Enrichment_Test()` (`Functions_for_clustering_and_enrichment_1.0.R:603`) showed it called a **bare** `clusterProfiler::simplify(allRes, cutoff=0.7, by="p.adjust", select_fun=min)` with **no `semData`/OrgDb** — the default `measure="Wang"` derives term similarity from the GO DAG in **GO.db** (organism-agnostic, offline). The current code had reimplemented this with a mandatory `GOSemSim::godata(orgdb, …)`, so it skipped whenever no OrgDb was configured. **Fix:** build Wang semData with `GOSemSim::godata(ont=<BP|MF|CC>)` over GO.db — no OrgDb — via a new per-process, per-ontology cache `.go_semdata()` (godata is slow; cached across ORA jobs). The `orgdb` arg is retained only for possible future IC-based measures. Skips softly only if GO.db/GOSemSim are absent. **Empirically verified offline** on the real Uri_Gat `GO2gene_CC.tab` (in-process *and* inside `future` multisession workers: `GOSemSimDATA` built from GO.db, `simplify` 21→7 terms, no OrgDb). This supersedes the earlier §15.4 "OrgDb-gated" note — GO simplify now reaches **full offline parity** with the legacy run.
+2. **Rich per-pathway core-gene tables restored.** The per-pathway `core_genes/<id>.csv` was a minimal `gene,rank_value`. It now left-joins a per-gene **context** table (built in the module by reusing `build_rnaseq_summary_df()` + normalized expression + per-gene z-scores), so each core gene carries all-contrast DE (`linearFC.*`/`pvalue.*`/`padj.*`/`*_pass`/`pass_any_contrast`), per-sample normalized expression, `.zscore` columns, and `rank_value` — the offline equivalent of the legacy `Excels_core_genes` (annotation columns like UniProt/GO titles are omitted; this offline project wires no gene-annotation source — see §15.4). Validated: 45-column CSVs.
+3. **Per-pathway expression heatmaps** (legacy `Heatmaps_all_genes` + `Heatmaps_core_genes`) implemented as `per_pathway/heatmaps_all_genes/<id>.png` and `per_pathway/heatmaps_core_genes/<id>.png`, reusing `plot_heatmap_core()` (row z-score, zero-variance guard) + `save_heatmap_to_file()` + `build_heatmap_annotation_col()`. All-genes uses `gseaResult@geneSets[[id]]`; core uses `core_enrichment`. **Opt-in** (`plots.pathway_heatmaps: false` default) due to volume; fail-soft.
+4. **Second "all genes" ridgeplot** (legacy `ridgeplot_edited1(core_enrichment=FALSE)`) via a `core_enrichment` arg on `plot_gsea_ridgeplot()`; writes `ridgeplot/plot_all_genes.png` + `data_all_genes.csv` beside the leading-edge `plot.png`/`data.csv`.
+5. **Per-pathway gseaplot2 + core-gene tables default → `true`** (`gsea.per_pathway_artifacts`; was `false`).
+6. **Dotplot made an explicit toggle** (`plots.dotplot`, default true).
+
+**Architecture safety.** All new data (per-gene `gene_context`, normalized `expr_mat`, `annotation_col`) is threaded **only** into `run_gsea_all()`'s serial assembly loop and used by the serial writers. The bounded GSEA worker factory `.make_gsea_worker(local_tables, pvalueCutoff, pAdjustMethod)` is unchanged, so none of it enters a parallel worker closure — the §12.3 globals fix is preserved. `pre` is threaded into `.run_local_enrichment()` for this purpose; it never reaches a worker.
+
+### 15.2 Configuration (final)
+
+```yaml
+enrichment:
+  go_simplify: true            # was false; needs orgdb else soft-skip
+  orgdb: ""
+  plots:
+    dotplot: true
+    ridgeplot: true
+    ridgeplot_all_genes: true   # NEW
+    pathway_heatmaps: false     # NEW, opt-in (large volume)
+    shared_genes: true
+  gsea:
+    per_pathway_artifacts: true # was false
+```
+
+Rich-by-default; every expensive artifact independently disableable. **Backward-compatible:** the old flat key `enrichment.gsea_per_pathway_artifacts` is still honored (`%||%` chain), and an explicit `false` at any key is respected. Applied to `config/templates/rna_config.yaml` and both `Projects/Uri_Gat` configs (`config.yaml`: heatmaps off; `config_smoke.yaml`: all on, to exercise every path).
+
+### 15.3 Validation
+
+- **Unit tests:** `test-enrichment-local.R` **84 pass, 0 fail** (added: all-genes ridgeplot variant + filename, per-pathway fail-soft, `.build_gene_context` assembly, `.go_semdata` per-ontology cache, and a real offline `GOSemSimDATA` build from GO.db).
+- **GO-simplify offline fix (§15.1 item 1):** verified in-process **and** inside `future` multisession workers — `.go_semdata("CC")` builds `GOSemSimDATA` from GO.db with no OrgDb, and `clusterProfiler::simplify()` reduces a real CC `compareClusterResult` 21→7 terms in each worker. Confirms `simplify.csv` will now be produced by the parallel (workers=4) pipeline path.
+- **`tar_validate()`:** OK.
+- **Smoke (`config_smoke.yaml`, GO_CC, workers 1, ALL toggles on incl. heatmaps; in-process, 730 s):** every new artifact type produced — `per_pathway/{plots,core_genes,heatmaps_all_genes,heatmaps_core_genes}` (257 each), ridgeplot `{plot,plot_all_genes}.png` + `{data,data_all_genes}.csv`, rich 45-col core-gene CSVs (FeatureID + linearFC/pvalue/padj/pass ×contrasts + expression + `.zscore` + rank_value), ORA `dotplot.pdf`+`shared_genes/`. `simplify.csv` count **0** (go_simplify true but no local OrgDb → soft-skip, as designed). (Pre-reorg 2026-07-13 files coexisted only because the Smoke_01 dir was not cleaned; all new artifacts are 2026-07-16.)
+- **Full `Analysis_01` (`config.yaml`, GO_BP/MF/CC, workers 4, per_pathway on, heatmaps off; in-process, ~2.7 h): PASS.** Clean rebuild → **12,146 files**, **0** pre-dating the run, **0** stale old-layout names. Per DB: ORA results+dotplots+shared_genes for all collections; GSEA per unit has `results.csv`+`dotplot.png`+`ridgeplot/{plot,plot_all_genes}.png`+`{data,data_all_genes}.csv`; per-pathway `plots/`+`core_genes/` at scale (~5,600 significant pathways total). `simplify.csv` **0** (soft-skip, no OrgDb) and pathway-heatmaps **0** (off in `config.yaml`) — both exactly as configured. Rich core-gene CSVs = **77 columns** (all-contrast DE + per-sample expression + `.zscore` + `rank_value`). **The `workers=4` parallel path ran correctly** with the new serial-threaded `gene_context`/`expr_mat` (69 ORA + 93 GSEA jobs across 4 workers, no errors) — confirming the §12.3 globals fix and parallelization architecture are intact.
+
+### 15.4 Residual intentional differences (documented)
+
+- **Annotation columns** (UniProt names/titles, transcript IDs, GO IDs/titles) in core-gene tables: **not** included. This offline project wires no gene-annotation source (RNA `final_results` carries none either). The rich table includes everything available (expression + DE + z-scores); annotation would require configuring an annotation source ("whenever available"). *Not a Phase-2 blocker.*
+- **GO simplify**: ~~materializes only when a local OrgDb is configured~~ **— CORRECTED (see §15.1 item 1): now at full offline parity via Wang/GO.db, no OrgDb. Simplify runs whenever GO.db/GOSemSim are installed (skips softly otherwise).** The only remaining caveat is numeric: exact simplified-term membership depends on the installed GO.db version (3.22.0 here) vs the legacy environment's — the *mechanism* is identical, term-level results may differ slightly if GO.db versions differ.
+- **KEGG**: legacy audit folders were GO-only; the current code path is identical for KEGG (no special-casing).
+
+### 15.5 Parity verdict
+
+With §15 implemented, **every legacy enrichment artifact type now has a current equivalent** (ORA tables/dotplots/**GO-simplify**; GSEA tables; leading-edge + all-genes ridgeplots; per-pathway gseaplot2; rich per-pathway core-gene tables; per-pathway all-genes + core-genes heatmaps), plus current-only additions (GSEA dotplots; ORA shared-gene heatmaps). With the GO-simplify offline fix (§15.1 item 1), simplify is no longer a residual difference — it is at **full offline parity**. Classification: **functional parity** (the only documented gap is core-gene annotation columns, which need an annotation source this offline project does not wire; §15.4). **Note:** the earlier smoke/full-run `simplify.csv = 0` counts in §15.3 were recorded **before** the GO-simplify fix; the user's pending final full `Analysis_01` (go_simplify on, GO.db present) is expected to produce `simplify.csv` in every GO ORA unit — that run is the last confirmation before commit.
+
+### 15.6 Files touched (§15)
+
+`R/core/09_enrichment.R` (`plot_gsea_ridgeplot` gains `core_enrichment`; `save_gsea_per_pathway_artifacts` gains `gene_context`/`expr_mat`/`annotation_col`/`plots`/`heatmaps` + rich CSV join + heatmap writers; `run_gsea_all` gains serial-only `dotplot`/`ridgeplot_all_genes`/`pathway_heatmaps`/`gene_context`/`expr_mat`/`annotation_col`; **GO-simplify offline fix:** new `.go_semdata()` + `.enrich_semdata_cache`, `run_cluster_ora_compute` simplify block uses Wang/GO.db with no OrgDb gate), `R/modules/rnaseq/05_mod_pathway.R` (`.run_local_enrichment` takes `pre`; resolves new toggles; `.build_gene_context()` helper; threads context/expr into `run_gsea_all`; simplify comment corrected), `config/templates/rna_config.yaml` + `Projects/Uri_Gat/{config,config_smoke}.yaml` (simplify docs corrected — no OrgDb), `tests/testthat/test-enrichment-local.R`. Compute/statistics/RNG/parallelization, `pathway_results`, report, Shiny, proteomics, multiomics — untouched. **Uncommitted.**
+
+---
+
+# 16. Phase 2 — COMPLETE (sign-off summary)
+
+**Phase 2 (legacy enrichment plots & output-coverage parity) is complete and committed locally** on `feature/enrichment-migration-v2` (not pushed, not merged). This section is the authoritative summary; §14 and §15 hold the detail.
+
+## 16.1 What Phase 2 delivered
+
+- **Legacy audit.** The current offline enrichment output was audited artifact-by-artifact against the original Uri_Gat legacy run (`outputs/Results/{GSEA_GO,Enrichment_GO}`) and the legacy source (`Functions_for_clustering_and_enrichment_1.0.R`, `Neat_RNA-Seq_1.0.Rmd`).
+- **Output-layout reorganization (§14).** Flat, token-repeating filenames → a short, context-in-the-path hierarchy: `ORA/<db>/{contrasts/with_direction,contrasts/without_direction,all_DE/any_contrast,clustering/partition,clustering/binary_patterns}/…` and `GSEA/<db>/ranking_by_<method>/<contrast>/…`, each unit holding fixed short filenames (`results.csv`, `dotplot.{pdf,png}`, `ridgeplot/…`, `per_pathway/…`). Centralized in two pure builders `ora_unit_dir()`/`gsea_unit_dir()`.
+- **Removed the obsolete empty `GSEA_enrichment/` directory** definition (dead entry in `create_legacy_output_dirs()`, `R/core/00_paths.R`) and its `PROJECT_STRUCTURE.md` mention.
+- **ORA & GSEA coverage now matches the legacy workflow**, with documented intentional differences (§16.3).
+- **GSEA ridgeplots ported** (`plot_gsea_ridgeplot`, `core_enrichment` switch): (1) leading-edge/core-gene ridgeplot → `ridgeplot/plot.png` + `data.csv`; (2) all-pathway-genes ridgeplot → `ridgeplot/plot_all_genes.png` + `data_all_genes.csv`.
+- **Rich per-pathway core-gene tables** (`per_pathway/core_genes/<id>.csv`): DE statistics (all-contrast `linearFC`/`pvalue`/`padj`/`pass` + `pass_any_contrast`), normalized per-sample expression, per-gene z-scores, `rank_value`, and any available annotation. Built by the module via `.build_gene_context()` (reuses `build_rnaseq_summary_df()`), threaded serially into `run_gsea_all()`.
+- **Per-pathway `gseaplot2`** PNGs (`per_pathway/plots/<id>.png`).
+- **Per-pathway expression heatmaps** (reusing `plot_heatmap_core()`): all pathway genes (`per_pathway/heatmaps_all_genes/<id>.png`) and core/leading-edge genes (`per_pathway/heatmaps_core_genes/<id>.png`).
+- **Independently configurable:** heatmaps via `plots.pathway_heatmaps`; per-pathway GSEA plots + rich core-gene tables via `gsea.per_pathway_artifacts`. **Backward-compatible** with the old flat key `gsea_per_pathway_artifacts` (honored via the `%||%` chain; explicit `false` respected at either key).
+- **GO simplification restored to the true legacy offline mechanism:** `clusterProfiler::simplify()` with **Wang** semantic similarity, GO DAG data from **`GO.db`/`GOSemSim`**, **no organism-specific `OrgDb`**, **no internet / no downloads**. The earlier OrgDb requirement was identified (root-cause analysis of legacy `Clusters_Enrichment_Test():603`) as **incorrect and removed**. GO semantic data are **cached by ontology** (`.go_semdata()` + `.enrich_semdata_cache`) to avoid rebuilding `godata()` per job. Simplify is **fail-soft only when `GO.db`/`GOSemSim` are unavailable**; the unsimplified GO ORA is always produced.
+
+## 16.2 Engine / architecture properties preserved (from Phase 1 + §12)
+
+- **Nested fgsea/BiocParallel disabled** — GSEA runs on a serial internal backend (`SerialParam()`); no nested SOCK cluster.
+- **Large future globals eliminated** — bounded worker factories (`.make_gsea_worker`, `.make_ora_worker`) + per-job ranked vectors keep exported globals ≈ `local_tables`.
+- **Heavy plotting/expression data stay in the serial writer paths** (`run_gsea_all` assembly loop) and are **never** exported to parallel enrichment workers — verified: adding `gene_context`/`expr_mat`/`annotation_col` did not touch the worker factory.
+- **Reproducibility preserved** — `params$seed` → `future.seed`; results identical across worker counts and independent rebuilds.
+
+## 16.3 Documented intentional differences (residual)
+
+- **Core-gene annotation columns** (UniProt names/titles, transcript IDs, GO titles): omitted — this offline project wires no gene-annotation source (RNA `final_results` carries none either). Everything else available is included. "Whenever available."
+- **GO-simplify numeric caveat:** the *mechanism* is identical to legacy; exact simplified-term membership depends on the installed **GO.db 3.22.0** vs the legacy environment's version.
+
+## 16.4 KEGG readiness
+
+- The generic ORA/GSEA compute, plots, core-gene tables, ridgeplots, and heatmap paths are **database-agnostic** (`ora_unit_dir()`/`gsea_unit_dir()` do not special-case KEGG; the per-pathway/heatmap writers key on gene sets, not GO).
+- `go_simplify` applies **only to GO** databases (`type == "GO"` guard) and is skipped for KEGG — correct by construction.
+- (The Uri_Gat legacy audit folders were GO-only, so KEGG parity is structural, not run-verified here.)
+
+## 16.5 Final configuration defaults & rationale
+
+```yaml
+enrichment:
+  go_simplify: true            # legacy parity; offline Wang/GO.db, no OrgDb
+  plots:
+    dotplot: true
+    ridgeplot: true
+    ridgeplot_all_genes: true
+    pathway_heatmaps: false     # OPT-IN (see rationale)
+    shared_genes: true
+  gsea:
+    per_pathway_artifacts: true  # gseaplot2 PNGs + rich core-gene tables
+```
+
+Rich-by-default so a default run reproduces legacy-level output; every expensive artifact is independently switchable. **`pathway_heatmaps` defaults to `false`** because it creates a very large number of files (one heatmap per significant pathway per GSEA unit — thousands across 3 DBs) and substantially increases runtime; the capability is fully implemented and enabled per-project when wanted. `go_simplify` and `gsea.per_pathway_artifacts` default `true` because they are core legacy outputs and (for simplify) fully offline.
+
+## 16.6 Validation (all passed)
+
+- **Unit tests:** `test-enrichment-local.R` — **84 pass, 0 fail** (incl. new all-genes ridgeplot, per-pathway fail-soft, `.build_gene_context`, `.go_semdata` cache, and a real offline `GOSemSimDATA` build from GO.db).
+- **`tar_validate()`:** OK.
+- **Smoke** (`config_smoke.yaml`, GO_CC, all toggles incl. heatmaps): every new artifact type produced.
+- **Full `Analysis_01`** (`config.yaml`: GO_BP + GO_MF + GO_CC, `workers: 4`, `go_simplify: true`, `gsea.per_pathway_artifacts: true`, both ridgeplot variants, `plots.pathway_heatmaps: true`): completed successfully — **`simplify.csv` produced** in GO ORA units, both **`heatmaps_all_genes/` and `heatmaps_core_genes/`** produced, per-pathway plots + rich core-gene tables produced, clean tree, and **`tar_outdated()` → `character(0)`** with all targets (incl. `rna_pathway_res`) complete.
+- **Offline-simplify de-risk:** verified `godata()`+`simplify()` run inside `future` multisession workers (GOSemSimDATA from GO.db, 21→7 terms, no OrgDb).
+
+## 16.7 Roadmap — next planned phases
+
+Each phase below is separately gated; **none is started.** Detail also in §6–§8.
+
+### Phase 3 — Proteomics adaptation *(investigation-first; depends on Phase 2)*
+- **Goal:** run the same offline cluster-ORA + multi-method GSEA (+ Phase 2 plots/artifacts) on proteomics, operating in the **gene-symbol space** mapped from proteins.
+- **Expected code areas:** `R/modules/proteomics/05_mod_pathway.R` (+ `R/domain/proteomics/07b_pathway.R`); the proteomics pathway target in the proteomics pipeline factory; reuse `R/core/09_enrichment.R` unchanged (make callers omics-agnostic where needed).
+- **Expected outputs:** the same `Enrichment/{ORA,GSEA}/…` tree for the proteomics mode.
+- **Main risks / open decisions:** (1) protein→gene-symbol mapping fidelity (dedup, NA rate in the `Genes` column) and the overlap-warn threshold; (2) whether proteomics has a clustering target and whether it clusters in gene-symbol space (cluster-ORA needs gene-symbol cluster sets); (3) `linearFC.imputs` sign/scale parity vs RNA `log2FoldChange` for the `fc` ranking; (4) reuse-vs-wrapper for the local-enrichment core; (5) the rich core-gene context builder is currently RNA-specific (`build_rnaseq_summary_df`) — a proteomics equivalent is needed.
+- **Recommended validation:** protein→gene mapping correctness; gene-space overlap with local tables; `extract_enrichment_df()` parity; identical output schema; a proteomics smoke run.
+- **Depends on Phase 2:** yes (consumes the completed enrichment core + output structure).
+
+### Phase 4 — HTML report integration *(planning-only; depends on Phases 2–3 output stability)*
+- **Goal:** surface GSEA tables (method × contrast × DB), cluster-ORA tables (incl. `Cluster`, `Fold_enrichment`), GO simplified-vs-unsimplified, dotplots, and (optionally) ridgeplots/heatmaps/shared-gene plots in the generated **HTML report**.
+- **Expected code areas:** `R/domain/rnaseq/report_template*.Rmd` and `render_rnaseq_report()` (the `rna_report` target). **No template edits until Phase 4 is approved.**
+- **Expected outputs:** report sections/links; no new enrichment artifacts.
+- **Main risks / open decisions:** keep blocks additive/guarded so absent (toggled-off) outputs never break the report; decide how much of the large per-pathway/heatmap output to link vs summarize.
+- **Recommended validation:** report renders with outputs present and absent; no regressions to existing sections.
+- **Depends on Phase 2:** yes (reads the Phase 2 output layout); ideally after Phase 3 so proteomics is covered too.

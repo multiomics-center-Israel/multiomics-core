@@ -51,8 +51,7 @@ create_legacy_output_dirs <- function(out_dir, create = TRUE) {
         datasets         = file.path(out_dir, "Datasets"),
         diagnostic_plots = file.path(out_dir, "Diagnostic_plots"),
         clustering       = file.path(out_dir, "Clustering"),
-        enrichment       = file.path(out_dir, "Enrichment"),
-        gsea_enrichment  = file.path(out_dir, "GSEA_enrichment")
+        enrichment       = file.path(out_dir, "Enrichment")
     )
 
     if (isTRUE(create)) {
