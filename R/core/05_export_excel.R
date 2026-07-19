@@ -815,6 +815,13 @@ build_final_results_generic <- function(
         base[[cols$p]] <- summary_df[[cols$p]][m]
         base[[cols$padj]] <- summary_df[[cols$padj]][m]
 
+        # Also surface the naive simple log2FC when the DE step produced it
+        # (RNA DESeq2 path), reported next to the model FC/p/padj.
+        simple_col <- paste0("simple_log2FC.", cn)
+        if (simple_col %in% colnames(summary_df)) {
+            base[[simple_col]] <- summary_df[[simple_col]][m]
+        }
+
         # ============================================================
         # DETERMINE UP/DOWN DIRECTION
         # ============================================================

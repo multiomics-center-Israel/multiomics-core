@@ -11,7 +11,10 @@
 #' @param meta Data frame with sample metadata
 #' @param contrasts_df Data frame with columns: Contrast_name, Factor, Numerator, Denominator
 #' @param de_cfg List with DE configuration (p_cutoff, linear_fc_cutoff, sample_col, sample_alignment, etc.)
-#' @return List with 'dds' (DESeqDataSet) and 'tables' (list of DE result data frames)
+#' @return List with 'dds' (DESeqDataSet) and 'tables' (list of per-contrast DE
+#'   data frames). Each table also carries a 'simple_log2FC' column: the naive
+#'   log2 ratio of per-group mean normalized counts (see \code{compute_simple_log2fc()}),
+#'   reported alongside the DESeq2 model estimate.
 #' @export
 run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
     # Validate contrasts
@@ -80,6 +83,13 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         dds <- DESeq2::DESeq(dds0)
     }
 
+    # Normalized counts + per-sample group labels, used for the GLM-free
+    # simple_log2FC column below. Size factors are estimated per this call's
+    # sample set, so subsetting to one contrast (e.g. 4 vs 4) normalizes within
+    # that contrast rather than across a larger cohort.
+    norm_counts <- DESeq2::counts(dds, normalized = TRUE)
+    group_vec <- as.character(SummarizedExperiment::colData(dds)[[factor_col]])
+
     # Extract results per contrast
     tables <- list()
     for (i in 1:nrow(contrasts_df)) {
@@ -124,6 +134,10 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         # Add gene IDs
         tab$FeatureID <- rownames(tab)
 
+        # Naive, GLM-free companion to the DESeq2 estimate:
+        # log2((mean_num + 1) / (mean_den + 1)) over per-group mean normalized counts.
+        tab$simple_log2FC <- compute_simple_log2fc(norm_counts, group_vec, num, den)[rownames(tab)]
+
         tables[[cn]] <- tab
     }
 
@@ -132,6 +146,34 @@ run_deseq2_de <- function(counts, meta, contrasts_df, de_cfg) {
         dds = dds,
         tables = tables
     ))
+}
+
+
+#' Simple (GLM-free) log2 fold change from group-mean normalized counts
+#'
+#' Computes a naive per-gene fold change independent of any DESeq2/limma model:
+#' the ratio of the two groups' mean normalized counts, with a pseudocount, on
+#' the log2 scale — \code{log2((mean_num + pc) / (mean_den + pc))}. This assumes
+#' \code{counts_mat} is on the linear (normalized-count) scale; already-log2 data
+#' should not be passed here.
+#'
+#' @param counts_mat Numeric matrix (genes x samples) of normalized counts.
+#' @param group Character/factor vector of group labels, one per column of \code{counts_mat}.
+#' @param num Numerator group label (e.g. the exposed / treatment group).
+#' @param den Denominator group label (e.g. the reference / control group).
+#' @param pseudocount Value added to each group mean before the ratio. Default 1.
+#' @return Named numeric vector of simple log2 fold changes, one per row of \code{counts_mat}.
+compute_simple_log2fc <- function(counts_mat, group, num, den, pseudocount = 1) {
+    group <- as.character(group)
+    num_cols <- which(group == num)
+    den_cols <- which(group == den)
+    genes <- rownames(counts_mat)
+    if (length(num_cols) == 0 || length(den_cols) == 0) {
+        return(stats::setNames(rep(NA_real_, nrow(counts_mat)), genes))
+    }
+    mean_num <- rowMeans(counts_mat[, num_cols, drop = FALSE], na.rm = TRUE)
+    mean_den <- rowMeans(counts_mat[, den_cols, drop = FALSE], na.rm = TRUE)
+    stats::setNames(log2((mean_num + pseudocount) / (mean_den + pseudocount)), genes)
 }
 
 
@@ -172,7 +214,13 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
     
     summary_df[[paste0("pvalue.", cn)]] <- tab$pvalue[idx]
     summary_df[[paste0("padj.", cn)]] <- tab$padj[idx]
-    
+
+    # Naive log2 ratio of group-mean normalized counts, carried alongside the
+    # DESeq2 stats when run_deseq2_de supplied it (absent for other DE paths).
+    if ("simple_log2FC" %in% names(tab)) {
+      summary_df[[paste0("simple_log2FC.", cn)]] <- tab$simple_log2FC[idx]
+    }
+
     pass_col <- paste0(cn, "_pass")
     
     is_sig <- !is.na(tab$padj[idx]) & 
