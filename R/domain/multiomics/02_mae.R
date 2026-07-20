@@ -281,7 +281,12 @@ build_feature_name_map <- function(mae) {
         still_missing <- is.na(display) | display == ""
         display[still_missing] <- feat_ids[still_missing]
 
-        om_map <- setNames(display, feat_ids)
+        # Register both the plain feature id and the view-suffixed alias
+        # (GENE_n_<view>), which MOFA appends to keep features unique across views.
+        # The suffixed key carries this view's original id (gene_id vs protein_id),
+        # so per-view lookups resolve to the correct original id instead of NA.
+        om_map <- c(setNames(display, feat_ids),
+                    setNames(display, paste0(feat_ids, "_", om)))
         name_map <- c(name_map, om_map)
     }
 

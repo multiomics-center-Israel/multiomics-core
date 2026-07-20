@@ -59,16 +59,13 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
         if (is.null(res1) || is.null(res2)) next
 
-        # Standardize 'term' column helper
+        # Standardize 'term' column helper. Our per-omic enrichment tables key the
+        # gene set on `pathway` (e.g. "GO:0000027") with the readable label in
+        # `pathway_name`; other callers may use term/ID/Description. Match on the
+        # stable ID so both omics align on the same key.
         get_term_col <- function(df) {
-            if ("term" %in% colnames(df)) {
-                return(df$term)
-            }
-            if ("ID" %in% colnames(df)) {
-                return(df$ID)
-            }
-            if ("Description" %in% colnames(df)) {
-                return(df$Description)
+            for (col in c("term", "ID", "pathway", "Description")) {
+                if (col %in% colnames(df)) return(as.character(df[[col]]))
             }
             return(rownames(df))
         }
@@ -76,13 +73,18 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         res1$term <- get_term_col(res1)
         res2$term <- get_term_col(res2)
 
-        # Build ID → pathway name lookup
+        # Build term-ID → readable-name lookup. Prefer pathway/pathway_name (our
+        # schema); fall back to ID/pathway for the clusterProfiler-style shape.
         id_to_name <- character(0)
         for (df_tmp in list(res1, res2)) {
-            if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-                nms <- setNames(df_tmp$pathway, df_tmp$ID)
-                id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+            if ("pathway" %in% colnames(df_tmp) && "pathway_name" %in% colnames(df_tmp)) {
+                nms <- setNames(as.character(df_tmp$pathway_name), as.character(df_tmp$pathway))
+            } else if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
+                nms <- setNames(as.character(df_tmp$pathway), as.character(df_tmp$ID))
+            } else {
+                next
             }
+            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
         }
 
         # Union of terms
@@ -839,6 +841,13 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             message("Multi-ORA: organism annotation not available for ", organism,
                     " and no usable per-omic GMT gene sets")
         }
+        # Even without an OrgDb, organisms with a KEGG code (e.g. ehi) can still get
+        # pathview maps: render the union of per-omic KEGG-enriched pathways with
+        # RNA + protein log2FC overlaid, using native KEGG gene IDs.
+        tryCatch(
+            generate_per_omic_union_pathview(de_results, harmonization_res, config, out_dir),
+            error = function(e) message("  Union pathview failed: ", conditionMessage(e))
+        )
         return(gmt_res)
     }
 
@@ -1059,6 +1068,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         message("  Multi-ORA pathview failed: ", e$message)
         NULL
     })
+
 
     # 5. Per-omics pathview: top metabolomics pathways + proteomics overlay,
     #    and top proteomics pathways + metabolomics overlay
@@ -1438,11 +1448,17 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     per_omics_t2n  <- list()
 
     for (om in intersect(gene_omics, names(de_results))) {
-        gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
-        if (is.null(gmt_path) || !nzchar(gmt_path)) next
-        gmt_abs <- resolve_raw_path(config, gmt_path)
-        if (!file.exists(gmt_abs)) {
-            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
+        # gmt_file may list several GMTs (e.g. GO + KEGG); resolve + keep existing.
+        gmt_path <- unlist(config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file,
+                           use.names = FALSE)
+        gmt_path <- gmt_path[nzchar(gmt_path)]
+        if (length(gmt_path) == 0) next
+        gmt_abs <- vapply(gmt_path, function(g) resolve_raw_path(config, g),
+                          character(1), USE.NAMES = FALSE)
+        gmt_abs <- gmt_abs[file.exists(gmt_abs)]
+        if (length(gmt_abs) == 0) {
+            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ",
+                    paste(gmt_path, collapse = ", "))
             next
         }
         gs <- gmt_to_term2gene(gmt_abs)
@@ -1619,9 +1635,14 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         summary$n_omics_support_pval <- summary$n_omics_support
     }
 
-    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only
-    summary <- summary[order(is.na(summary$pooled_pvalue), summary$pooled_pvalue,
-                             summary$metabolomics_padj), ]
+    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only.
+    # metabolomics_padj only exists when metab_ora was supplied; order() rejects a
+    # NULL key ("argument N is not a vector"), so add it only when present.
+    sort_keys <- list(is.na(summary$pooled_pvalue), summary$pooled_pvalue)
+    if (!is.null(summary$metabolomics_padj)) {
+        sort_keys <- c(sort_keys, list(summary$metabolomics_padj))
+    }
+    summary <- summary[do.call(order, sort_keys), ]
 
     # Drop internal helper column
     summary$norm_id <- NULL
@@ -1675,8 +1696,10 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         padj_map <- setNames(om_res$padj, om_res$pathway)
         count_map <- setNames(om_res$Count, om_res$pathway)
 
-        matched_padj <- padj_map[top$pathway]
-        matched_count <- count_map[top$pathway]
+        # unname: a lookup miss yields an NA-named element, which data.frame()
+        # would otherwise promote to a (missing) row name and abort.
+        matched_padj <- unname(padj_map[top$pathway])
+        matched_count <- unname(count_map[top$pathway])
 
         plot_data[[om]] <- data.frame(
             pathway = top$pathway,
@@ -1693,8 +1716,8 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
         met_count_map <- setNames(metab_ora$setSize, normalize_kegg_pathway_id(metab_ora$ID))
         norm_top_ids <- normalize_kegg_pathway_id(top$ID)
 
-        matched_padj <- met_padj_map[norm_top_ids]
-        matched_count <- met_count_map[norm_top_ids]
+        matched_padj <- unname(met_padj_map[norm_top_ids])
+        matched_count <- unname(met_count_map[norm_top_ids])
 
         plot_data[["Metabolomics"]] <- data.frame(
             pathway = top$pathway,
@@ -1707,8 +1730,10 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
 
     plot_df <- do.call(rbind, plot_data)
     plot_df$neg_log10_padj <- pmin(plot_df$neg_log10_padj, 15)
-    # Remove entries where pathway was not found in the per-omics results
-    plot_df <- plot_df[plot_df$neg_log10_padj > 0, ]
+    # Remove entries where pathway was not found in the per-omics results. Guard
+    # against NA scores (pathways with no pooled/per-omic padj) — an NA in the
+    # logical index yields NA row names and aborts the subset.
+    plot_df <- plot_df[!is.na(plot_df$neg_log10_padj) & plot_df$neg_log10_padj > 0, ]
 
     if (nrow(plot_df) == 0) return(invisible(NULL))
 
@@ -2081,6 +2106,127 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         tryCatch(grDevices::dev.off(), error = function(e2) NULL)
         NULL
     })
+}
+
+
+#' Pathview maps for the UNION of KEGG pathways enriched in any single omic
+#'
+#' For non-model organisms whose KEGG gene IDs are the native RNA locus tags
+#' (e.g. E. histolytica: gene IDs = EHI_ locus tags), the ENTREZ-based
+#' \code{generate_multi_ora_pathview()} cannot map features. This renders the
+#' union of KEGG pathways enriched (p < 0.05) in transcriptomics OR proteomics
+#' (per-omic ORA) and overlays both RNA and protein log2FC on each map, using
+#' native KEGG gene IDs (\code{gene.idtype = "KEGG"}). Proteomics feature IDs are
+#' mapped to gene IDs via the harmonization gene-protein mapping.
+#'
+#' @param per_omics_ora Named list of per-omic ORA data frames (need a 'pathway' column).
+#' @param de_results Named list of DE results per omics.
+#' @param harmonization_res Harmonization result (supplies gene_protein_mapping).
+#' @param config Full config.
+#' @param out_dir Multi-ORA output directory (maps go under out_dir/pathview).
+#' @param top_n Max pathways to render (default 25).
+#' @return Path to the compiled PDF, or NULL.
+generate_per_omic_union_pathview <- function(de_results, harmonization_res,
+                                             config, out_dir, top_n = 25) {
+    if (!requireNamespace("pathview", quietly = TRUE)) return(NULL)
+    organism <- config$global$organism %||% ""
+    kegg_org <- get_kegg_organism(organism)
+    if (is.null(kegg_org) || !nzchar(kegg_org)) return(NULL)
+
+    # 1. Union of native KEGG (<org>#####) pathways enriched (p < 0.05) in RNA OR
+    #    protein, read from the per-omic ORA tables written by the RNA/proteomics
+    #    enrichment steps. Locate them by walking up from out_dir to the run root.
+    kegg_re <- paste0("^", kegg_org, "[0-9]+$")
+    run_root <- out_dir
+    for (i in seq_len(8)) {
+        if (dir.exists(file.path(run_root, "rna", "Enrichment")) ||
+            dir.exists(file.path(run_root, "proteomics", "Enrichment"))) break
+        parent <- dirname(run_root); if (identical(parent, run_root)) break; run_root <- parent
+    }
+    ora_files <- c(list.files(file.path(run_root, "rna", "Enrichment"),
+                              "custom_ora_(up|down)\\.csv$", full.names = TRUE),
+                   list.files(file.path(run_root, "proteomics", "Enrichment"),
+                              "custom_ora_(up|down)\\.csv$", full.names = TRUE))
+    pathways <- unique(unlist(lapply(ora_files, function(f) {
+        d <- tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (is.null(d) || !"pathway" %in% names(d)) return(character(0))
+        pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
+        keep <- grepl(kegg_re, d$pathway)
+        if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < 0.05
+        unique(d$pathway[keep])
+    })))
+    if (length(pathways) == 0) {
+        message("  Union pathview: no enriched ", kegg_org, " KEGG pathways.")
+        return(NULL)
+    }
+    pathways <- head(pathways, top_n)
+
+    # 2. Native-KEGG-ID gene data: RNA feature ids used directly; proteomics
+    #    feature ids mapped to gene ids via the gene-protein mapping.
+    gpm <- harmonization_res$gene_protein_mapping
+    native_fc <- function(om) {
+        tbls <- tryCatch(extract_de_tables(de_results[[om]], om, harmonization_res),
+                         error = function(e) NULL)
+        if (is.null(tbls) || length(tbls) == 0) return(NULL)
+        df <- tbls[[1]]
+        if (!all(c("feature_id", "log2fc") %in% names(df))) return(NULL)
+        ids <- df$feature_id
+        if (identical(om, "proteomics") && !is.null(gpm)) {
+            ids <- gpm$gene_id[match(df$feature_id, gpm$protein_id)]
+        }
+        ok <- !is.na(ids) & is.finite(df$log2fc)
+        if (!any(ok)) return(NULL)
+        tapply(df$log2fc[ok], ids[ok], mean, na.rm = TRUE)
+    }
+    rna_fc  <- native_fc("transcriptomics")
+    prot_fc <- native_fc("proteomics")
+    if (is.null(rna_fc) && is.null(prot_fc)) return(NULL)
+    genes <- unique(c(names(rna_fc), names(prot_fc)))
+    gene_data <- matrix(NA_real_, length(genes), 2,
+                        dimnames = list(genes, c("RNA", "Protein")))
+    if (!is.null(rna_fc))  gene_data[names(rna_fc), 1]  <- rna_fc
+    if (!is.null(prot_fc)) gene_data[names(prot_fc), 2] <- prot_fc
+
+    # 3. Render one map per pathway (both layers overlaid).
+    # pathview needs its 'bods' dataset in the global env when called via ::.
+    if (!exists("bods", envir = globalenv())) {
+        utils::data("bods", package = "pathview", envir = globalenv())
+    }
+    pv_dir <- file.path(out_dir, "pathview")
+    dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
+    cwd <- getwd(); setwd(pv_dir); on.exit(setwd(cwd), add = TRUE)
+    generated <- character(0)
+    for (pid in pathways) {
+        clean_pid <- normalize_kegg_pathway_id(pid)
+        tryCatch({
+            pathview::pathview(gene.data = gene_data, pathway.id = clean_pid,
+                               species = kegg_org, gene.idtype = "KEGG",
+                               out.suffix = "multi_ora", kegg.dir = pv_dir,
+                               multi.state = TRUE, same.layer = FALSE)
+            f <- c(paste0(kegg_org, clean_pid, ".multi_ora.multi.png"),
+                   paste0(kegg_org, clean_pid, ".multi_ora.png"))
+            f <- f[file.exists(f)]
+            if (length(f) > 0) {
+                generated <- c(generated, file.path(pv_dir, f[1]))
+                message("    Union pathview: ", pid)
+            }
+        }, error = function(e) message("    Union pathview failed for ", pid, ": ", e$message))
+    }
+    if (length(generated) == 0) return(NULL)
+
+    # 4. Compile into the PDF the report uses as the has_pathview gate.
+    pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
+    tryCatch({
+        grDevices::pdf(pdf_path, width = 12, height = 8)
+        for (png_file in generated) {
+            img <- png::readPNG(png_file)
+            grid::grid.newpage()
+            grid::grid.raster(img, y = 0.48, height = 0.92)
+        }
+        grDevices::dev.off()
+    }, error = function(e) { tryCatch(grDevices::dev.off(), error = function(e2) NULL) })
+    message("  Union pathview: ", length(generated), " maps -> ", basename(pdf_path))
+    pdf_path
 }
 
 

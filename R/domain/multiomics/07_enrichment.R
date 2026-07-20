@@ -132,16 +132,26 @@ extract_enrichment_df <- function(enrich_res) {
         return(enrich_res$enrichment_df)
     }
 
-    # $pathway_results slot (nested by contrast)
-    if (!is.null(enrich_res$pathway_results) && is.list(enrich_res$pathway_results)) {
-        # Collect data frames from all contrasts
+    # Contrast-keyed collection. The per-contrast results live either under a
+    # $pathway_results slot (RNA) or at the top level of the list keyed by
+    # contrast name (proteomics: list(<contrast> = list(custom_fgsea = df))).
+    contrast_list <- if (!is.null(enrich_res$pathway_results) &&
+                         is.list(enrich_res$pathway_results)) {
+        enrich_res$pathway_results
+    } else if (is.list(enrich_res)) {
+        enrich_res
+    } else {
+        NULL
+    }
+
+    if (!is.null(contrast_list)) {
         dfs <- list()
-        for (contrast_name in names(enrich_res$pathway_results)) {
-            contrast_res <- enrich_res$pathway_results[[contrast_name]]
+        for (contrast_name in names(contrast_list)) {
+            contrast_res <- contrast_list[[contrast_name]]
             if (is.data.frame(contrast_res) && nrow(contrast_res) > 0) {
                 dfs[[contrast_name]] <- contrast_res
             } else if (is.list(contrast_res)) {
-                # May have sub-results (e.g., KEGG, GO)
+                # May have sub-results (e.g., custom_fgsea, KEGG, GO)
                 for (sub_name in names(contrast_res)) {
                     sub_res <- contrast_res[[sub_name]]
                     if (is.data.frame(sub_res) && nrow(sub_res) > 0) {
@@ -150,7 +160,9 @@ extract_enrichment_df <- function(enrich_res) {
                 }
             }
         }
-        if (length(dfs) > 0) return(do.call(rbind, dfs))
+        # Sub-results (e.g. fgsea vs ORA) can carry different columns, so bind by
+        # name and fill gaps rather than rbind (which requires identical columns).
+        if (length(dfs) > 0) return(dplyr::bind_rows(dfs))
     }
 
     NULL
@@ -1038,6 +1050,11 @@ get_organism_db <- function(organism) {
 
 #' Get KEGG organism code
 get_kegg_organism <- function(organism) {
+    # A missing/blank organism (e.g. no global.organism set) must return NULL, not
+    # error: list[[character(0)]] throws "attempt to select less than one element".
+    if (is.null(organism) || length(organism) != 1L || is.na(organism) || !nzchar(organism)) {
+        return(NULL)
+    }
     kegg_map <- list(
         c_elegans = "cel",
         "Caenorhabditis elegans" = "cel",
@@ -1050,7 +1067,8 @@ get_kegg_organism <- function(organism) {
         zebrafish = "dre",
         "Danio rerio" = "dre",
         drosophila = "dme",
-        "Drosophila melanogaster" = "dme"
+        "Drosophila melanogaster" = "dme",
+        "Entamoeba histolytica" = "ehi"
     )
     kegg_map[[organism]]
 }
@@ -1540,7 +1558,8 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
                            main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
-                           color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
+                           # Blue = less significant (low -log10p) -> red = highly significant.
+                           color = colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(50),
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -1548,7 +1567,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     } else {
         heatmap(log_pval_matrix, scale = "none", Colv = NA,
                 main = "Cross-Omics Pathway Enrichment",
-                col = colorRampPalette(c("white", "orange", "red"))(50))
+                col = colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(50))
     }
 }
 
@@ -1557,6 +1576,14 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
     top <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
+
+    # Label rows by readable GO term name (+ GO ID), falling back to the ID.
+    # GO IDs are unique per row, so the composite label stays unique downstream.
+    if ("pathway_name" %in% names(top)) {
+        nm <- top$pathway_name
+        nm[is.na(nm) | !nzchar(nm)] <- top$pathway[is.na(nm) | !nzchar(nm)]
+        top$pathway <- paste0(nm, " (", top$pathway, ")")
+    }
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
 
@@ -1660,10 +1687,15 @@ plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
     agg <- agg[order(agg$pvalue), ]
     agg <- agg[seq_len(min(top_n, nrow(agg))), ]
 
-    # Truncate names
-    agg$label <- ifelse(nchar(agg$pathway) > 45,
-                        paste0(substr(agg$pathway, 1, 42), "..."),
-                        agg$pathway)
+    # Label bars by readable GO term name (+ GO ID), falling back to the ID.
+    if ("pathway_name" %in% names(pathway_table)) {
+        nm <- pathway_table$pathway_name[match(agg$pathway, pathway_table[[pathway_col]])]
+        nm[is.na(nm) | !nzchar(nm)] <- agg$pathway[is.na(nm) | !nzchar(nm)]
+        disp <- paste0(nm, " (", agg$pathway, ")")
+    } else {
+        disp <- agg$pathway
+    }
+    agg$label <- ifelse(nchar(disp) > 45, paste0(substr(disp, 1, 42), "..."), disp)
 
     neg_log_p <- -log10(agg$pvalue + 1e-300)
     neg_log_p <- pmin(neg_log_p, 15)
@@ -1741,6 +1773,9 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         message("Running enrichment on DIABLO loadings...")
         diablo_dir <- file.path(out_dir, "diablo_loadings")
         dir.create(diablo_dir, showWarnings = FALSE)
+        # Clear stale per-component outputs so a prior run's plots/tables can't
+        # leak into the report, which globs this dir at render time.
+        unlink(list.files(diablo_dir, pattern = "\\.(png|csv)$", full.names = TRUE))
 
         results$diablo <- tryCatch(
             run_diablo_loadings_enrichment(
@@ -1765,6 +1800,8 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         message("Running enrichment on MOFA2 weights...")
         mofa_dir <- file.path(out_dir, "mofa_loadings")
         dir.create(mofa_dir, showWarnings = FALSE)
+        # Clear stale per-factor outputs (see diablo_loadings note above).
+        unlink(list.files(mofa_dir, pattern = "\\.(png|csv)$", full.names = TRUE))
 
         results$mofa <- tryCatch(
             run_mofa_weights_enrichment(
@@ -2174,10 +2211,14 @@ enrich_feature_list_gmt <- function(resolved_ids, omics_type,
     if (is.null(config)) return(NULL)
     cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")[[omics_type]]
     if (is.null(cfg_key)) return(NULL)
-    gmt_path <- config$modes[[cfg_key]]$pathway$gmt_file
-    if (is.null(gmt_path) || !nzchar(gmt_path)) return(NULL)
-    gmt_abs <- resolve_raw_path(config, gmt_path)
-    if (!file.exists(gmt_abs)) return(NULL)
+    # gmt_file may list several GMTs (e.g. GO + KEGG); resolve + keep existing.
+    gmt_path <- unlist(config$modes[[cfg_key]]$pathway$gmt_file, use.names = FALSE)
+    gmt_path <- gmt_path[nzchar(gmt_path)]
+    if (length(gmt_path) == 0) return(NULL)
+    gmt_abs <- vapply(gmt_path, function(g) resolve_raw_path(config, g),
+                      character(1), USE.NAMES = FALSE)
+    gmt_abs <- gmt_abs[file.exists(gmt_abs)]
+    if (length(gmt_abs) == 0) return(NULL)
     gs <- gmt_to_term2gene(gmt_abs)
     if (is.null(gs) || nrow(gs$t2g) == 0) return(NULL)
 

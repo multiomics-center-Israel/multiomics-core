@@ -215,6 +215,28 @@ if (!is.null(gene_protein_mapping)) {
             gene_protein_mapping$protein_symbol <- pa$Genes[idx]
         }
     }
+
+    # Join per-contrast log2FC (RNA and proteomics) for the run's shared contrast
+    # from the volcano tables, keyed by gene_id (EHI_) and protein_id (XP_).
+    rp_parent  <- dirname(run_dir)
+    rna_enr_m  <- file.path(rp_parent, "rna", "Enrichment")
+    prot_enr_m <- file.path(rp_parent, "proteomics", "Enrichment")
+    shared_bn <- intersect(list.files(rna_enr_m,  "^pathway_volcano_data_.*\\.csv$"),
+                           list.files(prot_enr_m, "^pathway_volcano_data_.*\\.csv$"))
+    if (length(shared_bn) >= 1) {
+        rv <- tryCatch(read.csv(file.path(rna_enr_m,  shared_bn[1]), stringsAsFactors = FALSE),
+                       error = function(e) NULL)
+        pv <- tryCatch(read.csv(file.path(prot_enr_m, shared_bn[1]), stringsAsFactors = FALSE),
+                       error = function(e) NULL)
+        if (!is.null(rv) && all(c("FeatureID", "log2FC") %in% colnames(rv))) {
+            gene_protein_mapping$rna_log2FC <-
+                round(rv$log2FC[match(gene_protein_mapping$gene_id, rv$FeatureID)], 3)
+        }
+        if (!is.null(pv) && all(c("FeatureID", "log2FC") %in% colnames(pv))) {
+            gene_protein_mapping$protein_log2FC <-
+                round(pv$log2FC[match(gene_protein_mapping$protein_id, pv$FeatureID)], 3)
+        }
+    }
 }
 ```
 
@@ -301,6 +323,51 @@ results_parent <- dirname(run_dir)
 rna_enr  <- file.path(results_parent, "rna", "Enrichment")
 prot_enr <- file.path(results_parent, "proteomics", "Enrichment")
 
+# A protein is "not imputed" in a contrast when it has a measured (non-missing,
+# positive) intensity in EVERY sample of the contrast's two groups in the raw
+# pg_matrix; the pipeline min-val-imputes the missing ones. Raw sample columns
+# are named "<Group>_<rep>", so the group is the column name minus the replicate.
+prot_fully_observed <- function(cfg, groups) {
+    pg_path <- file.path(cfg$project$dir %||% ".", cfg$paths$raw %||% "data",
+                         cfg$modes$proteomics$files$protein %||% "")
+    if (!file.exists(pg_path)) return(NULL)
+    pg <- tryCatch(read.delim(pg_path, check.names = FALSE, stringsAsFactors = FALSE),
+                   error = function(e) NULL)
+    if (is.null(pg)) return(NULL)
+    id_col <- cfg$modes$proteomics$id_columns$protein_id %||% "Protein.Group"
+    if (!id_col %in% colnames(pg)) return(NULL)
+    grp_of <- sub("_[0-9]+$", "", colnames(pg))
+    scols  <- colnames(pg)[grp_of %in% groups & colnames(pg) != id_col]
+    if (length(scols) == 0) return(NULL)
+    obs <- vapply(pg[, scols, drop = FALSE], function(col) {
+        x <- suppressWarnings(as.numeric(as.character(col)))
+        is.finite(x) & x > 0
+    }, logical(nrow(pg)))
+    if (is.null(dim(obs))) obs <- matrix(obs, nrow = nrow(pg))
+    data.frame(protein_id  = pg[[id_col]],
+               not_imputed = rowSums(!obs) == 0,
+               stringsAsFactors = FALSE)
+}
+
+# Reusable RNA-vs-protein log2FC scatter with per-panel Pearson/Spearman.
+rp_scatter <- function(d, title) {
+    labs <- sapply(split(d, d$contrast), function(x) {
+        sprintf("Pearson r = %.3f | Spearman rho = %.3f | n = %d",
+                cor(x$rna_log2FC, x$protein_log2FC, method = "pearson"),
+                cor(x$rna_log2FC, x$protein_log2FC, method = "spearman"), nrow(x))
+    })
+    d$facet <- paste0(d$contrast, "\n(", labs[d$contrast], ")")
+    ggplot2::ggplot(d, ggplot2::aes(x = rna_log2FC, y = protein_log2FC)) +
+        ggplot2::geom_hline(yintercept = 0, color = "gray90") +
+        ggplot2::geom_vline(xintercept = 0, color = "gray90") +
+        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey60") +
+        ggplot2::geom_point(alpha = 0.5, size = 1.4, color = "steelblue") +
+        ggplot2::geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.5) +
+        ggplot2::facet_wrap(~ facet, scales = "free") +
+        ggplot2::theme_minimal() +
+        ggplot2::labs(title = title, x = "RNA log2 fold change", y = "Protein log2 fold change")
+}
+
 rp_pairs <- NULL
 if (!is.null(gene_protein_mapping) &&
     all(c("gene_id", "protein_id") %in% colnames(gene_protein_mapping)) &&
@@ -318,164 +385,246 @@ if (!is.null(gene_protein_mapping) &&
         if (!all(c("FeatureID", "log2FC") %in% colnames(rna_df)))  return(NULL)
         if (!all(c("FeatureID", "log2FC") %in% colnames(prot_df))) return(NULL)
 
-        m <- merge(map_sub, rna_df[, c("FeatureID", "log2FC")],
+        rna_cols <- c("FeatureID", "log2FC",
+                      if ("simple_log2FC" %in% colnames(rna_df)) "simple_log2FC")
+        m <- merge(map_sub, rna_df[, rna_cols, drop = FALSE],
                    by.x = "gene_id", by.y = "FeatureID")
         names(m)[names(m) == "log2FC"] <- "rna_log2FC"
+        names(m)[names(m) == "simple_log2FC"] <- "rna_simple_log2FC"
         m <- merge(m, prot_df[, c("FeatureID", "log2FC")],
                    by.x = "protein_id", by.y = "FeatureID")
         names(m)[names(m) == "log2FC"] <- "protein_log2FC"
         if (nrow(m) == 0) return(NULL)
 
-        m$te_log2FC <- m$protein_log2FC - m$rna_log2FC
-        m$contrast  <- gsub("_", " ", sub("\\.csv$", "", sub("^pathway_volcano_data_", "", bn)))
+        m$te_log2FC    <- m$protein_log2FC - m$rna_log2FC
+        m$contrast_raw <- sub("\\.csv$", "", sub("^pathway_volcano_data_", "", bn))
+        m$contrast     <- gsub("_", " ", m$contrast_raw)
         m[is.finite(m$rna_log2FC) & is.finite(m$protein_log2FC), ]
     }))
 }
 
-if (is.null(rp_pairs) || nrow(rp_pairs) < 3) {
-    cat("*No matched RNA/protein log2FC pairs were found for this run.*\n")
+# Flag each pair's protein as not-imputed (fully observed) for its contrast.
+if (!is.null(rp_pairs) && nrow(rp_pairs) > 0) {
+    rp_pairs$prot_not_imputed <- NA
+    for (cr in unique(rp_pairs$contrast_raw)) {
+        groups <- strsplit(cr, "_vs_", fixed = TRUE)[[1]]
+        look <- tryCatch(prot_fully_observed(cfg, groups), error = function(e) NULL)
+        if (is.null(look)) next
+        idx <- rp_pairs$contrast_raw == cr
+        rp_pairs$prot_not_imputed[idx] <-
+            look$not_imputed[match(rp_pairs$protein_id[idx], look$protein_id)]
+    }
+}
+
+# RNA simple log2FC (naive group-mean log-ratio); falls back to the DESeq2
+# log2FC on older runs whose volcano CSVs predate the simple_log2FC column.
+if (!is.null(rp_pairs) && nrow(rp_pairs) > 0) {
+    if (!"rna_simple_log2FC" %in% names(rp_pairs) || all(is.na(rp_pairs$rna_simple_log2FC))) {
+        rp_pairs$rna_simple_log2FC <- rp_pairs$rna_log2FC
+    }
+}
+
+# The correlation test uses ONLY fully-measured proteins: every replicate in
+# both conditions has a real (non-missing) intensity, so the fold change carries
+# no min-val-imputed values. rp_fm is that subset; rp_pairs is kept for the
+# direction-agreement comparison below. Fall back to all pairs only if imputation
+# status could not be derived (raw pg_matrix unavailable).
+fm_ok  <- !is.null(rp_pairs) && "prot_not_imputed" %in% colnames(rp_pairs) &&
+    any(rp_pairs$prot_not_imputed %in% TRUE)
+rp_fm  <- if (fm_ok) rp_pairs[which(rp_pairs$prot_not_imputed), , drop = FALSE] else rp_pairs
+fm_ttl <- if (fm_ok) {
+    "RNA vs Protein log2FC — fully-measured proteins (quantified in every replicate)"
 } else {
-    cor_labs <- sapply(split(rp_pairs, rp_pairs$contrast), function(d) {
-        rp <- cor(d$rna_log2FC, d$protein_log2FC, method = "pearson")
-        rs <- cor(d$rna_log2FC, d$protein_log2FC, method = "spearman")
-        sprintf("Pearson r = %.3f | Spearman rho = %.3f | n = %d", rp, rs, nrow(d))
-    })
-    rp_pairs$facet <- paste0(rp_pairs$contrast, "\n(", cor_labs[rp_pairs$contrast], ")")
+    "RNA vs Protein log2FC — all mapped pairs (imputation status unavailable)"
+}
 
-    p <- ggplot2::ggplot(rp_pairs, ggplot2::aes(x = rna_log2FC, y = protein_log2FC)) +
-        ggplot2::geom_hline(yintercept = 0, color = "gray90") +
-        ggplot2::geom_vline(xintercept = 0, color = "gray90") +
-        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey60") +
-        ggplot2::geom_point(alpha = 0.5, size = 1.4, color = "steelblue") +
-        ggplot2::geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.5) +
-        ggplot2::facet_wrap(~ facet, scales = "free") +
-        ggplot2::theme_minimal() +
-        ggplot2::labs(
-            title = "RNA vs Protein Differential Expression (log2FC)",
-            x = "RNA log2 fold change",
-            y = "Protein log2 fold change"
-        )
-    print(p)
+if (is.null(rp_fm) || nrow(rp_fm) < 3) {
+    cat("*Fewer than 3 fully-measured gene-protein pairs (protein quantified in every replicate) were found for this run.*\n")
+} else {
+    print(rp_scatter(rp_fm, fm_ttl))
 
-    tbl <- rp_pairs[, c("contrast", "gene_id", "protein_id",
-                        "rna_log2FC", "protein_log2FC", "te_log2FC")]
+    tbl <- rp_fm[, c("contrast", "gene_id", "protein_id",
+                     "rna_log2FC", "protein_log2FC", "te_log2FC")]
     tbl <- tbl[order(-(abs(tbl$rna_log2FC) + abs(tbl$protein_log2FC))), ]
-    rp_dt <- make_dt(tbl, caption = "RNA vs protein log2FC per mapped gene-protein pair")
+    rp_dt <- make_dt(tbl, caption = "RNA vs protein log2FC per fully-measured gene-protein pair (protein quantified in every replicate)")
 }
 # Widgets only auto-render as a top-level expression, not from inside if/for.
 if (exists("rp_dt")) rp_dt
 ```
 
 ```{r rna-prot-log2fc-legend, eval=has_transcriptomics, results='asis'}
-figure_legend("RNA-seq log2 fold change (x) versus proteomics log2 fold change (y) for each mapped gene-protein pair, one panel per contrast. Solid line is an OLS fit; the dashed diagonal marks equal RNA and protein change. Sources: RNA DESeq2 and proteomics limma per-contrast fold changes (pathway_volcano_data_<contrast>.csv in rna/Enrichment and proteomics/Enrichment); pairing via gene_protein_mapping.csv (gene_id EHI_ to protein_id XP_). Pearson and Spearman coefficients and n shown per panel. Single contrast, hypothesis-generating.")
+figure_legend("RNA-seq log2 fold change (x) versus proteomics log2 fold change (y), one panel per contrast, restricted to fully-measured proteins: a real (non-missing) intensity in every replicate of both conditions in the raw pg_matrix (proteomics files.protein), so the protein fold change carries no min-val-imputed values. Solid line is an OLS fit; the dashed diagonal marks equal RNA and protein change. Sources: RNA DESeq2 and proteomics limma per-contrast fold changes (pathway_volcano_data_<contrast>.csv in rna/Enrichment and proteomics/Enrichment); pairing via gene_protein_mapping.csv (gene_id EHI_ to protein_id XP_). Pearson/Spearman and n (per panel) are computed on this fully-measured subset. Single contrast, hypothesis-generating.")
 ```
 
-## Concordance Distribution
+### Fold-change direction agreement
 
-```{r rna-prot-concordance, eval=has_transcriptomics && has_rna_prot, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "rna_protein_concordance.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
+```{r rna-prot-concordance-pie, eval=has_transcriptomics, fig.width=8, fig.height=3.8}
+# How often RNA and protein move the same way (sign agreement), for all mapped
+# pairs and for the fully-measured subset (protein quantified in every replicate).
+# Pairs with a zero fold change on either side are excluded from the count.
+if (exists("rp_pairs") && !is.null(rp_pairs) && nrow(rp_pairs) >= 3) {
+    dir_counts <- function(d, panel) {
+        d <- d[d$rna_log2FC != 0 & d$protein_log2FC != 0, , drop = FALSE]
+        same <- sign(d$rna_log2FC) == sign(d$protein_log2FC)
+        data.frame(panel = sprintf("%s (n = %d)", panel, nrow(d)),
+                   direction = c("Same direction", "Opposite direction"),
+                   n = c(sum(same), sum(!same)),
+                   stringsAsFactors = FALSE)
+    }
+    pieces <- list(dir_counts(rp_pairs, "All mapped pairs"))
+    if ("prot_not_imputed" %in% colnames(rp_pairs)) {
+        ni <- rp_pairs[which(rp_pairs$prot_not_imputed), , drop = FALSE]
+        if (nrow(ni) > 0) pieces[[2]] <- dir_counts(ni, "Fully-measured proteins")
+    }
+    pie_df <- do.call(rbind, pieces)
+    pie_df$panel     <- factor(pie_df$panel, levels = unique(pie_df$panel))
+    pie_df$direction <- factor(pie_df$direction,
+                               levels = c("Same direction", "Opposite direction"))
+    pie_df$pct <- ave(pie_df$n, pie_df$panel, FUN = function(x) 100 * x / sum(x))
+    pie_df$lab <- ifelse(pie_df$n > 0, sprintf("%d (%.0f%%)", pie_df$n, pie_df$pct), "")
+
+    p <- ggplot2::ggplot(pie_df, ggplot2::aes(x = "", y = n, fill = direction)) +
+        ggplot2::geom_col(width = 1, color = "white") +
+        ggplot2::coord_polar(theta = "y") +
+        ggplot2::facet_wrap(~ panel) +
+        ggplot2::geom_text(ggplot2::aes(label = lab),
+                           position = ggplot2::position_stack(vjust = 0.5), size = 3) +
+        ggplot2::scale_fill_manual(
+            values = c("Same direction" = "#4C72B0", "Opposite direction" = "#DD8452"),
+            name = NULL) +
+        ggplot2::theme_void() +
+        ggplot2::labs(title = "RNA / protein fold-change direction agreement")
+    print(p)
+} else {
+    cat("*Not enough matched pairs to summarise fold-change direction agreement.*\n")
 }
 ```
 
-```{r rna-prot-concordance-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
-figure_legend("Distribution of per-gene RNA-protein Pearson correlations across samples. The histogram shows how well transcript levels predict protein abundance for individual genes.")
-render_commentary("rna_protein_concordance")
+```{r rna-prot-concordance-pie-legend, eval=has_transcriptomics, results='asis'}
+figure_legend("Share of mapped gene-protein pairs whose RNA and protein log2 fold changes have the same sign (same direction) versus opposite signs. Left: all mapped pairs; right: fully-measured proteins only (a real intensity in every replicate of both conditions in the raw pg_matrix). Pairs with a zero fold change on either side are excluded. Sources: per-contrast log2FC (pathway_volcano_data_<contrast>.csv), mapping gene_protein_mapping.csv, observedness from proteomics files.protein. Descriptive, hypothesis-generating.")
 ```
 
-## DE Scatter (All Contrasts)
+## Rank Concordance
 
-```{r rna-prot-de-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r rna-prot-de-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
-figure_legend("RNA vs protein differential expression scatter plot per contrast. Each point is a gene/protein pair. Diagonal concordance indicates matching fold-change direction; off-diagonal points suggest post-transcriptional regulation.")
-render_commentary("rna_protein_de_scatter")
-```
-
-## Per-Contrast DE Details {.tabset}
-
-```{r rna-prot-per-contrast, eval=has_transcriptomics && has_rna_prot, results='asis'}
-per_contrast_dir <- file.path(rna_prot_dir, "per_contrast")
-if (dir.exists(per_contrast_dir)) {
-    contrast_dirs <- list.dirs(per_contrast_dir, full.names = TRUE, recursive = FALSE)
-    for (cdir in contrast_dirs) {
-        cname <- basename(cdir)
-        cat(sprintf("\n### %s\n\n", gsub("_", " ", cname)))
-
-        de_scatter <- file.path(cdir, "plots", "rna_protein_de_scatter.png")
-        if (file.exists(de_scatter)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-scatter-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), de_scatter
-            ), quiet = TRUE))
-        }
-
-        te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
-        if (file.exists(te_hist)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), te_hist
-            ), quiet = TRUE))
-        }
-
-        te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
-        if (file.exists(te_scatter)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), te_scatter
-            ), quiet = TRUE))
-        }
-
-        # Summary table
-        de_csv <- file.path(cdir, "tables", "rna_protein_de_concordance.csv")
-        if (file.exists(de_csv)) {
-            de_df <- read.csv(de_csv, stringsAsFactors = FALSE)
-            n_total <- nrow(de_df)
-            n_conc <- sum(de_df$concordant, na.rm = TRUE)
-            r_val <- cor(de_df$rna_log2FC, de_df$protein_log2FC, use = "complete.obs")
-            tf_msg <- ""
-            if ("is_transcription_factor" %in% colnames(de_df)) {
-                n_tf <- sum(de_df$is_transcription_factor, na.rm = TRUE)
-                if (n_tf > 0) tf_msg <- sprintf(", %d known TFs", n_tf)
+```{r rna-prot-rank-concordance, eval=has_transcriptomics, fig.width=11, fig.height=7.2}
+# Directional concordance of RNA vs the protein log2FC ranking. Per contrast and
+# direction, proteins are ranked by (simple) log2FC and we track the running % of
+# included proteins whose paired RNA (simple) log2FC agrees beyond +/-0.5. Each
+# point is tested against a random-set null (permutation, seeded) and the
+# hypergeometric distribution at rank 250; the dashed horizontal line is the
+# marginal (null) rate. Uses the group-mean simple log2FC on both omics.
+rc_ok <- exists("rp_pairs") && !is.null(rp_pairs) && nrow(rp_pairs) >= 40 &&
+    all(c("rna_simple_log2FC", "protein_log2FC", "contrast") %in% colnames(rp_pairs))
+if (rc_ok) {
+    up_thr <- 0.5; dn_thr <- -0.5; ranks <- c(100, 250); nperm <- 1000
+    seed0  <- cfg$params$seed %||% 42
+    lab_up <- "protein high->low: %RNA > 0.5"
+    lab_dn <- "protein low->high: %RNA < -0.5"
+    d0 <- rp_pairs[is.finite(rp_pairs$rna_simple_log2FC) & is.finite(rp_pairs$protein_log2FC), , drop = FALSE]
+    set.seed(seed0)
+    curves <- list(); pts <- list(); refs <- list()
+    for (cn in unique(d0$contrast)) {
+        dc <- d0[d0$contrast == cn, , drop = FALSE]; N <- nrow(dc)
+        if (N < 40) next
+        for (dir in c("up", "down")) {
+            if (dir == "up") { ord <- order(-dc$protein_log2FC); hit <- dc$rna_simple_log2FC > up_thr; lab <- lab_up }
+            else             { ord <- order(dc$protein_log2FC);  hit <- dc$rna_simple_log2FC < dn_thr; lab <- lab_dn }
+            K <- sum(hit)
+            curves[[paste(cn, dir)]] <- data.frame(contrast = cn, direction = lab,
+                rank = seq_len(N), cum_pct = 100 * cumsum(hit[ord]) / seq_len(N), stringsAsFactors = FALSE)
+            refs[[paste(cn, dir)]] <- data.frame(contrast = cn, direction = lab,
+                base_pct = 100 * K / N, stringsAsFactors = FALSE)
+            for (R in ranks[ranks <= N]) {
+                obs <- sum(hit[ord[seq_len(R)]])
+                nd  <- vapply(seq_len(nperm), function(i) sum(sample(hit, R)), integer(1))
+                p_perm <- (1 + sum(nd >= obs)) / (1 + nperm)
+                p_hyp  <- stats::phyper(obs - 1, K, N - K, R, lower.tail = FALSE)
+                lbl <- if (R == max(ranks)) sprintf("r%d perm=%.2g/hyp=%.2g", R, p_perm, p_hyp)
+                       else sprintf("r%d perm=%.2g", R, p_perm)
+                pts[[paste(cn, dir, R)]] <- data.frame(contrast = cn, direction = lab, rank = R,
+                    obs_pct = 100 * obs / R, label = lbl,
+                    vj = if (R == min(ranks)) -0.8 else 1.6, stringsAsFactors = FALSE)
             }
-            cat(sprintf("\n**%s:** %d gene-protein pairs, r = %.3f, %d/%d (%.0f%%) concordant%s\n\n",
-                        gsub("_", " ", cname), n_total, r_val,
-                        n_conc, n_total, 100 * n_conc / n_total, tf_msg))
         }
     }
+    if (length(curves) > 0) {
+        cur <- do.call(rbind, curves); pt <- do.call(rbind, pts); rf <- do.call(rbind, refs)
+        cols <- setNames(c("#c0392b", "#2c6fbb"), c(lab_up, lab_dn))
+        print(
+            ggplot2::ggplot(cur, ggplot2::aes(rank, cum_pct, colour = direction)) +
+                ggplot2::geom_vline(xintercept = ranks, colour = "grey60", linetype = "dashed", linewidth = 0.3) +
+                ggplot2::geom_hline(data = rf, ggplot2::aes(yintercept = base_pct, colour = direction),
+                                    linetype = "dashed", linewidth = 0.35) +
+                ggplot2::geom_line(linewidth = 0.55) +
+                ggplot2::geom_point(data = pt, ggplot2::aes(rank, obs_pct, colour = direction),
+                                    inherit.aes = FALSE, size = 1.5) +
+                ggplot2::geom_text(data = pt, ggplot2::aes(rank, obs_pct, colour = direction, label = label, vjust = vj),
+                                   inherit.aes = FALSE, hjust = -0.06, size = 2.3, show.legend = FALSE) +
+                ggplot2::facet_wrap(~ contrast, scales = "free_x") +
+                ggplot2::scale_colour_manual(values = cols, name = NULL) +
+                ggplot2::theme_bw(base_size = 10) + ggplot2::theme(legend.position = "top") +
+                ggplot2::labs(x = "proteins included, ranked from the extreme (rank)",
+                              y = "cumulative % RNA concordant beyond +/-0.5",
+                              title = "RNA-protein rank concordance (permutation p at 100 & 250; hypergeometric at 250)")
+        )
+    } else cat("*Not enough mapped pairs per contrast for the rank-concordance analysis.*\n")
+} else {
+    cat("*Not enough mapped gene-protein pairs for the rank-concordance analysis.*\n")
 }
 ```
 
-## Translation Efficiency (All Contrasts)
+```{r rna-prot-rank-concordance-legend, eval=has_transcriptomics, results='asis'}
+figure_legend("Cumulative directional agreement as proteins are added from the extreme of the log2FC ranking. Red: proteins ranked most-up first, y = running % with RNA log2FC > 0.5; blue: most-down first, y = running % with RNA log2FC < -0.5. Vertical dashed lines mark ranks 100 and 250; the horizontal dashed line is the marginal (null) rate for that direction. Labels give the permutation p (1000 random equal-size sets, seeded) at ranks 100 and 250 and the hypergeometric p at 250. Uses the group-mean simple log2FC (RNA and protein) from pathway_volcano_data_<contrast>.csv, paired via gene_protein_mapping.csv. Hypothesis-generating.")
+```
 
-```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
+## Top Proteins by RNA Agreement
+
+```{r rna-prot-top100-bars, eval=has_transcriptomics, fig.width=10.5, fig.height=11}
+# Top-100 up- and down-regulated proteins per contrast (by simple log2FC),
+# coloured by whether the paired RNA (simple) log2FC agrees beyond the +/-0.5
+# threshold in that direction (up panel: RNA > 0.5; down panel: RNA < -0.5).
+tb_ok <- exists("rp_pairs") && !is.null(rp_pairs) && nrow(rp_pairs) >= 40 &&
+    all(c("rna_simple_log2FC", "protein_log2FC", "contrast") %in% colnames(rp_pairs))
+if (tb_ok) {
+    up_thr <- 0.5; dn_thr <- -0.5; TOPN <- 100
+    pan_dn <- "top down-regulated (RNA < -0.5)"; pan_up <- "top up-regulated (RNA > 0.5)"
+    d0 <- rp_pairs[is.finite(rp_pairs$rna_simple_log2FC) & is.finite(rp_pairs$protein_log2FC), , drop = FALSE]
+    rows <- list()
+    for (cn in unique(d0$contrast)) {
+        dc <- d0[d0$contrast == cn, , drop = FALSE]; n <- min(TOPN, nrow(dc))
+        if (n < 10) next
+        dn <- dc[order(dc$protein_log2FC), ][seq_len(n), ]
+        dn$panel <- pan_dn; dn$rank <- seq_len(n); dn$concordant <- dn$rna_simple_log2FC < dn_thr
+        up <- dc[order(-dc$protein_log2FC), ][seq_len(n), ]
+        up$panel <- pan_up; up$rank <- seq_len(n); up$concordant <- up$rna_simple_log2FC > up_thr
+        rows[[cn]] <- rbind(dn, up)[, c("contrast", "panel", "rank", "protein_log2FC", "rna_simple_log2FC", "concordant")]
+    }
+    if (length(rows) > 0) {
+        tb  <- do.call(rbind, rows)
+        agg <- do.call(rbind, lapply(split(tb, list(tb$contrast, tb$panel), drop = TRUE), function(s)
+            data.frame(contrast = s$contrast[1], panel = s$panel[1],
+                       lab = sprintf("concordant %d/%d", sum(s$concordant), nrow(s)), stringsAsFactors = FALSE)))
+        print(
+            ggplot2::ggplot(tb, ggplot2::aes(rank, protein_log2FC, fill = concordant)) +
+                ggplot2::geom_col(width = 1) +
+                ggplot2::geom_hline(yintercept = 0, linewidth = 0.2, colour = "grey40") +
+                ggplot2::geom_text(data = agg, ggplot2::aes(x = Inf, y = Inf, label = lab),
+                                   inherit.aes = FALSE, hjust = 1.05, vjust = 1.3, size = 2.5) +
+                ggplot2::facet_grid(contrast ~ panel, scales = "free_y") +
+                ggplot2::scale_fill_manual(values = c("TRUE" = "#2166ac", "FALSE" = "grey75"),
+                    labels = c("TRUE" = "RNA concordant (beyond +/-0.5)", "FALSE" = "not concordant"), name = NULL) +
+                ggplot2::theme_bw(base_size = 9) + ggplot2::theme(legend.position = "top") +
+                ggplot2::labs(x = "protein rank (1 = most extreme)", y = "protein log2FC (simple)",
+                    title = "Top up/down proteins per contrast, coloured by RNA directional agreement")
+        )
+    } else cat("*Not enough pairs per contrast for the top-protein bar plot.*\n")
+} else {
+    cat("*Not enough mapped gene-protein pairs for the top-protein bar plot.*\n")
 }
 ```
 
-```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
-figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
-render_commentary("translation_efficiency_hist")
-```
-
-```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
-p <- file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
-figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
-render_commentary("translation_efficiency_scatter")
+```{r rna-prot-top100-bars-legend, eval=has_transcriptomics, results='asis'}
+figure_legend("Each bar is one of the top-100 most up- or down-regulated proteins per contrast (by simple log2FC); bar height is the protein log2FC. Blue marks proteins whose paired RNA agrees beyond the threshold in that direction (up panel: RNA log2FC > 0.5; down panel: RNA log2FC < -0.5), grey otherwise; the per-panel label gives the concordant count. Sources: simple log2FC in pathway_volcano_data_<contrast>.csv, pairing gene_protein_mapping.csv. Descriptive, hypothesis-generating.")
 ```
 
 ---
@@ -981,18 +1130,6 @@ figure_legend("DIABLO sample scores plot. Samples are projected onto the first t
 render_commentary("diablo_sample_plot")
 ```
 
-```{r diablo-variable-plot, eval=has_diablo, results='asis'}
-p <- file.path(diablo_dir, "diablo_variable_plot.png")
-if (file.exists(p)) {
-    knitr::include_graphics(p)
-}
-```
-
-```{r diablo-variable-legend, eval=has_diablo, results='asis'}
-figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
-render_commentary("diablo_variable_plot")
-```
-
 ```{r diablo-circos, eval=has_diablo, results='asis'}
 circos_path <- file.path(diablo_dir, "diablo_circos.png")
 if (file.exists(circos_path)) {
@@ -1005,26 +1142,6 @@ if (file.exists(circos_path)) {
 if (file.exists(file.path(diablo_dir, "diablo_circos.png"))) {
     figure_legend("DIABLO circos plot showing cross-omics feature correlations. Sectors represent omics layers; bar heights show DIABLO loading magnitude (component 1). Chords connect feature pairs with absolute Pearson correlation above the cutoff. Red chords indicate positive correlation; blue chords indicate negative correlation. Chord intensity and width scale with correlation strength.")
     render_commentary("diablo_circos")
-}
-```
-
-```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
-int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
-int_rds <- file.path(diablo_dir, "diablo_loadings_interactive.rds")
-if (file.exists(int_rds)) {
-    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
-    widget <- readRDS(int_rds)
-    cat(knitr::knit_child(text = c(
-        '```{r diablo-interactive-widget, echo=FALSE, fig.height=7}',
-        'widget',
-        '```'
-    ), envir = environment(), quiet = TRUE))
-    cat("\n\n")
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
-} else if (file.exists(int_html)) {
-    cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
-    cat(sprintf('<iframe src="%s" width="100%%" height="650" frameborder="0" style="border:1px solid #ddd; border-radius:4px;"></iframe>\n\n', int_html))
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
 }
 ```
 
@@ -1360,6 +1477,27 @@ robust_csv <- file.path(consensus_dir, "robust_features.csv")
 if (file.exists(robust_csv)) {
     robust_df <- read.csv(robust_csv, stringsAsFactors = FALSE)
     if (nrow(robust_df) > 0) {
+        # Resolve the consensus "feature" column to original gene_id + protein_id
+        # + description. The feature may be a harmonized GENE_n (GENE_n = row n of
+        # gene_protein_mapping, see 02_mae.R) or already a gene_id; handle both,
+        # then join protein_id / description by gene_id.
+        if (!is.null(gene_protein_mapping) && "feature" %in% names(robust_df)) {
+            gid       <- robust_df$feature
+            is_gene_n <- grepl("^GENE_\\d+$", gid)
+            if (any(is_gene_n)) {
+                n  <- suppressWarnings(as.integer(sub("^GENE_", "", gid)))
+                ok <- is_gene_n & !is.na(n) & n >= 1 & n <= nrow(gene_protein_mapping)
+                gid[ok] <- gene_protein_mapping$gene_id[n[ok]]
+            }
+            robust_df$gene_id    <- gid
+            mi                   <- match(robust_df$gene_id, gene_protein_mapping$gene_id)
+            robust_df$protein_id <- gene_protein_mapping$protein_id[mi]
+            if ("gene_description" %in% names(gene_protein_mapping)) {
+                robust_df$description <- gene_protein_mapping$gene_description[mi]
+            }
+            front     <- intersect(c("gene_id", "protein_id", "description"), names(robust_df))
+            robust_df <- robust_df[, c(front, setdiff(names(robust_df), c(front, "feature")))]
+        }
         make_dt(robust_df, caption = "Robust Features Across Integration Methods", pageLength = 15)
     }
 }

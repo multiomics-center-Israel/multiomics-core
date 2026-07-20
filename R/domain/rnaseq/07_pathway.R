@@ -16,7 +16,7 @@
 #'
 #' @param de_table DE table with FeatureID, log2FoldChange, pvalue, padj columns
 #' @param pathway_results Pathway results from run_pathway_analysis()
-#' @return data.frame: FeatureID, log2FC, neg_log10_pvalue, padj, pathways
+#' @return data.frame: FeatureID, log2FC, simple_log2FC, neg_log10_pvalue, padj, pathways
 build_pathway_volcano_data <- function(de_table, pathway_results) {
   if (is.null(de_table) || nrow(de_table) == 0) return(NULL)
   if (is.null(pathway_results)) return(NULL)
@@ -31,6 +31,9 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
   volcano_df <- data.frame(
     FeatureID = de_table$FeatureID,
     log2FC = de_table$log2FoldChange,
+    # Naive group-mean log-ratio companion (present for the DESeq2 path); carried
+    # so downstream consumers (e.g. the multiomics RNA-protein plots) can use it.
+    simple_log2FC = if ("simple_log2FC" %in% names(de_table)) de_table$simple_log2FC else NA_real_,
     neg_log10_pvalue = neg_log10_p,
     padj = de_table$padj,
     stringsAsFactors = FALSE
