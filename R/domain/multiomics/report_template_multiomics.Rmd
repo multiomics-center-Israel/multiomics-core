@@ -512,7 +512,9 @@ figure_legend("Share of mapped gene-protein pairs whose RNA and protein log2 fol
 # included proteins whose paired RNA (simple) log2FC agrees beyond +/-0.5. Each
 # point is tested against a random-set null (permutation, seeded) and the
 # hypergeometric distribution at rank 250; the dashed horizontal line is the
-# marginal (null) rate. Uses the group-mean simple log2FC on both omics.
+# marginal (null) rate. Proteins are ranked by the proteomics limma moderated
+# log2FC; the RNA side uses the group-mean simple log2FC. Proteomics has no
+# simple log2FC column, so the two sides are not the same statistic.
 rc_ok <- exists("rp_pairs") && !is.null(rp_pairs) && nrow(rp_pairs) >= 40 &&
     all(c("rna_simple_log2FC", "protein_log2FC", "contrast") %in% colnames(rp_pairs))
 if (rc_ok) {
@@ -574,15 +576,16 @@ if (rc_ok) {
 ```
 
 ```{r rna-prot-rank-concordance-legend, eval=has_transcriptomics, results='asis'}
-figure_legend("Cumulative directional agreement as proteins are added from the extreme of the log2FC ranking. Red: proteins ranked most-up first, y = running % with RNA log2FC > 0.5; blue: most-down first, y = running % with RNA log2FC < -0.5. Vertical dashed lines mark ranks 100 and 250; the horizontal dashed line is the marginal (null) rate for that direction. Labels give the permutation p (1000 random equal-size sets, seeded) at ranks 100 and 250 and the hypergeometric p at 250. Uses the group-mean simple log2FC (RNA and protein) from pathway_volcano_data_<contrast>.csv, paired via gene_protein_mapping.csv. Hypothesis-generating.")
+figure_legend("Cumulative directional agreement as proteins are added from the extreme of the protein log2FC ranking. Red: proteins ranked most-up first, y = running % with RNA simple log2FC > 0.5; blue: most-down first, y = running % with RNA simple log2FC < -0.5. Vertical dashed lines mark ranks 100 and 250; the horizontal dashed line is the marginal (null) rate for that direction. Labels give the permutation p (1000 random equal-size sets, seeded) at ranks 100 and 250 and the hypergeometric p at 250. The two axes are not the same statistic: proteins are ranked by the proteomics limma moderated log2FC, while the RNA threshold uses the RNA group-mean simple log2FC (the naive log-ratio of group means), because the proteomics table carries no simple log2FC column. On runs whose RNA table predates that column the RNA side falls back to the DESeq2 shrunken log2FC. Both are read from pathway_volcano_data_<contrast>.csv and paired via gene_protein_mapping.csv. Hypothesis-generating.")
 ```
 
 ## Top Proteins by RNA Agreement
 
 ```{r rna-prot-top100-bars, eval=has_transcriptomics, fig.width=10.5, fig.height=11}
-# Top-100 up- and down-regulated proteins per contrast (by simple log2FC),
-# coloured by whether the paired RNA (simple) log2FC agrees beyond the +/-0.5
-# threshold in that direction (up panel: RNA > 0.5; down panel: RNA < -0.5).
+# Top-100 up- and down-regulated proteins per contrast, ranked by the proteomics
+# limma moderated log2FC, coloured by whether the paired RNA group-mean simple
+# log2FC agrees beyond the +/-0.5 threshold in that direction (up panel:
+# RNA > 0.5; down panel: RNA < -0.5).
 tb_ok <- exists("rp_pairs") && !is.null(rp_pairs) && nrow(rp_pairs) >= 40 &&
     all(c("rna_simple_log2FC", "protein_log2FC", "contrast") %in% colnames(rp_pairs))
 if (tb_ok) {
@@ -624,7 +627,7 @@ if (tb_ok) {
 ```
 
 ```{r rna-prot-top100-bars-legend, eval=has_transcriptomics, results='asis'}
-figure_legend("Each bar is one of the top-100 most up- or down-regulated proteins per contrast (by simple log2FC); bar height is the protein log2FC. Blue marks proteins whose paired RNA agrees beyond the threshold in that direction (up panel: RNA log2FC > 0.5; down panel: RNA log2FC < -0.5), grey otherwise; the per-panel label gives the concordant count. Sources: simple log2FC in pathway_volcano_data_<contrast>.csv, pairing gene_protein_mapping.csv. Descriptive, hypothesis-generating.")
+figure_legend("Each bar is one of the top-100 most up- or down-regulated proteins per contrast, ranked by the proteomics limma moderated log2FC; bar height is that same protein log2FC. Blue marks proteins whose paired RNA agrees beyond the threshold in that direction (up panel: RNA simple log2FC > 0.5; down panel: RNA simple log2FC < -0.5), grey otherwise; the per-panel label gives the concordant count. The two sides are not the same statistic: the protein ranking uses the limma moderated log2FC, while the RNA threshold uses the RNA group-mean simple log2FC (the naive log-ratio of group means), because the proteomics table carries no simple log2FC column. Sources: pathway_volcano_data_<contrast>.csv for both fold changes, gene_protein_mapping.csv for the pairing. Descriptive, hypothesis-generating.")
 ```
 
 ---
