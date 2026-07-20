@@ -730,7 +730,7 @@ if (file.exists(ora_issues_file)) {
     }
     cat("\n*This is often caused by KEGG REST API timeouts or network issues. Re-running the pipeline may resolve it.*\n\n")
 } else {
-    cat("*No Multi-ORA results found.*\n")
+    cat("*No jointly-significant pathways from the combined cross-omics ORA.* This test pools the significant RNA and protein features into a single over-representation test against the combined gene sets; for this run no pathway reached significance in the pooled test. This does not mean either omic lacks enrichment — the per-omic ORAs can still be enriched (see the per-omic enrichment tables, and the KEGG pathview maps where available). An empty combined result means the RNA and protein hits did not concentrate in the *same* pathways strongly enough to pass the pooled test.\n")
 }
 ```
 
@@ -991,7 +991,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
+    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Each cell is the fgsea normalized enrichment score (NES) for that pathway in that omics layer, with the sign giving the direction of enrichment: red = up (positive NES), blue = down (negative NES), white ~ 0; the number in each cell is the NES. Note: for each pathway the per-omics value is taken from that layer's enriched-pathways table, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```

@@ -1362,9 +1362,9 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 
         # 1. Cross-omics heatmap
         plots$pathway_heatmap <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
-        png(plots$pathway_heatmap, width = 1200, height = 900, res = 120)
+        png(plots$pathway_heatmap, width = 1500, height = 1150, res = 120)
         tryCatch({
-            plot_cross_omics_pathway_heatmap(meta_results, omics)
+            plot_cross_omics_pathway_heatmap(meta_results, omics, enrich_dir = out_dir)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
@@ -1525,13 +1525,11 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # =============================================================================
 
 #' Plot cross-omics pathway heatmap
-plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
+plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
+                                             enrich_dir = NULL) {
 
     # Select top N pathways by combined p-value
     top_pathways <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
-
-    pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
-    pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
     # Row labels: readable GO term name + GO ID (fall back to ID when name missing).
     # Appending the ID also guarantees unique rownames for pheatmap.
@@ -1541,33 +1539,53 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     go_name[missing] <- go_id[missing]
     go_name <- ifelse(nchar(go_name) > 50, paste0(substr(go_name, 1, 47), "..."), go_name)
     pathway_labels <- paste0(go_name, " (", go_id, ")")
-    rownames(pval_matrix) <- pathway_labels
 
-    # Transform to -log10(p)
-    log_pval_matrix <- -log10(pval_matrix + 1e-300)
-    # Cap at 10 for display
-    log_pval_matrix[log_pval_matrix > 10] <- 10
-    colnames(log_pval_matrix) <- gsub("^pval_", "", colnames(log_pval_matrix))
+    pval_cols  <- grep("^pval_", names(top_pathways), value = TRUE)
+    omic_names <- sub("^pval_", "", pval_cols)
 
-    # Replace NA with 0
-    log_pval_matrix[is.na(log_pval_matrix)] <- 0
+    # Prefer the signed NES (direction of enrichment) from each omic's fgsea table
+    # so the cell shows whether a pathway is up (+) or down (-) in that layer;
+    # fall back to -log10(p) only when NES is unavailable.
+    nes_mat <- NULL
+    if (!is.null(enrich_dir)) {
+        nes_mat <- matrix(NA_real_, nrow(top_pathways), length(omic_names),
+                          dimnames = list(pathway_labels, omic_names))
+        for (om in omic_names) {
+            f <- file.path(enrich_dir, paste0(om, "_enriched_pathways.csv"))
+            if (!file.exists(f)) next
+            e <- tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(x) NULL)
+            if (is.null(e) || !all(c("pathway", "NES") %in% names(e))) next
+            e <- e[!duplicated(e$pathway), ]
+            nes_mat[, om] <- suppressWarnings(as.numeric(e$NES[match(top_pathways$pathway, e$pathway)]))
+        }
+        if (all(is.na(nes_mat))) nes_mat <- NULL
+    }
 
-    # Heatmap
-    if (requireNamespace("pheatmap", quietly = TRUE)) {
-        pheatmap::pheatmap(log_pval_matrix,
-                           cluster_rows = FALSE,
-                           cluster_cols = FALSE,
-                           main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
-                           # Blue = less significant (low -log10p) -> red = highly significant.
-                           color = colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(50),
-                           fontsize_row = 7, fontsize_col = 10,
-                           angle_col = 45,
-                           na_col = "grey90",
-                           border_color = "grey80")
+    if (!is.null(nes_mat)) {
+        mat <- nes_mat; mat[is.na(mat)] <- 0
+        lim <- max(abs(mat), na.rm = TRUE); lim <- if (is.finite(lim) && lim > 0) lim else 1
+        col <- colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(51)  # blue = down, red = up
+        breaks <- seq(-lim, lim, length.out = 52)
+        main <- "Cross-Omics Pathway Enrichment (NES: red = up, blue = down)"
+        disp <- round(mat, 2)
     } else {
-        heatmap(log_pval_matrix, scale = "none", Colv = NA,
-                main = "Cross-Omics Pathway Enrichment",
-                col = colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(50))
+        pm <- as.matrix(top_pathways[, pval_cols, drop = FALSE]); rownames(pm) <- pathway_labels
+        mat <- -log10(pm + 1e-300); mat[mat > 10] <- 10
+        colnames(mat) <- omic_names; mat[is.na(mat)] <- 0
+        col <- colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(50); breaks <- NA
+        main <- "Cross-Omics Pathway Enrichment (-log10 p-value)"
+        disp <- FALSE
+    }
+
+    if (requireNamespace("pheatmap", quietly = TRUE)) {
+        args <- list(mat, cluster_rows = FALSE, cluster_cols = FALSE, main = main,
+                     color = col, fontsize_row = 11, fontsize_col = 13, fontsize = 12,
+                     fontsize_number = 9, angle_col = 45, na_col = "grey90",
+                     border_color = "grey80", display_numbers = disp)
+        if (!is.null(breaks) && !all(is.na(breaks))) args$breaks <- breaks
+        do.call(pheatmap::pheatmap, args)
+    } else {
+        heatmap(mat, scale = "none", Colv = NA, main = main, col = col)
     }
 }
 
