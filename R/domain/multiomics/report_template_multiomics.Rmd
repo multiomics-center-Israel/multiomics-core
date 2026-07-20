@@ -1011,8 +1011,108 @@ if (file.exists(meta_file)) {
 ```{r enrichment-table-legend, eval=has_enrichment, results='asis'}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
-    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Pathways significant in multiple omics are most informative.")
+    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Fisher's method combines evidence regardless of the direction of change, so a pathway can reach joint significance while moving in opposite directions in the two layers. The section below separates these cases.")
     render_commentary("cross_omics_meta_analysis")
+}
+```
+
+## Jointly Significant Pathways and Their Direction {.unnumbered}
+
+```{r enrichment-concordant, eval=has_enrichment, results='asis'}
+meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
+alpha_joint <- 0.05
+
+if (file.exists(meta_file)) {
+    meta_tbl <- read.csv(meta_file, stringsAsFactors = FALSE)
+    pcols <- grep("^pval_", names(meta_tbl), value = TRUE)
+    layer_names <- sub("^pval_", "", pcols)
+
+    if (length(pcols) >= 2 && "combined_padj" %in% names(meta_tbl)) {
+        # Jointly significant = nominally significant in every layer AND
+        # surviving FDR on the Fisher-combined p.
+        keep <- rep(TRUE, nrow(meta_tbl))
+        for (pc in pcols) keep <- keep & !is.na(meta_tbl[[pc]]) & meta_tbl[[pc]] < alpha_joint
+        keep <- keep & !is.na(meta_tbl$combined_padj) & meta_tbl$combined_padj < alpha_joint
+        joint <- meta_tbl[keep, , drop = FALSE]
+        joint <- joint[order(joint$combined_padj), , drop = FALSE]
+
+        # Attach the per-layer NES so direction can be compared across layers.
+        for (ln in layer_names) {
+            nes_file <- file.path(enrichment_dir, sprintf("%s_enriched_pathways.csv", ln))
+            joint[[paste0("NES_", ln)]] <- NA_real_
+            if (file.exists(nes_file)) {
+                nes_tbl <- tryCatch(read.csv(nes_file, stringsAsFactors = FALSE),
+                                    error = function(e) NULL)
+                if (!is.null(nes_tbl) && all(c("pathway_name", "NES") %in% names(nes_tbl))) {
+                    nes_tbl <- nes_tbl[!duplicated(nes_tbl$pathway_name), , drop = FALSE]
+                    idx <- match(joint$pathway_name, nes_tbl$pathway_name)
+                    joint[[paste0("NES_", ln)]] <- suppressWarnings(as.numeric(nes_tbl$NES[idx]))
+                }
+            }
+        }
+
+        nes_cols <- paste0("NES_", layer_names)
+        nes_mat <- as.matrix(joint[, nes_cols, drop = FALSE])
+        joint$direction <- apply(nes_mat, 1, function(v) {
+            if (any(is.na(v))) return("undetermined")
+            if (all(v > 0)) "same (up in all layers)"
+            else if (all(v < 0)) "same (down in all layers)"
+            else "opposite"
+        })
+
+        n_joint <- nrow(joint)
+        n_same  <- sum(grepl("^same", joint$direction))
+        n_opp   <- sum(joint$direction == "opposite")
+
+        if (n_joint > 0) {
+            cat(sprintf(
+                paste0("Of the %d pathways in the cross-omics meta-analysis, %d are nominally ",
+                       "significant (p < %.2f) in every omics layer and also pass FDR on the ",
+                       "Fisher-combined p. Of those %d, %d change in the same direction in all ",
+                       "layers and %d change in opposite directions.\n\n"),
+                nrow(meta_tbl), n_joint, alpha_joint, n_joint, n_same, n_opp))
+
+            if (n_opp > 0) {
+                cat(paste0("The opposite-direction pathways are reported here rather than dropped. ",
+                           "They are jointly significant but the transcript and protein evidence ",
+                           "disagrees on sign, so they do not support a single coherent statement ",
+                           "about the pathway.\n\n"))
+            }
+
+            show_cols <- intersect(
+                c("pathway_name", pcols, "combined_pval", "combined_padj", nes_cols, "direction"),
+                names(joint))
+            make_dt(joint[, show_cols, drop = FALSE],
+                    caption = "Pathways jointly significant across omics layers, annotated by direction",
+                    pageLength = 15)
+
+            # Persist so the numbers quoted above are checkable off-report.
+            out_tsv <- file.path(enrichment_dir, "cross_omics_jointly_significant_pathways.tsv")
+            tryCatch(
+                write.table(joint[, show_cols, drop = FALSE], out_tsv,
+                            sep = "\t", row.names = FALSE, quote = FALSE),
+                error = function(e) invisible(NULL))
+        } else {
+            cat(sprintf(paste0("No pathway reached nominal significance (p < %.2f) in every ",
+                               "omics layer while also passing FDR on the Fisher-combined p.\n\n"),
+                        alpha_joint))
+        }
+    }
+}
+```
+
+```{r enrichment-concordant-legend, eval=has_enrichment, results='asis'}
+if (file.exists(file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv"))) {
+    figure_legend(paste0(
+        "Pathways significant in every omics layer at nominal p < 0.05 and passing FDR on the ",
+        "Fisher-combined p. Direction is taken from the sign of the per-layer NES in ",
+        "<omics>_enriched_pathways.csv; 'undetermined' means the pathway had no NES in at least ",
+        "one layer (for example an ORA-only result). Sources: ",
+        "cross_omics_pathways_meta_analysis.csv for the p-values, ",
+        "<omics>_enriched_pathways.csv for NES, both in the cross_enrichment directory. ",
+        "The full annotated list is written to cross_omics_jointly_significant_pathways.tsv. ",
+        "Direction agreement is descriptive and is not itself tested; with few replicates and a ",
+        "single contrast these results are hypothesis-generating."))
 }
 ```
 
