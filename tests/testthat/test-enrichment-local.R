@@ -362,3 +362,60 @@ test_that(".build_gene_context assembles DE stats + expression + z-scores", {
     expect_true(all(paste0("S", 1:4) %in% names(ctx)))
     expect_true(any(grepl("\\.zscore$", names(ctx))))
 })
+
+# ---------------------------------------------------------------------------
+# Enrichment enable/disable gating (mod_rnaseq_pathway): the explicit
+# enrichment.enabled switch + the existing pathway.enabled switch. Either being
+# false must skip enrichment and return the empty-safe shape; an absent
+# enrichment.enabled must keep running (backward compatibility).
+# ---------------------------------------------------------------------------
+
+# Minimal config builder for the gate. enrichment_enabled = NULL omits the key.
+.mk_pw_cfg <- function(pathway_enabled = TRUE, enrichment_enabled = NULL) {
+    enr <- list(annotation_dir = "")
+    if (!is.null(enrichment_enabled)) enr$enabled <- enrichment_enabled
+    list(modes = list(rna = list(
+        pathway    = list(enabled = pathway_enabled),
+        enrichment = enr
+    )))
+}
+.empty_pw <- list(annotation = NULL, pathway_results = list(), plot_files = list())
+
+test_that("enrichment.enabled: false skips enrichment (empty-safe return)", {
+    res <- suppressMessages(mod_rnaseq_pathway(
+        de_res = NULL, pre = NULL,
+        config = .mk_pw_cfg(pathway_enabled = TRUE, enrichment_enabled = FALSE),
+        out_dir = withr::local_tempdir()))
+    expect_identical(res, .empty_pw)
+})
+
+test_that("pathway.enabled: false still skips enrichment (existing behavior)", {
+    res <- suppressMessages(mod_rnaseq_pathway(
+        de_res = NULL, pre = NULL,
+        config = .mk_pw_cfg(pathway_enabled = FALSE, enrichment_enabled = NULL),
+        out_dir = withr::local_tempdir()))
+    expect_identical(res, .empty_pw)
+})
+
+test_that("absent enrichment.enabled still runs enrichment (backward compatible)", {
+    # No `enabled` key + pathway on: the disable gate must NOT fire. With empty DE
+    # tables the run proceeds past the gate to the downstream 'no DE tables' guard
+    # (a different code path) — proving enrichment was NOT skipped by the switch.
+    expect_warning(
+        res <- suppressMessages(mod_rnaseq_pathway(
+            de_res = list(tables = list()), pre = NULL,
+            config = .mk_pw_cfg(pathway_enabled = TRUE, enrichment_enabled = NULL),
+            out_dir = withr::local_tempdir())),
+        "No DE tables")
+    expect_identical(res, .empty_pw)
+})
+
+test_that("enrichment.enabled: true runs enrichment (reaches DE-table check)", {
+    expect_warning(
+        res <- suppressMessages(mod_rnaseq_pathway(
+            de_res = list(tables = list()), pre = NULL,
+            config = .mk_pw_cfg(pathway_enabled = TRUE, enrichment_enabled = TRUE),
+            out_dir = withr::local_tempdir())),
+        "No DE tables")
+    expect_identical(res, .empty_pw)
+})

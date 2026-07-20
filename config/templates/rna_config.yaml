@@ -215,63 +215,82 @@ modes:
       acknowledgment: ""
 
     # --------------------------------------------------------
-    # Local (offline) enrichment — sibling of the online `pathway:` config.
+    # RNA pathway enrichment analysis (ORA + GSEA)
+    # By default, enrichment runs using offline local annotation tables.
+    # Set annotation_dir to "" to use the existing online workflow instead.
     #
-    # BACKWARD-COMPATIBILITY / ACTIVATION (annotation_dir):
-    #   - annotation_dir: ""  (empty/unset) -> the EXISTING ONLINE pathway
-    #     workflow runs exactly as it does today (organism detection, gene
-    #     annotation, online gene-set loading, fGSEA + ORA). Nothing changes.
-    #   - annotation_dir: "<path>"          -> activates the NEW local/offline,
-    #     table-driven enrichment workflow (KEGG/GO .tab files; no internet).
-    #   This switch exists to preserve backward compatibility with the current
-    #   project while adding the offline path.
+    # annotation_dir:
+    #   Path -> offline local annotation tables.
+    #   ""   -> existing online enrichment workflow.
     #
-    # GO EXPANSION (preprocessing, NOT runtime):
-    #   Runtime enrichment does NOT perform GO expansion. The pipeline expects
-    #   PRE-GENERATED local GO annotation tables. GO expansion is a separate
-    #   preprocessing step (e.g. clusterProfiler::buildGOmap() during annotation
-    #   preparation). To reproduce the legacy behavior ("with GO expansion"),
-    #   the supplied GO2gene_*.tab tables must ALREADY contain the expanded GO
-    #   assignments (legacy used a "Func_annot_data_expanded" directory).
+    # Expected files in annotation_dir (GO tables must be pre-expanded):
+    #   KEGG_pathway2gene.tab   KEGG_pathway2name.tab
+    #   GO2gene_BP.tab          GO2name_BP.tab
+    #   GO2gene_MF.tab          GO2name_MF.tab
+    #   GO2gene_CC.tab          GO2name_CC.tab
     # --------------------------------------------------------
     enrichment:
-      annotation_dir: ""               # empty -> online path (above); set -> offline local path
-      # databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]  # default = all four; missing files are skipped + warned
-      # max_terms_in_dotplot: 20       # legacy default. Display-only: number of pathways shown in dotplots.
-                                       # Does NOT affect enrichment calculations; all results stay in the output tables.
-      # pvalue_cutoff: 0.05            # ORA/GSEA adjusted-p cutoff
-      # workers: 1                     # single control for enrichment parallelism (ORA + GSEA).
-      #                                # <=1 = sequential (default). >1 runs independent enrichment
-      #                                # jobs in parallel via future.apply (multisession); identical
-      #                                # results regardless of worker count. Falls back to sequential
-      #                                # if future/future.apply are not installed.
-      #
-      # GO simplify — DEFAULT true (legacy parity). Collapses redundant GO terms
-      #   via clusterProfiler::simplify() with the Wang measure, whose semantic
-      #   similarity comes from the GO DAG in GO.db — fully OFFLINE, organism-
-      #   agnostic, NO OrgDb required (this matches the legacy behavior). If
-      #   GO.db/GOSemSim are not installed, simplify is SKIPPED SOFTLY with a
-      #   warning and the unsimplified GO ORA is still produced — never fails.
+
+      # --- Enable / routing ---
+      enabled: true
+      # Run RNA enrichment.
+      # false skips all enrichment analyses while the rest of the RNA pipeline continues.
+
+      annotation_dir: "data/Func_annot_data_expanded"
+      # Path to local annotation tables.
+      # Leave empty ("") to use the existing online workflow.
+
+      # --- Databases and workers ---
+      databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]
+      # Annotation databases to test. Missing table files are skipped with a warning.
+
+      workers: 1
+      # Number of parallel enrichment workers.
+      # 1 = sequential execution.
+
+      # --- Statistical settings ---
+      pvalue_cutoff: 0.05
+      # Significance cutoff for ORA and GSEA (offline enrichment).
+
+      padj_method: "fdr"
+      # Multiple-testing adjustment method.
+
+      # gsea_pvalue_cutoff: 0.05
+      # Optional GSEA-only significance cutoff (defaults to pvalue_cutoff).
+      # gsea_padj_method: "fdr"
+      # Optional GSEA-only adjustment method (defaults to padj_method).
+
+      max_terms_in_dotplot: 20
+      # Max pathways shown in dotplots/ridgeplots. Display only; all results stay in the tables.
+
+      # --- GO simplification ---
       go_simplify: true
-      # orgdb: ""                      # reserved for future IC-based measures (Resnik/Lin/...); NOT needed for the Wang default
-      #
-      # Output toggles — rich-by-default. Every expensive artifact is independently
-      # switchable; set any to false to skip it. All default true EXCEPT the
-      # high-volume per-pathway expression heatmaps, which are opt-in (false).
+      # Simplify redundant GO terms.
+      # Ignored for non-GO databases.
+
+      # --- Plot toggles (each artifact is independently switchable) ---
       plots:
-        dotplot: true                  # ORA + GSEA dotplots
-        ridgeplot: true                # GSEA leading-edge ridgeplot (needs ggridges)
-        ridgeplot_all_genes: true      # GSEA all-genes ridgeplot variant (legacy ridgeplot_edited1)
-        pathway_heatmaps: false        # per-pathway expression heatmaps (all + leading-edge genes); OPT-IN (large volume)
-        shared_genes: true             # ORA gene<->term and term<->term shared-gene heatmaps (PDF + CSV)
+        dotplot: true
+        # ORA and GSEA dotplots.
+
+        ridgeplot: true
+        # GSEA ridgeplot of leading-edge genes.
+
+        ridgeplot_all_genes: true
+        # GSEA ridgeplot using all pathway genes.
+
+        pathway_heatmaps: false
+        # Generate per-pathway expression heatmaps.
+        # Disabled by default because it creates many files.
+
+        shared_genes: true
+        # ORA gene-to-term and term-to-term shared-gene heatmaps.
+
+      # --- GSEA-specific settings ---
       gsea:
-        per_pathway_artifacts: true    # per-pathway gseaplot2 PNGs + rich core-gene tables for each significant pathway
-      #   (Backward compat: the old flat key `gsea_per_pathway_artifacts` is still honored.)
-      # Expected files in annotation_dir (gene-based; GO tables pre-expanded):
-      #   KEGG_pathway2gene.tab   KEGG_pathway2name.tab
-      #   GO2gene_BP.tab          GO2name_BP.tab
-      #   GO2gene_MF.tab          GO2name_MF.tab
-      #   GO2gene_CC.tab          GO2name_CC.tab
+        per_pathway_artifacts: true
+        # Generate per-pathway GSEA plots and detailed core-gene tables.
+        # (Back-compat: the old flat key gsea_per_pathway_artifacts is still honored.)
 
 params:
   seed: 1

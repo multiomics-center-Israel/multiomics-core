@@ -61,9 +61,18 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pw_cfg  <- rna_cfg$pathway
     enr_cfg <- rna_cfg$enrichment %||% list()
 
-    # Skip entirely if pathway analysis is disabled
-    if (is.null(pw_cfg) || isFALSE(pw_cfg$enabled)) {
-        message("Pathway analysis disabled in config (pathway.enabled: false)")
+    # Skip entirely if enrichment is disabled. Two independent switches disable
+    # it (either being false skips): the broad `pathway.enabled` and the explicit
+    # `enrichment.enabled`. `enrichment.enabled` is absent-safe (NULL/unset -> run)
+    # so pre-existing configs without the key keep running enrichment as before.
+    # Returns the standard empty-safe shape so the rest of the RNA pipeline (and
+    # all downstream consumers of pathway_results) continue without failure.
+    pathway_off    <- is.null(pw_cfg) || isFALSE(pw_cfg$enabled)
+    enrichment_off <- isFALSE(enr_cfg$enabled)
+    if (pathway_off || enrichment_off) {
+        message("RNA enrichment disabled (",
+                if (pathway_off) "pathway.enabled: false" else "enrichment.enabled: false",
+                "); skipping ORA/GSEA and continuing the pipeline.")
         return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
     }
 
