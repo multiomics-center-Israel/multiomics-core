@@ -87,7 +87,7 @@ modes:
       method: "none"  # DIA-NN output already normalized
 
     imputation:
-      method: "perseus"
+      method: "perseus_like"
       width: 0.2
       downshift: 1.6
 

@@ -267,7 +267,7 @@ compute_linear_rsd <- function(mat, stage, pseudocount = 1) {
 #'   \code{backtransform_exact} flag in metrics.
 #' @param pseudocount Numeric scalar.  The pseudocount used when log2-
 #'   transforming the matrix (read from
-#'   \code{config$modes$metabolomics$normalization$pseudocount}).  Passed
+#'   \code{config$modes$metabolomics$preprocessing$pseudocount}).  Passed
 #'   unchanged to \code{compute_linear_rsd()} for exact back-transformation.
 #' @param cfg         The QC config section:
 #'   \code{config$modes$metabolomics$qc}.  Controls toggles
@@ -708,7 +708,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
 #'   \itemize{
 #'     \item \code{config$modes$metabolomics$qc} (toggles, thresholds)
 #'     \item \code{config$modes$metabolomics} (effects, for plot functions)
-#'     \item \code{config$modes$metabolomics$normalization$pseudocount}
+#'     \item \code{config$modes$metabolomics$preprocessing$pseudocount}
 #'   }
 #'
 #' @return Character vector of all file paths written by both subset calls
@@ -717,7 +717,7 @@ qc_full_metabolomics_suite <- function(mat, meta, stage, pseudocount,
 mod_met_qc_suite <- function(data, stage, out_dir, config) {
   cfg_qc      <- config$modes$metabolomics$qc           %||% list()
   cfg_mode    <- config$modes$metabolomics
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
 
   # Short-circuit when QC is globally disabled

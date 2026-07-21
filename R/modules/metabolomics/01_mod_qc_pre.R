@@ -338,17 +338,18 @@ build_norm_label <- function(norm_applied) {
 #' @param expr_log   Transform-only matrix (no scaling), used for DE. NULL if no scaling applied.
 #' @return list of subset descriptors.
 
-build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col) {
+build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col, expr_log = NULL) {
   all_subset <- list(
     tag       = "",
     label     = "",
     expr_work = expr_work,
     expr_filt = expr_filt,
+    expr_log  = expr_log,
     meta      = meta
   )
-  
+
   subsets <- list(all_subset)
-  
+
   # Identify QC samples via the treatment column
   if ("treatment" %in% colnames(meta)) {
     is_qc <- tolower(trimws(as.character(meta$treatment))) == "qc"
@@ -359,10 +360,11 @@ build_qc_subsets <- function(expr_work, expr_filt, meta, sample_col) {
         label     = " [excl. QC]",
         expr_work = expr_work[, keep_ids, drop = FALSE],
         expr_filt = expr_filt[, keep_ids, drop = FALSE],
+        expr_log  = if (!is.null(expr_log)) expr_log[, keep_ids, drop = FALSE] else NULL,
         meta      = meta[!is_qc, , drop = FALSE]
       )
     }
   }
-  
+
   subsets
 }

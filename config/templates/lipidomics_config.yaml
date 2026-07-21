@@ -1,0 +1,203 @@
+# ==============================================================================
+# Lipidomics config template
+# ==============================================================================
+# Add this block under modes: in your project config.yaml
+
+project:
+  dir: "C:/path/to/your/project"
+  name: "MyProject"
+  analysis_round: "01"
+
+paths:
+  raw: "data"
+  out: "outputs"
+
+params:
+  seed: 1
+
+modes:
+  lipidomics:
+
+    # ---- Input specification ----
+    input:
+      # "lipidsearch"    : LipidSearch export (Excel or CSV with annotation columns)
+      # "translated_csv" : Translated CSV (Metabolite col + sample cols, optional Label row)
+      # "processed_wide" : Already-processed wide table (clean sample columns)
+      format: "lipidsearch"
+      sheet: "RAW Data"         # Excel sheet name/index (for xlsx)
+      has_group_row: false       # Set true if row 1 contains group labels
+
+    files:
+      data: "lipidomics/Elah_Lipidomics_Final_Analysis.xlsx"    # REQUIRED
+      metadata: "lipidomics/sample_metadata.csv"                 # Optional
+
+    # ---- Feature ID construction ----
+    id_columns:
+      # If set and exists in data, use this column directly as feature_id
+      feature_id_col: null
+      # For LipidSearch format: Molecule column is used by default
+      # For translated CSV: Metabolite column is used by default
+      name_col: "Metabolite"
+      # LipidSearch annotation columns (used to separate annotation from sample data)
+      annotation_cols:
+        - "Molecule List Name"
+        - "Molecule"
+        - "Average Measured Retention Time"
+        - "LipidMolecGroup"
+        - "ClassKey"
+        - "SubClassKey"
+        - "FAKey"
+        - "FAGroupKey"
+        - "TotalGrade"
+        - "Precursor Mz"
+
+    # ---- Normalization ----
+    normalization:
+      input_already_normalized: false
+
+      # 1. Sample normalization: "none" | "sum" | "median" | "pqn" | "is"
+      sample_norm: "sum"
+
+      # 2. Transformation: "none" | "log2" | "log10" | "glog10"
+      transform: "log2"
+
+      # 3. Scaling: "none" | "auto" | "pareto" | "range"
+      scaling: "auto"
+
+      pseudocount: 1
+
+      # Missing value handling: "keep" | "zero" | "min_half" | "lod"
+      na_policy: "min_half"
+      na_lod_fraction: 0.2
+
+      # Column in row_data for internal standard (if sample_norm = "is")
+      is_ref_col: null
+
+      # Metadata column for biological-factor normalization (if sample_norm = "bio_factor").
+      # Numeric column on the metadata table (e.g. "mg_protein"). Each sample's
+      # intensities are divided by its row's value.
+      biological_factor_col: null
+
+      # ---- Method evaluation (optional) ----
+      evaluate_methods:
+        - sample_norm: "none"
+          transform: "log2"
+          scaling: "none"
+        - sample_norm: "sum"
+          transform: "log2"
+          scaling: "auto"
+        - sample_norm: "pqn"
+          transform: "log2"
+          scaling: "pareto"
+
+    # ---- Sample filtering (optional) ----
+    sample_filter:
+      enabled: true
+      rules:
+        exclude_blanks: true
+        exclude_qc: false
+        exclude_pools: true        # Remove Pool_* columns
+        exclude_samples: null
+      # Regex patterns to exclude sample columns (for LipidSearch format)
+      exclude_patterns:
+        - "^Pool"
+        - "^Procedure_Blank"
+        - "^Blank"
+
+    # ---- Effects (for QC plots) ----
+    effects:
+      samples: "sample_id"
+      color: "condition"
+      shape: null
+      heatmap_annotations: null
+
+    # ---- QC settings ----
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+    # ---- Differential expression ----
+    de:
+      method: "limma"              # "limma" | "t_test" | "t_test_equal" | "wilcoxon"
+      condition_column: "condition"
+      contrasts:
+        - "Ana - Oxy"
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+
+    # ---- Clustering ----
+    clustering:
+      enabled: true
+      group_col: "condition"
+      min_groups: 2
+      de_source: "any_contrast"
+
+      steps:
+        hierarchical:
+          enabled: true
+          distance: "euclidean"
+          linkage: "complete"
+
+        partition:
+          enabled: true
+          algorithm: "hclust"
+          distance: "euclidean"
+          k_max: 20
+          nstart: 25
+
+        binary_patterns:
+          enabled: true
+          corr_cutoff: 0.8
+
+      heatmap:
+        max_rows: null
+        cluster_cols: true
+
+    # ---- Random forest (optional) ----
+    rf:
+      run_rf: true
+      n_trees: 500
+      importance: "permutation"
+      top_n: 20
+      seed: 1234
+
+    # ---- PLS-DA (optional) ----
+    plsda:
+      run_plsda: true
+      vip_top_n: 15
+      colors: null
+
+    pathway:
+      enabled: true
+      organism: "Homo sapiens"
+      p_threshold: 0.05
+      string_network: true
+      string_organism: 9606
+      string_score: 400
+
+
+# ==============================================================================
+# Example: translated CSV input (Ifat's translated dataset)
+# ==============================================================================
+# modes:
+#   lipidomics:
+#     input:
+#       format: "translated_csv"
+#       has_group_row: true        # Row 1 = Label row with Oxy/Ana
+#     files:
+#       data: "lipidomics/Elah_Translated_dataset.csv"
+#     id_columns:
+#       name_col: "Metabolite"
+#     normalization:
+#       sample_norm: "sum"
+#       transform: "log2"
+#       scaling: "auto"
+#     effects:
+#       samples: "sample_id"
+#       color: "condition"
+#     de:
+#       condition_column: "condition"
+#       contrasts:
+#         - "Ana - Oxy"

@@ -8,7 +8,10 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Let superseded runs finish instead of killing them mid-step (which
+  # surfaces as "operation was canceled"); the latest run is still the one
+  # whose status gates the PR.
+  cancel-in-progress: false
 
 jobs:
   lint-and-test:

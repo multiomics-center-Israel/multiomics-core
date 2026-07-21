@@ -12,7 +12,7 @@ create_mock_proteomics_config <- function() {
             sample_col = "SampleID"
         ),
         imputation = list(
-            method = "perseus",
+            method = "perseus_like",
             no_repetitions = 5,
             min_no_passed = 3,
             width = 0.3,

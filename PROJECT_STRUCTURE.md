@@ -12,7 +12,7 @@ A practical map of the repository for future Claude Code sessions. Read this **a
 
 - **RNA-seq** — DESeq2 differential expression, batch correction (ComBat-Seq/SVA/RUV), cell-type deconvolution (xCell2), pathway enrichment.
 - **Proteomics** — limma-based DE with multi-imputation and stability filtering, PPI networks, advanced stats.
-- **Metabolomics** — missingness classification, MNAR/MAR imputation, TSS/Median/PQN normalization, LOESS drift correction, DE (limma/t-test/Wilcoxon), pathway enrichment (QEA, ssGSEA, ORA, GSEA).
+- **Metabolomics** — missingness *filtering* (no imputation stage), TSS/Median/PQN/EigenMS normalization (selected via `preprocessing.chosen_norm`), optional LOESS drift correction, DE (limma/t-test/Wilcoxon), pathway enrichment (QEA, ssGSEA, ORA, GSEA).
 - **Multi-omics integration** — DIABLO, MOFA, SNF, concordance, cross-omics enrichment, WGCNA, COSMOS, consensus and stability analysis.
 
 Behaviour is driven by a single **YAML config** (path passed via `MULTIOMICS_CONFIG`). Each run writes results under `<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/`. AI-generated figure commentary is optional (Claude CLI / Anthropic API / OpenAI backends).
@@ -174,9 +174,7 @@ config/
 │   ├── proteins_config.yaml     Proteomics template
 │   ├── metabolomics_template.yaml
 │   └── multiomics_config.yaml   Multi-omics template
-├── config_GT4.yaml              Real / per-project configs (gitignored except templates)
-├── config_GT6.yaml
-└── config_GT15.yaml
+└── (per-project *.yaml configs are gitignored — they live on disk, not in the repo)
 ```
 
 `.gitignore` excludes `config/*.yaml` but **whitelists** `config/templates/*.yaml`. So per-project configs are NOT in git — they live on disk only.
@@ -329,34 +327,16 @@ In this order, before changing anything:
 
 ## 11. Warnings / pitfalls
 
-These come from `CLAUDE.md`, the `.gitignore`, and observations from the scan — re-stated here for convenience. **`CLAUDE.md` is the source of truth; when in doubt defer to it.**
+**The hard rules — must-not-touch paths, destructive-command confirmations, and data safety — live in `CLAUDE.md` and are not repeated here.** `CLAUDE.md` is the source of truth; defer to it. This section keeps only the *structure-specific* pitfalls surfaced by scanning the repo.
 
-### Must-not-touch (per `CLAUDE.md`)
-
-- `_targets/` — pipeline cache, gitignored, machine-specific.
-- `renv.lock` — only changed via explicit user request.
-- `.Renviron`, `.env`, `*.key`, `*.pem` — secrets.
-- `.github/CODEOWNERS`, `.github/workflows/` — CI / review rules.
-- The Shiny payload contract — see §8.
-
-### Never run without explicit confirmation
-
-- `git push --force`, `git reset --hard main`, interactive rebases of pushed commits.
-- `rm -rf` outside the working tree.
-- `targets::tar_destroy()`, `renv::clean()`, `renv::deactivate()`.
-- `unlink()` of directories.
-
-### Easy mistakes
+### Easy mistakes (structure-specific)
 
 - **Putting helpers in `_targets.R`.** They belong in `R/` (the right layer for what they do).
 - **Skipping numeric prefixes.** Files load in `sort()` order — picking the wrong number breaks dependencies silently.
 - **Forgetting to mirror per-mode.** A pattern in `rnaseq/` often needs `proteomics/` and `metabolomics/` counterparts.
 - **Editing per-project YAMLs as if they were templates.** Templates live in `config/templates/` (gitted); real configs are gitignored.
-- **Running `tar_make()` autonomously.** It may rebuild expensive computations. Wait for the user to ask.
-- **`renv::snapshot()` autonomously.** This is a deliberate human decision — it bumps `renv.lock`.
-- **Reading raw bio data into chat.** Use `str()` / `dim()` / `colnames()`. See data safety in `CLAUDE.md`.
-- **Adding `library()` calls inside functions.** Use `pkg::fn()` instead.
-- **Unseeded randomness.** Anything stochastic must take a seed or use `withr::with_seed()`.
+
+(General workflow rules — `tar_make`/`renv::snapshot` autonomy, `library()` in functions, seeding, raw-data-in-chat — live in `CLAUDE.md`.)
 
 ### Unclear / worth confirming
 
@@ -368,4 +348,4 @@ These come from `CLAUDE.md`, the `.gitignore`, and observations from the scan �
 
 ---
 
-*Last scanned: 2026-05-31. Layout may have changed since.*
+*Last scanned: 2026-06-16. Layout may have changed since.*

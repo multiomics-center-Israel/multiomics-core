@@ -639,7 +639,6 @@ modes:
       use_adj: true
     de_table:
       id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
     qc_post:
       enabled: true
       de_source: "summary"
@@ -795,12 +794,12 @@ wizard_proteomics <- function(project_dir, project_name, analyst, round) {
                           "DEP2 / MinDet — deterministic minimum (experimental)",
                           "None (complete cases only)"),
                         default = 1)
-  imp_method <- c("perseus", "dep2", "none")[imp_idx]
+  imp_method <- c("perseus_like", "dep2", "none")[imp_idx]
   imp_width <- "0.2"
   imp_downshift <- "1.6"
   dep2_method <- "MinDet"
-  if (imp_method == "perseus") {
-    cat("  Perseus parameters (press Enter for defaults):\n")
+  if (imp_method == "perseus_like") {
+    cat("  Perseus-like parameters (press Enter for defaults):\n")
     imp_width <- ask("    Width (SD scaling for imputed distribution)", "0.2")
     imp_downshift <- ask("    Downshift (SDs below mean)", "1.6")
   } else if (imp_method == "dep2") {
@@ -1078,15 +1077,6 @@ modes:
       linear_fc_cutoff: %s
     de_table:
       id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
-    qc_post:
-      enabled: true
-      de_source: "summary"
-      plots:
-        volcano: true
-        ma: true
-      outputs:
-        write_de_tables: true
     clustering:
       enabled: %s
       de_source: "any_contrast"
@@ -1358,7 +1348,6 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
   run_rf <- FALSE
   run_plsda <- FALSE
   selected_organism <- "Homo sapiens"
-  kegg_org_code <- "hsa"
   run_enrichment <- FALSE
   gmt_file <- "null"
   run_mummichog <- FALSE
@@ -1383,24 +1372,20 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
     # Organism
     cat("\n--- [METAB] Organism ---\n")
-    cat("Used for mummichog pathway analysis (KEGG organism-specific models).\n\n")
+    cat("Used for pathway / enrichment analysis.\n\n")
     org_idx <- ask_choice("Which organism does your data come from?",
                           c("Human (Homo sapiens)",
                             "Mouse (Mus musculus)",
                             "Rat (Rattus norvegicus)",
                             "Zebrafish (Danio rerio)",
                             "C. elegans (Caenorhabditis elegans)",
-                            "Other (type KEGG organism code, e.g. 'ame' for honey bee)"),
+                            "Other (type the organism name)"),
                           default = 1)
-    # Latin names -> KEGG organism codes for mummichog
-    kegg_codes <- c("hsa", "mmu", "rno", "dre", "cel", "other")
     organism_names <- c("Homo sapiens", "Mus musculus", "Rattus norvegicus",
                         "Danio rerio", "Caenorhabditis elegans", "other")
     selected_organism <- organism_names[org_idx]
-    kegg_org_code <- kegg_codes[org_idx]
-    if (kegg_org_code == "other") {
+    if (selected_organism == "other") {
       selected_organism <- ask("Organism name (e.g. 'Apis mellifera')")
-      kegg_org_code <- ask("KEGG organism code (e.g. 'ame' — see https://www.kegg.jp/kegg/catalog/org_list.html)")
     }
     # Enrichment
     cat("\n--- [METAB] Pathway Enrichment ---\n")
@@ -1413,7 +1398,16 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
         gmt_path <- validate_file(gmt_ans, "GMT file")
         if (!is.null(gmt_path)) gmt_file <- paste0('"', gmt_path, '"')
       }
-      run_mummichog <- ask_yn(sprintf("Enable mummichog pathway analysis? (uses KEGG %s model)", kegg_org_code), FALSE)
+      run_mummichog <- ask_yn("Enable mummichog pathway analysis? (m/z-based, pinned engine)", FALSE)
+      if (run_mummichog &&
+          !grepl("homo sapiens|human", tolower(selected_organism))) {
+        cat(sprintf(
+          paste0("  WARNING: the pinned mummichog engine currently ships only the built-in\n",
+                 "  HUMAN model. With organism '%s' the run will stop with a clear error\n",
+                 "  until a custom model is supplied (model_ref, coming soon). Enable\n",
+                 "  mummichog only for human data for now.\n"),
+          selected_organism))
+      }
     }
     # AI Commentary
     cat("\n--- [METAB] AI Commentary ---\n")
@@ -1575,18 +1569,16 @@ wizard_metabolomics <- function(project_dir, project_name, analyst, round) {
     input_yaml <- sprintf('    input:\n      format: "%s"\n      sheet: null',
                           input_format)
   }
-  # Build mummichog section
+  # Build mummichog section (pinned engine; built-in human_mfn model by default)
   mummichog_yaml <- ""
   if (run_mummichog) {
-    mummichog_yaml <- sprintf('
+    mummichog_yaml <- '
       mummichog:
         enabled: true
-        organisms:
-          - %s
         p_cutoff: 0.05
         tolerance_ppm: 10
         n_permutations: 100
-        ionization_mode: null', kegg_org_code)
+        ionization_mode: pos_default'
   }
   # Build preprocessing section (with relaxed thresholds for multi-level)
   if (is_multi_level) {
@@ -1750,6 +1742,749 @@ params:
   }
   config_path
 }
+
+# --- Lipidomics Wizard --------------------------------------------------------
+
+wizard_lipidomics <- function(project_dir, project_name, analyst, round) {
+
+  # Data files
+  cat("\n--- [LIPID] Data Files ---\n")
+  cat("Provide ABSOLUTE paths to your input files.\n\n")
+
+  data_path <- ask("Path to lipidomics data file (LipidSearch export, translated CSV, or processed table)")
+  data_path <- validate_file(data_path, "Lipidomics data file")
+  if (is.null(data_path)) {
+    data_path <- ask("Please re-enter the lipidomics data file path")
+    data_path <- validate_file(data_path, "Lipidomics data file")
+  }
+
+  metadata_path <- ask("Path to metadata file (sample info, CSV/TSV — or 'none')", "none")
+  if (tolower(metadata_path) == "none") {
+    metadata_path <- NULL
+  } else {
+    metadata_path <- validate_file(metadata_path, "Metadata file")
+  }
+
+  # Input format
+  cat("\n--- [LIPID] Input Format ---\n")
+  format_idx <- ask_choice("What format is your data file?",
+    c("LipidSearch export (Excel or CSV with annotation columns)",
+      "Translated CSV (Metabolite col + sample cols, optional group row)",
+      "Already-processed wide table (clean sample columns)"),
+    default = 1)
+  input_format <- c("lipidsearch", "translated_csv", "processed_wide")[format_idx]
+
+  # Format-specific options
+  sheet_name <- "null"
+  has_group_row <- FALSE
+  name_col <- "Metabolite"
+
+  if (input_format == "lipidsearch") {
+    sheet_name <- ask("Excel sheet name (or 'null' for first sheet)", "RAW Data")
+    if (tolower(sheet_name) == "null") sheet_name <- "null"
+  } else if (input_format == "translated_csv") {
+    has_group_row <- ask_yn("Does the first data row contain group labels (e.g. Oxy/Ana)?", TRUE)
+  }
+
+  # Column detection
+  cat("\n--- [LIPID] Column Detection ---\n")
+  sample_col <- "sample_id"
+  group_col <- "condition"
+
+  if (!is.null(data_path)) {
+    data_cols <- detect_columns(data_path)
+    cat("Data file columns: ", paste(head(data_cols, 8), collapse = ", "),
+        if (length(data_cols) > 8) "..." else "", "\n")
+
+    if (input_format == "translated_csv" || input_format == "processed_wide") {
+      name_col <- ask("Feature name column", "Metabolite")
+    }
+  }
+
+  if (!is.null(metadata_path)) {
+    meta_cols <- detect_columns(metadata_path)
+    cat("Metadata columns: ", paste(meta_cols, collapse = ", "), "\n")
+    sample_col <- ask("Sample ID column in metadata", meta_cols[1])
+    cat("\nWhich column defines your biological groups/conditions?\n")
+    group_col <- ask("Group/condition column", meta_cols[min(2, length(meta_cols))])
+  }
+
+  # Build contrasts
+  generated_contrasts <- NULL
+  if (!is.null(metadata_path)) {
+    generated_contrasts <- wizard_build_contrasts(metadata_path, group_col)
+  }
+
+  # Normalization
+  cat("\n--- [LIPID] Normalization ---\n")
+  norm_idx <- ask_choice("Sample normalization method:",
+    c("Sum normalization (recommended for lipidomics)",
+      "PQN — Probabilistic Quotient Normalization",
+      "Median centering",
+      "EigenMS — SVD-based systematic bias removal",
+      "EigenMS-forced — EigenMS retaining a fixed % of eigentrends",
+      "Internal standard — divide each sample by an IS feature",
+      "Biological factor — divide each sample by a metadata covariate (e.g. mg protein)",
+      "None (data already normalized)"),
+    default = 1)
+  sample_norm <- c("sum", "pqn", "median", "eigenms", "eigenms_forced",
+                   "is", "bio_factor", "none")[norm_idx]
+
+  # Method-specific follow-ups
+  is_ref_col <- "null"
+  bio_factor_col <- "null"
+  if (sample_norm == "is") {
+    is_ref_col <- ask("Row metadata column with the IS feature flag (e.g. 'is_internal_standard')",
+                      "is_internal_standard")
+    is_ref_col <- sprintf('"%s"', is_ref_col)
+  } else if (sample_norm == "bio_factor") {
+    bio_factor_col <- ask("Metadata column with per-sample numeric factor to divide by (e.g. 'mg_protein')",
+                          "mg_protein")
+    bio_factor_col <- sprintf('"%s"', bio_factor_col)
+  }
+
+  transform_idx <- ask_choice("Transformation:",
+    c("log2 (recommended)",
+      "log10",
+      "Generalized log10 (MetaboAnalyst-style)",
+      "None"),
+    default = 1)
+  transform <- c("log2", "log10", "glog10", "none")[transform_idx]
+
+  scaling_idx <- ask_choice("Scaling:",
+    c("Auto-scaling (unit variance, recommended for lipidomics)",
+      "Pareto scaling (square root of SD)",
+      "None",
+      "Range scaling (min-max)"),
+    default = 1)
+  scaling <- c("auto", "pareto", "none", "range")[scaling_idx]
+
+  na_idx <- ask_choice("Missing value handling:",
+    c("Replace with half-minimum per feature (recommended)",
+      "Keep as NA",
+      "Replace with zero"),
+    default = 1)
+  na_policy <- c("min_half", "keep", "zero")[na_idx]
+
+  # DE method & cutoffs
+  cat("\n--- [LIPID] Differential Expression ---\n")
+  de_method_idx <- ask_choice("DE method:",
+    c("Limma — moderated t-test (recommended)",
+      "Welch t-test (unequal variance)",
+      "Student t-test (equal variance)",
+      "Wilcoxon rank-sum test (non-parametric)"),
+    default = 1)
+  de_method <- c("limma", "t_test", "t_test_equal", "wilcoxon")[de_method_idx]
+
+  p_cutoff <- as.numeric(ask("p-value cutoff", "0.05"))
+  fc_cutoff <- as.numeric(ask("Linear fold-change cutoff", "1.5"))
+
+  # Feature selection
+  cat("\n--- [LIPID] Feature Selection ---\n")
+  run_rf <- ask_yn("Run Random Forest feature importance?", TRUE)
+  run_plsda <- ask_yn("Run PLS-DA multivariate analysis?", TRUE)
+
+  # AI Commentary
+  cat("\n--- [LIPID] AI Commentary ---\n")
+  commentary_idx <- ask_choice("Commentary backend:",
+    c("None (data-driven fallback only)",
+      "Claude Code (uses your subscription, no API key needed)",
+      "Claude API (requires ANTHROPIC_API_KEY)",
+      "OpenAI API (requires OPENAI_API_KEY)"),
+    default = 1)
+  commentary_backends <- c("none", "claude-code", "claude", "openai")
+  commentary_backend <- commentary_backends[commentary_idx]
+  commentary_enabled <- commentary_backend != "none"
+
+  # PowerPoint
+  generate_pptx <- ask_yn("Generate a PowerPoint summary presentation?", TRUE)
+
+  # --- Technical / Instrument Report (Optional) ---
+  nna <- function(x, default = "") if (is.null(x) || !nzchar(x)) default else x
+  cat("\n--- [LIPID] Technical / Instrument Report (Optional) ---\n")
+  cat("Provide a LipidSearch / MS-DIAL parameter dump or facility report\n")
+  cat("(LOG/TXT/PDF/DOCX) to auto-extract instrument and software details.\n")
+  tech_report_path <- ask("Path to log file or technical report (or 'none')", "none")
+  tech_report_fields <- NULL
+
+  if (tolower(tech_report_path) != "none") {
+    tech_report_path <- validate_file(tech_report_path, "Technical report / log file")
+    if (!is.null(tech_report_path) && nzchar(Sys.which("claude"))) {
+      cat("  Extracting text from file...\n")
+      ext <- tolower(tools::file_ext(tech_report_path))
+      doc_text <- tryCatch({
+        if (ext %in% c("log", "txt", "tsv", "csv")) {
+          paste(readLines(tech_report_path, warn = FALSE), collapse = "\n")
+        } else if (ext == "pdf") {
+          paste(system2("pdftotext", c("-layout", shQuote(tech_report_path), "-"),
+                        stdout = TRUE, stderr = FALSE), collapse = "\n")
+        } else {
+          paste(system2("pandoc", c("-t", "plain", shQuote(tech_report_path)),
+                        stdout = TRUE, stderr = FALSE), collapse = "\n")
+        }
+      }, error = function(e) NULL)
+
+      if (!is.null(doc_text) && nchar(doc_text) >= 50) {
+        cat(sprintf("  Extracted %d characters. Sending to Claude for parsing...\n",
+                    nchar(doc_text)))
+        json_schema <- paste0(
+          '{"type":"object","properties":{',
+          '"facility":{"type":"string","description":"Lipidomics facility / core if mentioned"},',
+          '"sample_prep":{"type":"string","description":"Lipid extraction protocol, internal standards (e.g. SPLASH Lipidomix)"},',
+          '"ms_acquisition":{"type":"string","description":"Mass spectrometer model and chromatography (e.g. Q Exactive, HILIC, RP, normal-phase)"},',
+          '"search_engine":{"type":"string","description":"Software name and version (e.g. LipidSearch 5.0, MS-DIAL 5.0, LipidMatch)"},',
+          '"search_parameters":{"type":"string","description":"Mass tolerance, lipid class library, identification grade, FA scoring"},',
+          '"acknowledgment":{"type":"string","description":"Facility acknowledgment if present"}',
+          '},"required":["facility","sample_prep","ms_acquisition","search_engine","search_parameters"]}'
+        )
+        prompt <- sprintf(paste0(
+          "Extract structured information from this lipidomics processing log or facility report. ",
+          "Return only the fields described in the schema. Use exact details from the text. ",
+          "If a field is not mentioned, use an empty string.\n\nLOG/REPORT TEXT:\n%s"), doc_text)
+        cmd <- sprintf(
+          "claude --print --output-format json --model sonnet --json-schema %s --no-session-persistence %s",
+          shQuote(json_schema), shQuote(prompt))
+        parsed <- tryCatch({
+          raw <- system(cmd, intern = TRUE, timeout = 120)
+          p <- jsonlite::fromJSON(paste(raw, collapse = "\n"), simplifyVector = FALSE)
+          if (!is.null(p$structured_output)) p$structured_output
+          else if (!is.null(p$result) && nzchar(p$result))
+            jsonlite::fromJSON(p$result, simplifyVector = FALSE)
+          else NULL
+        }, error = function(e) { cat(sprintf("  Claude extraction failed: %s\n", e$message)); NULL })
+
+        if (!is.null(parsed) && (!is.null(parsed$search_engine) || !is.null(parsed$ms_acquisition))) {
+          cat("\n  Extracted fields:\n")
+          for (k in c("facility", "sample_prep", "ms_acquisition", "search_engine",
+                      "search_parameters", "acknowledgment")) {
+            v <- nna(parsed[[k]])
+            if (nzchar(v)) cat(sprintf("    %-16s %s\n", paste0(k, ":"), substr(v, 1, 80)))
+          }
+          if (ask_yn("\n  Use these extracted fields?", TRUE)) tech_report_fields <- parsed
+        }
+      }
+    } else if (!is.null(tech_report_path)) {
+      cat("  Claude Code CLI not found — add 'technical_report:' block manually later.\n")
+    }
+  }
+
+  # --- Report Section Toggles (Optional) ---
+  cat("\n--- [LIPID] Report Section Toggles (Optional) ---\n")
+  cat("Each section can be toggled on/off in the final HTML report.\n")
+  cat("Press Enter to keep all sections ON.\n\n")
+  show_qc          <- ask_yn("Show QC section (PCA, density, boxplots, heatmaps)?", TRUE)
+  show_de          <- ask_yn("Show DE section (volcano + tables)?", TRUE)
+  show_de_heatmaps <- ask_yn("Show DE heatmaps section?", TRUE)
+  show_clustering  <- ask_yn("Show Clustering section (hierarchical / partition / binary)?", TRUE)
+  show_class       <- ask_yn("Show Lipid Class Analysis section?", TRUE)
+  show_fs          <- ask_yn("Show Feature Selection section (RF + PLS-DA)?", TRUE)
+  show_biomarker   <- ask_yn("Show Biomarker Discovery section?", TRUE)
+  show_pathway     <- ask_yn("Show Lipid Pathway section?", TRUE)
+  show_methods     <- ask_yn("Show Methods section?", TRUE)
+  show_session     <- ask_yn("Show Session Info section?", TRUE)
+  show_technical   <- ask_yn("Show Technical Summary section?", TRUE)
+
+  # Copy data into project structure
+  cat("\n--- [LIPID] Setting Up Project ---\n")
+
+  data_dir <- file.path(project_dir, "data", tolower(project_name), "lipidomics")
+  dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+
+  data_dest <- file.path("lipidomics", basename(data_path))
+  file.copy(data_path, file.path(project_dir, "data", tolower(project_name), data_dest),
+            overwrite = TRUE)
+  cat(sprintf("  Copied data file -> data/%s/%s\n", tolower(project_name), data_dest))
+
+  meta_dest <- ""
+  if (!is.null(metadata_path)) {
+    meta_dest <- file.path("lipidomics", basename(metadata_path))
+    file.copy(metadata_path, file.path(project_dir, "data", tolower(project_name), meta_dest),
+              overwrite = TRUE)
+    cat(sprintf("  Copied metadata -> data/%s/%s\n", tolower(project_name), meta_dest))
+  }
+
+  # Write auto-generated contrasts if built
+  contrasts_yaml <- ""
+  if (!is.null(generated_contrasts) && nrow(generated_contrasts) > 0) {
+    contrast_strings <- paste0(generated_contrasts$Numerator, " - ", generated_contrasts$Denominator)
+    contrasts_yaml <- paste0("      contrasts:\n",
+      paste(sprintf('        - "%s"', contrast_strings), collapse = "\n"), "\n")
+  } else {
+    contrasts_yaml <- ""  # let pipeline auto-generate from metadata groups
+    cat("  No contrasts defined. Pipeline will auto-generate all pairwise contrasts at runtime.\n")
+  }
+
+  # Generate config YAML
+  config_name <- paste0("lipid_", tolower(gsub("[^a-zA-Z0-9]", "_", project_name)), ".yaml")
+  config_path <- file.path(project_dir, "config", config_name)
+  dir.create(file.path(project_dir, "config"), showWarnings = FALSE)
+
+  sheet_yaml <- if (sheet_name == "null") "null" else paste0('"', sheet_name, '"')
+
+  # Build report_sections block (only emit non-default toggles to keep YAML clean)
+  rs_lines <- character(0)
+  if (!show_qc)          rs_lines <- c(rs_lines, "      qc: false")
+  if (!show_de)          rs_lines <- c(rs_lines, "      de: false")
+  if (!show_de_heatmaps) rs_lines <- c(rs_lines, "      de_heatmaps: false")
+  if (!show_clustering)  rs_lines <- c(rs_lines, "      clustering: false")
+  if (!show_class)       rs_lines <- c(rs_lines, "      class_analysis: false")
+  if (!show_fs)          rs_lines <- c(rs_lines, "      feature_selection: false")
+  if (!show_biomarker)   rs_lines <- c(rs_lines, "      biomarker: false")
+  if (!show_pathway)     rs_lines <- c(rs_lines, "      pathway: false")
+  if (!show_methods)     rs_lines <- c(rs_lines, "      methods: false")
+  if (!show_session)     rs_lines <- c(rs_lines, "      session_info: false")
+  if (!show_technical)   rs_lines <- c(rs_lines, "      technical_summary: false")
+  report_sections_yaml <- if (length(rs_lines) > 0) {
+    paste0("\n    report_sections:\n", paste(rs_lines, collapse = "\n"), "\n")
+  } else ""
+
+  technical_report_yaml <- ""
+  if (!is.null(tech_report_fields)) {
+    yaml_esc <- function(s) gsub('"', '\\\\"', nna(s))
+    technical_report_yaml <- paste0(
+      "\n    technical_report:\n",
+      sprintf('      facility: "%s"\n',          yaml_esc(tech_report_fields$facility)),
+      sprintf('      sample_prep: "%s"\n',       yaml_esc(tech_report_fields$sample_prep)),
+      sprintf('      ms_acquisition: "%s"\n',    yaml_esc(tech_report_fields$ms_acquisition)),
+      sprintf('      search_engine: "%s"\n',     yaml_esc(tech_report_fields$search_engine)),
+      sprintf('      search_parameters: "%s"\n', yaml_esc(tech_report_fields$search_parameters)),
+      sprintf('      acknowledgment: "%s"\n',    yaml_esc(tech_report_fields$acknowledgment))
+    )
+  }
+
+  config_yaml <- sprintf('# Auto-generated by run.R wizard (lipidomics)
+# Project: %s
+# Date: %s
+
+project:
+  dir: "%s"
+  name: "%s"
+  analysis_round: "%s"
+  analyst: "%s"
+
+paths:
+  raw: "data/%s"
+  out: "outputs/%s"
+
+modes:
+  lipidomics:
+
+    input:
+      format: "%s"
+      sheet: %s
+      has_group_row: %s
+
+    files:
+      data: "%s"
+      metadata: "%s"
+
+    id_columns:
+      name_col: "%s"
+
+    normalization:
+      sample_norm: "%s"
+      transform: "%s"
+      scaling: "%s"
+      pseudocount: 1
+      na_policy: "%s"
+      is_ref_col: %s
+      biological_factor_col: %s
+
+    sample_filter:
+      enabled: false
+
+    effects:
+      samples: "%s"
+      color: "%s"
+
+    qc:
+      adaptive_plots: true
+      thresholds:
+        min_samples_for_pca3d: 10
+        max_samples_for_heatmaps: 120
+
+    de:
+      method: "%s"
+      condition_column: "%s"
+%s      p_cutoff: %s
+      linear_fc_cutoff: %s
+
+    rf:
+      run_rf: %s
+      n_trees: 500
+      importance: "permutation"
+      top_n: 20
+      seed: 1234
+
+    plsda:
+      run_plsda: %s
+      vip_top_n: 15
+
+    commentary:
+      enabled: %s
+      backend: "%s"
+      claude_code_model: "sonnet"
+      max_tokens: 1500
+      max_retries: 2
+
+    outputs:
+      generate_pptx: %s
+%s%s
+params:
+  seed: 1
+',
+    project_name, Sys.Date(), project_dir, project_name, round, analyst,
+    tolower(project_name), tolower(project_name),
+    input_format, sheet_yaml, tolower(has_group_row),
+    data_dest, meta_dest,
+    name_col,
+    sample_norm, transform, scaling, na_policy,
+    is_ref_col, bio_factor_col,
+    sample_col, group_col,
+    de_method, group_col,
+    contrasts_yaml,
+    p_cutoff, fc_cutoff,
+    tolower(run_rf),
+    tolower(run_plsda),
+    tolower(commentary_enabled), commentary_backend,
+    tolower(generate_pptx),
+    report_sections_yaml,
+    technical_report_yaml
+  )
+
+  writeLines(config_yaml, config_path)
+  cat(sprintf("\n  Config saved: %s\n", config_path))
+
+  config_path
+}
+
+# --- Multiomics Integration Wizard --------------------------------------------
+
+wizard_multiomics <- function(project_dir, project_name, analyst, round) {
+
+  cat("\n--- Multi-Omics Integration Setup ---\n")
+  cat("This pipeline integrates results from individual omics layers\n")
+  cat("(RNA-seq, Proteomics, Metabolomics, Lipidomics) using DIABLO, SNF, MOFA2.\n\n")
+
+  # Input mode: from configs or from existing results
+  input_idx <- ask_choice("How will you provide the omics data?",
+    c("From existing configs (run individual pipelines first, then integrate)",
+      "From existing results (point to results folders or payload RDS files)"),
+    default = 1)
+  input_mode <- c("pipeline", "outputs")[input_idx]
+
+  # Collect individual layer configs or payload paths
+  layer_configs <- list()
+
+  if (input_mode == "pipeline") {
+    cat("\nPoint to existing config YAML files for each omics layer.\n")
+    cat("Leave blank to skip a layer (at least 2 required).\n\n")
+
+    rna_cfg <- ask("RNA-seq config YAML path (or blank to skip)", "")
+    if (nzchar(rna_cfg)) {
+      rna_cfg <- validate_file(rna_cfg, "RNA-seq config")
+      if (!is.null(rna_cfg)) layer_configs$rna <- rna_cfg
+    }
+
+    prot_cfg <- ask("Proteomics config YAML path (or blank to skip)", "")
+    if (nzchar(prot_cfg)) {
+      prot_cfg <- validate_file(prot_cfg, "Proteomics config")
+      if (!is.null(prot_cfg)) layer_configs$proteomics <- prot_cfg
+    }
+
+    metab_cfg <- ask("Metabolomics config YAML path (or blank to skip)", "")
+    if (nzchar(metab_cfg)) {
+      metab_cfg <- validate_file(metab_cfg, "Metabolomics config")
+      if (!is.null(metab_cfg)) layer_configs$metabolomics <- metab_cfg
+    }
+
+    lipid_cfg <- ask("Lipidomics config YAML path (or blank to skip)", "")
+    if (nzchar(lipid_cfg)) {
+      lipid_cfg <- validate_file(lipid_cfg, "Lipidomics config")
+      if (!is.null(lipid_cfg)) layer_configs$lipidomics <- lipid_cfg
+    }
+
+    if (length(layer_configs) < 2) {
+      stop("Multi-omics integration requires at least 2 omics layers. Got: ",
+           length(layer_configs), call. = FALSE)
+    }
+
+    cat(sprintf("\n  Layers selected: %s\n", paste(names(layer_configs), collapse = ", ")))
+
+  } else {
+    # Outputs mode: point to results folders or individual payload RDS files
+    cat("\nProvide results folders from previous pipeline runs.\n")
+    cat("The wizard will scan for shiny_payload_*.rds files automatically.\n")
+    cat("You can provide one folder per layer, or multiple folders.\n")
+    cat("Enter paths one at a time. Type 'done' when finished.\n\n")
+
+    result_folders <- character(0)
+    repeat {
+      folder <- ask("Results folder path (or 'done' to finish)", "done")
+      if (tolower(folder) == "done") break
+      folder <- normalizePath(folder, mustWork = TRUE)
+      result_folders <- c(result_folders, folder)
+    }
+
+    # Scan all provided folders for shiny_payload_*.rds files
+    payload_map <- c(
+      shiny_payload_rnaseq       = "rna",
+      shiny_payload_proteomics   = "proteomics",
+      shiny_payload_metabolomics = "metabolomics",
+      shiny_payload_lipidomics   = "lipidomics"
+    )
+
+    for (folder in result_folders) {
+      rds_files <- list.files(folder, pattern = "shiny_payload_.*\\.rds$",
+                              recursive = TRUE, full.names = TRUE)
+      for (rds in rds_files) {
+        base <- tools::file_path_sans_ext(basename(rds))
+        if (base %in% names(payload_map)) {
+          layer_name <- payload_map[[base]]
+          if (!layer_name %in% names(layer_configs)) {
+            layer_configs[[layer_name]] <- rds
+            cat(sprintf("  Found %s: %s\n", layer_name, rds))
+          }
+        }
+      }
+    }
+
+    # If no payloads found from folder scan, fall back to manual entry
+    if (length(layer_configs) == 0) {
+      cat("\nNo payload files found in provided folders.\n")
+      cat("Enter payload RDS paths manually (blank to skip):\n\n")
+
+      rna_rds <- ask("RNA-seq payload RDS path", "")
+      if (nzchar(rna_rds)) layer_configs$rna <- normalizePath(rna_rds, mustWork = TRUE)
+
+      prot_rds <- ask("Proteomics payload RDS path", "")
+      if (nzchar(prot_rds)) layer_configs$proteomics <- normalizePath(prot_rds, mustWork = TRUE)
+
+      metab_rds <- ask("Metabolomics payload RDS path", "")
+      if (nzchar(metab_rds)) layer_configs$metabolomics <- normalizePath(metab_rds, mustWork = TRUE)
+
+      lipid_rds <- ask("Lipidomics payload RDS path", "")
+      if (nzchar(lipid_rds)) layer_configs$lipidomics <- normalizePath(lipid_rds, mustWork = TRUE)
+    }
+
+    if (length(layer_configs) < 2) {
+      stop("Multi-omics integration requires at least 2 omics layers. Found: ",
+           length(layer_configs), call. = FALSE)
+    }
+
+    cat(sprintf("\n  Layers discovered: %s\n", paste(names(layer_configs), collapse = ", ")))
+  }
+
+  # Condition column
+  condition_col <- ask("Condition column name (in metadata)", "condition")
+
+  # Sample mapping (optional, for matching samples across omics)
+  sample_mapping <- ask("Sample mapping CSV path (optional, blank to skip)", "")
+
+  # Gene-protein mapping
+  gene_prot_map <- ask("Gene-protein mapping file (optional, blank to skip)", "")
+
+  # Organism
+  organism <- ask("Organism", "Homo sapiens")
+
+  # Output subdirectory
+  out_subdir <- ask("Output subdirectory (under outputs/)",
+                    paste0("outputs/", tolower(gsub(" ", "_", project_name))))
+
+  # Commentary
+  cat("\n--- Commentary ---\n")
+  commentary_enabled <- tolower(substr(ask("Enable AI commentary? (y/n)", "y"), 1, 1)) == "y"
+  commentary_backend <- "none"
+  if (commentary_enabled) {
+    backend_idx <- ask_choice("Commentary backend:",
+      c("claude-code", "none (generate placeholders)"),
+      default = 1)
+    commentary_backend <- c("claude-code", "none")[backend_idx]
+  }
+
+  # Integration methods
+  cat("\n--- Integration Methods ---\n")
+  use_diablo <- tolower(substr(ask("Enable DIABLO (supervised)? (y/n)", "y"), 1, 1)) == "y"
+  use_snf    <- tolower(substr(ask("Enable SNF (unsupervised clustering)? (y/n)", "y"), 1, 1)) == "y"
+  use_mofa2  <- tolower(substr(ask("Enable MOFA2 (factor analysis)? (y/n)", "y"), 1, 1)) == "y"
+
+  methods <- character(0)
+  if (use_diablo) methods <- c(methods, "DIABLO")
+  if (use_snf)    methods <- c(methods, "SNF")
+  if (use_mofa2)  methods <- c(methods, "MOFA2")
+
+  if (length(methods) == 0) {
+    cat("Warning: no methods selected, defaulting to DIABLO + SNF\n")
+    methods <- c("DIABLO", "SNF")
+  }
+
+  # DIABLO cv_folds
+  cv_folds <- 3
+  if (use_diablo) {
+    cv_folds <- as.integer(ask("DIABLO cross-validation folds", "3"))
+  }
+
+  # Build omics_present list from discovered layers
+  omics_key_map <- c(rna = "rna", proteomics = "proteomics",
+                     metabolomics = "metabolomics", lipidomics = "lipidomics")
+  omics_present <- unname(omics_key_map[names(layer_configs)])
+
+  # Build config YAML
+  config_lines <- c(
+    "# Auto-generated by multiomics-core wizard (multi-omics integration)",
+    sprintf("# Generated: %s", Sys.time()),
+    "",
+    "project:",
+    sprintf("  dir: \"%s\"", project_dir),
+    sprintf("  name: \"%s\"", project_name),
+    sprintf("  analysis_round: \"%s\"", round),
+    sprintf("  analyst: \"%s\"", analyst),
+    "",
+    "paths:",
+    "  raw: \"data\"",
+    sprintf("  out: \"%s\"", out_subdir),
+    "",
+    "params:",
+    "  seed: 1234",
+    "",
+    "design:",
+    sprintf("  condition_column: \"%s\"", condition_col),
+    "",
+    "modes:"
+  )
+
+  if (input_mode == "pipeline") {
+    # Merge individual configs' modes sections
+    for (layer_name in names(layer_configs)) {
+      layer_cfg <- yaml::read_yaml(layer_configs[[layer_name]])
+      if (!is.null(layer_cfg$modes[[layer_name]])) {
+        layer_yaml <- yaml::as.yaml(list(modes = layer_cfg$modes[layer_name]))
+        layer_lines <- strsplit(layer_yaml, "\n")[[1]]
+        layer_lines <- layer_lines[layer_lines != "modes:"]
+        config_lines <- c(config_lines, layer_lines)
+      } else {
+        first_key <- names(layer_cfg$modes)[1]
+        if (!is.null(first_key)) {
+          renamed <- layer_cfg$modes[1]
+          names(renamed) <- layer_name
+          layer_yaml <- yaml::as.yaml(renamed)
+          config_lines <- c(config_lines,
+            paste0("  ", strsplit(layer_yaml, "\n")[[1]]))
+        }
+      }
+    }
+  }
+
+  # Multiomics integration section
+  config_lines <- c(config_lines,
+    "  multiomics:",
+    sprintf("    condition_column: \"%s\"", condition_col),
+    sprintf("    input_mode: \"%s\"", input_mode)
+  )
+
+  if (nzchar(gene_prot_map)) {
+    config_lines <- c(config_lines,
+      sprintf("    gene_protein_mapping_file: \"%s\"", gene_prot_map))
+  } else {
+    config_lines <- c(config_lines,
+      "    gene_protein_mapping_file: ~")
+  }
+
+  config_lines <- c(config_lines,
+    "    require_one_to_one_mapping: no")
+
+  config_lines <- c(config_lines,
+    "",
+    "    feature_selection:",
+    "      method: \"variance\"",
+    "      top_n: 500",
+    "      min_var_percentile: 50"
+  )
+
+  # Integration block
+  config_lines <- c(config_lines,
+    "",
+    "    integration:",
+    "      methods:"
+  )
+  for (m in methods) {
+    config_lines <- c(config_lines, sprintf("        - \"%s\"", m))
+  }
+
+  if (use_diablo) {
+    config_lines <- c(config_lines,
+      "      diablo:",
+      "        ncomp: 2",
+      "        design_matrix: \"full\"",
+      sprintf("        cv_folds: %d", cv_folds))
+  }
+
+  if (use_snf) {
+    config_lines <- c(config_lines,
+      "      snf:",
+      "        K: 20",
+      "        alpha: 0.5",
+      "        T: 20",
+      "        n_clusters: 2")
+  }
+
+  # Commentary
+  config_lines <- c(config_lines,
+    "",
+    "    commentary:",
+    sprintf("      enabled: %s", if (commentary_enabled) "yes" else "no"),
+    sprintf("      backend: \"%s\"", commentary_backend)
+  )
+
+  # Enrichment
+  config_lines <- c(config_lines,
+    "",
+    "    enrichment:",
+    "      run_enrichment: yes"
+  )
+
+  # Payload paths (outputs mode)
+  if (input_mode == "outputs") {
+    config_lines <- c(config_lines,
+      "",
+      "    payload_paths:")
+    for (nm in names(layer_configs)) {
+      config_lines <- c(config_lines,
+        sprintf("      %s: \"%s\"", nm, layer_configs[[nm]]))
+    }
+  }
+
+  # Sample mapping
+  if (nzchar(sample_mapping)) {
+    config_lines <- c(config_lines,
+      sprintf("    sample_mapping: \"%s\"", sample_mapping))
+  }
+
+  # Global section
+  config_lines <- c(config_lines,
+    "",
+    "global:",
+    "  omics_present:"
+  )
+  for (op in omics_present) {
+    config_lines <- c(config_lines, sprintf("    - %s", op))
+  }
+  config_lines <- c(config_lines,
+    sprintf("  organism: \"%s\"", organism)
+  )
+
+  config_yaml <- paste(config_lines, collapse = "\n")
+
+  # Save
+  config_name <- paste0("multiomics_", tolower(gsub("[^a-zA-Z0-9]", "_", project_name)), ".yaml")
+  config_path <- file.path(project_dir, "config", config_name)
+  dir.create(dirname(config_path), recursive = TRUE, showWarnings = FALSE)
+  writeLines(config_yaml, config_path)
+  cat(sprintf("\n  Multi-omics config saved: %s\n", config_path))
+
+  config_path
+}
+
 # --- Pipeline Runner ----------------------------------------------------------
 run_pipeline <- function(config_path, fresh = FALSE) {
   config_path <- normalizePath(config_path, mustWork = TRUE)
