@@ -1201,7 +1201,6 @@ plot_meta_integration <- function(meta_integration, plots_dir) {
     # Unlabeled version
     p <- ggplot2::ggplot(factors, base_aes) +
         ggplot2::geom_point(size = 3, alpha = 0.7) +
-        ggplot2::stat_ellipse(ggplot2::aes(group = cluster), level = 0.95) +
         base_labs +
         ggplot2::theme_minimal()
 
@@ -1211,7 +1210,6 @@ plot_meta_integration <- function(meta_integration, plots_dir) {
     # Labeled version (with sample names)
     p_labeled <- ggplot2::ggplot(factors, base_aes) +
         ggplot2::geom_point(size = 3, alpha = 0.7) +
-        ggplot2::stat_ellipse(ggplot2::aes(group = cluster), level = 0.95) +
         base_labs +
         ggplot2::theme_minimal()
 

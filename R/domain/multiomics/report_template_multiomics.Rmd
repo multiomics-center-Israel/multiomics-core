@@ -1037,28 +1037,32 @@ if (file.exists(meta_file)) {
         joint <- joint[order(joint$combined_padj), , drop = FALSE]
 
         # Attach the per-layer NES so direction can be compared across layers.
-        for (ln in layer_names) {
-            nes_file <- file.path(enrichment_dir, sprintf("%s_enriched_pathways.csv", ln))
-            joint[[paste0("NES_", ln)]] <- NA_real_
-            if (file.exists(nes_file)) {
-                nes_tbl <- tryCatch(read.csv(nes_file, stringsAsFactors = FALSE),
-                                    error = function(e) NULL)
-                if (!is.null(nes_tbl) && all(c("pathway_name", "NES") %in% names(nes_tbl))) {
-                    nes_tbl <- nes_tbl[!duplicated(nes_tbl$pathway_name), , drop = FALSE]
-                    idx <- match(joint$pathway_name, nes_tbl$pathway_name)
-                    joint[[paste0("NES_", ln)]] <- suppressWarnings(as.numeric(nes_tbl$NES[idx]))
+        # Guard on nrow: when no pathway is jointly significant, joint has 0 rows
+        # and assigning a scalar column errors ("replacement has 1 row, data has 0").
+        nes_cols <- paste0("NES_", layer_names)
+        if (nrow(joint) > 0) {
+            for (ln in layer_names) {
+                nes_file <- file.path(enrichment_dir, sprintf("%s_enriched_pathways.csv", ln))
+                joint[[paste0("NES_", ln)]] <- NA_real_
+                if (file.exists(nes_file)) {
+                    nes_tbl <- tryCatch(read.csv(nes_file, stringsAsFactors = FALSE),
+                                        error = function(e) NULL)
+                    if (!is.null(nes_tbl) && all(c("pathway_name", "NES") %in% names(nes_tbl))) {
+                        nes_tbl <- nes_tbl[!duplicated(nes_tbl$pathway_name), , drop = FALSE]
+                        idx <- match(joint$pathway_name, nes_tbl$pathway_name)
+                        joint[[paste0("NES_", ln)]] <- suppressWarnings(as.numeric(nes_tbl$NES[idx]))
+                    }
                 }
             }
-        }
 
-        nes_cols <- paste0("NES_", layer_names)
-        nes_mat <- as.matrix(joint[, nes_cols, drop = FALSE])
-        joint$direction <- apply(nes_mat, 1, function(v) {
-            if (any(is.na(v))) return("undetermined")
-            if (all(v > 0)) "same (up in all layers)"
-            else if (all(v < 0)) "same (down in all layers)"
-            else "opposite"
-        })
+            nes_mat <- as.matrix(joint[, nes_cols, drop = FALSE])
+            joint$direction <- apply(nes_mat, 1, function(v) {
+                if (any(is.na(v))) return("undetermined")
+                if (all(v > 0)) "same (up in all layers)"
+                else if (all(v < 0)) "same (down in all layers)"
+                else "opposite"
+            })
+        }
 
         n_joint <- nrow(joint)
         n_same  <- sum(grepl("^same", joint$direction))
@@ -1523,7 +1527,7 @@ if (has_meta_pca || has_meta_pca_labeled) {
             '```{r meta-pca-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             meta_pca_plot
         ), quiet = TRUE))
-        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, colored by original group, shaped by consensus cluster assignment. Ellipses show 95% confidence regions per cluster.")
+        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, colored by original group, shaped by consensus cluster assignment.")
     }
 
     if (has_meta_pca_labeled) {
@@ -1561,14 +1565,78 @@ if (file.exists(feat_corr_plot)) {
 
 ## Top Robust Features Across Methods {.unnumbered}
 
-```{r consensus-robust-features, eval=has_consensus, results='asis'}
-robust_plot <- file.path(consensus_dir, "plots", "robust_features.png")
-if (file.exists(robust_plot)) {
-    cat(knitr::knit_child(text = sprintf(
-        '```{r robust-feat-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        robust_plot
-    ), quiet = TRUE))
-    figure_legend("Top robust features identified consistently across multiple integration methods. Heatmap shows normalized importance scores per method. Features ranked by combined importance (top 20% in the majority of methods).")
+```{r consensus-robust-features, eval=has_consensus, fig.width=11, fig.height=15}
+# Rebuild the robust-features heatmap inline (rather than embedding the pipeline
+# PNG) so the row labels can be enlarged and annotated with a short description
+# per gene/protein id. Descriptions are only assembled here, on gene_protein_mapping.
+# Fill mirrors plot_robust_features(): within-method importance rank as a percentile.
+robust_ok  <- FALSE
+fic <- file.path(consensus_dir, "feature_importance_comparison.csv")
+rfc <- file.path(consensus_dir, "robust_features.csv")
+if (file.exists(fic) && file.exists(rfc)) {
+    fi <- read.csv(fic, stringsAsFactors = FALSE)
+    rf <- read.csv(rfc, stringsAsFactors = FALSE)
+    method_cols <- intersect(c("mofa", "diablo", "snf", "spls"), names(fi))
+    if (nrow(rf) > 0 && length(method_cols) >= 1 && "feature" %in% names(fi)) {
+        imp <- as.matrix(fi[, method_cols, drop = FALSE])
+        rownames(imp) <- fi$feature
+        rank_pct <- apply(imp, 2, function(x) {
+            r <- rep(NA_real_, length(x)); v <- !is.na(x)
+            r[v] <- rank(-x[v], ties.method = "average"); r
+        })
+        n_total <- colSums(!is.na(imp))
+        top     <- head(rf$feature, 30)
+
+        # "id — short description" labels, falling back id -> gene desc -> gene name
+        # -> protein symbol -> bare id, so non-model features still read clearly.
+        label_for <- function(ids) {
+            if (is.null(gene_protein_mapping)) return(ids)
+            ann <- rep(NA_character_, length(ids))
+            mg  <- match(ids, gene_protein_mapping$gene_id)
+            if ("gene_description" %in% names(gene_protein_mapping))
+                ann <- gene_protein_mapping$gene_description[mg]
+            if ("gene_name" %in% names(gene_protein_mapping)) {
+                gn  <- gene_protein_mapping$gene_name[mg]
+                ann <- ifelse(is.na(ann) | !nzchar(ann), gn, ann)
+            }
+            if ("protein_symbol" %in% names(gene_protein_mapping)) {
+                ps  <- gene_protein_mapping$protein_symbol[match(ids, gene_protein_mapping$protein_id)]
+                ann <- ifelse(is.na(ann) | !nzchar(ann), ps, ann)
+            }
+            ann <- ifelse(is.na(ann), "", ann)
+            ann <- ifelse(nchar(ann) > 45, paste0(substr(ann, 1, 42), "..."), ann)
+            ifelse(nzchar(ann), paste0(ids, "  —  ", ann), ids)
+        }
+
+        plot_df <- do.call(rbind, lapply(method_cols, function(m) {
+            data.frame(feature = top, method = m,
+                       rank_pct = rank_pct[match(top, rownames(imp)), m] / n_total[m] * 100,
+                       stringsAsFactors = FALSE)
+        }))
+        lvl <- rev(top)
+        plot_df$feature <- factor(plot_df$feature, levels = lvl, labels = label_for(lvl))
+
+        p <- ggplot2::ggplot(plot_df,
+                 ggplot2::aes(x = method, y = feature, fill = rank_pct)) +
+            ggplot2::geom_tile() +
+            ggplot2::scale_fill_viridis_c(option = "plasma", na.value = "grey90",
+                     direction = -1, labels = function(x) paste0(round(x), "%")) +
+            ggplot2::labs(title = "Top Robust Features Across Methods",
+                          subtitle = "Features consistently important in multiple methods",
+                          x = "Method", y = NULL, fill = "Rank\n(percentile)") +
+            ggplot2::theme_minimal() +
+            ggplot2::theme(axis.text.y = ggplot2::element_text(size = 12),
+                           axis.text.x = ggplot2::element_text(size = 11),
+                           plot.margin = ggplot2::margin(6, 6, 6, 14))
+        print(p)
+        robust_ok <- TRUE
+    }
+}
+```
+
+```{r consensus-robust-features-legend, eval=has_consensus, results='asis'}
+if (isTRUE(robust_ok)) {
+    figure_legend("Top robust features across integration methods. Fill is each feature's within-method importance rank as a percentile (0% = most important), so scores are comparable across methods. Rows are labelled by gene/protein id with a short description where available (gene_description/gene_name from ehi_gene_annotation.csv; protein symbol from the proteomics table). Sources: feature_importance_comparison.csv and robust_features.csv in the consensus directory.")
     render_commentary("robust_features")
 } else {
     cat("*No robust features found across methods. This can occur when methods identify largely different feature sets.*\n")
