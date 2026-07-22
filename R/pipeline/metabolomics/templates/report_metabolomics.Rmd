@@ -857,7 +857,8 @@ if (exists("cutoff_panel_html")) {
         log2(metab_cfg$de$linear_fc_cutoff %||% 1.5)
     }
     .p_default <- metab_cfg$de$p_cutoff %||% 0.05
-    cat(cutoff_panel_html(.lfc_default, .p_default, default_ptype = "pval"))
+    cat(cutoff_panel_html(.lfc_default, .p_default,
+        default_ptype = if (isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE)) "padj" else "pval"))
 }
 ```
 
@@ -966,8 +967,10 @@ if (!is.null(de_contrasts)) {
     cat("\n## Volcano: ", ctr, " {.tabset}\n\n", sep = "")
 
     # -- Static Volcano (sub-tabbed by p-value type) --
-    # Default sub-tab matches the cutoff-panel default (`default_ptype = "pval"`)
-    default_ptype_metab <- "pval"
+    # Default sub-tab matches the cutoff-panel default, which follows
+    # de.use_adjusted_pval (adjusted by default) so the panel, live counts and
+    # the first-shown static sub-tab all agree on the p-value type.
+    default_ptype_metab <- if (isTRUE(metab_cfg$de$use_adjusted_pval %||% TRUE)) "padj" else "pval"
     vol_padj_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_padj\\.png$"),
                                        basename(de_res$files))]
     vol_pval_png <- de_res$files[grepl(paste0("volcano_", ctr_label, "_pval\\.png$"),
