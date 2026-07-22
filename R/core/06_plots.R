@@ -557,7 +557,7 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
   pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
 
   # Validation check
-  if (is.na(lfc_col) || is.na(y_col)) {
+  if (is.na(lfc_col) || is.na(padj_col)) {
     stop(paste0(
       "plot_volcano: Could not find required columns. ",
       "Available: ", paste(colnames(de_tbl), collapse = ", ")
