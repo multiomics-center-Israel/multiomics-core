@@ -36,35 +36,49 @@ isTRUE_vec <- function(x) {
 #' @param condition_col Column in meta identifying experimental groups.
 #' @param sample_col    Column in meta identifying sample IDs.
 #' @param label         Character label for log messages.
+#' @param qc_flag_column Optional column in meta whose qc/blank/pool value marks
+#'   technical samples (e.g. `qc.qc_flag_column`). NULL disables this check.
 #' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
 #' @keywords internal
 filter_to_biological <- function(mat, meta, condition_col, sample_col,
-                                 label = "metabolomics") {
+                                 label = "metabolomics", qc_flag_column = NULL) {
   condition_vals <- trimws(as.character(meta[[condition_col]]))
   sample_vals    <- trimws(as.character(meta[[sample_col]]))
-  
-  is_qc_or_blank_condition <- grepl("(^|_)(qc|blank|blanks)($|_)",
-                                    condition_vals, ignore.case = TRUE)
-  is_qc_sample <- grepl("^QC", sample_vals, ignore.case = TRUE)
-  
+
+  # QC/blank/pool tokens. Mirrors .detect_pool_samples(): condition/group values
+  # that contain or start with qc/blank/pool, and sample IDs starting QC/Pool.
+  qc_token_re <- "(^|_)(qc|blank|blanks|pool|pooled)($|_)|^(qc|pool)"
+  is_qc_or_blank_condition <- grepl(qc_token_re, condition_vals, ignore.case = TRUE)
+  is_qc_sample             <- grepl("^(qc|pool)", sample_vals, ignore.case = TRUE)
+
   is_bio <- !(is_qc_or_blank_condition | is_qc_sample)
-  
+
   if ("is_QC" %in% colnames(meta))
     is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
   if ("is_blank" %in% colnames(meta))
     is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
-  
+
+  # Honor a configured QC-flag column (e.g. qc.qc_flag_column: "treatment"),
+  # where technical samples carry a qc/blank/pool value in a column distinct
+  # from the DE condition column.
+  if (!is.null(qc_flag_column) && qc_flag_column %in% colnames(meta)) {
+    flag_vals <- trimws(as.character(meta[[qc_flag_column]]))
+    is_bio <- is_bio & !grepl(qc_token_re, flag_vals, ignore.case = TRUE)
+  }
+
   n_excluded <- sum(!is_bio)
   if (n_excluded > 0L) {
     message(sprintf(
-      "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
+      "%s: excluding %d non-biological sample(s) (QC/blank/pool); retaining %d",
       label, n_excluded, sum(is_bio)
     ))
-    keep_ids <- meta[[sample_col]][is_bio]
+    # Subset by sample-ID name (character-coerced) so numeric/factor IDs are not
+    # interpreted as positional column indices.
+    keep_ids <- as.character(meta[[sample_col]])[is_bio]
     mat  <- mat[, keep_ids, drop = FALSE]
     meta <- meta[is_bio, , drop = FALSE]
   }
-  
+
   list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
 }
 
@@ -244,7 +258,8 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     # estimate use only biological samples (restores the 2b behavior). No-op
     # when there are no QC/blank samples.
     bio          <- filter_to_biological(mat_for_test, meta, condition_col,
-                                         sample_col, label = "metabolomics DE")
+                                         sample_col, label = "metabolomics DE",
+                                         qc_flag_column = cfg$qc$qc_flag_column)
     mat_for_test <- bio$mat
     meta         <- bio$meta
     condition    <- bio$condition
@@ -262,8 +277,15 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     }
 
     # Raw filtered matrix for computing log2(FC) from intensity ratios
-    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale)
+    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale). Align it to
+    # the biological samples used in the fit, in the same column order, so the
+    # two-group idx_A/idx_B (from the filtered condition) index the right columns.
     mat_raw <- pre$expr_filt
+    if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
+        mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
+    } else {
+        mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
+    }
 
     # Run DE for each contrast
     de_tables <- list()
