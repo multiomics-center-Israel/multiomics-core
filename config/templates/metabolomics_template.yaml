@@ -79,6 +79,15 @@ modes:
       # Divide each sample by a measured per-sample covariate (e.g. total
       # protein) before log2. Names the metadata column holding that value;
       # required only when chosen_norm = "bio_factor".
+      #
+      # When to prefer it: use when a measured input amount (total protein,
+      # cell count, tissue mass) is the correct scaling variable and you trust
+      # the assay. Unlike tss/median/pqn, bio_factor corrects ONLY for this one
+      # covariate — it does not account for compositional or dilution effects
+      # beyond it, so it assumes the covariate captures the dominant source of
+      # between-sample loading differences. Note also that the normalization is
+      # only as good as the measurement: a noisy covariate propagates directly
+      # into the normalized intensities.
       biological_factor_col: null
 
       # ---- Sample normalization (legacy / reference only) ----
