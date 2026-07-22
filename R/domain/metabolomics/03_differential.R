@@ -239,7 +239,15 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
     # Align metadata to matrix columns
     meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
-    condition <- factor(meta[[condition_col]])
+
+    # Exclude QC/blank samples before DE so the limma fit and its variance
+    # estimate use only biological samples (restores the 2b behavior). No-op
+    # when there are no QC/blank samples.
+    bio          <- filter_to_biological(mat_for_test, meta, condition_col,
+                                         sample_col, label = "metabolomics DE")
+    mat_for_test <- bio$mat
+    meta         <- bio$meta
+    condition    <- bio$condition
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
