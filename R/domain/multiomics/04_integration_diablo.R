@@ -997,6 +997,65 @@ plot_diablo_loadings_interactive <- function(diablo_results, mae, config,
         }
     }
 
+    # --- Non-model fallback: color by custom GMT when OrgDb/KEGG gave nothing ---
+    # OrgDb/KEGGREST pathway mapping is unavailable for organisms without a
+    # Bioconductor package (e.g. E. histolytica), leaving every feature
+    # "Unmapped". Map instead from each omic's custom GMT (pathway.gmt_file),
+    # keyed on the native feature IDs (EHI_ for RNA, XP_ Protein.Group for
+    # proteomics) already carried in feature_id / display_name. Populates the
+    # same variables (pathway_label, .all_pathways, all_kegg_pathways) the plot
+    # and dropdown selector below consume.
+    if (!is.null(color_by) && color_by %in% c("pathway", "GO") &&
+        all(df$pathway_label == "Unmapped")) {
+        omic_cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")
+        feat_pathways <- list()
+        for (om in intersect(names(omic_cfg_key), unique(df$omics))) {
+            gmt_spec <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
+            if (is.null(gmt_spec)) next
+            gmt_paths <- vapply(unlist(gmt_spec, use.names = FALSE), function(g) {
+                if (nzchar(g) && !grepl("^([A-Za-z]:|/|\\\\)", g)) {
+                    resolve_raw_path(config, g)
+                } else g
+            }, character(1), USE.NAMES = FALSE)
+            gmt_paths <- gmt_paths[file.exists(gmt_paths)]
+            if (length(gmt_paths) == 0) next
+            gs <- tryCatch(read_gmt(gmt_paths), error = function(e) NULL)
+            if (is.null(gs) || length(gs) == 0) next
+            descr <- attr(gs, "descriptions")
+            # Reverse the GMT into gene -> pathway-name(s).
+            gene2pw <- list()
+            for (pw in names(gs)) {
+                pname <- if (!is.null(descr) && pw %in% names(descr) &&
+                             nzchar(descr[[pw]])) descr[[pw]] else pw
+                for (g in gs[[pw]]) gene2pw[[g]] <- c(gene2pw[[g]], pname)
+            }
+            gmt_genes <- names(gene2pw)
+            for (r in which(df$omics == om)) {
+                cand <- unique(c(df$feature_id[r], df$display_name[r]))
+                nid  <- cand[cand %in% gmt_genes]
+                if (length(nid) == 0) next
+                pws <- unique(unlist(gene2pw[nid], use.names = FALSE))
+                if (length(pws) > 0) feat_pathways[[df$feature_id[r]]] <- pws
+            }
+        }
+        if (length(feat_pathways) > 0) {
+            pw_counts <- sort(table(unlist(feat_pathways, use.names = FALSE)),
+                              decreasing = TRUE)
+            top_pw <- names(pw_counts)[seq_len(min(pathway_top_n, length(pw_counts)))]
+            for (fid in names(feat_pathways)) {
+                matched <- intersect(feat_pathways[[fid]], top_pw)
+                df$pathway_label[df$feature_id == fid] <-
+                    if (length(matched) > 0) matched[1] else "Other pathway"
+            }
+            df$.all_pathways <- lapply(df$feature_id,
+                                       function(fid) feat_pathways[[fid]] %||% character(0))
+            all_kegg_pathways <- names(pw_counts)
+            message("  DIABLO interactive: GMT-colored ",
+                    sum(df$pathway_label != "Unmapped"), " / ", nrow(df),
+                    " features across ", length(pw_counts), " pathways")
+        }
+    }
+
     # --- Build plotly figure with pathway selector dropdown ---
     omics_shapes <- c(
         transcriptomics = "circle",
