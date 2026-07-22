@@ -585,7 +585,8 @@ mod_met_normalize_eigenms <- function(data, config) {
     NULL
   }
   
-  mat_norm <- norm_eigenms(data$mat, groups = groups)
+  seed     <- config$params$seed %||% 1
+  mat_norm <- norm_eigenms(data$mat, groups = groups, seed = seed)
   eigenms_info <- attr(mat_norm, "eigenms_info")
   mat_log  <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
   
