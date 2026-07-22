@@ -88,6 +88,9 @@ load_precomputed_metabolomics_de <- function(config) {
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
+    # Match the computed-DE path (build_de_summary): gate on the adjusted
+    # (default) or raw p-value per de$use_adjusted_pval.
+    use_adjusted_pval <- isTRUE(de_cfg$use_adjusted_pval %||% TRUE)
 
     # Derive contrast labels from file names
     contrast_labels <- vapply(de_files, function(f) {
@@ -154,9 +157,10 @@ load_precomputed_metabolomics_de <- function(config) {
         summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
         summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
 
+        pcol <- if (isTRUE(use_adjusted_pval)) tbl$adj.P.Val[idx] else tbl$P.Value[idx]
         pass <- as.integer(
-            !is.na(tbl$adj.P.Val[idx]) &
-            tbl$adj.P.Val[idx] < padj_cutoff &
+            !is.na(pcol) &
+            pcol < padj_cutoff &
             abs(tbl$logFC[idx]) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
@@ -283,7 +287,11 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     }
 
     # Build wide summary_df
-    summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut)
+    # Metabolomics significance defaults to the BH-adjusted p-value; set
+    # de$use_adjusted_pval: false to gate on the raw p-value instead.
+    use_adj <- isTRUE(de_cfg$use_adjusted_pval %||% TRUE)
+    summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut,
+                                   use_adjusted_pval = use_adj)
 
     # Add Name column from row_data$original_id (HMDB → compound name)
     if (!is.null(pre$row_data) && "original_id" %in% colnames(pre$row_data)) {
@@ -489,10 +497,17 @@ make_contrast_label <- function(contrast_str) {
 #' Build wide summary_df from per-contrast DE tables
 #'
 #' @param de_tables Named list of per-contrast data.frames.
-#' @param padj_cutoff Numeric, adjusted p-value threshold.
+#' @param padj_cutoff Numeric, p-value threshold (applied to the adjusted or raw
+#'   p-value depending on \code{use_adjusted_pval}).
 #' @param log2fc_cut  Numeric, absolute log2 FC threshold.
+#' @param use_adjusted_pval Logical. If \code{TRUE} (default), gate significance
+#'   on the BH-adjusted p-value (\code{adj.P.Val}); if \code{FALSE}, on the raw
+#'   p-value (\code{P.Value}). The metabolomics pipeline sets this from
+#'   \code{de$use_adjusted_pval}; other callers (e.g. lipidomics) keep the
+#'   adjusted default.
 #' @return Wide data.frame with feature_id + per-contrast columns + pass flags.
-build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
+build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut,
+                             use_adjusted_pval = TRUE) {
     contrast_names <- names(de_tables)
     first <- de_tables[[1]]
 
@@ -515,10 +530,11 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
         summary_df[[paste0("pvalue.", ctr)]]     <- tbl$P.Value
         summary_df[[paste0("padj.", ctr)]]       <- tbl$adj.P.Val
 
-        # Significance flag (uses raw P.Value, not adjusted)
+        # Significance flag: BH-adjusted (default) or raw p-value per use_adjusted_pval
+        pcol <- if (isTRUE(use_adjusted_pval)) tbl$adj.P.Val else tbl$P.Value
         pass <- as.integer(
-          !is.na(tbl$adj.P.Val) &
-            tbl$adj.P.Val < padj_cutoff &
+            !is.na(pcol) &
+            pcol < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
