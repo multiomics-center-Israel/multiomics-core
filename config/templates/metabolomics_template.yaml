@@ -220,12 +220,23 @@ modes:
       # HTML). Off by default; set true to build it.
       run_network: false
       libraries: []
+      # gmt_file: a COMPOUND pathway GMT whose members are KEGG compound IDs
+      # (Cxxxxx) — NOT a gene GMT (a gene GMT matches nothing here). Enrichment
+      # maps features via the "KEGG"/"Name" column and the universe is restricted
+      # to KEGG-annotated features. Accepts an absolute path OR a path relative to
+      # paths.raw. Generate one for your organism with:
+      #   Rscript utils/extract_kegg_compounds.R --kegg-org <org> --format gmt \
+      #     --output <paths.raw>/metabolics/kegg_compounds_<org>.gmt
       gmt_file: null
+      # mapping_file: optional TSV with HMDB and KEGG columns; fills KEGG ids for
+      # features that carry only HMDB. Leave null when features already have KEGG.
       mapping_file: null
       # Which p-value column to use when filtering significant features for ORA:
       #   "P.Value"   - raw p-value (default; MetaboAnalyst convention)
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
+      # ORA, GSEA, QEA and ssGSEA all run per contrast (from the contrasts file);
+      # the report shows one section per contrast plus a combined results table.
 
       # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
       # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
