@@ -173,7 +173,7 @@ test_that("resolve_group_variable distinguishes unset from configured-but-missin
     # Configured but absent + preservation requested -> loud error, not silence
     expect_error(
         resolve_group_variable(meta, expr, "Conditon", "SampleID", preserve = TRUE),
-        "not found in metadata"
+        "preservation"   # single word: robust to cli line-wrapping at any console width
     )
 
     # Configured but absent + preservation NOT requested -> NULL (won't be used)
@@ -189,7 +189,7 @@ test_that("correct_batch_proteomics errors on a misspelled preservation column",
     pre <- make_synth_prot()
     # valid batch column, but a typo'd group column with preserve_condition (default TRUE)
     config <- make_config(method = "combat", batch_col = "Batch", group_col = "Conditon")
-    expect_error(correct_batch_proteomics(pre, config), "not found in metadata")
+    expect_error(correct_batch_proteomics(pre, config), "preservation")
 })
 
 # --- Non-finite guard (P2: reject Inf, not just NA) ---
