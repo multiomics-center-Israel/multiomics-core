@@ -1486,6 +1486,62 @@ if (show_id_venn && has_ggVennDiagram) {
 }
 ```
 
+```{r identified-proteins-barplot, results='asis', fig.height=5, fig.width=11}
+# Barplot: number of proteins identified (non-missing, pre-imputation) per
+# sample, colored by group, with the count printed above each bar. Reuses the
+# same unimputed matrix + metadata mapping as the identified-proteins Venn.
+bar_raw_file <- list.files(datasets_dir, pattern = "unimputed.*\\.(tsv|csv)$", full.names = TRUE)[1]
+if (is.na(bar_raw_file)) {
+    bar_raw_file <- list.files(datasets_dir, pattern = "(raw_|pre_imputation).*\\.(tsv|csv)$", full.names = TRUE)[1]
+}
+if (!is.na(bar_raw_file) && file.exists(bar_raw_file) && exists("meta") && is.data.frame(meta)) {
+    cat("## Identified Proteins per Sample\n\n")
+    cat("Number of proteins identified (non-missing) in each sample, before imputation, colored by group.\n\n")
+
+    bar_raw_df <- tryCatch({
+        if (grepl("\\.csv$", bar_raw_file)) read.csv(bar_raw_file, stringsAsFactors = FALSE, check.names = FALSE)
+        else read.delim(bar_raw_file, stringsAsFactors = FALSE, check.names = FALSE)
+    }, error = function(e) NULL)
+
+    sample_col_b <- prot_cfg$effects$samples %||% "SampleID"
+    group_col_b  <- prot_cfg$effects$color %||% "Condition"
+
+    if (!is.null(bar_raw_df) && sample_col_b %in% names(meta) && group_col_b %in% names(meta)) {
+        expr_cols_b <- intersect(as.character(meta[[sample_col_b]]), names(bar_raw_df))
+        if (length(expr_cols_b) >= 1) {
+            n_id <- vapply(bar_raw_df[, expr_cols_b, drop = FALSE],
+                           function(x) sum(!is.na(x) & x != 0), integer(1))
+            grp_map <- setNames(as.character(meta[[group_col_b]]), as.character(meta[[sample_col_b]]))
+            bar_df <- data.frame(sample = expr_cols_b,
+                                 n_identified = as.integer(n_id),
+                                 Group = grp_map[expr_cols_b],
+                                 stringsAsFactors = FALSE)
+            # Order bars by group then sample so the colors cluster together
+            bar_df <- bar_df[order(bar_df$Group, bar_df$sample), ]
+            bar_df$sample <- factor(bar_df$sample, levels = bar_df$sample)
+
+            p_bar <- ggplot(bar_df, aes(x = sample, y = n_identified, fill = Group)) +
+                geom_col() +
+                geom_text(aes(label = n_identified), vjust = -0.35, size = 3) +
+                scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+                labs(x = NULL, y = "Identified proteins") +
+                theme_minimal(base_size = 12) +
+                theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                      panel.grid.major.x = element_blank())
+            print(p_bar)
+            figure_legend("Number of proteins identified (non-missing, pre-imputation) per sample, colored by group; the count is printed above each bar.")
+        } else {
+            cat("*No sample columns from the metadata matched the expression matrix.*\n\n")
+        }
+    } else {
+        cat("*Per-sample identification data not available.*\n\n")
+    }
+} else {
+    cat("## Identified Proteins per Sample\n\n")
+    cat("*Pre-imputation data or metadata not available for per-sample identified proteins plot.*\n\n")
+}
+```
+
 ## DE Results Table
 
 ```{r de-table, results='asis'}
