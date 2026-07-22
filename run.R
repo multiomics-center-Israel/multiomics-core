@@ -32,12 +32,14 @@ if (!"renv" %in% loadedNamespaces()) {
     RENV_CONFIG_AUTOLOADER_ENABLED   = "FALSE"
   )
 }
-
-# Polyfill `%||%` for R < 4.4 (base only added it in 4.4.0).
-if (!exists("%||%", envir = baseenv(), inherits = FALSE)) {
+# --- Null-coalescing backport ------------------------------------------------
+# Base R gained `%||%` only in 4.4.0. run_pipeline() and the wizard use it
+# before R/core/* (which also define it) are sourced, so on R < 4.4 a plain
+# `Rscript run.R --config ...` died with "could not find function %||%".
+# Define it here when absent so the runner works on the project's R 4.3.
+if (!exists("%||%", mode = "function")) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
 }
-
 # --- Dependency check --------------------------------------------------------
 check_dependencies <- function(mode = "cli") {
   core_pkgs <- c("yaml", "jsonlite", "targets")

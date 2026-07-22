@@ -108,7 +108,7 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
         # MAINTAINER NOTE: any NEW normalization method that always log2-
         # transforms MUST be added to this whitelist; otherwise CV will safely
         # (but silently) skip for it via the guard below.
-        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced")
+        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")
         chosen_norm <- tolower(cfg_mode$preprocessing$chosen_norm %||% "")
         transform   <- tolower(norm_cfg$transform %||% "log2")
         # The median path honors the configurable transform, so it is only log2

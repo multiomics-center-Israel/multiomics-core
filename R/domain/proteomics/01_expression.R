@@ -33,19 +33,35 @@ apply_custom_annotation <- function(row_data, cfg, config = NULL) {
     mapped_genes
   )
   
-  # Only overwrite if existing values are empty or just "|"
+  # A value is overwritable if it carries no real annotation: NA, blank, just
+  # "|", or the literal "pep" placeholder that DIA-NN emits when it cannot parse
+  # gene symbols from an Ensembl pep.all FASTA header (the GRCh38 runs). Without
+  # the "pep" case the custom map is computed but never written, since "pep"
+  # reads as a non-empty value.
+  .is_blank_annot <- function(x) {
+    x_norm <- tolower(trimws(gsub("\\|", "", as.character(x))))
+    is.na(x) | !nzchar(x_norm) | x_norm == "pep"
+  }
+
   if ("Genes" %in% colnames(row_data)) {
-    empty_genes <- is.na(row_data$Genes) | !nzchar(trimws(gsub("\\|", "", row_data$Genes)))
+    empty_genes <- .is_blank_annot(row_data$Genes)
     row_data$Genes[empty_genes & !is.na(mapped_display)] <- mapped_display[empty_genes & !is.na(mapped_display)]
   } else {
     row_data$Genes <- mapped_display
   }
-  
+
   if ("First.Protein.Description" %in% colnames(row_data)) {
-    empty_desc <- is.na(row_data$First.Protein.Description) | !nzchar(trimws(row_data$First.Protein.Description))
+    empty_desc <- .is_blank_annot(row_data$First.Protein.Description)
     row_data$First.Protein.Description[empty_desc & !is.na(mapped_desc)] <- mapped_desc[empty_desc & !is.na(mapped_desc)]
   } else {
     row_data$First.Protein.Description <- mapped_desc
+  }
+
+  # Protein.Names is also "pep" in these runs and surfaces in the DE table /
+  # tooltips; backfill it with the gene symbol when it is a placeholder.
+  if ("Protein.Names" %in% colnames(row_data)) {
+    empty_names <- .is_blank_annot(row_data$Protein.Names)
+    row_data$Protein.Names[empty_names & !is.na(mapped_genes)] <- mapped_genes[empty_names & !is.na(mapped_genes)]
   }
   
   n_mapped <- sum(!is.na(mapped_genes))
