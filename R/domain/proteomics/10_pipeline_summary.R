@@ -177,6 +177,7 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
 
     # --- Imputation info ---
     imp_method <- prot_cfg$imputation$method %||% "none"
+    if (imp_method == "perseus") imp_method <- "perseus_like"
     imp_width  <- prot_cfg$imputation$width %||% 0.2
     imp_down   <- prot_cfg$imputation$downshift %||% 1.6
 
@@ -476,8 +477,8 @@ generate_proteomics_flowchart_html <- function(stats) {
     if (isTRUE(ff$imputation_enabled)) {
         imp_method <- esc(ff$imputation_method)
         imp_detail <- imp_method
-        if (ff$imputation_method == "perseus") {
-            imp_detail <- sprintf("Perseus &middot; width=%.1f &middot; down=%.1f",
+        if (ff$imputation_method == "perseus_like") {
+            imp_detail <- sprintf("Perseus-like &middot; width=%.1f &middot; down=%.1f",
                                   as.numeric(stats$methods$imp_width),
                                   as.numeric(stats$methods$imp_downshift))
         } else if (ff$imputation_method == "qrilc") {
@@ -650,14 +651,14 @@ generate_proteomics_summary_body_r <- function(stats) {
         sprintf("Normalization via %s.", nm))
     imp_part <- switch(imp,
         "none"    = " Complete cases only (no imputation).",
-        "perseus" = sprintf(" Missing values imputed via Perseus-style downshifted normal distribution (width = %s, downshift = %s SD).",
+        "perseus_like" = sprintf(" Missing values imputed via Perseus-like downshifted normal distribution (width = %s, downshift = %s SD).",
                             stats$methods$imp_width, stats$methods$imp_downshift),
         "dep2"    = " Missing values imputed using DEP2/MinDet approach.",
         sprintf(" Imputation via %s.", imp))
     norm_desc <- paste0(norm_part, imp_part)
     norm_tags <- c()
     if (nm != "none") norm_tags <- c(norm_tags, nm)
-    if (imp == "perseus") norm_tags <- c(norm_tags, "Perseus imputation",
+    if (imp == "perseus_like") norm_tags <- c(norm_tags, "Perseus-like imputation",
                                           sprintf("width=%.1f", as.numeric(stats$methods$imp_width)),
                                           sprintf("downshift=%.1f", as.numeric(stats$methods$imp_downshift)))
     else if (imp != "none") norm_tags <- c(norm_tags, imp)

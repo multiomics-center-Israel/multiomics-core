@@ -71,9 +71,13 @@ build_shiny_payload_proteomics <- function(
     # contrasts: Contrast definitions
     payload$contrasts <- inputs$contrasts
 
-    # feature_annot: Feature annotations
-    if (!is.null(annot)) {
-        payload$feature_annot <- annot
+    # feature_annot: Feature annotations (Protein.Names, Genes, descriptions).
+    # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
+    # the shared helper so future annotation columns flow through automatically.
+    payload$feature_annot <- if (!is.null(annot)) {
+        annot
+    } else {
+        build_feature_annot(pre$row_data, prot_cfg$id_columns$protein_id)
     }
 
     # ============================================================

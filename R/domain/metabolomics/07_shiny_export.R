@@ -58,7 +58,8 @@ build_shiny_payload_metabolomics <- function(
     modes <- config$modes %||% list()
     metab_cfg <- modes$metabolomics %||% list()
     de_cfg <- metab_cfg$de %||% list()
-    norm_cfg <- metab_cfg$normalization %||% list()
+    norm_cfg <- metab_cfg$preprocessing %||% list()
+    preprocessing_cfg <- metab_cfg$preprocessing %||% list()
     effects_cfg <- metab_cfg$effects %||% list()
 
     # ============================================================
@@ -77,12 +78,14 @@ build_shiny_payload_metabolomics <- function(
     # contrasts: Contrast definitions
     payload$contrasts <- inputs$contrasts %||% NULL
 
-    # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.)
-    if (!is.null(annot)) {
-        payload$feature_annot <- annot
-    } else if (!is.null(pre$row_data)) {
-        # Use row_data as feature annotations if no external annot provided
-        payload$feature_annot <- pre$row_data
+    # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.).
+    # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
+    # the shared helper (feature_id -> rownames) so future annotation columns
+    # flow through automatically.
+    payload$feature_annot <- if (!is.null(annot)) {
+        annot
+    } else {
+        build_feature_annot(pre$row_data, "feature_id")
     }
 
     # ============================================================
@@ -94,7 +97,6 @@ build_shiny_payload_metabolomics <- function(
 
     # expr_norm: Normalized expression (NO NAs allowed)
     # In metabolomics, expr_work is the normalized matrix
-    # Check for NA policy - if na_policy="zero", NAs were replaced
     payload$expr_norm <- pre$expr_work
 
     # expr_long: Long-format expression with metadata
@@ -105,7 +107,7 @@ build_shiny_payload_metabolomics <- function(
         na_count <- sum(is.na(payload$expr_norm))
         warning(
             "metabolomics expr_norm contains ", na_count, " NA values. ",
-            "Consider using na_policy='zero' in config or imputation. ",
+            "Consider tightening upstream missingness filtering or imputation. ",
             "Replacing NAs with row medians for contract compliance."
         )
         # Replace NAs with row medians as fallback
@@ -292,6 +294,12 @@ build_shiny_payload_metabolomics <- function(
         norm_cfg$scaling %||% "none"
     )
     payload$norm_method <- norm_method
+
+    # Selected normalization matrix for the metabolomics preprocessing DAG
+    # (one of "tss" | "median" | "pqn"; NULL in review mode).
+    # List-style assignment preserves the key when the value is NULL —
+    # `payload$chosen_norm <- NULL` would remove it from the list.
+    payload["chosen_norm"] <- list(preprocessing_cfg$chosen_norm)
 
     # Group and aesthetic variables (canonical: group, color)
     if (!is.null(effects_cfg$color)) {

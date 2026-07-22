@@ -529,17 +529,25 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 
 #' Volcano plot for a single DE table (one contrast)
 #'
-#' Consistent logic:
-#' Y-axis: -log10(adj.P.Val)  [Adjusted p-value / FDR]
-#' Color:  Up (red), Down (blue), NS (grey) based on padj and logFC thresholds
-#' H-line: padj_cutoff (matches the Y-axis and coloring threshold)
+#' Consistent logic — everything is driven by the *selected* p-value column
+#' (`pvalue_type`), so each plot is self-describing:
+#' Y-axis: -log10(selected p)   [adjusted FDR, or raw p, depending on pvalue_type]
+#' Color:  Up (red), Down (blue), NS (grey) based on the selected p and logFC
+#' H-line: p_cutoff on the selected column (matches the Y-axis and coloring)
 #'
 #' @param de_tbl Data frame with logFC, P.Value, adj.P.Val
 #' @param cfg Config list (sections de$p_cutoff, de$linear_fc_cutoff)
 #' @param title Plot title
+#' @param pvalue_type Which p-value to plot: "padj" (adjusted / FDR, default) or
+#'   "pval" (raw p-value). Selecting "pval" when the table has no raw p-value
+#'   column is an error — we'd rather fail loudly than silently draw the FDR plot
+#'   under a "P.Value" title.
 #' @param ... Ignored
 #' @return ggplot object
-plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
+
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pval"), ...) {
+  pvalue_type <- match.arg(pvalue_type)
+
   # 1. Flexible Column Mapping
   # Try to find the logFC column
   lfc_col <- intersect(c("log2FoldChange", "logFC"), colnames(de_tbl))[1]
@@ -548,11 +556,6 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
   # Try to find the raw P-value column
   pval_col <- intersect(c("pvalue", "P.Value", "p.value"), colnames(de_tbl))[1]
 
-  # Pick the y-axis p-value column per request. The "Raw P-value" tab must use
-  # the unadjusted p-value; previously this argument was ignored and every tab
-  # plotted padj, so the raw and adjusted volcanoes rendered identically.
-  y_col <- if (identical(pvalue_type, "pval") && !is.na(pval_col)) pval_col else padj_col
-
   # Validation check
   if (is.na(lfc_col) || is.na(y_col)) {
     stop(paste0(
@@ -560,33 +563,60 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
       "Available: ", paste(colnames(de_tbl), collapse = ", ")
     ))
   }
-  
+
+  # Pick the p-value column that drives the whole plot. For "pval" we require a
+  # genuine raw p-value column — silently falling back to padj would reproduce
+  # the exact bug this argument exists to fix. We treat an absent column and an
+  # all-NA column the same way: upstream builders deliberately leave P.Value as
+  # NA for contrasts that have no raw p-value, so both must fail loudly.
+  p_col <- if (pvalue_type == "padj") padj_col else pval_col
+  if (is.na(p_col)) {
+    stop(paste0(
+      "plot_volcano: pvalue_type = '", pvalue_type, "' requested but no ",
+      if (pvalue_type == "pval") "raw p-value" else "adjusted p-value",
+      " column was found. ",
+      "Available: ", paste(colnames(de_tbl), collapse = ", ")
+    ))
+  }
+  if (all(is.na(de_tbl[[p_col]]))) {
+    stop(paste0(
+      "plot_volcano: column '", p_col, "' (pvalue_type = '", pvalue_type,
+      "') is entirely NA, so a ", pvalue_type, " volcano cannot be drawn. ",
+      if (pvalue_type == "pval") {
+        "This contrast likely has no raw p-value in the DE summary."
+      } else {
+        ""
+      }
+    ))
+  }
+
   # 2. Thresholds from config
   p_cut <- cfg$de$p_cutoff %||% 0.05
   lin_fc_cut <- cfg$de$linear_fc_cutoff %||% 1.5
   log2fc_cut <- log2(lin_fc_cut)
-  
+
   # 3. Prepare Data
   # We create a local 'plot_df' so we don't mess with the original de_tbl
   plot_df <- as.data.frame(de_tbl)
   plot_df$.logFC <- as.numeric(plot_df[[lfc_col]])
-  plot_df$.p <- as.numeric(plot_df[[y_col]])
+  plot_df$.p <- as.numeric(plot_df[[p_col]])
 
   # Handle NAs (important for DESeq2)
   plot_df$.p_plot <- ifelse(is.na(plot_df$.p), 1, plot_df$.p)
   plot_df$.neglog10p <- -log10(pmax(plot_df$.p_plot, 1e-300))
 
-  # 4. Define Significance & Direction (thresholded on the displayed p-value type)
+
+  # 4. Define Significance & Direction (against the selected p column)
   is_sig <- !is.na(plot_df$.logFC) & (plot_df$.p_plot <= p_cut) & (abs(plot_df$.logFC) >= log2fc_cut)
-  
+
   plot_df$.direction <- factor(
     ifelse(!is_sig, "NS", ifelse(plot_df$.logFC > 0, "Up", "Down")),
     levels = c("NS", "Down", "Up")
   )
-  
+
   # 5. Sorting (Significant points on top)
   plot_df <- plot_df[order(plot_df$.direction), ]
-  
+
   # 6. Plotting
   ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
@@ -599,9 +629,9 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = "padj", ...) {
     ggplot2::geom_hline(yintercept = -log10(p_cut), linetype = "dashed", color = "grey50") +
     ggplot2::labs(
       title = title %||% "Volcano Plot",
-      subtitle = paste("Using:", y_col, "and", lfc_col),
+      subtitle = paste("Using:", p_col, "and", lfc_col),
       x = "log2 Fold Change",
-      y = paste0("-log10(", y_col, ")")
+      y = paste0("-log10(", p_col, ")")
     ) +
     ggplot2::theme_minimal()
 }

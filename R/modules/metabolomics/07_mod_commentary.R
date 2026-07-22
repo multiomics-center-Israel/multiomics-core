@@ -238,7 +238,7 @@ build_metabolomics_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
     }, error = function(e) message("  Could not extract PCA variance: ", e$message))
 
     # --- Methods ---
-    norm_info <- metab_cfg$normalization %||% list()
+    norm_info <- metab_cfg$preprocessing %||% list()
     norm_parts <- character(0)
     if (!is.null(norm_info$sample_norm) && tolower(norm_info$sample_norm) != "none")
         norm_parts <- c(norm_parts, norm_info$sample_norm)

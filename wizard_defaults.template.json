@@ -23,7 +23,7 @@
     },
     "proteomics": {
       "prot_de_method": "limma",
-      "prot_imp_method": "perseus",
+      "prot_imp_method": "perseus_like",
       "prot_pathway": "both",
       "prot_pathway_volcano": true,
       "prot_clustering": true,

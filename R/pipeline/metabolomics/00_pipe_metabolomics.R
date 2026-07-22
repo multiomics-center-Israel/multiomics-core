@@ -22,9 +22,10 @@
 #                    │    │
 #                    └────┴──── [chosen_norm] ──→ met_corrected
 #                                                      └─ metab_pre (adapter)
-pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
+pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
+                              mummichog_enabled = FALSE) {
   # -- Validate chosen_norm at plan-definition time --------------------------
-  valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced")
+  valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced", "bio_factor")
   if (!is.null(chosen_norm)) {
     chosen_norm <- tolower(chosen_norm)
     if (!chosen_norm %in% valid_norms) {
@@ -142,6 +143,10 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
     tar_target(
       met_norm_eigenms_forced,
       mod_met_normalize_eigenms_forced(met_filtered, config = config)
+    ),
+    tar_target(
+      met_norm_bio_factor,
+      mod_met_normalize_bio_factor(met_filtered, config = config)
     ),
     tar_target(
       met_norm_comparison,
@@ -269,7 +274,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         out_dir             = metab_out_dir,
         config              = config,
         norm_eigenms        = met_norm_eigenms,
-        norm_eigenms_forced = met_norm_eigenms_forced
+        norm_eigenms_forced = met_norm_eigenms_forced,
+        norm_bio_factor     = met_norm_bio_factor
       )
     ),
     # metab_pre ADAPTER — bridges met_* targets → existing contract
@@ -277,7 +283,6 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
       metab_pre,
       {
         pre_cfg  <- config$modes$metabolomics$preprocessing %||% list()
-        norm_cfg <- config$modes$metabolomics$normalization  %||% list()
         miss_stats <- met_missingness_stats$stats_df
         miss_samp  <- met_missingness_stats$samp_miss_df
         info <- list(
@@ -342,6 +347,44 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
   # ==================================================================
   # ANALYSIS MODE — Output targets (skipped when multiomics is active)
   # ==================================================================
+  # Pinned mummichog v2 stage (06c/05b), opt-in via
+  # modes.metabolomics.enrichment.mummichog.enabled. Added to the CORE targets so
+  # it also runs in multiomics mode (as the previous engine did), but only when
+  # enabled — a disabled config never needs the Python venv. Runs on the built-in
+  # human_mfn model by default; a custom model via model_ref/model_json (06d)
+  # overrides it (required for non-human organisms).
+  if (isTRUE(mummichog_enabled)) {
+    analysis_core <- c(analysis_core, list(
+      # Per-contrast run as ONE format = "file" target: mod_mummichog_pinned()
+      # runs mummichog for every contrast (into mummichog_pinned/<contrast>/) and
+      # returns the flat list of every produced file (mcg result trees incl.
+      # mcg_modularanalysis_*, inputs, id-maps, manifests). Keeping the
+      # side-effecting run as the file-target command means {targets} re-runs the
+      # whole stage if any tracked output is deleted (self-healing).
+      tar_target(
+        metab_mummichog_pinned_files,
+        mod_mummichog_pinned(
+          pre     = metab_pre,
+          de_res  = metab_de_res,
+          config  = config,
+          out_dir = metab_out_dir
+        ),
+        format = "file"
+      ),
+      # Report-facing pathways: read each contrast's pathway table back from the
+      # tracked files (grouped by contrast dir). Always-defined so the report
+      # target depends on one stable symbol (NULL in the disabled branch below).
+      tar_target(
+        metab_mummichog_report_pathways,
+        read_mummichog_pathways_by_contrast(metab_mummichog_pinned_files)
+      )
+    ))
+  } else {
+    analysis_core <- c(analysis_core, list(
+      tar_target(metab_mummichog_report_pathways, NULL)
+    ))
+  }
+
   if (skip_outputs) {
     return(c(base_targets, analysis_core))
   }
@@ -389,7 +432,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         de_res         = metab_de_res,
         config         = config,
         out_dir        = metab_out_dir,
-        clustering_res = metab_clustering_obj
+        clustering_res = metab_clustering_obj,
+        inputs         = metab_inputs
       ),
       format = "file"
     ),
@@ -436,7 +480,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
         out_dir            = metab_out_dir,
         qc_comparison_file = NULL,
         qc_suite_files     = NULL,
-        commentary_file    = metab_commentary
+        commentary_file    = metab_commentary,
+        mummichog_pathways = metab_mummichog_report_pathways
       ),
       format = "file"
     ),
@@ -466,6 +511,6 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE) {
       format = "file"
     )
   )
-  
+
   c(base_targets, analysis_core, analysis_outputs)
 }

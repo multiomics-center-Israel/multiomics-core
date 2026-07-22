@@ -21,10 +21,15 @@
 #' @param row_data data.frame with at least a column matching ref_col (for IS).
 #' @param groups  Character/factor vector of group labels per sample
 #'                (required for eigenms; ignored by other methods).
+#' @param meta    data.frame of per-sample metadata (for method = "bio_factor").
+#' @param bio_factor_col Name of the meta column with the per-sample covariate
+#'                (for method = "bio_factor").
+#' @param sample_col Name of the meta column holding sample IDs (typically
+#'                `effects$samples`); used to align meta to columns of `mat`.
 #' @return Normalized numeric matrix (same dimensions).
 normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = NULL,
                               groups = NULL, ref_samples = NULL,
-                              meta = NULL, bio_factor_col = NULL) {
+                              meta = NULL, bio_factor_col = NULL, sample_col = NULL) {
     method <- tolower(method)
     assert_one_of(method, "sample_norm",
                   c("none", "sum", "median", "pqn", "eigenms", "eigenms_forced",
@@ -38,7 +43,8 @@ normalize_samples <- function(mat, method = "none", ref_col = NULL, row_data = N
         eigenms        = norm_eigenms(mat, groups),
         eigenms_forced = norm_eigenms_forced(mat, groups),
         is             = norm_internal_standard(mat, ref_col, row_data),
-        bio_factor     = norm_biological_factor(mat, meta, bio_factor_col),
+        bio_factor     = norm_biological_factor(mat, meta, bio_factor_col,
+                                                sample_col = sample_col),
         stop("Unknown sample normalization method: ", method)
     )
 }
@@ -341,20 +347,26 @@ norm_internal_standard <- function(mat, ref_col = NULL, row_data = NULL) {
 #'                   `factor_col` and a sample-id column matching colnames(mat)
 #'                   (or be in the same row order as colnames(mat)).
 #' @param factor_col Name of the column in meta with per-sample numeric values.
+#' @param sample_col Name of the meta column holding sample IDs that match
+#'                   colnames(mat) (typically `effects$samples`). When NULL,
+#'                   conventional names (sample_id, SampleID, ...) are tried.
 #' @return Normalized matrix.
-norm_biological_factor <- function(mat, meta, factor_col) {
+norm_biological_factor <- function(mat, meta, factor_col, sample_col = NULL) {
     if (is.null(meta) || is.null(factor_col) || !nzchar(factor_col)) {
         stop("biological_factor normalization requires both meta and ",
-             "biological_factor_col to be set in config.")
+             "a per-sample factor column (factor_col) to be provided.")
     }
     if (!factor_col %in% colnames(meta)) {
         stop("biological_factor: column '", factor_col,
              "' not found in metadata.")
     }
 
-    # Match meta rows to sample column order via a sample-id column when present
-    sample_cols <- intersect(c("sample_id", "SampleID", "Sample.ID", "sample"),
-                             colnames(meta))
+    # Match meta rows to sample column order. Prefer the configured sample-id
+    # column (effects$samples, passed as sample_col); fall back to conventional
+    # names so callers that don't supply one still work.
+    candidate_cols <- c(sample_col, "sample_id", "SampleID", "Sample.ID", "sample")
+    candidate_cols <- candidate_cols[!is.na(candidate_cols) & nzchar(candidate_cols)]
+    sample_cols <- intersect(candidate_cols, colnames(meta))
     if (length(sample_cols) > 0) {
         idx <- match(colnames(mat), meta[[sample_cols[1]]])
         if (any(is.na(idx))) {

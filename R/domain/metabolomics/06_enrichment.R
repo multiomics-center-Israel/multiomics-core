@@ -74,6 +74,25 @@ make_pathway_labels <- function(ids, desc_map) {
 
 # ==== COMPOUND ID MAPPING ====================================================
 
+#' Read an HMDB → KEGG mapping table from a TSV
+#'
+#' Returns a named character vector keyed by HMDB. NULL when the path is
+#' missing/invalid or the required \code{HMDB}/\code{KEGG} columns are absent,
+#' so callers can skip the mapping step without branching on file existence.
+#'
+#' @param path Path to a tab-separated mapping file.
+#' @return Named character vector (KEGG values, HMDB names), or NULL.
+read_hmdb_kegg_map <- function(path) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+    df <- tryCatch(
+        readr::read_delim(path, delim = "\t",
+                          col_types = readr::cols(), show_col_types = FALSE),
+        error = function(e) NULL
+    )
+    if (is.null(df) || !all(c("HMDB", "KEGG") %in% colnames(df))) return(NULL)
+    stats::setNames(as.character(df$KEGG), as.character(df$HMDB))
+}
+
 #' Map feature IDs to compound identifiers for enrichment
 #'
 #' Extracts compound names from row_data and optionally maps HMDB to KEGG.
@@ -94,25 +113,20 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
 
     # HMDB-to-KEGG mapping: replace compound names with KEGG IDs when a
     # mapping file is provided, so that IDs match KEGG-based GMT pathways.
-    if (!is.null(mapping_file) && file.exists(mapping_file)) {
-        mapping_df <- readr::read_delim(mapping_file, delim = "\t",
-                                        col_types = readr::cols(),
-                                        show_col_types = FALSE)
-
-        # Locate HMDB IDs — try dedicated column first, then parse feature_id
+    map_vec <- read_hmdb_kegg_map(mapping_file)
+    if (!is.null(map_vec)) {
+        # Locate HMDB IDs — try common column-name variants, then parse feature_id
         hmdb_ids <- NULL
-        if ("HMDB" %in% colnames(row_data)) {
-            hmdb_ids <- as.character(row_data$HMDB)
+        hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
+                              colnames(row_data))[1]
+        if (!is.na(hmdb_col)) {
+            hmdb_ids <- as.character(row_data[[hmdb_col]])
         } else if ("feature_id" %in% colnames(row_data)) {
             # Try extracting HMDB from feature_id (HMDB|Name format)
             hmdb_ids <- sub("\\|.*$", "", as.character(row_data$feature_id))
         }
 
-        # Vectorised lookup: build named vector HMDB->KEGG then index
-        if (!is.null(hmdb_ids) &&
-            "HMDB" %in% colnames(mapping_df) &&
-            "KEGG" %in% colnames(mapping_df)) {
-            map_vec <- stats::setNames(mapping_df$KEGG, mapping_df$HMDB)
+        if (!is.null(hmdb_ids)) {
             mapped_kegg <- map_vec[hmdb_ids]
             has_map <- !is.na(mapped_kegg) & mapped_kegg != ""
             compound_names[has_map] <- mapped_kegg[has_map]
