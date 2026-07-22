@@ -1751,6 +1751,29 @@ params:
   config_path
 }
 # --- Pipeline Runner ----------------------------------------------------------
+#' Resolve the {targets} store directory for a config
+#'
+#' Each config caches into its own store so two pipelines launched from
+#' different configs never share one. Sharing a store is exactly how concurrent
+#' runs corrupt the cache: objects end up from one run and metadata from
+#' another, and a dependency can no longer be reloaded. An explicit
+#' `project$store` (or top-level `targets_store`) in the config wins; otherwise
+#' the store is derived from the project name. We resolve it here and pass it to
+#' tar_make()/tar_destroy() directly rather than writing it into _targets.yaml
+#' via tar_config_set() — that would mutate one shared file and race when
+#' several runs launch at once.
+#'
+#' @param cfg Parsed config list (from yaml::read_yaml).
+#' @return A store path string, e.g. "_targets_noam_probatch".
+resolve_store <- function(cfg) {
+  explicit <- cfg$project$store %||% cfg$targets_store
+  if (!is.null(explicit) && nzchar(explicit)) return(explicit)
+  name <- cfg$project$name %||% "default"
+  slug <- tolower(gsub("[^a-zA-Z0-9]+", "_", name))
+  slug <- gsub("^_+|_+$", "", slug)
+  paste0("_targets_", slug)
+}
+
 run_pipeline <- function(config_path, fresh = FALSE) {
   config_path <- normalizePath(config_path, mustWork = TRUE)
   cat(sprintf("\n  Config: %s\n", config_path))
@@ -1764,10 +1787,15 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     cat(sprintf("  Linked config -> %s\n", root_config))
   }
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
+  # Per-config store, passed explicitly to every targets call below so this run
+  # never touches another config's cache — even when _targets.yaml or TAR_CONFIG
+  # point somewhere else, and even when several runs go concurrently.
+  store <- resolve_store(cfg_tmp)
+  cat(sprintf("  Store:  %s\n", store))
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
-    targets::tar_destroy(ask = FALSE)
-    dir.create("_targets/scratch", recursive = TRUE, showWarnings = FALSE)
+    targets::tar_destroy(ask = FALSE, store = store)
+    dir.create(file.path(store, "scratch"), recursive = TRUE, showWarnings = FALSE)
   }
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)
@@ -1815,7 +1843,7 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     }
   }
   cat("  Starting pipeline...\n\n")
-  targets::tar_make()
+  targets::tar_make(store = store)
   # Find the reports
   cfg <- yaml::read_yaml(config_path)
   run_dir_name <- sprintf("Results_%s_%s",
