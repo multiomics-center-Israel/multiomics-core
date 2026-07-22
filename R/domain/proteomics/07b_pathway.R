@@ -208,7 +208,7 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     gmt_file  <- pw_cfg$gmt_file
     if (!is.null(gmt_file)) {
         gmt_file <- vapply(unlist(gmt_file, use.names = FALSE), function(g) {
-            if (nzchar(g) && !grepl("^([A-Za-z]:|/|\\\\)", g)) {
+            if (nzchar(g) && !grepl("^([A-Za-z]:|/|\\\\|~)", g)) {
                 resolve_raw_path(config, g)
             } else {
                 g
