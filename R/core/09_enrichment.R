@@ -20,7 +20,9 @@
 #' @export
 read_gmt <- function(gmt_file) {
     paths <- unlist(gmt_file, use.names = FALSE)
-
+    if (length(paths) == 0L) {
+        stop("gmt_file must be a non-empty path or list of paths")
+    }
     # Merge branch: read each file singly, then concatenate (first name wins).
     if (length(paths) > 1) {
         merged <- list()
