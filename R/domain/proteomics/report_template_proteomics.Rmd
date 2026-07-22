@@ -1534,6 +1534,9 @@ if (!is.na(bar_raw_file) && file.exists(bar_raw_file) && exists("meta") && is.da
     } else {
         cat("*Per-sample identification data not available.*\n\n")
     }
+} else {
+    cat("## Identified Proteins per Sample\n\n")
+    cat("*Pre-imputation data or metadata not available for per-sample identified proteins plot.*\n\n")
 }
 ```
 
