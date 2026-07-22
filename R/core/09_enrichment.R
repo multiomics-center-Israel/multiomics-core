@@ -95,11 +95,15 @@ load_gene_sets <- function(organism,
 
     # Custom GMT takes priority. gmt_file may be a vector/list of paths (GO +
     # KEGG, etc.); keep only those that exist and merge via read_gmt().
-    gmt_paths <- unlist(gmt_file, use.names = FALSE)
-    gmt_paths <- gmt_paths[nzchar(gmt_paths) & file.exists(gmt_paths)]
+    requested_gmt_paths <- unlist(gmt_file, use.names = FALSE)
+    requested_gmt_paths <- requested_gmt_paths[nzchar(requested_gmt_paths)]
+    missing_gmt_paths <- requested_gmt_paths[!file.exists(requested_gmt_paths)]
+    if (length(missing_gmt_paths) > 0) {
+        warning("Some GMT files were not found and will be skipped: ",
+                paste(missing_gmt_paths, collapse = ", "))
+    }
+    gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
-        gene_sets$custom <- read_gmt(gmt_paths)
-        message("Loaded custom gene sets from: ",
                 paste(gmt_paths, collapse = ", "))
 
         # Validate GMT coverage against annotation features if available
