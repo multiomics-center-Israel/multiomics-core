@@ -135,8 +135,13 @@ norm_pqn <- function(mat, qc_idx = NULL) {
 #'
 #' @param mat    Numeric matrix (features x samples), log-scale or linear.
 #' @param groups Character/factor vector of group labels per sample.
+#' @param seed   Integer seed for the bootstrap parallel analysis in
+#'   \code{ProteoMM::eig_norm1}. Applied locally via \code{withr::with_seed()},
+#'   so the global RNG state is left unchanged. The metabolomics pipeline passes
+#'   \code{params.seed} from the config; the default preserves the historical
+#'   value for other callers.
 #' @return Normalized numeric matrix (same dimensions).
-norm_eigenms <- function(mat, groups = NULL) {
+norm_eigenms <- function(mat, groups = NULL, seed = 12345L) {
     if (is.null(groups)) {
         warning("norm_eigenms: groups not provided — falling back to PQN normalization.")
         return(norm_pqn(mat))
@@ -163,11 +168,16 @@ norm_eigenms <- function(mat, groups = NULL) {
     grDevices::pdf(NULL)
     on.exit(grDevices::dev.off(), add = TRUE)
 
-    # Step 1: Identify eigentrends (SVD + parallel analysis)
-    set.seed(12345)  # reproducibility as recommended by ProteoMM
-    rv <- suppressWarnings(suppressMessages(
-        ProteoMM::eig_norm1(m = mat, treatment = groups, prot.info = prot_info)
-    ))
+    # Step 1: Identify eigentrends (SVD + parallel analysis).
+    # Seed the bootstrap parallel analysis locally so eigenMS is reproducible via
+    # the config seed; withr::with_seed restores the global RNG state afterward,
+    # so this never perturbs other stochastic pipeline steps.
+    rv <- withr::with_seed(
+        seed,
+        suppressWarnings(suppressMessages(
+            ProteoMM::eig_norm1(m = mat, treatment = groups, prot.info = prot_info)
+        ))
+    )
 
     n_eigentrends <- rv$h.c
     message(sprintf("norm_eigenms (ProteoMM): found %d significant eigentrend(s)",
