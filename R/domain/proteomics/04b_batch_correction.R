@@ -9,9 +9,13 @@
 #'                    `proBatch::center_feature_batch_medians_dm` (proBatch's
 #'                    discrete-batch correction).
 #'
-#' Both backends operate on the imputed log2 matrix (`pre$expr_filt`), and the
-#' corrected matrix is propagated to `expr_filt`, `expr_work`, `expr_imp_single`,
-#' so that downstream DE, QC and clustering all consume the corrected data.
+#' Both backends estimate and apply the correction on the imputed complete
+#' matrix (`pre$expr_imp_single`). The corrected values feed `expr_work` and
+#' `expr_imp_single` in full; `expr_filt` receives the corrected values with its
+#' original missing-value pattern restored, so it keeps its "filtered,
+#' unimputed" contract (the DE step re-imputes it, and CV / Shiny exports still
+#' exclude imputed measurements). All downstream DE, QC and clustering consume
+#' the corrected data.
 #'
 #' These functions are side-effect free: they take a matrix (or `pre` list) and
 #' return a corrected matrix (or modified `pre`). File I/O, if any, lives in the
@@ -21,17 +25,19 @@
 #'
 #' Dispatches on `config$modes$proteomics$batch_correction$method`. When the
 #' method is `"none"` (or the block is absent / disabled) the input is returned
-#' unchanged. Otherwise the corrected matrix replaces `expr_filt`, `expr_work`
-#' and `expr_imp_single` in the returned `pre` list.
+#' unchanged. Otherwise `expr_work` and `expr_imp_single` become the complete
+#' corrected matrix, while `expr_filt` (and `expr_filt_pre_imp`) get the
+#' corrected values with the original NA pattern restored.
 #'
 #' @param pre Output of `preprocess_proteomics()` (a list with at least
 #'   `expr_filt` (log2 proteins x samples matrix) and `meta`).
 #' @param config Full pipeline config.
 #' @param seed Integer seed for the (small) stochastic component of ComBat's
 #'   empirical-Bayes estimation; passed through `withr::with_seed()`.
-#' @return The `pre` list, with `expr_filt`/`expr_work`/`expr_imp_single`
-#'   replaced by the corrected matrix and `batch_corrected`/`batch_method`
-#'   metadata fields added when a correction was applied.
+#' @return The `pre` list, with the corrected matrix in `expr_work`/
+#'   `expr_imp_single` (complete) and `expr_filt`/`expr_filt_pre_imp` (corrected
+#'   observed values, NA where originally missing), plus `batch_corrected`/
+#'   `batch_method` metadata fields when a correction was applied.
 correct_batch_proteomics <- function(pre, config, seed = 42) {
   cfg <- config$modes$proteomics
   bc  <- get_proteomics_batch_config(cfg)
@@ -42,17 +48,28 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
   }
 
   # ComBat/probatch need a complete matrix. preprocess_proteomics() already
-  # produces a single-imputation complete matrix (expr_imp_single); correct that
-  # rather than the NA-containing expr_filt. Downstream DE re-runs imputation on
-  # the (now complete) corrected matrix, where it is a no-op, so the corrected
-  # values flow straight into the limma fits.
+  # produces a single-imputation complete matrix (expr_imp_single); estimate and
+  # apply the correction on that. The original missing-value pattern is restored
+  # to expr_filt afterwards (see below) so the DE step still re-imputes it.
   expr <- pre$expr_imp_single %||% pre$expr_filt
   assert_numeric_matrix(expr, "expr_imp_single")
+
+  # ComBat (and probatch median-centering) misbehave on non-finite input. NAs
+  # should already be imputed here; -Inf can still arrive from log2 of zero or
+  # negative upstream intensities, which assert_numeric_matrix() does not catch.
+  if (!all(is.finite(expr))) {
+    cli::cli_abort(c(
+      "Proteomics batch correction requires a finite intensity matrix.",
+      "i" = "Found {sum(is.na(expr))} NA and {sum(is.infinite(expr))} non-finite value(s) in the imputed matrix.",
+      "i" = "Non-finite values usually come from log2 of zero/negative intensities upstream; filter or floor them before this step."
+    ))
+  }
   meta <- pre$meta
 
   sample_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
   batch_var  <- resolve_batch_variable(meta, expr, bc$batch_col, sample_col)
-  group_var  <- resolve_group_variable(meta, expr, bc$group_col %||% cfg$effects$color, sample_col)
+  group_var  <- resolve_group_variable(meta, expr, bc$group_col %||% cfg$effects$color,
+                                       sample_col, preserve = bc$preserve_condition)
   covariates <- resolve_batch_covariates(meta, expr, bc$covariates, sample_col)
 
   corrected <- switch(
@@ -71,11 +88,25 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
   message(sprintf("Proteomics batch correction: applied '%s' on batch column '%s'.",
                   bc$method, bc$batch_col))
 
-  pre$expr_filt        <- corrected
-  pre$expr_work        <- corrected
-  pre$expr_imp_single  <- corrected
-  pre$batch_corrected  <- TRUE
-  pre$batch_method     <- bc$method
+  # Keep expr_filt's "filtered, unimputed" contract: corrected values at
+  # observed positions, NA where the measurement was originally missing. This
+  # fixes two things at once —
+  #   * the DE step re-imputes expr_filt, so its multiple imputations stay
+  #     genuinely different (a complete matrix collapses them to a single draw
+  #     and the imputation-consensus stops measuring robustness), and
+  #   * build_group_cv_proteomics() and the Shiny expr_raw export still exclude
+  #     imputed measurements, which they detect via NAs in expr_filt.
+  # expr_work / expr_imp_single stay complete + corrected for QC and plots.
+  na_mask <- is.na(pre$expr_filt)[rownames(corrected), colnames(corrected), drop = FALSE]
+  corrected_unimputed <- corrected
+  corrected_unimputed[na_mask] <- NA_real_
+
+  pre$expr_filt         <- corrected_unimputed
+  pre$expr_filt_pre_imp <- corrected_unimputed
+  pre$expr_work         <- corrected
+  pre$expr_imp_single   <- corrected
+  pre$batch_corrected   <- TRUE
+  pre$batch_method      <- bc$method
   pre
 }
 
@@ -136,11 +167,29 @@ resolve_batch_variable <- function(meta, expr, batch_col, sample_col) {
 #' @param expr Intensity matrix (proteins x samples).
 #' @param group_col Name of the metadata column holding the biological condition.
 #' @param sample_col Name of the metadata column holding sample IDs.
-#' @return A factor of group labels per column, or `NULL` if `group_col` is unset
-#'   or absent.
+#' @param preserve Logical; whether condition preservation was requested. When
+#'   `TRUE`, a `group_col` that is set but absent from `meta` is treated as a
+#'   config error rather than silently ignored.
+#' @return A factor of group labels per column, or `NULL` when no group column
+#'   is configured (nothing to preserve).
 #' @noRd
-resolve_group_variable <- function(meta, expr, group_col, sample_col) {
-  if (is.null(group_col) || !nzchar(group_col) || !group_col %in% colnames(meta)) {
+resolve_group_variable <- function(meta, expr, group_col, sample_col, preserve = TRUE) {
+  # No condition column configured anywhere -> genuinely nothing to preserve.
+  if (is.null(group_col) || !nzchar(group_col)) {
+    return(NULL)
+  }
+  # A column was configured but is absent. Silently dropping it would let ComBat
+  # remove the biological condition along with the batch effect (worst when
+  # condition and batch are correlated), so fail loudly on the likely typo when
+  # preservation was requested.
+  if (!group_col %in% colnames(meta)) {
+    if (isTRUE(preserve)) {
+      cli::cli_abort(c(
+        "Condition column {.val {group_col}} for batch-correction preservation not found in metadata.",
+        "i" = "Fix {.code modes.proteomics.batch_correction.group_col} (or {.code effects.color}), or set {.code preserve_condition: false} to correct without preserving condition.",
+        "i" = "Available columns: {.val {colnames(meta)}}."
+      ))
+    }
     return(NULL)
   }
   as.factor(as.character(align_meta_column(meta, expr, group_col, sample_col)))
@@ -219,10 +268,11 @@ correct_proteomics_combat <- function(expr, batch_var, group_var = NULL,
     ))
   }
 
-  if (anyNA(expr)) {
+  if (!all(is.finite(expr))) {
     cli::cli_abort(c(
-      "ComBat cannot run on a matrix containing NA.",
-      "i" = "Run batch correction after imputation, or impute before this step."
+      "ComBat requires a matrix of finite values.",
+      "i" = "Found {sum(is.na(expr))} NA and {sum(is.infinite(expr))} non-finite value(s) (e.g. from log2 of zero/negative intensities).",
+      "i" = "Impute NAs and floor/remove non-finite values before batch correction."
     ))
   }
 

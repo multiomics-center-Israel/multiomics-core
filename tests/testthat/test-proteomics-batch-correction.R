@@ -158,3 +158,70 @@ test_that("mod_proteomics_batch_correction passes through when disabled", {
     out <- mod_proteomics_batch_correction(pre, config, verbose = FALSE)
     expect_identical(out$expr_filt, pre$expr_filt)
 })
+
+# --- Condition-preservation column resolution (P1: no silent drop) ---
+
+test_that("resolve_group_variable distinguishes unset from configured-but-missing", {
+    pre  <- make_synth_prot()
+    expr <- pre$expr_imp_single
+    meta <- pre$meta
+
+    # Nothing configured -> NULL (genuinely nothing to preserve)
+    expect_null(resolve_group_variable(meta, expr, NULL, "SampleID", preserve = TRUE))
+    expect_null(resolve_group_variable(meta, expr, "", "SampleID", preserve = TRUE))
+
+    # Configured but absent + preservation requested -> loud error, not silence
+    expect_error(
+        resolve_group_variable(meta, expr, "Conditon", "SampleID", preserve = TRUE),
+        "not found in metadata"
+    )
+
+    # Configured but absent + preservation NOT requested -> NULL (won't be used)
+    expect_null(resolve_group_variable(meta, expr, "Conditon", "SampleID", preserve = FALSE))
+
+    # Configured and present -> factor aligned to columns
+    gv <- resolve_group_variable(meta, expr, "Condition", "SampleID", preserve = TRUE)
+    expect_s3_class(gv, "factor")
+    expect_length(gv, ncol(expr))
+})
+
+test_that("correct_batch_proteomics errors on a misspelled preservation column", {
+    pre <- make_synth_prot()
+    # valid batch column, but a typo'd group column with preserve_condition (default TRUE)
+    config <- make_config(method = "combat", batch_col = "Batch", group_col = "Conditon")
+    expect_error(correct_batch_proteomics(pre, config), "not found in metadata")
+})
+
+# --- Non-finite guard (P2: reject Inf, not just NA) ---
+
+test_that("correct_batch_proteomics rejects non-finite intensities before correction", {
+    pre <- make_synth_prot()
+    pre$expr_imp_single[1, 1] <- -Inf   # e.g. log2(0) leaking through upstream
+    config <- make_config(method = "combat", batch_col = "Batch")
+    # aborts on the finite guard before any backend/package is touched
+    expect_error(correct_batch_proteomics(pre, config), "finite")
+})
+
+# --- expr_filt keeps its unimputed contract after correction (P1/P2) ---
+
+test_that("batch correction restores the NA pattern in expr_filt", {
+    skip_if_not_installed("sva")
+    pre <- make_synth_prot(batch_shift = 6)
+    # A missing-value pattern in the (unimputed) filtered matrix; expr_imp_single
+    # stays complete, exactly as preprocess_proteomics() guarantees.
+    miss <- cbind(c(1L, 5L, 10L), c(2L, 3L, 7L))  # (row, col) positions
+    pre$expr_filt[miss] <- NA
+    config <- make_config(method = "combat", batch_col = "Batch", group_col = "Condition")
+
+    out <- correct_batch_proteomics(pre, config, seed = 1)
+
+    # expr_filt keeps NAs exactly where they were; work/imputed are complete
+    expect_true(anyNA(out$expr_filt))
+    expect_equal(which(is.na(out$expr_filt)), which(is.na(pre$expr_filt)))
+    expect_false(anyNA(out$expr_work))
+    expect_false(anyNA(out$expr_imp_single))
+    # observed positions carry the corrected values; expr_filt_pre_imp mirrors expr_filt
+    obs <- !is.na(out$expr_filt)
+    expect_equal(out$expr_filt[obs], out$expr_work[obs])
+    expect_identical(out$expr_filt_pre_imp, out$expr_filt)
+})
