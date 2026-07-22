@@ -339,7 +339,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         pre     = metab_pre,
         de_res  = metab_de_res,
         config  = config,
-        out_dir = metab_out_dir
+        out_dir = metab_out_dir,
+        inputs  = metab_inputs
       )
     )
   )

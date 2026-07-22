@@ -23,6 +23,31 @@ resolve_raw_path <- function(config, rel_path) {
     resolve_project_path(config, base, rel_path)
 }
 
+#' Resolve a user-supplied input path (absolute, or relative to raw/)
+#'
+#' Locates an input file the same way the data files are located: an absolute
+#' path is returned unchanged, while a relative path is resolved against the raw
+#' data directory (\code{config$paths$raw} under \code{project$dir}). "Absolute"
+#' covers Unix (\code{/...}), home (\code{~/...}), Windows drive
+#' (\code{C:/...}, \code{C:\\...}) and UNC (\code{\\\\host\\share}) paths, so a
+#' config authored on either OS behaves the same. Accepts a vector (each element
+#' resolved independently) and returns \code{NULL} for \code{NULL} input, so it
+#' can wrap optional keys like \code{gmt_file} / \code{mapping_file} directly.
+#'
+#' @param config Config object with \code{project$dir} (and optional \code{paths$raw}).
+#' @param path Character path(s), or NULL.
+#' @return Resolved path(s) as a character vector, or NULL.
+resolve_input_path <- function(config, path) {
+    if (is.null(path)) return(NULL)
+    path <- unlist(path, use.names = FALSE)
+    if (length(path) == 0) return(path)
+    vapply(path, function(p) {
+        if (is.na(p) || !nzchar(p)) return(p)
+        # Absolute if it starts with a drive letter ("C:"), or with /, ~ or \.
+        if (grepl("^([A-Za-z]:|[/~\\\\])", p)) p else resolve_raw_path(config, p)
+    }, character(1), USE.NAMES = FALSE)
+}
+
 #' Resolve a path relative to the 'outputs' directory
 resolve_out_path <- function(config, rel_path = "") {
     base <- config$paths$out %||% "outputs"

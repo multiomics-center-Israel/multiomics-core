@@ -594,6 +594,7 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   }
 
   files <- unique(c(list_mummichog_files(out_dir), log_file))
+
   .mmc_check_run_outputs(result$status, files, log_file)
 
   manifest_file <- write_mummichog_manifest(

@@ -397,6 +397,19 @@ if (!is.null(de_res$summary_df) && "pass_any_contrast" %in% colnames(de_res$summ
   metric_card(format(n_de_total, big.mark = ","), "DE Metabolites", color = "#c0392b")
 }
 
+# Metabolites included in enrichment (background). Same across contrasts, read
+# from the ORA table (the only method table that records the background size).
+enr_bg <- if (!is.null(enrichment_res$ora$table) &&
+              "bg_size" %in% names(enrichment_res$ora$table) &&
+              nrow(enrichment_res$ora$table) > 0) {
+  enrichment_res$ora$table$bg_size[1]
+} else {
+  NA_integer_
+}
+if (!is.na(enr_bg)) {
+  metric_card(format(enr_bg, big.mark = ","), "In Enrichment", color = "#2c7a7b")
+}
+
 cat("</div>\n")
 
 # ---- DE breakdown per contrast -------------------------------------------
@@ -1941,26 +1954,48 @@ if (!is.null(plsda_res$vip_df)) {
 ### Lollipop Plot
 
 ```{r qea-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$qea_lollipop)) {
-  safe_print_plot(enrichment_res$plots$qea_lollipop)
-  figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plot showing the top enriched metabolic pathways. Bar length represents statistical significance; color indicates enrichment score direction.")
+qeabc <- enrichment_res$qea_by_contrast
+if (is.null(qeabc) || length(qeabc) == 0) {
+  if (!is.null(enrichment_res$plots$qea_lollipop)) safe_print_plot(enrichment_res$plots$qea_lollipop)
+} else {
+  for (ct in names(qeabc)) {
+    p <- qeabc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plots, one per contrast (two-group comparison each). Bar length represents statistical significance.")
 ```
 
 ### Barplot
 
 ```{r qea-barplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$qea_barplot)) {
-  safe_print_plot(enrichment_res$plots$qea_barplot)
-  figure_legend("Barplot of QEA enriched pathways ranked by significance. Pathways are ordered from most to least significant.")
+qeabc <- enrichment_res$qea_by_contrast
+if (is.null(qeabc) || length(qeabc) == 0) {
+  if (!is.null(enrichment_res$plots$qea_barplot)) safe_print_plot(enrichment_res$plots$qea_barplot)
+} else {
+  for (ct in names(qeabc)) {
+    p <- qeabc[[ct]]$plots$barplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("QEA barplots, one per contrast, ranked by significance.")
 ```
 
 ### Results Table
 
 ```{r qea-table}
-if (!is.null(enrichment_res$qea$table)) {
-  make_dt(enrichment_res$qea$table, caption = "QEA Pathway Enrichment")
+qeabc <- enrichment_res$qea_by_contrast
+qea_tbl <- if (!is.null(qeabc) && length(qeabc) > 0) {
+  do.call(rbind, lapply(names(qeabc), function(ct) {
+    t <- qeabc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$qea$table
+}
+if (!is.null(qea_tbl)) {
+  make_dt(qea_tbl, caption = "QEA Pathway Enrichment — all contrasts")
 }
 ```
 
@@ -1973,19 +2008,31 @@ if (!is.null(enrichment_res$qea$table)) {
 ### Lollipop Plot
 
 ```{r ssgsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ssgsea_lollipop)) {
-  safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
-  figure_legend("ssGSEA lollipop plot showing the top enriched metabolic pathways based on single-sample Gene Set Enrichment Analysis scores.")
+ssbc <- enrichment_res$ssgsea_by_contrast
+if (is.null(ssbc) || length(ssbc) == 0) {
+  if (!is.null(enrichment_res$plots$ssgsea_lollipop)) safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
+} else {
+  for (ct in names(ssbc)) {
+    p <- ssbc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("ssGSEA lollipop plots, one per contrast (two-group comparison each), based on single-sample GSEA scores.")
 ```
 
 ### Barplot
 
 ```{r ssgsea-barplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ssgsea_barplot)) {
-  safe_print_plot(enrichment_res$plots$ssgsea_barplot)
-  figure_legend("Barplot of ssGSEA enrichment results, showing pathway enrichment scores ranked by significance.")
+ssbc <- enrichment_res$ssgsea_by_contrast
+if (is.null(ssbc) || length(ssbc) == 0) {
+  if (!is.null(enrichment_res$plots$ssgsea_barplot)) safe_print_plot(enrichment_res$plots$ssgsea_barplot)
+} else {
+  for (ct in names(ssbc)) {
+    p <- ssbc[[ct]]$plots$barplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("ssGSEA barplots, one per contrast, ranked by significance.")
 ```
 
 ### Boxplots (static)
@@ -2115,8 +2162,22 @@ if (!is.null(enrichment_res$ssgsea$scores) &&
 ### Results Table
 
 ```{r ssgsea-table}
-if (!is.null(enrichment_res$ssgsea$table)) {
-  make_dt(enrichment_res$ssgsea$table, caption = "ssGSEA Pathway Enrichment")
+ssbc <- enrichment_res$ssgsea_by_contrast
+ssgsea_tbl_all <- if (!is.null(ssbc) && length(ssbc) > 0) {
+  do.call(rbind, lapply(names(ssbc), function(ct) {
+    t <- ssbc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    # Drop per-contrast mean_<group> columns: their names differ across
+    # contrasts, which would break rbind ("names do not match previous names").
+    # The full per-contrast tables (with means) are still in the *_results.tsv.
+    t <- t[, !grepl("^mean_", names(t)), drop = FALSE]
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$ssgsea$table
+}
+if (!is.null(ssgsea_tbl_all)) {
+  make_dt(ssgsea_tbl_all, caption = "ssGSEA Pathway Enrichment — all contrasts")
 }
 ```
 
@@ -2129,26 +2190,48 @@ if (!is.null(enrichment_res$ssgsea$table)) {
 ### Lollipop Plot
 
 ```{r ora-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ora_lollipop)) {
-  safe_print_plot(enrichment_res$plots$ora_lollipop)
-  figure_legend("Over-Representation Analysis (ORA) lollipop plot showing pathways significantly enriched among DE metabolites using Fisher's exact test.")
+orabc <- enrichment_res$ora_by_contrast
+if (is.null(orabc) || length(orabc) == 0) {
+  if (!is.null(enrichment_res$plots$ora_lollipop)) safe_print_plot(enrichment_res$plots$ora_lollipop)
+} else {
+  for (ct in names(orabc)) {
+    p <- orabc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("Over-Representation Analysis (ORA) lollipop plots, one per contrast: pathways significantly enriched among DE metabolites (Fisher's exact test).")
 ```
 
 ### Dot Plot
 
 ```{r ora-dotplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$ora_dotplot)) {
-  safe_print_plot(enrichment_res$plots$ora_dotplot)
-  figure_legend("ORA dot plot displaying enriched pathways. Point size indicates the number of DE metabolites in the pathway; color represents significance.")
+orabc <- enrichment_res$ora_by_contrast
+if (is.null(orabc) || length(orabc) == 0) {
+  if (!is.null(enrichment_res$plots$ora_dotplot)) safe_print_plot(enrichment_res$plots$ora_dotplot)
+} else {
+  for (ct in names(orabc)) {
+    p <- orabc[[ct]]$plots$dotplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("ORA dot plots, one per contrast. Point size indicates the number of DE metabolites in the pathway; color represents significance.")
 ```
 
 ### Results Table
 
 ```{r ora-table}
-if (!is.null(enrichment_res$ora$table)) {
-  make_dt(enrichment_res$ora$table, caption = "ORA Pathway Enrichment (Fisher's Exact Test)")
+orabc <- enrichment_res$ora_by_contrast
+ora_tbl <- if (!is.null(orabc) && length(orabc) > 0) {
+  do.call(rbind, lapply(names(orabc), function(ct) {
+    t <- orabc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$ora$table
+}
+if (!is.null(ora_tbl)) {
+  make_dt(ora_tbl, caption = "ORA Pathway Enrichment (Fisher's Exact Test) — all contrasts")
 }
 ```
 
@@ -2161,26 +2244,48 @@ if (!is.null(enrichment_res$ora$table)) {
 ### Lollipop Plot
 
 ```{r gsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$gsea_lollipop)) {
-  safe_print_plot(enrichment_res$plots$gsea_lollipop)
-  figure_legend("GSEA lollipop plot showing pathways ranked by Normalized Enrichment Score (NES). Positive NES indicates up-regulation; negative indicates down-regulation of the pathway.")
+gsbc <- enrichment_res$gsea_by_contrast
+if (is.null(gsbc) || length(gsbc) == 0) {
+  if (!is.null(enrichment_res$plots$gsea_lollipop)) safe_print_plot(enrichment_res$plots$gsea_lollipop)
+} else {
+  for (ct in names(gsbc)) {
+    p <- gsbc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("GSEA lollipop plots, one per contrast: pathways ranked by Normalized Enrichment Score (NES). Positive NES = up-regulation, negative = down-regulation.")
 ```
 
 ### NES Barplot
 
 ```{r gsea-nes-barplot, fig.width=12, fig.height=8, results='asis'}
-if (!is.null(enrichment_res$plots$gsea_nes_barplot)) {
-  safe_print_plot(enrichment_res$plots$gsea_nes_barplot)
-  figure_legend("GSEA Normalized Enrichment Score (NES) barplot. Metabolites were pre-ranked by log2 fold change; pathways are ordered by NES magnitude.")
+gsbc <- enrichment_res$gsea_by_contrast
+if (is.null(gsbc) || length(gsbc) == 0) {
+  if (!is.null(enrichment_res$plots$gsea_nes_barplot)) safe_print_plot(enrichment_res$plots$gsea_nes_barplot)
+} else {
+  for (ct in names(gsbc)) {
+    p <- gsbc[[ct]]$plots$nes_barplot
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
 }
+figure_legend("GSEA Normalized Enrichment Score (NES) barplots, one per contrast. Metabolites were pre-ranked by log2 fold change.")
 ```
 
 ### Results Table
 
 ```{r gsea-table}
-if (!is.null(enrichment_res$gsea$table)) {
-  make_dt(enrichment_res$gsea$table, caption = "GSEA Pathway Enrichment (fgsea, ranked by log2FC)")
+gsbc <- enrichment_res$gsea_by_contrast
+gsea_tbl <- if (!is.null(gsbc) && length(gsbc) > 0) {
+  do.call(rbind, lapply(names(gsbc), function(ct) {
+    t <- gsbc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$gsea$table
+}
+if (!is.null(gsea_tbl)) {
+  make_dt(gsea_tbl, caption = "GSEA Pathway Enrichment (fgsea, ranked by log2FC) — all contrasts")
 }
 ```
 
