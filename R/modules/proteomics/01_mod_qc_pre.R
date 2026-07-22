@@ -28,6 +28,12 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_pca13)
     plots$pca_1_3 <- p13
 
+    # Labeled-PNG + scores-CSV companions feed the report's "With Sample Names"
+    # and interactive PCA tabs (plain PNGs above don't provide either).
+    files <- c(files,
+               write_pca_companions(p12, out_qc, pcs = c(1, 2)),
+               write_pca_companions(p13, out_qc, pcs = c(1, 3)))
+
     # ---------- PCA with top variable proteins (for report dropdown) ----------
     n_top_values <- c(500, 1000, 2000)
     n_features <- nrow(pre$expr_imp_single)

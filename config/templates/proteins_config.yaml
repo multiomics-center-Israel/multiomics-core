@@ -78,6 +78,26 @@ modes:
       method: "none"      # "none" | "median" | "vsn"
 
     # --------------------------------------------------------
+    # Batch correction (optional)
+    # Runs after imputation, on the log2 intensity matrix, and feeds the
+    # corrected data to DE, QC and clustering. Leave method "none" to disable.
+    # --------------------------------------------------------
+    batch_correction:
+      method: "none"           # "none" | "combat" | "probatch"
+      # batch_col is the metadata column holding the batch label.
+      # Defaults to modes.proteomics.qc.batch_col when omitted.
+      batch_col: null
+      # group_col: the biological condition to preserve. Defaults to
+      # modes.proteomics.effects.color (e.g. "Condition") when omitted.
+      group_col: null
+      # preserve_condition: for ComBat, encode group_col (+ covariates) in the
+      # model matrix so the biological effect is kept, not removed. (true|false)
+      preserve_condition: true
+      # covariates: optional extra metadata columns to protect in the ComBat
+      # model (e.g. ["Sex", "Age"]). Ignored by probatch.
+      covariates: null
+
+    # --------------------------------------------------------
     # Multiple imputation
     # --------------------------------------------------------
     imputation:
