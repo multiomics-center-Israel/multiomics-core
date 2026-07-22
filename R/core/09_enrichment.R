@@ -104,6 +104,8 @@ load_gene_sets <- function(organism,
     }
     gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
+        gene_sets$custom <- read_gmt(gmt_paths)
+        message("Loaded custom gene sets from: ",
                 paste(gmt_paths, collapse = ", "))
 
         # Validate GMT coverage against annotation features if available
