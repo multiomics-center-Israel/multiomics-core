@@ -139,7 +139,12 @@ mod_met_raw <- function(inp, config) {
   if (!is.null(row_data) && !is.null(row_data$feature_id)) {
     rownames(row_data) <- row_data$feature_id
   }
-  
+
+  # Populate KEGG column from HMDB → KEGG mapping so downstream modules
+  # (network, etc.) can use a uniform row_data$KEGG without re-reading the file.
+  row_data <- add_kegg_from_hmdb(row_data,
+                                 cfg$enrichment$mapping_file %||% NULL)
+
   list(
     expr_raw      = expr_raw,
     meta          = meta,
@@ -282,7 +287,7 @@ mod_met_filtered <- function(raw, config) {
 #' @return list with: \code{mat}, \code{meta}, \code{row_data}.
 #'
 mod_met_log <- function(filtered, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   method      <- norm_cfg$transform   %||% "log2"
   pseudocount <- norm_cfg$pseudocount %||% 1
   
@@ -369,10 +374,11 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               logged, meta, out_dir, config,
                               norm_eigenms = NULL,
-                              norm_eigenms_forced = NULL) {
+                              norm_eigenms_forced = NULL,
+                              norm_bio_factor = NULL) {
   cfg_mode <- config$modes$metabolomics
   pre_cfg  <- cfg_mode$preprocessing %||% list()
-  norm_cfg <- cfg_mode$normalization  %||% list()
+  norm_cfg <- cfg_mode$preprocessing  %||% list()
   
   chosen_norm <- tolower(pre_cfg$chosen_norm)
   
@@ -382,8 +388,9 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                        pqn            = norm_pqn$mat,
                        eigenms        = if (!is.null(norm_eigenms)) norm_eigenms$mat else stop("EigenMS target not available"),
                        eigenms_forced = if (!is.null(norm_eigenms_forced)) norm_eigenms_forced$mat else stop("EigenMS_forced target not available"),
+                       bio_factor     = if (!is.null(norm_bio_factor)) norm_bio_factor$mat else stop("mod_met_corrected: chosen_norm = 'bio_factor' but the normalization returned NULL. Set preprocessing.biological_factor_col to a per-sample metadata column (e.g. total protein)."),
                        stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
-                                    "Valid options: tss, median, pqn, eigenms, eigenms_forced.", chosen_norm))
+                                    "Valid options: tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
   )
   
   # Apply scaling if configured
@@ -474,7 +481,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 #'
 mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   pre_cfg <- config$modes$metabolomics$preprocessing %||% list()
@@ -506,7 +513,7 @@ mod_met_normalize_linear <- function(data, method, config) {
     }
   }
   
-  # PQN reference samples: use config$normalization$pqn_reference to specify
+  # PQN reference samples: use preprocessing.pqn_reference to specify
   # which sample(s) to use as the reference spectrum (e.g. a QC pool).
   # Options: a sample name, "pools" (auto-detect from is_QC/Pool columns),
   #          "median_pool" (middle pool by injection order), or null (default: all).
@@ -566,7 +573,7 @@ mod_met_normalize_linear <- function(data, method, config) {
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
 mod_met_normalize_eigenms <- function(data, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   # Extract group labels for EigenMS
@@ -604,7 +611,7 @@ mod_met_normalize_eigenms <- function(data, config) {
 #' @param config Full pipeline config list.
 #' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
 mod_met_normalize_eigenms_forced <- function(data, config) {
-  norm_cfg    <- config$modes$metabolomics$normalization %||% list()
+  norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
   
   cfg_mode  <- config$modes$metabolomics
@@ -674,6 +681,59 @@ mod_met_normalize_log <- function(data, config) {
   
   list(
     mat      = mat_shifted,
+    meta     = data$meta,
+    row_data = data$row_data
+  )
+}
+
+
+# ==============================================================================
+# mod_met_normalize_bio_factor — divide each sample by a measured biological
+# covariate (e.g. total protein), on the linear scale, then log2 transform
+# ==============================================================================
+
+#' Apply biological-factor normalization then log2 transformation
+#'
+#' Divides each sample by a per-sample numeric value (e.g. mg of total protein
+#' from a NanoDrop / BCA assay) read from a metadata column, then log2s — the
+#' same linear-then-log2 shape as \code{mod_met_normalize_linear()}. Use when
+#' intensities should be scaled to a measured input amount rather than to a
+#' within-sample statistic. The column is named by
+#' \code{preprocessing.biological_factor_col}; the values live in the sample
+#' metadata. Returns \code{NULL} when that column is unset (the target is built
+#' on every run but only used when \code{chosen_norm = "bio_factor"}).
+#'
+#' @param data   List returned by \code{mod_met_imputed()} (Linear scale); must
+#'   carry a \code{meta} table containing \code{biological_factor_col}.
+#' @param config Full pipeline config list.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}, or
+#'   \code{NULL} when \code{biological_factor_col} is unconfigured.
+mod_met_normalize_bio_factor <- function(data, config) {
+  cfg_mode    <- config$modes$metabolomics
+  norm_cfg    <- cfg_mode$preprocessing %||% list()
+  pseudocount <- norm_cfg$pseudocount %||% 1
+  factor_col  <- norm_cfg$biological_factor_col
+
+  # This target is built on every run (targets has no conditional build) but is
+  # only consumed when chosen_norm == "bio_factor". Return NULL when the covariate
+  # column is unconfigured so non-bio_factor runs don't fail here; the guard in
+  # mod_met_corrected() raises a clear error only if bio_factor is actually chosen.
+  if (is.null(factor_col) || !nzchar(factor_col)) {
+    message("mod_met_normalize_bio_factor: preprocessing.biological_factor_col is not ",
+            "set; returning NULL (only an error if chosen_norm = 'bio_factor').")
+    return(NULL)
+  }
+
+  # Align the covariate to sample columns via the configured sample-id column.
+  sample_col <- cfg_mode$effects$samples %||% NULL
+
+  mat_norm <- normalize_samples(data$mat, method = "bio_factor",
+                                meta = data$meta, bio_factor_col = factor_col,
+                                sample_col = sample_col)
+  mat_log  <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
+
+  list(
+    mat      = mat_log,
     meta     = data$meta,
     row_data = data$row_data
   )

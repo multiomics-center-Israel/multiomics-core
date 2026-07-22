@@ -16,6 +16,7 @@
 #' unimputed" contract (the DE step re-imputes it, and CV / Shiny exports still
 #' exclude imputed measurements). All downstream DE, QC and clustering consume
 #' the corrected data.
+
 #'
 #' These functions are side-effect free: they take a matrix (or `pre` list) and
 #' return a corrected matrix (or modified `pre`). File I/O, if any, lives in the
@@ -28,6 +29,7 @@
 #' unchanged. Otherwise `expr_work` and `expr_imp_single` become the complete
 #' corrected matrix, while `expr_filt` (and `expr_filt_pre_imp`) get the
 #' corrected values with the original NA pattern restored.
+
 #'
 #' @param pre Output of `preprocess_proteomics()` (a list with at least
 #'   `expr_filt` (log2 proteins x samples matrix) and `meta`).
@@ -38,6 +40,7 @@
 #'   `expr_imp_single` (complete) and `expr_filt`/`expr_filt_pre_imp` (corrected
 #'   observed values, NA where originally missing), plus `batch_corrected`/
 #'   `batch_method` metadata fields when a correction was applied.
+
 correct_batch_proteomics <- function(pre, config, seed = 42) {
   cfg <- config$modes$proteomics
   bc  <- get_proteomics_batch_config(cfg)
@@ -64,12 +67,14 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
       "i" = "Non-finite values usually come from log2 of zero/negative intensities upstream; filter or floor them before this step."
     ))
   }
+
   meta <- pre$meta
 
   sample_col <- cfg$effects$samples %||% cfg$id_columns$sample_col
   batch_var  <- resolve_batch_variable(meta, expr, bc$batch_col, sample_col)
   group_var  <- resolve_group_variable(meta, expr, bc$group_col %||% cfg$effects$color,
                                        sample_col, preserve = bc$preserve_condition)
+
   covariates <- resolve_batch_covariates(meta, expr, bc$covariates, sample_col)
 
   corrected <- switch(
@@ -107,6 +112,7 @@ correct_batch_proteomics <- function(pre, config, seed = 42) {
   pre$expr_imp_single   <- corrected
   pre$batch_corrected   <- TRUE
   pre$batch_method      <- bc$method
+
   pre
 }
 
@@ -190,6 +196,7 @@ resolve_group_variable <- function(meta, expr, group_col, sample_col, preserve =
         "i" = "Available columns: {.val {colnames(meta)}}."
       ))
     }
+
     return(NULL)
   }
   as.factor(as.character(align_meta_column(meta, expr, group_col, sample_col)))
@@ -273,6 +280,7 @@ correct_proteomics_combat <- function(expr, batch_var, group_var = NULL,
       "ComBat requires a matrix of finite values.",
       "i" = "Found {sum(is.na(expr))} NA and {sum(is.infinite(expr))} non-finite value(s) (e.g. from log2 of zero/negative intensities).",
       "i" = "Impute NAs and floor/remove non-finite values before batch correction."
+
     ))
   }
 

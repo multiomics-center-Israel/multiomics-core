@@ -16,12 +16,6 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
   
   cfg <- config$modes$proteomics
   
-  # Check if QC post is enabled
-  if (is.null(cfg$qc_post) || isFALSE(cfg$qc_post$enabled)) {
-    message("QC post-DE disabled in config.")
-    return(list(plots = list(), files = character(0)))
-  }
-  
   dirs <- create_legacy_output_dirs(out_dir)
   out_qc_post <- file.path(dirs$diagnostic_plots, "DE_plots")
   ensure_dir(out_qc_post)
@@ -29,13 +23,9 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
   plots <- list()
   files <- character(0)
   
-  # Read plot/output toggles from config
-  do_volcano <- isTRUE(cfg$qc_post$plots$volcano %||% TRUE)
-  do_ma      <- isTRUE(cfg$qc_post$plots$ma %||% TRUE)
-  do_write   <- isTRUE(cfg$qc_post$outputs$write_de_tables %||% TRUE)
   
   # Write the summary if available and enabled
-  if (do_write && !is.null(de_res$summary_df)) {
+  if (!is.null(de_res$summary_df)) {
     f_all <- file.path(out_qc_post, "de_summary_all.tsv")
     save_tsv_path(de_res$summary_df, f_all)
     files <- c(files, f_all)
@@ -51,7 +41,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
     if (is.null(de_tbl)) next
     
     # Volcano — emit one variant per p-value type so the report can show both
-    if (do_volcano) {
+    
       for (ptype in c("padj", "pval")) {
         p_volcano <- tryCatch(
           plot_volcano(de_tbl,
@@ -87,10 +77,9 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
         file.copy(f_volcano_padj, f_volcano_legacy, overwrite = TRUE)
         files <- c(files, f_volcano_legacy)
       }
-    }
+
     
     # MA
-    if (do_ma) {
       id_col <- cfg$de_table$id_col %||% "FeatureID"
       de_tbl_ma <- de_tbl
       if (!("AveExpr" %in% colnames(de_tbl_ma))) {
@@ -107,7 +96,7 @@ mod_proteomics_qc_post <- function(pre, de_res, config, out_dir, de_source = c("
       
       plots[[paste0("ma_", cn)]] <- p_ma
       files <- c(files, f_ma)
-    }
+    
   }
   
   # ---------- Top DE heatmaps ----------

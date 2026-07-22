@@ -48,7 +48,7 @@ generate_metabolomics_pptx <- function(pre, qc_res, de_res, feature_sel_res,
 
     metab_cfg  <- config$modes$metabolomics %||% config$modes$lipidomics
     de_cfg     <- metab_cfg$de %||% list()
-    norm_cfg   <- metab_cfg$normalization %||% list()
+    norm_cfg   <- metab_cfg$preprocessing %||% list()
     diag_dir   <- file.path(out_dir, "Diagnostic_plots")
 
     # Project info

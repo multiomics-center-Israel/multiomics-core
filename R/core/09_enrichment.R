@@ -313,6 +313,23 @@ load_gene_sets <- function(organism,
                     }
 
                     kegg_sets <- kegg_sets[lengths(kegg_sets) >= 10 & lengths(kegg_sets) <= 500]
+
+                    # Attach pathway ID -> name lookup so the report shows readable
+                    # names, not bare IDs. KEGGPATHID2NAME keys often drop the
+                    # organism prefix (e.g. "04110" vs "hsa04110"), so fall back to
+                    # matching on the digit portion when the prefixed ID misses.
+                    if (!is.null(kegg_gene$KEGGPATHID2NAME) &&
+                        nrow(kegg_gene$KEGGPATHID2NAME) > 0) {
+                        id2name <- setNames(kegg_gene$KEGGPATHID2NAME$to,
+                                            kegg_gene$KEGGPATHID2NAME$from)
+                        set_ids <- names(kegg_sets)
+                        kegg_names <- id2name[set_ids]
+                        miss <- is.na(kegg_names)
+                        kegg_names[miss] <- id2name[sub("^[a-z]+", "", set_ids[miss])]
+                        names(kegg_names) <- set_ids
+                        attr(kegg_sets, "descriptions") <- kegg_names
+                    }
+
                     gene_sets$KEGG <- kegg_sets
                     message("Loaded ", length(kegg_sets), " KEGG pathways")
                 }
@@ -518,9 +535,17 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
         names_vec <- lookup_go_term_names(pathway_ids)
         pathway_df$pathway_name <- unname(names_vec[pathway_ids])
     } else if (database == "KEGG" || grepl("KEGG", database, ignore.case = TRUE)) {
-        # For KEGG, the pathway names are usually already descriptive
-        # but we'll keep the ID for now as KEGG lookup is more complex
-        pathway_df$pathway_name <- pathway_ids
+        # Use the ID -> name lookup attached by load_gene_sets(); fall back to the
+        # bare ID for any pathway without a resolved name (e.g. KEGGREST fallback
+        # sets, which already carry the name in the pathway ID itself).
+        descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL
+        if (!is.null(descriptions)) {
+            names_vec <- unname(descriptions[pathway_ids])
+            names_vec[is.na(names_vec)] <- pathway_ids[is.na(names_vec)]
+            pathway_df$pathway_name <- names_vec
+        } else {
+            pathway_df$pathway_name <- pathway_ids
+        }
     } else {
         # For custom GMT, use descriptions attribute if available
         descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL

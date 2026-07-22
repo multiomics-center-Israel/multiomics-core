@@ -416,8 +416,8 @@ test_that("G1 metab: median + non-log2 transform -> NULL + warning (no wrong CV)
     pre  <- list(expr_work = log10(lin + 1), meta = meta)
     config <- list(modes = list(metabolomics = list(
         effects = list(samples = "SampleID"),
-        preprocessing = list(chosen_norm = "median"),
-        normalization = list(scaling = "none", transform = "log10", pseudocount = 1)
+        preprocessing = list(chosen_norm = "median", scaling = "none",
+                             transform = "log10", pseudocount = 1)
     )))
 
     expect_warning(

@@ -225,3 +225,4 @@ test_that("batch correction restores the NA pattern in expr_filt", {
     expect_equal(out$expr_filt[obs], out$expr_work[obs])
     expect_identical(out$expr_filt_pre_imp, out$expr_filt)
 })
+
