@@ -42,16 +42,30 @@ run_domain_analysis <- function(de_res, config, out_dir) {
                                 !is.na(fc_vals) & abs(fc_vals) >= fc_cutoff)
     }
 
-    id_col <- cfg$id_columns$protein_id %||% "FeatureID"
+    # summary_df is keyed by the DE FeatureID column, not the raw protein_id
+    # column (cfg$id_columns$protein_id, e.g. "Protein.Group"). Using the latter
+    # silently looked up a non-existent column -> 0 significant -> always skipped.
+    id_col <- cfg$de_table$id_col %||% "FeatureID"
+    if (!id_col %in% colnames(summary_df)) {
+        id_col <- intersect(c("FeatureID", cfg$id_columns$protein_id), colnames(summary_df))[1]
+    }
+    if (is.na(id_col) || !nzchar(id_col) || !id_col %in% colnames(summary_df)) {
+        stop("Domain analysis: could not determine ID column in summary_df. Available: ",
+             paste(colnames(summary_df), collapse = ", "))
+    }
     sig_proteins <- summary_df[[id_col]][sig_mask]
+
+    # Genes may be "SYMBOL | description" (custom-mapped) and/or ";"-joined;
+    # extract the bare leading gene symbol for UniProt/InterPro queries.
+    .first_gene_symbol <- function(g) {
+        if (is.na(g) || !nzchar(g)) return(NA_character_)
+        trimws(strsplit(strsplit(g, ";", fixed = TRUE)[[1]][1], "|", fixed = TRUE)[[1]][1])
+    }
 
     # Map to gene symbols if available
     if ("Genes" %in% colnames(summary_df)) {
         gene_map <- setNames(
-            vapply(summary_df[["Genes"]], function(g) {
-                if (is.na(g) || !nzchar(g)) return(NA_character_)
-                trimws(strsplit(g, ";")[[1]][1])
-            }, character(1)),
+            vapply(summary_df[["Genes"]], .first_gene_symbol, character(1)),
             summary_df[[id_col]]
         )
         sig_genes <- gene_map[sig_proteins]
@@ -61,10 +75,7 @@ run_domain_analysis <- function(de_res, config, out_dir) {
     }
 
     all_genes <- if ("Genes" %in% colnames(summary_df)) {
-        g <- vapply(summary_df[["Genes"]], function(g) {
-            if (is.na(g) || !nzchar(g)) return(NA_character_)
-            trimws(strsplit(g, ";")[[1]][1])
-        }, character(1))
+        g <- vapply(summary_df[["Genes"]], .first_gene_symbol, character(1))
         g[!is.na(g) & nzchar(g)]
     } else {
         summary_df[[id_col]]

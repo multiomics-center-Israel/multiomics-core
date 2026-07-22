@@ -1084,7 +1084,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-dist-heatmap, eval=show_distance, results='asis'}
-figure_legend("Euclidean distance matrix of imputed protein expression values. Darker colors indicate larger distances (less similar samples). Samples from the same experimental group should cluster together with smaller (lighter) inter-sample distances.")
+figure_legend("Euclidean distance matrix of imputed protein expression values. Darker colors indicate smaller distances (more similar samples), following the DESeq2 sample-distance convention. Samples from the same experimental group should cluster together as darker (smaller-distance) blocks.")
 ```
 
 ```{r commentary-distance, eval=show_distance, results='asis'}
