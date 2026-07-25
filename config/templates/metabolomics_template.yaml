@@ -199,7 +199,17 @@ modes:
           enabled: true
           algorithm: "hclust"
           distance: "euclidean"
-          k_max: 20
+          # k is chosen by the gap statistic (k_method defaults to "gap" in code).
+          # Gap-statistic runtime is roughly gap_B * k_max * O(n_features^2).
+          k_max: 20                # Max K tested. Cost is LINEAR in k_max — set to
+                                   # the biologically expected max number of clusters.
+          gap_B: 50                # Gap-statistic bootstraps (code default: 100).
+                                   # 50 is stable enough for firstSEmax at ~half cost.
+          min_variance: 0          # Drop features with variance <= this before the
+                                   # gap statistic (variance units; code default 0 =
+                                   # only constant rows). Raising it feeds fewer
+                                   # features in, cutting runtime QUADRATICALLY
+                                   # (smaller O(n_features^2)) — the biggest speed lever.
           nstart: 25
           # Only relevant in partition clustering to generate profile plots
           profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
