@@ -25,7 +25,9 @@
 pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
                               mummichog_enabled = FALSE) {
   # -- Validate chosen_norm at plan-definition time --------------------------
-  valid_norms <- c("tss", "median", "pqn", "eigenms", "eigenms_forced", "bio_factor")
+  # "none" = analysis mode on the transform-only matrix (met_log), for tables
+  # that arrive already normalized; NULL stays QC-review mode.
+  valid_norms <- c("none", "tss", "median", "pqn", "eigenms", "eigenms_forced", "bio_factor")
   if (!is.null(chosen_norm)) {
     chosen_norm <- tolower(chosen_norm)
     if (!chosen_norm %in% valid_norms) {

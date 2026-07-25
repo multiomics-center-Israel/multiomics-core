@@ -71,8 +71,12 @@ modes:
 
       # ---- Normalization selection workflow ----
       # null  → QC review mode (compute all methods, stop after report)
-      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" | "bio_factor"
-      #   → full pipeline
+      # "none" | "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" |
+      #   "bio_factor"  → full pipeline
+      #
+      # "none": skip sample normalization — use when the input table is already
+      # normalized upstream. transform/scaling below still apply, so log2 is
+      # still taken; if the table also arrives log-scaled, set transform: "none".
       chosen_norm: null
 
       # ---- Biological-factor normalization (chosen_norm: "bio_factor") ----
