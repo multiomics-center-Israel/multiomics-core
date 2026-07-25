@@ -469,7 +469,17 @@ cat("</div>\n")
     list(label = "Filtering",
          ran   = !is.na(.tm_n_before) && !is.na(.tm_n_after) && .tm_n_before != .tm_n_after),
     list(label = "Normalization",
-         ran   = (tolower(pre$info$normalization$method %||% metab_cfg$preprocessing$chosen_norm %||% "none") != "none")),
+         # "ran" if sample normalization OR a transform OR scaling was applied.
+         # chosen_norm = "none" skips sample normalization but still log2s (and
+         # optionally scales), so keying off the method name alone would wrongly
+         # report "skipped" for a table that was in fact transformed.
+         ran   = {
+             .ni <- pre$info$normalization
+             .norm_ran <- tolower(.ni$method %||% metab_cfg$preprocessing$chosen_norm %||% "none") != "none"
+             .tf_ran   <- !is.null(.ni$transform) && tolower(.ni$transform) != "none"
+             .sc_ran   <- !is.null(.ni$scaling)   && tolower(.ni$scaling)   != "none"
+             .norm_ran || .tf_ran || .sc_ran
+         }),
     list(label = "Differential expression",
          ran   = !is.null(de_res) && !is.null(de_res$summary_df)),
     list(label = "Feature selection (RF / PLS-DA)",
