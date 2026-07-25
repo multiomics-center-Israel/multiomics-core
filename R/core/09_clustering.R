@@ -894,7 +894,7 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
       
       if (k_method == "gap") {
         # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
-        gap_B <- cl_cfg$gap_B %||% 100
+        gap_B <- cl_cfg$gap_B %||% 50
         final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
       } else {
         # Silhouette on hierarchical tree cuts: explicit k -> score table,
