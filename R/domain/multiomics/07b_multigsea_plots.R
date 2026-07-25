@@ -1440,7 +1440,10 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     for (om in intersect(gene_omics, names(de_results))) {
         gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
         if (is.null(gmt_path) || !nzchar(gmt_path)) next
-        gmt_abs <- resolve_raw_path(config, gmt_path)
+        # Resolve like every other user-supplied input (metabolomics enrichment,
+        # data files): absolute paths pass through, relative ones resolve under
+        # the raw/ data dir. resolve_raw_path() would mangle an absolute path.
+        gmt_abs <- resolve_input_path(config, gmt_path)
         if (!file.exists(gmt_abs)) {
             message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
             next
