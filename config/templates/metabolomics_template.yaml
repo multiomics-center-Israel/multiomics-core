@@ -102,6 +102,15 @@ modes:
       # ---- Transformation (applied inside the normalization branches) ----
       transform: "log2"
 
+      # ---- Input already on log scale? ----
+      # Set true when the input table is ALREADY log-transformed (e.g. a
+      # normalized+logged table fed in with chosen_norm: "none"). This tells the
+      # differential analysis to compute non-limma fold changes as the difference
+      # of group means on the log scale (the correct log2 FC) instead of
+      # log2(mean_B/mean_A) on a linear matrix. When true, also set transform:
+      # "none" to avoid log-transforming an already-logged table twice.
+      input_is_log: false
+
       # ---- Feature scaling ----
       # IMPORTANT: scaling must NOT be applied before differential analysis for
       # metabolomics. Clustering and PCA use a built-in z-score that does NOT

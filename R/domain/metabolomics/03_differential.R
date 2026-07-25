@@ -198,8 +198,16 @@ load_precomputed_metabolomics_de <- function(config) {
 
 #' Run metabolomics differential analysis
 #'
+#' Fold changes for the non-limma methods (t_test/t_test_equal/wilcoxon) are
+#' computed as log2(mean_B / mean_A) on the linear-scale filtered matrix. Set
+#' \code{preprocessing.input_is_log: true} when the input table is already
+#' log-scaled — the fold change is then taken as the difference of group means on
+#' the log matrix (the correct log2 fold change), avoiding a spurious log-of-ratio.
+#'
 #' @param pre    List from preprocess_metabolomics() (pre contract).
 #' @param config Full pipeline config.
+#' @param contrast_table Optional data.frame of contrasts (Numerator/Denominator,
+#'   optional Contrast_name); falls back to \code{config$modes$metabolomics$de$contrasts}.
 #' @return list conforming to the DE contract:
 #'   summary_df, method, de_tables (per-contrast list), de_model
 run_metabolomics_de <- function(pre, config, contrast_table) {
@@ -280,32 +288,48 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         log2fc_cut <- log2(linear_fc)
     }
 
-    # Raw filtered matrix for computing log2(FC) from intensity ratios
-    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale). Align it to
+    # Fold-change matrix for the non-limma methods. By default FC is log2(mean_B /
+    # mean_A) computed on expr_filt, the pre-transform filtered matrix, which is
+    # assumed to be on a LINEAR scale (MetaboAnalyst-compatible). It is aligned to
     # the biological samples used in the fit, in the same column order, so the
-    # two-group idx_A/idx_B (from the filtered condition) index the right columns.
+    # two-group idx_A/idx_B index the right columns. limma is unaffected — it
+    # derives logFC from the model on the log-scale test matrix.
     #
-    # SCALE CAVEAT: expr_filt is the pre-transform filtered matrix and is assumed
-    # to be on a LINEAR scale. The non-limma methods below compute FC as
-    # log2(mean_B / mean_A) on it. When chosen_norm = "none" (an already-processed
-    # table fed in directly), that table may already be log-scaled, which would
-    # make the linear-ratio FC (and the significance flags derived from it) wrong.
-    # limma is unaffected (it derives FC from the model on the log-scale test
-    # matrix). Warn so the mismatch is not silent; the full scale-aware fix is
-    # tracked separately.
+    # When the input table is ALREADY log-scaled (preprocessing.input_is_log:
+    # true — e.g. a normalized table fed straight in), a linear-ratio FC would be
+    # wrong. In that case pass mat_for_fc = NULL so de_two_group() computes the
+    # correct log2 fold change directly as the difference of group means on the
+    # log-scale matrix (mean_B - mean_A).
     chosen_norm_de <- tolower(cfg$preprocessing$chosen_norm %||% "")
-    if (method != "limma" && identical(chosen_norm_de, "none")) {
+    input_is_log   <- isTRUE(cfg$preprocessing$input_is_log)
+    transform_cfg  <- tolower(cfg$preprocessing$transform %||% "log2")
+
+    if (input_is_log && transform_cfg != "none") {
         warning(sprintf(
-            "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Use method 'limma', or supply the table on a linear scale.",
-            method
+            "metabolomics DE: preprocessing.input_is_log = true but transform = '%s'; the input is log-transformed again (double-log). Set transform: 'none' when the input is already log-scaled.",
+            transform_cfg
         ))
     }
 
-    mat_raw <- pre$expr_filt
-    if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
-        mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
+    if (input_is_log) {
+        # Already-log input: FC = difference of group means on the log matrix.
+        mat_raw <- NULL
     } else {
-        mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
+        mat_raw <- pre$expr_filt
+        if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
+            mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
+        } else {
+            mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
+        }
+        # When we cannot tell the input scale, caution: chosen_norm = "none" feeds
+        # the raw filtered table straight through, so if it was already log-scaled
+        # (without input_is_log set) the linear-ratio FC would be wrong.
+        if (method != "limma" && identical(chosen_norm_de, "none") && !is.null(mat_raw)) {
+            warning(sprintf(
+                "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, set preprocessing.input_is_log: true (and transform: 'none'); otherwise these fold changes and their significance flags will be wrong.",
+                method
+            ))
+        }
     }
 
     # Run DE for each contrast
