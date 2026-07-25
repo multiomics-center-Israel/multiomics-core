@@ -101,6 +101,14 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
     scaling       <- tolower(norm_cfg$scaling %||% "none")
     pseudocount   <- norm_cfg$pseudocount %||% 1
 
+    # Drift correction divides each (log-scale) value by a per-sample LOESS
+    # factor, so a drift-corrected workspace is no longer exactly
+    # log2(x + pseudocount) and the 2^x - pseudocount inverse would yield wrong
+    # linear values. Applies to every normalization method (drift runs on the
+    # selected matrix regardless of chosen_norm), so gate the exact inverse on it.
+    drift_applied <- isTRUE(pre$info$drift$drift_applied)
+
+    use_exact_inverse <- FALSE
     if (identical(scaling, "none")) {
         # The 2^x inverse is only valid on a genuinely log2 workspace. These
         # normalization methods hardcode log2(x + pseudocount) regardless of
@@ -124,17 +132,26 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
             ))
             return(NULL)
         }
+        use_exact_inverse <- !drift_applied
+    }
+
+    if (use_exact_inverse) {
         # Post-normalization linear matrix (exact inverse on the log2 workspace).
         expr_linear <- 2^as.matrix(pre$expr_work) - pseudocount
-        # Floor tiny negatives from approximate back-transform / drift (matches
-        # compute_linear_rsd()); keeps the value count for CV.
+        # Floor tiny negatives from approximate back-transform; keeps the value
+        # count for CV.
         neg <- is.finite(expr_linear) & expr_linear < 0
         expr_linear[neg] <- .Machine$double.eps
     } else {
-        # Scaling enabled -> reconstruction invalid; use filtered pre-norm linear.
+        # Exact reconstruction invalid (feature scaling, or drift correction broke
+        # the log2 form); use the pre-normalization linear matrix instead.
+        reason <- if (!identical(scaling, "none"))
+            sprintf("feature scaling = '%s'", scaling)
+        else
+            "drift correction was applied, so expr_work is no longer an exact log2 workspace"
         warning(sprintf(
-            "metabolomics group CV: feature scaling = '%s'; using pre-normalization 'expr_filt' (CV includes technical variation, not directly comparable to other omics).",
-            scaling
+            "metabolomics group CV: %s; using pre-normalization 'expr_filt' (CV includes technical variation, not directly comparable to other omics).",
+            reason
         ))
         if (is.null(pre$expr_filt)) return(NULL)
         expr_linear <- as.matrix(pre$expr_filt)

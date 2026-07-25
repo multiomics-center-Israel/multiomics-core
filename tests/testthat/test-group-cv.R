@@ -551,3 +551,65 @@ test_that("G2 rnaseq: tximport source_type IS whitelisted -> finite CV", {
     expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
     expect_true(all(is.finite(cv$CV.ctrl)))
 })
+
+
+# =============================================================================
+# G4 — Metabolomics drift-correction invertibility guard
+#      LOESS drift correction divides each log-scale value by a per-sample
+#      factor, so a drift-corrected expr_work is no longer exactly
+#      log2(x + pseudocount). The 2^x - p inverse must NOT be used; CV falls
+#      back to the pre-normalization linear matrix (expr_filt). Applies to every
+#      normalization method, so this guard is independent of chosen_norm.
+# =============================================================================
+test_that("G4 metab: drift-corrected workspace falls back to expr_filt for CV", {
+    meta   <- wiring_meta()
+    lin    <- wiring_linear_matrix(meta$SampleID)
+    pseudo <- 1
+    # expr_work is a valid log2 workspace whose exact inverse is `lin`, but drift
+    # ran. expr_filt is a DIFFERENT matrix with a clearly different spread, so the
+    # assertion proves the fallback (expr_filt) was used, not the 2^x inverse.
+    lin2 <- lin
+    lin2[1, 4:6] <- c(100, 500, 900)   # trt/F1: CV 80% vs lin's 9.09%
+    pre <- list(
+        expr_work = log2(lin + pseudo),
+        expr_filt = lin2,
+        meta      = meta,
+        info      = list(drift = list(drift_applied = TRUE))
+    )
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "pqn", scaling = "none", pseudocount = pseudo)
+    )))
+
+    expect_warning(
+        cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config),
+        "drift correction"
+    )
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    # Matches expr_filt's CV (the fallback), NOT 2^expr_work - p (which is `lin`).
+    expect_equal(cv$CV.trt[1], 100 * stats::sd(lin2[1, 4:6]) / mean(lin2[1, 4:6]))
+})
+
+test_that("G4 metab: no drift -> exact 2^expr_work inverse is used (expr_filt ignored)", {
+    meta   <- wiring_meta()
+    lin    <- wiring_linear_matrix(meta$SampleID)
+    pseudo <- 1
+    # expr_filt is deliberately bogus (all ones) to prove the exact-inverse path
+    # ignores it when drift did NOT run.
+    pre <- list(
+        expr_work = log2(lin + pseudo),
+        expr_filt = matrix(1, nrow(lin), ncol(lin), dimnames = dimnames(lin)),
+        meta      = meta,
+        info      = list(drift = list(drift_applied = FALSE))
+    )
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "pqn", scaling = "none", pseudocount = pseudo)
+    )))
+
+    cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    # 2^expr_work - p == lin; bogus expr_filt would have given CV 0.
+    expect_equal(cv$CV.trt[1], 100 * stats::sd(lin[1, 4:6]) / mean(lin[1, 4:6]))
+})
