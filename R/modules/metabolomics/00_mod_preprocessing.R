@@ -383,6 +383,12 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   chosen_norm <- tolower(pre_cfg$chosen_norm)
   
   chosen_mat <- switch(chosen_norm,
+                       # "none": table is already normalized upstream — skip
+                       # sample normalization and use the transform-only matrix.
+                       # transform/scaling still apply via preprocessing.transform
+                       # and preprocessing.scaling (set transform: "none" too if
+                       # the table also arrives log-scaled).
+                       none           = logged$mat,
                        tss            = norm_tss$mat,
                        median         = norm_median$mat,
                        pqn            = norm_pqn$mat,
@@ -390,7 +396,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                        eigenms_forced = if (!is.null(norm_eigenms_forced)) norm_eigenms_forced$mat else stop("EigenMS_forced target not available"),
                        bio_factor     = if (!is.null(norm_bio_factor)) norm_bio_factor$mat else stop("mod_met_corrected: chosen_norm = 'bio_factor' but the normalization returned NULL. Set preprocessing.biological_factor_col to a per-sample metadata column (e.g. total protein)."),
                        stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
-                                    "Valid options: tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
+                                    "Valid options: none, tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
   )
   
   # Apply scaling if configured

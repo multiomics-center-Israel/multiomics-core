@@ -285,9 +285,12 @@ build_shiny_payload_metabolomics <- function(
     payload$log_fc_cutoff <- log2(linear_fc)
 
     payload$fc_cutoff <- linear_fc
-    # Build normalization method description
+    # Build normalization method description. Report the ACTUAL selected sample
+    # normalization (chosen_norm) rather than the legacy preprocessing$sample_norm
+    # field, which stays at its template default (e.g. "pqn") even when
+    # chosen_norm = "none" skips sample normalization.
     norm_method <- paste0(
-        norm_cfg$sample_norm %||% "none",
+        preprocessing_cfg$chosen_norm %||% norm_cfg$sample_norm %||% "none",
         "/",
         norm_cfg$transform %||% "none",
         "/",
