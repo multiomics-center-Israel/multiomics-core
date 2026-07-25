@@ -284,6 +284,23 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale). Align it to
     # the biological samples used in the fit, in the same column order, so the
     # two-group idx_A/idx_B (from the filtered condition) index the right columns.
+    #
+    # SCALE CAVEAT: expr_filt is the pre-transform filtered matrix and is assumed
+    # to be on a LINEAR scale. The non-limma methods below compute FC as
+    # log2(mean_B / mean_A) on it. When chosen_norm = "none" (an already-processed
+    # table fed in directly), that table may already be log-scaled, which would
+    # make the linear-ratio FC (and the significance flags derived from it) wrong.
+    # limma is unaffected (it derives FC from the model on the log-scale test
+    # matrix). Warn so the mismatch is not silent; the full scale-aware fix is
+    # tracked separately.
+    chosen_norm_de <- tolower(cfg$preprocessing$chosen_norm %||% "")
+    if (method != "limma" && identical(chosen_norm_de, "none")) {
+        warning(sprintf(
+            "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Use method 'limma', or supply the table on a linear scale.",
+            method
+        ))
+    }
+
     mat_raw <- pre$expr_filt
     if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
         mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
