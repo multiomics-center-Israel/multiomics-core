@@ -203,8 +203,6 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
                 round(100 * n_genes / n_genes_raw, 1) else NA
         ),
         feature_flags = list(
-            batch_enabled      = isTRUE(rna_cfg$batch_correction$enabled),
-            batch_method       = rna_cfg$batch_correction$method %||% "combat_seq",
             pathway_enabled    = isTRUE(rna_cfg$pathway$enabled),
             clustering_enabled = isTRUE(rna_cfg$clustering$enabled)
         )
@@ -458,15 +456,6 @@ generate_flowchart_html <- function(stats) {
     parts <- c(parts, list(
         fc_node("\u2696\uFE0F", "Normalization", norm_detail, "fc-node-norm")
     ))
-
-    # --- Batch Correction (optional) ---
-    if (isTRUE(ff$batch_enabled)) {
-        batch_detail <- esc(ff$batch_method)
-        parts <- c(parts, list(
-            fc_arrow(),
-            fc_node("\U0001F504", "Batch Correction", batch_detail, "fc-node-batch")
-        ))
-    }
 
     # --- QC / DE split (always 2 branches) ---
     de_method <- toupper(stats$methods$de_method)
