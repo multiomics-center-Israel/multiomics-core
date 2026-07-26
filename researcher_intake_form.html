@@ -693,7 +693,6 @@ input.invalid, select.invalid, textarea.invalid {
           <label><input type="checkbox" id="pref_ppi"> PPI networks</label>
           <label><input type="checkbox" id="pref_clustering" checked> Clustering</label>
           <label><input type="checkbox" id="pref_batch"> Batch correction</label>
-          <label><input type="checkbox" id="pref_deconv"> Cell-type deconvolution</label>
           <label><input type="checkbox" id="pref_advstats"> Advanced statistics</label>
         </div>
       </div>
@@ -1046,7 +1045,6 @@ function collectData() {
       ppi_networks: document.getElementById('pref_ppi').checked,
       clustering: document.getElementById('pref_clustering').checked,
       batch_correction: document.getElementById('pref_batch').checked,
-      deconvolution: document.getElementById('pref_deconv').checked,
       advanced_stats: document.getElementById('pref_advstats').checked,
       genes_of_interest: genes,
       pathways_of_interest: val('pathways_of_interest'),
@@ -1187,7 +1185,6 @@ function printSummary() {
   if (data.analysis_preferences.ppi_networks) analyses.push('PPI networks');
   if (data.analysis_preferences.clustering) analyses.push('Clustering');
   if (data.analysis_preferences.batch_correction) analyses.push('Batch correction');
-  if (data.analysis_preferences.deconvolution) analyses.push('Cell-type deconvolution');
   if (data.analysis_preferences.advanced_stats) analyses.push('Advanced statistics');
   html += field('Analyses', analyses.join(', ') || 'None selected');
   if (data.analysis_preferences.genes_of_interest.length) html += field('Genes of Interest', data.analysis_preferences.genes_of_interest.join(', '));
@@ -1257,7 +1254,6 @@ function clearForm() {
   document.getElementById('pref_ppi').checked = false;
   document.getElementById('pref_clustering').checked = true;
   document.getElementById('pref_batch').checked = false;
-  document.getElementById('pref_deconv').checked = false;
   document.getElementById('pref_advstats').checked = false;
 
   // Reset groups table to 2 rows
