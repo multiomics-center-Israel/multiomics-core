@@ -1372,7 +1372,12 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
             TERM2NAME = term2name,
             minGSSize = 5,
             maxGSSize = 500,
-            pvalueCutoff = 1.0
+            # Ask enricher for every tested set (p and q cutoffs both open); this
+            # wrapper does its own padj / raw-p thresholding below. Leaving the
+            # default qvalueCutoff = 0.2 would silently drop rows with raw
+            # p < 0.05 but q >= 0.2 before the raw-p fallback ever sees them.
+            pvalueCutoff = 1.0,
+            qvalueCutoff = 1.0
         )
         if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
             df <- as.data.frame(res)
@@ -1457,7 +1462,10 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
         sig <- character(0); univ <- character(0)
         for (nm in names(de_tables)) {
             df  <- de_tables[[nm]]
-            fid <- as.character(df$feature_id)
+            # Match GMT members by bare ID: RNA feature_ids may carry a "Gene:"
+            # prefix (e.g. "Gene:EHI_012345") while custom GMTs list the bare ID.
+            # The single-omics RNA pathway module strips it the same way.
+            fid <- sub("^Gene:", "", as.character(df$feature_id))
             univ <- c(univ, fid)
             s <- fid[!is.na(df$padj) & df$padj < 0.05]
             if (length(s) < 5) s <- fid[!is.na(df$pvalue) & df$pvalue < 0.05]
@@ -1475,8 +1483,13 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
                 length(univ), " tested features")
     }
 
-    if (length(per_omics_sig) == 0) {
-        message("Multi-ORA (GMT): no gene-based omics with a usable GMT + sig features")
+    # A cross-omics ORA needs at least two gene-based GMT omics. With only one
+    # (e.g. a non-model RNA+metabolomics run, where metabolomics is not covered
+    # by this gene-based fallback) the pooled result would be single-omic while
+    # presenting as multi-omics, so decline instead.
+    if (length(per_omics_sig) < 2) {
+        message("Multi-ORA (GMT): need >= 2 gene-based omics with a usable GMT + ",
+                "sig features; found ", length(per_omics_sig), " -- skipping")
         return(NULL)
     }
 
