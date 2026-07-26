@@ -61,6 +61,7 @@ modes:
       enabled: true
       method: "fgsea"
       databases: ["GO", "KEGG"]
+      gmt_file: null          # Custom GMT for non-model organisms; enables the GMT-based multi-ORA fallback (absolute or relative to raw/)
 
     commentary:
       enabled: true
@@ -111,6 +112,7 @@ modes:
       enabled: true
       method: "both"
       databases: ["GO", "KEGG"]
+      gmt_file: null          # Custom GMT for non-model organisms; enables the GMT-based multi-ORA fallback (absolute or relative to raw/)
 
     ppi:
       enabled: true
