@@ -1278,7 +1278,11 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
             keyType = "kegg",
             minGSSize = 5,
             maxGSSize = 500,
-            pvalueCutoff = 1.0
+            # Open both cutoffs and let this wrapper threshold below; the default
+            # qvalueCutoff = 0.2 would otherwise drop rows with raw p < 0.05 but
+            # q >= 0.2 before the raw-p fallback sees them (same as the enricher path).
+            pvalueCutoff = 1.0,
+            qvalueCutoff = 1.0
         )
         if (!is.null(res) && nrow(as.data.frame(res)) > 0) {
             df <- as.data.frame(res)
