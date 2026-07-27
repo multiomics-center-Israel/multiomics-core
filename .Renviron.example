@@ -13,3 +13,11 @@ MULTIOMICS_CONFIG=/path/to/your/config.yaml
 # set it below. An ABSOLUTE path is the most robust
 # (e.g. /home/you/multiomics-core/envs/mummichog/bin/python).
 # MUMMICHOG_PYTHON=envs/mummichog/bin/python
+
+# Path to the pinned TabPFN venv's Python interpreter. Only needed to enable the
+# TabPFN side of the classifier-benchmark POC (utils/benchmark_tabpfn_metab.R);
+# the benchmark falls back to RF-only when this is unset/absent. Leave COMMENTED
+# to use the platform-aware default (envs/tabpfn/bin/python on Unix,
+# envs/tabpfn/Scripts/python.exe on Windows). Build the venv with
+# `bash setup-tabpfn-venv.sh` — it prints the exact line for your machine.
+# TABPFN_PYTHON=envs/tabpfn/bin/python

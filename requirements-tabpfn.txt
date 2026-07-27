@@ -1,0 +1,11 @@
+# Pinned Python environment for the TabPFN classifier-benchmark POC.
+# Installed into an ISOLATED venv (envs/tabpfn) — never into the main pipeline env.
+# Regenerate the fully-resolved lockfile with setup-tabpfn-venv.sh (pip freeze).
+#
+# tabpfn is left unpinned here; requirements-tabpfn.lock (produced on first setup)
+# is the exact reproduction anchor. Pin an explicit tabpfn== once you have settled
+# on a version for the study.
+tabpfn
+scikit-learn
+numpy
+pandas
