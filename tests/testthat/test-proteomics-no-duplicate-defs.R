@@ -49,9 +49,13 @@ test_that("no proteomics domain function is defined more than once", {
     }
 
     dup <- defs[vapply(defs, length, integer(1L)) > 1L]
-    # Drop only the exact allowlisted collisions; any extra file keeps it failing.
+    # Drop only the exact allowlisted collisions; any extra definition keeps it
+    # failing. Compare as a multiset (identical() on sorted vectors) rather than
+    # setequal(): a second definition inside one allowlisted file changes the
+    # count but not the set, and must still be reported as a new shadow.
     for (nm in names(known_duplicates)) {
-        if (!is.null(dup[[nm]]) && setequal(dup[[nm]], known_duplicates[[nm]])) {
+        if (!is.null(dup[[nm]]) &&
+            identical(sort(dup[[nm]]), sort(known_duplicates[[nm]]))) {
             dup[[nm]] <- NULL
         }
     }
