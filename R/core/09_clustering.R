@@ -33,6 +33,7 @@
 #' @param corr_cutoff Minimum correlation threshold (overrides config)
 #' @param counts_cutoff_high Minimum count for "1" positions (overrides config)
 #' @param counts_cutoff_low Maximum count for "0" positions; NULL disables (overrides config)
+#' @param feature_term Noun used in pattern-plot titles ("genes" by default; pass "features" for non-transcriptomic omics such as metabolomics)
 #' @return List with files (paths), plots (ggplot objects), best (pattern assignments)
 run_binary_patterns <- function(expr_mat_corr,
                                 expr_mat_counts = NULL,
@@ -43,8 +44,9 @@ run_binary_patterns <- function(expr_mat_corr,
                                 summary_df = NULL,
                                 corr_cutoff = 0.8,
                                 counts_cutoff_high = 0,
-                                counts_cutoff_low = NULL, 
-                                annot_context = NULL) {
+                                counts_cutoff_low = NULL,
+                                annot_context = NULL,
+                                feature_term = "genes") {
   stopifnot(is.matrix(expr_mat_corr) || is.data.frame(expr_mat_corr))
   expr_mat_corr <- as.matrix(expr_mat_corr)
   stopifnot(is.data.frame(meta))
@@ -236,7 +238,7 @@ run_binary_patterns <- function(expr_mat_corr,
       annotation_row_builder = TRUE,
       annotation_row_context = annot_context,
       out_file = f_hm,
-      title = sprintf("Pattern %s (%d genes)", pat, length(feats_pat)),
+      title = sprintf("Pattern %s (%d %s)", pat, length(feats_pat), feature_term),
       cluster_cols = FALSE
     )
     
@@ -604,7 +606,7 @@ get_n_groups_from_effects <- function(pre, cfg) {
 #' Decide which clustering steps to run (data-driven)
 #'
 #' Hierarchical can always run when enabled.
-#' Partition + Binary patterns run only if n_groups >= min_groups (default 3).
+#' Partition + Binary patterns run only if n_groups > min_groups (default 2).
 #'
 #' @param pre pre object
 #' @param cfg proteomics mode config with $clustering
@@ -615,8 +617,7 @@ clustering_run_flags <- function(pre, cfg) {
     return(list(hierarchical = FALSE, partition = FALSE, binary_patterns = FALSE))
   }
   
-  # config defaults (safe)
-  min_groups <- cl$min_groups %||% 3L
+  min_groups <- 2L # minimum number of groups needed for clustering
   n_groups <- get_n_groups_from_effects(pre, cfg)
   
   # step blocks may be missing; treat missing as enabled=FALSE unless explicitly TRUE
@@ -634,7 +635,7 @@ clustering_run_flags <- function(pre, cfg) {
   bin_enabled <- isTRUE(bin_enabled && !is.null(bin_group_col))
   
   # guards for data suitability
-  can_multi_group <- isTRUE(n_groups >= as.integer(min_groups))
+  can_multi_group <- isTRUE(n_groups > as.integer(min_groups))
   
   list(
     hierarchical    = hier_enabled,
@@ -865,8 +866,12 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
     z_gm <- zscore_rows(gm)
   }
   
-  # Configuration parameters
-  k_fixed <- cl_cfg$k
+  # Configuration parameters.
+  # Use [["k"]] (exact), NOT $k: `$` does partial matching, so when a config
+  # sets k_max but no k, `cl_cfg$k` matches `k_max` and silently fixes k to
+  # k_max — skipping auto-k selection and crashing cutree() when k_max exceeds
+  # the feature count.
+  k_fixed <- cl_cfg[["k"]]
   k_max <- cl_cfg$k_max %||% 20
   nstart <- cl_cfg$nstart %||% 25
   
@@ -889,7 +894,7 @@ perform_partition_clustering_effects <- function(expr_mat, meta, cfg, de_feature
       
       if (k_method == "gap") {
         # Gap statistic (matches Neat_RNA-Seq: firstSEmax, SE.factor=1)
-        gap_B <- cl_cfg$gap_B %||% 100
+        gap_B <- cl_cfg$gap_B %||% 50
         final_k <- choose_k_gap_statistic(z_gm, k_max = k_max, B = gap_B)
       } else {
         # Silhouette on hierarchical tree cuts: explicit k -> score table,
@@ -1074,16 +1079,16 @@ save_cluster_profile_outputs <- function(expr_mat, meta, clusters, cfg, out_dir)
   
   group_col  <- get_clustering_group_col(cfg, meta)
   sample_col <- cfg$effects$samples
-  color_col  <- cfg$clustering$steps$partition$color_col  # NULL if not set
-  x_axis_col <- cfg$clustering$steps$partition$x_axis_col %||% group_col
+  color_col  <- cfg$clustering$steps$partition$profile_color_col  # NULL if not set
+  x_axis_col <- cfg$clustering$steps$partition$profile_x_axis_col %||% group_col
   
   if (!is.null(color_col) && !(color_col %in% colnames(meta))) {
-    warning(sprintf("clustering$steps$partition$color_col '%s' not found in metadata; ignoring.",
+    warning(sprintf("clustering$steps$partition$profile_color_col '%s' not found in metadata; ignoring.",
                     color_col))
     color_col <- NULL
   }
   if (!(x_axis_col %in% colnames(meta))) {
-    warning(sprintf("clustering$steps$partition$x_axis_col '%s' not found in metadata; falling back to group_col.",
+    warning(sprintf("clustering$steps$partition$profile_x_axis_col '%s' not found in metadata; falling back to group_col.",
                     x_axis_col))
     x_axis_col <- group_col
   }
@@ -1489,10 +1494,12 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
 #' @param cfg mode config.
 #' @param annot_context list of summary_df + cutoffs + id_col for row annotations.
 #' @param out_dir destination directory for binary-pattern outputs.
+#' @param feature_term Noun used in pattern-plot titles ("genes" by default; pass "features" for non-transcriptomic omics).
 #' @return list(files, plots, patterns, patterns_list, binary_best)
 .run_binary_patterns_step <- function(expr_mat_corr, expr_mat_counts, meta,
                                       de_features, summary_df, cfg,
-                                      annot_context, out_dir) {
+                                      annot_context, out_dir,
+                                      feature_term = "genes") {
   ensure_dir(out_dir)
   bcfg <- cfg$clustering$steps$binary_patterns %||% list()
   
@@ -1507,7 +1514,8 @@ build_de_row_annotations <- function(summary_df, feature_ids, p_cutoff, log2fc_c
     corr_cutoff        = bcfg$corr_cutoff %||% 0.8,
     counts_cutoff_high = bcfg$counts_cutoff_high %||% bcfg$counts_cutoff %||% 0,
     counts_cutoff_low  = bcfg$counts_cutoff_low %||% NULL,
-    annot_context      = annot_context
+    annot_context      = annot_context,
+    feature_term       = feature_term
   )
   
   list(

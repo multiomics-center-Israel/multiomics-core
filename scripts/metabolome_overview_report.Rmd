@@ -144,7 +144,7 @@ if (n_l1 > 0 && n_total > 0) {
     theme_minimal() +
     theme(legend.position = "none",
           plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666666"),
           axis.text.x = element_text(size = 12)) +
     ylim(0, max(level_df$Count) * 1.15)
   print(p)
@@ -197,7 +197,7 @@ if (!is.null(kegg_map) && length(kegg_map$pathway_counts) > 0) {
     theme_minimal() +
     theme(legend.position = "none",
           plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666666"),
           axis.text.y = element_text(size = 9)) +
     ylim(0, max(pw_df$count) * 1.1)
   print(p)
@@ -256,7 +256,7 @@ if (!is.null(kegg_map) && length(kegg_map$pathway_counts) > 0) {
     theme_minimal() +
     theme(legend.position = "none",
           plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666")) +
+          plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666666")) +
     ylim(0, max(cat_plot$Count) * 1.15)
   print(p)
 }
@@ -328,7 +328,7 @@ if (!is.null(data_all) && fid_col %in% colnames(data_all)) {
            x = NULL, y = "Mean Intensity (x10^6)") +
       theme_minimal() +
       theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-            plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666"),
+            plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#666666"),
             axis.text.y = element_text(size = 8))
     print(p)
   }

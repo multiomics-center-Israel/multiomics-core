@@ -78,16 +78,36 @@ modes:
       method: "none"      # "none" | "median" | "vsn"
 
     # --------------------------------------------------------
+    # Batch correction (optional)
+    # Runs after imputation, on the log2 intensity matrix, and feeds the
+    # corrected data to DE, QC and clustering. Leave method "none" to disable.
+    # --------------------------------------------------------
+    batch_correction:
+      method: "none"           # "none" | "combat" | "probatch"
+      # batch_col is the metadata column holding the batch label.
+      # Defaults to modes.proteomics.qc.batch_col when omitted.
+      batch_col: null
+      # group_col: the biological condition to preserve. Defaults to
+      # modes.proteomics.effects.color (e.g. "Condition") when omitted.
+      group_col: null
+      # preserve_condition: for ComBat, encode group_col (+ covariates) in the
+      # model matrix so the biological effect is kept, not removed. (true|false)
+      preserve_condition: true
+      # covariates: optional extra metadata columns to protect in the ComBat
+      # model (e.g. ["Sex", "Age"]). Ignored by probatch.
+      covariates: null
+
+    # --------------------------------------------------------
     # Multiple imputation
     # --------------------------------------------------------
     imputation:
       multi_imputation: true  # false = single imputation (no consensus filter)
-      method: "perseus"    # "none" | "perseus" | "dep2" | "qrilc" | "minval"
+      method: "perseus_like"    # "none" | "perseus_like" | "dep2" | "qrilc" | "minval"
 
       no_repetitions: 10
       min_no_passed: 8
 
-      # Perseus-style parameters
+      # Perseus-like parameters
       width: 0.2
       downshift: 1.6
 
@@ -103,32 +123,21 @@ modes:
     # --------------------------------------------------------
     de:
       method: "limma"           # "limma" | "ttest" | "welch" | "anova"
+      # whether to use adjusted p-value in final results tables and plots
+      # (if false the cutoff will use the p-value instead)
       use_adj_for_pass1: true
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
       p_adjust_method: "BH"     # "BH" | "bonferroni" | "holm" | "BY"
       fdrtool_correction: false  # true = empirical null correction on t-stats (DEP-style)
-      paired: false
+      paired: false           # relevant for t-test
       pairing_col: null          # metadata column for paired test (e.g. "Subject")
 
     # --------------------------------------------------------
     # How to interpret DE summary tables (used by get_de_features, QC_post, etc.)
     # --------------------------------------------------------
     de_table:
-      id_col: "FeatureID"
-      pass_any_col: "pass_any_contrast"
-
-    # --------------------------------------------------------
-    # QC_post (plots/tables that depend on DE results)
-    # --------------------------------------------------------
-    qc_post:
-      enabled: true
-      de_source: "table1"   # "summary" | "table1"
-      plots:
-        volcano: true
-        ma: true
-      outputs:
-        write_de_tables: true   # writes per-contrast tables derived from the chosen source
+      id_col: "FeatureID" # the column name of the proteins if null the default is FeatureID
 
     # --------------------------------------------------------
     # Clustering (optional; enable only if you want it)
@@ -136,13 +145,6 @@ modes:
     clustering:
       enabled: false
       group_col: "Condition"        # metadata column for clustering group logic
-
-      # Which DE features to cluster.
-      # "any_contrast" = pass_any_col == 1
-      de_source: "any_contrast"
-
-      # Run steps that require multiple conditions only if enough groups exist
-      min_groups: 2
 
       steps:
         hierarchical:
@@ -158,8 +160,8 @@ modes:
           k: null
           k_max: 20
           nstart: 25
-          x_axis_col: null           # Metadata column for profile plot X-axis (defaults to group_col)
-          color_col: null            # Optional metadata column for color/linetype grouping in profile plots
+          profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
+          profile_color_col: null    # Partition cluster PROFILE plot: optional color/linetype grouping column; not used for heatmaps
         binary_patterns:
           enabled: true
           corr_cutoff: 0.8
@@ -235,7 +237,7 @@ modes:
     # QC advanced settings
     # --------------------------------------------------------
     qc:
-      run_umap: true
+      run_umap: false
       umap_n_neighbors: 15
       umap_min_dist: 0.1
       outlier_sd_threshold: 3
@@ -252,7 +254,7 @@ modes:
     # Organism is read from annotation.organism above (single source of truth)
     # --------------------------------------------------------
     pathway:
-      enabled: true
+      enabled: false
       method: "both"          # "fgsea" | "ora" | "both"
       databases: ["GO", "KEGG", "Reactome"]  # "all" = GO+KEGG+Reactome; "GO" loads BP+CC+MF; or pick: "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome"
       gmt_file: null          # Custom GMT file for non-model organisms
@@ -268,7 +270,7 @@ modes:
     # Override with species: <taxid> only if auto-derivation fails.
     # --------------------------------------------------------
     ppi:
-      enabled: true
+      enabled: false
       # species: 9606         # Derived from annotation.organism; uncomment to override
       significance_threshold: 0.05
       lfc_threshold: 0
@@ -286,7 +288,7 @@ modes:
     # Advanced statistics
     # --------------------------------------------------------
     advanced_stats:
-      enabled: true
+      enabled: false
       compute_effect_size_ci: true
       bootstrap_n: 1000
       ci_level: 0.95
@@ -309,7 +311,7 @@ modes:
     # AI commentary
     # --------------------------------------------------------
     commentary:
-      enabled: true
+      enabled: false
       backend: "claude-code"
       claude_code_model: "sonnet"
       max_tokens: 1500

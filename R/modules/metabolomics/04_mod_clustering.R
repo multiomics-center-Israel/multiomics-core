@@ -108,7 +108,8 @@ mod_metabolomics_clustering <- function(pre, de_res, config, out_dir) {
       summary_df      = de_res$summary_df,
       cfg             = cfg,
       annot_context   = annot_context,
-      out_dir         = file.path(clustering_dir, "Binary_patterns")
+      out_dir         = file.path(clustering_dir, "Binary_patterns"),
+      feature_term    = "features"
     )
     written             <- c(written, b$files)
     if (length(b$plots)) plots <- c(plots, b$plots)

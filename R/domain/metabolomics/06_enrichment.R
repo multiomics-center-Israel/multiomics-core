@@ -74,6 +74,25 @@ make_pathway_labels <- function(ids, desc_map) {
 
 # ==== COMPOUND ID MAPPING ====================================================
 
+#' Read an HMDB → KEGG mapping table from a TSV
+#'
+#' Returns a named character vector keyed by HMDB. NULL when the path is
+#' missing/invalid or the required \code{HMDB}/\code{KEGG} columns are absent,
+#' so callers can skip the mapping step without branching on file existence.
+#'
+#' @param path Path to a tab-separated mapping file.
+#' @return Named character vector (KEGG values, HMDB names), or NULL.
+read_hmdb_kegg_map <- function(path) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+    df <- tryCatch(
+        readr::read_delim(path, delim = "\t",
+                          col_types = readr::cols(), show_col_types = FALSE),
+        error = function(e) NULL
+    )
+    if (is.null(df) || !all(c("HMDB", "KEGG") %in% colnames(df))) return(NULL)
+    stats::setNames(as.character(df$KEGG), as.character(df$HMDB))
+}
+
 #' Map feature IDs to compound identifiers for enrichment
 #'
 #' Extracts compound names from row_data and optionally maps HMDB to KEGG.
@@ -81,8 +100,29 @@ make_pathway_labels <- function(ids, desc_map) {
 #' @param row_data     data.frame with feature annotations.
 #' @param expr_mat     Expression matrix (features x samples).
 #' @param mapping_file Optional path to HMDB-to-KEGG mapping TSV.
-#' @return list(expr_mapped, compound_names) with remapped rownames.
-map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL) {
+#' @param annotated_only Logical (default TRUE). When the data carries KEGG
+#'   compound IDs, restrict the universe to the KEGG-annotated features so the
+#'   background matches a KEGG-based GMT's namespace (MetaboAnalyst-style). It is
+#'   a no-op when no KEGG ids are present, so name-only datasets are unaffected.
+#'   Not exposed to config on purpose — this is the fixed, correct default.
+#' @return list(expr_mapped, compound_names, feature_map) with remapped rownames.
+map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL,
+                                         annotated_only = TRUE) {
+    # Align the expression matrix to the annotation rows. row_data can be a
+    # filtered subset of expr_mat (e.g. missingness filtering drops features, so
+    # expr_raw ends up with more rows than row_data); matching by feature id
+    # keeps compound_names (taken from row_data) and the matrix rows in lockstep.
+    # Without this, the logical filtering below indexes a mismatched matrix and
+    # errors, which the module's tryCatch turns into a silent NULL for every
+    # enrichment method.
+    if (!is.null(row_data) && "feature_id" %in% colnames(row_data) &&
+        !is.null(rownames(expr_mat))) {
+        common <- intersect(as.character(row_data$feature_id), rownames(expr_mat))
+        row_data <- row_data[match(common, as.character(row_data$feature_id)), ,
+                             drop = FALSE]
+        expr_mat <- expr_mat[common, , drop = FALSE]
+    }
+
     # Extract compound names from row_data
     if ("Name" %in% colnames(row_data)) {
         compound_names <- as.character(row_data$Name)
@@ -94,31 +134,73 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
 
     # HMDB-to-KEGG mapping: replace compound names with KEGG IDs when a
     # mapping file is provided, so that IDs match KEGG-based GMT pathways.
-    if (!is.null(mapping_file) && file.exists(mapping_file)) {
-        mapping_df <- readr::read_delim(mapping_file, delim = "\t",
-                                        col_types = readr::cols(),
-                                        show_col_types = FALSE)
-
-        # Locate HMDB IDs — try dedicated column first, then parse feature_id
+    map_vec <- read_hmdb_kegg_map(mapping_file)
+    if (!is.null(map_vec)) {
+        # Locate HMDB IDs — try common column-name variants, then parse feature_id
         hmdb_ids <- NULL
-        if ("HMDB" %in% colnames(row_data)) {
-            hmdb_ids <- as.character(row_data$HMDB)
+        hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
+                              colnames(row_data))[1]
+        if (!is.na(hmdb_col)) {
+            hmdb_ids <- as.character(row_data[[hmdb_col]])
         } else if ("feature_id" %in% colnames(row_data)) {
             # Try extracting HMDB from feature_id (HMDB|Name format)
             hmdb_ids <- sub("\\|.*$", "", as.character(row_data$feature_id))
         }
 
-        # Vectorised lookup: build named vector HMDB->KEGG then index
-        if (!is.null(hmdb_ids) &&
-            "HMDB" %in% colnames(mapping_df) &&
-            "KEGG" %in% colnames(mapping_df)) {
-            map_vec <- stats::setNames(mapping_df$KEGG, mapping_df$HMDB)
+        if (!is.null(hmdb_ids)) {
             mapped_kegg <- map_vec[hmdb_ids]
             has_map <- !is.na(mapped_kegg) & mapped_kegg != ""
             compound_names[has_map] <- mapped_kegg[has_map]
             message("enrichment: mapped ", sum(has_map), " features to KEGG IDs")
         }
     }
+
+    # Prefer explicit KEGG compound IDs when the annotation carries them: a
+    # KEGG column is unambiguous, whereas compound names are spelled
+    # inconsistently across software. Applied AFTER the HMDB->KEGG step so a
+    # direct KEGG ID wins over a lookup. Cells may hold "C00031", "cpd:C00031"
+    # or "C00031;C00267" — take the first KEGG compound ID present.
+    kegg_col <- intersect(c("KEGG", "KEGG_ID", "KEGG ID", "kegg", "kegg_id"),
+                          colnames(row_data))[1]
+    if (!is.na(kegg_col)) {
+        kegg_raw <- as.character(row_data[[kegg_col]])
+        has_kegg <- grepl("C[0-9]{5}", kegg_raw)
+        kegg_id  <- sub(".*?(C[0-9]{5}).*", "\\1", kegg_raw, perl = TRUE)
+        compound_names[has_kegg] <- kegg_id[has_kegg]
+        message("enrichment: using KEGG IDs from '", kegg_col, "' for ",
+                sum(has_kegg), " features")
+    }
+
+    # Optionally restrict the universe to features carrying a KEGG compound ID.
+    # With a KEGG-based GMT, name-only features can never match a pathway, so
+    # keeping them only inflates the background; MetaboAnalyst-style ORA uses the
+    # KEGG-mappable set as the reference. Detect KEGG IDs by their Cxxxxx shape
+    # (set above from the KEGG column or the HMDB->KEGG mapping).
+    if (isTRUE(annotated_only)) {
+        is_kegg <- grepl("^C[0-9]{5}$", trimws(compound_names))
+        # No-op when the data carries no KEGG ids at all (e.g. a name-only
+        # dataset with a name-based GMT), so the background is never emptied.
+        if (any(is_kegg)) {
+            n_drop <- sum(!is_kegg & !is.na(compound_names))
+            compound_names[!is_kegg] <- NA_character_
+            message("enrichment: restricting background to ", sum(is_kegg),
+                    " KEGG-annotated features (dropped ", n_drop, " name-only).")
+        }
+    }
+
+    # Per-feature id -> compound map, keyed by the feature ids callers hold
+    # (ORA/GSEA look up by feature_id). compound_names is row-aligned to
+    # row_data, so key on row_data$feature_id when available (falling back to
+    # the matrix rownames). ORA/GSEA use this to translate their feature ids to
+    # compounds; deriving that positionally after the filtering/dedup below
+    # would misalign, so build it here beforehand.
+    feat_key <- if ("feature_id" %in% colnames(row_data) &&
+                    length(row_data$feature_id) == length(compound_names)) {
+        as.character(row_data$feature_id)
+    } else {
+        rownames(expr_mat)
+    }
+    feature_map <- stats::setNames(compound_names, feat_key)
 
     # Filter valid compound names
     valid <- !is.na(compound_names) & nzchar(compound_names) & compound_names != "NA"
@@ -132,7 +214,8 @@ map_compounds_for_enrichment <- function(row_data, expr_mat, mapping_file = NULL
 
     list(
         expr_mapped    = mat_use,
-        compound_names = names_use[!dup]
+        compound_names = names_use[!dup],
+        feature_map    = feature_map
     )
 }
 
@@ -188,6 +271,11 @@ run_metabolomics_qea <- function(pre, config) {
     cfg      <- config$modes$metabolomics
     enr_cfg  <- cfg$enrichment %||% list()
 
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
+
     # Guard: skip when enrichment is disabled in config
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics QEA: disabled in config — skipping")
@@ -236,8 +324,7 @@ run_metabolomics_qea <- function(pre, config) {
     # ---- Prepare QEA data ----
     # Map features to compound IDs and transpose into the samples-by-compounds
     # layout expected by globaltest. The result is written to a temp TSV.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
         return(NULL)
@@ -413,6 +500,11 @@ run_metabolomics_ssgsea <- function(pre, config) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
 
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
+
     # Guard: skip when enrichment is disabled in config
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics ssGSEA: disabled — skipping")
@@ -434,8 +526,7 @@ run_metabolomics_ssgsea <- function(pre, config) {
 
     # ---- Build expression matrix with compound IDs ----
     # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {
         message("metabolomics ssGSEA: too few features — skipping")
@@ -557,6 +648,28 @@ run_metabolomics_ssgsea <- function(pre, config) {
 }
 
 
+# ==== CONTRAST SELECTION (shared by ORA / GSEA) ==============================
+
+#' Resolve which DE contrast an enrichment method should use
+#'
+#' Returns \code{contrast} when it names an existing \code{de_res$de_tables}
+#' entry; otherwise falls back to the first contrast (warning when a non-NULL
+#' name was not found). Callers guarantee \code{de_res$de_tables} is non-empty.
+#'
+#' @param contrast Requested contrast name, or NULL for the first.
+#' @param de_res   DE results carrying a named \code{de_tables} list.
+#' @param method   Short method label used only in the warning message.
+#' @return A single contrast name (a key of \code{de_res$de_tables}).
+.resolve_enrichment_contrast <- function(contrast, de_res, method) {
+    available <- names(de_res$de_tables)
+    if (is.null(contrast)) return(available[1])
+    if (contrast %in% available) return(contrast)
+    warning("metabolomics ", method, ": contrast '", contrast,
+            "' not found; using '", available[1], "'.")
+    available[1]
+}
+
+
 # ==== ORA VIA FISHER'S EXACT TEST =============================================
 
 #' Run Over-Representation Analysis (ORA) using Fisher's exact test
@@ -569,10 +682,18 @@ run_metabolomics_ssgsea <- function(pre, config) {
 #' @param pre     Preprocessing results (expr_raw, meta, row_data).
 #' @param de_res  DE results from run_metabolomics_de() (must contain de_tables).
 #' @param config  Full pipeline config.
-#' @return list(table, method) or NULL.
-run_metabolomics_ora <- function(pre, de_res, config) {
+#' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
+#'   test. Defaults to the first contrast; an unknown name falls back to the
+#'   first with a warning.
+#' @return list(table, contrast, method) or NULL.
+run_metabolomics_ora <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
+
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
 
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics ORA: disabled — skipping")
@@ -590,8 +711,7 @@ run_metabolomics_ora <- function(pre, de_res, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build background (all measured features mapped to IDs) ----
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
     bg_ids <- mapped$compound_names
     if (length(bg_ids) < 5) {
         message("metabolomics ORA: too few background compounds — skipping")
@@ -605,7 +725,7 @@ run_metabolomics_ora <- function(pre, de_res, config) {
         return(NULL)
     }
 
-    contrast_name <- names(de_res$de_tables)[1]
+    contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "ORA")
     de_tbl <- de_res$de_tables[[contrast_name]]
 
     # Significance filtering: choose p-value column via config.
@@ -628,11 +748,10 @@ run_metabolomics_ora <- function(pre, de_res, config) {
       return(NULL)
     }
 
-    # Map significant feature IDs to the same compound namespace as bg_ids.
-    orig_names <- rownames(pre$expr_raw)
-    name_map   <- stats::setNames(bg_ids, orig_names[seq_along(bg_ids)])
-    fg_ids     <- unique(na.omit(name_map[sig_features]))
-    fg_ids     <- fg_ids[fg_ids %in% bg_ids]
+    # Map significant feature IDs to the compound namespace via the aligned
+    # per-feature map (keyed by feature id), then keep those present in bg.
+    fg_ids <- unique(na.omit(mapped$feature_map[sig_features]))
+    fg_ids <- fg_ids[fg_ids %in% bg_ids]
 
     message("ORA: ", length(fg_ids), " foreground / ", length(bg_ids),
             " background compounds (contrast: ", contrast_name, ")")
@@ -747,10 +866,18 @@ run_metabolomics_ora <- function(pre, de_res, config) {
 #' @param pre     Preprocessing results.
 #' @param de_res  DE results from run_metabolomics_de().
 #' @param config  Full pipeline config.
+#' @param contrast Optional contrast name (a key of \code{de_res$de_tables}) to
+#'   rank. Defaults to the first contrast; an unknown name falls back to the
+#'   first with a warning.
 #' @return list(table, ranks, contrast, method) or NULL.
-run_metabolomics_gsea <- function(pre, de_res, config) {
+run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
     cfg     <- config$modes$metabolomics
     enr_cfg <- cfg$enrichment %||% list()
+
+    # Resolve gmt_file / mapping_file like the data files: absolute paths are
+    # kept as-is, relative paths are located under paths$raw.
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
 
     if (!isTRUE(enr_cfg$run_enrichment)) {
         message("metabolomics GSEA: disabled — skipping")
@@ -771,17 +898,12 @@ run_metabolomics_gsea <- function(pre, de_res, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build ranked list from DE log2FC ----
-    contrast_name <- names(de_res$de_tables)[1]
+    contrast_name <- .resolve_enrichment_contrast(contrast, de_res, "GSEA")
     de_tbl <- de_res$de_tables[[contrast_name]]
 
-    # Map feature IDs to compound namespace
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw,
-                                            mapping_file)
-    orig_names <- rownames(pre$expr_raw)
-    name_map   <- stats::setNames(mapped$compound_names,
-                                   orig_names[seq_along(mapped$compound_names)])
-
-    de_tbl$compound_id <- name_map[de_tbl$feature_id]
+    # Map feature IDs to the compound namespace via the aligned per-feature map.
+    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    de_tbl$compound_id <- mapped$feature_map[de_tbl$feature_id]
     de_tbl <- de_tbl[!is.na(de_tbl$compound_id) & nzchar(de_tbl$compound_id), ]
     de_tbl <- de_tbl[!is.na(de_tbl$logFC), ]
 

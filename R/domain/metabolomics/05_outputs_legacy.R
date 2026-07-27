@@ -36,6 +36,11 @@ build_final_results_metabolomics <- function(
     annot_cols <- NULL
     if (!is.null(rd)) {
         available <- setdiff(colnames(rd), feature_id_col)
+        # Surface original_id directly after feature_id in the Excel output;
+        # leave column order untouched when it is absent.
+        if ("original_id" %in% available) {
+            available <- c("original_id", setdiff(available, "original_id"))
+        }
         if (length(available) > 0) {
             annot_cols <- setNames(available, available)
         }
@@ -68,13 +73,13 @@ build_final_results_metabolomics <- function(
 #'
 #' Guards (return \code{NULL}, never approximate an inverse):
 #' \itemize{
-#'   \item If feature scaling is enabled (\code{normalization$scaling != "none"}),
+#'   \item If feature scaling is enabled (\code{preprocessing$scaling != "none"}),
 #'     the back-transform is invalid (centering breaks positivity), so we fall
 #'     back to the filtered PRE-normalization linear matrix (\code{expr_filt});
 #'     the CV then includes technical variation that normalization would have
 #'     removed (see the contract doc / column note).
 #'   \item If the workspace is not provably log2 — i.e. \code{chosen_norm ==
-#'     "median"} with a non-log2 \code{normalization$transform} (log10/glog10/
+#'     "median"} with a non-log2 \code{preprocessing$transform} (log10/glog10/
 #'     none), or an unrecognized \code{chosen_norm} — we skip CV with a warning
 #'     rather than \code{2^}-inverting a non-log2 matrix into wrong numbers.
 #' }
@@ -92,7 +97,7 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
 
     cfg_mode      <- config$modes$metabolomics %||% list()
     sample_id_col <- cfg_mode$effects$samples %||% "sample_id"
-    norm_cfg      <- cfg_mode$normalization %||% list()
+    norm_cfg      <- cfg_mode$preprocessing %||% list()
     scaling       <- tolower(norm_cfg$scaling %||% "none")
     pseudocount   <- norm_cfg$pseudocount %||% 1
 
@@ -103,14 +108,15 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
         # MAINTAINER NOTE: any NEW normalization method that always log2-
         # transforms MUST be added to this whitelist; otherwise CV will safely
         # (but silently) skip for it via the guard below.
-        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced")
+        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")
         chosen_norm <- tolower(cfg_mode$preprocessing$chosen_norm %||% "")
         transform   <- tolower(norm_cfg$transform %||% "log2")
-        # The median path honors the configurable transform, so it is only log2
-        # when transform == "log2". Everything outside the whitelist (incl.
-        # unknown chosen_norm) is not provably log2 -> skip rather than guess.
+        # The median and none paths honor the configurable transform, so they are
+        # only log2 when transform == "log2" (none = transform-only matrix, no
+        # sample normalization). Everything outside the whitelist (incl. unknown
+        # chosen_norm) is not provably log2 -> skip rather than guess.
         provably_log2 <- chosen_norm %in% always_log2_norms ||
-            (identical(chosen_norm, "median") && identical(transform, "log2"))
+            (chosen_norm %in% c("median", "none") && identical(transform, "log2"))
         if (!isTRUE(provably_log2)) {
             warning(sprintf(
                 "metabolomics group CV: chosen_norm='%s' with transform='%s' is not a provably-log2 workspace; skipping CV (a 2^x back-transform would produce wrong values on a non-log2 matrix).",

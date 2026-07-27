@@ -15,9 +15,18 @@
 #' @param config  Full pipeline config.
 #' @param out_dir Output directory for this mode.
 #' @return list with graph, nodes, edges, counts, and output file path.
-#'   Returns NULL if network cannot be built (no KEGG IDs).
+#'   Returns NULL if the step is not enabled (\code{enrichment$run_network} is
+#'   not \code{true}; off by default) or if the network cannot be built
+#'   (no KEGG IDs).
 mod_metabolomics_network <- function(de_res, pre, config, out_dir) {
     metab_cfg <- config$modes$metabolomics
+
+    # Opt-in: the DE-metabolite network step runs only when explicitly enabled
+    # in config (off by default), mirroring enrichment$run_enrichment.
+    if (!isTRUE(metab_cfg$enrichment$run_network)) {
+        message("metabolomics network: skipped (enrichment$run_network not enabled)")
+        return(NULL)
+    }
 
     # Extract DE table from mod_metabolomics_de() output
     # Structure: de_res$de_tables (named list of per-contrast data.frames)

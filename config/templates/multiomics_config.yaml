@@ -61,6 +61,7 @@ modes:
       enabled: true
       method: "fgsea"
       databases: ["GO", "KEGG"]
+      gmt_file: null          # Custom GMT for non-model organisms; enables the GMT-based multi-ORA fallback (absolute or relative to raw/)
 
     commentary:
       enabled: true
@@ -87,7 +88,7 @@ modes:
       method: "none"  # DIA-NN output already normalized
 
     imputation:
-      method: "perseus"
+      method: "perseus_like"
       width: 0.2
       downshift: 1.6
 
@@ -111,6 +112,7 @@ modes:
       enabled: true
       method: "both"
       databases: ["GO", "KEGG"]
+      gmt_file: null          # Custom GMT for non-model organisms; enables the GMT-based multi-ORA fallback (absolute or relative to raw/)
 
     ppi:
       enabled: true

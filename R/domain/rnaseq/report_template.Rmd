@@ -610,8 +610,6 @@ cat("</div>\n")
          ran   = (tolower(rna_cfg$normalization$method %||% "tmm") != "none")),
     list(label = "Differential expression",
          ran   = !is.null(de_data) && nrow(de_data) > 0),
-    list(label = "Cell-type deconvolution",
-         ran   = isTRUE(rna_cfg$deconvolution$enabled)),
     list(label = "Pathway enrichment",
          ran   = isTRUE(rna_cfg$pathway$enabled))
 )
@@ -1020,7 +1018,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-dist-heatmap, results='asis', echo=FALSE}
-figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate larger distances (less similar samples). Samples from the same experimental group are expected to cluster together with smaller (lighter) inter-sample distances.")
+figure_legend("Euclidean distance matrix of normalized expression values. Darker colors indicate smaller distances (more similar samples), following the DESeq2 sample-distance convention. Samples from the same experimental group are expected to cluster together as darker (smaller-distance) blocks.")
 ```
 
 ```{r commentary-distance, results='asis'}
@@ -2718,56 +2716,6 @@ render_commentary("clustering_binary")
 ```{r clustering-divider-rna, eval=clustering_show_rna, results='asis'}
 cat("\n---\n\n")
 ```
-
-# Cell Type Deconvolution
-
-```{r deconv-setup}
-deconv_dir <- file.path(run_dir, "rna", "Deconvolution")
-has_deconvolution <- dir.exists(deconv_dir) &&
-    (file.exists(file.path(deconv_dir, "xcell2_scores.csv")) ||
-     file.exists(file.path(deconv_dir, "deconvolution_results.rds")))
-```
-
-```{r deconv-skip, eval=!has_deconvolution, results='asis'}
-cat("Cell type deconvolution was not run. This analysis is only available for **human** and **mouse** datasets.\n\n")
-cat("To enable, set `deconvolution.enabled: true` in the configuration file.\n")
-```
-
-```{r deconv-heatmap, eval=has_deconvolution, fig.cap="Cell type enrichment scores (xCell2)"}
-heatmap_path <- file.path(deconv_dir, "plots", "xcell2_heatmap.png")
-if (file.exists(heatmap_path)) knitr::include_graphics(heatmap_path)
-```
-
-```{r legend-deconv-heatmap, eval=has_deconvolution, results='asis', echo=FALSE}
-figure_legend("Cell type enrichment score heatmap (xCell2). Rows represent inferred cell types and columns represent samples. Higher scores indicate greater predicted abundance of a given cell type in the sample.")
-```
-
-```{r deconv-heatmap-commentary, eval=has_deconvolution, results='asis'}
-render_commentary("deconv_heatmap")
-```
-
-```{r deconv-barplot, eval=has_deconvolution, fig.cap="Cell type composition by condition"}
-bar_path <- file.path(deconv_dir, "plots", "celltype_stacked_bar.png")
-if (file.exists(bar_path)) knitr::include_graphics(bar_path)
-```
-
-```{r legend-deconv-barplot, eval=has_deconvolution, results='asis', echo=FALSE}
-figure_legend("Stacked bar chart of estimated cell type proportions across experimental conditions. Each bar represents a sample or condition, with segments showing the relative abundance of different cell types.")
-```
-
-```{r deconv-barplot-commentary, eval=has_deconvolution, results='asis'}
-render_commentary("deconv_stacked_bar")
-```
-
-```{r deconv-diff-table, eval=has_deconvolution}
-diff_comp_file <- file.path(deconv_dir, "differential_composition.csv")
-if (file.exists(diff_comp_file)) {
-    diff_comp <- read.csv(diff_comp_file, stringsAsFactors = FALSE)
-    make_dt(diff_comp, caption = "Differential Cell Type Composition")
-}
-```
-
----
 
 # Enrichment / Pathway Analysis
 

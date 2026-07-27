@@ -84,7 +84,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     config, out_dir,
                                     qc_comparison_file = NULL,
                                     qc_suite_files     = NULL,
-                                    commentary_file    = NULL) {
+                                    commentary_file    = NULL,
+                                    mummichog_pathways = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -126,6 +127,24 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         }
     }
 
+    # Build per-contrast mummichog report sections (06e) from the per-contrast
+    # pathway tables. Empty list when mummichog is disabled or no contrast has a
+    # result, which keeps the report section hidden.
+    mummi_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+
+    # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
+    # CSV table) into mummichog_pinned/, named by the section's de-duplicated
+    # slug (so labels that collapse to the same token don't overwrite each
+    # other), in addition to embedding them in the HTML. The engine's mcg_*
+    # result files are untouched. Paths are returned so the file target tracks them.
+    mummi_exports <- character(0)
+    for (contrast in names(mummi_sections)) {
+        s <- mummi_sections[[contrast]]
+        mummi_exports <- c(mummi_exports,
+                           save_mummichog_exports(s$plot, s$table, out_dir,
+                                                  contrast_label = s$slug))
+    }
+
     render_params <- list(
 
         pre                = pre,
@@ -139,7 +158,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         config             = config,
         qc_comparison_file = qc_comparison_file,
         qc_suite_files     = qc_suite_files,
-        commentary_file    = commentary_file
+        commentary_file    = commentary_file,
+        mummichog_sections = mummi_sections
     )
 
 
@@ -178,7 +198,7 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
         })
     }
 
-    out_file
+    unique(c(out_file, mummi_exports))
 }
 
 

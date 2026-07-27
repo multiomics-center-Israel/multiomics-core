@@ -558,8 +558,6 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   </div>
   <div style="margin-top:14px;">
     <div class="toggle-row"><input type="checkbox" id="rna_clustering"><label class="toggle-label" for="rna_clustering">Clustering</label></div>
-    <div class="toggle-row"><input type="checkbox" id="rna_batch_corr"><label class="toggle-label" for="rna_batch_corr">Batch correction</label></div>
-    <div class="toggle-row"><input type="checkbox" id="rna_deconv"><label class="toggle-label" for="rna_deconv">Cell type deconvolution (human/mouse)</label></div>
   </div>
 </div>
 
@@ -578,7 +576,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <div class="field">
       <label>Imputation</label>
       <select id="prot_imp_method" onchange="toggleImpParams()">
-        <option value="perseus">Perseus-style (recommended)</option>
+        <option value="perseus_like">Perseus-like (recommended)</option>
         <option value="dep2">DEP2 / MinDet</option>
         <option value="qrilc">QRILC (DEP workflow)</option>
         <option value="minval">MinVal (floor of minimum)</option>
@@ -593,7 +591,7 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <span class="hint">Run 10 iterations, require 8/10 consensus for DE significance</span>
     </div>
   </div>
-  <div class="field-row conditional" id="prot_perseus_params">
+  <div class="field-row conditional" id="prot_perseus_like_params">
     <div class="field">
       <label>Width <span class="hint">(SD scaling)</span></label>
       <input type="number" id="prot_imp_width" value="0.2" step="0.1">
@@ -965,11 +963,15 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   <div class="field-row">
     <div class="field">
       <label>Sample normalization</label>
-      <select id="lipid_sample_norm">
+      <select id="lipid_sample_norm" onchange="updateLipidNormCondFields()">
         <option value="sum">Sum normalization (recommended)</option>
-        <option value="pqn">PQN</option>
+        <option value="pqn">PQN — Probabilistic Quotient Normalization</option>
         <option value="median">Median centering</option>
-        <option value="none">None</option>
+        <option value="eigenms">EigenMS (NOREVA)</option>
+        <option value="eigenms_forced">EigenMS-forced (fixed % eigentrends)</option>
+        <option value="is">Internal standard (per-sample IS feature)</option>
+        <option value="bio_factor">Biological factor (e.g. mg protein)</option>
+        <option value="none">None (already normalized)</option>
       </select>
     </div>
     <div class="field">
@@ -977,10 +979,22 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
       <select id="lipid_transform">
         <option value="log2">log2 (recommended)</option>
         <option value="log10">log10</option>
+        <option value="glog10">Generalized log10 (MetaboAnalyst)</option>
         <option value="none">None</option>
       </select>
     </div>
   </div>
+
+  <!-- Conditional inputs for bio_factor / is normalization -->
+  <div class="field conditional" id="lipid_bio_factor_field" style="display:none;">
+    <label>Biological factor metadata column <span class="hint">(numeric column to divide by, e.g. "mg_protein")</span></label>
+    <input type="text" id="lipid_bio_factor_col" placeholder="mg_protein">
+  </div>
+  <div class="field conditional" id="lipid_is_ref_field" style="display:none;">
+    <label>IS reference column <span class="hint">(row metadata column flagging the IS feature)</span></label>
+    <input type="text" id="lipid_is_ref_col" placeholder="is_internal_standard">
+  </div>
+
   <div class="field-row">
     <div class="field">
       <label>Scaling</label>
@@ -1026,6 +1040,24 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
     <div class="toggle-row"><input type="checkbox" id="lipid_rf" checked><label class="toggle-label" for="lipid_rf">Random Forest feature importance</label></div>
     <div class="toggle-row"><input type="checkbox" id="lipid_plsda" checked><label class="toggle-label" for="lipid_plsda">PLS-DA multivariate analysis</label></div>
     <div class="toggle-row"><input type="checkbox" id="lipid_has_group_row" checked><label class="toggle-label" for="lipid_has_group_row">First data row contains group labels</label></div>
+  </div>
+
+  <!-- Report Section Toggles -->
+  <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px;">
+    <label style="font-weight:600;margin-bottom:10px;display:block;">Report Sections <span class="hint">(toggle which sections appear in the HTML report; only Technical Summary is wired today, others are written to YAML for future use)</span></label>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_qc" checked><label class="toggle-label" for="lipid_show_qc">QC Diagnostics</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_de" checked><label class="toggle-label" for="lipid_show_de">Differential Expression</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_de_heatmaps" checked><label class="toggle-label" for="lipid_show_de_heatmaps">DE Heatmaps</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_clustering" checked><label class="toggle-label" for="lipid_show_clustering">Clustering</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_class" checked><label class="toggle-label" for="lipid_show_class">Lipid Class Analysis</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_fs" checked><label class="toggle-label" for="lipid_show_fs">Feature Selection</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_biomarker" checked><label class="toggle-label" for="lipid_show_biomarker">Biomarker Discovery</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_pathway" checked><label class="toggle-label" for="lipid_show_pathway">Lipid Pathway</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_methods" checked><label class="toggle-label" for="lipid_show_methods">Methods</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_session" checked><label class="toggle-label" for="lipid_show_session">Session Info</label></div>
+      <div class="toggle-row"><input type="checkbox" id="lipid_show_technical" checked><label class="toggle-label" for="lipid_show_technical">Technical Summary</label></div>
+    </div>
   </div>
 </div>
 
@@ -1651,8 +1683,8 @@ function syncFCFromLog2(prefix) {
 }
 
 function toggleImpParams() {
-  var field = document.getElementById('prot_perseus_params');
-  if (field) field.classList.toggle('visible', document.getElementById('prot_imp_method').value === 'perseus');
+  var field = document.getElementById('prot_perseus_like_params');
+  if (field) field.classList.toggle('visible', document.getElementById('prot_imp_method').value === 'perseus_like');
 }
 
 function togglePairedOption() {
@@ -2099,9 +2131,6 @@ function generateRNAYaml() {
   yaml += '        partition:\n          enabled: true\n          algorithm: "hclust"\n          k_max: 20\n';
   yaml += '        binary_patterns:\n          enabled: true\n          group_col: ' + yamlStr(groupCol) + '\n          corr_cutoff: 0.8\n';
 
-  yaml += '\n    batch_correction:\n      enabled: ' + yamlBool(checked('rna_batch_corr')) + '\n';
-  yaml += '\n    deconvolution:\n      enabled: ' + yamlBool(checked('rna_deconv')) + '\n';
-
   yaml += '\n    effects:\n';
   yaml += '      color: ' + yamlStr(groupCol) + '\n';
   yaml += '      shape: ' + (shapeCol && shapeCol !== 'null' ? yamlStr(shapeCol) : 'null') + '\n';
@@ -2251,11 +2280,7 @@ function generateProtYaml() {
   yaml += '      paired: ' + yamlBool(pairedOn) + '\n';
   yaml += '      pairing_col: ' + (pairingCol && pairingCol !== 'null' ? yamlStr(pairingCol) : 'null') + '\n';
 
-  yaml += '\n    de_table:\n      id_col: "FeatureID"\n      pass_any_col: "pass_any_contrast"\n';
-
-  yaml += '\n    qc_post:\n      enabled: true\n      de_source: "summary"\n';
-  yaml += '      plots:\n        volcano: true\n        ma: true\n';
-  yaml += '      outputs:\n        write_de_tables: true\n';
+  yaml += '\n    de_table:\n      id_col: "FeatureID"\n';
 
   yaml += '\n    clustering:\n';
   yaml += '      enabled: ' + yamlBool(checked('prot_clustering')) + '\n';
@@ -2630,6 +2655,8 @@ function generateLipidYaml() {
   var transform = v('lipid_transform') || 'log2';
   var scaling = v('lipid_scaling') || 'auto';
   var naPolicy = v('lipid_na_policy') || 'min_half';
+  var lipidBioFactorCol = v('lipid_bio_factor_col');
+  var lipidIsRefCol = v('lipid_is_ref_col');
 
   yaml += '\n    normalization:\n';
   yaml += '      sample_norm: ' + yamlStr(sampleNorm) + '\n';
@@ -2637,6 +2664,8 @@ function generateLipidYaml() {
   yaml += '      scaling: ' + yamlStr(scaling) + '\n';
   yaml += '      pseudocount: 1\n';
   yaml += '      na_policy: ' + yamlStr(naPolicy) + '\n';
+  yaml += '      is_ref_col: ' + (sampleNorm === 'is' && lipidIsRefCol ? yamlStr(lipidIsRefCol) : 'null') + '\n';
+  yaml += '      biological_factor_col: ' + (sampleNorm === 'bio_factor' && lipidBioFactorCol ? yamlStr(lipidBioFactorCol) : 'null') + '\n';
 
   var lipidExcludeBoxes = document.querySelectorAll('.lipid_exclude_sample:checked');
   yaml += '\n    sample_filter:\n';
@@ -2691,8 +2720,34 @@ function generateLipidYaml() {
   yaml += '\n    outputs:\n';
   yaml += '      generate_pptx: ' + yamlBool(checked('generate_pptx')) + '\n';
 
+  // Report section toggles for lipidomics — only emit non-default (false) entries
+  var lipRsLines = [];
+  if (!checked('lipid_show_qc'))            lipRsLines.push('      qc: false');
+  if (!checked('lipid_show_de'))            lipRsLines.push('      de: false');
+  if (!checked('lipid_show_de_heatmaps'))   lipRsLines.push('      de_heatmaps: false');
+  if (!checked('lipid_show_clustering'))    lipRsLines.push('      clustering: false');
+  if (!checked('lipid_show_class'))         lipRsLines.push('      class_analysis: false');
+  if (!checked('lipid_show_fs'))            lipRsLines.push('      feature_selection: false');
+  if (!checked('lipid_show_biomarker'))     lipRsLines.push('      biomarker: false');
+  if (!checked('lipid_show_pathway'))       lipRsLines.push('      pathway: false');
+  if (!checked('lipid_show_methods'))       lipRsLines.push('      methods: false');
+  if (!checked('lipid_show_session'))       lipRsLines.push('      session_info: false');
+  if (!checked('lipid_show_technical'))     lipRsLines.push('      technical_summary: false');
+  if (lipRsLines.length > 0) {
+    yaml += '\n    report_sections:\n' + lipRsLines.join('\n') + '\n';
+  }
+
   yaml += '\nparams:\n  seed: 1\n';
   return yaml;
+}
+
+// Toggle visibility of conditional lipidomics normalization fields
+function updateLipidNormCondFields() {
+  var sn = v('lipid_sample_norm');
+  var bioField = document.getElementById('lipid_bio_factor_field');
+  var isField  = document.getElementById('lipid_is_ref_field');
+  if (bioField) bioField.style.display = (sn === 'bio_factor') ? '' : 'none';
+  if (isField)  isField.style.display  = (sn === 'is')         ? '' : 'none';
 }
 
 // ============================================================
@@ -3532,8 +3587,6 @@ var pipelineDefs = {
     { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
     { id:'pathway',   label:'Pathway analysis',    icon:'\uD83D\uDEE4', cat:'stat',   after:['de'],   optional:true, toggleId:'rna_pathway', checkFn:function(){ return v('rna_pathway') !== 'none'; } },
     { id:'cluster',   label:'Clustering',          icon:'\uD83E\uDDE9', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_clustering' },
-    { id:'batch',     label:'Batch correction',    icon:'\uD83D\uDD27', cat:'core',   after:['norm'], optional:true, toggleId:'rna_batch_corr' },
-    { id:'deconv',    label:'Deconvolution',       icon:'\uD83E\uDDEC', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_deconv' },
     { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
     { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
   ],

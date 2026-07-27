@@ -44,6 +44,9 @@ data/*
 !data/example_proteomics/
 !data/example_metabolomics/
 !data/example_lipidomics/
+# Exception: pipeline reference assets used by the lipid-links extension
+# (curated journal-IF list + curated lipid-class -> KEGG pathway map).
+!data/lipidomics/
 
 # Project-specific configs (use config/templates/ as reference)
 config/*.yaml
@@ -71,6 +74,7 @@ wizard_defaults.json
 
 # Python virtual environments
 .mummichog_venv/
+envs/
 
 # Windows zone identifier files
 *:Zone.Identifier

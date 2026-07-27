@@ -158,19 +158,30 @@ validate_metabolomics_config <- function(cfg) {
            "when files$sample_map is set")
   }
   
-  norm <- cfg$normalization
+  # The pre-cleanup `normalization:` block was consolidated into `preprocessing:`.
+  # A lingering `normalization:` block is now silently ignored by the rest of the
+  # pipeline (which reads `preprocessing`), so reject it loudly rather than let
+  # stale sample_norm/transform/scaling/pseudocount settings be dropped and the
+  # analysis quietly run on defaults.
+  if (!is.null(cfg$normalization)) {
+    stop("metabolomics config still has a 'normalization:' block, which is no longer read.\n",
+         "Normalization settings now live under 'preprocessing:'.\n",
+         "  - Move sample_norm, transform, scaling and pseudocount into 'preprocessing:'.\n",
+         "  - Then delete the old 'normalization:' block.\n",
+         "Leaving it in place would silently fall back to defaults and change your results.")
+  }
+
+  norm <- cfg$preprocessing
   if (!is.null(norm)) {
-    assert_one_of(norm$sample_norm, "normalization$sample_norm",
+    assert_one_of(norm$sample_norm, "preprocessing$sample_norm",
                   c("none", "sum", "median", "pqn", "is"),
                   allow_null = TRUE)
-    assert_one_of(norm$transform, "normalization$transform",
-                  c("none", "log2", "log10"),
+    # Keep in sync with transform_metab() in 01_normalization.R.
+    assert_one_of(norm$transform, "preprocessing$transform",
+                  c("none", "log2", "log10", "glog10"),
                   allow_null = TRUE)
-    assert_one_of(norm$scaling, "normalization$scaling",
+    assert_one_of(norm$scaling, "preprocessing$scaling",
                   c("none", "center", "auto", "pareto", "range"),
-                  allow_null = TRUE)
-    assert_one_of(norm$na_policy, "normalization$na_policy",
-                  c("keep", "zero", "min_half", "lod"),
                   allow_null = TRUE)
   }
   invisible(TRUE)
@@ -663,8 +674,8 @@ build_feature_ids <- function(data_df, id_cfg) {
   
   # Vectorised RT[rt]_MZ[mz] builder; per-row fallback when a coordinate is NA
   make_rt_mz_ids <- function() {
-    mz_vals <- if (has_mz) as.numeric(data_df[[mz_col]]) else rep(NA_real_, nr)
-    rt_vals <- if (has_rt) as.numeric(data_df[[rt_col]]) else rep(NA_real_, nr)
+    mz_vals <- if (has_mz) round(as.numeric(data_df[[mz_col]]), 2) else rep(NA_real_, nr)
+    rt_vals <- if (has_rt) round(as.numeric(data_df[[rt_col]]), 2) else rep(NA_real_, nr)
     both_ok <- !is.na(mz_vals) & !is.na(rt_vals)
     
     fallback <- if (has_nm) {
@@ -700,6 +711,42 @@ build_feature_ids <- function(data_df, id_cfg) {
 }
 
 
+
+
+#' Annotate row_data with a KEGG column from an HMDB → KEGG mapping file
+#'
+#' Adds (or fills) a \code{KEGG} column on \code{row_data} by looking up the
+#' HMDB ID for each feature in a TSV with columns \code{HMDB} and \code{KEGG}.
+#' If \code{row_data} already has a \code{KEGG} column, only NA / blank entries
+#' are filled — pre-existing IDs are preserved. No-op when \code{mapping_file}
+#' is NULL/missing or no HMDB-like column is present.
+#'
+#' @param row_data data.frame of feature annotations.
+#' @param mapping_file Path to TSV with HMDB and KEGG columns (or NULL).
+#' @return row_data with a \code{KEGG} column populated where possible.
+add_kegg_from_hmdb <- function(row_data, mapping_file) {
+    if (is.null(row_data)) return(row_data)
+
+    hmdb_col <- intersect(c("HMDB", "HMDB_ID", "HMDB ID", "hmdb_id"),
+                          colnames(row_data))[1]
+    if (is.na(hmdb_col)) return(row_data)
+
+    map_vec <- read_hmdb_kegg_map(mapping_file)
+    if (is.null(map_vec)) return(row_data)
+
+    looked_up <- map_vec[as.character(row_data[[hmdb_col]])]
+
+    existing <- if ("KEGG" %in% colnames(row_data))
+        as.character(row_data$KEGG) else rep(NA_character_, nrow(row_data))
+    needs_fill <- is.na(existing) | !nzchar(existing)
+    existing[needs_fill] <- looked_up[needs_fill]
+    row_data$KEGG <- existing
+
+    n_filled <- sum(!is.na(looked_up[needs_fill]))
+    message(sprintf("add_kegg_from_hmdb: populated KEGG for %d/%d features",
+                    n_filled, nrow(row_data)))
+    row_data
+}
 
 
 #' Build minimal metadata when no metadata file is provided

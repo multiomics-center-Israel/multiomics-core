@@ -22,7 +22,7 @@ collect_metab_pipeline_stats <- function(config, pre, de_res,
                                          feature_sel_res, enrichment_res) {
 
     metab_cfg <- config$modes$metabolomics
-    norm_cfg  <- metab_cfg$normalization %||% list()
+    norm_cfg  <- metab_cfg$preprocessing %||% list()
 
     # --- Project info ---
     analyst <- gsub("_", " ", config$project$analyst %||% "")

@@ -1,0 +1,382 @@
+# tests/testthat/test-mummichog-pinned-io.R
+#
+# Unit tests for output discovery, file classification, result parsing and the
+# feature-id join (06c). A minimal but faithful v2.7.0 result tree is built in a
+# temp dir (no Python needed).
+
+# Build a fake mummichog v2 result tree; returns its root directory.
+build_fake_tree <- function() {
+  root   <- withr::local_tempdir(.local_envir = parent.frame())
+  resdir <- file.path(root, "1699999999.99.smoke_test")
+  tables <- file.path(resdir, "tables")
+  figs   <- file.path(resdir, "figures")
+  jsd    <- file.path(resdir, "js")
+  for (d in c(tables, figs, jsd)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+
+  writeLines("<html></html>", file.path(resdir, "result.html"))
+
+  writeLines(c(
+    "pathway\toverlap_size\tpathway_size\tp-value\toverlap_EmpiricalCompounds (id)\toverlap_features (id)\toverlap_features (name)",
+    "PathA\t1\t10\t0.01\tE1\tC1\tname1",
+    "PathB\t2\t20\t0.02\tE1,E2\tC1,C2\tnames"
+  ), file.path(tables, "mcg_pathwayanalysis_smoke_test.tsv"))
+  writeLines("binary-placeholder", file.path(tables, "mcg_pathwayanalysis_smoke_test.xlsx"))
+
+  writeLines(c(
+    "MODULE\tp-value\tsize\tmembers (name)\tmembers (id)\tThis module overlaps with",
+    "module_1\t0.03\t3\tn\tE1\t-"
+  ), file.path(tables, "mcg_modularanalysis_smoke_test.tsv"))
+
+  writeLines(c(
+    "EID\tmassfeature_rows\tstr_row_ion\tcompounds\tcompound_names",
+    "E1\trow1\trow1_M+H[1+]\tC1\tn1"
+  ), file.path(tables, "ListOfEmpiricalCompounds.tsv"))
+
+  writeLines(c(
+    "massfeature_rows\tm/z\tretention_time\tp_value\tstatistic\tCompoundID_from_user",
+    "row1\t100\t10\t0.01\t2\tfeat_1",
+    "row2\t200\t20\t0.02\t-1\tfeat_2",
+    "row3\t201\t20\t0.03\t1\tfeat_3"
+  ), file.path(tables, "userInputData.txt"))
+
+  # Note the real file repeats the "input_row" column; the reader must tolerate it.
+  writeLines(c(
+    "input_row\tEID\tstr_row_ion\tcompounds\tcompound_names\tinput_row\tm/z\tretention_time\tp_value\tstatistic\tCompoundID_from_user",
+    "row1\tE1\trow1_M+H[1+]\tC1\tn1\trow1\t100\t10\t0.01\t2\tfeat_1",
+    "row2\tE2\trow2_M+H[1+]\tC2\tn2\trow2\t200\t20\t0.02\t-1\tfeat_2",
+    "row3\tE2\trow3_M+H[1+]\tC3\tn3\trow3\t201\t20\t0.03\t1\tfeat_3"
+  ), file.path(tables, "userInput_to_EmpiricalCompounds.tsv"))
+
+  writeLines("{}", file.path(tables, "exported_Compounds.json"))
+  writeLines("%PDF-1.4", file.path(figs, "plot_pathwayModel_smoke_test.pdf"))
+  writeLines("// js", file.path(jsd, "result.js"))
+
+  root
+}
+
+test_that("files are discovered and classified by kind", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+  kinds <- vapply(files, classify_mummichog_file, character(1))
+
+  for (k in c("v2_result_html", "pathway_tsv", "pathway_xlsx", "module_tsv",
+              "empirical_compounds", "user_input_to_ec", "user_input_copy",
+              "exported_compounds_json", "figure_pdf", "js")) {
+    expect_true(k %in% kinds, info = paste("missing kind:", k))
+  }
+  expect_false(any(kinds == "other"))
+})
+
+test_that("pathway and module tables parse", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+
+  pw <- read_mummichog_pathways(files)
+  expect_equal(nrow(pw), 2L)
+  expect_true("overlap_EmpiricalCompounds (id)" %in% colnames(pw))
+
+  md <- read_mummichog_modules(files)
+  expect_equal(nrow(md), 1L)
+})
+
+test_that("empirical map reader tolerates the duplicated input_row column", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+  emap  <- read_mummichog_empirical_map(files)
+  expect_setequal(emap$EID, c("E1", "E2"))
+  expect_setequal(emap$feature_id, c("feat_1", "feat_2", "feat_3"))
+})
+
+test_that("join maps pathways back to feature ids via carried ids (not rowN)", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+  pw    <- read_mummichog_pathways(files)
+
+  joined <- join_features_to_results(pw, files)
+  expect_true("feature_ids" %in% colnames(joined))
+  expect_equal(joined$feature_ids[joined$pathway == "PathA"], "feat_1")
+  expect_equal(joined$feature_ids[joined$pathway == "PathB"], "feat_1;feat_2;feat_3")
+})
+
+test_that("manifest records every file with a kind and byte size", {
+  root  <- build_fake_tree()
+  files <- list_mummichog_files(root)
+  mpath <- file.path(root, "mummichog_manifest.tsv")
+  mf    <- write_mummichog_manifest(files, mpath)
+
+  man <- readr::read_tsv(mf, show_col_types = FALSE)
+  expect_setequal(colnames(man), c("path", "file", "directory", "kind", "bytes"))
+  expect_true("pathway_tsv" %in% man$kind)
+  expect_true(all(man$bytes >= 0))
+})
+
+test_that("readers fail loudly when an expected table is absent", {
+  empty <- withr::local_tempdir()
+  expect_error(read_mummichog_pathways(list_mummichog_files(empty)), "No pathway")
+  expect_error(read_mummichog_modules(list_mummichog_files(empty)), "No modular")
+})
+
+test_that(".mmc_check_run_outputs salvages a non-zero exit when the pathway table exists", {
+  ok  <- c("/x/v2/1699.p/tables/mcg_pathwayanalysis_p.tsv", "/x/v2/runner.log")
+  bad <- c("/x/v2/runner.log")
+
+  # the known result.html rescale_color crash: non-zero exit BUT the pathway
+  # table was already written -> salvage with a warning, don't abort
+  expect_warning(res <- .mmc_check_run_outputs(1L, ok, "log.txt"), "salvaging")
+  expect_true(res)
+  # non-zero exit with no pathway table -> a real failure
+  expect_error(.mmc_check_run_outputs(1L, bad, "log.txt"), "no pathway table")
+  # clean exit with outputs -> silent success
+  expect_silent(.mmc_check_run_outputs(0L, ok, "log.txt"))
+  # clean exit that produced nothing usable -> error
+  expect_error(.mmc_check_run_outputs(0L, bad, "log.txt"), "no expected v2 outputs")
+})
+
+# Build a flat mummichog_pinned/<dir>/... file list under `root`; one subdir per
+# entry, each with an input.tsv and (unless with_pw = FALSE) a pathway table.
+.mk_contrast_tree <- function(root, dirs, with_pw = rep(TRUE, length(dirs))) {
+  for (i in seq_along(dirs)) {
+    cdir <- file.path(root, "mummichog_pinned", dirs[[i]])
+    tdir <- file.path(cdir, "v2", "1699999999.99.mcg_pinned", "tables")
+    dir.create(tdir, recursive = TRUE, showWarnings = FALSE)
+    writeLines("x", file.path(cdir, "input.tsv"))     # always present
+    if (isTRUE(with_pw[[i]])) {
+      # NB: identical basename across every contrast dir on purpose — this is
+      # the shared-filename case, and the reader must group by contrast DIR (not
+      # basename) so no contrast's table is dropped when names collide.
+      writeLines(c("pathway\tp-value", "PathA\t0.01"),
+                 file.path(tdir, "mcg_pathwayanalysis_mcg_pinned.tsv"))
+    }
+  }
+  list.files(file.path(root, "mummichog_pinned"), recursive = TRUE,
+             full.names = TRUE)
+}
+
+test_that("read_mummichog_pathways_by_contrast recovers original labels from the map", {
+  root  <- withr::local_tempdir()
+  files <- .mk_contrast_tree(root, c("HL_LL", "LL_HL", "NoData"),
+                             with_pw = c(TRUE, TRUE, FALSE))
+  # map the sanitised dirs back to the real (space-containing) contrast labels
+  readr::write_tsv(
+    data.frame(dir      = c("HL_LL", "LL_HL", "NoData"),
+               contrast = c("HL vs LL", "LL vs HL", "no data")),
+    file.path(root, "mummichog_pinned", "contrasts.tsv")
+  )
+  files <- list.files(file.path(root, "mummichog_pinned"), recursive = TRUE,
+                      full.names = TRUE)   # re-list to include contrasts.tsv
+
+  res <- read_mummichog_pathways_by_contrast(files)
+  # keyed by ORIGINAL labels; the contrast with no pathway table is omitted
+  expect_setequal(names(res), c("HL vs LL", "LL vs HL"))
+  expect_s3_class(res[["HL vs LL"]], "data.frame")
+  expect_equal(nrow(res[["LL vs HL"]]), 1L)
+})
+
+test_that("read_mummichog_pathways_by_contrast falls back to dir names without a map", {
+  root  <- withr::local_tempdir()
+  files <- .mk_contrast_tree(root, c("A_vs_B", "C_vs_D"))
+  files <- c(files, file.path(root, "stray.txt"))     # not under a contrast dir
+
+  res <- read_mummichog_pathways_by_contrast(files)
+  expect_setequal(names(res), c("A_vs_B", "C_vs_D"))  # sanitised dir names
+  expect_s3_class(res[["A_vs_B"]], "data.frame")
+
+  expect_length(read_mummichog_pathways_by_contrast(character(0)), 0)
+  expect_length(read_mummichog_pathways_by_contrast(NULL), 0)
+})
+
+test_that("an input placed inside out_dir is staged out so it survives the wipe", {
+  root    <- withr::local_tempdir()
+  out_dir <- file.path(root, "v2")
+  dir.create(out_dir, recursive = TRUE)
+  infile  <- file.path(out_dir, "input.tsv")           # nested INSIDE out_dir
+  lines   <- c("mz\trtime\tp-value\tt-score\tCompoundID",
+               "180.06\t50\t0.01\t2\tfeat_1")
+  writeLines(lines, infile)
+
+  staged <- .mmc_stage_infile(infile, out_dir)
+  # the staged copy must live OUTSIDE out_dir (compare with a consistent separator)
+  expect_false(startsWith(
+    normalizePath(staged, winslash = "/"),
+    paste0(normalizePath(out_dir, winslash = "/"), "/")
+  ))
+
+  unlink(out_dir, recursive = TRUE, force = TRUE)       # simulate run_mummichog's wipe
+  expect_true(file.exists(staged))                      # copy survives the wipe
+  expect_identical(readLines(staged), lines)            # content preserved
+})
+
+test_that("an input outside out_dir is left untouched", {
+  root    <- withr::local_tempdir()
+  out_dir <- file.path(root, "v2")
+  infile  <- file.path(root, "input.tsv")               # OUTSIDE out_dir
+  writeLines("x", infile)
+  # .mmc_stage_infile returns a winslash = "/" path; compare on the same convention
+  expect_identical(.mmc_stage_infile(infile, out_dir),
+                   normalizePath(infile, winslash = "/", mustWork = TRUE))
+})
+
+test_that(".mmc_default_python resolves to a platform-appropriate venv path", {
+  dp <- .mmc_default_python()
+  if (.Platform$OS.type == "windows") {
+    expect_match(dp, "Scripts/python\\.exe$")
+  } else {
+    expect_match(dp, "bin/python$")
+  }
+})
+
+test_that(".mmc_abs_keep_symlink makes a relative path absolute", {
+  rel <- file.path("envs", "mummichog", "bin", "python")
+  abs <- .mmc_abs_keep_symlink(rel)
+  expect_true(startsWith(abs, getwd()))
+  expect_true(endsWith(abs, rel))
+})
+
+test_that(".mmc_abs_keep_symlink expands ~ instead of treating it as relative", {
+  skip_if(identical(path.expand("~"), "~"), "no home dir to expand")
+  out <- .mmc_abs_keep_symlink("~/envs/mummichog/bin/python")
+  expect_identical(out, path.expand("~/envs/mummichog/bin/python"))
+  expect_false(grepl("~", out, fixed = TRUE))   # not <cwd>/~/...
+})
+
+test_that(".mmc_abs_keep_symlink leaves an absolute path untouched", {
+  p <- if (.Platform$OS.type == "windows") {
+    "C:/venvs/mummichog/Scripts/python.exe"
+  } else {
+    "/opt/venvs/mummichog/bin/python"
+  }
+  expect_identical(.mmc_abs_keep_symlink(p), p)
+})
+
+test_that(".mmc_abs_keep_symlink does NOT resolve a symlinked interpreter", {
+  # Reproduces the macOS/Linux venv bug: bin/python is a symlink to the base
+  # interpreter; normalizePath() would resolve it (losing the venv), we must not.
+  skip_on_os("windows")
+  tmp    <- withr::local_tempdir()
+  target <- file.path(tmp, "python3.11")
+  link   <- file.path(tmp, "python")
+  writeLines("#!/bin/sh", target)
+  if (!file.symlink(target, link)) skip("cannot create symlinks in this sandbox")
+
+  kept <- .mmc_abs_keep_symlink(link)                  # link is already absolute
+  expect_identical(kept, link)                         # returned verbatim...
+  expect_false(identical(kept, normalizePath(link)))   # ...not the resolved target
+  # both still resolve to the same real file — we only avoided the resolution
+  expect_identical(normalizePath(kept), normalizePath(target))
+})
+
+test_that(".mmc_exists_nofollow treats even a dangling symlink as present", {
+  skip_on_os("windows")
+  tmp  <- withr::local_tempdir()
+  link <- file.path(tmp, "python")
+  if (!file.symlink(file.path(tmp, "missing-target"), link)) {
+    skip("cannot create symlinks in this sandbox")
+  }
+  expect_true(.mmc_exists_nofollow(link))                 # the link node exists
+  expect_false(file.exists(link))                         # though its target does not
+  expect_false(.mmc_exists_nofollow(file.path(tmp, "nope")))
+})
+
+test_that("mod_mummichog_pinned is a no-op when mummichog is disabled or omitted", {
+  out_dir <- withr::local_tempdir()
+
+  cfg_off <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(enabled = FALSE)))))
+  expect_null(mod_mummichog_pinned(pre = NULL, de_res = NULL,
+                                   config = cfg_off, out_dir = out_dir))
+
+  cfg_omit <- list(modes = list(metabolomics = list(enrichment = list())))
+  expect_null(mod_mummichog_pinned(pre = NULL, de_res = NULL,
+                                   config = cfg_omit, out_dir = out_dir))
+
+  # nothing written, no venv invoked -> the output subdir is never created
+  expect_false(dir.exists(file.path(out_dir, "mummichog_pinned")))
+})
+
+test_that("pipe_metabolomics adds the pinned mummichog targets only when enabled", {
+  skip_if_not_installed("targets")
+  library(targets)
+  on  <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = TRUE)
+  off <- pipe_metabolomics(chosen_norm = "pqn", mummichog_enabled = FALSE)
+  # enabling adds _files (the format="file" per-contrast run) + _report_pathways
+  # (the read-back) = 2; disabled adds only the report alias (1) -> net +1
+  expect_equal(length(on) - length(off), 1L)
+
+  # the stage lives in analysis_core, so it is also present in multiomics runs
+  # (skip_outputs = TRUE), matching the pre-switch behaviour
+  mo_on  <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = TRUE)
+  mo_off <- pipe_metabolomics(chosen_norm = "pqn", skip_outputs = TRUE, mummichog_enabled = FALSE)
+  expect_equal(length(mo_on) - length(mo_off), 1L)
+})
+
+test_that("mod_mummichog_pinned refuses a non-human organism without a model", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Mus musculus",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+  expect_error(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    "non-human"
+  )
+})
+
+test_that("a configured model bypasses the organism guard (human-only) check", {
+  # model_json set -> network != human_mfn -> guard skipped; the call then fails
+  # later (here on the missing m/z annotations, pre = NULL), NOT with the
+  # organism error.
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Mus musculus",
+    enrichment = list(mummichog = list(enabled = TRUE, model_json = "/tmp/model.json")))))
+  err <- tryCatch(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    error = function(e) conditionMessage(e)
+  )
+  expect_false(grepl("non-human", err))   # model_json bypassed the organism guard
+  expect_match(err, "m/z")                # stopped later, as expected
+})
+
+test_that("a human organism passes the guard (fails later, not on organism)", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Homo sapiens",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+  err <- tryCatch(
+    mod_mummichog_pinned(pre = NULL, de_res = NULL, config = cfg,
+                         out_dir = withr::local_tempdir()),
+    error = function(e) conditionMessage(e)
+  )
+  expect_false(grepl("non-human", err))   # cleared the organism guard
+  expect_match(err, "m/z")                # stopped later, as expected
+})
+
+test_that(".mmc_preflight_runner aborts on a missing interpreter", {
+  expect_error(.mmc_preflight_runner("/nonexistent/bin/python"),
+               "Python executable not found")
+  expect_error(.mmc_preflight_runner(""), "Python executable not found")
+})
+
+test_that("mod_mummichog_pinned fails loud on a broken venv, not per-contrast quietly", {
+  # A broken/stale interpreter is a SHARED setup error, identical for every
+  # contrast, so it must abort the whole stage up front — NOT be swallowed by the
+  # per-contrast tryCatch into warnings + an empty (silently missing) section.
+  pre <- list(row_data = data.frame(
+    check.names = FALSE,
+    feature_id  = c("F1", "F2"),
+    "m/z"       = c(100.1, 200.2),
+    RT          = c(1.0, 2.0)
+  ))
+  de <- list(de_tables = list(
+    "A_vs_B" = data.frame(feature_id = c("F1", "F2"),
+                          P.Value = c(0.01, 0.5), logFC = c(1.2, -0.3))
+  ))
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Homo sapiens",
+    enrichment = list(mummichog = list(enabled = TRUE)))))
+
+  expect_error(
+    mod_mummichog_pinned(pre = pre, de_res = de, config = cfg,
+                         out_dir = withr::local_tempdir(),
+                         python  = "/nonexistent/bin/python"),
+    "Python executable not found"
+  )
+})

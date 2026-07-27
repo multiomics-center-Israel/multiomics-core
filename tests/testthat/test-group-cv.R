@@ -416,8 +416,8 @@ test_that("G1 metab: median + non-log2 transform -> NULL + warning (no wrong CV)
     pre  <- list(expr_work = log10(lin + 1), meta = meta)
     config <- list(modes = list(metabolomics = list(
         effects = list(samples = "SampleID"),
-        preprocessing = list(chosen_norm = "median"),
-        normalization = list(scaling = "none", transform = "log10", pseudocount = 1)
+        preprocessing = list(chosen_norm = "median", scaling = "none",
+                             transform = "log10", pseudocount = 1)
     )))
 
     expect_warning(
@@ -453,6 +453,49 @@ test_that("G1 metab: unknown chosen_norm -> NULL + warning (fail-safe)", {
         effects = list(samples = "SampleID"),
         preprocessing = list(chosen_norm = "some_future_method"),
         normalization = list(scaling = "none", transform = "log2", pseudocount = 1)
+    )))
+
+    expect_warning(
+        cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config),
+        "provably-log2"
+    )
+    expect_null(cv)
+})
+
+
+# =============================================================================
+# G3 — Metabolomics chosen_norm = "none" (already-normalized table)
+#      "none" skips sample normalization and uses the transform-only matrix, so
+#      it is invertible exactly like the median path: provably log2 ONLY when
+#      transform == "log2". A non-log2 transform must SKIP + warn, never invert.
+# =============================================================================
+test_that("G3 metab: none + log2 transform IS invertible -> finite CV", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pseudo <- 1
+    pre  <- list(expr_work = log2(lin + pseudo), meta = meta)  # transform-only log2(x+p)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "none", scaling = "none",
+                             transform = "log2", pseudocount = pseudo)
+    )))
+
+    cv <- build_group_cv_metabolomics(pre, wiring_contrasts(), config)
+    expect_false(is.null(cv))
+    expect_setequal(names(cv), c("CV.trt", "CV.ctrl"))
+    expect_true(all(is.finite(cv$CV.ctrl)))
+    # Reconstruction is exact here -> CV equals linear CV.
+    expect_equal(cv$CV.trt[1], 100 * stats::sd(lin[1, 4:6]) / mean(lin[1, 4:6]))
+})
+
+test_that("G3 metab: none + non-log2 transform -> NULL + warning (not provably log2)", {
+    meta <- wiring_meta()
+    lin  <- wiring_linear_matrix(meta$SampleID)
+    pre  <- list(expr_work = log10(lin + 1), meta = meta)
+    config <- list(modes = list(metabolomics = list(
+        effects = list(samples = "SampleID"),
+        preprocessing = list(chosen_norm = "none", scaling = "none",
+                             transform = "log10", pseudocount = 1)
     )))
 
     expect_warning(
