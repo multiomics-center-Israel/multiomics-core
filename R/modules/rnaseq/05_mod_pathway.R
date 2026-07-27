@@ -367,12 +367,21 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # ------------------------------------------------------------------
     # 2. Cluster-based ORA across all gene-list methods
     # ------------------------------------------------------------------
-    gene_lists <- build_gene_lists(
-        de_tables      = de_tables,
-        clustering_res = clustering_res,
-        p_cutoff       = rna_de_cfg$p_cutoff %||% 0.05,
-        lfc_cutoff     = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
-    )
+    # Contract (see the clustering_res @param): cluster-based ORA runs ONLY in
+    # single-omics mode. In multiomics mode (clustering_res = NULL) ORA is skipped
+    # and only GSEA runs. Without this guard build_gene_lists() would still create
+    # the contrast-derived collections from the DE tables alone (they need no
+    # clustering), so ORA would run contrary to the documented behavior.
+    gene_lists <- if (is.null(clustering_res)) {
+        list()
+    } else {
+        build_gene_lists(
+            de_tables      = de_tables,
+            clustering_res = clustering_res,
+            p_cutoff       = rna_de_cfg$p_cutoff %||% 0.05,
+            lfc_cutoff     = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
+        )
+    }
 
     if (length(gene_lists) > 0) {
         message("\n--- Cluster-based ORA ---")
@@ -452,6 +461,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
             if (length(ora_results) > 0) pathway_results[["cluster_ora"]] <- ora_results
         }
+    } else if (is.null(clustering_res)) {
+        # Multiomics mode: ORA is intentionally skipped (see the clustering_res
+        # @param contract); GSEA still runs below.
+        message("Cluster-based ORA skipped (multiomics mode: no clustering ",
+                "result); running GSEA only.")
     } else {
         message("Cluster-based ORA requires clustering results. ",
                 "Enable clustering in config to run ORA. GSEA will proceed.")
