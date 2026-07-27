@@ -11,13 +11,25 @@
 #   signatures; the fix is a rename (not a deletion) and touches shiny-export
 #   code. Remove it from `known_duplicates` below once #140 is resolved so the
 #   guard starts enforcing it.
+#
+# Scope note: this guard scans only R/domain/proteomics. Because the whole R/
+# tree is sourced into one environment, proteomics functions can also be
+# shadowed from other directories (e.g. filter_features_optimized in
+# domain/rnaseq), and other layers collide among themselves. A codebase-wide
+# audit of every such collision is tracked in #142; broaden this scan to the
+# full sourced file set once that lands.
 
 test_that("no proteomics domain function is defined more than once", {
     root_dir <- normalizePath(if (dir.exists("R")) "." else "../..")
     prot_dir <- file.path(root_dir, "R", "domain", "proteomics")
     skip_if_not(dir.exists(prot_dir), "proteomics domain directory not found")
 
-    known_duplicates <- c("build_de_contrast_summary")  # tracked in #140
+    # Pre-existing collisions tracked in their own issues, each pinned to the
+    # EXACT set of files it may appear in. A definition of an allowlisted name
+    # in any *other* file is still a failure, so a third shadow can't hide.
+    known_duplicates <- list(
+        build_de_contrast_summary = c("05_de_summary.R", "07_shiny_export.R")  # #140
+    )
 
     # Collect every top-level `name <- function(...)` and the file(s) it's in.
     # Parse-based (not regex) so commented-out or string occurrences don't count.
@@ -37,7 +49,12 @@ test_that("no proteomics domain function is defined more than once", {
     }
 
     dup <- defs[vapply(defs, length, integer(1L)) > 1L]
-    dup <- dup[setdiff(names(dup), known_duplicates)]
+    # Drop only the exact allowlisted collisions; any extra file keeps it failing.
+    for (nm in names(known_duplicates)) {
+        if (!is.null(dup[[nm]]) && setequal(dup[[nm]], known_duplicates[[nm]])) {
+            dup[[nm]] <- NULL
+        }
+    }
 
     detail <- paste(vapply(names(dup), function(nm) {
         sprintf("  %s: %s", nm, paste(dup[[nm]], collapse = ", "))
