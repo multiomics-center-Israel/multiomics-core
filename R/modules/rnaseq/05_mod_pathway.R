@@ -10,14 +10,16 @@
 #' @param gene_lists Output of build_gene_lists().
 #' @param local_tables Output of load_local_pathway_tables().
 #' @param pval_cutoff,padj_method ORA thresholds passed to run_cluster_ora_compute().
-#' @param go_simplify,orgdb GO-simplify controls (gated; default off).
+#' @param orgdb Reserved for future IC-based GO simplify measures (or NULL). GO
+#'   simplify itself is mandatory for GO results (Wang/GO.db) — see
+#'   run_cluster_ora_compute().
 #' @return A function(job) -> list(job, db_type, result), where result is the
 #'   4-element list from run_cluster_ora_compute() (or list() if not significant).
 #' @noRd
 .make_ora_worker <- function(gene_lists, local_tables, pval_cutoff, padj_method,
-                             go_simplify, orgdb) {
+                             orgdb) {
     force(gene_lists); force(local_tables); force(pval_cutoff)
-    force(padj_method); force(go_simplify); force(orgdb)
+    force(padj_method); force(orgdb)
     function(job) {
         clusters <- gene_lists[[job$clust_method]][[job$clust_round]]
         tbl      <- local_tables[[job$db_name]]
@@ -31,7 +33,6 @@
             type          = db_type,
             pvalueCutoff  = pval_cutoff,
             pAdjustMethod = padj_method,
-            go_simplify   = go_simplify,
             orgdb         = orgdb,
             ont           = db_ont
         )
@@ -278,15 +279,28 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     message("\n=== Local Enrichment (offline, table-driven) ===\n")
 
-    annotation_dir <- enr_cfg$annotation_dir
+    # Resolve annotation_dir. Absolute paths (Unix "/...", Windows "C:\..."/UNC)
+    # are used as given; RELATIVE paths are ALWAYS resolved against the configured
+    # project directory (config$project$dir) — never a same-named directory that
+    # happens to sit under the process working directory. The resolved path is the
+    # one validated and reported below.
+    annotation_dir_raw <- enr_cfg$annotation_dir
+    is_abs      <- grepl("^(/|\\\\|[A-Za-z]:)", annotation_dir_raw)
+    project_dir <- config$project$dir
+    annotation_dir <- if (is_abs || is.null(project_dir) || !nzchar(project_dir)) {
+        annotation_dir_raw
+    } else {
+        file.path(project_dir, annotation_dir_raw)
+    }
 
-    # Resolve a relative annotation_dir against the project dir if needed.
     if (!dir.exists(annotation_dir)) {
-        project_dir <- config$project$dir
-        if (!is.null(project_dir) && nzchar(project_dir)) {
-            candidate <- file.path(project_dir, annotation_dir)
-            if (dir.exists(candidate)) annotation_dir <- candidate
-        }
+        stop("Local/offline enrichment was requested ",
+             "(modes.rna.enrichment.annotation_dir = \"", annotation_dir_raw, "\"), ",
+             "but the resolved annotation directory does not exist:\n  ",
+             normalizePath(annotation_dir, winslash = "/", mustWork = FALSE), "\n",
+             "Provide the local annotation tables at that path, or set ",
+             "modes.rna.enrichment.annotation_dir: \"\" to use the online ",
+             "enrichment workflow.", call. = FALSE)
     }
 
     # ------------------------------------------------------------------
@@ -310,11 +324,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pval_cutoff <- enr_cfg$pvalue_cutoff %||% 0.05
     padj_method <- enr_cfg$padj_method   %||% "fdr"
     rna_de_cfg  <- config$modes$rna$de %||% list()
-    # GO simplify defaults to TRUE (legacy parity). Offline: the compute layer
-    # collapses redundant GO terms with the Wang measure over GO.db (no OrgDb, no
-    # network). If GO.db/GOSemSim are missing it warns and skips softly (the
-    # unsimplified GO ORA is always produced) — the pipeline never fails.
-    go_simplify <- isTRUE(enr_cfg$go_simplify %||% TRUE)
+    # GO simplify is MANDATORY for GO results and NOT configurable: the compute
+    # layer always collapses redundant GO terms with the Wang measure over GO.db
+    # (no OrgDb, no network). Any legacy `enrichment.go_simplify` field is ignored.
+    # If GO.db/GOSemSim are missing it warns and keeps the unsimplified GO ORA —
+    # the pipeline never fails. `orgdb` stays reserved for future IC-based measures.
     orgdb       <- enr_cfg$orgdb
     # Single control for enrichment parallelism (ORA + GSEA). <=1 == sequential.
     workers     <- enr_cfg$workers %||% 1
@@ -392,7 +406,6 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                 local_tables = local_tables,
                 pval_cutoff  = pval_cutoff,
                 padj_method  = padj_method,
-                go_simplify  = go_simplify,
                 orgdb        = orgdb
             )
 
@@ -418,6 +431,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                     unit_dir     = unit_dir,
                     type         = jr$db_type,
                     maxCategory  = enr_cfg$max_terms_in_dotplot %||% 20,
+                    dotplot      = do_dotplot,
                     shared_genes = do_shared_genes
                 )
 
@@ -562,7 +576,25 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     expr <- pre$expr_work
     if (!is.null(expr)) {
         expr <- as.matrix(expr)
-        idx  <- match(summ[[id_col]], rownames(expr))
+        # Match on the `Gene:`-normalized key on BOTH sides: DE FeatureIDs may have
+        # had the prefix stripped upstream while expr_work rownames keep it (or vice
+        # versa). Normalizing both aligns them regardless. `summ`'s own (original)
+        # IDs are preserved in the output; only the match key is normalized.
+        # Ambiguity guard: if two expr rows normalize to the SAME key (e.g. both
+        # "Gene:X" and "X" present) we cannot know which is X's expression, so we
+        # EXCLUDE those keys from matching (their expression stays NA) rather than
+        # silently pick one. Unique matches are unaffected.
+        expr_keys <- sub("^Gene:", "", rownames(expr))
+        dup <- duplicated(expr_keys) | duplicated(expr_keys, fromLast = TRUE)
+        if (any(dup)) {
+            ambig <- unique(expr_keys[dup])
+            warning(".build_gene_context(): ", length(ambig), " gene ID(s) are ",
+                    "ambiguous after Gene: normalization (e.g. ",
+                    paste(utils::head(ambig, 5L), collapse = ", "),
+                    "); their expression is left NA to avoid a wrong match.")
+            expr_keys[dup] <- NA_character_   # ambiguous keys never match a gene
+        }
+        idx  <- match(sub("^Gene:", "", summ[[id_col]]), expr_keys)
         sub  <- expr[idx, , drop = FALSE]           # NA rows for unmatched genes
         # Per-gene z-scores across samples (scale() works column-wise -> transpose).
         z <- tryCatch(t(scale(t(sub))), error = function(e) NULL)

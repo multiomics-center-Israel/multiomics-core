@@ -419,3 +419,289 @@ test_that("enrichment.enabled: true runs enrichment (reaches DE-table check)", {
         "No DE tables")
     expect_identical(res, .empty_pw)
 })
+
+# ===========================================================================
+# Codex-review fixes (#1/#4/#5/#6/#7/#8/#9/#10)
+# ===========================================================================
+
+# ---- #1 + #4: annotation_dir resolution + missing-dir error ----------------
+
+.mk_enr_cfg <- function(annotation_dir, project_dir = NULL) {
+    list(
+        project = list(dir = project_dir),
+        modes = list(rna = list(
+            pathway    = list(enabled = TRUE),
+            de         = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5),
+            enrichment = list(annotation_dir = annotation_dir)
+        ))
+    )
+}
+.call_local_enrich <- function(cfg) {
+    suppressMessages(.run_local_enrichment(
+        de_tables   = list(A.vs.B = data.frame(FeatureID = "g1")),
+        feature_ids = "g1",
+        enr_cfg     = cfg$modes$rna$enrichment,
+        config      = cfg,
+        out_dir     = withr::local_tempdir()))
+}
+
+test_that("#1 missing annotation dir raises a clear offline-enrichment error", {
+    proj <- withr::local_tempdir()  # exists, but has no 'annot' subdir
+    err <- tryCatch(.call_local_enrich(.mk_enr_cfg("annot", proj)),
+                    error = function(e) conditionMessage(e))
+    expect_match(err, "Local/offline enrichment was requested")
+    expect_match(err, "does not exist")
+    expect_match(err, 'annotation_dir: ""', fixed = TRUE)
+    expect_match(err, "annot")  # the raw path is echoed
+})
+
+test_that("#4 relative annotation_dir resolves against project.dir, not CWD", {
+    proj <- withr::local_tempdir()  # project dir WITHOUT the 'annot' subdir
+    cwd  <- withr::local_tempdir()
+    dir.create(file.path(cwd, "annot"))  # same-named dir under CWD must NOT win
+    withr::local_dir(cwd)
+    err <- tryCatch(.call_local_enrich(.mk_enr_cfg("annot", proj)),
+                    error = function(e) conditionMessage(e))
+    # Errors (proj/annot doesn't exist) instead of silently using cwd/annot,
+    # and the reported resolved path is under the project dir.
+    expect_match(err, "does not exist")
+    expect_true(grepl(basename(proj), err, fixed = TRUE))
+})
+
+test_that("#4 absolute annotation_dir is used as-is (not prefixed by project.dir)", {
+    proj <- withr::local_tempdir()
+    abs_missing <- file.path(withr::local_tempdir(), "nope")  # absolute, missing
+    err <- tryCatch(.call_local_enrich(.mk_enr_cfg(abs_missing, proj)),
+                    error = function(e) conditionMessage(e))
+    expect_match(err, "does not exist")
+    expect_false(grepl(basename(proj), err, fixed = TRUE))  # project dir NOT prepended
+})
+
+# ---- #10: sequential fallback is seeded + reproducible ---------------------
+
+test_that("#10 no-future fallback is seeded, reproducible, and non-leaking", {
+    # Force the fallback by shadowing requireNamespace in the environment that
+    # run_enrichment_jobs (sourced into globalenv) looks up from.
+    had  <- exists("requireNamespace", envir = globalenv(), inherits = FALSE)
+    orig <- if (had) get("requireNamespace", envir = globalenv()) else NULL
+    assign("requireNamespace", function(...) FALSE, envir = globalenv())
+    on.exit({
+        if (had) assign("requireNamespace", orig, envir = globalenv())
+        else rm("requireNamespace", envir = globalenv())
+    }, add = TRUE)
+
+    jobs <- as.list(1:6)
+    fun  <- function(j) stats::runif(1)
+    r1 <- run_enrichment_jobs(jobs, fun, workers = 1, seed = 123)
+    r2 <- run_enrichment_jobs(jobs, fun, workers = 1, seed = 123)
+    expect_identical(r1, r2)                       # reproducible across runs
+    expect_false(identical(r1, run_enrichment_jobs(jobs, fun, 1, seed = 999)))
+
+    # Does not leave the caller's global RNG state altered.
+    set.seed(42); before <- .Random.seed
+    invisible(run_enrichment_jobs(jobs, fun, workers = 1, seed = 7))
+    expect_identical(.Random.seed, before)
+})
+
+# ---- #6: effective GSEA cutoff selection -----------------------------------
+
+test_that("#6 .gsea_significant_rows uses the configured adjusted-p cutoff", {
+    res_df <- data.frame(ID = c("a", "b", "c"), padj = c(0.03, 0.07, 0.20),
+                         stringsAsFactors = FALSE)
+    expect_equal(nrow(.gsea_significant_rows(res_df, 0.05)), 1L)   # only 0.03
+    expect_setequal(.gsea_significant_rows(res_df, 0.10)$ID, c("a", "b"))  # +0.07
+    expect_equal(nrow(.gsea_significant_rows(res_df, 0.01)), 0L)
+    # NA padj rows never selected; empty/absent handled
+    res_na <- data.frame(ID = "x", padj = NA_real_)
+    expect_equal(nrow(.gsea_significant_rows(res_na, 0.10)), 0L)
+    expect_equal(nrow(.gsea_significant_rows(data.frame(ID = "x"), 0.10)), 0L)
+})
+
+# ---- #8: Gene: prefix normalization for expression matching ----------------
+
+test_that("#8 .build_gene_context matches DE ids to prefixed expr row names", {
+    skip_if_not(exists("build_rnaseq_summary_df"))
+    de <- list(A.vs.B = data.frame(
+        FeatureID = c("ABC123", "DEF456"),
+        log2FoldChange = c(1, -1), pvalue = c(0.01, 0.02), padj = c(0.02, 0.03),
+        stringsAsFactors = FALSE))
+    expr <- matrix(withr::with_seed(1, rnorm(2 * 4)), nrow = 2,
+                   dimnames = list(c("Gene:ABC123", "Gene:DEF456"), paste0("S", 1:4)))
+    ctx <- .build_gene_context(de, list(expr_work = expr), list(p_cutoff = 0.05))
+    row <- ctx[ctx$FeatureID == "ABC123", , drop = FALSE]
+    expect_false(any(is.na(row[, paste0("S", 1:4)])))   # expression was matched
+    # No-prefix case still matches
+    expr2 <- expr; rownames(expr2) <- c("ABC123", "DEF456")
+    ctx2 <- .build_gene_context(de, list(expr_work = expr2), list(p_cutoff = 0.05))
+    expect_false(any(is.na(ctx2[ctx2$FeatureID == "ABC123", paste0("S", 1:4)])))
+})
+
+test_that("#8 duplicate normalized expr keys are excluded (no silent wrong match)", {
+    skip_if_not(exists("build_rnaseq_summary_df"))
+    # "Gene:ABC123" and "ABC123" both normalize to ABC123 -> ambiguous. "DEF456" is
+    # unique and must still match.
+    de <- list(A.vs.B = data.frame(FeatureID = c("ABC123", "DEF456"),
+                                   log2FoldChange = c(1, 1), pvalue = c(.01, .01),
+                                   padj = c(.02, .02), stringsAsFactors = FALSE))
+    expr <- matrix(withr::with_seed(1, rnorm(3 * 3)), nrow = 3,
+                   dimnames = list(c("Gene:ABC123", "ABC123", "DEF456"),
+                                   paste0("S", 1:3)))
+    expect_warning(
+        ctx <- .build_gene_context(de, list(expr_work = expr), list(p_cutoff = 0.05)),
+        "ambiguous")
+    # Ambiguous gene -> expression EXCLUDED (NA), not an arbitrary row.
+    expect_true(all(is.na(ctx[ctx$FeatureID == "ABC123", paste0("S", 1:3)])))
+    # Unique gene still matched.
+    expect_false(any(is.na(ctx[ctx$FeatureID == "DEF456", paste0("S", 1:3)])))
+})
+
+# ---- #5 + #9: ORA dotplot toggle & targeted na-handling --------------------
+
+# Small synthetic ORA result that is definitely significant (cluster1 == T1 genes).
+.mk_ora_result <- function() {
+    t2g <- data.frame(term = rep(c("T1", "T2", "T3"), each = 20),
+                      gene = paste0("g", 1:60), stringsAsFactors = FALSE)
+    t2n <- data.frame(term = c("T1", "T2", "T3"),
+                      name = c("term one", "term two", "term three"),
+                      stringsAsFactors = FALSE)
+    clusters <- setNames(c(rep("1", 20), rep("2", 20)), paste0("g", 1:40))
+    run_cluster_ora_compute(clusters, TERM2GENE = t2g, TERM2NAME = t2n,
+                            type = "KEGG")   # KEGG: never simplified
+}
+
+test_that("#5 plots.dotplot=FALSE suppresses the ORA dotplot; TRUE writes it", {
+    skip_if_not_installed("clusterProfiler")
+    skip_if_not_installed("enrichplot")
+    res <- .mk_ora_result()
+    skip_if(length(res) == 0, "fixture produced no ORA enrichment")
+
+    d_off <- withr::local_tempdir()
+    write_cluster_ora_outputs(res, unit_dir = d_off, type = "KEGG", dotplot = FALSE)
+    expect_true(file.exists(file.path(d_off, "results.csv")))
+    expect_false(file.exists(file.path(d_off, "dotplot.pdf")))   # suppressed
+
+    d_on <- withr::local_tempdir()
+    write_cluster_ora_outputs(res, unit_dir = d_on, type = "KEGG", dotplot = TRUE)
+    expect_true(file.exists(file.path(d_on, "dotplot.pdf")))     # written
+})
+
+test_that("#9 shared-gene keeps enriched terms with NA in optional columns", {
+    skip_if_not_installed("pheatmap")
+    # 2 terms, overlapping genes; one term has qvalue = NA (an optional column).
+    df <- data.frame(
+        Cluster = c("1", "1"), ID = c("GO:1", "GO:2"),
+        Description = c("term one", "term two"),
+        geneID = c("g1/g2/g3", "g2/g3/g4"),
+        qvalue = c(0.01, NA),   # unrelated NA must NOT drop the row
+        stringsAsFactors = FALSE)
+    tmp <- withr::local_tempdir()
+    plot_ora_shared_genes(df, tmp)
+    t2t <- list.files(tmp, pattern = "terms_to_terms.*\\.csv$", full.names = TRUE)
+    expect_true(length(t2t) >= 1)
+    m <- utils::read.csv(t2t[1], row.names = 1, check.names = FALSE)
+    expect_equal(nrow(m), 2L)   # BOTH terms retained (old na.omit dropped NA row -> 1 -> skipped)
+})
+
+# ---- #7: per_pathway_artifacts gates core-gene CSV writes -------------------
+
+.mk_gsea_result <- function() {
+    genes <- paste0("g", 1:200)
+    vals  <- c(seq(3, 2.1, length.out = 30), seq(2, -2, length.out = 140),
+               seq(-2.1, -3, length.out = 30))
+    stats <- setNames(vals, genes)
+    t2g   <- data.frame(term = "T1", gene = paste0("g", 1:30), stringsAsFactors = FALSE)
+    suppressWarnings(suppressMessages(clusterProfiler::GSEA(
+        stats, TERM2GENE = t2g, minGSSize = 5, maxGSSize = 1000,
+        pvalueCutoff = 1, verbose = FALSE, by = "fgsea")))
+}
+
+test_that("#7 core-gene CSVs written only when per_pathway_artifacts (plots) is on", {
+    skip_if_not_installed("clusterProfiler")
+    g <- tryCatch(.mk_gsea_result(), error = function(e) NULL)
+    skip_if(is.null(g) || nrow(as.data.frame(g)) == 0, "no GSEA result produced")
+    res_df <- as.data.frame(g); res_df$padj <- res_df$p.adjust
+    expr <- matrix(withr::with_seed(1, rnorm(30 * 6)), nrow = 30,
+                   dimnames = list(paste0("g", 1:30), paste0("S", 1:6)))
+    core_csvs <- function(d) list.files(file.path(d, "core_genes"),
+                                        pattern = "\\.csv$", full.names = TRUE)
+
+    # artifacts FALSE, heatmaps FALSE -> nothing written
+    d1 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(g, res_df, d1, plots = FALSE, heatmaps = FALSE,
+                                    sig_cutoff = 1)
+    expect_equal(length(list.files(d1, recursive = TRUE)), 0L)
+
+    # artifacts FALSE, heatmaps TRUE -> NO core-gene CSVs; heatmaps allowed
+    skip_if_not_installed("pheatmap")
+    d2 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(g, res_df, d2, expr_mat = expr,
+                                    plots = FALSE, heatmaps = TRUE, sig_cutoff = 1)
+    expect_equal(length(core_csvs(d2)), 0L)                       # contract: no CSVs
+    hm <- list.files(d2, recursive = TRUE)                        # relative paths
+    expect_true(any(grepl("heatmaps_(all|core)_genes/.*\\.png$", hm)))  # heatmaps produced
+
+    # artifacts TRUE, heatmaps FALSE -> core-gene CSVs written
+    d3 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(g, res_df, d3, plots = TRUE, heatmaps = FALSE,
+                                    sig_cutoff = 1)
+    expect_true(length(core_csvs(d3)) >= 1)
+
+    # artifacts TRUE, heatmaps TRUE -> both
+    d4 <- withr::local_tempdir()
+    save_gsea_per_pathway_artifacts(g, res_df, d4, expr_mat = expr,
+                                    plots = TRUE, heatmaps = TRUE, sig_cutoff = 1)
+    expect_true(length(core_csvs(d4)) >= 1)
+    expect_true(any(grepl("heatmaps_(all|core)_genes/.*\\.png$",
+                          list.files(d4, recursive = TRUE))))
+})
+
+# ===========================================================================
+# Mandatory GO simplification (config field removed; always applied for GO)
+# ===========================================================================
+
+test_that("GO simplify is mandatory for GO and never applied to KEGG (fail-soft)", {
+    skip_if_not_installed("clusterProfiler")
+    # Shadow .go_semdata so we can (a) observe whether simplify is attempted and
+    # (b) force the fail-soft branch without a slow real godata() build.
+    called <- new.env(); called$ont <- character(0)
+    orig <- get(".go_semdata", envir = globalenv())
+    assign(".go_semdata",
+           function(ont) { called$ont <- c(called$ont, ont %||% "BP"); NULL },
+           envir = globalenv())
+    on.exit(assign(".go_semdata", orig, envir = globalenv()), add = TRUE)
+
+    t2g <- data.frame(term = rep(c("T1", "T2", "T3"), each = 20),
+                      gene = paste0("g", 1:60), stringsAsFactors = FALSE)
+    t2n <- data.frame(term = c("T1", "T2", "T3"),
+                      name = c("a", "b", "c"), stringsAsFactors = FALSE)
+    clusters <- setNames(c(rep("1", 20), rep("2", 20)), paste0("g", 1:40))
+
+    # GO: simplify is attempted unconditionally (no config flag exists). semData
+    # NULL -> fail-soft: warn, keep unsimplified result (elements [[2]]/[[4]] NULL).
+    called$ont <- character(0)
+    expect_warning(
+        res_go <- run_cluster_ora_compute(clusters, t2g, t2n, type = "GO", ont = "CC"),
+        "GO simplify could not run")
+    expect_true("CC" %in% called$ont)     # simplify attempted for GO (mandatory)
+    expect_true(length(res_go) == 4)
+    expect_false(is.null(res_go[[3]]))    # unsimplified result retained
+    expect_null(res_go[[2]]); expect_null(res_go[[4]])   # no simplify output
+
+    # KEGG: simplify is NEVER attempted.
+    called$ont <- character(0)
+    res_kegg <- run_cluster_ora_compute(clusters, t2g, t2n, type = "KEGG")
+    expect_equal(length(called$ont), 0L)  # .go_semdata not called for KEGG
+    expect_null(res_kegg[[2]]); expect_null(res_kegg[[4]])
+})
+
+test_that("run_cluster_ora_compute no longer accepts a go_simplify argument", {
+    expect_false("go_simplify" %in% names(formals(run_cluster_ora_compute)))
+    expect_false("go_simplify" %in% names(formals(run_cluster_ora)))
+})
+
+test_that("config template no longer exposes go_simplify", {
+    tpl <- readLines(testthat::test_path("..", "..", "config", "templates",
+                                         "rna_config.yaml"))
+    # No ACTIVE (uncommented) go_simplify key remains.
+    expect_false(any(grepl("^\\s*go_simplify\\s*:", tpl)))
+})

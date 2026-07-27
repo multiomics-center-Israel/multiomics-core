@@ -665,14 +665,13 @@ With §15 implemented, **every legacy enrichment artifact type now has a current
 ## 16.4 KEGG readiness
 
 - The generic ORA/GSEA compute, plots, core-gene tables, ridgeplots, and heatmap paths are **database-agnostic** (`ora_unit_dir()`/`gsea_unit_dir()` do not special-case KEGG; the per-pathway/heatmap writers key on gene sets, not GO).
-- `go_simplify` applies **only to GO** databases (`type == "GO"` guard) and is skipped for KEGG — correct by construction.
+- GO simplification applies **only to GO** databases (`type == "GO"` guard in `run_cluster_ora_compute()`) and is never applied to KEGG — correct by construction.
 - (The Uri_Gat legacy audit folders were GO-only, so KEGG parity is structural, not run-verified here.)
 
 ## 16.5 Final configuration defaults & rationale
 
 ```yaml
 enrichment:
-  go_simplify: true            # legacy parity; offline Wang/GO.db, no OrgDb
   plots:
     dotplot: true
     ridgeplot: true
@@ -683,7 +682,9 @@ enrichment:
     per_pathway_artifacts: true  # gseaplot2 PNGs + rich core-gene tables
 ```
 
-Rich-by-default so a default run reproduces legacy-level output; every expensive artifact is independently switchable. **`pathway_heatmaps` defaults to `false`** because it creates a very large number of files (one heatmap per significant pathway per GSEA unit — thousands across 3 DBs) and substantially increases runtime; the capability is fully implemented and enabled per-project when wanted. `go_simplify` and `gsea.per_pathway_artifacts` default `true` because they are core legacy outputs and (for simplify) fully offline.
+Rich-by-default so a default run reproduces legacy-level output; every expensive artifact is independently switchable. **`pathway_heatmaps` defaults to `false`** because it creates a very large number of files (one heatmap per significant pathway per GSEA unit — thousands across 3 DBs) and substantially increases runtime; the capability is fully implemented and enabled per-project when wanted. `gsea.per_pathway_artifacts` defaults `true` because it is a core legacy output.
+
+**GO simplification is ALWAYS applied for GO results and is no longer configurable** (post-Codex-review change): redundant / highly similar GO terms are reduced automatically via `clusterProfiler::simplify()` (Wang measure over `GO.db`/`GOSemSim`, offline, no OrgDb). KEGG is never simplified. If simplification cannot run (GO.db/GOSemSim absent), the unsimplified GO ORA result is retained with a warning — the pipeline never fails. The former `enrichment.go_simplify` config field has been removed from the template; a legacy config that still contains it (even `false`) is ignored and cannot disable simplification.
 
 ## 16.6 Validation (all passed)
 
@@ -712,3 +713,4 @@ Each phase below is separately gated; **none is started.** Detail also in §6–
 - **Main risks / open decisions:** keep blocks additive/guarded so absent (toggled-off) outputs never break the report; decide how much of the large per-pathway/heatmap output to link vs summarize.
 - **Recommended validation:** report renders with outputs present and absent; no regressions to existing sections.
 - **Depends on Phase 2:** yes (reads the Phase 2 output layout); ideally after Phase 3 so proteomics is covered too.
+- **⚠ Known follow-up (Codex review #2, deferred to this phase):** the RNA report currently reads fGSEA results **non-recursively** from the `Enrichment/` root (`report_template.Rmd`: `list.files(enrich_dir, pattern="pathway_.*_fgsea\\.csv$")`, and the `has_enrichment` guard is also root-only). This matches only the **online** path's flat files. The **offline** (Phase 1/2) layout writes nested results at `Enrichment/GSEA/<database>/ranking_by_<method>/<contrast>/results.csv` (and ORA under `Enrichment/ORA/<db>/…/results.csv`), so the report shows *no* enrichment for offline runs. Phase 4 **must** teach the report to read the nested offline layout (recurse those directories, or consume the in-memory `rna_pathway_res$pathway_results`). Not a Phase-2 defect — report integration is intentionally deferred here.

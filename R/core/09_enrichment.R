@@ -1498,7 +1498,13 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
             message("  future/future.apply not available — running sequentially. ",
                     "Install with: renv::install(c('future', 'future.apply'))")
         }
-        return(lapply(jobs, fun))
+        # Reproducibility in the no-future fallback: seed the sequential run from
+        # the same project `seed` the future path uses. withr::with_seed sets the
+        # RNG deterministically and RESTORES the caller's global RNG state on exit
+        # (no leak). Streams are not byte-identical to future's L'Ecuyer-CMRG
+        # per-job streams, but results are reproducible across independent runs
+        # with the same seed — which is what matters for permutation-based GSEA.
+        return(withr::with_seed(seed, lapply(jobs, fun)))
     }
 
     # NB: workers must capture ONLY the data they use. Callers build worker
@@ -1757,9 +1763,9 @@ run_gsea_all <- function(ranked_genes,
         if (is.null(results[[contrast]])) results[[contrast]] <- list()
         results[[contrast]][[result_key]] <- res_df
 
-        n_sig <- sum(res_df$padj < 0.05, na.rm = TRUE)
+        n_sig <- nrow(.gsea_significant_rows(res_df, pvalueCutoff))
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                ": ", n_sig, " significant (padj < 0.05)")
+                ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
 
         # Write CSV
         if (!is.null(output_dir)) {
@@ -1842,7 +1848,8 @@ run_gsea_all <- function(ranked_genes,
                     expr_mat       = expr_mat,
                     annotation_col = annotation_col,
                     plots          = isTRUE(per_pathway_artifacts),
-                    heatmaps       = isTRUE(pathway_heatmaps)
+                    heatmaps       = isTRUE(pathway_heatmaps),
+                    sig_cutoff     = pvalueCutoff
                 )
             }
 
@@ -1884,6 +1891,29 @@ run_gsea_all <- function(ranked_genes,
 # PER-PATHWAY GSEA ARTIFACTS (Phase 3 — legacy outputs)
 # ==============================================================================
 
+#' Select the significant rows of a GSEA result at the effective cutoff
+#'
+#' clusterProfiler::GSEA() already filters its `@result` to rows with both
+#' `pvalue <= pvalueCutoff` AND `p.adjust <= pvalueCutoff`, so a valid GSEA
+#' data.frame's rows are all significant at the configured cutoff. This helper
+#' re-selects on the ADJUSTED p-value (`padj`) using the SAME configured cutoff
+#' (`gsea_pvalue_cutoff` if set, else `pvalue_cutoff`) so every downstream
+#' artifact decision (dotplot gate, per-pathway plots/tables/heatmaps, counts)
+#' tracks the config instead of a hard-coded 0.05. Uses `<=` to match GSEA's
+#' filtering contract. NA `padj` rows are excluded.
+#'
+#' @param res_df GSEA result data.frame (must have a `padj` column).
+#' @param sig_cutoff Effective adjusted-p significance cutoff.
+#' @return The subset of `res_df` that is significant (0-row frame if none/NA-only).
+#' @noRd
+.gsea_significant_rows <- function(res_df, sig_cutoff = 0.05) {
+    if (is.null(res_df) || !is.data.frame(res_df) ||
+        !"padj" %in% names(res_df) || nrow(res_df) == 0) {
+        return(res_df[0, , drop = FALSE])
+    }
+    res_df[!is.na(res_df$padj) & res_df$padj <= sig_cutoff, , drop = FALSE]
+}
+
 #' Save per-pathway GSEA artifacts: enrichment plots, core-gene tables, heatmaps
 #'
 #' For each significant pathway in the GSEA result, produces (each gated):
@@ -1899,6 +1929,12 @@ run_gsea_all <- function(ranked_genes,
 #' minimal `gene, rank_value` table. All artifacts are fail-soft; this runs only
 #' in the serial output stage, never inside a parallel worker.
 #'
+#' File writing vs computation: gseaplot2 PNGs AND the core-gene CSVs are written
+#' only when `plots` (i.e. gsea.per_pathway_artifacts) is TRUE. Heatmaps are an
+#' independent output (`heatmaps` / plots.pathway_heatmaps): they may run with
+#' `plots = FALSE`, deriving their gene sets in memory without writing any
+#' core-gene CSV.
+#'
 #' @param gsea_result gseaResult S4 object from clusterProfiler::GSEA()
 #' @param res_df Data.frame version of the result (with padj, pathway, etc.)
 #' @param output_dir The per_pathway/ directory for this GSEA unit.
@@ -1906,28 +1942,34 @@ run_gsea_all <- function(ranked_genes,
 #'   with annotation / expression / DE / z-score columns to enrich core-gene CSVs.
 #' @param expr_mat Optional feature x sample expression matrix for heatmaps.
 #' @param annotation_col Optional pheatmap column-annotation data.frame.
-#' @param plots Logical: emit gseaplot2 PNGs (default TRUE).
+#' @param plots Logical: emit gseaplot2 PNGs + core-gene CSVs (default TRUE).
 #' @param heatmaps Logical: emit per-pathway expression heatmaps (default FALSE).
+#' @param sig_cutoff Effective adjusted-p cutoff selecting which pathways get
+#'   artifacts (the configured GSEA cutoff; default 0.05).
 #' @param max_heatmap_genes Cap on genes drawn per heatmap (guards huge sets).
 #' @noRd
 save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
                                             gene_context = NULL, expr_mat = NULL,
                                             annotation_col = NULL,
                                             plots = TRUE, heatmaps = FALSE,
+                                            sig_cutoff = 0.05,
                                             max_heatmap_genes = 500) {
 
     if (is.null(gsea_result) || is.null(output_dir)) return(invisible(NULL))
 
-    sig_rows <- res_df[!is.na(res_df$padj) & res_df$padj < 0.05, , drop = FALSE]
+    sig_rows <- .gsea_significant_rows(res_df, sig_cutoff)
     if (nrow(sig_rows) == 0) return(invisible(NULL))
 
-    # Directories (create only those we will populate)
+    # Directories (create only those we will populate). The core_genes CSV
+    # directory is created only when `plots` is on — heatmaps never write CSVs.
     plots_dir <- file.path(output_dir, "plots")
     excel_dir <- file.path(output_dir, "core_genes")
     hm_all_dir  <- file.path(output_dir, "heatmaps_all_genes")
     hm_core_dir <- file.path(output_dir, "heatmaps_core_genes")
-    if (isTRUE(plots)) dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
-    dir.create(excel_dir, recursive = TRUE, showWarnings = FALSE)
+    if (isTRUE(plots)) {
+        dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+        dir.create(excel_dir, recursive = TRUE, showWarnings = FALSE)
+    }
     do_heatmaps <- isTRUE(heatmaps) && !is.null(expr_mat)
     if (do_heatmaps) {
         expr_mat <- as.matrix(expr_mat)
@@ -1941,14 +1983,30 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
     } else NULL
     gene_list <- gsea_result@geneList  # full ranked vector (gene -> value)
 
+    # Match the pathway's genes to expression rows on the `Gene:`-normalized key
+    # (DE/pathway IDs may have the prefix stripped while expr rownames retain it —
+    # see the ID-normalization note in mod_rnaseq_pathway). Select by POSITION so
+    # the matrix keeps its original rownames for the plot. Ambiguity guard: keys
+    # shared by >1 expr row (e.g. both "Gene:X" and "X") are EXCLUDED from heatmaps
+    # so an ambiguous gene is never plotted from an arbitrary row.
+    expr_keys <- sub("^Gene:", "", rownames(expr_mat))
+    ambig_keys <- unique(expr_keys[duplicated(expr_keys)])
+    if (length(ambig_keys) > 0) {
+        warning("pathway heatmaps: ", length(ambig_keys), " ambiguous gene ID(s) ",
+                "after Gene: normalization (e.g. ",
+                paste(utils::head(ambig_keys, 5L), collapse = ", "),
+                "); excluded from heatmaps.")
+    }
+
     # Helper: write one expression heatmap for a gene set (fail-soft).
     write_pathway_heatmap <- function(genes, out_png, title) {
-        feats <- intersect(genes, rownames(expr_mat))
-        if (length(feats) < 2) return(invisible(NULL))  # need >=2 rows to cluster
-        if (length(feats) > max_heatmap_genes) feats <- feats[seq_len(max_heatmap_genes)]
+        want <- setdiff(sub("^Gene:", "", genes), ambig_keys)  # drop ambiguous
+        sel  <- which(expr_keys %in% want)
+        if (length(sel) < 2) return(invisible(NULL))  # need >=2 rows to cluster
+        if (length(sel) > max_heatmap_genes) sel <- sel[seq_len(max_heatmap_genes)]
         tryCatch({
             hm <- plot_heatmap_core(
-                expr_mat[feats, , drop = FALSE],
+                expr_mat[sel, , drop = FALSE],
                 annotation_col = annotation_col,
                 title          = title,
                 scale_rows     = TRUE,
@@ -1990,7 +2048,9 @@ save_gsea_per_pathway_artifacts <- function(gsea_result, res_df, output_dir,
         }
 
         # --- Core-gene CSV (rich when gene_context supplied) ---
-        if (length(core_genes) > 0) {
+        # Written only when per-pathway artifacts are enabled (`plots`); heatmaps
+        # alone never write these tables.
+        if (isTRUE(plots) && length(core_genes) > 0) {
             tryCatch({
                 if (!is.null(ctx_key)) {
                     idx <- match(core_genes, gene_context[[ctx_key]])
@@ -2179,14 +2239,14 @@ run_cluster_ora <- function(clusters,
                             pAdjustMethod = "fdr",
                             outDir = NULL,
                             maxCategory = 1000,
-                            go_simplify = FALSE,
                             orgdb = NULL,
                             ont = NULL) {
 
     # Thin wrapper: pure compute (parallel-safe) + serial file I/O. Kept for
     # backward compatibility and direct callers/tests. The module orchestration
     # calls run_cluster_ora_compute() and write_cluster_ora_outputs() separately
-    # so compute can run inside parallel workers while I/O stays serial.
+    # so compute can run inside parallel workers while I/O stays serial. GO simplify
+    # is always applied for GO results (see run_cluster_ora_compute()).
     res <- run_cluster_ora_compute(
         clusters      = clusters,
         TERM2GENE     = TERM2GENE,
@@ -2194,7 +2254,6 @@ run_cluster_ora <- function(clusters,
         type          = type,
         pvalueCutoff  = pvalueCutoff,
         pAdjustMethod = pAdjustMethod,
-        go_simplify   = go_simplify,
         orgdb         = orgdb,
         ont           = ont
     )
@@ -2252,11 +2311,10 @@ run_cluster_ora <- function(clusters,
 #' @param clusters Named vector: gene IDs as names, cluster labels as values.
 #' @param TERM2GENE Two-column data.frame (term ID, gene ID).
 #' @param TERM2NAME Two-column data.frame (term ID, term name).
-#' @param type "KEGG" or "GO". Controls simplify and the @fun slot.
+#' @param type "KEGG" or "GO". For "GO", redundant terms are ALWAYS simplified
+#'   (mandatory; not configurable). For "KEGG" no simplification is applied.
 #' @param pvalueCutoff Adjusted p-value cutoff for filtering (default 0.05).
 #' @param pAdjustMethod P-value adjustment method (default "fdr").
-#' @param go_simplify Whether to run GO simplify (default FALSE; GO only). Uses
-#'   the Wang measure over GO.db — offline, no OrgDb.
 #' @param orgdb Reserved for future IC-based similarity measures (which require an
 #'   organism OrgDb). Not used by the default Wang simplify. (or NULL).
 #' @param ont GO ontology ("BP"/"MF"/"CC") for simplify semData (or NULL).
@@ -2273,7 +2331,6 @@ run_cluster_ora_compute <- function(clusters,
                                     type = "KEGG",
                                     pvalueCutoff = 0.05,
                                     pAdjustMethod = "fdr",
-                                    go_simplify = FALSE,
                                     orgdb = NULL,
                                     ont = NULL) {
 
@@ -2356,23 +2413,25 @@ run_cluster_ora_compute <- function(clusters,
     }
 
     # GO simplify — legacy-equivalent, fully offline.
-    # The ORA above (enricher over local TERM2GENE/TERM2NAME) always produces the
-    # UNSIMPLIFIED GO result. simplify() collapses redundant GO terms using the
-    # DEFAULT Wang measure, whose semantic similarity is derived from the GO DAG in
-    # GO.db — organism-agnostic and needing NO OrgDb (exactly what the legacy
+    # GO simplify is MANDATORY for GO results (not configurable). The ORA above
+    # (enricher over local TERM2GENE/TERM2NAME) always produces the UNSIMPLIFIED GO
+    # result; simplify() then collapses redundant GO terms with the DEFAULT Wang
+    # measure, whose semantic similarity is derived from the GO DAG in GO.db —
+    # organism-agnostic, needing NO OrgDb (exactly what the legacy
     # Clusters_Enrichment_Test() did: a bare simplify(allRes, cutoff=0.7, ...)).
-    # The `orgdb` argument is retained ONLY for future IC-based measures
-    # (Resnik/Lin/Jiang/Rel), which additionally need an organism OrgDb; it is not
-    # used for the Wang default. On any missing package / failure: skip + warn,
-    # keep the unsimplified result — the pipeline never fails.
+    # KEGG (type != "GO") is never simplified. The `orgdb` argument is retained
+    # ONLY for future IC-based measures (Resnik/Lin/Jiang/Rel), which additionally
+    # need an organism OrgDb; it is not used for the Wang default. Fail-soft: on
+    # any missing package / failure, warn and keep the unsimplified result — the
+    # pipeline never fails.
     allRes_simplify <- NULL
     enrichment_table_simplify <- NULL
 
-    if (type == "GO" && isTRUE(go_simplify)) {
+    if (type == "GO") {
         sem_data <- .go_semdata(ont)
         if (is.null(sem_data)) {
-            warning("GO simplify requested (go_simplify=TRUE) but GO.db/GOSemSim ",
-                    "are not installed. Skipping simplify; unsimplified GO ORA produced.")
+            warning("GO simplify could not run: GO.db/GOSemSim are not installed. ",
+                    "Retaining the unsimplified GO ORA result.")
         } else {
             allRes_simplify <- tryCatch({
                 clusterProfiler::simplify(
@@ -2411,6 +2470,8 @@ run_cluster_ora_compute <- function(clusters,
 #' @param unit_dir The ORA unit directory (from ora_unit_dir()).
 #' @param type "KEGG" or "GO".
 #' @param maxCategory Max categories to show in dotplot (default 1000).
+#' @param dotplot Logical; when TRUE write the ORA dotplot PDF (the config
+#'   `plots.dotplot` toggle — controls ORA and GSEA dotplots alike). Default TRUE.
 #' @param shared_genes Logical; when TRUE also emit the legacy ORA shared-gene
 #'   heatmaps (gene<->term / term<->term) via plot_ora_shared_genes(). Additive
 #'   and fail-soft; default FALSE (callers pass the config toggle).
@@ -2418,6 +2479,7 @@ run_cluster_ora_compute <- function(clusters,
 #' @noRd
 write_cluster_ora_outputs <- function(ora_result, unit_dir,
                                       type = "KEGG", maxCategory = 1000,
+                                      dotplot = TRUE,
                                       shared_genes = FALSE) {
     if (length(ora_result) == 0 || is.null(unit_dir)) return(invisible(NULL))
 
@@ -2439,8 +2501,8 @@ write_cluster_ora_outputs <- function(ora_result, unit_dir,
                   quote = FALSE, row.names = TRUE)
     }
 
-    # Dotplot
-    if (!is.null(allRes) && nrow(allRes@compareClusterResult) > 0) {
+    # Dotplot (config-gated: plots.dotplot). ORA and GSEA share this toggle.
+    if (isTRUE(dotplot) && !is.null(allRes) && nrow(allRes@compareClusterResult) > 0) {
         # Legacy font size heuristic
         font.size <- if (nrow(allRes@compareClusterResult) > 50) 4 else 9
 
@@ -2558,7 +2620,14 @@ plot_ora_shared_genes <- function(ora_df, out_dir) {
     written <- character(0)
     for (cl in unique(ora_df$Cluster)) {
         cl_res <- tryCatch({
-            TEMP <- stats::na.omit(ora_df[ora_df$Cluster == cl, , drop = FALSE])
+            # Keep rows valid for the shared-gene matrices: drop only rows whose
+            # REQUIRED fields (Description label + geneID membership) are missing.
+            # Unrelated optional columns (e.g. qvalue) may be NA and must NOT cause
+            # an otherwise-enriched term to be discarded (a whole-row na.omit did).
+            cl_sub <- ora_df[ora_df$Cluster == cl, , drop = FALSE]
+            keep   <- !is.na(cl_sub$Description) & !is.na(cl_sub$geneID) &
+                      nzchar(as.character(cl_sub$geneID))
+            TEMP   <- cl_sub[keep, , drop = FALSE]
             term_genes <- strsplit(as.character(TEMP$geneID), "/", fixed = TRUE)
             all_genes  <- unique(unlist(term_genes))
             n_terms <- nrow(TEMP)

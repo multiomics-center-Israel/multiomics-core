@@ -228,6 +228,13 @@ modes:
     #   GO2gene_BP.tab          GO2name_BP.tab
     #   GO2gene_MF.tab          GO2name_MF.tab
     #   GO2gene_CC.tab          GO2name_CC.tab
+    #
+    # Table format (REQUIRED): tab-separated, WITH A HEADER ROW. Only the first
+    # two columns are used (column names are free text; the header row is skipped).
+    #   *2gene.tab (TERM2GENE): col1 = term ID (GO:...|KEGG path id), col2 = gene ID.
+    #   *2name.tab (TERM2NAME): col1 = term ID,                       col2 = term name.
+    # A file without a header loses its first data row; a file with <2 columns is
+    # skipped with a warning.
     # --------------------------------------------------------
     enrichment:
 
@@ -264,9 +271,10 @@ modes:
       # Max pathways shown in dotplots/ridgeplots. Display only; all results stay in the tables.
 
       # --- GO simplification ---
-      go_simplify: true
-      # Simplify redundant GO terms.
-      # Ignored for non-GO databases.
+      # GO result simplification is ALWAYS applied in the offline workflow and is
+      # NOT configurable: redundant / highly similar GO terms are reduced
+      # automatically (KEGG is never simplified). If it cannot run, the unsimplified
+      # result is kept with a warning. (A legacy `go_simplify` field is ignored.)
 
       # --- Plot toggles (each artifact is independently switchable) ---
       plots:
