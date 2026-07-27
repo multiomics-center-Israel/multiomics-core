@@ -33,7 +33,10 @@ test_that("no proteomics domain function is defined more than once", {
 
     # Collect every top-level `name <- function(...)` and the file(s) it's in.
     # Parse-based (not regex) so commented-out or string occurrences don't count.
-    r_files <- list.files(prot_dir, pattern = "\\.[Rr]$", full.names = TRUE)
+    # recursive = TRUE to match production: _targets.R / helper.R source R/
+    # recursively, so a function added under proteomics/<subdir>/ is live too.
+    r_files <- list.files(prot_dir, pattern = "\\.[Rr]$", full.names = TRUE,
+                          recursive = TRUE)
     defs <- list()
     for (f in r_files) {
         for (e in parse(f, keep.source = FALSE)) {
