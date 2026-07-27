@@ -62,19 +62,23 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     pw_cfg  <- rna_cfg$pathway
     enr_cfg <- rna_cfg$enrichment %||% list()
 
-    # Skip entirely if enrichment is disabled. Two independent switches disable
-    # it (either being false skips): the broad `pathway.enabled` and the explicit
-    # `enrichment.enabled`. Both are absent-safe (NULL/unset -> run): a config with
-    # only an `enrichment:` block and no legacy `pathway:` block (e.g. the shipped
-    # template) still runs, and pre-existing configs without `enrichment.enabled`
-    # keep running as before. Only an explicit `false` on either switch disables.
+    # Decide whether to run enrichment. Skip when either switch is explicitly
+    # false (`pathway.enabled: false` or `enrichment.enabled: false`), OR when the
+    # config omits BOTH blocks entirely — a legacy/minimal RNA config never ran
+    # enrichment, and proceeding would introduce surprise network annotation / I/O
+    # (pinned by tests/testthat/test-config-defaults.R). A standalone `enrichment:`
+    # block still opts in even without a legacy `pathway:` block (e.g. the shipped
+    # template), and pre-existing configs that carry a `pathway:` block keep running.
     # Returns the standard empty-safe shape so the rest of the RNA pipeline (and
     # all downstream consumers of pathway_results) continue without failure.
     pathway_off    <- isFALSE(pw_cfg$enabled)
     enrichment_off <- isFALSE(enr_cfg$enabled)
-    if (pathway_off || enrichment_off) {
-        message("RNA enrichment disabled (",
-                if (pathway_off) "pathway.enabled: false" else "enrichment.enabled: false",
+    both_absent    <- is.null(pw_cfg) && is.null(rna_cfg$enrichment)
+    if (both_absent || pathway_off || enrichment_off) {
+        reason <- if (both_absent) "no pathway/enrichment config"
+                  else if (pathway_off) "pathway.enabled: false"
+                  else "enrichment.enabled: false"
+        message("RNA enrichment disabled (", reason,
                 "); skipping ORA/GSEA and continuing the pipeline.")
         return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
     }

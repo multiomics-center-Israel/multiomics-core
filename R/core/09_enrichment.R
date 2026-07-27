@@ -1115,12 +1115,15 @@ generate_clustered_dotplots <- function(clustered_dir, output_dir) {
 #' @param path Path to a tab-separated table.
 #' @return A data.frame with every data row preserved.
 .read_term_table <- function(path) {
-    x <- read.delim(path, sep = "\t", header = TRUE,
+    # colClasses = "character": keep bare-numeric identifiers (e.g. KEGG "00010",
+    # numeric-looking gene IDs) as text so read.delim does not strip leading zeros
+    # (00010 -> 10) and break the join with canonical IDs downstream.
+    x <- read.delim(path, sep = "\t", header = TRUE, colClasses = "character",
                     stringsAsFactors = FALSE, row.names = NULL)
     first_name <- if (ncol(x) >= 1) colnames(x)[1] else ""
     looks_like_id <- grepl("^(GO\\.[0-9]|X[0-9]{4,}|[A-Za-z]{2,4}[0-9]{4,})", first_name)
     if (isTRUE(looks_like_id) || nrow(x) == 0) {
-        x <- read.delim(path, sep = "\t", header = FALSE,
+        x <- read.delim(path, sep = "\t", header = FALSE, colClasses = "character",
                         stringsAsFactors = FALSE, row.names = NULL)
     }
     x
