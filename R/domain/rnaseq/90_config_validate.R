@@ -82,23 +82,7 @@ validate_rna_config <- function(cfg) {
         assert_scalar_bool(a$skip_annotation, "annotation$skip_annotation", allow_null = TRUE)
     }
 
-    # 7. Batch Correction
-    if (!is.null(cfg$batch_correction)) {
-        bc <- cfg$batch_correction
-        assert_scalar_bool(bc$enabled, "batch_correction$enabled")
-        if (isTRUE(bc$enabled)) {
-            assert_one_of(bc$method, "batch_correction$method",
-                          c("combat_seq", "sva", "ruv"), allow_null = TRUE)
-        }
-    }
-
-    # 8. Deconvolution
-    if (!is.null(cfg$deconvolution)) {
-        dc <- cfg$deconvolution
-        assert_scalar_bool(dc$enabled, "deconvolution$enabled")
-    }
-
-    # 9. Pathway
+    # 7. Pathway
     if (!is.null(cfg$pathway)) {
         p <- cfg$pathway
         assert_scalar_bool(p$enabled, "pathway$enabled", allow_null = TRUE)

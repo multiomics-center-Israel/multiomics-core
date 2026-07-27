@@ -19,7 +19,7 @@ For in-depth documentation and tutorials, see the official targets book: <https:
 -   Standardized data loading and validation
 -   Omics-specific preprocessing (filtering, normalization, imputation)
 -   Proteomics differential expression via **limma** with multiple imputations and stability filtering
--   RNA-seq differential expression via **DESeq2** with batch correction (ComBat-Seq/SVA/RUV) and cell-type deconvolution
+-   RNA-seq differential expression via **DESeq2**
 -   Metabolomics preprocessing (missingness classification, MNAR/MAR imputation, TSS/Median/PQN normalization, LOESS drift correction) and DE
 -   Pathway enrichment analysis (fGSEA, ORA, QEA, ssGSEA)
 -   Unified QC utilities (PCA, heatmaps, sample distance)
@@ -423,7 +423,7 @@ If the configured backend's prerequisite is missing at runtime (`claude` CLI not
 ### Implemented
 
 -   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
--   **RNA-seq**: Full pipeline (DESeq2), Batch correction (ComBat-Seq/SVA/RUV), Cell-type deconvolution (xCell2), Pathway enrichment (fGSEA/ORA)
+-   **RNA-seq**: Full pipeline (DESeq2), Pathway enrichment (fGSEA/ORA)
 -   **Metabolomics**: Missingness classification (MNAR/MAR), Imputation (KNN + min/2), Normalization (TSS/Median/PQN with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
 -   **Multi-omics**: Integration (DIABLO, MOFA, SNF), Concordance analysis, RNA-protein correlation, Cross-omics enrichment (multiGSEA, multi-ORA), Loadings-based enrichment, Foundational analysis (correlations, WGCNA), Mechanistic inference (COSMOS, TF activity, mediation), Consensus across methods, Stability analysis (bootstrap, k-fold, cluster stability), Integrated reporting, AI commentary
 -   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection

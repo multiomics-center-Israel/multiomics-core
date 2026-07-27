@@ -381,8 +381,6 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   pathway_method <- c("fgsea", "ora", "both", "none")[pathway_idx]
   pathway_enabled <- pathway_idx != 4
   clustering_on <- ask_yn("Enable clustering?", FALSE)
-  batch_corr_on <- ask_yn("Enable batch correction? (detects and corrects batch effects)", FALSE)
-  deconv_on <- ask_yn("Enable cell type deconvolution? (human/mouse only, uses xCell2)", FALSE)
   # Organism & Annotation
   cat("\n--- Organism & Annotation ---\n")
   org_idx <- ask_choice("Which organism does your data come from?",
@@ -682,10 +680,6 @@ modes:
           enabled: true
           group_col: "%s"
           corr_cutoff: 0.8
-    batch_correction:
-      enabled: %s
-    deconvolution:
-      enabled: %s
     effects:
       color: "%s"
       shape: %s
@@ -710,8 +704,6 @@ params:
                          tolower(pathway_enabled), pathway_method, custom_gmt_file,
                          tolower(commentary_enabled), commentary_backend,
                          tolower(clustering_on), group_col,
-                         tolower(batch_corr_on),
-                         tolower(deconv_on),
                          group_col, shape_col, sample_col
   )
   # Inject technical_report block if extracted

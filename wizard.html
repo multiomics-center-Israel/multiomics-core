@@ -558,8 +558,6 @@ select { cursor: pointer; appearance: none; background-image: url("data:image/sv
   </div>
   <div style="margin-top:14px;">
     <div class="toggle-row"><input type="checkbox" id="rna_clustering"><label class="toggle-label" for="rna_clustering">Clustering</label></div>
-    <div class="toggle-row"><input type="checkbox" id="rna_batch_corr"><label class="toggle-label" for="rna_batch_corr">Batch correction</label></div>
-    <div class="toggle-row"><input type="checkbox" id="rna_deconv"><label class="toggle-label" for="rna_deconv">Cell type deconvolution (human/mouse)</label></div>
   </div>
 </div>
 
@@ -2133,9 +2131,6 @@ function generateRNAYaml() {
   yaml += '        partition:\n          enabled: true\n          algorithm: "hclust"\n          k_max: 20\n';
   yaml += '        binary_patterns:\n          enabled: true\n          group_col: ' + yamlStr(groupCol) + '\n          corr_cutoff: 0.8\n';
 
-  yaml += '\n    batch_correction:\n      enabled: ' + yamlBool(checked('rna_batch_corr')) + '\n';
-  yaml += '\n    deconvolution:\n      enabled: ' + yamlBool(checked('rna_deconv')) + '\n';
-
   yaml += '\n    effects:\n';
   yaml += '      color: ' + yamlStr(groupCol) + '\n';
   yaml += '      shape: ' + (shapeCol && shapeCol !== 'null' ? yamlStr(shapeCol) : 'null') + '\n';
@@ -3592,8 +3587,6 @@ var pipelineDefs = {
     { id:'volcano',   label:'Volcano plot',        icon:'\uD83C\uDF0B', cat:'output', after:['de'] },
     { id:'pathway',   label:'Pathway analysis',    icon:'\uD83D\uDEE4', cat:'stat',   after:['de'],   optional:true, toggleId:'rna_pathway', checkFn:function(){ return v('rna_pathway') !== 'none'; } },
     { id:'cluster',   label:'Clustering',          icon:'\uD83E\uDDE9', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_clustering' },
-    { id:'batch',     label:'Batch correction',    icon:'\uD83D\uDD27', cat:'core',   after:['norm'], optional:true, toggleId:'rna_batch_corr' },
-    { id:'deconv',    label:'Deconvolution',       icon:'\uD83E\uDDEC', cat:'stat',   after:['norm'], optional:true, toggleId:'rna_deconv' },
     { id:'report',    label:'HTML report',         icon:'\uD83D\uDCCA', cat:'output', after:['de','pca'] },
     { id:'pptx',      label:'PowerPoint',          icon:'\uD83D\uDCDD', cat:'output', after:['report'], optional:true, toggleId:'generate_pptx' }
   ],
