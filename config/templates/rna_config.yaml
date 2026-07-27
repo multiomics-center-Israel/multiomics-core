@@ -216,12 +216,14 @@ modes:
 
     # --------------------------------------------------------
     # RNA pathway enrichment analysis (ORA + GSEA)
-    # By default, enrichment runs using offline local annotation tables.
-    # Set annotation_dir to "" to use the existing online workflow instead.
+    # By default (annotation_dir: ""), enrichment uses the online workflow, so a
+    # freshly configured project runs without provisioning any annotation tables.
+    # To use the faster, reproducible OFFLINE workflow, set annotation_dir to a
+    # directory of pre-built local tables (file list below).
     #
     # annotation_dir:
+    #   ""   -> existing online enrichment workflow (default).
     #   Path -> offline local annotation tables.
-    #   ""   -> existing online enrichment workflow.
     #
     # Expected files in annotation_dir (GO tables must be pre-expanded):
     #   KEGG_pathway2gene.tab   KEGG_pathway2name.tab
@@ -243,9 +245,10 @@ modes:
       # Run RNA enrichment.
       # false skips all enrichment analyses while the rest of the RNA pipeline continues.
 
-      annotation_dir: "data/Func_annot_data_expanded"
-      # Path to local annotation tables.
-      # Leave empty ("") to use the existing online workflow.
+      annotation_dir: ""
+      # Empty ("") -> online workflow (default; nothing to provision).
+      # Set to a directory of pre-built local tables to enable offline enrichment,
+      # e.g. "data/Func_annot_data_expanded".
 
       # --- Databases and workers ---
       databases: ["KEGG", "GO_BP", "GO_MF", "GO_CC"]

@@ -705,3 +705,78 @@ test_that("config template no longer exposes go_simplify", {
     # No ACTIVE (uncommented) go_simplify key remains.
     expect_false(any(grepl("^\\s*go_simplify\\s*:", tpl)))
 })
+
+# ---------------------------------------------------------------------------
+# rankers: an underflowed p == 0 stays at the TOP with a finite score (#128).
+# The legacy Inf -> 0 replacement pushed the strongest signal to the bottom.
+# ---------------------------------------------------------------------------
+
+test_that("rank_by_pval_wo_direction keeps p == 0 at the top with a finite score", {
+    de <- data.frame(
+        FeatureID      = c("g0", "g1", "g2"),
+        log2FoldChange = c(3, 1, -1),
+        pvalue         = c(0, 1e-3, 0.5),
+        stringsAsFactors = FALSE
+    )
+    r <- rank_by_pval_wo_direction(de)
+    expect_identical(names(r)[1], "g0")     # most significant first
+    expect_true(all(is.finite(r)))          # no Inf leaks through
+    expect_gt(r[["g0"]], r[["g1"]])         # zero-p outranks 1e-3
+})
+
+test_that("rank_by_pval_with_direction keeps zero-p genes at the signed extremes", {
+    de <- data.frame(
+        FeatureID      = c("up0", "dn0", "mid"),
+        log2FoldChange = c(2, -2, 1),
+        pvalue         = c(0, 0, 0.2),
+        stringsAsFactors = FALSE
+    )
+    r <- rank_by_pval_with_direction(de)
+    expect_true(all(is.finite(r)))
+    expect_identical(names(r)[1], "up0")               # top = up + most significant
+    expect_identical(names(r)[length(r)], "dn0")       # bottom = down + most significant
+})
+
+# ---------------------------------------------------------------------------
+# .read_term_table: tolerate a headerless table without dropping row one (#128).
+# ---------------------------------------------------------------------------
+
+test_that(".read_term_table preserves the first row of a headerless table", {
+    f <- tempfile(fileext = ".tab")
+    on.exit(unlink(f), add = TRUE)
+    # Headerless TERM2GENE: first column is a term ID, no header row.
+    writeLines(c("GO:0008150\tgeneA", "GO:0008150\tgeneB", "GO:0009987\tgeneC"), f)
+    tab <- .read_term_table(f)
+    expect_equal(nrow(tab), 3)                  # no data row lost to a phantom header
+    expect_true(any(tab[[2]] == "geneA"))       # first data row survived
+})
+
+test_that(".read_term_table skips a genuine text header row", {
+    f <- tempfile(fileext = ".tab")
+    on.exit(unlink(f), add = TRUE)
+    writeLines(c("term\tgene", "GO:0008150\tgeneA", "GO:0009987\tgeneC"), f)
+    tab <- .read_term_table(f)
+    expect_equal(nrow(tab), 2)                  # header consumed, 2 data rows
+    expect_false(any(tab[[1]] == "term"))
+})
+
+# ---------------------------------------------------------------------------
+# build_gene_lists: ORA gene selection matches the canonical DE rule (#128).
+# Canonical (R/domain/rnaseq/04_de_summary.R): padj <= cutoff AND
+# abs(signif(linearFC, 3)) >= linear cutoff. The old strict log2 comparison
+# dropped genes exactly on the boundary that the pipeline reports as DE.
+# ---------------------------------------------------------------------------
+
+test_that("build_gene_lists includes boundary genes per the canonical DE rule", {
+    de <- list(cA = data.frame(
+        FeatureID      = c("gUp", "gBoundary", "gLow"),
+        log2FoldChange = c(2, log2(1.5), 0.2),   # gBoundary: linear FC == 1.5
+        padj           = c(1e-4, 0.05, 1e-4),    # gBoundary: padj == cutoff
+        stringsAsFactors = FALSE
+    ))
+    gl <- build_gene_lists(de, clustering_res = NULL,
+                           p_cutoff = 0.05, lfc_cutoff = log2(1.5))
+    expect_true("gBoundary" %in% names(gl$contrasts$cA))          # included (>= / <=)
+    expect_equal(unname(gl$contrasts$cA[["gBoundary"]]), "up")    # direction from rounded FC
+    expect_false("gLow" %in% names(gl$contrasts$cA))              # FC below cutoff
+})

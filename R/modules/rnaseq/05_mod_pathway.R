@@ -64,11 +64,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     # Skip entirely if enrichment is disabled. Two independent switches disable
     # it (either being false skips): the broad `pathway.enabled` and the explicit
-    # `enrichment.enabled`. `enrichment.enabled` is absent-safe (NULL/unset -> run)
-    # so pre-existing configs without the key keep running enrichment as before.
+    # `enrichment.enabled`. Both are absent-safe (NULL/unset -> run): a config with
+    # only an `enrichment:` block and no legacy `pathway:` block (e.g. the shipped
+    # template) still runs, and pre-existing configs without `enrichment.enabled`
+    # keep running as before. Only an explicit `false` on either switch disables.
     # Returns the standard empty-safe shape so the rest of the RNA pipeline (and
     # all downstream consumers of pathway_results) continue without failure.
-    pathway_off    <- is.null(pw_cfg) || isFALSE(pw_cfg$enabled)
+    pathway_off    <- isFALSE(pw_cfg$enabled)
     enrichment_off <- isFALSE(enr_cfg$enabled)
     if (pathway_off || enrichment_off) {
         message("RNA enrichment disabled (",

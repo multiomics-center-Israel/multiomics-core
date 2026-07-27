@@ -1101,6 +1101,31 @@ generate_clustered_dotplots <- function(clustered_dir, output_dir) {
 # Re-applied from reference branch claude/enrichment-migration-plan-cuduc.
 # No online resources. GO simplify is optional/gated (see run_cluster_ora).
 # ==============================================================================
+
+#' Read a two-column term table, tolerant of a missing header row
+#'
+#' The offline TERM2GENE/TERM2NAME tables are documented as header-carrying, and
+#' read.delim(header = TRUE) is correct for those. A genuinely headerless file with
+#' >= 2 rows would otherwise silently lose its first mapping (row 1 consumed as
+#' column names, and a >0-row result never triggers a fallback). read.delim mangles
+#' an ID-shaped header cell (e.g. "GO:0008150" -> "GO.0008150", "00010" -> "X00010")
+#' while a real text header ("term", "GO_ID") stays a word, so an ID-shaped first
+#' column name signals a headerless file: re-read with header = FALSE to keep all rows.
+#'
+#' @param path Path to a tab-separated table.
+#' @return A data.frame with every data row preserved.
+.read_term_table <- function(path) {
+    x <- read.delim(path, sep = "\t", header = TRUE,
+                    stringsAsFactors = FALSE, row.names = NULL)
+    first_name <- if (ncol(x) >= 1) colnames(x)[1] else ""
+    looks_like_id <- grepl("^(GO\\.[0-9]|X[0-9]{4,}|[A-Za-z]{2,4}[0-9]{4,})", first_name)
+    if (isTRUE(looks_like_id) || nrow(x) == 0) {
+        x <- read.delim(path, sep = "\t", header = FALSE,
+                        stringsAsFactors = FALSE, row.names = NULL)
+    }
+    x
+}
+
 load_local_pathway_tables <- function(annotation_dir,
                                       databases = c("KEGG", "GO_BP", "GO_MF", "GO_CC"),
                                       feature_ids = NULL) {
@@ -1139,23 +1164,11 @@ load_local_pathway_tables <- function(annotation_dir,
             next
         }
 
-        # Read two-column tab files.
-        # Legacy uses read.delim() with default header=TRUE, so files may have headers.
-        # We read with header=TRUE (matching legacy), then fall back to header=FALSE
-        # if the result has fewer than 2 rows (suggesting no header was present).
-        term2gene <- read.delim(gene_file, sep = "\t", header = TRUE,
-                                stringsAsFactors = FALSE, row.names = NULL)
-        term2name <- read.delim(name_file, sep = "\t", header = TRUE,
-                                stringsAsFactors = FALSE, row.names = NULL)
-        # If header=TRUE produced zero rows, retry without header
-        if (nrow(term2gene) == 0) {
-            term2gene <- read.delim(gene_file, sep = "\t", header = FALSE,
-                                    stringsAsFactors = FALSE, row.names = NULL)
-        }
-        if (nrow(term2name) == 0) {
-            term2name <- read.delim(name_file, sep = "\t", header = FALSE,
-                                    stringsAsFactors = FALSE, row.names = NULL)
-        }
+        # Read two-column tab files. Header-carrying is the documented format;
+        # .read_term_table() also tolerates a genuinely headerless file (which
+        # would otherwise silently drop its first mapping row).
+        term2gene <- .read_term_table(gene_file)
+        term2name <- .read_term_table(name_file)
 
         # Validate column count
         if (ncol(term2gene) < 2) {
@@ -1231,9 +1244,10 @@ rank_by_pval_wo_direction <- function(de_table) {
         stringsAsFactors = FALSE
     )
     df <- df[!is.na(df$pval), , drop = FALSE]
-    df$rank_val <- -log10(df$pval)
-    # Legacy: replace any NaN/Inf from log10(0) with 0
-    df$rank_val[!is.finite(df$rank_val)] <- 0
+    # Floor p at the smallest positive double so an underflowed p == 0 yields a
+    # large FINITE score and stays at the TOP of the ranking. (The legacy
+    # Inf -> 0 replacement pushed the strongest signal to the bottom — see PR #128.)
+    df$rank_val <- -log10(pmax(df$pval, .Machine$double.xmin))
     df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
 
     ranks <- df$rank_val
@@ -1256,9 +1270,10 @@ rank_by_pval_with_direction <- function(de_table) {
         stringsAsFactors = FALSE
     )
     df <- df[!is.na(df$lfc) & !is.na(df$pval), , drop = FALSE]
-    df$neg_log_p <- -log10(df$pval)
-    # Legacy: replace any NaN/Inf with 0
-    df$neg_log_p[!is.finite(df$neg_log_p)] <- 0
+    # Floor p at the smallest positive double so an underflowed p == 0 yields a
+    # large FINITE magnitude, kept at the significant end after signing rather
+    # than collapsing to 0 as the legacy Inf -> 0 replacement did — see PR #128.
+    df$neg_log_p <- -log10(pmax(df$pval, .Machine$double.xmin))
     # Apply direction: positive LFC -> positive rank, negative LFC -> negative rank
     # Legacy logic: if fc is NA, rank = 0; if fc > 0, rank = pval; else rank = -pval
     # Since we already filtered NA lfc, just apply sign
@@ -1360,8 +1375,9 @@ rank_by_min_pval_any_contrast <- function(de_tables) {
         stringsAsFactors = FALSE
     )
     df <- df[!is.na(df$min_pval), , drop = FALSE]
-    df$rank_val <- -log10(df$min_pval)
-    df$rank_val[!is.finite(df$rank_val)] <- 0
+    # Floor p at the smallest positive double (see PR #128): an underflowed
+    # min p == 0 stays at the TOP instead of collapsing to 0 via Inf -> 0.
+    df$rank_val <- -log10(pmax(df$min_pval, .Machine$double.xmin))
     df <- df[order(df$rank_val, decreasing = TRUE), , drop = FALSE]
 
     ranks <- df$rank_val
@@ -2765,6 +2781,25 @@ build_gene_lists <- function(de_tables,
 
     gene_lists <- list()
 
+    # Match the pipeline's canonical DE significance rule (see
+    # R/domain/rnaseq/04_de_summary.R:167-180) exactly, so ORA operates on the same
+    # gene set the summary reports as DE: padj <= p_cutoff AND
+    # abs(signif(linearFC, 3)) >= linear cutoff, where
+    # linearFC = ifelse(lfc >= 0, 2^lfc, -2^-lfc). The caller passes lfc_cutoff in
+    # log2 units (log2(linear_fc_cutoff)), so recover the linear cutoff here.
+    # Direction uses the sign of the rounded linear FC (also matching the summary).
+    linear_cut <- 2 ^ lfc_cutoff
+    .sig_rows <- function(dt) {
+        lin_fc     <- ifelse(dt$log2FoldChange >= 0, 2 ^ dt$log2FoldChange,
+                             -1 * (2 ^ -dt$log2FoldChange))
+        rounded_fc <- signif(lin_fc, 3)
+        keep <- !is.na(dt$padj) & dt$padj <= p_cutoff &
+                !is.na(dt$log2FoldChange) & abs(rounded_fc) >= linear_cut
+        out <- dt[keep, , drop = FALSE]
+        out$.rounded_fc <- rounded_fc[keep]
+        out
+    }
+
     # ------------------------------------------------------------------
     # 1. Contrast-based gene lists (always available when DE tables exist)
     # ------------------------------------------------------------------
@@ -2773,14 +2808,12 @@ build_gene_lists <- function(de_tables,
         # "contrasts": per contrast, genes assigned to "up" or "down"
         for (cn in names(de_tables)) {
             dt <- de_tables[[cn]]
-            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
-                      !is.na(dt$log2FoldChange) &
-                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            sig <- .sig_rows(dt)
             if (nrow(sig) == 0) next
             # Deduplicate by FeatureID (keep first occurrence)
             sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
 
-            labels <- ifelse(sig$log2FoldChange > 0, "up", "down")
+            labels <- ifelse(sig$.rounded_fc > 0, "up", "down")
             names(labels) <- sig$FeatureID
             gene_lists[["contrasts"]][[cn]] <- labels
         }
@@ -2788,9 +2821,7 @@ build_gene_lists <- function(de_tables,
         # "contrasts_wo_direction": per contrast, all DE genes in one cluster "all"
         for (cn in names(de_tables)) {
             dt <- de_tables[[cn]]
-            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
-                      !is.na(dt$log2FoldChange) &
-                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            sig <- .sig_rows(dt)
             if (nrow(sig) == 0) next
             sig <- sig[!duplicated(sig$FeatureID), , drop = FALSE]
 
@@ -2805,9 +2836,7 @@ build_gene_lists <- function(de_tables,
         all_de_ids <- character(0)
         for (cn in names(de_tables)) {
             dt <- de_tables[[cn]]
-            sig <- dt[!is.na(dt$padj) & dt$padj < p_cutoff &
-                      !is.na(dt$log2FoldChange) &
-                      abs(dt$log2FoldChange) > lfc_cutoff, , drop = FALSE]
+            sig <- .sig_rows(dt)
             all_de_ids <- c(all_de_ids, sig$FeatureID)
         }
         all_de_ids <- unique(all_de_ids[!is.na(all_de_ids)])
