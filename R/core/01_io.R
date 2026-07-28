@@ -94,7 +94,17 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
   if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
     validate_contrasts_content(inputs$contrasts, mode)
   }
-  
+
+  # Warn early about commas in a tab-separated sample sheet — they parse fine
+  # here but break the CSV-assuming report readers at render time.
+  if (!is.null(inputs$metadata) && is.character(files$metadata) && nzchar(files$metadata)) {
+    check_metadata_delimiter_safety(
+      as.data.frame(inputs$metadata),
+      resolve_raw_path(config, files$metadata),
+      mode
+    )
+  }
+
   inputs
 }
 
