@@ -237,24 +237,52 @@ test_that("a contrast Factor that is not the grouping column is rejected", {
 test_that("fdrtool_correction is applied per contrast when enabled", {
     skip_if_not_installed("fdrtool")
 
-    fx <- make_percontrast_fixture()
-    cfg_fdr <- fx$cfg
+    # fdrtool estimates an empirical null from the moderated t-statistics, so it
+    # needs a realistically sized protein set (the tiny shared fixture has too few
+    # to fit). Build a 200-protein, 3-vs-3 matrix with a handful of true positives;
+    # seeded so the fit - and thus the assertion - is deterministic.
+    n_prot  <- 400L
+    samples <- c("C1", "C2", "C3", "A1", "A2", "A3")
+    groups  <- c("Ctrl", "Ctrl", "Ctrl", "A", "A", "A")
+    expr <- withr::with_seed(42, {
+        m <- matrix(rnorm(n_prot * length(samples), mean = 10, sd = 0.3),
+                    nrow = n_prot, ncol = length(samples))
+        m[1:30, 4:6] <- m[1:30, 4:6] + 2   # 30 proteins up in group A
+        m
+    })
+    rownames(expr) <- paste0("P", seq_len(n_prot))
+    colnames(expr) <- samples
+    observed <- matrix(TRUE, n_prot, length(samples), dimnames = dimnames(expr))
+
+    meta <- data.frame(SampleName = samples, Group = groups, stringsAsFactors = FALSE)
+    prot_tbl <- data.frame(
+        Protein.Group = rownames(expr), Protein.Names = rownames(expr),
+        Genes = rownames(expr), First.Protein.Description = rownames(expr),
+        stringsAsFactors = FALSE
+    )
+    contrasts_df <- data.frame(
+        Contrast_name = "A_vs_Ctrl", Factor = "Group",
+        Numerator = "A", Denominator = "Ctrl", stringsAsFactors = FALSE
+    )
+    cfg_plain <- make_percontrast_fixture()$cfg
+    cfg_fdr   <- cfg_plain
     cfg_fdr$modes$proteomics$de$fdrtool_correction <- TRUE
 
-    res_plain <- run_limma_percontrast_proteomics(
-        expr_imp = fx$expr, observed = fx$observed, meta = fx$meta,
-        contrasts_df = fx$contrasts_df, prot_tbl = fx$prot_tbl, cfg = fx$cfg
-    )
-    res_fdr <- suppressWarnings(run_limma_percontrast_proteomics(
-        expr_imp = fx$expr, observed = fx$observed, meta = fx$meta,
-        contrasts_df = fx$contrasts_df, prot_tbl = fx$prot_tbl, cfg = cfg_fdr
+    res_plain <- suppressMessages(run_limma_percontrast_proteomics(
+        expr_imp = expr, observed = observed, meta = meta,
+        contrasts_df = contrasts_df, prot_tbl = prot_tbl, cfg = cfg_plain
     ))
+    res_fdr <- suppressMessages(suppressWarnings(run_limma_percontrast_proteomics(
+        expr_imp = expr, observed = observed, meta = meta,
+        contrasts_df = contrasts_df, prot_tbl = prot_tbl, cfg = cfg_fdr
+    )))
 
     p_plain <- res_plain$de_tables[["A_vs_Ctrl"]]$P.Value
     p_fdr   <- res_fdr$de_tables[["A_vs_Ctrl"]]$P.Value
 
     # Same tested/untested rows, but the correction actually changes the p-values.
     expect_equal(is.na(p_plain), is.na(p_fdr))
+    expect_false(any(is.na(p_fdr)))
     expect_false(isTRUE(all.equal(p_plain, p_fdr)))
 })
 
