@@ -1,203 +1,109 @@
-#!/usr/bin/env Rscript
-# Test script for lipidomics pipeline
-# Runs each stage manually to verify correctness
+# tests/testthat/test-lipidomics-integration.R
+#
+# Integration test for the lipidomics pipeline on the committed synthetic dataset
+# (fixtures/test_lipidomics_config.yaml -> test_data/synthetic_lipidomics.csv).
+# Exercises load -> preprocess -> QC -> DE, plus the downstream stages (feature
+# selection, lipid-class analysis, HTML report) when their optional deps exist.
+#
+# Rewritten from a narrative cat()/tryCatch() script that asserted nothing and
+# wrote outputs into the repo tree (test_outputs/): it now uses real expect_*()
+# so breakage fails the suite, and keeps every artifact inside a per-test temp
+# dir. R/ is already sourced by helper.R, so no manual sourcing here.
 
-cat("=== Lipidomics Pipeline Test ===\n\n")
-
-# ---- 1. Source all R files in dependency order ----
-cat("1. Sourcing R files...\n")
-core_files <- sort(list.files("R/core", pattern = "\\.R$", full.names = TRUE, recursive = TRUE))
-service_files <- sort(list.files("R/services", pattern = "\\.R$", full.names = TRUE, recursive = TRUE))
-domain_files <- sort(list.files("R/domain", pattern = "\\.R$", full.names = TRUE, recursive = TRUE))
-module_files <- sort(list.files("R/modules", pattern = "\\.R$", full.names = TRUE, recursive = TRUE))
-
-suppressWarnings(suppressMessages({
-  for (f in c(core_files, service_files, domain_files, module_files)) {
-    tryCatch(source(f, local = FALSE), error = function(e) {
-      cat("  WARN: could not source", basename(f), ":", e$message, "\n")
-    })
-  }
-}))
-cat("   Done sourcing.\n\n")
-
-# ---- 2. Load config ----
-cat("2. Loading config...\n")
-config <- load_config(testthat::test_path("fixtures", "test_lipidomics_config.yaml"))
-# Anchor project$dir to the repo root derived from the test location so data
-# paths resolve regardless of the working directory testthat runs under
-# (tests/testthat) or where the repo is checked out.
-config$project$dir <- normalizePath(testthat::test_path("..", ".."))
-cat("   Config loaded. Modes:", paste(names(config$modes), collapse = ", "), "\n\n")
-
-# ---- 3. Validate config ----
-cat("3. Validating lipidomics config...\n")
-tryCatch({
-  validate_lipidomics_config(config$modes$lipidomics)
-  cat("   PASS: config validation\n\n")
-}, error = function(e) {
-  cat("   FAIL: config validation -", e$message, "\n\n")
-})
-
-# ---- 4. Load inputs ----
-cat("4. Loading lipidomics inputs...\n")
-tryCatch({
-  inputs <- load_lipidomics_inputs(config)
-  cat("   Format:", inputs$format, "\n")
-  cat("   Data dimensions:", nrow(inputs$data), "rows x", ncol(inputs$data), "cols\n")
-  cat("   Metadata:", if (is.null(inputs$metadata)) "auto-generated from group row" else "provided", "\n")
-  if (!is.null(inputs$metadata)) {
-    cat("   Metadata dims:", nrow(inputs$metadata), "rows x", ncol(inputs$metadata), "cols\n")
-    cat("   Metadata cols:", paste(colnames(inputs$metadata), collapse = ", "), "\n")
-    cat("   Conditions:", paste(unique(inputs$metadata$condition), collapse = ", "), "\n")
-  }
-  cat("   PASS: load inputs\n\n")
-}, error = function(e) {
-  cat("   FAIL: load inputs -", e$message, "\n\n")
-  stop("Cannot continue without inputs")
-})
-
-# ---- 5. Preprocess ----
-cat("5. Preprocessing...\n")
-tryCatch({
-  pre <- preprocess_lipidomics(inputs, config)
-  cat("   Raw features:", nrow(pre$expr_raw), "\n")
-  cat("   Filtered features:", nrow(pre$expr_filt), "\n")
-  cat("   Samples:", ncol(pre$expr_work), "\n")
-  cat("   Lipid classes:", pre$info$n_lipid_classes, "\n")
-  cat("   Top classes:", paste(head(names(sort(table(pre$row_data$lipid_class), decreasing = TRUE)), 5), collapse = ", "), "\n")
-  cat("   Metadata cols:", paste(colnames(pre$meta), collapse = ", "), "\n")
-  cat("   Sample IDs:", paste(colnames(pre$expr_work), collapse = ", "), "\n")
-  cat("   NA count:", pre$info$missingness$total_na, "\n")
-  cat("   Normalization:", paste(pre$info$normalization$sample_norm,
-                                 pre$info$normalization$transform,
-                                 pre$info$normalization$scaling, sep = " / "), "\n")
-
-  # Check chain info
-  has_chains <- sum(!is.na(pre$row_data$total_carbons))
-  cat("   Features with chain info:", has_chains, "/", nrow(pre$row_data), "\n")
-
-  cat("   PASS: preprocessing\n\n")
-}, error = function(e) {
-  cat("   FAIL: preprocessing -", e$message, "\n")
-  cat("   Traceback:\n")
-  traceback()
-  cat("\n")
-  stop("Cannot continue without pre")
-})
-
-# ---- 6. QC module ----
-cat("6. Running QC module...\n")
-out_dir <- file.path("test_outputs", "lipidomics")
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-# Absolute so it stays valid when the report step renders from the repo root.
-out_dir <- normalizePath(out_dir, mustWork = TRUE)
-
-tryCatch({
-  qc_res <- mod_lipidomics_qc_pre(pre, config, out_dir)
-  cat("   Plots generated:", length(qc_res$plots), "\n")
-  cat("   Files generated:", length(qc_res$files), "\n")
-  cat("   Plot names:", paste(names(qc_res$plots), collapse = ", "), "\n")
-  cat("   PASS: QC module\n\n")
-}, error = function(e) {
-  cat("   FAIL: QC module -", e$message, "\n\n")
-  qc_res <<- NULL
-})
-
-# ---- 7. DE module ----
-cat("7. Running DE module...\n")
-tryCatch({
-  de_res <- mod_lipidomics_de(pre, config, out_dir)
-  n_sig <- sum(de_res$summary_df$pass_any_contrast == 1, na.rm = TRUE)
-  cat("   Method:", de_res$method, "\n")
-  cat("   Total features:", nrow(de_res$summary_df), "\n")
-  cat("   Significant:", n_sig, "\n")
-  cat("   Plots:", length(de_res$plots), "\n")
-  cat("   Files:", length(de_res$files), "\n")
-
-  # Show top 5 by p-value
-  top5 <- head(de_res$de_tables[[1]][order(de_res$de_tables[[1]]$P.Value), ], 5)
-  cat("   Top 5 lipids by p-value:\n")
-  for (i in seq_len(nrow(top5))) {
-    cat("     ", top5$feature_id[i], ": logFC=", round(top5$logFC[i], 3),
-        ", p=", signif(top5$P.Value[i], 3), "\n")
-  }
-  cat("   PASS: DE module\n\n")
-}, error = function(e) {
-  cat("   FAIL: DE module -", e$message, "\n\n")
-  de_res <<- NULL
-})
-
-# ---- 8. Feature selection module ----
-cat("8. Running feature selection module...\n")
-tryCatch({
-  fs_res <- mod_lipidomics_feature_selection(pre, config, out_dir)
-  if (!is.null(fs_res)) {
-    cat("   RF:", if (!is.null(fs_res$rf)) "completed" else "skipped", "\n")
-    cat("   PLS-DA:", if (!is.null(fs_res$plsda)) "completed" else "skipped", "\n")
-    if (!is.null(fs_res$rf)) {
-      cat("   Top 3 RF features:", paste(head(fs_res$rf$importance_df$feature_id, 3), collapse = ", "), "\n")
-    }
-    if (!is.null(fs_res$plsda)) {
-      cat("   Top 3 VIP features:", paste(head(fs_res$plsda$vip_df$feature_id, 3), collapse = ", "), "\n")
-      cat("   Explained variance:", paste(round(fs_res$plsda$explained_variance * 100, 1), "%", collapse = ", "), "\n")
-    }
-    cat("   PASS: feature selection\n\n")
-  } else {
-    cat("   SKIP: both methods unavailable\n\n")
-  }
-  fs_res <<- fs_res
-}, error = function(e) {
-  cat("   FAIL: feature selection -", e$message, "\n\n")
-  fs_res <<- NULL
-})
-
-# ---- 9. Lipid class analysis module ----
-cat("9. Running lipid class analysis module...\n")
-tryCatch({
-  class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
-  cat("   Class composition:", if (!is.null(class_res$class_comp)) "computed" else "failed", "\n")
-  cat("   Chain saturation:", if (!is.null(class_res$chain_sat)) "computed" else "failed", "\n")
-  cat("   Chain length:", if (!is.null(class_res$chain_len)) "computed" else "failed", "\n")
-  cat("   Class ORA:", if (!is.null(class_res$class_ora)) paste(nrow(class_res$class_ora), "classes tested") else "skipped/failed", "\n")
-  cat("   Plots:", length(class_res$plots), "\n")
-  cat("   Files:", length(class_res$files), "\n")
-
-  if (!is.null(class_res$class_comp)) {
-    cat("   Top 5 classes (normalized %):\n")
-    norm_means <- rowMeans(class_res$class_comp$class_norm)
-    top_cl <- head(sort(norm_means, decreasing = TRUE), 5)
-    for (nm in names(top_cl)) {
-      cat("     ", nm, ":", round(top_cl[nm], 1), "%\n")
-    }
-  }
-
-  cat("   PASS: lipid class analysis\n\n")
-}, error = function(e) {
-  cat("   FAIL: lipid class analysis -", e$message, "\n\n")
-  class_res <<- NULL
-})
-
-# ---- 10. Report rendering ----
-cat("10. Rendering HTML report...\n")
-# Report templates are resolved relative to the repo root (as in the real
-# pipeline run); testthat runs from tests/testthat, so render from the root
-# and restore the working directory afterwards.
-old_wd <- getwd()
-tryCatch({
-  setwd(config$project$dir)
-  report_path <- mod_lipidomics_report(pre, qc_res, de_res, fs_res, class_res, config, out_dir)
-  cat("   Report:", report_path, "\n")
-  cat("   Exists:", file.exists(report_path), "\n")
-  cat("   Size:", round(file.info(report_path)$size / 1024, 1), "KB\n")
-  cat("   PASS: report rendering\n\n")
-}, error = function(e) {
-  cat("   FAIL: report rendering -", e$message, "\n\n")
-}, finally = setwd(old_wd))
-
-# ---- Summary ----
-cat("=== Test Complete ===\n")
-cat("Output files:\n")
-all_files <- list.files("test_outputs", recursive = TRUE, full.names = TRUE)
-for (f in all_files) {
-  cat("  ", f, "(", round(file.info(f)$size / 1024, 1), "KB)\n")
+#' TRUE when the fixture and the lipidomics entry-point functions are available.
+lipid_fixture_available <- function() {
+  cfg_path <- testthat::test_path("fixtures", "test_lipidomics_config.yaml")
+  file.exists(cfg_path) &&
+    exists("load_lipidomics_inputs") &&
+    exists("preprocess_lipidomics")
 }
+
+#' Load the lipidomics fixture config, anchored to the repo root so the
+#' fixture's relative data paths resolve regardless of testthat's working dir.
+lipid_config <- function() {
+  config <- load_config(testthat::test_path("fixtures", "test_lipidomics_config.yaml"))
+  config$project$dir <- normalizePath(testthat::test_path("..", ".."))
+  config
+}
+
+test_that("lipidomics: config validates and inputs load", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+
+  config <- lipid_config()
+  expect_error(validate_lipidomics_config(config$modes$lipidomics), NA)
+
+  inputs <- load_lipidomics_inputs(config)
+  expect_type(inputs, "list")
+  expect_gt(nrow(inputs$data), 0)
+  expect_gt(ncol(inputs$data), 0)
+})
+
+test_that("lipidomics: preprocessing produces the `pre` contract", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+
+  config <- lipid_config()
+  inputs <- load_lipidomics_inputs(config)
+  pre    <- preprocess_lipidomics(inputs, config)
+
+  expect_true(all(c("expr_raw", "expr_filt", "expr_work", "meta", "row_data", "info")
+                  %in% names(pre)))
+  expect_gt(nrow(pre$expr_raw), 0)
+  expect_gt(nrow(pre$expr_filt), 0)
+  expect_equal(ncol(pre$expr_work), nrow(pre$meta))
+  expect_true("lipid_class" %in% names(pre$row_data))
+})
+
+test_that("lipidomics: QC and DE modules run and the DE result is well-formed", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+  skip_if_not_installed("ggplot2")
+
+  config  <- lipid_config()
+  out_dir <- withr::local_tempdir()
+  inputs  <- load_lipidomics_inputs(config)
+  pre     <- preprocess_lipidomics(inputs, config)
+
+  qc_res <- mod_lipidomics_qc_pre(pre, config, out_dir)
+  expect_type(qc_res, "list")
+  expect_gte(length(qc_res$plots), 1L)
+
+  de_res <- mod_lipidomics_de(pre, config, out_dir)
+  expect_error(assert_de_contract(de_res, stage = "lipidomics"), NA)
+  expect_s3_class(de_res$summary_df, "data.frame")
+  expect_gt(nrow(de_res$summary_df), 0)
+  expect_true("pass_any_contrast" %in% names(de_res$summary_df))
+  expect_length(de_res$de_tables, 1L)
+})
+
+test_that("lipidomics: downstream stages run when their deps are available", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+  skip_if_not_installed("ggplot2")
+
+  config  <- lipid_config()
+  # Trim the RF forest for test speed; the fixture uses 500 in production.
+  config$modes$lipidomics$rf$n_trees <- 100
+  out_dir <- withr::local_tempdir()
+  inputs  <- load_lipidomics_inputs(config)
+  pre     <- preprocess_lipidomics(inputs, config)
+  qc_res  <- mod_lipidomics_qc_pre(pre, config, out_dir)
+  de_res  <- mod_lipidomics_de(pre, config, out_dir)
+
+  # Feature selection (RF / PLS-DA): the module returns NULL when the optional
+  # learner packages are absent, so accept NULL or a well-formed list.
+  fs_res <- mod_lipidomics_feature_selection(pre, config, out_dir)
+  expect_true(is.null(fs_res) || is.list(fs_res))
+
+  # Lipid-class analysis.
+  class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
+  expect_type(class_res, "list")
+
+  # HTML report — needs a working pandoc; skip when unavailable. Report templates
+  # resolve relative to the repo root, so render from there and restore the wd.
+  skip_if_not_installed("rmarkdown")
+  if (!rmarkdown::pandoc_available()) skip("pandoc not available")
+  report_path <- withr::with_dir(
+    config$project$dir,
+    mod_lipidomics_report(pre, qc_res, de_res, fs_res, class_res, config, out_dir)
+  )
+  expect_true(file.exists(report_path))
+  expect_gt(file.info(report_path)$size, 0)
+})
