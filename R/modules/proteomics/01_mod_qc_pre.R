@@ -171,7 +171,9 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     plots$dist_heatmap <- ph
 
     f_dist_na <- file.path(out_qc, "sample_distance_heatmap_NA.png")
-    ph_na <- plot_sample_distance_heatmap(pre$expr_raw, annotation_col = annot)
+    # Use the log2 assay (with NAs, pre-imputation) so distances stay in log2
+    # space now that expr_raw may hold the linear input matrix (#138).
+    ph_na <- plot_sample_distance_heatmap(pre$expr_log2, annotation_col = annot)
     written_na <- save_heatmap_to_file(ph_na, f_dist_na, width = 1600, height = 1200, res = 150)
     files <- c(files, written_na)
     plots$dist_heatmap_na <- ph_na

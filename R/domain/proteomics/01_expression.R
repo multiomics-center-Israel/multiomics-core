@@ -114,36 +114,42 @@ get_proteomics_expression_matrix <- function(inputs, config) {
     # Build row_data from ID + annotation columns
     row_data <- protein[, c(protein_id_col, anno_cols), drop = FALSE]
     
-    # Build expression matrix
-    assay_log2 <- as.matrix(protein[, sample_cols, drop = FALSE])
-    storage.mode(assay_log2) <- "numeric"
-    rownames(assay_log2) <- feat_ids
-    
+    # Build expression matrix on the input scale, as provided
+    assay_input <- as.matrix(protein[, sample_cols, drop = FALSE])
+    storage.mode(assay_input) <- "numeric"
+    rownames(assay_input) <- feat_ids
+
     # Resolve input scale
     is_log_flag <- cfg$files$is_logtransformed %||% NULL
-    
+
     if (!is.null(scale_in) && !is.null(is_log_flag)) {
       if ((identical(scale_in, "log2") && !isTRUE(is_log_flag)) ||
           (identical(scale_in, "linear") && isTRUE(is_log_flag))) {
         stop("Inconsistent proteomics config: scale_in conflicts with files$is_logtransformed")
       }
     }
-    
+
     if (is.null(scale_in)) {
       scale_in <- if (isTRUE(is_log_flag)) "log2" else "linear"
     }
-    
+
     if (identical(scale_in, "linear")) {
       message("[proteomics preprocessed] Applying log2(x + 1) transform")
-      assay_log2 <- log2(assay_log2 + 1)
-    } else if (!identical(scale_in, "log2")) {
+      # Retain the original linear matrix so expr_raw can honour its name (#138);
+      # the pipeline still works on assay_log2 throughout.
+      assay_linear <- assay_input
+      assay_log2   <- log2(assay_input + 1)
+    } else if (identical(scale_in, "log2")) {
+      # Input is already log2; there is no separate linear matrix to retain.
+      assay_linear <- NULL
+      assay_log2   <- assay_input
+    } else {
       stop(sprintf(
         "[proteomics preprocessed] Unsupported scale_in '%s'. Expected 'linear' or 'log2'.",
         as.character(scale_in)
       ))
     }
-    
-    assay_linear <- NULL
+
     message(sprintf(
       "[proteomics preprocessed] %d features x %d samples (scale_in=%s)",
       nrow(assay_log2), ncol(assay_log2), scale_in
@@ -162,8 +168,11 @@ get_proteomics_expression_matrix <- function(inputs, config) {
       cfg        = cfg,
       scale_in   = scale_in
     )
+    # The DIA-NN helper log2-transforms internally and returns only the log2
+    # assay, so no linear matrix is available; expr_raw falls back to log2 for
+    # this engine (surfaced via expr_raw_scale downstream). See #138.
     assay_linear <- NULL
-    
+
     # Feature annotations (row_data)
     row_data <- inputs$protein[, c(cfg$id_columns$protein_id, unlist(cfg$id_columns$protein_annot)), drop = FALSE]
     row_data <- apply_custom_annotation(row_data, cfg, config)
@@ -176,6 +185,11 @@ get_proteomics_expression_matrix <- function(inputs, config) {
   col_data <- inputs$metadata
   sample_col <- get_sample_col(cfg)
   assay_log2 <- align_matrix_to_meta(assay_log2, col_data, sample_col)
+  # Keep the retained linear matrix column-aligned with the log2 assay so
+  # expr_raw can be recovered by name in preprocess_proteomics (#138).
+  if (!is.null(assay_linear)) {
+    assay_linear <- align_matrix_to_meta(assay_linear, col_data, sample_col)
+  }
   col_data <- align_meta_to_expr(assay_log2, col_data, cfg)
   
   list(
