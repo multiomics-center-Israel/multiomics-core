@@ -1590,6 +1590,10 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
 #' @return The unit directory path (not created).
 #' @noRd
 gsea_unit_dir <- function(gsea_root, db_name, ranking_method, contrast) {
+    # Sanitize the user-supplied contrast name before it becomes a path component:
+    # a raw "/" or ".." would create unintended nested/parent paths, and ":" fails
+    # dir.create()/write.csv() on Windows. Same rule as the online writer.
+    contrast <- gsub("[^a-zA-Z0-9_-]", "_", contrast)
     file.path(gsea_root, db_name,
               paste0("ranking_by_", ranking_method), contrast)
 }
@@ -1615,6 +1619,9 @@ gsea_unit_dir <- function(gsea_root, db_name, ranking_method, contrast) {
 #' @noRd
 ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
     db_dir <- file.path(ora_root, db_name)
+    # clust_round is often a user-supplied contrast name and becomes a path
+    # component; sanitize it (a raw "/" / ".." misroutes, ":" fails on Windows).
+    clust_round <- gsub("[^a-zA-Z0-9_-]", "_", clust_round)
     switch(clust_method,
         all_DE                 = file.path(db_dir, "all_DE", clust_round),
         contrasts              = file.path(db_dir, "contrasts", "with_direction", clust_round),

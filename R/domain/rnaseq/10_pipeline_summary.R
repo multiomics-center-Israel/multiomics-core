@@ -54,6 +54,10 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
 
     p_cut  <- rna_cfg$de$p_cutoff %||% 0.05
     fc_lin <- rna_cfg$de$linear_fc_cutoff %||% 1.0
+    # Pathways are filtered by the enrichment cutoff (offline: enrichment.pvalue_cutoff),
+    # which may differ from the DE cutoff. Use it so reported pathway counts match the
+    # enrichment tables instead of a hard-coded 0.05.
+    pw_cut <- rna_cfg$enrichment$pvalue_cutoff %||% rna_cfg$de$p_cutoff %||% 0.05
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
     if (!is.null(de_res$summary_df)) {
@@ -130,7 +134,7 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
     if (!is.null(pathway_res$pathway_results)) {
         count_from_df <- function(df) {
             if (!is.data.frame(df) || !"padj" %in% names(df)) return(NULL)
-            sig_pw <- df[!is.na(df$padj) & df$padj < 0.05, , drop = FALSE]
+            sig_pw <- df[!is.na(df$padj) & df$padj < pw_cut, , drop = FALSE]
             # ORA tables have no NES column; keep the fallback integer (0L) so the
             # downstream vapply(..., FUN.VALUE = 0L, ...) type template holds.
             n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0L
@@ -188,6 +192,7 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
             p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,
             fc_cutoff = rna_cfg$de$linear_fc_cutoff %||% 1.0,
             pathway_method = rna_cfg$pathway$method %||% "fgsea",
+            pathway_p_cutoff = rna_cfg$enrichment$pvalue_cutoff %||% rna_cfg$de$p_cutoff %||% 0.05,
             pathway_dbs = rna_cfg$pathway$databases %||% c("GO", "KEGG"),
             organism = organism
         ),
@@ -636,8 +641,8 @@ generate_summary_body_r <- function(stats) {
 
     # Pathway
     pw_dbs <- paste(stats$methods$pathway_dbs, collapse = " and ")
-    pw_desc <- sprintf("%s ranks all genes by DE statistic and tests enrichment against %s. Pathways with adj. p &lt; 0.05 reported.",
-        toupper(stats$methods$pathway_method), pw_dbs)
+    pw_desc <- sprintf("%s ranks all genes by DE statistic and tests enrichment against %s. Pathways with adj. p &lt; %s reported.",
+        toupper(stats$methods$pathway_method), pw_dbs, stats$methods$pathway_p_cutoff)
     pw_stats <- ""
     if (stats$pathway$total > 0) {
         pw_items <- list(list(value = as.character(stats$pathway$total), label = "pathways", color = "var(--accent-blue)"))
@@ -645,7 +650,8 @@ generate_summary_body_r <- function(stats) {
         if (stats$pathway$down > 0) pw_items <- c(pw_items, list(list(value = as.character(stats$pathway$down), label = "down", color = "var(--accent-rose)")))
         pw_stats <- do.call(build_stats_row, pw_items)
     }
-    pw_tags <- c(toupper(stats$methods$pathway_method), stats$methods$pathway_dbs, "padj < 0.05")
+    pw_tags <- c(toupper(stats$methods$pathway_method), stats$methods$pathway_dbs,
+                 sprintf("padj < %s", stats$methods$pathway_p_cutoff))
     step8 <- build_step_html(8, "\U0001F9ED", "Pathway Enrichment", "phase-enrich", "downstream", pw_desc, pw_tags, pw_stats)
 
     # Report — "HTML report" tag is a link to the full interactive report
