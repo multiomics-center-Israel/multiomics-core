@@ -1147,7 +1147,11 @@ generate_clustered_dotplots <- function(clustered_dir, output_dir) {
                     stringsAsFactors = FALSE, row.names = NULL)
     first_name <- if (ncol(x) >= 1) colnames(x)[1] else ""
     looks_like_id <- grepl("^(GO\\.[0-9]|X[0-9]{4,}|[A-Za-z]{2,4}[0-9]{4,})", first_name)
-    if (isTRUE(looks_like_id) || nrow(x) == 0) {
+    # Re-read headerless ONLY when the first column name is ID-shaped (a data row
+    # was eaten as a header). Do NOT trigger on nrow == 0: a valid header-only file
+    # (no mappings) must stay empty, not be rebuilt into a fabricated term/gene row
+    # from its own header.
+    if (isTRUE(looks_like_id)) {
         x <- read.delim(path, sep = "\t", header = FALSE, colClasses = "character",
                         stringsAsFactors = FALSE, row.names = NULL)
     }
@@ -2341,7 +2345,12 @@ run_cluster_ora <- function(clusters,
         return(NULL)
     }
     sem <- tryCatch(
-        GOSemSim::godata(ont = key),   # Wang: GO DAG from GO.db, no OrgDb
+        # computeIC = FALSE: Wang similarity uses only the GO DAG (GO.db) and needs
+        # NO information content, whereas IC requires an organism OrgDb. GOSemSim
+        # (>= 2.x, incl. the locked 2.36.0) defaults computeIC = TRUE, so godata(ont=)
+        # alone errors offline — silently disabling the "mandatory" GO simplify via
+        # this tryCatch. Passing computeIC = FALSE makes offline Wang simplify work.
+        GOSemSim::godata(ont = key, computeIC = FALSE),   # Wang: GO DAG from GO.db, no OrgDb
         error = function(e) {
             message("    GOSemSim::godata(ont=", key, ") failed: ", e$message)
             NULL
