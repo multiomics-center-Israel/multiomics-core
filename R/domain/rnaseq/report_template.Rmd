@@ -486,11 +486,13 @@ This group-aware filtering ensures that genes specific to certain conditions are
 
 ```{r executive-summary, results='asis', echo=FALSE}
 # Compute gene counts early (also used by filter-stats section later)
-raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts)
+raw_counts_file_exec <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
 filt_counts_file_exec <- file.path(datasets_dir, "rna_counts_filtered.tsv")
 n_genes_raw <- NA
 n_genes_filt <- NA
-if (nzchar(rna_cfg$files$counts) && file.exists(raw_counts_file_exec) && !dir.exists(raw_counts_file_exec)) {
+# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
+# length-1 so the `if` does not error with a zero-length/NA condition.
+if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file_exec) && !dir.exists(raw_counts_file_exec)) {
     n_genes_raw <- nrow(read.csv(raw_counts_file_exec, stringsAsFactors = FALSE, check.names = FALSE))
 }
 if (file.exists(filt_counts_file_exec) && !dir.exists(filt_counts_file_exec)) {
@@ -655,7 +657,7 @@ The pipeline evaluates CPM distributions across biological groups and selects an
 
 ```{r filter-stats}
 # Read raw and filtered counts to get gene numbers
-raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts)
+raw_counts_file <- file.path(cfg$project$dir, cfg$paths$raw, rna_cfg$files$counts %||% "")
 filt_counts_file <- file.path(datasets_dir, "rna_counts_filtered.tsv")
 
 n_genes_raw <- NA
@@ -663,7 +665,9 @@ n_genes_filt <- NA
 raw_counts <- NULL
 filt_counts <- NULL
 
-if (nzchar(rna_cfg$files$counts) && file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
+# `files$counts` is NULL for tximport input (files$txi); `%||% ""` keeps nzchar()
+# length-1 so the `if` does not collapse to NA / zero-length and error.
+if (nzchar(rna_cfg$files$counts %||% "") && file.exists(raw_counts_file) && !dir.exists(raw_counts_file)) {
     raw_counts <- read.csv(raw_counts_file, stringsAsFactors = FALSE, check.names = FALSE)
     n_genes_raw <- nrow(raw_counts)
 }

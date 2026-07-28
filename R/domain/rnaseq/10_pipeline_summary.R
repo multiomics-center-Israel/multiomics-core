@@ -54,6 +54,14 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
 
     p_cut  <- rna_cfg$de$p_cutoff %||% 0.05
     fc_lin <- rna_cfg$de$linear_fc_cutoff %||% 1.0
+    # Pathways are filtered by the enrichment cutoff (offline: enrichment.pvalue_cutoff),
+    # which may differ from the DE cutoff. Use it so reported pathway counts match the
+    # enrichment tables instead of a hard-coded 0.05.
+    pw_cut <- rna_cfg$enrichment$pvalue_cutoff %||% rna_cfg$de$p_cutoff %||% 0.05
+    # GSEA tables use their own cutoff (enrichment.gsea_pvalue_cutoff), which is
+    # applied to the GSEA padj column and may differ from the ORA cutoff. Fall
+    # back to pw_cut so mixed configs still count consistently.
+    gsea_cut <- rna_cfg$enrichment$gsea_pvalue_cutoff %||% pw_cut
     log2_fc <- if (fc_lin > 1) log2(fc_lin) else 0
 
     if (!is.null(de_res$summary_df)) {
@@ -130,9 +138,14 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
     if (!is.null(pathway_res$pathway_results)) {
         count_from_df <- function(df) {
             if (!is.data.frame(df) || !"padj" %in% names(df)) return(NULL)
-            sig_pw <- df[!is.na(df$padj) & df$padj < 0.05, , drop = FALSE]
-            n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0
-            n_dn <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES < 0, na.rm = TRUE) else 0
+            # GSEA tables carry an NES column and are filtered by gsea_cut; ORA
+            # tables have none and use the ORA cutoff (pw_cut).
+            cut <- if ("NES" %in% names(df)) gsea_cut else pw_cut
+            sig_pw <- df[!is.na(df$padj) & df$padj < cut, , drop = FALSE]
+            # ORA tables have no NES column; keep the fallback integer (0L) so the
+            # downstream vapply(..., FUN.VALUE = 0L, ...) type template holds.
+            n_up <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES > 0, na.rm = TRUE) else 0L
+            n_dn <- if ("NES" %in% names(sig_pw)) sum(sig_pw$NES < 0, na.rm = TRUE) else 0L
             list(total = nrow(sig_pw), up = n_up, down = n_dn)
         }
 
@@ -186,7 +199,12 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
             p_cutoff  = rna_cfg$de$p_cutoff %||% 0.05,
             fc_cutoff = rna_cfg$de$linear_fc_cutoff %||% 1.0,
             pathway_method = rna_cfg$pathway$method %||% "fgsea",
-            pathway_dbs = rna_cfg$pathway$databases %||% c("GO", "KEGG"),
+            pathway_p_cutoff = rna_cfg$enrichment$pvalue_cutoff %||% rna_cfg$de$p_cutoff %||% 0.05,
+            # Offline enrichment declares its databases under `enrichment$databases`
+            # (KEGG/GO_BP/GO_MF/GO_CC); fall back there before the legacy default so
+            # enrichment-only configs report the databases they actually ran.
+            pathway_dbs = rna_cfg$pathway$databases %||%
+                          rna_cfg$enrichment$databases %||% c("GO", "KEGG"),
             organism = organism
         ),
         technical = list(
@@ -203,7 +221,13 @@ collect_pipeline_stats <- function(config, pre, de_res, pathway_res = NULL) {
                 round(100 * n_genes / n_genes_raw, 1) else NA
         ),
         feature_flags = list(
-            pathway_enabled    = isTRUE(rna_cfg$pathway$enabled),
+            # Mirror the routing gate in mod_rnaseq_pathway(): enrichment runs when
+            # at least one of the pathway/enrichment blocks is present and neither is
+            # explicitly disabled. A standalone `enrichment:` block opts in on its own,
+            # so keying off `pathway$enabled` alone under-reports enrichment-only runs.
+            pathway_enabled    = !(is.null(rna_cfg$pathway) && is.null(rna_cfg$enrichment)) &&
+                                 !isFALSE(rna_cfg$pathway$enabled) &&
+                                 !isFALSE(rna_cfg$enrichment$enabled),
             clustering_enabled = isTRUE(rna_cfg$clustering$enabled)
         )
     )
@@ -634,8 +658,8 @@ generate_summary_body_r <- function(stats) {
 
     # Pathway
     pw_dbs <- paste(stats$methods$pathway_dbs, collapse = " and ")
-    pw_desc <- sprintf("%s ranks all genes by DE statistic and tests enrichment against %s. Pathways with adj. p &lt; 0.05 reported.",
-        toupper(stats$methods$pathway_method), pw_dbs)
+    pw_desc <- sprintf("%s ranks all genes by DE statistic and tests enrichment against %s. Pathways with adj. p &lt; %s reported.",
+        toupper(stats$methods$pathway_method), pw_dbs, stats$methods$pathway_p_cutoff)
     pw_stats <- ""
     if (stats$pathway$total > 0) {
         pw_items <- list(list(value = as.character(stats$pathway$total), label = "pathways", color = "var(--accent-blue)"))
@@ -643,7 +667,8 @@ generate_summary_body_r <- function(stats) {
         if (stats$pathway$down > 0) pw_items <- c(pw_items, list(list(value = as.character(stats$pathway$down), label = "down", color = "var(--accent-rose)")))
         pw_stats <- do.call(build_stats_row, pw_items)
     }
-    pw_tags <- c(toupper(stats$methods$pathway_method), stats$methods$pathway_dbs, "padj < 0.05")
+    pw_tags <- c(toupper(stats$methods$pathway_method), stats$methods$pathway_dbs,
+                 sprintf("padj < %s", stats$methods$pathway_p_cutoff))
     step8 <- build_step_html(8, "\U0001F9ED", "Pathway Enrichment", "phase-enrich", "downstream", pw_desc, pw_tags, pw_stats)
 
     # Report — "HTML report" tag is a link to the full interactive report
