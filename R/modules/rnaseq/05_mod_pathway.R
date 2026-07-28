@@ -49,10 +49,15 @@
 #' @param pre     Preprocessed data list (with expr_filt, meta)
 #' @param config  Full pipeline config
 #' @param out_dir Output directory for the RNA mode (e.g. .../rna)
-#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL. Used only
-#'   by the local (offline) enrichment path: when provided (single-omics mode)
-#'   cluster-based ORA runs; when NULL (multiomics mode) ORA is skipped with a
-#'   warning and GSEA still runs. Ignored by the online fallback.
+#' @param clustering_res Result from mod_rnaseq_clustering(), or NULL. Its
+#'   NULL-ness is the single-omics/multiomics discriminator, NOT a
+#'   clustering-enabled flag: the single-omics pipeline always passes the
+#'   clustering object (a non-NULL list even when clustering is disabled),
+#'   while the multiomics pipeline passes NULL. Used only by the local (offline)
+#'   enrichment path. When non-NULL (single-omics): contrast-based ORA always
+#'   runs from the DE tables, and cluster-based ORA additionally runs when the
+#'   object actually carries clusters. When NULL (multiomics): all ORA is
+#'   skipped with a warning and only GSEA runs. Ignored by the online fallback.
 #' @return List with annotation, pathway_results, and plot_files
 #' @export
 mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NULL) {
@@ -290,9 +295,14 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # project directory (config$project$dir) — never a same-named directory that
     # happens to sit under the process working directory. The resolved path is the
     # one validated and reported below.
-    annotation_dir_raw <- enr_cfg$annotation_dir
+    # Expand a leading "~" before anything else: it must happen before the
+    # absolute-path test (an unexpanded "~/..." looks relative and would wrongly
+    # be joined onto project_dir) and before the file.path() join for the
+    # relative case.
+    annotation_dir_raw <- path.expand(enr_cfg$annotation_dir)
     is_abs      <- grepl("^(/|\\\\|[A-Za-z]:)", annotation_dir_raw)
     project_dir <- config$project$dir
+    if (!is.null(project_dir) && nzchar(project_dir)) project_dir <- path.expand(project_dir)
     annotation_dir <- if (is_abs || is.null(project_dir) || !nzchar(project_dir)) {
         annotation_dir_raw
     } else {
@@ -367,11 +377,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # ------------------------------------------------------------------
     # 2. Cluster-based ORA across all gene-list methods
     # ------------------------------------------------------------------
-    # Contract (see the clustering_res @param): cluster-based ORA runs ONLY in
-    # single-omics mode. In multiomics mode (clustering_res = NULL) ORA is skipped
-    # and only GSEA runs. Without this guard build_gene_lists() would still create
-    # the contrast-derived collections from the DE tables alone (they need no
-    # clustering), so ORA would run contrary to the documented behavior.
+    # Contract (see the clustering_res @param): this guard is the multiomics ORA
+    # skip. In multiomics mode (clustering_res = NULL) all ORA is skipped and only
+    # GSEA runs; without it build_gene_lists() would still build the contrast-derived
+    # collections from the DE tables alone (they need no clustering) and ORA would
+    # run contrary to the documented behavior. In single-omics mode clustering_res is
+    # always a non-NULL list, so build_gene_lists() runs: contrast-based ORA always,
+    # cluster-based ORA additionally when the object carries clusters.
     gene_lists <- if (is.null(clustering_res)) {
         list()
     } else {
