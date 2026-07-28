@@ -162,6 +162,15 @@ run_omic_e2e <- function(config_fixture, stage_fn, target_names) {
   # assertions can still see the outputs before they are removed.
   withr::defer(unlink(proj, recursive = TRUE, force = TRUE), envir = parent.frame())
 
+  # Symlink R/ and _targets.R into the sandbox and run tar_make() from there.
+  # _targets.R sources R/ with paths relative to the working directory, so this
+  # keeps the pipeline runnable while ALSO trapping any relative output path a
+  # stage writes (e.g. preprocess_rna()'s "outputs/rnaseq/filtering_threshold_qc.png",
+  # built from config$paths$out without project$dir) inside proj rather than the
+  # repository tree.
+  file.symlink(file.path(repo_root, "R"), file.path(proj, "R"))
+  file.symlink(file.path(repo_root, "_targets.R"), file.path(proj, "_targets.R"))
+
   raw_dir <- file.path(proj, "data")
   dir.create(raw_dir, recursive = TRUE, showWarnings = FALSE)
   stage_fn(raw_dir, repo_root)
@@ -173,13 +182,12 @@ run_omic_e2e <- function(config_fixture, stage_fn, target_names) {
 
   store <- file.path(proj, "_targets_store")
 
-  values <- withr::with_dir(repo_root, {
+  values <- withr::with_dir(proj, {
     withr::local_envvar(c(MULTIOMICS_CONFIG = cfg_path))
     suppressMessages(
       targets::tar_make(
         names          = tidyselect::all_of(target_names),
         store          = store,
-        script         = file.path(repo_root, "_targets.R"),
         callr_function = NULL,
         reporter       = "silent"
       )
@@ -195,7 +203,8 @@ run_omic_e2e <- function(config_fixture, stage_fn, target_names) {
     sprintf("Results_%s_%s", cfg$project$name, cfg$project$analysis_round)
   )
 
-  list(values = values, proj = proj, out_dir = out_dir, config_path = cfg_path)
+  list(values = values, proj = proj, out_dir = out_dir,
+       config_path = cfg_path, config = cfg)
 }
 
 #' Extract the feature-id column from a DE summary_df, tolerating naming

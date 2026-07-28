@@ -96,13 +96,23 @@ test_that("lipidomics: downstream stages run when their deps are available", {
   class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
   expect_type(class_res, "list")
 
-  # HTML report — needs a working pandoc; skip when unavailable. Report templates
-  # resolve relative to the repo root, so render from there and restore the wd.
+  # HTML report — needs a working pandoc plus the Rmd template's own packages
+  # (DT, etc.). Skip cleanly when pandoc or any such package is missing rather
+  # than failing the suite; a real report bug still surfaces as an error.
+  # Report templates resolve relative to the repo root, so render from there.
   skip_if_not_installed("rmarkdown")
   if (!rmarkdown::pandoc_available()) skip("pandoc not available")
-  report_path <- withr::with_dir(
-    config$project$dir,
-    mod_lipidomics_report(pre, qc_res, de_res, fs_res, class_res, config, out_dir)
+  report_path <- tryCatch(
+    withr::with_dir(
+      config$project$dir,
+      mod_lipidomics_report(pre, qc_res, de_res, fs_res, class_res, config, out_dir)
+    ),
+    error = function(e) {
+      if (grepl("there is no package called", conditionMessage(e), fixed = TRUE)) {
+        skip(paste("report dependency missing:", conditionMessage(e)))
+      }
+      stop(e)
+    }
   )
   expect_true(file.exists(report_path))
   expect_gt(file.info(report_path)$size, 0)

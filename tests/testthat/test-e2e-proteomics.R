@@ -7,8 +7,9 @@
 
 PROT_STAGE  <- e2e_stage_shipped("example_proteomics/proteomics", "proteomics")
 PROT_CONFIG <- "e2e_proteomics_config.yaml"
+PROT_TRUTH  <- sprintf("P%05d", 10001:10020)   # generator injects strong DE here
 
-test_that("proteomics runs end-to-end and produces a well-formed DE result", {
+test_that("proteomics runs end-to-end and recovers the injected DE signal", {
   if (!e2e_should_run()) skip("Set RUN_E2E_OMICS=1 to run the heavy end-to-end omic tests.")
   skip_if_not_installed("limma")
 
@@ -21,18 +22,28 @@ test_that("proteomics runs end-to-end and produces a well-formed DE result", {
   expect_s3_class(de$summary_df, "data.frame")
   expect_gt(nrow(de$summary_df), 0)
   expect_true("pass_any_contrast" %in% names(de$summary_df))
-  expect_length(de$de_tables, 1L)   # exactly the one configured contrast
+
+  # mod_proteomics_de() returns per-contrast tables under runs_de_tables (one
+  # list per imputation), not de_tables — assert each imputation carries exactly
+  # the one configured contrast.
+  expect_true(is.list(de$runs_de_tables))
+  expect_gte(length(de$runs_de_tables), 1L)
+  expect_true(all(vapply(de$runs_de_tables, length, integer(1)) == 1L))
 
   # The 3 cRAP- contaminants must be filtered out (77 real proteins remain).
   ids <- e2e_feature_ids(de$summary_df)
   expect_false(any(grepl("^cRAP-", ids)))
 
-  # --- numbers: significant count in a sane band ---
-  # The generator injects strong DE into the first 20 real proteins.
-  # Wide band; tighten after the first green run.
+  # --- numbers: significant count in a sane band + injected signal recovered ---
+  # The generator injects strong DE into P10001..P10020. Wide band; tighten
+  # after the first green run.
   sig <- e2e_significant_ids(de$summary_df)
   expect_gte(length(sig), 8L)
   expect_lte(length(sig), 70L)
+
+  expect_true(any(PROT_TRUTH %in% ids))
+  recall <- mean(PROT_TRUTH %in% sig)
+  expect_gte(recall, 0.5)
 })
 
 test_that("proteomics DE is reproducible across runs (same seed)", {
