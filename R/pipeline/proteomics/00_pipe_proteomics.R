@@ -47,10 +47,21 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
     
     # ---- preprocess ----
     tar_target(
-      prot_pre,
+      prot_pre_raw,
       preprocess_proteomics(prot_inputs, config)
     ),
-    
+
+    # ---- batch correction (no-op unless configured; see
+    #      modes.proteomics.batch_correction). Downstream consumes prot_pre. ----
+    tar_target(
+      prot_pre,
+      mod_proteomics_batch_correction(
+        pre     = prot_pre_raw,
+        config  = config,
+        verbose = TRUE
+      )
+    ),
+
     # ---- DE ----
     tar_target(
       prot_de_res,
@@ -61,7 +72,7 @@ pipe_proteomics <- function(skip_outputs = FALSE) {
         verbose = TRUE
       )
     ),
-    
+
     # ---- Pathway enrichment (multiomics depends on this) ----
     tar_target(
       prot_pathway_res,

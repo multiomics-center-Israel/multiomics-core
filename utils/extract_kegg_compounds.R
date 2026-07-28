@@ -8,6 +8,7 @@
 #' Usage:
 #'   Rscript extract_kegg_compounds.R --kegg-org hsa --output hsa_compounds.tsv
 #'   Rscript extract_kegg_compounds.R --kegg-org cel --format gmt --output cel_compounds.gmt
+#'   Rscript extract_kegg_compounds.R --kegg-org cre --format name-gmt --output cre_name_pathways.gmt
 #'   Rscript extract_kegg_compounds.R --list-kegg --search "elegans"
 #'
 #' @examples
@@ -248,6 +249,105 @@ extract_kegg_compound_gmt <- function(kegg_org, output_file = NULL) {
 }
 
 # ==============================================================================
+# NAME-KEYED GMT (for name-based metabolite matching)
+# ==============================================================================
+
+#' Extract KEGG compound pathways as a NAME-keyed GMT
+#'
+#' Same idea as \code{extract_kegg_compound_gmt()}, but each pathway lists its
+#' compounds by KEGG \emph{name} (e.g. "D-Glucose") rather than KEGG ID (e.g.
+#' "C00031"). Use this when your feature table identifies metabolites by name:
+#' the metabolomics enrichment (QEA/ssGSEA/ORA/GSEA) matches a \code{Name}
+#' column against the GMT members case-insensitively, so a name-keyed GMT
+#' produces hits with no HMDB/KEGG mapping file. An ID-keyed GMT, by contrast,
+#' never matches a name column.
+#'
+#' Names are taken straight from each pathway's KEGG \code{COMPOUND} record
+#' (the standard display name), so this needs no extra per-compound requests.
+#' Match rate depends on your software spelling metabolites the way KEGG does;
+#' when it is low, prefer ID-based matching (a compound GMT keyed on KEGG IDs
+#' plus features carrying KEGG/HMDB identifiers).
+#'
+#' @param kegg_org KEGG organism code (e.g. "cre" for Chlamydomonas reinhardtii).
+#' @param output_file Output GMT path (NULL -> "kegg_name_pathways_<org>.gmt").
+#' @return (invisibly) the named list of pathways with compound-name members.
+#'
+#' @export
+extract_kegg_name_gmt <- function(kegg_org, output_file = NULL) {
+
+    message("\n=== Generating KEGG NAME-keyed GMT for organism: ", kegg_org, " ===\n")
+
+    if (!requireNamespace("KEGGREST", quietly = TRUE)) {
+        stop("KEGGREST package required. Install with: BiocManager::install('KEGGREST')")
+    }
+
+    message("Fetching KEGG pathway list...")
+    pathway_list <- tryCatch({
+        KEGGREST::keggList("pathway", kegg_org)
+    }, error = function(e) {
+        stop("Failed to fetch KEGG pathways. Is '", kegg_org, "' a valid KEGG organism code?\n",
+             "Check valid codes at: https://www.genome.jp/kegg/catalog/org_list.html")
+    })
+
+    message("Found ", length(pathway_list), " pathways")
+
+    pathways <- list()
+    descriptions <- character()
+
+    message("Fetching compound names for each pathway...")
+    pb <- txtProgressBar(min = 0, max = length(pathway_list), style = 3)
+
+    for (i in seq_along(pathway_list)) {
+        pathway_id <- names(pathway_list)[i]
+        pathway_name <- pathway_list[i]
+        pathway_name <- gsub(paste0(" - .*$"), "", pathway_name)
+
+        tryCatch({
+            pathway_info <- KEGGREST::keggGet(pathway_id)[[1]]
+
+            if (!is.null(pathway_info$COMPOUND)) {
+                # pathway_info$COMPOUND is a named vector: names are KEGG IDs,
+                # values are the compound display names. Key the GMT on the
+                # names so it can match a Name column downstream.
+                cpd_names <- trimws(unname(pathway_info$COMPOUND))
+                cpd_names <- unique(cpd_names[nzchar(cpd_names)])
+                if (length(cpd_names) > 0) {
+                    clean_id <- gsub("path:", "", pathway_id)
+                    pathways[[clean_id]] <- cpd_names
+                    descriptions[clean_id] <- pathway_name
+                }
+            }
+        }, error = function(e) {
+            # Skip failed pathways
+        })
+
+        setTxtProgressBar(pb, i)
+        if (i %% 10 == 0) Sys.sleep(0.3)
+    }
+
+    close(pb)
+
+    if (length(pathways) == 0) {
+        message("No compounds found for organism: ", kegg_org)
+        return(invisible(list()))
+    }
+
+    attr(pathways, "descriptions") <- descriptions
+
+    if (is.null(output_file)) {
+        output_file <- sprintf("kegg_name_pathways_%s.gmt", kegg_org)
+    }
+
+    write_gmt_file(pathways, output_file)
+
+    message("\nSuccessfully created: ", output_file)
+    message("  Pathways with compounds: ", length(pathways))
+    message("  Unique compound names: ", length(unique(unlist(pathways))))
+
+    invisible(pathways)
+}
+
+# ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
 
@@ -384,7 +484,7 @@ if (!interactive()) {
         make_option(c("-k", "--kegg-org"), type = "character", default = NULL,
                     help = "KEGG organism code (e.g., 'hsa', 'mmu', 'cel')"),
         make_option(c("-f", "--format"), type = "character", default = "tsv",
-                    help = "Output format: tsv or gmt [default: tsv]"),
+                    help = "Output format: tsv, gmt (KEGG IDs) or name-gmt (compound names) [default: tsv]"),
         make_option(c("--output"), type = "character", default = NULL,
                     help = "Output file path"),
         make_option(c("--no-details"), action = "store_true", default = FALSE,
@@ -408,7 +508,12 @@ if (!interactive()) {
 
     # Extract compounds
     if (!is.null(opt$`kegg-org`)) {
-        if (opt$format == "gmt") {
+        if (opt$format == "name-gmt") {
+            extract_kegg_name_gmt(
+                kegg_org = opt$`kegg-org`,
+                output_file = opt$output
+            )
+        } else if (opt$format == "gmt") {
             extract_kegg_compound_gmt(
                 kegg_org = opt$`kegg-org`,
                 output_file = opt$output
@@ -426,6 +531,7 @@ if (!interactive()) {
         cat("\nExamples:\n")
         cat("  Rscript extract_kegg_compounds.R --kegg-org hsa --output human_compounds.tsv\n")
         cat("  Rscript extract_kegg_compounds.R --kegg-org cel --format gmt\n")
+        cat("  Rscript extract_kegg_compounds.R --kegg-org cre --format name-gmt --output cre_name_pathways.gmt\n")
         cat("  Rscript extract_kegg_compounds.R --list-kegg --search 'elegans'\n")
         cat("\nRun with --help for all options\n")
     }

@@ -32,12 +32,14 @@ if (!"renv" %in% loadedNamespaces()) {
     RENV_CONFIG_AUTOLOADER_ENABLED   = "FALSE"
   )
 }
-
-# Polyfill `%||%` for R < 4.4 (base only added it in 4.4.0).
-if (!exists("%||%", envir = baseenv(), inherits = FALSE)) {
+# --- Null-coalescing backport ------------------------------------------------
+# Base R gained `%||%` only in 4.4.0. run_pipeline() and the wizard use it
+# before R/core/* (which also define it) are sourced, so on R < 4.4 a plain
+# `Rscript run.R --config ...` died with "could not find function %||%".
+# Define it here when absent so the runner works on the project's R 4.3.
+if (!exists("%||%", mode = "function")) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
 }
-
 # --- Dependency check --------------------------------------------------------
 check_dependencies <- function(mode = "cli") {
   core_pkgs <- c("yaml", "jsonlite", "targets")
@@ -379,8 +381,6 @@ wizard_rna <- function(project_dir, project_name, analyst, round) {
   pathway_method <- c("fgsea", "ora", "both", "none")[pathway_idx]
   pathway_enabled <- pathway_idx != 4
   clustering_on <- ask_yn("Enable clustering?", FALSE)
-  batch_corr_on <- ask_yn("Enable batch correction? (detects and corrects batch effects)", FALSE)
-  deconv_on <- ask_yn("Enable cell type deconvolution? (human/mouse only, uses xCell2)", FALSE)
   # Organism & Annotation
   cat("\n--- Organism & Annotation ---\n")
   org_idx <- ask_choice("Which organism does your data come from?",
@@ -680,10 +680,6 @@ modes:
           enabled: true
           group_col: "%s"
           corr_cutoff: 0.8
-    batch_correction:
-      enabled: %s
-    deconvolution:
-      enabled: %s
     effects:
       color: "%s"
       shape: %s
@@ -708,8 +704,6 @@ params:
                          tolower(pathway_enabled), pathway_method, custom_gmt_file,
                          tolower(commentary_enabled), commentary_backend,
                          tolower(clustering_on), group_col,
-                         tolower(batch_corr_on),
-                         tolower(deconv_on),
                          group_col, shape_col, sample_col
   )
   # Inject technical_report block if extracted

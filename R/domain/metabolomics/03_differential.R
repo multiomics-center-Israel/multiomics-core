@@ -36,35 +36,49 @@ isTRUE_vec <- function(x) {
 #' @param condition_col Column in meta identifying experimental groups.
 #' @param sample_col    Column in meta identifying sample IDs.
 #' @param label         Character label for log messages.
+#' @param qc_flag_column Optional column in meta whose qc/blank/pool value marks
+#'   technical samples (e.g. `qc.qc_flag_column`). NULL disables this check.
 #' @return list(mat, meta, condition) — filtered matrix, metadata, and factor.
 #' @keywords internal
 filter_to_biological <- function(mat, meta, condition_col, sample_col,
-                                 label = "metabolomics") {
+                                 label = "metabolomics", qc_flag_column = NULL) {
   condition_vals <- trimws(as.character(meta[[condition_col]]))
   sample_vals    <- trimws(as.character(meta[[sample_col]]))
-  
-  is_qc_or_blank_condition <- grepl("(^|_)(qc|blank|blanks)($|_)",
-                                    condition_vals, ignore.case = TRUE)
-  is_qc_sample <- grepl("^QC", sample_vals, ignore.case = TRUE)
-  
+
+  # QC/blank/pool tokens. Mirrors .detect_pool_samples(): condition/group values
+  # that contain or start with qc/blank/pool, and sample IDs starting QC/Pool.
+  qc_token_re <- "(^|_)(qc|blank|blanks|pool|pooled)($|_)|^(qc|pool)"
+  is_qc_or_blank_condition <- grepl(qc_token_re, condition_vals, ignore.case = TRUE)
+  is_qc_sample             <- grepl("^(qc|pool)", sample_vals, ignore.case = TRUE)
+
   is_bio <- !(is_qc_or_blank_condition | is_qc_sample)
-  
+
   if ("is_QC" %in% colnames(meta))
     is_bio <- is_bio & !isTRUE_vec(meta[["is_QC"]])
   if ("is_blank" %in% colnames(meta))
     is_bio <- is_bio & !isTRUE_vec(meta[["is_blank"]])
-  
+
+  # Honor a configured QC-flag column (e.g. qc.qc_flag_column: "treatment"),
+  # where technical samples carry a qc/blank/pool value in a column distinct
+  # from the DE condition column.
+  if (!is.null(qc_flag_column) && qc_flag_column %in% colnames(meta)) {
+    flag_vals <- trimws(as.character(meta[[qc_flag_column]]))
+    is_bio <- is_bio & !grepl(qc_token_re, flag_vals, ignore.case = TRUE)
+  }
+
   n_excluded <- sum(!is_bio)
   if (n_excluded > 0L) {
     message(sprintf(
-      "%s: excluding %d non-biological sample(s) (QC/blank); retaining %d",
+      "%s: excluding %d non-biological sample(s) (QC/blank/pool); retaining %d",
       label, n_excluded, sum(is_bio)
     ))
-    keep_ids <- meta[[sample_col]][is_bio]
+    # Subset by sample-ID name (character-coerced) so numeric/factor IDs are not
+    # interpreted as positional column indices.
+    keep_ids <- as.character(meta[[sample_col]])[is_bio]
     mat  <- mat[, keep_ids, drop = FALSE]
     meta <- meta[is_bio, , drop = FALSE]
   }
-  
+
   list(mat = mat, meta = meta, condition = factor(meta[[condition_col]]))
 }
 
@@ -88,6 +102,9 @@ load_precomputed_metabolomics_de <- function(config) {
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
     linear_fc   <- de_cfg$linear_fc_cutoff %||% 1.5
     log2fc_cut  <- log2(linear_fc)
+    # Match the computed-DE path (build_de_summary): gate on the adjusted
+    # (default) or raw p-value per de$use_adjusted_pval.
+    use_adjusted_pval <- isTRUE(de_cfg$use_adjusted_pval %||% TRUE)
 
     # Derive contrast labels from file names
     contrast_labels <- vapply(de_files, function(f) {
@@ -154,9 +171,10 @@ load_precomputed_metabolomics_de <- function(config) {
         summary_df[[paste0("pvalue.", ctr)]]   <- tbl$P.Value[idx]
         summary_df[[paste0("padj.", ctr)]]     <- tbl$adj.P.Val[idx]
 
+        pcol <- if (isTRUE(use_adjusted_pval)) tbl$adj.P.Val[idx] else tbl$P.Value[idx]
         pass <- as.integer(
-            !is.na(tbl$adj.P.Val[idx]) &
-            tbl$adj.P.Val[idx] < padj_cutoff &
+            !is.na(pcol) &
+            pcol < padj_cutoff &
             abs(tbl$logFC[idx]) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
@@ -239,7 +257,16 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
     # Align metadata to matrix columns
     meta <- meta[match(colnames(mat_for_test), meta[[sample_col]]), , drop = FALSE]
-    condition <- factor(meta[[condition_col]])
+
+    # Exclude QC/blank samples before DE so the limma fit and its variance
+    # estimate use only biological samples (restores the 2b behavior). No-op
+    # when there are no QC/blank samples.
+    bio          <- filter_to_biological(mat_for_test, meta, condition_col,
+                                         sample_col, label = "metabolomics DE",
+                                         qc_flag_column = cfg$qc$qc_flag_column)
+    mat_for_test <- bio$mat
+    meta         <- bio$meta
+    condition    <- bio$condition
 
     # Thresholds for significance flags
     padj_cutoff <- de_cfg$p_cutoff %||% 0.05
@@ -254,8 +281,32 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     }
 
     # Raw filtered matrix for computing log2(FC) from intensity ratios
-    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale)
+    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale). Align it to
+    # the biological samples used in the fit, in the same column order, so the
+    # two-group idx_A/idx_B (from the filtered condition) index the right columns.
+    #
+    # SCALE CAVEAT: expr_filt is the pre-transform filtered matrix and is assumed
+    # to be on a LINEAR scale. The non-limma methods below compute FC as
+    # log2(mean_B / mean_A) on it. When chosen_norm = "none" (an already-processed
+    # table fed in directly), that table may already be log-scaled, which would
+    # make the linear-ratio FC (and the significance flags derived from it) wrong.
+    # limma is unaffected (it derives FC from the model on the log-scale test
+    # matrix). Warn so the mismatch is not silent; the full scale-aware fix is
+    # tracked separately.
+    chosen_norm_de <- tolower(cfg$preprocessing$chosen_norm %||% "")
+    if (method != "limma" && identical(chosen_norm_de, "none")) {
+        warning(sprintf(
+            "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Use method 'limma', or supply the table on a linear scale.",
+            method
+        ))
+    }
+
     mat_raw <- pre$expr_filt
+    if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
+        mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
+    } else {
+        mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
+    }
 
     # Run DE for each contrast
     de_tables <- list()
@@ -268,7 +319,7 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         message("metabolomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
+            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = NULL),
             t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
             t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
             wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
@@ -283,7 +334,11 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
     }
 
     # Build wide summary_df
-    summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut)
+    # Metabolomics significance defaults to the BH-adjusted p-value; set
+    # de$use_adjusted_pval: false to gate on the raw p-value instead.
+    use_adj <- isTRUE(de_cfg$use_adjusted_pval %||% TRUE)
+    summary_df <- build_de_summary(de_tables, padj_cutoff, log2fc_cut,
+                                   use_adjusted_pval = use_adj)
 
     # Add Name column from row_data$original_id (HMDB → compound name)
     if (!is.null(pre$row_data) && "original_id" %in% colnames(pre$row_data)) {
@@ -323,12 +378,7 @@ de_limma <- function(mat, condition, contrast_str, mat_for_fc = NULL) {
         stop("Package 'limma' is required for limma DE.")
     }
 
-    # Impute NAs with row means (limma cannot handle NA)
     mat_imp <- mat
-    for (i in seq_len(nrow(mat_imp))) {
-        nas <- is.na(mat_imp[i, ])
-        if (any(nas)) mat_imp[i, nas] <- mean(mat_imp[i, !nas], na.rm = TRUE)
-    }
 
     design <- stats::model.matrix(~ 0 + condition)
     colnames(design) <- levels(condition)
@@ -494,10 +544,17 @@ make_contrast_label <- function(contrast_str) {
 #' Build wide summary_df from per-contrast DE tables
 #'
 #' @param de_tables Named list of per-contrast data.frames.
-#' @param padj_cutoff Numeric, adjusted p-value threshold.
+#' @param padj_cutoff Numeric, p-value threshold (applied to the adjusted or raw
+#'   p-value depending on \code{use_adjusted_pval}).
 #' @param log2fc_cut  Numeric, absolute log2 FC threshold.
+#' @param use_adjusted_pval Logical. If \code{TRUE} (default), gate significance
+#'   on the BH-adjusted p-value (\code{adj.P.Val}); if \code{FALSE}, on the raw
+#'   p-value (\code{P.Value}). The metabolomics pipeline sets this from
+#'   \code{de$use_adjusted_pval}; other callers (e.g. lipidomics) keep the
+#'   adjusted default.
 #' @return Wide data.frame with feature_id + per-contrast columns + pass flags.
-build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
+build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut,
+                             use_adjusted_pval = TRUE) {
     contrast_names <- names(de_tables)
     first <- de_tables[[1]]
 
@@ -520,14 +577,16 @@ build_de_summary <- function(de_tables, padj_cutoff, log2fc_cut) {
         summary_df[[paste0("pvalue.", ctr)]]     <- tbl$P.Value
         summary_df[[paste0("padj.", ctr)]]       <- tbl$adj.P.Val
 
-        # Significance flag (uses raw P.Value, not adjusted)
+        # Significance flag: BH-adjusted (default) or raw p-value per use_adjusted_pval
+        pcol <- if (isTRUE(use_adjusted_pval)) tbl$adj.P.Val else tbl$P.Value
         pass <- as.integer(
-            !is.na(tbl$P.Value) &
-            tbl$P.Value < padj_cutoff &
+            !is.na(pcol) &
+            pcol < padj_cutoff &
             abs(tbl$logFC) >= log2fc_cut
         )
         summary_df[[paste0("pass.", ctr)]] <- pass
     }
+    
 
     # Aggregate pass flag across contrasts
     pass_cols <- grep("^pass\\.", colnames(summary_df), value = TRUE)

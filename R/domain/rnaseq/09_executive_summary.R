@@ -41,13 +41,6 @@ generate_rnaseq_executive_summary <- function(de_res,
                     format(n_genes_raw, big.mark = ",")))
     }
 
-    # --- Batch correction info ---
-    if (!is.null(pre$batch_corrected) && isTRUE(pre$batch_corrected)) {
-        summary_points <- c(summary_points,
-            sprintf("Batch correction applied using **%s** method",
-                    pre$batch_method %||% "unknown"))
-    }
-
     # --- DE results ---
     de_stats <- get_de_summary_stats(de_res, rna_cfg = config$modes$rna)
     if (!is.null(de_stats)) {

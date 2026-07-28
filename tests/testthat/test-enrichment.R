@@ -156,3 +156,121 @@ test_that("add_pathway_names handles GO terms", {
     expect_true("pathway_name" %in% names(result))
     expect_true(nzchar(result$pathway_name[1]))
 })
+
+# --- Tests for map_compounds_for_enrichment (metabolomics ID mapping) ---
+
+test_that("map_compounds_for_enrichment prefers KEGG IDs and aligns feature_map", {
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f2", "f3", "f4"),
+        Name       = c("Glucose", "", "Citrate", "Pyruvate"),
+        KEGG       = c("C00031", "", "", "cpd:C00022"),
+        stringsAsFactors = FALSE
+    )
+
+    # annotated_only = FALSE exercises the name-fallback + alignment path.
+    res <- map_compounds_for_enrichment(row_data, expr, annotated_only = FALSE)
+
+    # KEGG IDs win where present (any prefix stripped); Name is the fallback.
+    expect_equal(unname(res$feature_map["f1"]), "C00031")
+    expect_equal(unname(res$feature_map["f4"]), "C00022")
+    expect_equal(unname(res$feature_map["f3"]), "Citrate")
+
+    # f2 has neither a name nor a KEGG id, so it drops out of the background —
+    # but the map must still resolve the LATER features correctly. This is the
+    # regression guard for the previous positional-misalignment bug, where
+    # dropping f2 shifted every subsequent feature's compound by one.
+    expect_false("" %in% res$compound_names)
+    expect_true(all(c("C00031", "Citrate", "C00022") %in% res$compound_names))
+})
+
+test_that(".resolve_enrichment_contrast picks the requested or first contrast", {
+    de_res <- list(de_tables = list(A = data.frame(x = 1), B = data.frame(x = 2)))
+    expect_equal(.resolve_enrichment_contrast(NULL, de_res, "ORA"), "A")
+    expect_equal(.resolve_enrichment_contrast("B", de_res, "ORA"), "B")
+    expect_warning(res <- .resolve_enrichment_contrast("Z", de_res, "ORA"),
+                   "not found")
+    expect_equal(res, "A")
+})
+
+test_that(".sanitize_contrast produces file-safe labels", {
+    expect_equal(.sanitize_contrast("HL_48h_vs_HL_24h"), "HL_48h_vs_HL_24h")
+    expect_equal(.sanitize_contrast("A vs B (control)"), "A_vs_B_control")
+    expect_equal(.sanitize_contrast("x/y:z"), "x_y_z")
+})
+
+test_that(".resolve_contrast_groups maps a contrast to its two groups", {
+    inputs <- list(contrasts = data.frame(
+        Contrast_name = c("A_vs_B", "C_vs_D"),
+        Factor        = c("group", "group"),
+        Numerator     = c("A", "C"),
+        Denominator   = c("B", "D"),
+        stringsAsFactors = FALSE
+    ))
+    g <- .resolve_contrast_groups(inputs, "A_vs_B", "group")
+    expect_equal(g$group_col, "group")
+    expect_equal(sort(g$groups), c("A", "B"))
+    expect_null(.resolve_contrast_groups(inputs, "not_a_contrast", "group"))
+})
+
+test_that(".subset_pre_to_groups keeps only the requested groups' samples", {
+    pre <- list(
+        expr_raw = matrix(seq_len(12), nrow = 2,
+                          dimnames = list(c("f1", "f2"), paste0("S", 1:6))),
+        meta = data.frame(sample_id = paste0("S", 1:6),
+                          group = c("A", "A", "B", "B", "C", "C"),
+                          stringsAsFactors = FALSE)
+    )
+    sub <- .subset_pre_to_groups(pre, "group", c("A", "B"), "sample_id")
+    expect_equal(ncol(sub$expr_raw), 4L)
+    expect_equal(sort(colnames(sub$expr_raw)), c("S1", "S2", "S3", "S4"))
+    expect_equal(nrow(sub$meta), 4L)
+    # Fewer than two samples in the requested groups -> NULL.
+    expect_null(.subset_pre_to_groups(pre, "group", "Z", "sample_id"))
+})
+
+test_that("map_compounds_for_enrichment restricts to KEGG when annotated_only=TRUE", {
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f2", "f3", "f4"),
+        Name       = c("Glucose", "Citrate", "Pyruvate", "Alanine"),
+        KEGG       = c("C00031", "", "C00022", ""),   # only f1, f3 carry KEGG
+        stringsAsFactors = FALSE
+    )
+
+    res <- map_compounds_for_enrichment(row_data, expr, annotated_only = TRUE)
+
+    # Background is the KEGG-annotated set only; name-only features are dropped.
+    expect_equal(sort(unname(res$compound_names)), c("C00022", "C00031"))
+    expect_equal(nrow(res$expr_mapped), 2L)
+    expect_equal(unname(res$feature_map[["f1"]]), "C00031")
+    expect_true(is.na(res$feature_map[["f2"]]))
+
+    # With annotated_only = FALSE, name-only features stay in the background.
+    res_all <- map_compounds_for_enrichment(row_data, expr, annotated_only = FALSE)
+    expect_equal(nrow(res_all$expr_mapped), 4L)
+})
+
+test_that("map_compounds_for_enrichment aligns a filtered row_data to a larger matrix", {
+    # expr_mat carries an extra feature (f2) that was dropped from row_data
+    # upstream (e.g. by missingness filtering), so nrow(expr) != nrow(row_data).
+    expr <- matrix(seq_len(12), nrow = 4,
+                   dimnames = list(c("f1", "f2", "f3", "f4"), paste0("S", 1:3)))
+    row_data <- data.frame(
+        feature_id = c("f1", "f3", "f4"),
+        Name       = c("Glucose", "Citrate", "Pyruvate"),
+        KEGG       = c("C00031", "C00158", "C00022"),
+        stringsAsFactors = FALSE
+    )
+
+    # Must not error despite the row-count mismatch, and must use the row_data
+    # feature set (dropping the extra f2), keeping compounds correctly aligned.
+    res <- map_compounds_for_enrichment(row_data, expr)
+
+    expect_equal(nrow(res$expr_mapped), 3L)
+    expect_equal(sort(unname(res$compound_names)), c("C00022", "C00031", "C00158"))
+    expect_equal(unname(res$feature_map["f3"]), "C00158")
+    expect_false("f2" %in% names(res$feature_map))
+})

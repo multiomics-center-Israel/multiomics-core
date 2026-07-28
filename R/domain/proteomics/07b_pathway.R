@@ -203,10 +203,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # Load gene sets (using SYMBOL keytype — proteomics IDs are gene symbols)
     # ------------------------------------------------------------------
     databases <- pw_cfg$databases %||% c("GO", "KEGG", "Reactome")
+    # gmt_file may be a single path or a list of paths (e.g. GO + KEGG); resolve
+    # each relative entry against the raw data dir, leave absolute ones as-is.
     gmt_file  <- pw_cfg$gmt_file
-    if (!is.null(gmt_file) && nzchar(gmt_file) &&
-        !grepl("^([A-Za-z]:|/|\\\\)", gmt_file)) {
-        gmt_file <- resolve_raw_path(config, gmt_file)
+    if (!is.null(gmt_file)) {
+        gmt_file <- vapply(unlist(gmt_file, use.names = FALSE), function(g) {
+            if (nzchar(g) && !grepl("^([A-Za-z]:|/|\\\\|~)", g)) {
+                resolve_raw_path(config, g)
+            } else {
+                g
+            }
+        }, character(1), USE.NAMES = FALSE)
     }
 
     gene_sets <- tryCatch(

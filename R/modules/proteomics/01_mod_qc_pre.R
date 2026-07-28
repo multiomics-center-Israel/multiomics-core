@@ -23,10 +23,39 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     files <- c(files, f_pca12)
     plots$pca_1_2 <- p12
 
+    # Write the sample-labeled PNG + scores CSV that the report's "With Sample
+    # Names" and "Interactive" PCA tabs consume. Without these the report always
+    # showed "Labeled PCA plot not available" / "Interactive PCA not available".
+    .save_pca_labeled <- function(p, base, pc_y) {
+        sc <- attr(p, "scores")
+        if (is.null(sc) || !all(c("PC1", pc_y, "sample") %in% colnames(sc))) {
+            return(character(0))
+        }
+        f_lab <- file.path(out_qc, sprintf("%s_labeled.png", base))
+        p_lab <- p + ggplot2::geom_text(
+            data = sc,
+            mapping = ggplot2::aes(x = .data[["PC1"]], y = .data[[pc_y]],
+                                   label = .data[["sample"]]),
+            inherit.aes = FALSE, size = 3, vjust = -0.7, check_overlap = TRUE
+        )
+        ggplot2::ggsave(f_lab, plot = p_lab, width = 6, height = 5)
+        f_sc <- file.path(out_qc, sprintf("%s_scores.csv", base))
+        utils::write.csv(sc, f_sc, row.names = FALSE)
+        c(f_lab, f_sc)
+    }
+    files <- c(files, .save_pca_labeled(p12, "PCA_PC1.vs.PC2", "PC2"))
+
     f_pca13 <- file.path(out_qc, "PCA_PC1.vs.PC3.png")
     p13 <- qc_pca_scatter(pre$expr_imp_single, pre$meta, cfg, pcs = c(1, 3), out_file = f_pca13)
     files <- c(files, f_pca13)
     plots$pca_1_3 <- p13
+    files <- c(files, .save_pca_labeled(p13, "PCA_PC1.vs.PC3", "PC3"))
+
+    # Labeled-PNG + scores-CSV companions feed the report's "With Sample Names"
+    # and interactive PCA tabs (plain PNGs above don't provide either).
+    files <- c(files,
+               write_pca_companions(p12, out_qc, pcs = c(1, 2)),
+               write_pca_companions(p13, out_qc, pcs = c(1, 3)))
 
     # ---------- PCA with top variable proteins (for report dropdown) ----------
     n_top_values <- c(500, 1000, 2000)

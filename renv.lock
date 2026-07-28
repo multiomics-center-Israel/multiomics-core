@@ -6604,6 +6604,16 @@
       "Repository": "RSPM",
       "Encoding": "UTF-8"
     },
+    "future": {
+      "Package": "future",
+      "Version": "1.70.0",
+      "Source": "Repository"
+    },
+    "future.apply": {
+      "Package": "future.apply",
+      "Version": "1.20.2",
+      "Source": "Repository"
+    },
     "gargle": {
       "Package": "gargle",
       "Version": "1.6.1",
@@ -7126,6 +7136,11 @@
       "Maintainer": "Kamil Slowikowski <kslowikowski@gmail.com>",
       "Repository": "CRAN"
     },
+    "ggridges": {
+      "Package": "ggridges",
+      "Version": "0.5.7",
+      "Source": "Repository"
+    },
     "ggtangle": {
       "Package": "ggtangle",
       "Version": "0.1.1",
@@ -7222,6 +7237,11 @@
       "Repository": "https://bioc-release.r-universe.dev",
       "NeedsCompilation": "no",
       "Author": "Guangchuang Yu [aut, cre, cph] (ORCID: <https://orcid.org/0000-0002-6485-8781>), Tommy Tsan-Yuk Lam [aut, ths], Shuangbin Xu [aut] (ORCID: <https://orcid.org/0000-0003-3513-5362>), Lin Li [ctb], Bradley Jones [ctb], Justin Silverman [ctb], Watal M. Iwasaki [ctb], Yonghe Xia [ctb], Ruizhu Huang [ctb]"
+    },
+    "globals": {
+      "Package": "globals",
+      "Version": "0.19.1",
+      "Source": "Repository"
     },
     "globaltest": {
       "Package": "globaltest",
@@ -8955,6 +8975,11 @@
       "Version": "3.3.0-1",
       "Source": "Repository",
       "Repository": "CRAN"
+    },
+    "listenv": {
+      "Package": "listenv",
+      "Version": "1.0.0",
+      "Source": "Repository"
     },
     "lme4": {
       "Package": "lme4",
@@ -13889,103 +13914,6 @@
       "Author": "Jim Hester [aut], Lionel Henry [aut, cre], Kirill Müller [aut], Kevin Ushey [aut], Hadley Wickham [aut], Winston Chang [aut], Jennifer Bryan [ctb], Richard Cotton [ctb], Posit Software, PBC [cph, fnd]",
       "Maintainer": "Lionel Henry <lionel@posit.co>",
       "Repository": "RSPM"
-    },
-    "xCell": {
-      "Package": "xCell",
-      "Version": "1.1.0",
-      "Source": "GitHub",
-      "Type": "Package",
-      "Title": "Cell type enrichment analysis",
-      "Author": "person(“Dvir”, “Aran”, email = “dvir.aran@ucsf.edu”,role = c(\"aut\", \"cre\"))",
-      "Maintainer": "Dvir Aran <dvir.aran@ucsf.edu>",
-      "Description": "Tissues are a complex milieu consisting of numerous cell types.  In cancer, understanding the cellular heterogeneity in the tumor microenvironment is an emerging field of research. Numerous methods have been published in recent years for the enumeration of cell subsets from tissue expression profiles. However, the  available methods suffer from three major problems: inferring cell subset based on gene sets learned and verified from limited sources; displaying only partial portrayal  of the full cellular heterogeneity; and insufficient validation in mixed tissues. The xCell package performs cell type enrichment analysis from gene expression data for  64 immune and stroma cell types. xCell is a gene signatures-based method learned from thousands of pure cell types from various sources. xCell applies a novel technique for reducing associations between closley related cell types. xCell signatures were  validated using extensive in-silico simulations and also cytometry immunophenotyping,  and were shown to outperform previous methods. xCell allows researchers to reliably  portray the cellular heterogeneity landscape of tissue expression profiles.",
-      "License": "GPL-3",
-      "Encoding": "UTF-8",
-      "URL": "http://xCell.ucsf.edu",
-      "LazyData": "true",
-      "Depends": [
-        "R (>= 3.1.0)"
-      ],
-      "biocViews": "",
-      "Imports": [
-        "GSVA",
-        "GSEABase",
-        "pracma",
-        "utils",
-        "stats",
-        "MASS",
-        "digest",
-        "curl",
-        "quadprog"
-      ],
-      "RoxygenNote": "6.0.1",
-      "Suggests": [
-        "knitr",
-        "rmarkdown",
-        "testthat"
-      ],
-      "VignetteBuilder": "knitr",
-      "RemoteType": "github",
-      "RemoteHost": "api.github.com",
-      "RemoteUsername": "dviraran",
-      "RemoteRepo": "xCell",
-      "RemoteRef": "master",
-      "RemoteSha": "20e2919eefd37e15af35f29f4944e30697098a28"
-    },
-    "xCell2": {
-      "Package": "xCell2",
-      "Version": "1.2.3",
-      "Source": "Bioconductor",
-      "Type": "Package",
-      "Title": "A Tool for Generic Cell Type Enrichment Analysis",
-      "Authors@R": "c(person(given = \"Almog\",  family = \"Angel\",  role = c(\"aut\", \"cre\"), email = \"almog.angel@campus.technion.ac.il\", comment = c(ORCID = \"0009-0001-3297-6935\")), person(given = \"Dvir\",  family = \"Aran\",  role = \"aut\", email = \"dviraran@technion.ac.il\", comment = c(ORCID = \"0000-0001-6334-5039\")))",
-      "Description": "xCell2 provides methods for cell type enrichment analysis using cell type signatures. It includes three main functions - 1. xCell2Train for training custom references objects from bulk or single-cell RNA-seq datasets. 2. xCell2Analysis for conducting the cell type enrichment analysis using the custom reference. 3. xCell2GetLineage for identifying dependencies between different cell types using ontology.",
-      "License": "GPL (>= 3)",
-      "Encoding": "UTF-8",
-      "LazyData": "false",
-      "Depends": [
-        "R (>= 4.0.0)"
-      ],
-      "biocViews": "GeneExpression, Transcriptomics, Microarray, RNASeq, SingleCell, DifferentialExpression, ImmunoOncology, GeneSetEnrichment",
-      "Imports": [
-        "SummarizedExperiment",
-        "SingleCellExperiment",
-        "Rfast",
-        "singscore",
-        "AnnotationHub",
-        "ontologyIndex",
-        "tibble",
-        "dplyr",
-        "tidyselect",
-        "BiocParallel",
-        "Matrix",
-        "minpack.lm",
-        "pracma",
-        "methods",
-        "readr",
-        "magrittr",
-        "progress",
-        "quadprog"
-      ],
-      "Suggests": [
-        "testthat",
-        "knitr",
-        "rmarkdown",
-        "ggplot2",
-        "randomForest",
-        "tidyr",
-        "EnhancedVolcano",
-        "BiocStyle"
-      ],
-      "RoxygenNote": "7.3.2",
-      "VignetteBuilder": "knitr",
-      "URL": "https://github.com/AlmogAngel/xCell2",
-      "BugReports": "https://github.com/AlmogAngel/xCell2/issues",
-      "Config/pak/sysreqs": "make libicu-dev libpng-dev libxml2-dev libssl-dev libx11-dev zlib1g-dev",
-      "Repository": "https://bioc-release.r-universe.dev",
-      "NeedsCompilation": "no",
-      "Author": "Almog Angel [aut, cre] (ORCID: <https://orcid.org/0009-0001-3297-6935>), Dvir Aran [aut] (ORCID: <https://orcid.org/0000-0001-6334-5039>)",
-      "Maintainer": "Almog Angel <almog.angel@campus.technion.ac.il>"
     },
     "xfun": {
       "Package": "xfun",

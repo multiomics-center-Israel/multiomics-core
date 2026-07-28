@@ -1,6 +1,3 @@
-#TODO: add option to batch correction in the design formula
-#TODO: delete files: modules/rnaseq/07_mod_batch_correction.R and domain/rnaseq/04_batch_correction.R
-
 #' Run DESeq2 differential expression analysis
 #'
 #' Accepts either raw integer count matrices or tximport objects. Input type is

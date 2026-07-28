@@ -7,19 +7,31 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
     tar_target(rna_trinotate_main, load_and_process_trinotate(config)),
     tar_target(rna_pre, preprocess_rna(rna_inputs, config, gene_lengths = NULL, verbose = TRUE)),
     tar_target(rna_out_dir, get_mode_out_dir(run_dir, "rna")),
-    tar_target(rna_de_res, mod_rnaseq_de(rna_pre, rna_inputs, config, verbose = TRUE)),
-    # Pathway / enrichment analysis (multiomics depends on this)
-    tar_target(
-      rna_pathway_res,
-      mod_rnaseq_pathway(
-        de_res  = rna_de_res,
-        pre     = rna_pre,
-        config  = config,
-        out_dir = rna_out_dir
-      )
-    )
+    tar_target(rna_de_res, mod_rnaseq_de(rna_pre, rna_inputs, config, verbose = TRUE))
   )
-  
+
+  # ---- Pathway / enrichment (multiomics depends on this) ----
+  # One stable target; its clustering input depends on the run mode:
+  #   - multiomics (skip_outputs = TRUE): clustering is NOT produced, so pass
+  #     clustering_res = NULL -> GSEA only, cluster-based ORA skipped with a warning.
+  #   - single-omics (skip_outputs = FALSE): clustering_res = rna_clustering_obj
+  #     -> GSEA + cluster-based ORA (target defined in the outputs block below).
+  if (skip_outputs) {
+    targets <- c(targets, list(
+      tar_target(
+        rna_pathway_res,
+        mod_rnaseq_pathway(
+          de_res         = rna_de_res,
+          pre            = rna_pre,
+          config         = config,
+          out_dir        = rna_out_dir,
+          clustering_res = NULL
+        )
+      )
+    ))
+    return(targets)
+  }
+
   # ---- Single-omics outputs — skipped when multiomics pipeline is active ----
   if (!skip_outputs) {
     targets <- c(targets, list(
@@ -39,6 +51,17 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           de_res = rna_de_res,
           config = config,
           out_dir = rna_out_dir
+        )
+      ),
+      # Pathway / enrichment with clustering available (GSEA + cluster-based ORA)
+      tar_target(
+        rna_pathway_res,
+        mod_rnaseq_pathway(
+          de_res         = rna_de_res,
+          pre            = rna_pre,
+          config         = config,
+          out_dir        = rna_out_dir,
+          clustering_res = rna_clustering_obj
         )
       ),
       # Legacy outputs (TSV files) - now receives clustering_res

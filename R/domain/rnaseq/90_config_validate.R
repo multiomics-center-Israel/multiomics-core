@@ -82,23 +82,7 @@ validate_rna_config <- function(cfg) {
         assert_scalar_bool(a$skip_annotation, "annotation$skip_annotation", allow_null = TRUE)
     }
 
-    # 7. Batch Correction
-    if (!is.null(cfg$batch_correction)) {
-        bc <- cfg$batch_correction
-        assert_scalar_bool(bc$enabled, "batch_correction$enabled")
-        if (isTRUE(bc$enabled)) {
-            assert_one_of(bc$method, "batch_correction$method",
-                          c("combat_seq", "sva", "ruv"), allow_null = TRUE)
-        }
-    }
-
-    # 8. Deconvolution
-    if (!is.null(cfg$deconvolution)) {
-        dc <- cfg$deconvolution
-        assert_scalar_bool(dc$enabled, "deconvolution$enabled")
-    }
-
-    # 9. Pathway
+    # 7. Pathway
     if (!is.null(cfg$pathway)) {
         p <- cfg$pathway
         assert_scalar_bool(p$enabled, "pathway$enabled", allow_null = TRUE)
@@ -113,6 +97,57 @@ validate_rna_config <- function(cfg) {
                 }
             }
         }
+    }
+
+    # 8. Enrichment (the `enrichment` block — offline/online RNA pathway enrichment)
+    if (!is.null(cfg$enrichment)) {
+        e <- cfg$enrichment
+        assert_scalar_bool(e$enabled, "enrichment$enabled", allow_null = TRUE)
+        assert_scalar_chr(e$annotation_dir, "enrichment$annotation_dir", allow_null = TRUE)
+        assert_scalar_num(e$workers, "enrichment$workers", allow_null = TRUE, min_val = 1)
+        assert_scalar_num(e$pvalue_cutoff, "enrichment$pvalue_cutoff",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(e$gsea_pvalue_cutoff, "enrichment$gsea_pvalue_cutoff",
+                          allow_null = TRUE, min_val = 0, max_val = 1)
+        assert_scalar_num(e$max_terms_in_dotplot, "enrichment$max_terms_in_dotplot",
+                          allow_null = TRUE, min_val = 1)
+        assert_one_of(e$padj_method, "enrichment$padj_method",
+                      stats::p.adjust.methods, allow_null = TRUE)
+        assert_one_of(e$gsea_padj_method, "enrichment$gsea_padj_method",
+                      stats::p.adjust.methods, allow_null = TRUE)
+
+        if (!is.null(e$databases)) {
+            valid_db <- c("KEGG", "GO_BP", "GO_MF", "GO_CC")
+            if (!is.character(e$databases) || length(e$databases) == 0) {
+                stop("enrichment$databases must be a non-empty character vector, e.g. ",
+                     "[\"KEGG\", \"GO_BP\", \"GO_MF\", \"GO_CC\"].")
+            }
+            bad_db <- setdiff(e$databases, valid_db)
+            if (length(bad_db) > 0) {
+                stop("enrichment$databases has unknown value(s): ",
+                     paste(bad_db, collapse = ", "),
+                     ". Valid: ", paste(valid_db, collapse = ", "), ".")
+            }
+        }
+
+        if (!is.null(e$plots)) {
+            if (!is.list(e$plots)) {
+                stop("enrichment$plots must be a mapping of <toggle>: true/false.")
+            }
+            for (nm in c("dotplot", "ridgeplot", "ridgeplot_all_genes",
+                         "pathway_heatmaps", "shared_genes")) {
+                assert_scalar_bool(e$plots[[nm]], paste0("enrichment$plots$", nm),
+                                   allow_null = TRUE)
+            }
+        }
+
+        if (!is.null(e$gsea)) {
+            if (!is.list(e$gsea)) stop("enrichment$gsea must be a mapping.")
+            assert_scalar_bool(e$gsea$per_pathway_artifacts,
+                               "enrichment$gsea$per_pathway_artifacts", allow_null = TRUE)
+        }
+        assert_scalar_bool(e$gsea_per_pathway_artifacts,
+                           "enrichment$gsea_per_pathway_artifacts", allow_null = TRUE)
     }
 
     invisible(TRUE)

@@ -108,14 +108,15 @@ build_group_cv_metabolomics <- function(pre, contrasts_df, config = NULL) {
         # MAINTAINER NOTE: any NEW normalization method that always log2-
         # transforms MUST be added to this whitelist; otherwise CV will safely
         # (but silently) skip for it via the guard below.
-        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced")
+        always_log2_norms <- c("tss", "pqn", "eigenms", "eigenms_forced", "bio_factor")
         chosen_norm <- tolower(cfg_mode$preprocessing$chosen_norm %||% "")
         transform   <- tolower(norm_cfg$transform %||% "log2")
-        # The median path honors the configurable transform, so it is only log2
-        # when transform == "log2". Everything outside the whitelist (incl.
-        # unknown chosen_norm) is not provably log2 -> skip rather than guess.
+        # The median and none paths honor the configurable transform, so they are
+        # only log2 when transform == "log2" (none = transform-only matrix, no
+        # sample normalization). Everything outside the whitelist (incl. unknown
+        # chosen_norm) is not provably log2 -> skip rather than guess.
         provably_log2 <- chosen_norm %in% always_log2_norms ||
-            (identical(chosen_norm, "median") && identical(transform, "log2"))
+            (chosen_norm %in% c("median", "none") && identical(transform, "log2"))
         if (!isTRUE(provably_log2)) {
             warning(sprintf(
                 "metabolomics group CV: chosen_norm='%s' with transform='%s' is not a provably-log2 workspace; skipping CV (a 2^x back-transform would produce wrong values on a non-log2 matrix).",
