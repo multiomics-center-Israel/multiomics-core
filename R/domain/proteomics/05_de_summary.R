@@ -335,6 +335,23 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
     sample_col <- p_cfg$effects$samples %||% "SampleID"
     group_col <- p_cfg$de_table$group_col %||% p_cfg$effects$color %||% "Condition"
 
+    # Contrasts must be well-formed and target the grouping column this method
+    # splits on. run_limma_proteomics() asserts the same Factor == group_col
+    # invariant; without it a Factor pointing at a different metadata column would
+    # silently produce all-NA (or wrong-grouping) tables that are hard to debug.
+    required_contrast_cols <- c("Contrast_name", "Factor", "Numerator", "Denominator")
+    missing_cc <- setdiff(required_contrast_cols, colnames(contrasts_df))
+    if (length(missing_cc) > 0) {
+        stop("run_limma_percontrast_proteomics: contrasts_df is missing required column(s): ",
+             paste(missing_cc, collapse = ", "), ".")
+    }
+    bad_factor <- unique(contrasts_df$Factor[contrasts_df$Factor != group_col])
+    if (length(bad_factor) > 0) {
+        stop("run_limma_percontrast_proteomics: every contrast Factor must equal the grouping ",
+             "column '", group_col, "', but found: ", paste(bad_factor, collapse = ", "),
+             ". Fix the contrasts file's Factor column (or de_table$group_col / effects$color).")
+    }
+
     protein_id_col <- p_cfg$id_columns$protein_id %||% "Protein.Group"
     default_annot <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
     annot_cols <- unique(c(protein_id_col, p_cfg$id_columns$protein_annot %||% default_annot))
@@ -375,6 +392,16 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
     de_table_cfg <- p_cfg$de_table %||% list()
     target_id_col <- de_table_cfg$id_col %||% "FeatureID"
     adj_method <- p_cfg$de$p_adjust_method %||% "BH"
+
+    # Optional fdrtool empirical-null correction, matching run_limma_proteomics().
+    # The shared config permits this option for any method, so honour it here too:
+    # each contrast's moderated t-statistics are re-calibrated before adjustment.
+    # Check the package once, up front, rather than failing partway through.
+    fdrtool_correction <- isTRUE(p_cfg$de$fdrtool_correction)
+    if (fdrtool_correction && !requireNamespace("fdrtool", quietly = TRUE)) {
+        stop("fdrtool_correction is enabled but 'fdrtool' package is not installed.\n",
+             "Install with: install.packages('fdrtool')")
+    }
 
     result_cols <- c("logFC", "AveExpr", "t", "P.Value", "adj.P.Val", "B")
     groups <- as.character(meta_aligned[[group_col]])
@@ -445,6 +472,16 @@ run_limma_percontrast_proteomics <- function(expr_imp, observed, meta, contrasts
         cmat <- limma::makeContrasts(test - control, levels = design)
 
         fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(sub_expr, design), cmat))
+
+        # Replace the moderated p-values with fdrtool's empirical-null p-values
+        # before BH adjustment, so topTable() below adjusts the corrected values -
+        # exactly as run_limma_proteomics() does for the pooled fit.
+        if (fdrtool_correction) {
+            fdr_res <- fdrtool::fdrtool(fit2$t[, 1], statistic = "normal",
+                                        plot = FALSE, verbose = FALSE)
+            fit2$p.value[, 1] <- fdr_res$pval
+        }
+
         tt <- limma::topTable(fit2, coef = 1, adjust.method = adj_method,
                               sort.by = "none", number = Inf)
 
