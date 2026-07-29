@@ -131,7 +131,13 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 #' @return A consolidated dataframe with statistics, expression values, and Z-scores.
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
                                             feature_id_col = "FeatureID", config = NULL) {
-    cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
+    cv_cols  <- build_group_cv_proteomics(pre, contrasts_df, config)
+    obs_cols <- build_observed_fc_proteomics(pre, contrasts_df, config)
+
+    imp_block <- NULL
+    if (isTRUE(config$modes$proteomics$excel$imputed_block %||% TRUE)) {
+        imp_block <- pre$expr_imp_single
+    }
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -145,7 +151,9 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         ),
         row_data = row_data %||% pre$row_data,
         fc_is_signed = TRUE, # linearFC is signed
-        cv_cols = cv_cols
+        cv_cols = cv_cols,
+        obs_cols = obs_cols,
+        imp_expr_df = imp_block
     )
 }
 
@@ -195,5 +203,39 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
         sample_meta   = pre$meta,
         sample_id_col = sample_id_col,
         contrasts_df  = contrasts_df
+    )
+}
+
+#' Build observed-only counts and fold-change columns for proteomics
+#'
+#' Wraps \code{\link{compute_observed_fc_columns}} on \code{pre$expr_filt}, the
+#' log2 matrix before imputation. The resulting \code{obs.log2FC.<contrast>}
+#' sits next to the pipeline's \code{linearFC.imputs.<contrast>} in the final
+#' table so a reader can see how much of a fold change came from measurements
+#' and how much from filling in missing values.
+#'
+#' Disable with \code{modes.proteomics.excel.observed_fc: false}.
+#'
+#' @param pre Proteomics preprocessing results (uses \code{expr_filt}, \code{meta}).
+#' @param contrasts_df Contrasts table (Contrast_name, Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag, sample-ID column).
+#' @return Feature-indexed data.frame of \code{n_obs.<group>} and
+#'   \code{obs.*FC.<contrast>} columns, or NULL.
+build_observed_fc_proteomics <- function(pre, contrasts_df, config = NULL) {
+    if (is.null(config)) return(NULL)
+    enabled <- config$modes$proteomics$excel$observed_fc %||% TRUE
+    if (!isTRUE(enabled)) return(NULL)
+    if (is.null(pre$expr_filt) || is.null(pre$meta)) return(NULL)
+
+    prot_cfg <- config$modes$proteomics %||% list()
+    sample_id_col <- prot_cfg$effects$samples %||%
+        prot_cfg$id_columns$sample_col %||% "SampleID"
+
+    compute_observed_fc_columns(
+        expr_log2     = pre$expr_filt,  # pre-imputation: NAs mark unobserved
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df,
+        mode          = "proteomics"
     )
 }
