@@ -87,14 +87,33 @@ test_that("lipidomics: downstream stages run when their deps are available", {
   qc_res  <- mod_lipidomics_qc_pre(pre, config, out_dir)
   de_res  <- mod_lipidomics_de(pre, config, out_dir)
 
-  # Feature selection (RF / PLS-DA): the module returns NULL when the optional
-  # learner packages are absent, so accept NULL or a well-formed list.
+  # Feature selection (RF / PLS-DA). The module swallows backend errors and
+  # returns NULL, so gate on backend availability and then require real results
+  # — otherwise a broken learner would leave this test green.
+  have_rf    <- requireNamespace("ranger", quietly = TRUE) ||
+                requireNamespace("randomForest", quietly = TRUE)
+  have_plsda <- requireNamespace("mixOmics", quietly = TRUE)
+  if (!have_rf && !have_plsda) {
+    skip("no RF/PLS-DA backend installed (ranger/randomForest/mixOmics)")
+  }
   fs_res <- mod_lipidomics_feature_selection(pre, config, out_dir)
-  expect_true(is.null(fs_res) || is.list(fs_res))
+  expect_false(is.null(fs_res))                       # at least one backend ran
+  if (have_rf) {
+    expect_s3_class(fs_res$rf$importance_df, "data.frame")
+    expect_gt(nrow(fs_res$rf$importance_df), 0)
+  }
+  if (have_plsda) {
+    expect_s3_class(fs_res$plsda$vip_df, "data.frame")
+    expect_gt(nrow(fs_res$plsda$vip_df), 0)
+  }
 
-  # Lipid-class analysis.
+  # Lipid-class analysis: class composition is computed from the lipid_class
+  # column parsed at preprocessing, so it must be present for this fixture (the
+  # module otherwise swallows per-computation errors and still returns a list).
   class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
   expect_type(class_res, "list")
+  expect_false(is.null(class_res$class_comp))
+  expect_false(is.null(class_res$class_comp$class_norm))
 
   # HTML report — needs a working pandoc plus the Rmd template's own packages
   # (DT, etc.). Skip cleanly when pandoc or any such package is missing rather

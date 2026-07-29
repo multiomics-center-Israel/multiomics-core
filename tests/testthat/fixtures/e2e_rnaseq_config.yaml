@@ -46,8 +46,10 @@ modes:
       deseq_mode: "default"
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
-      # Raw p-value gate so the injected signal is reliably recovered on n=3/group.
-      use_adj: false
+      # Significance in build_rnaseq_summary_df() is gated on the BH-adjusted
+      # p-value (padj); it does not read use_adj. The injected signal is strong
+      # (~4x) so it is recovered on adjusted p even at n=3/group.
+      use_adj: true
 
     de_table:
       id_col: "FeatureID"

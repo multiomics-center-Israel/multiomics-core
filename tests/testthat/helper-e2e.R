@@ -35,12 +35,34 @@ e2e_should_run <- function() {
 
 #' Whether the extra (heavier) file-output assertions should run.
 #'
-#' Building the export targets pulls in QC/clustering/writers, so it is gated
-#' behind its own flag on top of RUN_E2E_OMICS.
+#' Building the export targets pulls in QC/clustering/writers, so it is an
+#' additional gate ON TOP OF the base opt-in: both RUN_E2E_OMICS and
+#' RUN_E2E_OMICS_FULL must be "1".
 #'
-#' @return TRUE when RUN_E2E_OMICS_FULL == "1".
+#' @return TRUE when RUN_E2E_OMICS == "1" and RUN_E2E_OMICS_FULL == "1".
 e2e_should_run_full <- function() {
-  identical(Sys.getenv("RUN_E2E_OMICS_FULL"), "1")
+  e2e_should_run() && identical(Sys.getenv("RUN_E2E_OMICS_FULL"), "1")
+}
+
+#' Link `from` into the sandbox at `to`, falling back to a copy.
+#'
+#' Directory symlinks require privileges on some platforms (Windows without
+#' admin / Developer Mode), so fall back to a recursive copy when symlinking
+#' fails rather than proceeding to a broken run.
+#'
+#' @param from Absolute source path (file or directory).
+#' @param to Destination path inside the sandbox.
+#' @return TRUE on success; stops on failure.
+e2e_link_or_copy <- function(from, to) {
+  ok <- tryCatch(isTRUE(suppressWarnings(file.symlink(from, to))),
+                 error = function(e) FALSE)
+  if (!ok || !file.exists(to)) {
+    ok <- file.copy(from, dirname(to), recursive = TRUE)
+  }
+  if (!isTRUE(ok) || !file.exists(to)) {
+    stop("run_omic_e2e: could not stage '", from, "' into the sandbox.", call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 #' Build a data-staging function that copies shipped synthetic inputs.
@@ -162,14 +184,14 @@ run_omic_e2e <- function(config_fixture, stage_fn, target_names) {
   # assertions can still see the outputs before they are removed.
   withr::defer(unlink(proj, recursive = TRUE, force = TRUE), envir = parent.frame())
 
-  # Symlink R/ and _targets.R into the sandbox and run tar_make() from there.
+  # Link (or copy) R/ and _targets.R into the sandbox and run tar_make() from there.
   # _targets.R sources R/ with paths relative to the working directory, so this
   # keeps the pipeline runnable while ALSO trapping any relative output path a
   # stage writes (e.g. preprocess_rna()'s "outputs/rnaseq/filtering_threshold_qc.png",
   # built from config$paths$out without project$dir) inside proj rather than the
   # repository tree.
-  file.symlink(file.path(repo_root, "R"), file.path(proj, "R"))
-  file.symlink(file.path(repo_root, "_targets.R"), file.path(proj, "_targets.R"))
+  e2e_link_or_copy(file.path(repo_root, "R"), file.path(proj, "R"))
+  e2e_link_or_copy(file.path(repo_root, "_targets.R"), file.path(proj, "_targets.R"))
 
   raw_dir <- file.path(proj, "data")
   dir.create(raw_dir, recursive = TRUE, showWarnings = FALSE)
