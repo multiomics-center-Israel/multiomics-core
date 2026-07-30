@@ -203,8 +203,14 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
   // When passFlag is available (imputation-consensus pipelines), a point must
   // also have passFlag===1 to be called significant.  This keeps the
   // interactive counts consistent with pipeline results at default thresholds.
+  //
+  // passFlag is undefined only when the pipeline supplied no flag column at all.
+  // A null element is NOT the same thing: the pipeline wrote NA there, which
+  // means "did not pass". Treating null as "no flag available" let a feature
+  // qualify on its p-value alone and made the live counts disagree with the
+  // static table by one.
   function classify(logFC, pval, lfcCut, pCut, passFlag) {
-    if (passFlag !== undefined && passFlag !== null && passFlag !== 1) return "NS";
+    if (passFlag !== undefined && passFlag !== 1) return "NS";
     if (pval !== null && !isNaN(pval) && pval <= pCut &&
         Math.abs(logFC) >= lfcCut) {
       return logFC > 0 ? "Up" : "Down";
@@ -237,7 +243,9 @@ cutoff_panel_html <- function(default_lfc = 1, default_p = 0.05,
       var lfc_i = data.logFC[i];
       if (lfc_i === null || isNaN(lfc_i)) continue;
       var pval_i = getPval(data, i);
-      var pf_i = (data.passFlag && data.passFlag[i] !== undefined) ? data.passFlag[i] : undefined;
+      // Only report "no flag" when the whole array is absent; a null element is
+      // a real NA from the pipeline and must reach classify() as null.
+      var pf_i = data.passFlag ? data.passFlag[i] : undefined;
       var dir = classify(lfc_i, pval_i, currentLfc, currentPval, pf_i);
       groups[dir].push(i);
     }
@@ -443,9 +451,18 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
                                   entity_label = "Protein", contrast = "",
                                   ycap = NULL) {
   df <- point_data_df
+
+  # digits = NA keeps full double precision. jsonlite's default (4 decimals)
+  # decides threshold comparisons by rounding: an adjusted p of 0.05004524
+  # serialised as 0.0500 satisfies "pval <= 0.05" in the browser even though the
+  # pipeline correctly excluded it. Same hazard for logFC against its cutoff.
+  to_json_exact <- function(x) {
+    jsonlite::toJSON(as.numeric(x), auto_unbox = FALSE, na = "null", digits = NA)
+  }
+
   js_name    <- jsonlite::toJSON(as.character(df$name), auto_unbox = FALSE)
-  js_logFC   <- jsonlite::toJSON(as.numeric(df$logFC), auto_unbox = FALSE, na = "null")
-  js_pval    <- jsonlite::toJSON(as.numeric(df$pval), auto_unbox = FALSE, na = "null")
+  js_logFC   <- to_json_exact(df$logFC)
+  js_pval    <- to_json_exact(df$pval)
 
   js_avgExpr <- "null"
   js_avgExprLabel <- "null"
@@ -459,7 +476,7 @@ cutoff_register_plot <- function(plot_id, point_data_df, plot_type = "volcano",
 
   js_adjPval <- "null"
   if ("adjPval" %in% names(df)) {
-    js_adjPval <- jsonlite::toJSON(as.numeric(df$adjPval), auto_unbox = FALSE, na = "null")
+    js_adjPval <- to_json_exact(df$adjPval)
   }
 
   # Optional imputation-consensus pass flag (proteomics: pass.imputs column).
