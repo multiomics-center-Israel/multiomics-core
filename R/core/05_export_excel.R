@@ -122,10 +122,27 @@ add_column_guide_sheet <- function(wb, df, config, mode = "proteomics",
     if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = TRUE)
 
-    note <- paste0(
-        "Blank cells in the measured intensity block mean the feature was not detected in that sample. ",
-        "Those blanks are filled in the imp.<sample> block, and the modelled statistics are computed on the filled matrix."
-    )
+    # The note has to match what this particular workbook contains. The imputed
+    # block is optional (modes.<mode>.excel.imputed_block), and this sheet is
+    # still written without it whenever CV or observed-only columns are present,
+    # so an unconditional sentence would describe a block that is not there.
+    note <- if (!imputed) {
+        paste0(
+            "Blank cells in the intensity block mean the feature was not detected in that sample. ",
+            "No imputation was performed in this run, so nothing was filled in and the statistics use the measured values only."
+        )
+    } else if (has("^imp\\.")) {
+        paste0(
+            "Blank cells in the measured intensity block mean the feature was not detected in that sample. ",
+            "Those blanks are filled in the imp.<sample> block, and the modelled statistics are computed on the filled matrix."
+        )
+    } else {
+        paste0(
+            "Blank cells in the measured intensity block mean the feature was not detected in that sample. ",
+            "The modelled statistics were computed on a matrix in which those blanks were filled by ", imp_method,
+            " imputation, but the filled values are not exported in this workbook."
+        )
+    }
     openxlsx::writeData(wb, sheet, x = note, startCol = 1, startRow = 1,
                         colNames = FALSE, rowNames = FALSE)
     openxlsx::writeData(wb, sheet, guide, startRow = 3)

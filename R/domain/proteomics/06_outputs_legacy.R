@@ -134,10 +134,16 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     cv_cols  <- build_group_cv_proteomics(pre, contrasts_df, config)
     obs_cols <- build_observed_fc_proteomics(pre, contrasts_df, config)
 
-    imp_block <- NULL
-    if (isTRUE(config$modes$proteomics$excel$imputed_block %||% TRUE)) {
-        imp_block <- pre$expr_imp_single
+    # config is optional here, as it has always been. Guard the flag lookup
+    # rather than leaning on NULL$a$b returning NULL: the two helpers above
+    # return NULL without a config, so the difference in behaviour should be
+    # stated where a reader can see it. Without a config, export the block.
+    imp_enabled <- if (is.null(config)) {
+        TRUE
+    } else {
+        isTRUE(config$modes$proteomics$excel$imputed_block %||% TRUE)
     }
+    imp_block <- if (imp_enabled) pre$expr_imp_single else NULL
 
     build_final_results_generic(
         summary_df = summary_df,
