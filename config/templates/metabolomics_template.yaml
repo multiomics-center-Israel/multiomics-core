@@ -246,11 +246,11 @@ modes:
       # samples only) instead of raw intensities, so their scale and sample set
       # match DE.
       qea:
-        # globaltest is sensitive to feature scale/parametrization. standardize
-        # gives each metabolite equal baseline weight instead of letting its
-        # variance drive its contribution to the test (globaltest::gt standardize=).
-        # Evaluate TRUE vs FALSE on your data before relying on it; FALSE keeps
-        # gt()'s default behavior.
+        # Rescale globaltest predictors before pathway testing (globaltest::gt
+        # standardize=). This changes the relative weighting of metabolites and
+        # therefore the pathway statistics, so treat it as a sensitivity-analysis
+        # setting, NOT an automatic scale correction. FALSE keeps globaltest's
+        # current default; evaluate TRUE vs FALSE on your data before relying on it.
         standardize: false
 
       # Self-contained set test (limma rotation). A FIFTH method, run alongside
