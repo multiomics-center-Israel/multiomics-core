@@ -241,6 +241,18 @@ modes:
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
 
+      # QEA (globaltest) options. QEA and ssGSEA now run on the SAME analysis
+      # matrix as the differential-abundance analysis (log-normalized, biological
+      # samples only) instead of raw intensities, so their scale and sample set
+      # match DE.
+      qea:
+        # globaltest is sensitive to feature scale/parametrization. standardize
+        # gives each metabolite equal baseline weight instead of letting its
+        # variance drive its contribution to the test (globaltest::gt standardize=).
+        # Evaluate TRUE vs FALSE on your data before relying on it; FALSE keeps
+        # gt()'s default behavior.
+        standardize: false
+
       # Self-contained set test (limma rotation). A FIFTH method, run alongside
       # QEA/ORA/GSEA/ssGSEA. Where those competitive methods ask "is this set
       # more changed than the rest?" (and lose power when a large fraction of

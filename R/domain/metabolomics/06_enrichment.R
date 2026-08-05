@@ -274,7 +274,8 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' libraries are combined into a single table with FDR correction across all
 #' pathways.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). QEA runs on the same analysis matrix as DE — see below.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, per_library_tables, method) or NULL if disabled/unavailable.
 run_metabolomics_qea <- function(pre, config) {
@@ -330,11 +331,24 @@ run_metabolomics_qea <- function(pre, config) {
     }
 
     mapping_file <- enr_cfg$mapping_file
+    # globaltest is sensitive to feature scale/parametrization, so QEA must see
+    # the SAME data as DE — not raw intensities. standardize (globaltest::gt)
+    # gives each metabolite equal baseline weight; default FALSE preserves prior
+    # gt() behavior.
+    standardize <- isTRUE((enr_cfg$qea %||% list())$standardize)
 
     # ---- Prepare QEA data ----
     # Map features to compound IDs and transpose into the samples-by-compounds
     # layout expected by globaltest. The result is written to a temp TSV.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    #
+    # Matrix source: the DE analysis matrix (log-normalized, biological samples
+    # only), obtained via .metab_de_matrix_condition() — the same helper the
+    # self-contained test uses — instead of pre$expr_raw. This aligns QEA's scale
+    # and sample set with DE for a fair comparison. Behavior change vs the old
+    # expr_raw path: QC/blank samples are now excluded and values are on the
+    # log-normalized scale.
+    de_in  <- .metab_de_matrix_condition(pre, config)
+    mapped <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
         return(NULL)
@@ -381,7 +395,8 @@ run_metabolomics_qea <- function(pre, config) {
 
     for (lib in libraries) {
         result <- tryCatch(
-            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file),
+            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file,
+                                 standardize = standardize),
             error = function(e) {
                 warning("QEA failed for ", lib, ": ", e$message)
                 NULL
@@ -430,8 +445,13 @@ run_metabolomics_qea <- function(pre, config) {
 #' @param data_file    Path to the tab-delimited QEA data (Sample, Group, compounds).
 #' @param gmt_file     Path to GMT file defining pathway sets.
 #' @param mapping_file Path to HMDB-to-KEGG mapping TSV (or NULL).
+#' @param standardize  Logical, passed to \code{globaltest::gt()}. When TRUE,
+#'   each compound is standardized to equal baseline weight (recommended when the
+#'   features' relative scales are arbitrary). Default FALSE preserves gt()'s
+#'   default.
 #' @return data.frame(pathway, raw_p, hits) or NULL if no testable pathways.
-run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
+run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
+                                 standardize = FALSE) {
     if (!requireNamespace("globaltest", quietly = TRUE)) {
         stop("Package 'globaltest' required for GMT enrichment.")
     }
@@ -477,7 +497,7 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
     # Run the global test: tests whether compound profiles in each pathway
     # are collectively associated with the condition factor.
     res_gt <- tryCatch(
-        globaltest::gt(response, X, subsets = subsets),
+        globaltest::gt(response, X, subsets = subsets, standardize = standardize),
         error = function(e) { warning("globaltest error: ", e$message); NULL }
     )
     if (is.null(res_gt)) return(NULL)
@@ -503,7 +523,8 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
 #' Requires exactly two condition levels for statistical testing; if more
 #' are present, scores are returned without p-values.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). Scores are computed on the same analysis matrix as DE.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, scores, method) or NULL if disabled/unavailable.
 run_metabolomics_ssgsea <- function(pre, config) {
@@ -535,8 +556,13 @@ run_metabolomics_ssgsea <- function(pre, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build expression matrix with compound IDs ----
-    # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    # Map features to enrichment-ready IDs (Name/HMDB/KEGG). Source matrix: the DE
+    # analysis matrix (log-normalized, biological samples only) via
+    # .metab_de_matrix_condition(), not pre$expr_raw — so the per-sample scores
+    # reflect the same scale and sample set as DE. Behavior change vs the old
+    # expr_raw path: QC/blank samples excluded, values on the log-normalized scale.
+    de_in    <- .metab_de_matrix_condition(pre, config)
+    mapped   <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {
         message("metabolomics ssGSEA: too few features — skipping")
@@ -1032,14 +1058,16 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
 
 # ==== SELF-CONTAINED SET TEST VIA LIMMA ROTATION ==============================
 
-#' Rebuild the limma DE matrix + condition factor used by run_metabolomics_de()
+#' Rebuild the limma DE analysis matrix + condition factor
 #'
-#' The self-contained rotation test must run on exactly the model DE used:
-#' the same expression matrix (pre-scaling \code{expr_log} when a variance
-#' scaling was applied, otherwise \code{expr_work}), the same biological-sample
-#' filtering, and the same condition factor. This mirrors the matrix/condition
-#' setup in \code{run_metabolomics_de()} without re-running DE. \code{03_differential.R}
-#' remains the source of truth — if that setup changes, update this to match.
+#' Enrichment methods that must run on the SAME data as DE (the self-contained
+#' rotation test, QEA, and ssGSEA) use this to obtain the same expression matrix
+#' (pre-scaling \code{expr_log} when a variance scaling was applied, otherwise
+#' \code{expr_work}), the same biological-sample filtering, and the same
+#' condition factor. It mirrors the matrix/condition setup in
+#' \code{run_metabolomics_de()} (\code{03_differential.R}) without re-running DE;
+#' that function remains the source of truth — if its setup changes, update this
+#' to match.
 #'
 #' @param pre    Preprocessing results (expr_work/expr_log, meta, info).
 #' @param config Full pipeline config.
