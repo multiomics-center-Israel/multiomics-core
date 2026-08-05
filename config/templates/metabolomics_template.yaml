@@ -241,6 +241,23 @@ modes:
       #   "adj.P.Val" - BH-adjusted (FDR-controlled, more conservative)
       pvalue_column: "P.Value"
 
+      # Self-contained set test (limma rotation). A FIFTH method, run alongside
+      # QEA/ORA/GSEA/ssGSEA. Where those competitive methods ask "is this set
+      # more changed than the rest?" (and lose power when a large fraction of
+      # features move), this asks "did this set change at all?" — so it can
+      # report signal where the others return nothing. It reuses the SAME limma
+      # model as DE (same design + contrasts) and the same KEGG/GMT universe.
+      # Results are hypothesis-generating (a more permissive question), not a
+      # correction of the other methods. Opt-in; runs per DE contrast.
+      selfcontained:
+        enabled: false
+        # method: fry (default, deterministic — no seed needed) or
+        #         mroast (rotation-based, stochastic — seeded below).
+        method: fry
+        # Only used when method: mroast.
+        n_rotations: 9999
+        seed: 42
+
       # Mummichog m/z-based pathway analysis — isolated, version-pinned engine
       # (mummichog==2.7.0 via processx). Opt-in; runs on the built-in human_mfn
       # model by default. Requires the pinned venv: `make mummichog-venv` then
