@@ -19,7 +19,7 @@ For in-depth documentation and tutorials, see the official targets book: <https:
 -   Standardized data loading and validation
 -   Omics-specific preprocessing (filtering, normalization, imputation)
 -   Proteomics differential expression via **limma** with multiple imputations and stability filtering
--   RNA-seq differential expression via **DESeq2** with batch correction (ComBat-Seq/SVA/RUV) and cell-type deconvolution
+-   RNA-seq differential expression via **DESeq2**
 -   Metabolomics preprocessing (missingness classification, MNAR/MAR imputation, TSS/Median/PQN normalization, LOESS drift correction) and DE
 -   Pathway enrichment analysis (fGSEA, ORA, QEA, ssGSEA)
 -   Unified QC utilities (PCA, heatmaps, sample distance)
@@ -264,7 +264,10 @@ modes:
         n_permutations: 100
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
+        force_primary_ion: true        # require a primary ion; false allows non-primary adducts
 ```
+
+`force_primary_ion` maps to mummichog's `-z`. mummichog 2.7.0 **requires a primary ion** (`M+H[+]` for positive, `M-H[-]` for negative) to be present before accepting a metabolite prediction — this filters out noise from irrelevant adducts and is the engine's **default**. Set `force_primary_ion: false` to relax that (emits `-z False`, keeping adduct-only predictions); omit the key to keep the default. It maps to MetaboAnalyst's `force_primary_ion` option.
 
 Then run as usual:
 
@@ -273,7 +276,7 @@ library(targets)
 tar_make(names = tidyselect::starts_with("met"))
 ```
 
-> **Interim limitation:** when enabled, mummichog results are written to disk (see below), but they are **not yet rendered** in the HTML report / PowerPoint / Shiny payload — the report's mummichog section stays hidden until a follow-up wires the pinned results into those outputs.
+> **Per-contrast:** mummichog runs **independently for each differential-abundance contrast** (each contrast's own p-values define its significant set against all features, sharing one model + params). Every contrast with a result renders as its own tab in the HTML report's mummichog section and gets its own files on disk (see below).
 >
 > **Organism:** the built-in model is **human only**. A non-human `modes.metabolomics.organism` with no custom model is rejected with a clear error rather than silently run against the human network — supply an organism-specific model (see below).
 
@@ -301,11 +304,13 @@ Supplying any custom model (`model_ref` or `model_json`) also satisfies the huma
 
 ### Where outputs land
 
-Under `<metab_out_dir>/mummichog_pinned/`:
+Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<contrast>/`, the contrast name sanitised to `A-Za-z0-9_`):
 
--   `input.tsv` and `input.tsv.idmap.tsv` — the exact table sent to mummichog (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
--   `v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
--   `v2/mummichog_manifest.tsv` and `v2/runner.log`.
+-   `<contrast>/input.tsv` and `<contrast>/input.tsv.idmap.tsv` — the exact table sent to mummichog for that contrast (m/z, retention time, p-value, statistic, **feature\_id as the 5th column**) plus a provenance id-map.
+-   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
+-   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
+
+Plus, directly under `mummichog_pinned/`, the report's presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
 
 To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
 
@@ -418,7 +423,7 @@ If the configured backend's prerequisite is missing at runtime (`claude` CLI not
 ### Implemented
 
 -   **Proteomics**: Preprocessing, Multi-imputation DE (Limma), Clustering (Hierarchical, k-means/PAM, Binary patterns), Pathway enrichment, PPI networks, Advanced statistics
--   **RNA-seq**: Full pipeline (DESeq2), Batch correction (ComBat-Seq/SVA/RUV), Cell-type deconvolution (xCell2), Pathway enrichment (fGSEA/ORA)
+-   **RNA-seq**: Full pipeline (DESeq2), Pathway enrichment (fGSEA/ORA)
 -   **Metabolomics**: Missingness classification (MNAR/MAR), Imputation (KNN + min/2), Normalization (TSS/Median/PQN with comparison), DE (limma/t-test/Wilcoxon), Feature selection (Random Forest, PLS-DA), Pathway enrichment (QEA, ssGSEA, ORA, GSEA), LOESS drift correction, QC suite, Report generation
 -   **Multi-omics**: Integration (DIABLO, MOFA, SNF), Concordance analysis, RNA-protein correlation, Cross-omics enrichment (multiGSEA, multi-ORA), Loadings-based enrichment, Foundational analysis (correlations, WGCNA), Mechanistic inference (COSMOS, TF activity, mediation), Consensus across methods, Stability analysis (bootstrap, k-fold, cluster stability), Integrated reporting, AI commentary
 -   **QC**: PCA (2D/3D, multi-resolution), UMAP, Sample distance/correlation, Density plots, Outlier detection

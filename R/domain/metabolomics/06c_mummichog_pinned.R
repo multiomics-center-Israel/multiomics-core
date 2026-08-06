@@ -125,6 +125,35 @@
   invisible(expected)
 }
 
+#' Preflight the shared mummichog runner
+#'
+#' Validates the environment every run shares — the venv interpreter exists and
+#' carries the pinned mummichog version — and returns its absolute path. Split
+#' out so a caller that runs the engine many times (e.g. once per contrast) can
+#' fail loud ONCE up front on a broken or stale venv, instead of letting a
+#' per-run `tryCatch` downgrade that setup error into an empty result.
+#'
+#' @param python Path to the interpreter (may be relative or a venv symlink).
+#' @return The absolute interpreter path (symlink preserved); aborts otherwise.
+#' @noRd
+.mmc_preflight_runner <- function(python) {
+  if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
+    .mmc_stop("Python executable not found: '", python, "'. ",
+              "Run `make setup` once per machine to build the pinned venv and print ",
+              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
+  }
+  # Make the interpreter path absolute (processx runs with wd = out_dir, so a
+  # relative command would be looked up there) but do NOT canonicalise it:
+  # normalizePath() follows symlinks, and a venv bin/python is usually a symlink
+  # to the base interpreter — running the resolved target loses the venv (and its
+  # mummichog). See .mmc_abs_keep_symlink().
+  python <- .mmc_abs_keep_symlink(python)
+  # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
+  # before we record 2.7.0 provenance and run it.
+  .mmc_check_mummichog_version(python, "2.7.0")
+  python
+}
+
 #' Find the first matching column name in a data.frame
 #'
 #' Tries exact candidates first, then a case-insensitive regex fallback. Used to
@@ -385,6 +414,107 @@ write_mummichog_manifest <- function(files, manifest_file) {
 
 # ==== runner ================================================================
 
+#' Coerce a config flag to a single logical (TRUE/FALSE), or fail loudly
+#'
+#' NULL passes through (unset). Accepts a real logical scalar, 0/1, and the usual
+#' boolean spellings (true/false, t/f, yes/no, on/off) — YAML normally yields a
+#' logical, but a QUOTED value or a typo arrives as a string. Anything
+#' unrecognised is a hard error rather than a silent default, so a bad
+#' `force_primary_ion` can never quietly relax mummichog's primary-ion filter.
+#'
+#' @param x   The raw config value.
+#' @param key Config key name, for the error message.
+#' @return TRUE/FALSE, or NULL when `x` is NULL.
+#' @noRd
+.mmc_as_flag <- function(x, key = "value") {
+  if (is.null(x)) return(NULL)
+  if (is.logical(x) && length(x) == 1L && !is.na(x)) return(x)
+  v <- tolower(trimws(as.character(x)))
+  if (length(v) == 1L && !is.na(v)) {
+    if (v %in% c("true", "t", "yes", "y", "on", "1"))  return(TRUE)
+    if (v %in% c("false", "f", "no", "n", "off", "0")) return(FALSE)
+  }
+  .mmc_stop("'", key, "' must be true or false; got '",
+            paste(as.character(x), collapse = ", "), "'.")
+}
+
+#' Assemble the `python -m mummichog.main` argument vector
+#'
+#' Pure builder split out of run_mummichog() so the CLI flags are unit-testable
+#' without a live subprocess. SHORT flags only: mummichog 2.7.0's getopt long
+#' options for --cutoff and --force_primary_ion are declared without a trailing
+#' "=", so they cannot take a value — the short forms (-c, -z) do.
+#'
+#' @param infile,project,network,mode Resolved run inputs.
+#' @param instrument_ppm,permutations Run parameters.
+#' @param cutoff Optional significance cutoff; NULL = mummichog's auto cutoff.
+#' @param force_primary_ion Optional logical. NULL leaves mummichog 2.7.0's
+#'   default (force_primary_ion = TRUE, i.e. require a primary ion). TRUE/FALSE
+#'   emit `-z True` / `-z False`; `-z` takes a VALUE in 2.7.0 (getopt "z:"), so a
+#'   bare -z is invalid, and FALSE is what allows non-primary adducts through.
+#' @param extra_args Extra CLI args appended verbatim.
+#' @return Character vector of arguments following the interpreter.
+#' @noRd
+.mmc_build_cli_args <- function(infile, project, network, mode,
+                                instrument_ppm, permutations,
+                                cutoff = NULL, force_primary_ion = NULL,
+                                extra_args = character()) {
+  # `-m mummichog.main` is Python's module flag; the later `-m <mode>` is
+  # mummichog's ionization mode (Python passes it through).
+  args <- c("-m", "mummichog.main",
+            "-f", infile,
+            "-o", project,
+            "-n", network,
+            "-m", mode,
+            "-u", as.character(instrument_ppm),
+            "-p", as.character(permutations))
+  if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
+  # Only emit -z when explicitly set, so an unset config leaves mummichog's
+  # default (require primary ion) exactly as-is. Coerce to a strict logical first
+  # so a quoted/typo'd config value errors instead of silently relaxing to False.
+  fpi <- .mmc_as_flag(force_primary_ion, "force_primary_ion")
+  if (!is.null(fpi)) {
+    args <- c(args, "-z", if (fpi) "True" else "False")
+  }
+  c(args, extra_args)
+}
+
+#' Decide a mummichog run's outcome from its exit status and produced files
+#'
+#' mummichog 2.7.0 can crash while rendering `result.html` (the known
+#' `rescale_color` "max() arg is an empty sequence" bug) AFTER it has already
+#' written the pathway table, exiting non-zero even though the enrichment
+#' succeeded. Treating every non-zero exit as fatal therefore discards otherwise
+#' complete contrasts. Salvage instead: a non-zero exit with the pathway table
+#' present is a warning, not an error; a non-zero exit with no table is a real
+#' failure; and a clean exit that produced nothing usable still fails.
+#'
+#' @param status   The subprocess exit status.
+#' @param files    Files discovered in the result tree (basenames inspected).
+#' @param log_file Path to the runner log, quoted in messages.
+#' @return Invisibly TRUE when the run is usable; aborts on a real failure.
+#' @noRd
+.mmc_check_run_outputs <- function(status, files, log_file) {
+  base <- basename(files)
+  has_pathways <- any(grepl("^mcg_pathwayanalysis.*\\.(tsv|csv|xlsx)$", base))
+  has_v2 <- any(base == "result.html") ||
+    any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|csv|xlsx)$", base))
+
+  if (status != 0) {
+    if (!has_pathways) {
+      .mmc_stop("mummichog exited with status ", status,
+                " and produced no pathway table (a real failure). See: ", log_file)
+    }
+    warning("mummichog exited non-zero (status ", status, ") but the pathway ",
+            "table is present — likely the known result.html rescale_color bug; ",
+            "salvaging results. See: ", log_file, call. = FALSE)
+  } else if (!has_v2) {
+    .mmc_stop("mummichog finished but no expected v2 outputs were found. See: ",
+              log_file)
+  }
+  invisible(TRUE)
+}
+
 #' Run mummichog v2 as an isolated subprocess
 #'
 #' Invokes `python -m mummichog.main` in the pinned venv with the working
@@ -402,6 +532,9 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #' @param permutations   Number of permutations for the null distribution.
 #' @param cutoff         Optional significance p-value cutoff; NULL = mummichog's
 #'                        automated cutoff.
+#' @param force_primary_ion Optional logical passed to mummichog's `-z`. NULL
+#'                        keeps 2.7.0's default (require a primary ion); FALSE
+#'                        emits `-z False` to allow non-primary adducts.
 #' @param timeout        Seconds before the process is killed.
 #' @param extra_args     Extra CLI args passed through verbatim.
 #' @return Sorted character vector of all produced files plus the manifest.
@@ -413,23 +546,13 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           instrument_ppm = 10,
                           permutations = 100,
                           cutoff = NULL,
+                          force_primary_ion = NULL,
                           timeout = 3600,
                           extra_args = character()) {
-  if (!nzchar(python) || !.mmc_exists_nofollow(python)) {
-    .mmc_stop("Python executable not found: '", python, "'. ",
-              "Run `make setup` once per machine to build the pinned venv and print ",
-              "the MUMMICHOG_PYTHON line for your .Renviron, or set MUMMICHOG_PYTHON yourself.")
-  }
-  # Make the interpreter path absolute (processx runs with wd = out_dir, so a
-  # relative command would be looked up there) but do NOT canonicalise it:
-  # normalizePath() follows symlinks, and a venv bin/python is usually a symlink
-  # to the base interpreter — running the resolved target loses the venv (and its
-  # mummichog). See .mmc_abs_keep_symlink(). The model path below is a plain file,
-  # so resolving it is fine; built-in names (human_mfn, worm) are not files.
-  python <- .mmc_abs_keep_symlink(python)
-  # Reproducibility guard: confirm this interpreter actually has mummichog 2.7.0
-  # before we record 2.7.0 provenance and run it.
-  .mmc_check_mummichog_version(python, "2.7.0")
+  # Validate the shared runner (interpreter exists, pinned version) and take its
+  # absolute path. Kept here too — defensive when run_mummichog() is called
+  # directly — even though mod_mummichog_pinned() also preflights before its loop.
+  python <- .mmc_preflight_runner(python)
   if (file.exists(network)) network <- normalizePath(network, mustWork = TRUE)
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")
@@ -443,19 +566,8 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   out_dir <- normalizePath(out_dir, mustWork = TRUE)
   log_file <- file.path(out_dir, "runner.log")
 
-  # Short flags only: mummichog's getopt long options for --cutoff and
-  # --force_primary_ion are declared WITHOUT an "=", so they would not accept a
-  # value. The first `-m mummichog.main` is Python's module flag; the later
-  # `-m <mode>` is mummichog's ionization mode (Python passes it through).
-  args <- c("-m", "mummichog.main",
-            "-f", infile,
-            "-o", project,
-            "-n", network,
-            "-m", mode,
-            "-u", as.character(instrument_ppm),
-            "-p", as.character(permutations))
-  if (!is.null(cutoff)) args <- c(args, "-c", as.character(cutoff))
-  args <- c(args, extra_args)
+  args <- .mmc_build_cli_args(infile, project, network, mode, instrument_ppm,
+                              permutations, cutoff, force_primary_ion, extra_args)
 
   # Force a headless matplotlib backend: mummichog imports matplotlib.pyplot and
   # writes figures, and a non-framework venv python on macOS must not reach for a
@@ -480,17 +592,10 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   if (isTRUE(result$timeout)) {
     .mmc_stop("mummichog timed out after ", timeout, "s. See: ", log_file)
   }
-  if (result$status != 0) {
-    .mmc_stop("mummichog exited with status ", result$status, ". See: ", log_file)
-  }
 
   files <- unique(c(list_mummichog_files(out_dir), log_file))
-  base  <- basename(files)
-  has_v2 <- any(base == "result.html") ||
-    any(grepl("^mcg_(pathway|modular)analysis.*\\.(tsv|xlsx)$", base))
-  if (!has_v2) {
-    .mmc_stop("mummichog finished but no expected v2 outputs were found. See: ", log_file)
-  }
+
+  .mmc_check_run_outputs(result$status, files, log_file)
 
   manifest_file <- write_mummichog_manifest(
     files, file.path(out_dir, "mummichog_manifest.tsv")
@@ -516,6 +621,64 @@ read_mummichog_pathways <- function(files) {
   tsv <- files[grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(files))]
   if (length(tsv) == 0) .mmc_stop("No pathway analysis .tsv found among mummichog outputs.")
   readr::read_tsv(tsv[[1]], show_col_types = FALSE)
+}
+
+#' Read per-contrast mummichog pathway tables from a flat file list
+#'
+#' The per-contrast stage writes each contrast's outputs under
+#' `mummichog_pinned/<contrast>/...` and tracks every file in one flat
+#' `format = "file"` target. This regroups that flat list by contrast directory
+#' — the path segment directly under `mummichog_pinned/` — and reads each
+#' contrast's pathway table, so the report can render one section per contrast
+#' without the stage having to hold the tables in memory.
+#'
+#' @param files Character vector of mummichog output files across all contrasts.
+#' @return A named list keyed by the original contrast label (recovered from the
+#'   stage's `contrasts.tsv` map; falls back to the sanitised subdir name when
+#'   the map is absent), each a pathway tibble. Contrasts that produced no
+#'   pathway table are omitted, so the report simply shows no section for them;
+#'   an empty list results when `files` is empty or none live under
+#'   `mummichog_pinned/`. A pathway table that exists but cannot be parsed
+#'   raises (rather than being silently dropped as if the contrast had no result).
+read_mummichog_pathways_by_contrast <- function(files) {
+  if (length(files) == 0) return(list())
+  # Tolerate Windows backslash separators (some paths come from normalizePath(),
+  # which uses "\\" there): match on a "/"-normalised copy, read from originals.
+  norm <- gsub("\\\\", "/", files)
+
+  # Recover original contrast labels from the sanitised-dir -> contrast map the
+  # stage writes, so report tabs/subtitles show the real DE contrast name rather
+  # than the sanitised directory token. Absent map -> fall back to the dir name.
+  label_of <- function(dir) dir
+  is_map   <- grepl("/mummichog_pinned/contrasts\\.tsv$", norm)
+  if (any(is_map)) {
+    m <- tryCatch(readr::read_tsv(files[is_map][[1]], show_col_types = FALSE),
+                  error = function(e) NULL)
+    if (!is.null(m) && all(c("dir", "contrast") %in% names(m))) {
+      lut <- stats::setNames(as.character(m$contrast), as.character(m$dir))
+      label_of <- function(dir) if (!is.na(lut[dir])) unname(lut[dir]) else dir
+    }
+  }
+
+  # Contrast dir = the path segment immediately under mummichog_pinned/.
+  pat   <- ".*/mummichog_pinned/([^/]+)/.*"
+  under <- grepl(pat, norm)
+  if (!any(under)) return(list())
+  keep     <- files[under]                 # original paths, for reading
+  contrast <- sub(pat, "\\1", norm[under])
+
+  out <- list()
+  for (dir in unique(contrast)) {
+    grp <- keep[contrast == dir]
+    # Distinguish "this contrast produced no pathway table" (expected — skip it
+    # quietly so the report just omits the section) from "the table exists but
+    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
+    # a genuine parse error surfaces via read_mummichog_pathways() rather than
+    # silently dropping a contrast whose results are actually broken.
+    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
+    out[[label_of(dir)]] <- read_mummichog_pathways(grp)
+  }
+  out
 }
 
 #' Read the mummichog module-analysis table

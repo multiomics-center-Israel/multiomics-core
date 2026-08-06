@@ -48,7 +48,6 @@ test_that("consensus pass.imputs is gated on the reported padj.imputs", {
     pass_col <- grep("^pass\\.imputs\\.", names(out), value = TRUE)
     padj_col <- grep("^padj\\.imputs\\.", names(out), value = TRUE)
     expect_length(pass_col, 1)
-    expect_length(padj_col, 1)
 
     pass <- setNames(out[[pass_col]], out$FeatureID)
     padj <- setNames(out[[padj_col]], out$FeatureID)

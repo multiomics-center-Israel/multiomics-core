@@ -240,8 +240,11 @@ build_metabolomics_extra_data <- function(de_res, qc_pre_obj = NULL, config) {
     # --- Methods ---
     norm_info <- metab_cfg$preprocessing %||% list()
     norm_parts <- character(0)
-    if (!is.null(norm_info$sample_norm) && tolower(norm_info$sample_norm) != "none")
-        norm_parts <- c(norm_parts, norm_info$sample_norm)
+    # Use chosen_norm (the actually-selected method), not the legacy sample_norm
+    # config field, which stays "pqn" by default even when chosen_norm = "none".
+    sample_norm_used <- norm_info$chosen_norm %||% norm_info$sample_norm
+    if (!is.null(sample_norm_used) && tolower(sample_norm_used) != "none")
+        norm_parts <- c(norm_parts, sample_norm_used)
     if (!is.null(norm_info$transform) && tolower(norm_info$transform) != "none")
         norm_parts <- c(norm_parts, norm_info$transform)
     if (!is.null(norm_info$scaling) && tolower(norm_info$scaling) != "none")

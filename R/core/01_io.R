@@ -37,6 +37,16 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
                            metabolomics = c("metadata", "contrasts"),
                            character(0)
   )
+
+  # The proteomics "limma_percontrast" method auto-generates control-referenced
+  # contrasts from de$control_condition, so a contrasts file is not required in
+  # that configuration. Any explicitly supplied file is still loaded and validated
+  # below; every other mode/method continues to require contrasts.
+  if (mode == "proteomics" &&
+      identical(cfg$de$method, "limma_percontrast") &&
+      !is.null(cfg$de$control_condition) && nzchar(cfg$de$control_condition)) {
+    required_files <- setdiff(required_files, "contrasts")
+  }
   
   # Check 1: key completely missing from config
   missing_keys <- setdiff(required_files, names(files))
@@ -90,8 +100,10 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
   
   if (!is.null(cfg$engine)) inputs$engine <- cfg$engine
   
-  # Validate contrasts file content (at least 1 row + expected columns)
-  if ("contrasts" %in% required_files && !is.null(inputs$contrasts)) {
+  # Validate contrasts file content (at least 1 row + expected columns) whenever a
+  # contrasts file was loaded - including the optional case where limma_percontrast
+  # could auto-generate them but the user still supplied a file.
+  if (!is.null(inputs$contrasts)) {
     validate_contrasts_content(inputs$contrasts, mode)
   }
   

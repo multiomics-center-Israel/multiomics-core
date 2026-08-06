@@ -10,7 +10,7 @@ A practical map of the repository for future Claude Code sessions. Read this **a
 
 `multiomics-core` is a `{targets}`-based **R bioinformatics pipeline** that runs standardised single-omics and multi-omics analyses:
 
-- **RNA-seq** — DESeq2 differential expression, batch correction (ComBat-Seq/SVA/RUV), cell-type deconvolution (xCell2), pathway enrichment.
+- **RNA-seq** — DESeq2 differential expression, pathway enrichment.
 - **Proteomics** — limma-based DE with multi-imputation and stability filtering, PPI networks, advanced stats.
 - **Metabolomics** — missingness *filtering* (no imputation stage), TSS/Median/PQN/EigenMS normalization (selected via `preprocessing.chosen_norm`), optional LOESS drift correction, DE (limma/t-test/Wilcoxon), pathway enrichment (QEA, ssGSEA, ORA, GSEA).
 - **Multi-omics integration** — DIABLO, MOFA, SNF, concordance, cross-omics enrichment, WGCNA, COSMOS, consensus and stability analysis.
@@ -119,8 +119,8 @@ Within each, numeric prefixes mirror the analysis flow. Common pattern across mo
 | `01_*` | Annotation / expression / normalization |
 | `02_*` | Filtering |
 | `03_*` | Preprocessing / imputation / differential expression |
-| `04_*` | Batch correction (rnaseq), feature selection, integration methods (multiomics) |
-| `05_*` | Outputs (legacy TSV writers), deconvolution, DE summaries |
+| `04_*` | feature selection, integration methods (multiomics) |
+| `05_*` | Outputs (legacy TSV writers), DE summaries |
 | `06_*` | Reporting helpers / enrichment / concordance |
 | `07_*` | Pathway, PPI networks, advanced stats, Shiny export |
 | `08_*` | Reports |
@@ -225,7 +225,7 @@ data/
 outputs/                                  Entire folder is gitignored
 └── Results_<project.name>_<analysis_round>/<mode>/
     ├── Clustering/        Datasets/      Diagnostic_plots/
-    ├── Enrichment/        GSEA_enrichment/
+    ├── Enrichment/
     ├── execution_info/    final_results.tsv
     └── Final_results_*_P_*.xlsx          Excel summaries
 ```

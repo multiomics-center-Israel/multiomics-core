@@ -71,8 +71,28 @@ modes:
 
       # ---- Normalization selection workflow ----
       # null  → QC review mode (compute all methods, stop after report)
-      # "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" → full pipeline
+      # "none" | "tss" | "median" | "pqn" | "eigenms" | "eigenms_forced" |
+      #   "bio_factor"  → full pipeline
+      #
+      # "none": skip sample normalization — use when the input table is already
+      # normalized upstream. transform/scaling below still apply, so log2 is
+      # still taken; if the table also arrives log-scaled, set transform: "none".
       chosen_norm: null
+
+      # ---- Biological-factor normalization (chosen_norm: "bio_factor") ----
+      # Divide each sample by a measured per-sample covariate (e.g. total
+      # protein) before log2. Names the metadata column holding that value;
+      # required only when chosen_norm = "bio_factor".
+      #
+      # When to prefer it: use when a measured input amount (total protein,
+      # cell count, tissue mass) is the correct scaling variable and you trust
+      # the assay. Unlike tss/median/pqn, bio_factor corrects ONLY for this one
+      # covariate — it does not account for compositional or dilution effects
+      # beyond it, so it assumes the covariate captures the dominant source of
+      # between-sample loading differences. Note also that the normalization is
+      # only as good as the measurement: a noisy covariate propagates directly
+      # into the normalized intensities.
+      biological_factor_col: null
 
       # ---- Sample normalization (legacy / reference only) ----
       # All methods (tss, median, pqn, eigenms) run in parallel; the ACTIVE
@@ -162,9 +182,10 @@ modes:
       condition_column: "group"
 
       p_cutoff: 0.05
-      pval_cutoff: 0.05
+      # true (default) = gate significance on BH-adjusted p (padj);
+      # false = raw p-value
+      use_adjusted_pval: true
       linear_fc_cutoff: 1.5
-      robust_ebayes: true
 
     # ---- Clustering ----
     clustering:
@@ -182,7 +203,17 @@ modes:
           enabled: true
           algorithm: "hclust"
           distance: "euclidean"
-          k_max: 20
+          # k is chosen by the gap statistic (k_method defaults to "gap" in code).
+          # Gap-statistic runtime is roughly gap_B * k_max * O(n_features^2).
+          k_max: 20                # Max K tested. Cost is LINEAR in k_max — set to
+                                   # the biologically expected max number of clusters.
+          gap_B: 50                # Gap-statistic bootstraps (code default: 100).
+                                   # 50 is stable enough for firstSEmax at ~half cost.
+          min_variance: 0          # Drop features with variance <= this before the
+                                   # gap statistic (variance units; code default 0 =
+                                   # only constant rows). Raising it feeds fewer
+                                   # features in, cutting runtime QUADRATICALLY
+                                   # (smaller O(n_features^2)) — the biggest speed lever.
           nstart: 25
           # Only relevant in partition clustering to generate profile plots
           profile_x_axis_col: null   # Partition cluster PROFILE plot: X-axis metadata column (defaults to group_col); not used for heatmaps
@@ -199,6 +230,9 @@ modes:
     # ---- Enrichment ----
     enrichment:
       run_enrichment: false
+      # Build the DE-metabolite KEGG network step (writes the report "Network/"
+      # HTML). Off by default; set true to build it.
+      run_network: false
       libraries: []
       gmt_file: null
       mapping_file: null
@@ -217,6 +251,14 @@ modes:
         n_permutations: 100
         tolerance_ppm: 10
         ionization_mode: pos_default   # pos_default | positive | negative
+
+        # Force primary ion (mummichog's -z). mummichog 2.7.0 REQUIRES a primary
+        # ion (M+H[+] / M-H[-]) to be present before accepting a metabolite
+        # prediction, which reduces noise from irrelevant adducts — this is the
+        # engine's default. Set false to allow non-primary adducts (emits
+        # `-z False`). Omit to keep the default. Maps to MetaboAnalyst's
+        # force_primary_ion option.
+        force_primary_ion: true
 
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # The built-in model is HUMAN ONLY: a non-human `organism` (above) with

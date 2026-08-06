@@ -96,3 +96,89 @@ test_that("mummichog_report_titles composes title/subtitle by model precedence",
   # no contrast -> NULL subtitle
   expect_null(mummichog_report_titles(cfg_builtin, list())$subtitle)
 })
+
+test_that("save_mummichog_exports writes the table as TSV + CSV", {
+  tmp <- withr::local_tempdir()
+  tb  <- build_mummichog_pathway_table(make_pw())
+
+  paths <- save_mummichog_exports(NULL, tb, tmp, contrast_label = "LL vs HL")
+
+  tsv <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_table_LL_vs_HL.tsv")
+  csv <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_table_LL_vs_HL.csv")
+  expect_setequal(paths, c(tsv, csv))
+  expect_true(file.exists(tsv))
+  expect_true(file.exists(csv))
+  # round-trips with the same rows
+  back <- readr::read_tsv(tsv, show_col_types = FALSE)
+  expect_equal(nrow(back), nrow(tb))
+})
+
+test_that("save_mummichog_exports writes the plot as PNG + PDF (when a device exists)", {
+  skip_if_not(isTRUE(capabilities("png")), "no PNG graphics device")
+  tmp <- withr::local_tempdir()
+  p   <- plot_mummichog_bubble(make_pw(), title = "T")
+
+  paths <- save_mummichog_exports(p, NULL, tmp, contrast_label = "LL_vs_HL")
+
+  png <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_bubble_LL_vs_HL.png")
+  pdf <- file.path(tmp, "mummichog_pinned", "mummichog_pathway_bubble_LL_vs_HL.pdf")
+  expect_true(all(c(png, pdf) %in% paths))
+  expect_true(file.exists(png))
+  expect_true(file.exists(pdf))
+})
+
+test_that("save_mummichog_exports is a no-op when there is nothing to save", {
+  tmp <- withr::local_tempdir()
+  expect_length(save_mummichog_exports(NULL, NULL, tmp), 0)
+})
+
+test_that("mummichog_report_titles uses an explicit contrast for the subtitle", {
+  cfg <- list(modes = list(metabolomics = list(
+    organism   = "Coelastrella",
+    enrichment = list(mummichog = list(model_json = "/m/cre.json")))))
+  t <- mummichog_report_titles(cfg, contrast = "HL_48h_vs_LL_48h")
+  expect_identical(t$subtitle, "HL_48h vs LL_48h, all features")
+  expect_match(t$title, "Coelastrella")
+})
+
+test_that("build_mummichog_report_sections builds one section per usable contrast", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  by_contrast <- list(
+    "HL_24h_vs_LL_24h" = make_pw(),
+    "HL_48h_vs_LL_48h" = make_pw(),
+    "empty_contrast"   = NULL             # no result -> dropped
+  )
+  secs <- build_mummichog_report_sections(by_contrast, cfg)
+
+  expect_named(secs, c("HL_24h_vs_LL_24h", "HL_48h_vs_LL_48h"))
+  for (nm in names(secs)) {
+    expect_s3_class(secs[[nm]]$plot, "ggplot")
+    expect_s3_class(secs[[nm]]$table, "data.frame")
+    expect_true(nzchar(secs[[nm]]$title))
+    expect_true(nzchar(secs[[nm]]$slug))
+  }
+  expect_match(secs[["HL_24h_vs_LL_24h"]]$subtitle, "HL_24h vs LL_24h")
+})
+
+test_that("build_mummichog_report_sections gives colliding labels distinct slugs", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
+  # two distinct labels that sanitise to the same token must not share a slug,
+  # else their standalone exports would overwrite each other
+  secs  <- build_mummichog_report_sections(
+    list("A-B" = make_pw(), "A_B" = make_pw()), cfg)
+  slugs <- vapply(secs, `[[`, character(1), "slug")
+
+  expect_named(secs, c("A-B", "A_B"))                    # display keys keep originals
+  expect_length(unique(slugs), 2L)                       # slugs are unique
+  expect_true(all(grepl("^[A-Za-z0-9_]+$", slugs)))      # filesystem-safe
+})
+
+test_that("build_mummichog_report_sections returns empty list on NULL/empty input", {
+  cfg <- list(modes = list(metabolomics = list(
+    enrichment = list(mummichog = list()))))
+  expect_length(build_mummichog_report_sections(NULL, cfg), 0)
+  expect_length(build_mummichog_report_sections(list(), cfg), 0)
+  expect_length(build_mummichog_report_sections(list(a = NULL), cfg), 0)
+})

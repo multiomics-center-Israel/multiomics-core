@@ -146,10 +146,13 @@ build_mummichog_pathway_table <- function(pathways) {
 #' (the pinned engine runs on a single contrast), prettified `A_vs_B` -> `A vs B`.
 #'
 #' @param config Full pipeline config.
-#' @param de_res DE results (uses `names(de_res$de_tables)[1]`).
+#' @param de_res Optional DE results; when `contrast` is not given, the subtitle
+#'   uses `names(de_res$de_tables)[1]`.
+#' @param contrast Optional explicit contrast label for the subtitle (takes
+#'   precedence over `de_res`). Used to title per-contrast mummichog sections.
 #' @return A list with character scalars `title` and `subtitle` (subtitle may be
 #'   `NULL` when no contrast is available).
-mummichog_report_titles <- function(config, de_res) {
+mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
   mummi_cfg <- config$modes$metabolomics$enrichment$mummichog %||% list()
 
   organism <- config$modes$metabolomics$organism
@@ -172,10 +175,9 @@ mummichog_report_titles <- function(config, de_res) {
     sprintf("Mummichog pathway analysis (%s model)", model_tag)
   }
 
-  contrast <- if (!is.null(de_res$de_tables) && length(de_res$de_tables) > 0) {
-    names(de_res$de_tables)[1]
-  } else {
-    NULL
+  if (is.null(contrast) && !is.null(de_res$de_tables) &&
+      length(de_res$de_tables) > 0) {
+    contrast <- names(de_res$de_tables)[1]
   }
   subtitle <- if (!is.null(contrast) && nzchar(contrast)) {
     paste0(gsub("_vs_", " vs ", contrast, fixed = TRUE), ", all features")
@@ -184,4 +186,115 @@ mummichog_report_titles <- function(config, de_res) {
   }
 
   list(title = title, subtitle = subtitle)
+}
+
+#' Build per-contrast mummichog report sections
+#'
+#' Turns the per-contrast pathway tables (from `metab_mummichog_report_pathways`)
+#' into ready-to-render report sections. Pure: builds a bubble plot + a sorted
+#' table + a per-contrast title for each contrast that has a usable result, and
+#' drops contrasts with no result. No file I/O — the report module saves the
+#' standalone exports separately.
+#'
+#' @param pathways_by_contrast Named list keyed by contrast, each a mummichog
+#'   pathway tibble (or NULL). Also tolerates a single tibble (one contrast).
+#' @param config Full pipeline config (for titles + the p-value cutoff line).
+#' @return A named list keyed by contrast, each `list(title, subtitle, plot,
+#'   table, slug)`. `slug` is a filesystem-safe, de-duplicated token for the
+#'   contrast (mirrors the engine's per-contrast directory naming) so the
+#'   standalone exports never collide. Empty list when there is nothing to show.
+build_mummichog_report_sections <- function(pathways_by_contrast, config) {
+  if (is.null(pathways_by_contrast)) return(list())
+  # Tolerate a bare single tibble (name it "contrast").
+  if (is.data.frame(pathways_by_contrast)) {
+    pathways_by_contrast <- list(contrast = pathways_by_contrast)
+  }
+  p_cut <- config$modes$metabolomics$enrichment$mummichog$p_cutoff %||% 0.05
+
+  nms <- names(pathways_by_contrast)
+  if (is.null(nms)) nms <- paste0("contrast_", seq_along(pathways_by_contrast))
+
+  sections <- list()
+  for (i in seq_along(pathways_by_contrast)) {
+    contrast <- nms[[i]]
+    pw       <- pathways_by_contrast[[i]]
+    if (is.null(pw) || !is.data.frame(pw) || nrow(pw) == 0) next
+    ttl  <- mummichog_report_titles(config, contrast = contrast)
+    plot <- plot_mummichog_bubble(pw, title = ttl$title,
+                                  subtitle = ttl$subtitle, p_cutoff = p_cut)
+    tbl  <- build_mummichog_pathway_table(pw)
+    if (is.null(plot)) next            # nothing plottable -> skip this contrast
+    sections[[contrast]] <- list(title = ttl$title, subtitle = ttl$subtitle,
+                                 plot = plot, table = tbl)
+  }
+
+  # Assign a de-duplicated, filesystem-safe slug per section (same sanitise +
+  # make.unique idiom the engine uses for contrast directories), so two labels
+  # that collapse to the same token get distinct export filenames instead of
+  # overwriting each other. Used by save_mummichog_exports() for the suffix.
+  if (length(sections) > 0) {
+    slugs <- make.unique(gsub("[^A-Za-z0-9]+", "_", names(sections)), sep = "_")
+    for (i in seq_along(sections)) sections[[i]]$slug <- slugs[[i]]
+  }
+  sections
+}
+
+#' Save the mummichog report plot and table as standalone files
+#'
+#' Writes the presentation exports for the pinned mummichog stage into the
+#' `mummichog_pinned/` folder, next to the engine's result tree: the bubble plot
+#' as PNG + PDF and the sorted pathway table as TSV + CSV. These are report
+#' artefacts derived from the pinned results — the engine's own result files
+#' (mcg_*.tsv) are left untouched.
+#'
+#' Each ggsave is guarded (matching the DE/enrichment modules): a device
+#' failure warns and skips that file rather than aborting report generation, so
+#' the return vector lists only the files actually written.
+#'
+#' @param plot   A ggplot from `plot_mummichog_bubble()`, or NULL.
+#' @param table  A data.frame from `build_mummichog_pathway_table()`, or NULL.
+#' @param out_dir Metabolomics mode output directory (metab_out_dir); files land
+#'   in its `mummichog_pinned/` subdirectory.
+#' @param contrast_label Optional contrast tag woven into the filenames
+#'   (e.g. `"LL_vs_HL"`); sanitised to a safe token.
+#' @return Character vector of the files written (may be empty).
+save_mummichog_exports <- function(plot, table, out_dir, contrast_label = NULL) {
+  if (is.null(plot) && is.null(table)) return(character(0))
+
+  # Write next to the engine's result tree (same dir as mod_mummichog_pinned()),
+  # so every mummichog artefact sits together under mummichog_pinned/. The stage
+  # runs first and only wipes its v2/ subdir, so these top-level files persist.
+  dest_dir <- file.path(out_dir, "mummichog_pinned")
+  ensure_dir(dest_dir)
+  suffix <- if (!is.null(contrast_label) && nzchar(contrast_label)) {
+    paste0("_", gsub("[^A-Za-z0-9]+", "_", contrast_label))
+  } else {
+    ""
+  }
+  written <- character(0)
+
+  if (!is.null(plot)) {
+    for (f in c(file.path(dest_dir, paste0("mummichog_pathway_bubble", suffix, ".png")),
+                file.path(dest_dir, paste0("mummichog_pathway_bubble", suffix, ".pdf")))) {
+      ok <- tryCatch({
+        ggplot2::ggsave(f, plot, width = 11, height = 8, dpi = 300)
+        TRUE
+      }, error = function(e) {
+        warning("mummichog export failed for ", basename(f), ": ",
+                conditionMessage(e))
+        FALSE
+      })
+      if (isTRUE(ok) && file.exists(f)) written <- c(written, f)
+    }
+  }
+
+  if (!is.null(table)) {
+    tsv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".tsv"))
+    csv <- file.path(dest_dir, paste0("mummichog_pathway_table", suffix, ".csv"))
+    readr::write_tsv(table, tsv)
+    readr::write_csv(table, csv)
+    written <- c(written, tsv, csv)
+  }
+
+  written
 }
