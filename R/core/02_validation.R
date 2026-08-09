@@ -15,6 +15,61 @@ check_has_cols <- function(df, required, df_name = deparse(substitute(df))) {
     }
 }
 
+#' Warn when a tab-separated sample sheet has commas inside its values
+#'
+#' The pipeline reads metadata by extension (see \code{read_table_auto}), so a
+#' tab-separated sheet with commas in its cells parses correctly here. Readers
+#' that assume CSV do not: they see more fields in the data rows than in the
+#' header, silently decide column 1 holds row names, and abort with
+#' "duplicate 'row.names' are not allowed". That is how a comma in a sample
+#' sheet takes down the report render long after the analysis itself succeeded,
+#' with no traceback pointing back at the sheet. Flag it at load time instead.
+#'
+#' Only column names and affected-row counts are reported — never cell values,
+#' which may carry identifying information.
+#'
+#' @param df Parsed metadata data frame.
+#' @param path Path the metadata was read from; its extension decides whether
+#'   the file is tab-separated and therefore at risk.
+#' @param mode Omics mode or scope, used as the message prefix.
+#' @return Invisibly \code{TRUE}. Emits a warning when commas are found.
+#' @examples
+#' df <- data.frame(SampleName = c("S1", "S2"),
+#'                  Source = c("run-1,run-2", "run-3,run-4"))
+#' # check_metadata_delimiter_safety(df, "samples.txt", "proteomics")
+check_metadata_delimiter_safety <- function(df, path, mode = "design") {
+    if (!is.data.frame(df) || nrow(df) == 0) return(invisible(TRUE))
+    # Only tab-separated sheets are at risk; a real CSV quotes its commas.
+    if (!tolower(tools::file_ext(path)) %in% c("tsv", "txt")) return(invisible(TRUE))
+
+    chr_cols <- names(df)[vapply(df, is.character, logical(1))]
+    n_affected <- vapply(
+        chr_cols,
+        function(cn) sum(grepl(",", df[[cn]], fixed = TRUE), na.rm = TRUE),
+        integer(1)
+    )
+    hits <- chr_cols[n_affected > 0]
+    if (length(hits) == 0) return(invisible(TRUE))
+
+    warning(
+        sprintf(
+            paste0(
+                "[%s] Metadata '%s' is tab-separated but %d column(s) contain commas: %s.\n",
+                "  This pipeline parses it correctly, but any reader that assumes CSV — ",
+                "including the report templates — will mis-parse it and abort with\n",
+                "  \"duplicate 'row.names' are not allowed\".\n",
+                "  Fix: remove the commas from those values (e.g. rename 'A,B' to 'A_B'), ",
+                "or drop the column if the analysis does not use it."
+            ),
+            mode, basename(path), length(hits),
+            paste(sprintf("%s (%d/%d rows)", hits, n_affected[hits], nrow(df)),
+                  collapse = ", ")
+        ),
+        call. = FALSE
+    )
+    invisible(TRUE)
+}
+
 #' Check that all values in x are present in y
 check_all_in <- function(x, y, label_x = "x", label_y = "y") {
     missing <- setdiff(x, y)

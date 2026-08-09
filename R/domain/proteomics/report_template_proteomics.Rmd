@@ -95,6 +95,15 @@ figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
 }
 
+# Helper: read a delimited metadata/table file, auto-detecting tab vs comma from
+# the header line. Metadata is frequently tab-separated (.txt), so a hardcoded
+# read.csv() silently collapses every column into one.
+read_delim_auto <- function(path, ...) {
+    l1 <- readLines(path, n = 1, warn = FALSE)
+    sep <- if (length(l1) && grepl("\t", l1)) "\t" else ","
+    read.delim(path, sep = sep, stringsAsFactors = FALSE, ...)
+}
+
 # Paths
 run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
 # Detect if we are already inside the proteomics output dir
@@ -339,7 +348,7 @@ make_dt(proj, "Analysis Parameters")
 ```{r params-design, results='asis'}
 meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
-    meta <- read.csv(meta_file, stringsAsFactors = FALSE)
+    meta <- read_delim_auto(meta_file)
     group_col <- prot_cfg$effects$color %||% "Condition"
 
     if (group_col %in% names(meta)) {
@@ -422,8 +431,7 @@ cat("# Technical Summary\n\n")
 tech <- prot_cfg$technical_report
 
 meta_ts <- tryCatch(
-    read.csv(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata),
-             stringsAsFactors = FALSE),
+    read_delim_auto(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)),
     error = function(e) NULL
 )
 group_col_ts <- prot_cfg$effects$color
@@ -2048,7 +2056,7 @@ explorer_json_str <- "{}"
 
 # Load expression data: use final_results.tsv which has per-sample columns + annotations
 meta_file_exp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
-meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+meta_df_exp <- if (file.exists(meta_file_exp)) read_delim_auto(meta_file_exp) else NULL
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
