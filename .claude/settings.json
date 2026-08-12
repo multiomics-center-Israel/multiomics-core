@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ldd *)",
+      "Bash(zcat *)",
+      "Bash(fc-list *)",
+      "Bash(curl -s https://rest.kegg.jp/*)",
+      "Bash(curl -s \"https://rest.kegg.jp/*)",
+      "Bash(curl -s https://ftp.ebi.ac.uk/pub/*)",
+      "Bash(curl -sI https://ftp.ebi.ac.uk/pub/*)",
+      "Bash(curl -s https://www.ebi.ac.uk/interpro/api/*)",
+      "Bash(curl -s \"https://www.ebi.ac.uk/interpro/api/*)"
+    ]
+  }
+}
