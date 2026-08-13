@@ -1478,7 +1478,10 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
 }
 
 
-#' Combine p-values using Fisher's method
+#' Combine p-values across omics using Stouffer's method
+#'
+#' Stouffer's Z, not Fisher's — the two give different combined p-values and
+#' the report used to name the wrong one.
 stouffer_combined_pvalues <- function(merged_pathways) {
 
     pval_cols <- grep("^pval_", names(merged_pathways), value = TRUE)
