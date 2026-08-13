@@ -994,9 +994,15 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
         # q-1 because phyper uses P(X > q-1) = P(X >= q)
         pval <- stats::phyper(q - 1, m, N - m, k, lower.tail = FALSE)
 
+        # `pathway` must hold the KEGG map id, not the human-readable name:
+        # merge_pathway_pvalues() joins the omics layers on this column and the
+        # gene layers emit map##### ids, so keying metabolites on the name made
+        # the metabolite layer unable to ever intersect them. The name is kept
+        # alongside in `pathway_name`, matching the gene-layer tables.
         results[[pw]] <- data.frame(
-            pathway = if (!is.null(pathway_names[pw]) && !is.na(pathway_names[pw]))
-                          pathway_names[pw] else pw,
+            pathway = pw,
+            pathway_name = if (!is.null(pathway_names[pw]) && !is.na(pathway_names[pw]))
+                               pathway_names[pw] else pw,
             ID = pw,
             pvalue = pval,
             GeneRatio = paste0(q, "/", k),
