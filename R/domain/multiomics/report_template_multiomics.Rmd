@@ -849,10 +849,11 @@ if (file.exists(harmony_summary_file)) {
     cat("Multi-omics data were harmonized into a unified **MultiAssayExperiment** object. ",
         "Each omics layer was aligned to a common set of samples.\n\n")
 
-    # Show omics layers
-    omics_dirs <- list.dirs(integration_dir, full.names = FALSE, recursive = FALSE)
-    if (length(omics_dirs) > 0) {
-        cat("**Omics layers in integration:** ", paste(omics_dirs, collapse = ", "), "\n\n")
+    # These are the integration/ subdirectories — one per method that produced
+    # output (diablo, mofa, snf), not the omics layers.
+    method_dirs <- list.dirs(integration_dir, full.names = FALSE, recursive = FALSE)
+    if (length(method_dirs) > 0) {
+        cat("**Integration methods with output:** ", paste(method_dirs, collapse = ", "), "\n\n")
     }
 }
 ```
@@ -1052,8 +1053,10 @@ if (length(lfc_plots) > 0) {
 }
 ```
 
-```{r diablo-top-features, eval=has_diablo}
-# Load top feature tables
+```{r diablo-top-features, eval=has_diablo, results='asis'}
+# Load top feature tables. results='asis' + knit_child is required here: without
+# it the cat()ed headers were emitted as literal "## ### Top DIABLO Features"
+# text and the DT widgets never rendered.
 diablo_feat_files <- list.files(diablo_dir, pattern = "diablo_top_features_.*\\.csv$", full.names = TRUE)
 if (length(diablo_feat_files) > 0) {
     for (ff in diablo_feat_files) {
@@ -1061,7 +1064,11 @@ if (length(diablo_feat_files) > 0) {
         df <- tryCatch(read.csv(ff, stringsAsFactors = FALSE), error = function(e) NULL)
         if (!is.null(df) && nrow(df) > 0) {
             cat(sprintf("\n### Top DIABLO Features: %s\n\n", omics_name))
-            print(make_dt(df, caption = paste("DIABLO top features -", omics_name)))
+            chunk_id <- paste0("diablo-feat-", gsub("[^a-zA-Z0-9]", "", omics_name))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nmake_dt(read.csv("%s", stringsAsFactors = FALSE), caption = "DIABLO top features - %s")\n```\n',
+                chunk_id, ff, omics_name
+            ), quiet = TRUE))
         }
     }
 }
