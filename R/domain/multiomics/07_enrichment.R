@@ -134,30 +134,53 @@ extract_enrichment_df <- function(enrich_res) {
 
     # $pathway_results slot (nested by contrast)
     if (!is.null(enrich_res$pathway_results) && is.list(enrich_res$pathway_results)) {
-        # Collect data frames from all contrasts
-        dfs <- list()
-        for (contrast_name in names(enrich_res$pathway_results)) {
-            contrast_res <- enrich_res$pathway_results[[contrast_name]]
-            if (is.data.frame(contrast_res) && nrow(contrast_res) > 0) {
-                dfs[[contrast_name]] <- contrast_res
-            } else if (is.list(contrast_res)) {
-                # May have sub-results (e.g., KEGG, GO)
-                for (sub_name in names(contrast_res)) {
-                    sub_res <- contrast_res[[sub_name]]
-                    if (is.data.frame(sub_res) && nrow(sub_res) > 0) {
-                        dfs[[paste0(contrast_name, "_", sub_name)]] <- sub_res
-                    }
-                }
-            }
-        }
-        # ORA and GSEA tables carry legitimately different columns (e.g. ORA has
-        # Fold_enrichment/Count, GSEA has NES/core_enrichment). bind_rows() aligns
-        # by name and NA-fills the missing method-specific columns, whereas rbind()
-        # requires identical schemas and aborts on heterogeneous inputs.
-        if (length(dfs) > 0) return(dplyr::bind_rows(dfs))
+        df <- collect_contrast_enrichment_dfs(enrich_res$pathway_results)
+        if (!is.null(df)) return(df)
+    }
+
+    # Bare contrast-keyed list. The proteomics pathway module returns
+    # list(<contrast> = list(<db>_<method> = data.frame)) with no
+    # $pathway_results wrapper, so without this branch the whole proteomics
+    # layer was silently dropped from the cross-omics combination.
+    if (is.list(enrich_res)) {
+        df <- collect_contrast_enrichment_dfs(enrich_res)
+        if (!is.null(df)) return(df)
     }
 
     NULL
+}
+
+
+#' Collect enrichment tables out of a contrast-keyed list
+#'
+#' Walks a \code{list(<contrast> = data.frame)} or
+#' \code{list(<contrast> = list(<sub_result> = data.frame))} and row-binds every
+#' non-empty table it finds.
+#'
+#' @param contrast_list Named list keyed by contrast.
+#' @return A single data frame, or NULL when no table was found.
+collect_contrast_enrichment_dfs <- function(contrast_list) {
+    dfs <- list()
+    for (contrast_name in names(contrast_list)) {
+        contrast_res <- contrast_list[[contrast_name]]
+        if (is.data.frame(contrast_res) && nrow(contrast_res) > 0) {
+            dfs[[contrast_name]] <- contrast_res
+        } else if (is.list(contrast_res)) {
+            # May have sub-results (e.g., KEGG, GO)
+            for (sub_name in names(contrast_res)) {
+                sub_res <- contrast_res[[sub_name]]
+                if (is.data.frame(sub_res) && nrow(sub_res) > 0) {
+                    dfs[[paste0(contrast_name, "_", sub_name)]] <- sub_res
+                }
+            }
+        }
+    }
+    # ORA and GSEA tables carry legitimately different columns (e.g. ORA has
+    # Fold_enrichment/Count, GSEA has NES/core_enrichment). bind_rows() aligns
+    # by name and NA-fills the missing method-specific columns, whereas rbind()
+    # requires identical schemas and aborts on heterogeneous inputs.
+    if (length(dfs) == 0) return(NULL)
+    dplyr::bind_rows(dfs)
 }
 
 
