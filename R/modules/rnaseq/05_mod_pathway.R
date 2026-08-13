@@ -215,13 +215,17 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
     # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
+    rna_de_cfg <- rna_cfg$de %||% list()
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = pw_method,
         min_size           = pw_min,
-        max_size           = pw_max
+        max_size           = pw_max,
+        seed               = config$params$seed %||% 1L,
+        p_cutoff           = rna_de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
     )
 
     # ------------------------------------------------------------------

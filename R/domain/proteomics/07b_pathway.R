@@ -50,8 +50,19 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     } else if (identical(ranking, "lfc")) {
         stat_vals <- lfc_vals
     } else {
-        # Default "stat": sign(log2FC) * -log10(pvalue)
-        stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+        # Default "stat": sign(log2FC) * -log10(pvalue).
+        # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
+        # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
+        # the p-value. Take the direction from the unrounded linearRatio when it
+        # is available, and treat a genuine zero as +1 rather than discarding it.
+        ratio_col <- paste0("linearRatio.imputs.", cn)
+        dir_vals <- if (ratio_col %in% colnames(summary_df)) {
+            sign(log2(as.numeric(summary_df[[ratio_col]])))
+        } else {
+            sign(lfc_vals)
+        }
+        dir_vals[is.na(dir_vals) | dir_vals == 0] <- 1
+        stat_vals <- dir_vals * -log10(pval_vals + 1e-300)
     }
 
     de_tbl <- data.frame(
@@ -152,10 +163,15 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         return(NULL)
     }
 
-    # Build per-contrast DE tables with gene symbols
+    # Build per-contrast DE tables, remapping Protein.Group -> gene symbol only
+    # when the gene sets are keyed on symbols. Under skip_annotation the GMTs
+    # use the same IDs as the DE table, and the remap is lossy: protein groups
+    # sharing a symbol collapse to one member, which silently shrank both the
+    # fGSEA universe and the ORA input.
+    skip_ann <- isTRUE((cfg$annotation %||% list())$skip_annotation)
     de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
         tbl <- extract_de_table_for_pathway(summary_df, cn, config)
-        map_proteins_to_gene_symbols(tbl, summary_df, config)
+        if (skip_ann) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
     })
 
     # ------------------------------------------------------------------
@@ -241,13 +257,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
     # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
+    de_cfg <- cfg$de %||% list()
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = method,
         min_size           = min_size,
-        max_size           = max_size
+        max_size           = max_size,
+        seed               = config$params$seed %||% 1L,
+        p_cutoff           = de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff         = log2(de_cfg$linear_fc_cutoff %||% 1.5)
     )
 
     # Save results and plots
