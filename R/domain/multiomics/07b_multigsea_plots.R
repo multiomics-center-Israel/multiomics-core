@@ -1454,14 +1454,20 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     per_omics_t2n  <- list()
 
     for (om in intersect(gene_omics, names(de_results))) {
-        gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
-        if (is.null(gmt_path) || !nzchar(gmt_path)) next
+        # gmt_file may be a single path or a YAML list of paths (GO + KEGG);
+        # read_gmt() already merges several files, so only these guards needed
+        # to vectorise — with a list they were comparing length-2 vectors and
+        # aborting the whole Multi-ORA step.
+        gmt_path <- unlist(config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file,
+                           use.names = FALSE)
+        if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) next
         # Resolve like every other user-supplied input (metabolomics enrichment,
         # data files): absolute paths pass through, relative ones resolve under
         # the raw/ data dir. resolve_raw_path() would mangle an absolute path.
         gmt_abs <- resolve_input_path(config, gmt_path)
-        if (!file.exists(gmt_abs)) {
-            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
+        if (any(!file.exists(gmt_abs))) {
+            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ",
+                    paste(gmt_abs[!file.exists(gmt_abs)], collapse = ", "))
             next
         }
         gs <- gmt_to_term2gene(gmt_abs)
