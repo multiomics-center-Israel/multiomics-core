@@ -407,8 +407,10 @@ if (dir.exists(multigsea_per_contrast_dir)) {
         cname <- basename(cdir)
         cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
 
+        # Per-contrast dirs hold only the pairwise multigsea_<a>_vs_<b>.png
+        # plots — the combined figure is written at the top level only, so
+        # filtering "_vs_" out here (as the top-level block does) left nothing.
         cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
-        cpngs <- cpngs[!grepl("_vs_", basename(cpngs))]
         if (length(cpngs) == 0) {
             cat("*No MultiGSEA plots for this contrast.*\n\n")
             next
@@ -426,7 +428,16 @@ if (dir.exists(multigsea_per_contrast_dir)) {
         }
     }
 } else {
-    cat("*Per-contrast MultiGSEA results not available.*\n")
+    # Per-contrast MultiGSEA is deliberately skipped for single-contrast runs
+    # (the combined output above already covers it), so say that rather than
+    # implying something failed.
+    n_contrasts <- length(cfg$design$contrasts %||% list())
+    if (n_contrasts <= 1) {
+        cat("*Single-contrast run: the combined MultiGSEA results above already",
+            "cover the only contrast, so no per-contrast split is produced.*\n")
+    } else {
+        cat("*Per-contrast MultiGSEA results not available.*\n")
+    }
 }
 ```
 
