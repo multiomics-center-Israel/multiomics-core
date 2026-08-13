@@ -438,13 +438,19 @@ load_gene_sets <- function(organism,
 #' @export
 run_ora <- function(sig_genes, gene_sets, background, min_size = 10, max_size = 500) {
 
-    gs_sizes <- lengths(gene_sets)
-    gs_filtered <- gene_sets[gs_sizes >= min_size & gs_sizes <= max_size]
+    # Size-filter on the members actually measured, not on raw GMT size. A set
+    # with 300 GMT members but 3 in the background carries no information yet
+    # still consumed a slot in the BH denominator, and could surface as a
+    # "significant" term backed by a handful of features. This also makes ORA
+    # test the same collection fgsea() does, which filters the same way.
+    gs_measured <- lapply(gene_sets, intersect, y = background)
+    gs_sizes <- lengths(gs_measured)
+    gs_filtered <- gs_measured[gs_sizes >= min_size & gs_sizes <= max_size]
 
     if (length(gs_filtered) == 0) return(data.frame())
 
     results <- lapply(names(gs_filtered), function(gs_name) {
-        gs_genes <- intersect(gs_filtered[[gs_name]], background)
+        gs_genes <- gs_filtered[[gs_name]]
         sig_in_gs <- length(intersect(sig_genes, gs_genes))
         sig_not_gs <- length(sig_genes) - sig_in_gs
         gs_not_sig <- length(gs_genes) - sig_in_gs
@@ -653,6 +659,9 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param method "fgsea", "ora", or "both"
 #' @param min_size Minimum gene set size for fGSEA
 #' @param max_size Maximum gene set size for fGSEA
+#' @param seed Integer seed for fgsea's stochastic multilevel step.
+#' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
+#' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -660,7 +669,10 @@ run_pathway_analysis <- function(de_tables,
                                   annotation = NULL,
                                   method = "fgsea",
                                   min_size = 10,
-                                  max_size = 500) {
+                                  max_size = 500,
+                                  seed = 1L,
+                                  p_cutoff = 0.05,
+                                  lfc_cutoff = log2(1.5)) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -700,13 +712,15 @@ run_pathway_analysis <- function(de_tables,
                     ranks <- ranks[!is.na(ranks)]
                     ranks <- sort(ranks, decreasing = TRUE)
 
-                    fgsea_res <- fgsea::fgsea(
+                    # fgseaMultilevel is stochastic: without a seed ~27 of 4087
+                    # GO terms flipped across padj = 0.05 between identical runs.
+                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
                         pathways = gs,
                         stats = ranks,
                         minSize = min_size,
                         maxSize = max_size,
                         nPermSimple = 10000
-                    )
+                    ))
 
                     fgsea_df <- as.data.frame(fgsea_res)
 
@@ -733,9 +747,11 @@ run_pathway_analysis <- function(de_tables,
                 # ---- ORA ----
                 if (method %in% c("ora", "both")) {
 
-                    # Identify significant up/down genes
-                    de_cfg_padj <- 0.05
-                    de_cfg_lfc  <- log2(1.5)
+                    # Identify significant up/down genes. Cutoffs come from the
+                    # caller's de: block rather than being hard-coded, so ORA
+                    # and the DE tables agree on what "significant" means.
+                    de_cfg_padj <- p_cutoff
+                    de_cfg_lfc  <- lfc_cutoff
                     sig_up   <- res$FeatureID[!is.na(res$padj) &
                                               res$padj < de_cfg_padj &
                                               res$log2FoldChange > de_cfg_lfc]
