@@ -552,8 +552,16 @@ if (dir.exists(mora_per_contrast_dir)) {
 ```
 
 ```{r metab-ora-setup, include=FALSE}
+# Compound ORA comes out of run_compound_ora() via two callers: the KEGG/OrgDb
+# multi-ORA branch, and the per-omics cross-enrichment step — the only one that
+# runs for an organism with no OrgDb/KEGG code. Either file is the same
+# analysis, and neither depends on the gene-based multi-ORA having succeeded.
 metab_ora_csv <- file.path(multi_ora_dir, "compound_ora_results.csv")
-has_metab_ora <- has_multi_ora && file.exists(metab_ora_csv)
+if (!file.exists(metab_ora_csv)) {
+    metab_ora_csv <- file.path(enrichment_dir, "metabolomics",
+                               "metabolomics_kegg_enrichment.csv")
+}
+has_metab_ora <- file.exists(metab_ora_csv)
 ```
 
 ## Metabolomics Compound Enrichment {.unnumbered}
