@@ -90,6 +90,17 @@ mod_proteomics_exports <- function(
 
         # Write final_results TSV
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
+
+        # Alert the analyst if the model estimates have been flattened relative
+        # to the group means — the failure mode that reads as a vertical stripe
+        # at x = 0 in the volcano.
+        files <- c(files, run_log2fc_shrinkage_check(
+            de_stats     = final_results,
+            contrasts_df = inputs$contrasts,
+            mode         = "proteomics",
+            p_cutoff     = de_cfg$p_cutoff %||% 0.05,
+            out_dir      = dirs$datasets
+        ))
     }
 
     # =========================================================================

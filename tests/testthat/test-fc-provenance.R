@@ -21,6 +21,7 @@
 #   P8 linearFC vs log2FC, each derived independently of the production code
 #   P9 log2FC_from_means: model-free estimate, and DESeq2 shrinkage detection
 #   P7 proteomics: log2FC.imputs and the imputed .norm block
+#   P10 the analyst-facing shrinkage alert (heavy shrinkage, x = 0 stripe)
 #   P6 build_provenance_notes documents every column family a mode emits
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -37,6 +38,7 @@ find_repo_file <- function(rel) {
 
 source(find_repo_file("R/core/01_io.R"))                        # normalize_contrast_name
 source(find_repo_file("R/core/05_export_excel.R"))
+source(find_repo_file("R/core/de_shrinkage_check.R"))
 source(find_repo_file("R/domain/rnaseq/00a_deseq_factory.R"))   # create_deseq_dataset
 source(find_repo_file("R/domain/rnaseq/01_expression.R"))       # compute_cpm
 source(find_repo_file("R/domain/rnaseq/04_de_summary.R"))
@@ -623,6 +625,123 @@ test_that("P9 DESeq2 shrinkage is visible as a gap against log2FC_from_means", {
     expect_lt(shrink_ratio(fr_legacy, low), 0.90)
     expect_lt(shrink_ratio(fr_legacy, low), shrink_ratio(fr_legacy, high))
     expect_gt(shrink_ratio(fr_legacy, high), 0.90)
+})
+
+
+# =============================================================================
+# P10 — the analyst-facing shrinkage alert
+# =============================================================================
+shrink_table <- function(model_lfc, naive_lfc, padj) {
+    data.frame(
+        Gene                       = paste0("g", seq_along(model_lfc)),
+        log2FC.S_vs_NS             = model_lfc,
+        log2FC_from_means.S_vs_NS  = naive_lfc,
+        linearFC.S_vs_NS           = signif(ifelse(model_lfc >= 0, 2^model_lfc,
+                                                   -1 * (2^-model_lfc)), 3),
+        pvalue.S_vs_NS             = padj,
+        padj.S_vs_NS               = padj,
+        stringsAsFactors           = FALSE,
+        check.names                = FALSE
+    )
+}
+
+# 100 features with a real effect, 100 null ones. The null half exists to prove
+# it cannot drag the verdict either way (its ratio is 0/0-ish by construction).
+shrink_fixture <- function(factor_applied = 1) {
+    naive <- c(rep(c(2, -2), each = 50L), rep(c(0.002, -0.002), each = 50L))
+    model <- naive * factor_applied
+    padj  <- c(rep(1e-6, 100L), rep(0.9, 100L))
+    shrink_table(model, naive, padj)
+}
+
+test_that("P10 a healthy fit is not flagged", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "ok")
+    expect_equal(chk$median_ratio, 1)
+    expect_equal(chk$n_considered, 100)   # the null half is excluded by the floor
+    expect_equal(chk$frac_flat, 0)
+})
+
+test_that("P10 ordinary betaPrior-scale shrinkage is not flagged", {
+    # ~0.85 is what DESeq2 betaPrior produced in the P9 fixture; that is normal
+    # behaviour and must not fire the alert.
+    chk <- check_log2fc_shrinkage(shrink_fixture(0.85), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "ok")
+    expect_equal(chk$median_ratio, 0.85)
+})
+
+test_that("P10 heavy shrinkage is flagged as 'shrunk'", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(0.3), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "shrunk")
+    expect_equal(chk$median_ratio, 0.3)
+    expect_equal(chk$frac_flat, 0)        # shrunk, but not flattened to zero
+})
+
+test_that("P10 a collapse to zero is flagged as 'collapsed'", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1e-5), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "collapsed")
+    expect_equal(chk$frac_flat, 1)
+    # Every significant feature sits at log2FC ~ 0: the x = 0 volcano stripe
+    expect_equal(chk$frac_sig_flat, 1)
+    expect_equal(chk$n_significant, 100)
+})
+
+test_that("P10 the x = 0 stripe is detected even when the median ratio looks fine", {
+    # Most features are estimated correctly, so the median ratio is 1, but a
+    # block of significant features has been flattened. The median would miss
+    # this; the stripe check must not.
+    naive <- rep(c(2, -2), each = 100L)
+    model <- naive
+    model[1:30] <- 0                       # flattened, and significant below
+    padj  <- c(rep(1e-6, 100L), rep(1e-6, 100L))
+
+    chk <- check_log2fc_shrinkage(shrink_table(model, naive, padj), "S_vs_NS", mode = "rna")
+    expect_equal(chk$median_ratio, 1)      # the median is blind to it
+    expect_equal(chk$frac_sig_flat, 0.15)  # 30 of 200 significant features
+    expect_equal(chk$flag, "collapsed")
+})
+
+test_that("P10 null features cannot trigger the alert on their own", {
+    # This is the evm.TU.ptg000675l_np1212.2 situation: both estimates ~0, so
+    # their ratio is unstable and meaningless. The floor must exclude them.
+    naive <- rep(c(0.005, -0.005), each = 100L)
+    model <- naive / 4.6                   # a ratio of ~0.22, from noise alone
+    chk <- check_log2fc_shrinkage(shrink_table(model, naive, rep(0.99, 200L)),
+                                  "S_vs_NS", mode = "rna")
+    expect_equal(chk$n_considered, 0)
+    expect_true(is.na(chk$median_ratio))
+    expect_equal(chk$flag, "ok")
+})
+
+test_that("P10 the check is skipped, not errored, when the columns are absent", {
+    df <- prov_summary_df()                # has log2FC but no log2FC_from_means
+    expect_null(check_log2fc_shrinkage(df, "S_vs_NS", mode = "rna"))
+    expect_null(check_log2fc_shrinkage(df, "S_vs_NS", mode = "metabolomics"))
+})
+
+test_that("P10 the alert names the contrast, the symptom and the volcano stripe", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1e-5), "S_vs_NS", mode = "rna")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "S_vs_NS")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "COLLAPSED")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "x = 0")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "log2fc_shrinkage_check.tsv")
+
+    # A healthy run reports, but does not warn
+    ok <- check_log2fc_shrinkage(shrink_fixture(1), "S_vs_NS", mode = "rna")
+    expect_silent(suppressMessages(warn_log2fc_shrinkage(ok, mode = "rna")))
+})
+
+test_that("P10 proteomics column naming resolves too", {
+    df <- data.frame(
+        FeatureID                      = paste0("p", 1:4),
+        `log2FC.imputs.S_vs_NS`        = c(2, -2, 2, -2),
+        `log2FC_from_means.S_vs_NS`    = c(2, -2, 2, -2),
+        `padj.imputs.S_vs_NS`          = 1e-6,
+        stringsAsFactors = FALSE, check.names = FALSE
+    )
+    chk <- check_log2fc_shrinkage(df, "S_vs_NS", mode = "proteomics")
+    expect_equal(chk$median_ratio, 1)
+    expect_equal(chk$flag, "ok")
 })
 
 
