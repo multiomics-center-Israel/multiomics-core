@@ -40,6 +40,155 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     invisible(TRUE)
 }
 
+#' Column glossary + fold-change reconciliation notes for a mode
+#'
+#' Returns the text shown on the "How to read" sheet: what each column block
+#' holds, and how to get from the per-sample values to the reported fold change.
+#' Split out from \code{\link{add_provenance_sheet}} so the wording is testable
+#' without openxlsx.
+#'
+#' @param mode "rna", "proteomics", or any other mode (generic fallback).
+#' @return List with \code{glossary} (data.frame: Column, Meaning) and
+#'   \code{notes} (character vector, one paragraph per element).
+build_provenance_notes <- function(mode = "rna") {
+    fc_rule <- paste(
+        "linearFC = 2^log2FC when log2FC is at least 0, and -1 / 2^log2FC when it is negative.",
+        "It is a signed linear fold change, not a log: linearFC = -1.61 means 1.61-fold lower in the numerator group."
+    )
+
+    if (identical(mode, "rna")) {
+        glossary <- data.frame(
+            Column = c(
+                "<sample>",
+                "<sample>.norm",
+                "Mean.<group>",
+                "CV.<group>",
+                "log2FC.<contrast>",
+                "linearFC.<contrast>",
+                "pvalue.<contrast>",
+                "padj.<contrast>",
+                "upDown.<contrast>"
+            ),
+            Meaning = c(
+                "Raw counts, after gene filtering. Not corrected for sequencing depth.",
+                "DESeq2 normalized counts: the raw count divided by that sample's size factor. This is the matrix the DE model was fitted on.",
+                "Arithmetic mean of the .norm values across the replicates of that group.",
+                "Coefficient of variation (%) within the group, computed on linear CPM.",
+                "DESeq2 log2 fold change for the contrast (numerator relative to denominator).",
+                fc_rule,
+                "Wald test p-value.",
+                "Benjamini-Hochberg adjusted p-value.",
+                "Direction, filled only for features that pass both cutoffs (see the Cutoffs sheet)."
+            ),
+            stringsAsFactors = FALSE
+        )
+        notes <- c(
+            "Reconciling the fold change from this row:",
+            "1. log2( Mean.<numerator> / Mean.<denominator> ) should land close to log2FC.",
+            "2. Apply the linearFC rule above to log2FC. This step is exact.",
+            "The same arithmetic on the raw <sample> columns will not reproduce log2FC. Raw counts are not corrected for library size, so any difference in sequencing depth between the groups shifts the ratio.",
+            "Step 1 is an approximation, not an identity. log2FC is a negative-binomial GLM coefficient, not a ratio of arithmetic means; the two agree closely for well-expressed features and can differ for low-count ones."
+        )
+    } else if (identical(mode, "proteomics")) {
+        glossary <- data.frame(
+            Column = c(
+                "<sample>",
+                "<sample>.norm",
+                "Mean.<group>",
+                "CV.<group>",
+                "log2FC.imputs.<contrast>",
+                "linearFC.imputs.<contrast>",
+                "pvalue.imputs.<contrast>",
+                "padj.imputs.<contrast>",
+                "upDown.imputs.<contrast>"
+            ),
+            Meaning = c(
+                "log2 intensity after filtering and normalization, before imputation. Blank cells were not measured.",
+                "The same matrix after imputation, for one representative imputation run. This is the kind of matrix limma was fitted on.",
+                "Arithmetic mean of the .norm log2 values across the replicates of that group.",
+                "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
+                "log2 of the mean linear ratio across the imputation runs: log2( mean of 2^logFC over runs ).",
+                fc_rule,
+                "Quantile across imputation runs of the moderated t-test p-value.",
+                "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
+                "Direction, filled only for features that pass the consensus rule (see the Cutoffs sheet)."
+            ),
+            stringsAsFactors = FALSE
+        )
+        notes <- c(
+            "Reconciling the fold change from this row:",
+            "1. Mean.<numerator> minus Mean.<denominator> (a difference, because the values are log2) should land close to log2FC.imputs.",
+            "2. Apply the linearFC rule above to log2FC.imputs. This step is exact.",
+            "Step 1 is an approximation for two reasons: the reported statistic averages over all imputation runs while the .norm block shows a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
+            "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation."
+        )
+    } else {
+        glossary <- data.frame(
+            Column = c("<sample>", "Mean.<group>", "CV.<group>",
+                       "log2FC.<contrast>", "linearFC.<contrast>"),
+            Meaning = c(
+                "Per-sample values as exported by this mode.",
+                "Arithmetic mean across the replicates of that group.",
+                "Coefficient of variation (%) within the group.",
+                "log2 fold change for the contrast, as reported by the DE model.",
+                fc_rule
+            ),
+            stringsAsFactors = FALSE
+        )
+        notes <- "Group means are descriptive summaries. The reported fold change is a model estimate, so the two agree closely but are not identical."
+    }
+
+    list(glossary = glossary, notes = notes)
+}
+
+#' Add a "How to read" sheet explaining the column blocks and fold changes
+#'
+#' Written to every Final_results workbook so the numbers in the Results sheet
+#' can be rechecked without reading the pipeline source.
+#'
+#' @param wb openxlsx workbook.
+#' @param mode Mode string, e.g. "rna" or "proteomics".
+#' @param sheet Sheet name (default "How to read").
+#' @return TRUE, invisibly.
+add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read") {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
+
+    info <- build_provenance_notes(mode)
+
+    if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
+    openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = FALSE)
+
+    title_style   <- openxlsx::createStyle(textDecoration = "bold", fontSize = 12)
+    header_style  <- openxlsx::createStyle(textDecoration = "bold",
+                                           border = "bottom", borderStyle = "thin")
+    wrap_style    <- openxlsx::createStyle(wrapText = TRUE, valign = "top")
+
+    openxlsx::writeData(wb, sheet, x = "Columns in the Results sheet",
+                        startCol = 1, startRow = 1, colNames = FALSE)
+    openxlsx::addStyle(wb, sheet, title_style, rows = 1, cols = 1, stack = TRUE)
+
+    glossary_start <- 3
+    openxlsx::writeData(wb, sheet, info$glossary, startRow = glossary_start)
+    openxlsx::addStyle(wb, sheet, header_style, rows = glossary_start, cols = 1:2, stack = TRUE)
+    openxlsx::addStyle(wb, sheet, wrap_style,
+                       rows = (glossary_start + 1):(glossary_start + nrow(info$glossary)),
+                       cols = 2, stack = TRUE)
+
+    notes_start <- glossary_start + nrow(info$glossary) + 2
+    openxlsx::writeData(wb, sheet, x = "Checking the numbers",
+                        startCol = 1, startRow = notes_start, colNames = FALSE)
+    openxlsx::addStyle(wb, sheet, title_style, rows = notes_start, cols = 1, stack = TRUE)
+    openxlsx::writeData(wb, sheet, x = info$notes,
+                        startCol = 1, startRow = notes_start + 1, colNames = FALSE)
+    openxlsx::addStyle(wb, sheet, wrap_style,
+                       rows = (notes_start + 1):(notes_start + length(info$notes)),
+                       cols = 1, stack = TRUE)
+
+    openxlsx::setColWidths(wb, sheet, cols = 1, widths = 34)
+    openxlsx::setColWidths(wb, sheet, cols = 2, widths = 95)
+    invisible(TRUE)
+}
+
 #' Get p-value cutoff tag for filename (generic for any mode)
 p_tag_generic <- function(config, mode, default = "NA") {
     p <- config$modes[[mode]]$de$p_cutoff
@@ -57,13 +206,18 @@ p_tag_generic <- function(config, mode, default = "NA") {
 #'   annotation rows above the data. NULL = all non-ID columns.
 #' @param sample_label_cols Character vector of metadata columns to concatenate
 #'   (with "_") for informative sample headers. NULL = keep original IDs.
+#' @param provenance_sheet Logical; add a "How to read" sheet documenting the
+#'   column blocks and how to reconcile log2FC/linearFC with the per-sample
+#'   values. Opt-in so modes that do not export the normalized block are
+#'   unaffected.
 write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col,
                                                        expr_for_de, with_cutoffs = TRUE,
                                                        clustering_res = NULL,
                                                        sample_meta = NULL,
                                                        sample_id_col = NULL,
                                                        annotation_rows = NULL,
-                                                       sample_label_cols = NULL) {
+                                                       sample_label_cols = NULL,
+                                                       provenance_sheet = FALSE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
     # Validate inputs
     if (is.null(final_results)) {
@@ -140,19 +294,23 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                     colnames(df_out)[colnames(df_out) == sc] <- new_name
                 }
             }
-            # Also rename z-score columns
-            zscore_cols_in_df <- grep("\\.zscore$", colnames(df_out), value = TRUE)
-            for (zc in zscore_cols_in_df) {
-                base_id <- sub("\\.zscore$", "", zc)
-                if (base_id %in% names(sample_label_map)) {
-                    new_name <- paste0(sample_label_map[[base_id]], ".zscore")
-                    colnames(df_out)[colnames(df_out) == zc] <- new_name
+            # Also rename the derived per-sample blocks (normalized values,
+            # z-scores) so a renamed header stays readable across the whole row
+            for (sfx in c(".norm", ".zscore")) {
+                sfx_re <- paste0(gsub(".", "\\.", sfx, fixed = TRUE), "$")
+                derived_cols <- grep(sfx_re, colnames(df_out), value = TRUE)
+                for (dc in derived_cols) {
+                    base_id <- sub(sfx_re, "", dc)
+                    if (base_id %in% names(sample_label_map)) {
+                        new_name <- paste0(sample_label_map[[base_id]], sfx)
+                        colnames(df_out)[colnames(df_out) == dc] <- new_name
+                    }
                 }
             }
         }
 
         # ---- Detect DE stat columns and group by contrast ----
-        de_col_pattern <- "^(linearFC|pvalue|padj|upDown)\\."
+        de_col_pattern <- "^(log2FC|linearFC|pvalue|padj|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
         if (length(de_col_indices) > 0) {
@@ -176,26 +334,30 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 
         # ---- Write annotation rows (rows 1..n_annot_rows) ----
         if (n_annot_rows > 0) {
-            # Map sample columns to their column indices in df_out
-            # (after potential renaming)
-            sample_col_indices <- vapply(sample_cols_in_df, function(sc) {
-                target <- if (!is.null(sample_label_map) && sc %in% names(sample_label_map)) {
+            # Map every per-sample column to its sample ID and its column index
+            # in df_out (after potential renaming). Both the measured block and
+            # the normalized block belong to the same sample, so the group
+            # labels above must repeat over both — otherwise the second block
+            # sits under a blank header and reads as unrelated.
+            sample_col_map <- do.call(rbind, lapply(sample_cols_in_df, function(sc) {
+                display <- if (!is.null(sample_label_map) && sc %in% names(sample_label_map)) {
                     sample_label_map[[sc]]
                 } else {
                     sc
                 }
-                match(target, colnames(df_out))
-            }, integer(1))
-            sample_col_indices <- sample_col_indices[!is.na(sample_col_indices)]
+                idx <- match(c(display, paste0(display, ".norm")), colnames(df_out))
+                data.frame(sample_id = sc, col_idx = idx,
+                           stringsAsFactors = FALSE)
+            }))
+            sample_col_map <- sample_col_map[!is.na(sample_col_map$col_idx), , drop = FALSE]
 
             row_idx <- 1
             # Write Sample_ID row first
             openxlsx::writeData(wb, sheet, x = "Sample_ID", startCol = 1, startRow = row_idx,
                                 colNames = FALSE, rowNames = FALSE)
-            for (j in seq_along(sample_col_indices)) {
-                sc <- sample_cols_in_df[j]
-                openxlsx::writeData(wb, sheet, x = sc,
-                                    startCol = sample_col_indices[j],
+            for (j in seq_len(nrow(sample_col_map))) {
+                openxlsx::writeData(wb, sheet, x = sample_col_map$sample_id[j],
+                                    startCol = sample_col_map$col_idx[j],
                                     startRow = row_idx,
                                     colNames = FALSE, rowNames = FALSE)
             }
@@ -206,11 +368,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 vals <- annot_row_data[[annot_name]]
                 openxlsx::writeData(wb, sheet, x = annot_name, startCol = 1,
                                     startRow = row_idx, colNames = FALSE, rowNames = FALSE)
-                for (j in seq_along(sample_col_indices)) {
-                    sc <- sample_cols_in_df[j]
+                for (j in seq_len(nrow(sample_col_map))) {
+                    sc <- sample_col_map$sample_id[j]
                     val <- if (sc %in% names(vals)) vals[[sc]] else NA
                     openxlsx::writeData(wb, sheet, x = val,
-                                        startCol = sample_col_indices[j],
+                                        startCol = sample_col_map$col_idx[j],
                                         startRow = row_idx,
                                         colNames = FALSE, rowNames = FALSE)
                 }
@@ -290,6 +452,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             fill_manual_cutoffs_formulas_legacy(wb, sheet, df_out, config,
                                                  mode = mode,
                                                  start_row = data_start_row + 1)
+        }
+        if (isTRUE(provenance_sheet)) {
+            add_provenance_sheet(wb, mode = mode)
         }
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
         path
@@ -371,8 +536,10 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         # Reorder columns to: ID, annotations, expression, CV, DE_stats, clustering, z-scores
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
+        norm_cols_present <- intersect(paste0(expr_cols, ".norm"), names(de_df))
+        mean_cols_present <- grep("^Mean\\.", names(de_df), value = TRUE)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
-        de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        de_stat_cols <- grep("^(log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
               "Binary_Pattern", "Binary_Corr"),
@@ -380,18 +547,23 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         )
         zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
 
-        # Annotation columns = everything not in ID, expression, CV, DE stats, clustering, z-scores, or 'order'
-        all_known <- c(id_cols, expr_cols, cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
+        # Annotation columns = everything not in ID, expression, normalized
+        # expression, group means, CV, DE stats, clustering, z-scores, or 'order'
+        all_known <- c(id_cols, expr_cols, norm_cols_present, mean_cols_present,
+                       cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
         annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
         expr_cols_present <- intersect(expr_cols, names(de_df))
 
-        # Build desired column order (CV columns sit right after the expression block)
+        # Build desired column order: the measured block, then the block the
+        # model saw, then the summaries derived from it, then the DE stats
         desired_order <- c(
             id_cols,
             annot_cols_present,
             expr_cols_present,
+            norm_cols_present,
+            mean_cols_present,
             cv_cols_present,
             de_stat_cols,
             clustering_cols,
@@ -424,6 +596,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     # (see build_rnaseq_summary_df() in R/domain/rnaseq/04_de_summary.R).
     if (mode == "rna") {
         list(
+            log2fc = paste0("log2FC.", contrast),
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
@@ -446,6 +619,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     } else {
         # Proteomics (uses imputation naming)
         list(
+            log2fc = paste0("log2FC.imputs.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),
@@ -558,7 +732,76 @@ cv_percent <- function(mat) {
 #'   computed (missing inputs, no contrast groups, or ambiguous Factor).
 compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
                                      contrasts_df, group_col = NULL) {
-    if (is.null(expr_linear) || is.null(sample_meta) || is.null(sample_id_col)) {
+    compute_group_stat_columns(
+        expr          = expr_linear,
+        sample_meta   = sample_meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df,
+        stat_fn       = cv_percent,
+        prefix        = "CV.",
+        group_col     = group_col
+    )
+}
+
+#' Per-group mean columns for contrast groups
+#'
+#' Companion to \code{\link{compute_group_cv_columns}}: emits
+#' \code{Mean.<group>} columns, the arithmetic per-feature mean across the
+#' replicates of each group that appears in at least one contrast.
+#'
+#' The mean is taken on whatever scale \code{expr} is on — the caller decides.
+#' Pass the matrix the DE model actually saw (DESeq2-normalized counts for
+#' RNA-seq, the imputed log2 matrix for proteomics) so that a reader can walk
+#' from the per-sample values to the reported fold change.
+#'
+#' @param expr Numeric matrix (features x samples). Column names must match
+#'   \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding the sample IDs.
+#' @param contrasts_df Contrasts table with \code{Factor}, \code{Numerator},
+#'   \code{Denominator} columns.
+#' @param group_col Optional override for the grouping column.
+#' @return Feature-indexed data.frame of \code{Mean.<group>} columns, or NULL.
+compute_group_mean_columns <- function(expr, sample_meta, sample_id_col,
+                                       contrasts_df, group_col = NULL) {
+    compute_group_stat_columns(
+        expr          = expr,
+        sample_meta   = sample_meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df,
+        stat_fn       = function(m) rowMeans(m, na.rm = TRUE),
+        prefix        = "Mean.",
+        group_col     = group_col
+    )
+}
+
+#' Per-group summary columns for contrast groups (shared machinery)
+#'
+#' Resolves the grouping column from the contrasts table, collects the samples
+#' belonging to each group that appears in at least one contrast, and applies
+#' \code{stat_fn} to that sub-matrix. Backs both
+#' \code{\link{compute_group_cv_columns}} and
+#' \code{\link{compute_group_mean_columns}} so the two can never disagree about
+#' which samples make up a group.
+#'
+#' @param expr Numeric matrix (features x samples). Column names must match
+#'   \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding the sample IDs.
+#' @param contrasts_df Contrasts table with \code{Factor}, \code{Numerator},
+#'   \code{Denominator} columns.
+#' @param stat_fn Function taking a features x replicates matrix and returning
+#'   one value per feature (row).
+#' @param prefix Column-name prefix for the emitted columns, e.g. \code{"CV."}.
+#' @param group_col Optional override for the grouping column. Defaults to the
+#'   (single) value of \code{contrasts_df$Factor}.
+#' @return A feature-indexed data.frame of \code{<prefix><group>} columns
+#'   (rownames = \code{rownames(expr)}), or \code{NULL} if the statistic cannot
+#'   be computed (missing inputs, no contrast groups, or ambiguous Factor).
+compute_group_stat_columns <- function(expr, sample_meta, sample_id_col,
+                                       contrasts_df, stat_fn, prefix,
+                                       group_col = NULL) {
+    if (is.null(expr) || is.null(sample_meta) || is.null(sample_id_col)) {
         return(NULL)
     }
     if (!is.data.frame(contrasts_df) ||
@@ -575,7 +818,10 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
     } else NULL)
     factor_col <- factor_col[!is.na(factor_col) & factor_col %in% colnames(sample_meta)]
     if (length(factor_col) != 1L) {
-        warning("compute_group_cv_columns: could not resolve a single grouping column; skipping CV.")
+        warning(sprintf(
+            "compute_group_stat_columns('%s'): could not resolve a single grouping column; skipping.",
+            prefix
+        ))
         return(NULL)
     }
 
@@ -585,23 +831,23 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
     groups <- groups[!is.na(groups) & nzchar(groups)]
     if (length(groups) == 0L) return(NULL)
 
-    expr_linear <- as.matrix(expr_linear)
+    expr <- as.matrix(expr)
     meta_ids <- as.character(sample_meta[[sample_id_col]])
     meta_grp <- as.character(sample_meta[[factor_col]])
-    col_grp  <- meta_grp[match(colnames(expr_linear), meta_ids)]
+    col_grp  <- meta_grp[match(colnames(expr), meta_ids)]
 
-    cv_list <- lapply(groups, function(g) {
+    stat_list <- lapply(groups, function(g) {
         cols <- which(col_grp == g)
         if (length(cols) == 0L) {
-            return(rep(NA_real_, nrow(expr_linear)))
+            return(rep(NA_real_, nrow(expr)))
         }
-        unname(cv_percent(expr_linear[, cols, drop = FALSE]))
+        unname(stat_fn(expr[, cols, drop = FALSE]))
     })
-    names(cv_list) <- paste0("CV.", groups)
+    names(stat_list) <- paste0(prefix, groups)
 
-    cv_df <- as.data.frame(cv_list, check.names = FALSE, stringsAsFactors = FALSE)
-    rownames(cv_df) <- rownames(expr_linear)
-    cv_df
+    stat_df <- as.data.frame(stat_list, check.names = FALSE, stringsAsFactors = FALSE)
+    rownames(stat_df) <- rownames(expr)
+    stat_df
 }
 
 #' Build final results table (generic for any mode)
@@ -625,8 +871,19 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
 #'   (e.g. from \code{\link{compute_group_cv_columns}}). When supplied, these
 #'   columns are inserted immediately after the per-sample expression block and
 #'   before the per-contrast statistics, matched by feature ID.
+#' @param norm_expr Optional second per-sample matrix (features x samples) — the
+#'   values the DE model actually saw, as opposed to the raw/observed values in
+#'   \code{expr_df}. Written as a block right after \code{expr_df}, with
+#'   \code{norm_suffix} appended to each column name so the two blocks stay
+#'   distinguishable. This is what lets a reader reproduce the reported fold
+#'   change from the table itself.
+#' @param norm_suffix Suffix appended to the \code{norm_expr} column names.
+#' @param mean_cols Optional feature-indexed data.frame of per-group mean columns
+#'   (e.g. from \code{\link{compute_group_mean_columns}}), inserted after the
+#'   \code{norm_expr} block and before \code{cv_cols}.
 #'
-#' @return data.frame with ID, annotations, expression, [CV.<group>], DE stats, pass_any_contrast
+#' @return data.frame with ID, annotations, expression, [normalized expression],
+#'   [Mean.<group>], [CV.<group>], DE stats, pass_any_contrast
 build_final_results_generic <- function(
   summary_df,
   expr_df,
@@ -637,7 +894,10 @@ build_final_results_generic <- function(
   fc_is_signed = TRUE,
   fc_direction_col = NULL,
   mode = "proteomics",  # FIX 2: Add mode parameter for column naming
-  cv_cols = NULL
+  cv_cols = NULL,
+  norm_expr = NULL,
+  norm_suffix = ".norm",
+  mean_cols = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -755,6 +1015,50 @@ build_final_results_generic <- function(
     }
 
     # ============================================================
+    # ADD MODEL-INPUT ("NORMALIZED") EXPRESSION BLOCK
+    # ============================================================
+    # expr_df above is what was measured (raw counts / observed log2
+    # intensities); this block is what the DE model was fitted on. Showing both
+    # is the whole point: a fold change computed on normalized values cannot be
+    # rederived from raw values alone, which is exactly the mismatch readers hit
+    # when they eyeball the per-sample columns.
+
+    if (!is.null(norm_expr)) {
+        norm_df <- as.data.frame(norm_expr, check.names = FALSE)
+        if (is.null(rownames(norm_df))) {
+            warning("norm_expr has no rownames. Cannot add normalized expression values.")
+        } else {
+            norm_matched <- norm_df[match(base[[feature_id_col]], rownames(norm_df)), , drop = FALSE]
+            colnames(norm_matched) <- paste0(colnames(norm_df), norm_suffix)
+            rownames(norm_matched) <- NULL
+
+            match_rate <- sum(base[[feature_id_col]] %in% rownames(norm_df)) / nrow(base)
+            if (match_rate < 0.95) {
+                warning(sprintf(
+                    "Low match rate for normalized expression values: %.1f%% (%d/%d features matched). Check that norm_expr rownames match feature IDs.",
+                    match_rate * 100, sum(base[[feature_id_col]] %in% rownames(norm_df)), nrow(base)
+                ))
+            }
+
+            base <- cbind(base, norm_matched)
+        }
+    }
+
+    # ============================================================
+    # ADD PER-GROUP MEAN COLUMNS (on the model-input scale)
+    # ============================================================
+
+    if (!is.null(mean_cols) && is.data.frame(mean_cols) && ncol(mean_cols) > 0) {
+        if (is.null(rownames(mean_cols))) {
+            warning("mean_cols has no rownames. Cannot add per-group mean columns.")
+        } else {
+            mean_matched <- mean_cols[match(base[[feature_id_col]], rownames(mean_cols)), , drop = FALSE]
+            rownames(mean_matched) <- NULL
+            base <- cbind(base, mean_matched)
+        }
+    }
+
+    # ============================================================
     # ADD PER-GROUP CV COLUMNS (linear-scale CV%, after expression)
     # ============================================================
 
@@ -806,7 +1110,12 @@ build_final_results_generic <- function(
             rep(NA, length(m))
         }
 
-        # Populate FC, p-value, adjusted p-value
+        # Populate log2FC (when the mode's DE step supplies it), FC, p, padj.
+        # log2FC comes first because it is the primitive the model reports;
+        # linearFC is a presentation of it (signed reciprocal for FC < 1).
+        if (!is.null(cols$log2fc) && cols$log2fc %in% colnames(summary_df)) {
+            base[[cols$log2fc]] <- summary_df[[cols$log2fc]][m]
+        }
         base[[cols$fc]] <- fc_vals
         base[[cols$p]] <- summary_df[[cols$p]][m]
         base[[cols$padj]] <- summary_df[[cols$padj]][m]
