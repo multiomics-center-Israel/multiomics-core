@@ -60,7 +60,8 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
 
     # 3) final results TSV
     if (!is.null(inputs$contrasts)) {
-        final_results <- build_final_results_rnaseq(pre = pre, summary_df = summary_df, contrasts_df = inputs$contrasts, row_data = pre$row_data, config = config)
+        norm_counts <- deseq2_normalized_counts(de_res$dds)
+        final_results <- build_final_results_rnaseq(pre = pre, summary_df = summary_df, contrasts_df = inputs$contrasts, row_data = pre$row_data, config = config, norm_counts = norm_counts)
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 
         # 4) Excel outputs
@@ -91,16 +92,46 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
                 sample_meta = pre$meta,
                 sample_id_col = rna_sample_id_col,
                 annotation_rows = excel_cfg$annotation_rows,
-                sample_label_cols = excel_cfg$sample_label_cols
+                sample_label_cols = excel_cfg$sample_label_cols,
+                provenance_sheet = TRUE
             ))
         }
     }
     unique(files)
 }
 
+#' Extract DESeq2 normalized counts from a fitted DESeqDataSet
+#'
+#' The counts the DE model was actually fitted on: raw counts divided by the
+#' per-sample size factors (or by the gene-wise normalization factors, when the
+#' input came from tximport and carries average transcript lengths). Returned so
+#' the final results table can show them next to the raw counts — the raw
+#' columns alone cannot reproduce log2FC whenever library sizes differ between
+#' groups.
+#'
+#' @param dds A fitted \code{DESeqDataSet}, or NULL.
+#' @return Numeric matrix (genes x samples) of normalized counts, or NULL when
+#'   \code{dds} is absent or carries no normalization.
+deseq2_normalized_counts <- function(dds) {
+    if (is.null(dds)) return(NULL)
+    if (!requireNamespace("DESeq2", quietly = TRUE)) return(NULL)
 
+    has_norm <- !is.null(DESeq2::sizeFactors(dds)) ||
+        !is.null(DESeq2::normalizationFactors(dds))
+    if (!isTRUE(has_norm)) {
+        warning("deseq2_normalized_counts: dds carries no size/normalization factors; skipping the normalized block.")
+        return(NULL)
+    }
+
+    as.matrix(DESeq2::counts(dds, normalized = TRUE))
+}
+
+#' @param norm_counts Optional DESeq2-normalized count matrix (from
+#'   \code{\link{deseq2_normalized_counts}}). When supplied it is exported as a
+#'   \code{<sample>.norm} block plus \code{Mean.<group>} columns, so the
+#'   reported fold change can be rechecked from the table.
 build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data = NULL,
-                                        config = NULL) {
+                                        config = NULL, norm_counts = NULL) {
     # FIX 1: Remove annotation columns (gene_name, symbol, description) from final_results
     # FIX 2: Pass mode="rna" for correct column naming (no ".imputs.")
     # FIX 5: Use RAW counts (expr_filt) not normalized (expr_work)
@@ -111,6 +142,7 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
     # CPM (2^expr_work would be wrong for VST/preprocessed runs; raw-count CV
     # is confounded by library size), computed from the raw counts directly.
     cv_cols <- build_group_cv_rnaseq(pre, contrasts_df, config)
+    mean_cols <- build_group_mean_rnaseq(norm_counts, pre, contrasts_df, config)
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -121,7 +153,36 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
         row_data = row_data %||% pre$row_data,
         fc_is_signed = TRUE,  # log2FoldChange is signed
         mode = "rna",  # FIX 2: Use RNA column naming
-        cv_cols = cv_cols
+        cv_cols = cv_cols,
+        norm_expr = norm_counts,
+        mean_cols = mean_cols
+    )
+}
+
+#' Build per-group mean columns for RNA-seq final results
+#'
+#' Means are taken on the DESeq2-normalized counts, i.e. the same values the DE
+#' model saw, so that \code{log2(Mean.<numerator> / Mean.<denominator>)} lands
+#' close to the reported \code{log2FC}. (Close, not equal: log2FC is a
+#' negative-binomial GLM coefficient rather than a ratio of arithmetic means.)
+#'
+#' @param norm_counts DESeq2-normalized count matrix, or NULL.
+#' @param pre RNA-seq preprocessing results (uses \code{meta}).
+#' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag + sample-ID column).
+#' @return Feature-indexed data.frame of \code{Mean.<group>} columns, or NULL.
+build_group_mean_rnaseq <- function(norm_counts, pre, contrasts_df, config = NULL) {
+    if (is.null(norm_counts) || is.null(config)) return(NULL)
+    # Same switch as the CV block: one flag governs the whole summary section.
+    if (!isTRUE(config$modes$rna$excel$group_cv %||% TRUE)) return(NULL)
+    if (is.null(pre$meta)) return(NULL)
+
+    sample_id_col <- config$modes$rna$effects$samples %||% "SampleID"
+    compute_group_mean_columns(
+        expr          = norm_counts,
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df
     )
 }
 
