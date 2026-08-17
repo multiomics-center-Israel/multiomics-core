@@ -64,6 +64,7 @@ build_provenance_notes <- function(mode = "rna") {
                 "Mean.<group>",
                 "CV.<group>",
                 "log2FC.<contrast>",
+                "log2FC_from_means.<contrast>",
                 "linearFC.<contrast>",
                 "pvalue.<contrast>",
                 "padj.<contrast>",
@@ -75,6 +76,7 @@ build_provenance_notes <- function(mode = "rna") {
                 "Arithmetic mean of the .norm values across the replicates of that group.",
                 "Coefficient of variation (%) within the group, computed on linear CPM.",
                 "DESeq2 log2 fold change for the contrast (numerator relative to denominator).",
+                "log2( Mean.<numerator> / Mean.<denominator> ), computed from the two Mean columns in this row. No model behind it.",
                 fc_rule,
                 "Wald test p-value.",
                 "Benjamini-Hochberg adjusted p-value.",
@@ -84,10 +86,11 @@ build_provenance_notes <- function(mode = "rna") {
         )
         notes <- c(
             "Reconciling the fold change from this row:",
-            "1. log2( Mean.<numerator> / Mean.<denominator> ) should land close to log2FC.",
+            "1. log2FC_from_means is log2( Mean.<numerator> / Mean.<denominator> ), so it can be recomputed from the two Mean cells alone.",
             "2. Apply the linearFC rule above to log2FC. This step is exact.",
             "The same arithmetic on the raw <sample> columns will not reproduce log2FC. Raw counts are not corrected for library size, so any difference in sequencing depth between the groups shifts the ratio.",
-            "Step 1 is an approximation, not an identity. log2FC is a negative-binomial GLM coefficient, not a ratio of arithmetic means; the two agree closely for well-expressed features and can differ for low-count ones."
+            "log2FC and log2FC_from_means answer slightly different questions. log2FC is a negative-binomial GLM coefficient; log2FC_from_means is a ratio of arithmetic means. They agree closely for well-expressed features and can differ for low-count ones.",
+            "A large, one-sided gap between them across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC collapses towards zero while log2FC_from_means still carries the effect."
         )
     } else if (identical(mode, "proteomics")) {
         glossary <- data.frame(
@@ -97,6 +100,7 @@ build_provenance_notes <- function(mode = "rna") {
                 "Mean.<group>",
                 "CV.<group>",
                 "log2FC.imputs.<contrast>",
+                "log2FC_from_means.<contrast>",
                 "linearFC.imputs.<contrast>",
                 "pvalue.imputs.<contrast>",
                 "padj.imputs.<contrast>",
@@ -108,6 +112,7 @@ build_provenance_notes <- function(mode = "rna") {
                 "Arithmetic mean of the .norm log2 values across the replicates of that group.",
                 "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
                 "log2 of the mean linear ratio across the imputation runs: log2( mean of 2^logFC over runs ).",
+                "Mean.<numerator> minus Mean.<denominator>, computed from the two Mean columns in this row (a difference, because the values are log2). No model behind it.",
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
@@ -117,10 +122,11 @@ build_provenance_notes <- function(mode = "rna") {
         )
         notes <- c(
             "Reconciling the fold change from this row:",
-            "1. Mean.<numerator> minus Mean.<denominator> (a difference, because the values are log2) should land close to log2FC.imputs.",
+            "1. log2FC_from_means is Mean.<numerator> minus Mean.<denominator>, so it can be recomputed from the two Mean cells alone.",
             "2. Apply the linearFC rule above to log2FC.imputs. This step is exact.",
-            "Step 1 is an approximation for two reasons: the reported statistic averages over all imputation runs while the .norm block shows a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
-            "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation."
+            "log2FC_from_means and log2FC.imputs differ for two reasons: the reported statistic averages over all imputation runs while the Mean columns come from a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
+            "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation.",
+            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table."
         )
     } else {
         glossary <- data.frame(
@@ -310,7 +316,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         }
 
         # ---- Detect DE stat columns and group by contrast ----
-        de_col_pattern <- "^(log2FC|linearFC|pvalue|padj|upDown)\\."
+        de_col_pattern <- "^(log2FC_from_means|log2FC|linearFC|pvalue|padj|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
         if (length(de_col_indices) > 0) {
@@ -539,7 +545,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         norm_cols_present <- intersect(paste0(expr_cols, ".norm"), names(de_df))
         mean_cols_present <- grep("^Mean\\.", names(de_df), value = TRUE)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
-        de_stat_cols <- grep("^(log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        de_stat_cols <- grep("^(log2FC_from_means|log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
               "Binary_Pattern", "Binary_Corr"),
@@ -597,6 +603,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     if (mode == "rna") {
         list(
             log2fc = paste0("log2FC.", contrast),
+            log2fc_means = paste0("log2FC_from_means.", contrast),
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
@@ -620,6 +627,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
         # Proteomics (uses imputation naming)
         list(
             log2fc = paste0("log2FC.imputs.", contrast),
+            log2fc_means = paste0("log2FC_from_means.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),
@@ -775,6 +783,71 @@ compute_group_mean_columns <- function(expr, sample_meta, sample_id_col,
     )
 }
 
+#' Naive per-contrast log2 fold change, computed from the group means
+#'
+#' The textbook estimator: the log2 ratio of the two group means, with no model
+#' behind it. Exported next to the model's own \code{log2FC} so the two can be
+#' compared directly — a large, systematic gap between them is what shrinkage
+#' (or a mis-specified design) looks like in a table. The extreme case is a
+#' reported log2FC collapsed to near zero while this column still shows the
+#' effect the data carries.
+#'
+#' Derived from the same \code{Mean.<group>} columns that are exported, so the
+#' number in this column is always reproducible from the neighbouring cells.
+#'
+#' @param mean_cols Feature-indexed data.frame of \code{Mean.<group>} columns
+#'   (from \code{\link{compute_group_mean_columns}}).
+#' @param contrasts_df Contrasts table with \code{Contrast_name},
+#'   \code{Numerator}, \code{Denominator}.
+#' @param scale Scale of the means: \code{"linear"} (RNA-seq normalized counts —
+#'   take the log2 of the ratio) or \code{"log2"} (proteomics log2 intensities —
+#'   take the difference).
+#' @return Feature-indexed data.frame with one column per contrast, named by
+#'   \code{Contrast_name}, or NULL when no contrast could be computed.
+compute_naive_log2fc_columns <- function(mean_cols, contrasts_df,
+                                         scale = c("linear", "log2")) {
+    scale <- match.arg(scale)
+    if (is.null(mean_cols) || !is.data.frame(mean_cols) || ncol(mean_cols) == 0L) {
+        return(NULL)
+    }
+    if (!is.data.frame(contrasts_df) ||
+        !all(c("Contrast_name", "Numerator", "Denominator") %in% colnames(contrasts_df))) {
+        return(NULL)
+    }
+
+    out <- list()
+    for (i in seq_len(nrow(contrasts_df))) {
+        cn  <- as.character(contrasts_df$Contrast_name[i])
+        num <- paste0("Mean.", as.character(contrasts_df$Numerator[i]))
+        den <- paste0("Mean.", as.character(contrasts_df$Denominator[i]))
+
+        if (!all(c(num, den) %in% colnames(mean_cols))) {
+            warning(sprintf(
+                "compute_naive_log2fc_columns: no group means for contrast '%s' (need '%s' and '%s'); skipping it.",
+                cn, num, den
+            ))
+            next
+        }
+
+        a <- as.numeric(mean_cols[[num]])
+        b <- as.numeric(mean_cols[[den]])
+
+        out[[cn]] <- if (identical(scale, "linear")) {
+            # A zero or negative group mean makes the ratio undefined; NA is the
+            # honest answer, not -Inf leaking into a spreadsheet.
+            ifelse(is.finite(a) & is.finite(b) & a > 0 & b > 0, log2(a / b), NA_real_)
+        } else {
+            ifelse(is.finite(a) & is.finite(b), a - b, NA_real_)
+        }
+    }
+
+    if (length(out) == 0L) return(NULL)
+
+    df <- as.data.frame(out, check.names = FALSE, stringsAsFactors = FALSE)
+    rownames(df) <- rownames(mean_cols)
+    df
+}
+
 #' Per-group summary columns for contrast groups (shared machinery)
 #'
 #' Resolves the grouping column from the contrasts table, collects the samples
@@ -881,6 +954,11 @@ compute_group_stat_columns <- function(expr, sample_meta, sample_id_col,
 #' @param mean_cols Optional feature-indexed data.frame of per-group mean columns
 #'   (e.g. from \code{\link{compute_group_mean_columns}}), inserted after the
 #'   \code{norm_expr} block and before \code{cv_cols}.
+#' @param naive_log2fc Optional feature-indexed data.frame with one column per
+#'   contrast (named by \code{Contrast_name}, e.g. from
+#'   \code{\link{compute_naive_log2fc_columns}}) holding the model-free log2
+#'   fold change from the group means. Written next to the model's
+#'   \code{log2FC}, so the two estimates can be compared per feature.
 #'
 #' @return data.frame with ID, annotations, expression, [normalized expression],
 #'   [Mean.<group>], [CV.<group>], DE stats, pass_any_contrast
@@ -897,7 +975,8 @@ build_final_results_generic <- function(
   cv_cols = NULL,
   norm_expr = NULL,
   norm_suffix = ".norm",
-  mean_cols = NULL
+  mean_cols = NULL,
+  naive_log2fc = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -1115,6 +1194,14 @@ build_final_results_generic <- function(
         # linearFC is a presentation of it (signed reciprocal for FC < 1).
         if (!is.null(cols$log2fc) && cols$log2fc %in% colnames(summary_df)) {
             base[[cols$log2fc]] <- summary_df[[cols$log2fc]][m]
+        }
+        # Model-free counterpart, straight from the exported group means. Sits
+        # next to log2FC so shrinkage shows up as a per-feature gap rather than
+        # something the reader has to go and recompute.
+        if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
+            cn %in% colnames(naive_log2fc)) {
+            base[[cols$log2fc_means]] <-
+                naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
         }
         base[[cols$fc]] <- fc_vals
         base[[cols$p]] <- summary_df[[cols$p]][m]
