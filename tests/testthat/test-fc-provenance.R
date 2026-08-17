@@ -6,8 +6,9 @@
 # compute a different number. These tests pin the columns that close that gap:
 # log2FC next to linearFC, a <sample>.norm block, and Mean.<group>.
 #
-# Deliberately BASE-R ONLY (no Bioconductor, no openxlsx) so they can be run
-# from RStudio on Windows before pushing:
+# Base R and openxlsx-free throughout, except P9's last case, which needs
+# DESeq2 and skips when it is unavailable — so the file still runs from
+# RStudio on Windows before pushing:
 #
 #   testthat::test_file("tests/testthat/test-fc-provenance.R")
 #
@@ -17,6 +18,9 @@
 #   P3 log2FC <-> linearFC is an exact round trip (the signed-reciprocal rule)
 #   P4 build_rnaseq_summary_df emits log2FC.<contrast> from log2FoldChange
 #   P5 metabolomics/lipidomics are untouched (no log2FC column, no norm block)
+#   P8 linearFC vs log2FC, each derived independently of the production code
+#   P9 log2FC_from_means: model-free estimate, and DESeq2 shrinkage detection
+#   P7 proteomics: log2FC.imputs and the imputed .norm block
 #   P6 build_provenance_notes documents every column family a mode emits
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -31,9 +35,12 @@ find_repo_file <- function(rel) {
     stop("Could not locate ", rel, " from working dir ", getwd())
 }
 
-source(find_repo_file("R/core/01_io.R"))                       # normalize_contrast_name
+source(find_repo_file("R/core/01_io.R"))                        # normalize_contrast_name
 source(find_repo_file("R/core/05_export_excel.R"))
+source(find_repo_file("R/domain/rnaseq/00a_deseq_factory.R"))   # create_deseq_dataset
+source(find_repo_file("R/domain/rnaseq/01_expression.R"))       # compute_cpm
 source(find_repo_file("R/domain/rnaseq/04_de_summary.R"))
+source(find_repo_file("R/domain/rnaseq/05_outputs_legacy.R"))   # build_final_results_rnaseq
 source(find_repo_file("R/domain/proteomics/05_de_summary.R"))
 source(find_repo_file("R/domain/proteomics/06_outputs_legacy.R"))
 
@@ -377,8 +384,245 @@ test_that("P7 proteomics final results carry the imputed block and group means",
     expect_equal(p2$S_2.norm, 7.5)
     # Means come from the imputed matrix, so the gap does not skew the group
     expect_equal(p2$Mean.S, mean(c(8, 7.5)))
-    expect_equal(which(names(fr) == "linearFC.imputs.S_vs_NS"),
-                 which(names(fr) == "log2FC.imputs.S_vs_NS") + 1L)
+    # Stat block order: the model estimate, its model-free counterpart, then
+    # the linear presentation of the model estimate.
+    nm <- names(fr)
+    expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 1L],
+                 "log2FC_from_means.S_vs_NS")
+    expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 2L],
+                 "linearFC.imputs.S_vs_NS")
+    # And it is recomputable from the two Mean cells in the same row
+    expect_equal(fr$log2FC_from_means.S_vs_NS, fr$Mean.S - fr$Mean.NS)
+})
+
+
+# =============================================================================
+# P8 — linearFC vs log2FC, each derived independently of the production code
+#      These deliberately do NOT reuse the pipeline's own expression. The
+#      expected values below are hand-computed constants, and the round trip is
+#      written a second, different way (exp/log rather than 2^ and ifelse), so a
+#      change to the production formula cannot make these tests agree with it by
+#      construction.
+# =============================================================================
+test_that("P8 linearFC matches hand-computed constants for known log2FC values", {
+    # Hand-computed, not derived from any formula in R/:
+    #   log2FC  0      -> ratio 1        -> linearFC  1
+    #   log2FC  1      -> ratio 2        -> linearFC  2
+    #   log2FC  2      -> ratio 4        -> linearFC  4
+    #   log2FC -1      -> ratio 0.5      -> 1/0.5 = 2   -> linearFC -2
+    #   log2FC -2      -> ratio 0.25     -> 1/0.25 = 4  -> linearFC -4
+    #   log2FC  0.585  -> ratio 1.5      -> linearFC  1.5   (log2(1.5)=0.5849625)
+    #   log2FC -0.585  -> ratio 0.6667   -> linearFC -1.5
+    #   log2FC -0.6833 -> ratio 0.62114  -> 1/0.62114 = 1.61 -> linearFC -1.61
+    cases <- data.frame(
+        log2FC   = c(0, 1, 2, -1, -2, 0.5849625, -0.5849625, -0.6833),
+        expected = c(1, 2, 4, -2, -4, 1.5,       -1.5,       -1.61),
+        stringsAsFactors = FALSE
+    )
+
+    de_tables <- list(A_vs_B = data.frame(
+        FeatureID      = paste0("g", seq_len(nrow(cases))),
+        log2FoldChange = cases$log2FC,
+        pvalue         = 0.5,
+        padj           = 0.5,
+        stringsAsFactors = FALSE
+    ))
+    sdf <- build_rnaseq_summary_df(de_tables, list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+
+    expect_equal(sdf$log2FC.A_vs_B, cases$log2FC)
+    expect_equal(sdf$linearFC.A_vs_B, cases$expected, tolerance = 1e-3)
+})
+
+test_that("P8 the two columns agree when each is derived on its own", {
+    lfc <- seq(-6, 6, by = 0.013)
+    de_tables <- list(A_vs_B = data.frame(
+        FeatureID      = paste0("g", seq_along(lfc)),
+        log2FoldChange = lfc,
+        pvalue         = 0.5,
+        padj           = 0.5,
+        stringsAsFactors = FALSE
+    ))
+    sdf <- build_rnaseq_summary_df(de_tables, list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+
+    written_log2 <- sdf$log2FC.A_vs_B
+    written_lin  <- sdf$linearFC.A_vs_B
+
+    # Derivation A: log2FC -> linearFC, via exp/log rather than 2^ and ifelse
+    ratio <- exp(written_log2 * log(2))
+    derived_lin <- ratio
+    below <- ratio < 1
+    derived_lin[below] <- -1 / ratio[below]
+    expect_equal(written_lin, signif(derived_lin, 3))
+
+    # Derivation B: linearFC -> log2FC, independently of derivation A
+    magnitude <- abs(written_lin)
+    magnitude[magnitude < 1] <- 1 / magnitude[magnitude < 1]   # no-op guard
+    derived_log2 <- log(magnitude, base = 2) * sign(written_lin)
+    # signif(, 3) on linearFC caps the recoverable precision
+    expect_equal(derived_log2, written_log2, tolerance = 1e-2)
+
+    # And the signs must never disagree between the two columns
+    expect_true(all(sign(written_lin) == sign(written_log2) |
+                    written_log2 == 0))
+})
+
+test_that("P8 proteomics linearFC.imputs agrees with its own log2FC.imputs", {
+    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+
+    written_log2 <- sdf$log2FC.imputs.S_vs_NS
+    written_lin  <- sdf$linearFC.imputs.S_vs_NS
+
+    ratio <- exp(written_log2 * log(2))
+    derived_lin <- ratio
+    below <- ratio < 1
+    derived_lin[below] <- -1 / ratio[below]
+    expect_equal(written_lin, signif(derived_lin, 3))
+})
+
+
+# =============================================================================
+# P9 — log2FC_from_means: the model-free estimate, and shrinkage detection
+# =============================================================================
+test_that("P9 the naive log2FC is exactly the log ratio of the Mean columns", {
+    means <- compute_group_mean_columns(prov_norm(), prov_meta(), "SampleID", prov_contrasts())
+    naive <- compute_naive_log2fc_columns(means, prov_contrasts(), scale = "linear")
+
+    expect_equal(colnames(naive), "S_vs_NS")
+    # g1 normalized: S mean 100, NS mean 100 -> 0.  g2: 200 vs 800 -> -2.
+    expect_equal(naive[["S_vs_NS"]], c(0, -2))
+    # Recomputed by hand from the exported cells, which is the point of it
+    expect_equal(naive[["S_vs_NS"]], log2(means$Mean.S / means$Mean.NS))
+})
+
+test_that("P9 on a log2 scale the naive log2FC is a difference, not a ratio", {
+    log_means <- data.frame(Mean.S = c(10, 3), Mean.NS = c(8, 5),
+                            row.names = c("p1", "p2"), check.names = FALSE)
+    naive <- compute_naive_log2fc_columns(log_means, prov_contrasts(), scale = "log2")
+    expect_equal(naive[["S_vs_NS"]], c(2, -2))
+})
+
+test_that("P9 a non-positive group mean gives NA, not -Inf", {
+    lin_means <- data.frame(Mean.S = c(100, 0), Mean.NS = c(50, 50),
+                            row.names = c("g1", "g2"), check.names = FALSE)
+    naive <- compute_naive_log2fc_columns(lin_means, prov_contrasts(), scale = "linear")
+    expect_equal(naive[["S_vs_NS"]][1], 1)
+    expect_true(is.na(naive[["S_vs_NS"]][2]))
+})
+
+test_that("P9 a contrast with no matching Mean columns warns and is skipped", {
+    means <- compute_group_mean_columns(prov_norm(), prov_meta(), "SampleID", prov_contrasts())
+    other <- data.frame(Contrast_name = "X_vs_Y", Factor = "condition",
+                        Numerator = "X", Denominator = "Y", stringsAsFactors = FALSE)
+    expect_warning(res <- compute_naive_log2fc_columns(means, other, scale = "linear"),
+                   "no group means for contrast")
+    expect_null(res)
+})
+
+test_that("P9 the naive column lands next to log2FC in the exported table", {
+    means <- compute_group_mean_columns(prov_norm(), prov_meta(), "SampleID", prov_contrasts())
+    naive <- compute_naive_log2fc_columns(means, prov_contrasts(), scale = "linear")
+
+    fr <- build_final_results_generic(
+        summary_df     = prov_summary_df(),
+        expr_df        = prov_raw(),
+        contrasts_df   = prov_contrasts(),
+        feature_id_col = "Gene",
+        mode           = "rna",
+        norm_expr      = prov_norm(),
+        mean_cols      = means,
+        naive_log2fc   = naive
+    )
+
+    nm <- names(fr)
+    expect_equal(nm[which(nm == "log2FC.S_vs_NS") + 1L], "log2FC_from_means.S_vs_NS")
+    expect_equal(nm[which(nm == "log2FC.S_vs_NS") + 2L], "linearFC.S_vs_NS")
+    # Recomputable from the neighbouring Mean cells
+    expect_equal(fr$log2FC_from_means.S_vs_NS, log2(fr$Mean.S / fr$Mean.NS))
+})
+
+test_that("P9 DESeq2 shrinkage is visible as a gap against log2FC_from_means", {
+    skip_if_not_installed("DESeq2")
+
+    meta <- data.frame(
+        SampleID  = c("A1", "A2", "A3", "B1", "B2", "B3"),
+        condition = c("A", "A", "A", "B", "B", "B"),
+        stringsAsFactors = FALSE
+    )
+    contrasts_df <- data.frame(
+        Contrast_name = "A_vs_B", Factor = "condition",
+        Numerator = "A", Denominator = "B", stringsAsFactors = FALSE
+    )
+
+    # Deterministic fixture: half the genes well expressed, half at low counts.
+    # Within each half, a third are unchanged and the rest move symmetrically up
+    # and down, so median-of-ratios normalization has a stable baseline to sit
+    # on (if every gene moved the same way, the size factors would absorb the
+    # effect and nothing would be left to shrink).
+    n_gene   <- 600L
+    base     <- c(rep(2000, n_gene / 2), rep(8, n_gene / 2))
+    true_lfc <- rep(rep(c(0, 1.5, -1.5), each = 100L), times = 2L)
+
+    counts <- withr::with_seed(42, {
+        m <- vapply(seq_len(6), function(j) {
+            direction <- if (j <= 3) 0.5 else -0.5
+            stats::rnbinom(n_gene, mu = base * 2^(true_lfc * direction), size = 20)
+        }, numeric(n_gene))
+        dimnames(m) <- list(paste0("g", seq_len(n_gene)), meta$SampleID)
+        m
+    })
+
+    fit <- function(deseq_mode) {
+        de_cfg <- list(method = "deseq2", deseq_mode = deseq_mode, p_cutoff = 0.05,
+                       linear_fc_cutoff = 1.5, sample_col = "SampleID")
+        de_res <- run_deseq2_de(counts, meta, contrasts_df, de_cfg)
+        sdf <- build_rnaseq_summary_df(de_res$tables, de_cfg)
+        names(sdf)[names(sdf) == "FeatureID"] <- "Gene"
+
+        norm_counts <- deseq2_normalized_counts(de_res$dds)
+        means <- compute_group_mean_columns(norm_counts, meta, "SampleID", contrasts_df)
+        naive <- compute_naive_log2fc_columns(means, contrasts_df, scale = "linear")
+
+        pre <- list(expr_filt = counts, meta = meta, row_data = NULL,
+                    info = list(source_type = "matrix"))
+        config <- list(modes = list(rna = list(
+            de = de_cfg, excel = list(group_cv = TRUE)
+        )))
+        build_final_results_rnaseq(pre, sdf, contrasts_df, config = config,
+                                   norm_counts = norm_counts)
+    }
+
+    fr_default <- suppressWarnings(fit("default"))
+    fr_legacy  <- suppressWarnings(fit("legacy"))
+
+    expect_true("log2FC_from_means.A_vs_B" %in% names(fr_default))
+
+    # Only the genes that were actually made to move; unchanged genes have a
+    # naive log2FC near zero, so the ratio below would be pure noise for them.
+    moved <- true_lfc != 0
+    high  <- which(moved & seq_len(n_gene) <= n_gene / 2)
+    low   <- which(moved & seq_len(n_gene) >  n_gene / 2)
+
+    shrink_ratio <- function(fr, idx) {
+        median(abs(fr$log2FC.A_vs_B[idx]) /
+               abs(fr$log2FC_from_means.A_vs_B[idx]), na.rm = TRUE)
+    }
+
+    # The naive column must recover the effect that was put in, on both halves
+    expect_equal(median(abs(fr_default$log2FC_from_means.A_vs_B[high])), 1.5,
+                 tolerance = 0.1)
+    expect_equal(median(abs(fr_default$log2FC_from_means.A_vs_B[low])), 1.5,
+                 tolerance = 0.2)
+
+    # Default mode does not shrink: the model estimate tracks the naive one
+    expect_gt(shrink_ratio(fr_default, high), 0.95)
+    expect_gt(shrink_ratio(fr_default, low),  0.95)
+
+    # betaPrior pulls estimates towards zero. The naive column is model-free and
+    # does not move, so the ratio drops — and it drops further where the counts
+    # are low, which is where the prior has the most say.
+    expect_lt(shrink_ratio(fr_legacy, low), 0.90)
+    expect_lt(shrink_ratio(fr_legacy, low), shrink_ratio(fr_legacy, high))
+    expect_gt(shrink_ratio(fr_legacy, high), 0.90)
 })
 
 
@@ -388,17 +632,23 @@ test_that("P7 proteomics final results carry the imputed block and group means",
 test_that("P6 provenance notes cover every column family the mode emits", {
     rna <- build_provenance_notes("rna")
     expect_true(all(c("<sample>", "<sample>.norm", "Mean.<group>", "CV.<group>",
-                      "log2FC.<contrast>", "linearFC.<contrast>") %in% rna$glossary$Column))
+                      "log2FC.<contrast>", "log2FC_from_means.<contrast>",
+                      "linearFC.<contrast>") %in% rna$glossary$Column))
 
     prot <- build_provenance_notes("proteomics")
     expect_true(all(c("<sample>", "<sample>.norm", "Mean.<group>", "CV.<group>",
-                      "log2FC.imputs.<contrast>", "linearFC.imputs.<contrast>") %in%
-                    prot$glossary$Column))
+                      "log2FC.imputs.<contrast>", "log2FC_from_means.<contrast>",
+                      "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
 
-    # Both must state the signed-reciprocal rule and flag the approximation
+    # Both must name the shrinkage comparison the naive column exists for
+    expect_true(any(grepl("shrinkage", rna$notes)))
+    expect_true(any(grepl("shrinkage", prot$notes)))
+
+    # Both must state the signed-reciprocal rule and say the two log2FC columns
+    # are not expected to agree to the last digit
     expect_true(any(grepl("signed linear fold change", rna$glossary$Meaning)))
-    expect_true(any(grepl("approximation", rna$notes)))
-    expect_true(any(grepl("approximation", prot$notes)))
+    expect_true(any(grepl("agree closely|can differ", rna$notes)))
+    expect_true(any(grepl("differ for two reasons", prot$notes)))
 
     # Unknown modes still get a usable glossary rather than an error
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")

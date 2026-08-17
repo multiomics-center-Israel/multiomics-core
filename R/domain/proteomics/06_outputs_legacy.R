@@ -133,6 +133,8 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
                                             feature_id_col = "FeatureID", config = NULL) {
     cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
     mean_cols <- build_group_mean_proteomics(pre, contrasts_df, config)
+    # Intensities are already log2, so the model-free estimate is a difference.
+    naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -151,7 +153,8 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         # imputed matrix limma was fitted on. Both are needed to walk from the
         # per-sample values to the reported logFC.
         norm_expr = pre$expr_imp_single,
-        mean_cols = mean_cols
+        mean_cols = mean_cols,
+        naive_log2fc = naive_log2fc
     )
 }
 
