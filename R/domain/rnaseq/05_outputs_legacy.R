@@ -143,6 +143,8 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
     # is confounded by library size), computed from the raw counts directly.
     cv_cols <- build_group_cv_rnaseq(pre, contrasts_df, config)
     mean_cols <- build_group_mean_rnaseq(norm_counts, pre, contrasts_df, config)
+    # Normalized counts are linear, so the model-free estimate is a log ratio.
+    naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "linear")
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -155,7 +157,8 @@ build_final_results_rnaseq <- function(pre, summary_df, contrasts_df, row_data =
         mode = "rna",  # FIX 2: Use RNA column naming
         cv_cols = cv_cols,
         norm_expr = norm_counts,
-        mean_cols = mean_cols
+        mean_cols = mean_cols,
+        naive_log2fc = naive_log2fc
     )
 }
 
