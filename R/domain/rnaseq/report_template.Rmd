@@ -1670,8 +1670,14 @@ make_ma_plotly <- function(df, contrast, padj_cut = 0.05, lfc_cut = log2(1.5), t
 
     # Calculate baseMean from expression columns (numeric columns that aren't stats)
     # These are sample columns with expression values
-    stat_patterns <- "^(Gene|linearFC|log2FoldChange|pvalue|padj|upDown|manual_cutoffs|pass|FeatureID|GeneName)"
-    expr_cols <- names(df)[!grepl(stat_patterns, names(df), ignore.case = TRUE)]
+    # Everything final_results carries that is NOT a per-sample count: the DE
+    # stats, and the derived per-group/per-sample summary blocks (Mean., CV.,
+    # <sample>.norm, <sample>.zscore). Letting any of those through inflates
+    # baseMean with values that are not counts.
+    stat_patterns <- "^(Gene|log2FC|linearFC|log2FoldChange|pvalue|padj|upDown|manual_cutoffs|pass|FeatureID|GeneName|Mean\\.|CV\\.)"
+    derived_patterns <- "(\\.norm|\\.zscore)$"
+    expr_cols <- names(df)[!grepl(stat_patterns, names(df), ignore.case = TRUE) &
+                           !grepl(derived_patterns, names(df), ignore.case = TRUE)]
     expr_cols <- expr_cols[sapply(df[expr_cols], is.numeric)]
 
     if (length(expr_cols) == 0) return(NULL)
