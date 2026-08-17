@@ -132,6 +132,9 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
                                             feature_id_col = "FeatureID", config = NULL) {
     cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
+    mean_cols <- build_group_mean_proteomics(pre, contrasts_df, config)
+    # Intensities are already log2, so the model-free estimate is a difference.
+    naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -145,7 +148,45 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         ),
         row_data = row_data %||% pre$row_data,
         fc_is_signed = TRUE, # linearFC is signed
-        cv_cols = cv_cols
+        cv_cols = cv_cols,
+        # expr_filt above is what was measured (NAs for unobserved); this is the
+        # imputed matrix limma was fitted on. Both are needed to walk from the
+        # per-sample values to the reported logFC.
+        norm_expr = pre$expr_imp_single,
+        mean_cols = mean_cols,
+        naive_log2fc = naive_log2fc
+    )
+}
+
+#' Build per-group mean columns for proteomics final results
+#'
+#' Means are taken on the imputed log2 matrix (\code{expr_imp_single}) — the
+#' scale limma was fitted on — so that
+#' \code{Mean.<numerator> - Mean.<denominator>} lands close to the reported
+#' \code{log2FC.imputs}. It will not match exactly: the reported statistic
+#' averages over all imputation runs while this block shows a single one, and
+#' limma reports a moderated coefficient rather than a difference of means.
+#'
+#' @param pre Proteomics preprocessing results (uses \code{expr_imp_single},
+#'   \code{meta}).
+#' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag + sample-ID column).
+#' @return Feature-indexed data.frame of \code{Mean.<group>} columns, or NULL.
+build_group_mean_proteomics <- function(pre, contrasts_df, config = NULL) {
+    if (is.null(config)) return(NULL)
+    # Same switch as the CV block: one flag governs the whole summary section.
+    if (!isTRUE(config$modes$proteomics$excel$group_cv %||% TRUE)) return(NULL)
+    if (is.null(pre$expr_imp_single) || is.null(pre$meta)) return(NULL)
+
+    prot_cfg <- config$modes$proteomics %||% list()
+    sample_id_col <- prot_cfg$effects$samples %||%
+        prot_cfg$id_columns$sample_col %||% "SampleID"
+
+    compute_group_mean_columns(
+        expr          = as.matrix(pre$expr_imp_single),
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df
     )
 }
 
