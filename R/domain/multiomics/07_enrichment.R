@@ -289,9 +289,25 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
             if (omics_type == "metabolomics") {
                 # Use ALL measured KEGG-mapped metabolites as universe (not just DE table)
                 full_universe <- unique(id_map$KEGG_ID[!is.na(id_map$KEGG_ID)])
-                run_compound_ora(de_mapped, out_dir, use_min_gs, max_gs, pval_cutoff,
-                                 exclude_classes = excl_classes,
-                                 universe = full_universe, label = contrast_name)
+                ora_res <- run_compound_ora(de_mapped, out_dir, use_min_gs, max_gs,
+                                            pval_cutoff,
+                                            exclude_classes = excl_classes,
+                                            universe = full_universe,
+                                            label = contrast_name)
+                # filter_ora_rows() switches to a literal `method` match the
+                # moment any row in the table carries one, so the ORA half has
+                # to name itself now that GSEA rows sit beside it.
+                if (is.data.frame(ora_res) && nrow(ora_res) > 0 &&
+                    !"method" %in% colnames(ora_res)) {
+                    ora_res$method <- "ora"
+                }
+                # Metabolites get both: ORA for the crowding question, GSEA for
+                # an NES the cross-omics heatmap can colour a cell with.
+                gsea_res <- run_compound_gsea(de_mapped, out_dir, use_min_gs, max_gs,
+                                              seed = config$params$seed %||% 1L,
+                                              exclude_classes = excl_classes,
+                                              label = contrast_name)
+                .rbind_fill(list(ora = ora_res, gsea = gsea_res))
             } else if (use_method == "gsea") {
                 run_gsea_kegg(de_mapped, kegg_org, use_min_gs, max_gs, pval_cutoff)
             } else {
@@ -311,7 +327,11 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
 
     if (length(all_results) == 0) return(NULL)
 
-    combined <- do.call(rbind, all_results)
+    # .rbind_fill(), not rbind(): a contrast can contribute ORA rows only (no
+    # compound pathway large enough to score) while another contributes both,
+    # and rbind() aborts on the differing column sets.
+    combined <- .rbind_fill(all_results)
+    if (is.null(combined) || nrow(combined) == 0) return(NULL)
     rownames(combined) <- NULL
 
     # Save per-omics results
@@ -368,6 +388,12 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
                     log2fc = if ("logFC" %in% names(df)) df$logFC else NA,
                     pvalue = if ("P.Value" %in% names(df)) df$P.Value else NA,
                     padj = if ("adj.P.Val" %in% names(df)) df$adj.P.Val else NA,
+                    # Kept for compound GSEA: the moderated t is the ranking
+                    # statistic, and it is unrecoverable from log2fc + p alone
+                    # once the table has been standardised.
+                    statistic = if ("statistic" %in% names(df)) df$statistic
+                                else if ("t" %in% names(df)) df$t
+                                else NA_real_,
                     stringsAsFactors = FALSE
                 )
                 std <- std[!is.na(std$pvalue), ]
@@ -1129,6 +1155,194 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 }
 
 
+#' Rank mapped metabolites for compound GSEA
+#'
+#' Ranks on the moderated t when the DE table carries usable values, falling
+#' back to sign(log2FC) * -log10(p). The test is for finite VALUES rather than
+#' for the column: the standardised metabolomics DE table always carries a
+#' `statistic` column and fills it with NA when the source export has none, and
+#' an all-NA rank vector makes fgsea report "no gene set overlap" — a message
+#' that sends the reader looking for an id-mapping bug that is not there.
+#'
+#' @param de_mapped DE table already merged with KEGG compound ids: columns
+#'   `KEGG_ID`, `pvalue`, `log2fc`, and optionally `statistic`.
+#' @return Named numeric vector of ranks (names are KEGG compound ids) sorted
+#'   decreasing, one entry per compound; `numeric(0)` when nothing is rankable.
+rank_compounds_for_gsea <- function(de_mapped) {
+    if (!is.data.frame(de_mapped) || nrow(de_mapped) == 0) return(numeric(0))
+    if (!"KEGG_ID" %in% colnames(de_mapped)) return(numeric(0))
+
+    stat <- if ("statistic" %in% colnames(de_mapped)) {
+        suppressWarnings(as.numeric(de_mapped$statistic))
+    } else {
+        NULL
+    }
+
+    if (!is.null(stat) && any(is.finite(stat))) {
+        ranks <- stat
+    } else {
+        lfc <- suppressWarnings(as.numeric(de_mapped$log2fc))
+        pval <- suppressWarnings(as.numeric(de_mapped$pvalue))
+        ranks <- sign(lfc) * -log10(pval + 1e-300)
+    }
+
+    names(ranks) <- as.character(de_mapped$KEGG_ID)
+    keep <- is.finite(ranks) & !is.na(names(ranks)) & nzchar(names(ranks))
+    ranks <- ranks[keep]
+    if (length(ranks) == 0) return(numeric(0))
+
+    # Several metabolites can annotate to the same compound; fgsea would score
+    # that compound twice. The strongest |rank| wins, ties broken on the compound
+    # id so the vector does not depend on the DE table's row order.
+    ranks <- ranks[order(-abs(ranks), names(ranks))]
+    ranks <- ranks[!duplicated(names(ranks))]
+    sort(ranks, decreasing = TRUE)
+}
+
+
+#' Run GSEA for metabolite compounds against KEGG compound pathways
+#'
+#' The rank-based companion to `run_compound_ora()`, not a replacement for it.
+#' ORA asks whether the significant compounds crowd into a pathway; this asks
+#' whether a pathway's compounds sit at one end of the whole measured ranking.
+#' It needs no significance cutoff and it yields an NES — the signed value the
+#' cross-omics heatmap draws for the gene layers and, with ORA alone, could
+#' never draw for metabolites.
+#'
+#' Compound sets are intersected with the measured, KEGG-mapped metabolites
+#' before the size filter, so a reported `size` is the number of compounds
+#' actually scored rather than KEGG's full membership. With a few hundred
+#' mapped metabolites most compound pathways fall below any sensible minimum;
+#' the count that survives is reported rather than worked around.
+#'
+#' @param de_mapped DE table merged with KEGG compound ids (see
+#'   `rank_compounds_for_gsea()` for the columns used).
+#' @param cache_dir Directory holding the cached KEGG compound-pathway and
+#'   pathway-class tables.
+#' @param min_gs Minimum measured compounds per pathway, honoured as given and
+#'   floored at 2, below which a set is not a set.
+#' @param max_gs Maximum measured compounds per pathway.
+#' @param seed Integer seed for fgsea's stochastic multilevel step.
+#' @param exclude_classes KEGG pathway classes to drop before testing, from
+#'   `enrichment.exclude_pathway_classes`; NULL tests every class.
+#' @param out_dir Directory to write the full scored table to; NULL to skip the
+#'   write. Defaults to `cache_dir`, matching `run_compound_ora()`.
+#' @param label Optional filename prefix so several contrasts writing into one
+#'   directory do not overwrite each other.
+#' @return data.frame of every scored pathway in the fgsea column shape the gene
+#'   layers emit (pathway, pathway_name, pval, padj, NES, size, database,
+#'   method), or NULL when no pathway was testable.
+run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs,
+                               seed = 1L, exclude_classes = NULL,
+                               out_dir = cache_dir, label = NULL) {
+
+    cpd_pathways <- get_kegg_compound_pathways(cache_dir)
+    if (is.null(cpd_pathways) || nrow(cpd_pathways) == 0) {
+        message("    Could not retrieve KEGG compound-pathway associations")
+        return(NULL)
+    }
+
+    ranks <- rank_compounds_for_gsea(de_mapped)
+    if (length(ranks) < 3) {
+        message("    Too few rankable compounds for GSEA (", length(ranks), ")")
+        return(NULL)
+    }
+
+    pathway_sets <- split(cpd_pathways$compound, cpd_pathways$pathway)
+    pathway_names <- stats::setNames(cpd_pathways$name, cpd_pathways$pathway)
+    pathway_names <- pathway_names[!duplicated(names(pathway_names))]
+
+    # The same class exclusion the other layers get, applied before testing so
+    # the dropped maps never enter the multiple-testing family.
+    if (!is.null(exclude_classes) && length(exclude_classes) > 0) {
+        keep_pw <- keep_kegg_pathways(names(pathway_sets),
+                                      exclude = unlist(exclude_classes),
+                                      cache_dir = cache_dir,
+                                      label = "compound pathways")
+        pathway_sets <- pathway_sets[keep_pw]
+    }
+
+    pathway_sets <- lapply(pathway_sets,
+                           function(cpds) unique(intersect(cpds, names(ranks))))
+    use_min_gs <- max(2, min_gs)
+    set_sizes <- lengths(pathway_sets)
+    testable <- set_sizes >= use_min_gs & set_sizes <= max_gs
+
+    message("    Compound GSEA: ", length(ranks), " ranked compounds; ",
+            sum(testable), "/", length(set_sizes), " pathways carry ",
+            use_min_gs, "-", max_gs, " measured compounds")
+
+    if (!any(testable)) {
+        message("    No compound pathway is large enough to score")
+        return(NULL)
+    }
+    pathway_sets <- pathway_sets[testable]
+
+    # fgseaMultilevel is stochastic: unseeded, borderline pathways cross
+    # padj = 0.05 between otherwise identical runs.
+    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
+        pathways = pathway_sets,
+        stats = ranks,
+        minSize = use_min_gs,
+        maxSize = max_gs,
+        nPermSimple = 10000
+    ))
+
+    df <- as.data.frame(fgsea_res)
+    if (nrow(df) == 0) {
+        message("    Compound GSEA scored no pathways")
+        return(NULL)
+    }
+
+    pw_ids <- as.character(df$pathway)
+    pw_names <- unname(pathway_names[pw_ids])
+    pw_names[is.na(pw_names) | !nzchar(pw_names)] <- pw_ids[is.na(pw_names) | !nzchar(pw_names)]
+
+    # `pathway` holds the KEGG map id, matching run_compound_ora() and the gene
+    # layers: merge_pathway_pvalues() joins the layers on this column, and a
+    # human-readable name here would leave metabolites unable to intersect them.
+    out <- data.frame(
+        pathway = pw_ids,
+        pathway_name = pw_names,
+        ID = pw_ids,
+        pval = df$pval,
+        padj = df$padj,
+        ES = df$ES,
+        NES = df$NES,
+        size = df$size,
+        leadingEdge = vapply(df$leadingEdge, paste, character(1), collapse = ","),
+        database = "KEGG",
+        method = "fgsea",
+        stringsAsFactors = FALSE
+    )
+    out <- out[order(out$pval), ]
+    rownames(out) <- NULL
+
+    finite_nes <- out$NES[is.finite(out$NES)]
+    message("    Compound GSEA: ", sum(out$padj < 0.05, na.rm = TRUE),
+            " of ", nrow(out), " pathways at BH padj < 0.05",
+            if (length(finite_nes) > 0) {
+                paste0(" (NES ", round(min(finite_nes), 2), " to ",
+                       round(max(finite_nes), 2), ")")
+            } else "")
+
+    # Every scored pathway is returned, matching what the gene layers hand the
+    # cross-omics step; the same table goes to disk so the NES a figure shows
+    # can be traced back without re-running fgsea.
+    if (!is.null(out_dir)) {
+        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+        fname <- if (is.null(label)) {
+            "compound_gsea_all_tested.csv"
+        } else {
+            paste0(label, "_compound_gsea_all_tested.csv")
+        }
+        utils::write.csv(out, file.path(out_dir, fname), row.names = FALSE)
+    }
+
+    out
+}
+
+
 #' Get organism annotation database
 get_organism_db <- function(organism) {
     db_map <- list(
@@ -1526,6 +1740,22 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
+        })
+        dev.off()
+
+        # 1b. The same pathways seen through over-representation only. The NES
+        # figure can only colour a layer that ran GSEA, so a layer whose
+        # enrichment is over-representation end to end has no column there;
+        # here it does. Colour is the FDR by definition of the figure — the
+        # config's pvalue_type governs the NES, dot and bar plots.
+        plots$pathway_heatmap_ora <- file.path(out_dir, "cross_omics_pathway_heatmap_ora.png")
+        png(plots$pathway_heatmap_ora, width = 1200, height = 900, res = 120)
+        tryCatch({
+            plot_cross_omics_ora_heatmap(meta_results, omics,
+                                         pathway_tables = pathway_tables)
+        }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
         })
         dev.off()
 
@@ -2093,6 +2323,260 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
         # stats::heatmap() has no na_col, so the fallback keeps the old coercion
         plot_matrix[is.na(plot_matrix)] <- 0
         heatmap(plot_matrix, scale = "none", Colv = NA,
+                main = heatmap_title, col = heat_colors)
+    }
+
+    invisible(NULL)
+}
+
+
+#' Pull the pathway-accession column out of an enrichment table, if it has one
+#'
+#' The four enrichment producers that feed this section (fgsea, clusterProfiler
+#' ORA, the Fisher fallback, compound ORA) each spell the accession column
+#' differently, so the lookup is centralised here rather than repeated at every
+#' call site.
+#'
+#' @param df Enrichment data frame.
+#' @return Name of the accession column, or NULL when the table has none.
+pathway_id_column <- function(df) {
+    if (!is.data.frame(df)) return(NULL)
+    for (candidate in c("pathway", "ID", "Description")) {
+        if (candidate %in% names(df)) return(candidate)
+    }
+    NULL
+}
+
+
+#' Keep only the over-representation rows of an enrichment table
+#'
+#' Most layers write a `method` column and the filter is literal. The compound
+#' ORA producer does not: its table carries neither `method` nor `NES`, and
+#' dropping it on a missing label would hide the one layer this figure exists
+#' for. A table with no NES column cannot hold GSEA output, so it is taken as
+#' over-representation throughout.
+#'
+#' @param df Enrichment data frame, or NULL.
+#' @return `df` restricted to its ORA rows (possibly zero rows); NULL stays NULL.
+filter_ora_rows <- function(df) {
+    if (!is.data.frame(df) || nrow(df) == 0) return(df)
+
+    if ("method" %in% names(df)) {
+        return(df[tolower(trimws(as.character(df$method))) %in% "ora", , drop = FALSE])
+    }
+    if ("NES" %in% names(df)) return(df[0, , drop = FALSE])
+    df
+}
+
+
+#' Build a per-layer significance matrix from over-representation rows only
+#'
+#' A layer can report the same pathway several times (one row per contrast,
+#' database, or ORA direction); the smallest value wins, the same "best row
+#' wins" rule `build_layer_nes_matrix()` and `merge_pathway_pvalues()` apply, so
+#' a cell means the same thing in all three places.
+#'
+#' Every requested layer gets a column even when it contributed nothing, so the
+#' caller can tell "layer ran no ORA" from "pathway not tested in this layer" —
+#' the two look identical once the matrix has been collapsed.
+#'
+#' @param ora_tables Named list of per-omics enrichment data frames already
+#'   restricted to ORA rows by `filter_ora_rows()`.
+#' @param pathways Pathway accessions, in the row order wanted.
+#' @param omic_names Layer names, in the column order wanted.
+#' @param pvalue_type "padj" (default) or "pvalue" — the statistic requested.
+#' @return Numeric matrix (pathways x layers) of significance values, NA where
+#'   the pathway was not tested in that layer, carrying a `pvalue_type_used`
+#'   attribute (named character vector, layer -> statistic actually taken, NA
+#'   for a layer with no usable ORA rows).
+build_layer_ora_matrix <- function(ora_tables, pathways, omic_names,
+                                   pvalue_type = "padj") {
+    pmat <- matrix(NA_real_, nrow = length(pathways), ncol = length(omic_names),
+                   dimnames = list(pathways, omic_names))
+    types_used <- stats::setNames(rep(NA_character_, length(omic_names)), omic_names)
+
+    for (om in omic_names) {
+        df <- ora_tables[[om]]
+        if (!is.data.frame(df) || nrow(df) == 0) next
+
+        pathway_col <- pathway_id_column(df)
+        if (is.null(pathway_col)) next
+
+        picked <- pick_pvalue_column(df, pvalue_type)
+        if (is.null(picked)) next
+        types_used[om] <- picked$type
+
+        vals <- suppressWarnings(as.numeric(df[[picked$column]]))
+        keep <- !is.na(vals)
+        if (!any(keep)) next
+
+        best <- tapply(vals[keep], as.character(df[[pathway_col]])[keep], min)
+        pmat[, om] <- as.numeric(best[match(pathways, names(best))])
+    }
+
+    attr(pmat, "pvalue_type_used") <- types_used
+    pmat
+}
+
+
+#' Plot the cross-omics over-representation heatmap
+#'
+#' Companion to `plot_cross_omics_pathway_heatmap()`, built from the ORA rows
+#' alone. The NES figure can only colour a layer that ran GSEA, so a layer whose
+#' enrichment is over-representation end to end (compound ORA on metabolites,
+#' the Fisher fallback on a non-model organism) is structurally absent from it.
+#' Here every layer is on the same footing because -log10(FDR) exists for all of
+#' them.
+#'
+#' Rows are ranked by `select_multi_omics_pathways()`, as in the NES figure, but
+#' over an ORA-only meta-analysis: ranking on the shared table would fill the
+#' figure with terms that only GSEA ever scored, leaving little but grey.
+#'
+#' @param meta_results Meta-analysis data frame from `stouffer_combined_pvalues()`
+#'   (used only to name layers when `pathway_tables` is NULL).
+#' @param omics Character vector of omics layer names, in column order.
+#' @param top_n Number of pathways to show.
+#' @param pathway_tables Named list of per-omics enrichment data frames — the
+#'   source of the ORA rows. Without it there is nothing to draw.
+#' @param pvalue_type "padj" (default) or "pvalue". The figure is defined on the
+#'   FDR; the argument exists so a layer that carries no usable adjusted p can
+#'   still be plotted on its raw p, which the title then says.
+#' @return Invisibly NULL; called for the plot it draws on the active device.
+plot_cross_omics_ora_heatmap <- function(meta_results, omics, top_n = 30,
+                                         pathway_tables = NULL,
+                                         pvalue_type = "padj") {
+
+    omic_names <- if (!is.null(pathway_tables) && length(pathway_tables) > 0) {
+        names(pathway_tables)
+    } else if (!is.null(meta_results)) {
+        sub("^pval_", "", grep("^pval_", names(meta_results), value = TRUE))
+    } else {
+        omics
+    }
+
+    draw_note <- function(msg) {
+        plot.new()
+        text(0.5, 0.5, msg, cex = 1.1)
+        invisible(NULL)
+    }
+
+    if (length(omic_names) == 0 || is.null(pathway_tables)) {
+        return(draw_note("No enrichment tables available for the ORA heatmap"))
+    }
+
+    ora_tables <- lapply(pathway_tables[omic_names], filter_ora_rows)
+    names(ora_tables) <- omic_names
+    n_ora <- vapply(ora_tables,
+                    function(d) if (is.data.frame(d)) nrow(d) else 0L, integer(1))
+
+    if (all(n_ora == 0)) {
+        return(draw_note("No over-representation results in any omics layer"))
+    }
+
+    populated <- ora_tables[n_ora > 0]
+    ora_pathways <- unique(unlist(lapply(populated, function(d) {
+        col <- pathway_id_column(d)
+        if (is.null(col)) NULL else as.character(d[[col]])
+    })))
+    if (length(ora_pathways) == 0) {
+        return(draw_note("No over-representation results in any omics layer"))
+    }
+
+    ora_meta <- merge_pathway_pvalues(populated, ora_pathways, names(populated),
+                                      pvalue_type = pvalue_type)
+    if (length(grep("^pval_", names(ora_meta))) == 0) {
+        return(draw_note("No usable significance column in the ORA results"))
+    }
+    ora_meta <- stouffer_combined_pvalues(ora_meta)
+    ora_meta <- attach_pathway_names_from_tables(ora_meta, populated)
+
+    top_pathways <- select_multi_omics_pathways(ora_meta, top_n)
+    if (is.null(top_pathways) || nrow(top_pathways) == 0) {
+        return(draw_note("No over-representation results to show"))
+    }
+
+    pmat <- build_layer_ora_matrix(ora_tables, as.character(top_pathways$pathway),
+                                   omic_names, pvalue_type)
+    types_used <- attr(pmat, "pvalue_type_used")
+
+    # 1e-300 guards -log10(0) the same way the -log10 fallback of the NES figure
+    # does; it is far below any FDR a real test returns.
+    score <- -log10(pmax(pmat, 1e-300))
+    # -log10(1) is IEEE negative zero and formatC prints that as "-0.00", which
+    # reads like a sign on a magnitude scale. Re-assign it as a plain zero.
+    score[!is.na(score) & score == 0] <- 0
+    rownames(score) <- format_pathway_labels(
+        top_pathways$pathway,
+        pathway_name_column(top_pathways),
+        append_id = TRUE
+    )
+
+    cell_labels <- matrix(formatC(score, format = "f", digits = 2),
+                          nrow = nrow(score), dimnames = dimnames(score))
+    cell_labels[is.na(score)] <- ""
+
+    # Two ways a column ends up blank, and they mean different things: the layer
+    # ran no ORA at all, or it did but none of its pathways reached these rows.
+    no_ora <- omic_names[n_ora == 0]
+    not_shown <- omic_names[n_ora > 0 & colSums(!is.na(score)) == 0]
+    col_labels <- omic_names
+    col_labels[omic_names %in% no_ora] <- paste0(no_ora, " *")
+    col_labels[omic_names %in% not_shown] <- paste0(not_shown, " +")
+
+    # pheatmap draws `main` at full size and clips it against the device rather
+    # than wrapping, so every line below is kept to roughly the width of the
+    # figure's own title -- the markers are terse for that reason, not for style.
+    marker_note <- c(
+        if (length(no_ora) > 0) "* = no ORA",
+        if (length(not_shown) > 0) "+ = ORA run, none shown"
+    )
+
+    stat_word <- if (identical(pvalue_type, "pvalue")) "p-value" else "FDR"
+    fell_back <- names(types_used)[!is.na(types_used) & types_used != pvalue_type]
+    fallback_line <- if (length(fell_back) == 0) NULL else {
+        other <- if (identical(pvalue_type, "pvalue")) "adjusted p" else "raw p"
+        paste0(other, " for: ", paste(fell_back, collapse = ", "))
+    }
+
+    heatmap_title <- paste(c(
+        "Cross-Omics Pathway Over-Representation (ORA only)",
+        paste0("colour = -log10(", stat_word, "); 1.3 = ", stat_word, " 0.05"),
+        fallback_line,
+        paste0("rows ranked on layers with ", stat_word,
+               " < 0.05, then combined p"),
+        paste(c("grey = not tested", marker_note), collapse = "; ")
+    ), collapse = "\n")
+
+    # Sequential ramp: this is a magnitude, not a direction, so it runs pale pink
+    # to dark red with no meaningful midpoint. The dark end stops short of black
+    # so the per-cell number stays readable on top of it.
+    heat_colors <- colorRampPalette(c("#FFF0F2", "#FBC4C9", "#F08D8D",
+                                      "#DD4B3E", "#A50F15"))(51)
+    lim <- suppressWarnings(max(score, na.rm = TRUE))
+    if (!is.finite(lim) || lim <= 0) lim <- 1
+    heat_breaks <- seq(0, lim, length.out = 52)
+
+    # NAs stay NA so na_col separates "not tested in this layer" from "tested,
+    # FDR near 1" — coercing them to 0 paints both the palest pink.
+    if (requireNamespace("pheatmap", quietly = TRUE)) {
+        pheatmap::pheatmap(score,
+                           cluster_rows = FALSE,
+                           cluster_cols = FALSE,
+                           main = heatmap_title,
+                           color = heat_colors,
+                           breaks = heat_breaks,
+                           labels_col = col_labels,
+                           fontsize = 9,
+                           fontsize_row = 7, fontsize_col = 10,
+                           fontsize_number = 6, number_color = "black",
+                           angle_col = 45,
+                           na_col = "grey90",
+                           border_color = "grey80",
+                           display_numbers = cell_labels)
+    } else {
+        # stats::heatmap() has no na_col, so the fallback keeps the old coercion
+        score[is.na(score)] <- 0
+        heatmap(score, scale = "none", Colv = NA,
                 main = heatmap_title, col = heat_colors)
     }
 
