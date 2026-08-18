@@ -462,6 +462,126 @@ if (dir.exists(per_contrast_dir)) {
 }
 ```
 
+## Top Proteins by RNA Agreement
+
+```{r rna-prot-topn-bars, eval=has_transcriptomics && has_rna_prot, fig.width=10, fig.height=7}
+# Ported from the Serge run's "Top Proteins by RNA Agreement" and adapted: top 50
+# rather than 100, the threshold is linear FC 1.5 rather than log2 0.5, the RNA
+# fold change gets its own panel instead of only tinting the protein bar, and the
+# panel label carries a hypergeometric p rather than a bare count.
+#
+# The two axes are NOT the same statistic: the protein side is the limma
+# moderated log2FC, the RNA side the DESeq2 log2FC. Read the comparison as
+# direction agreement, not as agreement of magnitude.
+TOPN <- 50
+fc_thr <- log2(1.5)
+
+pairs_csv <- file.path(rna_prot_dir, "tables", "rna_protein_log2FC_pairs.csv")
+tb_ok <- file.exists(pairs_csv)
+if (tb_ok) {
+    pr <- read.csv(pairs_csv, stringsAsFactors = FALSE)
+    pr <- pr[is.finite(pr$rna_log2FC) & is.finite(pr$protein_log2FC), , drop = FALSE]
+    tb_ok <- nrow(pr) >= 2 * TOPN
+}
+
+if (!tb_ok) {
+    cat("*Not enough mapped gene-protein pairs for the top-protein bar plot.*\n")
+} else {
+    # Hypergeometric: of the TOPN most extreme proteins, how many have an RNA
+    # fold change past the threshold in the SAME direction, against the rate over
+    # every mapped pair. lower.tail = FALSE with q - 1 gives P(X >= k).
+    enrich_p <- function(k, K, n, N) {
+        if (K == 0 || n == 0) return(NA_real_)
+        stats::phyper(k - 1, K, N - K, n, lower.tail = FALSE)
+    }
+
+    panels <- list()
+    for (cn in unique(pr$contrast)) {
+        d <- pr[pr$contrast == cn, , drop = FALSE]
+        n <- min(TOPN, floor(nrow(d) / 2))
+        if (n < 10) next
+        N <- nrow(d)
+
+        for (dir in c("up", "down")) {
+            sel <- if (dir == "up") {
+                d[order(-d$protein_log2FC), ][seq_len(n), ]
+            } else {
+                d[order(d$protein_log2FC), ][seq_len(n), ]
+            }
+            agree <- if (dir == "up") sel$rna_log2FC >= fc_thr else sel$rna_log2FC <= -fc_thr
+            K <- if (dir == "up") sum(d$rna_log2FC >= fc_thr) else sum(d$rna_log2FC <= -fc_thr)
+            k <- sum(agree)
+            p <- enrich_p(k, K, n, N)
+
+            sel$rank <- seq_len(n)
+            sel$agree <- agree
+            sel$direction <- if (dir == "up") "top 50 up in protein" else "top 50 down in protein"
+            sel$contrast_lab <- gsub("_", " ", cn)
+            sel$note <- sprintf("%d/%d agree (expected %.1f), hypergeometric p = %s",
+                                k, n, n * K / N,
+                                if (is.na(p)) "NA" else format.pval(p, digits = 2))
+            panels[[paste(cn, dir)]] <- sel
+        }
+    }
+
+    if (length(panels) == 0) {
+        cat("*Not enough pairs per contrast for the top-protein bar plot.*\n")
+    } else {
+        tb <- do.call(rbind, panels)
+        long <- rbind(
+            transform(tb[, c("rank", "direction", "contrast_lab", "agree", "note")],
+                      value = tb$protein_log2FC, layer = "protein log2FC"),
+            transform(tb[, c("rank", "direction", "contrast_lab", "agree", "note")],
+                      value = tb$rna_log2FC, layer = "RNA log2FC")
+        )
+        long$layer <- factor(long$layer, levels = c("protein log2FC", "RNA log2FC"))
+
+        lab <- unique(tb[, c("direction", "contrast_lab", "note")])
+        lab$layer <- factor("protein log2FC", levels = levels(long$layer))
+
+        print(
+            ggplot2::ggplot(long, ggplot2::aes(rank, value, fill = agree)) +
+                ggplot2::geom_col(width = 1) +
+                ggplot2::geom_hline(yintercept = 0, linewidth = 0.2, colour = "grey40") +
+                ggplot2::geom_hline(
+                    data = data.frame(y = c(fc_thr, -fc_thr)),
+                    ggplot2::aes(yintercept = y), inherit.aes = FALSE,
+                    linetype = "dashed", linewidth = 0.25, colour = "grey55") +
+                ggplot2::geom_text(data = lab,
+                    ggplot2::aes(x = Inf, y = Inf, label = note), inherit.aes = FALSE,
+                    hjust = 1.02, vjust = 1.4, size = 2.6) +
+                ggplot2::facet_grid(layer ~ direction + contrast_lab, scales = "free_y") +
+                ggplot2::scale_fill_manual(
+                    values = c("TRUE" = "#2166ac", "FALSE" = "grey78"),
+                    labels = c("TRUE" = "RNA agrees (past 1.5-fold, same direction)",
+                               "FALSE" = "RNA does not"),
+                    name = NULL) +
+                ggplot2::theme_bw(base_size = 9) +
+                ggplot2::theme(legend.position = "top") +
+                ggplot2::labs(
+                    x = "protein rank (1 = most extreme)", y = "log2 fold change",
+                    title = "Top proteins by log2FC, with the RNA fold change of the same features")
+        )
+    }
+}
+```
+
+```{r rna-prot-topn-bars-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+figure_legend(paste(
+    "Rows share an order: each column position is one gene-protein pair, ranked by",
+    "the protein log2 fold change, most extreme first. The upper row is that protein",
+    "fold change, the lower row the RNA fold change of the same pair, so the two are",
+    "read down the column. Blue marks pairs whose RNA moved past 1.5-fold in the same",
+    "direction; dashed lines mark that threshold. The panel label gives the observed",
+    "count, the count expected if the top proteins were a random draw from every",
+    "mapped pair, and a hypergeometric p for the excess.",
+    "The two rows are not the same statistic -- protein is the limma moderated log2FC",
+    "and RNA the DESeq2 log2FC -- so this shows agreement of direction, not of size.",
+    "Only pairs present in gene_protein_mapping.csv appear: proteins with no host",
+    "transcript, including every symbiont protein group, are absent by construction.",
+    "Source: rna_protein_log2FC_pairs.csv. Descriptive and hypothesis-generating."))
+```
+
 `r if (show_translation_eff) "## Translation Efficiency (All Contrasts)"`
 
 ```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
