@@ -1,6 +1,29 @@
 library(targets)
 
 # ------------------------------------------------------------------------------
+# Point reticulate at the active conda env's Python so MOFA2 (mofapy2) trains
+# instead of falling back to basilisk. Without this, reticulate picks whatever
+# Python it discovers first -- on this setup a uv cache interpreter, which has no
+# mofapy2 -- and MOFA2 errors before recovering through a slower basilisk env.
+#
+# `conda activate <env>` and `conda run -n <env>` both set CONDA_PREFIX, which is
+# the documented workflow. We deliberately do NOT derive the env from R.home():
+# an env's bin/Rscript can run another env's R, so R.home() may point at the
+# wrong Python. If CONDA_PREFIX is unset (running <env>/bin/Rscript directly
+# without activating), set RETICULATE_PYTHON yourself. An explicit
+# RETICULATE_PYTHON is never overridden.
+# ------------------------------------------------------------------------------
+if (!nzchar(Sys.getenv("RETICULATE_PYTHON"))) {
+  .prefix <- Sys.getenv("CONDA_PREFIX", unset = "")
+  if (nzchar(.prefix)) {
+    .py <- file.path(.prefix, "bin", "python")
+    if (file.exists(.py)) Sys.setenv(RETICULATE_PYTHON = .py)
+    rm(.py)
+  }
+  rm(.prefix)
+}
+
+# ------------------------------------------------------------------------------
 # Source R files in a strict dependency order:
 # 1) core     – generic utilities, no domain knowledge
 # 2) services – external-facing helpers (AI commentary, etc.)
