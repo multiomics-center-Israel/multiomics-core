@@ -40,8 +40,11 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
     # Keep a copy in both parent and rna/ subdirectories.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
+        # Rewritten on every render, not only when absent: a stale snapshot from
+        # an earlier run silently overrode any config change, so report settings
+        # edited in the config appeared to do nothing.
         config_used <- file.path(edir, "config_used.yaml")
-        if (!file.exists(config_used)) {
+        {
             dir.create(edir, recursive = TRUE, showWarnings = FALSE)
             if (!is.null(config_file) && file.exists(config_file)) {
                 file.copy(config_file, config_used, overwrite = TRUE)
