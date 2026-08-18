@@ -1617,6 +1617,19 @@ attach_pathway_names_from_tables <- function(meta_results, pathway_tables) {
 select_multi_omics_pathways <- function(meta_results, top_n = 30) {
     if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
 
+    # Rank on how many layers are ENRICHED, not how many were merely tested.
+    # n_omics counts non-missing p-values, so ordering by it alone floated
+    # pathways that every layer measured and none found anything in above
+    # pathways genuinely significant in two layers.
+    pval_cols <- grep("^pval_", names(meta_results), value = TRUE)
+    n_sig <- if (length(pval_cols) > 0) {
+        pm <- suppressWarnings(vapply(meta_results[pval_cols], as.numeric,
+                                      numeric(nrow(meta_results))))
+        pm <- matrix(pm, nrow = nrow(meta_results))
+        rowSums(!is.na(pm) & pm < 0.05)
+    } else {
+        rep(0L, nrow(meta_results))
+    }
     n_omics <- if ("n_omics" %in% names(meta_results)) {
         as.numeric(meta_results$n_omics)
     } else {
@@ -1628,7 +1641,7 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30) {
         rep(NA_real_, nrow(meta_results))
     }
 
-    ord <- order(-n_omics, combined, na.last = TRUE)
+    ord <- order(-n_sig, -n_omics, combined, na.last = TRUE)
     meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
 }
 
@@ -1817,7 +1830,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # would misread the row order.
     heatmap_title <- paste0(
         "Cross-Omics Pathway Enrichment (-log10 p-value)\n",
-        "rows: most omics layers first, then combined p\n",
+        "rows: most layers with p < 0.05 first, then combined p\n",
         "grey = not tested in that layer"
     )
 
