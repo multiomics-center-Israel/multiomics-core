@@ -202,6 +202,7 @@ show_snf                 <- show_section("snf")
 show_diablo_variable     <- show_section("diablo_variable_plot")
 show_diablo_interactive  <- show_section("diablo_interactive_loadings")
 show_rna_prot_hist       <- show_section("rna_protein_concordance_hist")
+show_translation_eff     <- show_section("translation_efficiency")
 
 #' Emit a heading together with its content, or a single fallback line
 #'
@@ -391,7 +392,7 @@ if (dir.exists(per_contrast_dir)) {
         }
 
         te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
-        if (file.exists(te_hist)) {
+        if (show_translation_eff && file.exists(te_hist)) {
             cat(knitr::knit_child(text = sprintf(
                 '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                 gsub("[^a-zA-Z0-9]", "", cname), te_hist
@@ -399,7 +400,7 @@ if (dir.exists(per_contrast_dir)) {
         }
 
         te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
-        if (file.exists(te_scatter)) {
+        if (show_translation_eff && file.exists(te_scatter)) {
             cat(knitr::knit_child(text = sprintf(
                 '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                 gsub("[^a-zA-Z0-9]", "", cname), te_scatter
@@ -439,9 +440,9 @@ if (dir.exists(per_contrast_dir)) {
 }
 ```
 
-## Translation Efficiency (All Contrasts)
+`r if (show_translation_eff) "## Translation Efficiency (All Contrasts)"`
 
-```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
@@ -450,12 +451,12 @@ if (file.exists(p)) {
 }
 ```
 
-```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
+```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
 figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
 render_commentary("translation_efficiency_hist")
 ```
 
-```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
@@ -464,7 +465,7 @@ if (file.exists(p)) {
 }
 ```
 
-```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
+```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
 figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
 render_commentary("translation_efficiency_scatter")
 ```
@@ -1076,13 +1077,13 @@ cat("## Per-Sample Within vs Cross-Group Distance\n\n")
 cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. The x axis is the within-group distance and the y axis the cross-group distance, so samples ABOVE the diagonal are closer to their own group; samples below it are ambiguous or misplaced.\n\n")
 ```
 
-```{r group-dist-scatter, eval=file.exists(group_dist_scatter), results='asis'}
+```{r group-dist-scatter, eval=has_group_dist && file.exists(group_dist_scatter), results='asis'}
 knitr::include_graphics(group_dist_scatter)
 figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points above the diagonal line indicate samples that are closer to their own condition group (x = within-group, y = cross-group distance). Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
 render_commentary("sample_group_distances")
 ```
 
-```{r group-dist-boxplot, eval=file.exists(group_dist_boxplot), results='asis'}
+```{r group-dist-boxplot, eval=has_group_dist && file.exists(group_dist_boxplot), results='asis'}
 knitr::include_graphics(group_dist_boxplot)
 figure_legend("Distribution of within-group and cross-group mean distances across all samples per omics layer. Clear separation between the two distributions indicates strong condition effect in that omics layer.")
 ```
