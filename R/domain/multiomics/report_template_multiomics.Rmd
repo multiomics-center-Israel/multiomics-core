@@ -69,6 +69,24 @@ make_dt <- function(df, caption = NULL, pageLength = 5) {
     )
 }
 
+#' Human-readable title for a rendered pathview map
+#'
+#' pathview leaves the KGML beside the PNG it renders, and that file carries the
+#' pathway's title. Reading it avoids both a network call and a bare numeric id
+#' as the section heading.
+#'
+#' @param png_path Path to the rendered pathview PNG.
+#' @return Character title, or NA when no KGML sits beside the image.
+pathview_map_title <- function(png_path) {
+    stem <- sub("\\..*$", "", basename(png_path))
+    kgml <- file.path(dirname(png_path), paste0(stem, ".xml"))
+    if (!file.exists(kgml)) return(NA_character_)
+    hit <- grep("title=", readLines(kgml, n = 40, warn = FALSE), value = TRUE)
+    if (length(hit) == 0) return(NA_character_)
+    ttl <- sub('.*title="([^"]+)".*', "\\1", hit[1])
+    if (identical(ttl, hit[1])) NA_character_ else ttl
+}
+
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -723,10 +741,13 @@ for (pv_png in pv_pngs) {
     contrast_part <- sub("^.*\\.multi_ora_?", "", bn)
     contrast_part <- sub("\\.(multi\\.)?png$", "", contrast_part)
     contrast_label <- gsub("\\.", " ", contrast_part)
+    pw_title <- pathview_map_title(pv_png)
+    pw_label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else
+        paste0(pw_title, " (", pw_id, ")")
     if (nzchar(contrast_label)) {
-        label <- paste0("Pathway ", pw_id, " (", contrast_label, ")")
+        label <- paste0(pw_label, " - ", contrast_label)
     } else {
-        label <- paste0("Pathway ", pw_id)
+        label <- pw_label
     }
     cat(sprintf("\n### %s {.unnumbered}\n\n", label))
     cat(sprintf("![%s](%s)\n\n", label, pv_png))
@@ -793,7 +814,13 @@ figure_legend("Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show pro
 # Collect ALL pathview PNGs from all sections into one combined PDF
 all_pv_pngs <- character(0)
 if (dir.exists(pathview_dir)) {
-    all_pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.png$", full.names = TRUE))
+    # Only the overlaid maps. pathview also leaves the blank KEGG reference PNG it
+    # downloaded (e.g. ko00360.png beside ko00360.multi_ora.multi.png), which
+    # doubled the PDF with pages carrying no data.
+    all_pv_pngs <- sort(list.files(
+        pathview_dir,
+        pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
+        full.names = TRUE))
 }
 
 if (length(all_pv_pngs) > 0) {
