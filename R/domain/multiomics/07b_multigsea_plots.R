@@ -2184,6 +2184,43 @@ aggregate_log2fc_by_ko <- function(de_table, ko_map, omics) {
 }
 
 
+#' Choose the emptiest corner of a KEGG map for pathview's colour key
+#'
+#' pathview draws its colour key at a fixed corner (default "topright"), which on
+#' some maps lands squarely on the artwork -- on ko01040 it covered the compound
+#' legend panel and made both unreadable. The blank KEGG template is cached on
+#' disk, so the ink in each corner can be measured and the quietest one chosen.
+#'
+#' @param template_png Path to the downloaded blank KEGG map PNG.
+#' @param frac Fraction of width and height treated as a corner.
+#' @return One of "topright", "bottomleft", "bottomright"; defaults to
+#'   "topright" when the template cannot be read.
+pick_key_position <- function(template_png, frac = 0.28) {
+    if (!file.exists(template_png) || !requireNamespace("png", quietly = TRUE)) {
+        return("topright")
+    }
+    img <- tryCatch(png::readPNG(template_png), error = function(e) NULL)
+    if (is.null(img)) return("topright")
+
+    grey <- if (length(dim(img)) == 3) {
+        apply(img[, , seq_len(min(3, dim(img)[3])), drop = FALSE], c(1, 2), mean)
+    } else img
+    nr <- nrow(grey); nc <- ncol(grey)
+    rr <- max(1L, floor(nr * frac)); cc <- max(1L, floor(nc * frac))
+    ink <- function(rows, cols) mean(grey[rows, cols] < 0.86)
+
+    # topleft is deliberately not a candidate: every KEGG map puts its title box
+    # there, and it is thin enough to score as empty -- on ko04510 the key landed
+    # squarely on "FOCAL ADHESION".
+    scores <- c(
+        topright    = ink(seq_len(rr),               seq.int(nc - cc + 1L, nc)),
+        bottomleft  = ink(seq.int(nr - rr + 1L, nr), seq_len(cc)),
+        bottomright = ink(seq.int(nr - rr + 1L, nr), seq.int(nc - cc + 1L, nc))
+    )
+    names(scores)[which.min(scores)]
+}
+
+
 #' Render KEGG maps for the union of pathways enriched in either gene omic
 #'
 #' Reads the per-omic ORA tables written by the RNA / proteomics enrichment
@@ -2346,11 +2383,17 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     generated <- character(0)
     for (pid in pathways) {
         clean_pid <- normalize_kegg_pathway_id(pid)
+        # Place the colour key in whichever corner the map itself leaves empty.
+        # The template is cached by an earlier pathview call, so this is free on
+        # a re-run and falls back to the default corner on a first run.
+        key_pos <- pick_key_position(
+            file.path(pv_dir, paste0(pv_species, clean_pid, ".png")))
         tryCatch({
             pathview::pathview(gene.data = gene_data, cpd.data = cpd_data,
                                pathway.id = clean_pid,
                                species = pv_species, gene.idtype = "KEGG",
                                out.suffix = "multi_ora", kegg.dir = pv_dir,
+                               key.pos = key_pos,
                                multi.state = TRUE, same.layer = FALSE)
             f <- c(paste0(pv_species, clean_pid, ".multi_ora.multi.png"),
                    paste0(pv_species, clean_pid, ".multi_ora.png"))
