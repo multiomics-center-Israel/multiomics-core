@@ -75,7 +75,10 @@ read_gmt <- function(gmt_file) {
 #'
 #' @param organism Organism name (used for OrgDb/KEGG lookups)
 #' @param pathway_database Character vector of databases to use (e.g. "GO", "KEGG")
-#' @param gmt_file Optional custom GMT file path
+#' @param gmt_file Optional custom GMT path, or a vector/list of paths. A single
+#'   path becomes one collection named "custom"; several paths stay separate,
+#'   one collection per file named after its basename, so each source is scored
+#'   and FDR-corrected on its own.
 #' @param annotation Gene annotation data frame (with gene_id and entrez_id columns)
 #' @return Named list of gene set collections (each a named list of character vectors)
 #' @export
@@ -104,9 +107,23 @@ load_gene_sets <- function(organism,
     }
     gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
-        gene_sets$custom <- read_gmt(gmt_paths)
-        message("Loaded custom gene sets from: ",
-                paste(gmt_paths, collapse = ", "))
+        # One GMT keeps the historical "custom" collection name. Several GMTs
+        # stay separate, one collection per file, so that each source gets its
+        # own result table and its own multiple-testing correction — merging
+        # them would pool unrelated (and often redundant) sets into a single
+        # FDR family.
+        if (length(gmt_paths) == 1) {
+            collection_names <- "custom"
+        } else {
+            collection_names <- make.unique(
+                tools::file_path_sans_ext(basename(gmt_paths)), sep = "_")
+        }
+
+        for (i in seq_along(gmt_paths)) {
+            gene_sets[[collection_names[i]]] <- read_gmt(gmt_paths[i])
+            message("Loaded gene set collection '", collection_names[i],
+                    "' from: ", gmt_paths[i])
+        }
 
         # Validate GMT coverage against annotation features if available
         if (!is.null(annotation) && "gene_id" %in% colnames(annotation)) {
@@ -118,17 +135,20 @@ load_gene_sets <- function(organism,
         }
 
         if (!is.null(feature_ids) && length(feature_ids) > 0) {
-            gmt_val <- tryCatch(
-                validate_gmt(gene_sets$custom, feature_ids, verbose = TRUE),
-                error = function(e) {
-                    warning("GMT validation failed: ", e$message)
-                    NULL
+            for (nm in collection_names) {
+                gmt_val <- tryCatch(
+                    validate_gmt(gene_sets[[nm]], feature_ids, verbose = TRUE),
+                    error = function(e) {
+                        warning("GMT validation failed for '", nm, "': ", e$message)
+                        NULL
+                    }
+                )
+                if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
+                    gene_sets[[nm]] <- gmt_val$filtered_pathways
+                    message("GMT '", nm, "' filtered to ",
+                            length(gmt_val$filtered_pathways),
+                            " pathways with coverage in data")
                 }
-            )
-            if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
-                gene_sets$custom <- gmt_val$filtered_pathways
-                message("GMT filtered to ", length(gmt_val$filtered_pathways),
-                        " pathways with coverage in data")
             }
         }
     }
@@ -418,13 +438,19 @@ load_gene_sets <- function(organism,
 #' @export
 run_ora <- function(sig_genes, gene_sets, background, min_size = 10, max_size = 500) {
 
-    gs_sizes <- lengths(gene_sets)
-    gs_filtered <- gene_sets[gs_sizes >= min_size & gs_sizes <= max_size]
+    # Size-filter on the members actually measured, not on raw GMT size. A set
+    # with 300 GMT members but 3 in the background carries no information yet
+    # still consumed a slot in the BH denominator, and could surface as a
+    # "significant" term backed by a handful of features. This also makes ORA
+    # test the same collection fgsea() does, which filters the same way.
+    gs_measured <- lapply(gene_sets, intersect, y = background)
+    gs_sizes <- lengths(gs_measured)
+    gs_filtered <- gs_measured[gs_sizes >= min_size & gs_sizes <= max_size]
 
     if (length(gs_filtered) == 0) return(data.frame())
 
     results <- lapply(names(gs_filtered), function(gs_name) {
-        gs_genes <- intersect(gs_filtered[[gs_name]], background)
+        gs_genes <- gs_filtered[[gs_name]]
         sig_in_gs <- length(intersect(sig_genes, gs_genes))
         sig_not_gs <- length(sig_genes) - sig_in_gs
         gs_not_sig <- length(gs_genes) - sig_in_gs
@@ -571,9 +597,18 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_ids <- pathway_df$pathway
 
     if (database == "GO" || grepl("^GO", database, ignore.case = TRUE)) {
-        # Look up GO term names
-        names_vec <- lookup_go_term_names(pathway_ids)
-        pathway_df$pathway_name <- unname(names_vec[pathway_ids])
+        # Prefer the names the collection already carries — a custom GO GMT
+        # names its own terms, and the biomaRt-generated sets attach the same
+        # GO term names — then fill any gap from GO.db.
+        descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL
+        names_vec <- if (!is.null(descriptions)) unname(descriptions[pathway_ids]) else
+            rep(NA_character_, length(pathway_ids))
+        unnamed <- is.na(names_vec) | !nzchar(names_vec)
+        if (any(unnamed)) {
+            looked_up <- lookup_go_term_names(pathway_ids[unnamed])
+            names_vec[unnamed] <- unname(looked_up[pathway_ids[unnamed]])
+        }
+        pathway_df$pathway_name <- names_vec
     } else if (database == "KEGG" || grepl("KEGG", database, ignore.case = TRUE)) {
         # Use the ID -> name lookup attached by load_gene_sets(); fall back to the
         # bare ID for any pathway without a resolved name (e.g. KEGGREST fallback
@@ -624,6 +659,9 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param method "fgsea", "ora", or "both"
 #' @param min_size Minimum gene set size for fGSEA
 #' @param max_size Maximum gene set size for fGSEA
+#' @param seed Integer seed for fgsea's stochastic multilevel step.
+#' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
+#' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -631,7 +669,10 @@ run_pathway_analysis <- function(de_tables,
                                   annotation = NULL,
                                   method = "fgsea",
                                   min_size = 10,
-                                  max_size = 500) {
+                                  max_size = 500,
+                                  seed = 1L,
+                                  p_cutoff = 0.05,
+                                  lfc_cutoff = log2(1.5)) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -671,13 +712,15 @@ run_pathway_analysis <- function(de_tables,
                     ranks <- ranks[!is.na(ranks)]
                     ranks <- sort(ranks, decreasing = TRUE)
 
-                    fgsea_res <- fgsea::fgsea(
+                    # fgseaMultilevel is stochastic: without a seed ~27 of 4087
+                    # GO terms flipped across padj = 0.05 between identical runs.
+                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
                         pathways = gs,
                         stats = ranks,
                         minSize = min_size,
                         maxSize = max_size,
                         nPermSimple = 10000
-                    )
+                    ))
 
                     fgsea_df <- as.data.frame(fgsea_res)
 
@@ -704,9 +747,11 @@ run_pathway_analysis <- function(de_tables,
                 # ---- ORA ----
                 if (method %in% c("ora", "both")) {
 
-                    # Identify significant up/down genes
-                    de_cfg_padj <- 0.05
-                    de_cfg_lfc  <- log2(1.5)
+                    # Identify significant up/down genes. Cutoffs come from the
+                    # caller's de: block rather than being hard-coded, so ORA
+                    # and the DE tables agree on what "significant" means.
+                    de_cfg_padj <- p_cutoff
+                    de_cfg_lfc  <- lfc_cutoff
                     sig_up   <- res$FeatureID[!is.na(res$padj) &
                                               res$padj < de_cfg_padj &
                                               res$log2FoldChange > de_cfg_lfc]

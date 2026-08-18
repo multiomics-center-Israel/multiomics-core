@@ -77,6 +77,24 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
         ),
         format = "file"
       ),
+      # Headline numbers paired with the file each can be checked against.
+      # Depends on the outputs and enrichment targets so the artifacts it reads
+      # are already written.
+      tar_target(
+        rna_fact_sheet,
+        mod_rnaseq_fact_sheet(
+          pre            = rna_pre,
+          inputs         = rna_inputs,
+          config         = config,
+          out_dir        = rna_out_dir,
+          run_dir        = run_dir,
+          outputs_legacy = rna_outputs_legacy,
+          pathway_res    = rna_pathway_res
+        )
+        # deliberately not format = "file": the module returns character(0) if
+        # it cannot assemble a sheet, and a convenience artifact must not be
+        # able to fail an otherwise complete run
+      ),
       tar_target(
         rna_qc_post_obj,
         mod_rnaseq_qc_post(

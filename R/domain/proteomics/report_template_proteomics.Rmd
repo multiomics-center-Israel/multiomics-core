@@ -1927,8 +1927,12 @@ make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut 
     }
     # Fallback: exclude known stat columns, keep numeric
     if (length(expr_cols) == 0) {
-        stat_patterns <- "^(padj|pvalue|linearFC|linearRatio|upDown|pass|sum\\.pass|n_pass|manual_cutoffs|FeatureID|Protein\\.Names|Genes|First\\.Protein)"
-        expr_cols <- names(src)[!grepl(stat_patterns, names(src))]
+        # Also exclude the derived per-group/per-sample summary blocks (Mean.,
+        # CV., <sample>.norm, <sample>.zscore) — they are not intensities.
+        stat_patterns <- "^(padj|pvalue|log2FC|linearFC|linearRatio|upDown|pass|sum\\.pass|n_pass|manual_cutoffs|FeatureID|Protein\\.Names|Genes|First\\.Protein|Mean\\.|CV\\.)"
+        derived_patterns <- "(\\.norm|\\.zscore)$"
+        expr_cols <- names(src)[!grepl(stat_patterns, names(src)) &
+                                !grepl(derived_patterns, names(src))]
         expr_cols <- expr_cols[vapply(src[expr_cols], is.numeric, logical(1))]
     }
 
