@@ -270,6 +270,64 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 }
 
 
+#' Reduce a proteomics accession to its gene id
+#'
+#' The Spalangia annotation carries two model naming schemes and the proteomics
+#' accessions are transcript-level, so a Protein.Group member reduces to a gene:
+#' \code{evm.model.X[.k.hash]|species} -> \code{evm.TU.X}, and
+#' \code{BRK_gN.tK[.k.hash]|species} -> \code{BRK_gN}.
+#'
+#' @param acc Character vector of accessions.
+#' @return Character vector of gene ids; the input stem when no rule applies.
+.accession_to_gene <- function(acc) {
+    a <- sub("\\|.*$", "", acc)
+    is_evm <- startsWith(a, "evm.model.")
+    a[is_evm] <- paste0("evm.TU.", substring(a[is_evm], nchar("evm.model.") + 1L))
+    a[is_evm] <- sub("\\.[0-9]+\\.[0-9a-f]{8}$", "", a[is_evm])
+    a[!is_evm] <- sub("\\.t[0-9]+(\\.[0-9]+\\.[0-9a-f]{8})?$", "", a[!is_evm])
+    a
+}
+
+
+#' Resolve which accession of a protein group belongs to the paired gene
+#'
+#' A DIA-NN Protein.Group can list several accessions, but they are not
+#' necessarily ambiguous for the gene in hand: usually exactly one reduces to
+#' that gene, and where several do they are transcript models of the same gene.
+#' Recording which one matches keeps the pair attributable instead of leaving a
+#' long semicolon-joined string to be read by eye.
+#'
+#' @param gene_id Character vector of gene ids.
+#' @param protein_id Character vector of Protein.Group strings, same length.
+#' @return Data frame with matched_accession, accession_match
+#'   ("unique" / "gene_isoforms" / "none") and n_other_gene_accessions.
+.resolve_matched_accession <- function(gene_id, protein_id) {
+    accs <- strsplit(protein_id, ";", fixed = TRUE)
+    matched <- character(length(gene_id))
+    status  <- character(length(gene_id))
+    n_other <- integer(length(gene_id))
+
+    for (i in seq_along(gene_id)) {
+        a <- accs[[i]]
+        g <- .accession_to_gene(a)
+        hit <- a[g == gene_id[i]]
+        n_other[i] <- sum(g != gene_id[i])
+        if (length(hit) == 1L) {
+            matched[i] <- hit
+            status[i]  <- "unique"
+        } else if (length(hit) > 1L) {
+            matched[i] <- paste(hit, collapse = ";")
+            status[i]  <- "gene_isoforms"
+        } else {
+            matched[i] <- NA_character_
+            status[i]  <- "none"
+        }
+    }
+    data.frame(matched_accession = matched, accession_match = status,
+               n_other_gene_accessions = n_other, stringsAsFactors = FALSE)
+}
+
+
 #' Write the gene-protein log2FC pairs table
 #'
 #' The one artifact a reader needs to check the RNA-protein correlation by hand:
@@ -295,10 +353,72 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
     if (length(parts) == 0) return(invisible(NULL))
 
     tbl <- do.call(rbind, parts)
+
+    # A DIA-NN Protein.Group can name several accessions that share the observed
+    # peptides. It is ONE quantified unit with ONE fold change -- the individual
+    # accessions do not exist as separate rows in the proteomics DE table -- so
+    # the group string stays the join key. Surfacing the count keeps that
+    # ambiguity visible instead of buried in a long semicolon-joined field.
+    tbl$n_protein_accessions <- lengths(strsplit(tbl$protein_id, ";", fixed = TRUE))
+    tbl <- cbind(tbl, .resolve_matched_accession(tbl$gene_id, tbl$protein_id))
+
+    # protein_accession is the correlation-ready identifier: the Protein.Group
+    # split on ";" and reduced to the single accession that IS this gene. One
+    # row per gene, one accession, nothing repeated. Exploding the group instead
+    # and keeping every accession inflates r from 0.061 to 0.072 purely by
+    # repeating 590 measurements across 1,493 rows, so that expansion is written
+    # separately and labelled for lookup only.
+    tbl$protein_accession <- vapply(
+        strsplit(tbl$matched_accession, ";", fixed = TRUE),
+        function(x) if (length(x) == 0 || is.na(x[1])) NA_character_ else x[1],
+        character(1)
+    )
+
+    front <- c("gene_id", "protein_accession", "rna_log2FC", "protein_log2FC",
+               "rna_padj", "protein_padj", "accession_match", "protein_id")
+    tbl <- tbl[, c(intersect(front, names(tbl)),
+                   setdiff(names(tbl), front)), drop = FALSE]
+
     dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
     f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs.csv")
     write.csv(tbl, f, row.names = FALSE)
-    message("  Wrote ", nrow(tbl), " gene-protein log2FC pairs to ", basename(f))
+    message("  Wrote ", nrow(tbl), " gene-protein log2FC pairs to ", basename(f),
+            " (", sum(tbl$accession_match == "unique"), " resolve to one accession, ",
+            sum(tbl$accession_match == "gene_isoforms"), " to isoforms of the gene, ",
+            sum(tbl$accession_match == "none"), " unresolved)")
+
+    .write_log2fc_pairs_by_accession(tbl, out_dir)
+    invisible(f)
+}
+
+
+#' Write the per-accession expansion of the pairs table
+#'
+#' One row per accession for anyone joining on a single protein identifier. The
+#' fold change is NOT per accession: every accession of a group carries that
+#' group's single measured value, repeated. Use it for lookup and annotation, not
+#' to count proteins or to compute a correlation -- the repeats would weight
+#' multi-accession groups by their size.
+#'
+#' @param tbl The pairs table, already carrying n_protein_accessions.
+#' @param out_dir Directory whose tables/ subdirectory receives the file.
+#' @return Invisibly the path written.
+.write_log2fc_pairs_by_accession <- function(tbl, out_dir) {
+    acc <- strsplit(tbl$protein_id, ";", fixed = TRUE)
+    long <- tbl[rep(seq_len(nrow(tbl)), lengths(acc)), , drop = FALSE]
+    long$protein_accession <- unlist(acc, use.names = FALSE)
+    long$shared_measurement <- long$n_protein_accessions > 1
+    rownames(long) <- NULL
+
+    front <- c("gene_id", "protein_accession", "protein_id",
+               "n_protein_accessions", "shared_measurement")
+    long <- long[, c(intersect(front, names(long)),
+                     setdiff(names(long), front)), drop = FALSE]
+
+    f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs_by_accession.csv")
+    write.csv(long, f, row.names = FALSE)
+    message("  Wrote ", nrow(long), " gene-accession rows to ", basename(f),
+            " (fold changes repeat within a protein group)")
     invisible(f)
 }
 
