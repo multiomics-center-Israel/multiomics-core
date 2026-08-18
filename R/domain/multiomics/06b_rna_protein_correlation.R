@@ -137,9 +137,14 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             )
 
             if (!is.null(out_dir)) {
-                write.csv(cor_df,
-                          file.path(out_dir, "tables", "rna_protein_correlations.csv"),
-                          row.names = FALSE)
+                # The per-gene across-sample correlation is deliberately NOT
+                # written any more. Its feature ids are the harmonized MAE
+                # rownames (GENE_1, GENE_2, ...), which cannot be traced back to
+                # a gene or protein, and at 8 samples -- paired arbitrarily
+                # across omics for this design -- the per-gene coefficient is not
+                # interpretable. The summary scalar is still computed below for
+                # the foundational summary. The checkable artifact is
+                # rna_protein_log2FC_pairs.csv, written after the DE join.
 
                 p <- ggplot2::ggplot(cor_df, ggplot2::aes(x = correlation)) +
                     ggplot2::geom_histogram(bins = 50, fill = "steelblue",
@@ -229,6 +234,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         # Also save a combined summary plot to the main plots dir
         if (length(de_concordance_list) > 0 && !is.null(out_dir)) {
             .save_combined_de_scatter(de_concordance_list, out_dir)
+            .write_log2fc_pairs_table(de_concordance_list, out_dir)
         }
     } else {
         message("  Skipping DE concordance: missing DE tables or gene mapping")
@@ -261,6 +267,39 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         return(gsub("\\s*-\\s*", "_vs_", trimws(as.character(cand[[1]]))))
     }
     "contrast_1"
+}
+
+
+#' Write the gene-protein log2FC pairs table
+#'
+#' The one artifact a reader needs to check the RNA-protein correlation by hand:
+#' one row per gene-protein pair, carrying both original identifiers and both
+#' fold changes, stacked over every contrast. Recomputing the correlation from
+#' these two columns reproduces the figure in the report exactly.
+#'
+#' @param de_concordance_list Named list of per-contrast concordance tables.
+#' @param out_dir Directory whose tables/ subdirectory receives the file.
+#' @return Invisibly the path written, or NULL when there is nothing to write.
+.write_log2fc_pairs_table <- function(de_concordance_list, out_dir) {
+    cols <- c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+              "protein_log2FC", "protein_padj", "concordant")
+    parts <- lapply(names(de_concordance_list), function(cname) {
+        d <- de_concordance_list[[cname]]
+        have <- intersect(cols, names(d))
+        if (!all(c("rna_log2FC", "protein_log2FC") %in% have)) return(NULL)
+        out <- d[, have, drop = FALSE]
+        out$contrast <- cname
+        out
+    })
+    parts <- Filter(Negate(is.null), parts)
+    if (length(parts) == 0) return(invisible(NULL))
+
+    tbl <- do.call(rbind, parts)
+    dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+    f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs.csv")
+    write.csv(tbl, f, row.names = FALSE)
+    message("  Wrote ", nrow(tbl), " gene-protein log2FC pairs to ", basename(f))
+    invisible(f)
 }
 
 
