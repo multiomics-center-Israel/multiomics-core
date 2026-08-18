@@ -87,6 +87,40 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 # PROTEIN-TO-GENE MAPPING
 # ==============================================================================
 
+#' Restrict pathway-analysis DE tables to a subset of features
+#'
+#' A proteomics run can quantify more than one organism -- a host plus its
+#' symbiont, say -- while the gene sets cover only one of them. Leaving the
+#' other organism's proteins in place puts features in the enrichment universe
+#' that can never belong to any set, and counts them among the significant
+#' features, so the hypergeometric background stops describing the annotated
+#' space.
+#'
+#' The pattern is matched against the DE FeatureID, which for a DIA-NN run is the
+#' Protein.Group string (often carrying a species tag).
+#'
+#' @param de_tables Named list of per-contrast DE tables with a FeatureID column.
+#' @param pattern Regular expression; features whose FeatureID matches are KEPT.
+#'   NULL or empty keeps everything.
+#' @return The list with each table filtered; unchanged when no pattern is given.
+filter_pathway_features <- function(de_tables, pattern = NULL) {
+    if (is.null(pattern) || !nzchar(pattern)) return(de_tables)
+
+    lapply(de_tables, function(tbl) {
+        if (is.null(tbl) || !"FeatureID" %in% names(tbl)) return(tbl)
+        keep <- grepl(pattern, tbl$FeatureID)
+        if (!any(keep)) {
+            warning("pathway.feature_filter matched no features; keeping all. ",
+                    "Pattern: ", pattern)
+            return(tbl)
+        }
+        message("  pathway feature filter: keeping ", sum(keep), " of ",
+                length(keep), " features (", pattern, ")")
+        tbl[keep, , drop = FALSE]
+    })
+}
+
+
 #' Map protein IDs to gene symbols for pathway analysis
 #'
 #' Uses the Genes column from summary_df (semicolon-separated,
@@ -173,6 +207,12 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         tbl <- extract_de_table_for_pathway(summary_df, cn, config)
         if (skip_ann) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
     })
+
+    # Optional restriction to the organism the gene sets actually describe.
+    # Applied here, before the universe and the significant set are derived, so
+    # both mean the same thing.
+    de_tables <- filter_pathway_features(
+        de_tables, (cfg$pathway %||% list())$feature_filter)
 
     # ------------------------------------------------------------------
     # Resolve organism from config (no auto-detect for proteomics)
