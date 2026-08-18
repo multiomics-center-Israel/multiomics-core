@@ -204,6 +204,13 @@ show_diablo_interactive  <- show_section("diablo_interactive_loadings")
 show_rna_prot_hist       <- show_section("rna_protein_concordance_hist")
 show_translation_eff     <- show_section("translation_efficiency")
 
+# With a single contrast the "All Contrasts (Combined)" and "Per-Contrast"
+# sections describe the same comparison, so the split is noise. Section headings
+# collapse to one and the per-contrast duplicates are suppressed.
+n_contrasts    <- length(cfg$design$contrasts %||% list())
+single_contrast <- n_contrasts <= 1
+combined_label <- if (single_contrast) "" else " (All Contrasts Combined)"
+
 #' Emit a heading together with its content, or a single fallback line
 #'
 #' The template used to place static markdown sub-headings above chunks gated on
@@ -493,7 +500,7 @@ render_commentary("translation_efficiency_scatter")
 cat("*No MultiGSEA plots found.*\n")
 ```
 
-## All Contrasts (Combined) {.unnumbered}
+`r if (single_contrast) "" else "## All Contrasts (Combined) {.unnumbered}"`
 
 ```{r multigsea-plots, eval=has_multigsea, results='asis'}
 # Exclude pairwise "omics_vs_omics" scatter plots; keep combined/summary plots only.
@@ -509,9 +516,9 @@ for (gp in gsea_pngs) {
 }
 ```
 
-## Per-Contrast MultiGSEA {.tabset .unnumbered}
+`r if (single_contrast) "" else "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`
 
-```{r multigsea-per-contrast, eval=has_multigsea, results='asis'}
+```{r multigsea-per-contrast, eval=has_multigsea && !single_contrast, results='asis'}
 multigsea_per_contrast_dir <- file.path(multigsea_dir, "per_contrast")
 if (dir.exists(multigsea_per_contrast_dir)) {
     contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
@@ -574,7 +581,7 @@ if (file.exists(ora_issues_file)) {
 }
 ```
 
-### All Contrasts (Pooled) {.unnumbered}
+`r if (single_contrast) "" else "### All Contrasts (Pooled) {.unnumbered}"`
 
 ```{r multi-ora-plots, eval=has_multi_ora, results='asis'}
 # Pooled barplot
@@ -622,9 +629,9 @@ if (file.exists(multi_ora_csv)) {
 render_commentary("multi_ora")
 ```
 
-### Per-Contrast Multi-ORA {.tabset .unnumbered}
+`r if (single_contrast) "" else "### Per-Contrast Multi-ORA {.tabset .unnumbered}"`
 
-```{r multi-ora-per-contrast, eval=has_multi_ora, results='asis'}
+```{r multi-ora-per-contrast, eval=has_multi_ora && !single_contrast, results='asis'}
 mora_per_contrast_dir <- file.path(multi_ora_dir, "per_contrast")
 if (dir.exists(mora_per_contrast_dir)) {
     mora_contrast_dirs <- list.dirs(mora_per_contrast_dir, full.names = TRUE, recursive = FALSE)
@@ -780,12 +787,16 @@ if (identical(pv_species, "ko")) {
         "compound values are single-state, so only one half of each circle is filled.",
         "Red is higher and green or blue lower in the first group of the contrast.",
         "Two caveats: a KO can collect several paralogous genes, whose fold changes are averaged,",
-        "and features with no KO assignment do not appear on the map at all."))
+        "and features with no KO assignment do not appear on the map at all.",
+        # The selection rules come from the code that applied them, so the legend
+        # cannot drift from the thresholds actually used.
+        if (exists("pathview_significance_caption")) pathview_significance_caption() else ""))
 } else {
     figure_legend(paste(
         "KEGG pathway maps generated with pathview, shown per contrast.",
         "Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available.",
-        "Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated."))
+        "Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.",
+        if (exists("pathview_significance_caption")) pathview_significance_caption() else ""))
 }
 render_commentary("multi_ora_pathview")
 ```
@@ -876,7 +887,7 @@ if (length(all_pv_pngs) > 0) {
 cat("*No cross-omics enrichment results found. Enrichment analysis requires pathway results from at least 1 omics layer.*\n")
 ```
 
-## All Contrasts (Combined) {.unnumbered}
+`r if (single_contrast) "" else "## All Contrasts (Combined) {.unnumbered}"`
 
 ```{r enrichment-per-omics, eval=has_enrichment, results='asis'}
 # Show per-omics enrichment barplots
@@ -956,9 +967,9 @@ if (file.exists(meta_file)) {
 }
 ```
 
-## Per-Contrast Enrichment {.tabset .unnumbered}
+`r if (single_contrast) "" else "## Per-Contrast Enrichment {.tabset .unnumbered}"`
 
-```{r enrichment-per-contrast, eval=has_enrichment, results='asis'}
+```{r enrichment-per-contrast, eval=has_enrichment && !single_contrast, results='asis'}
 enrich_per_contrast_dir <- file.path(enrichment_dir, "per_contrast")
 if (dir.exists(enrich_per_contrast_dir)) {
     enrich_contrast_dirs <- list.dirs(enrich_per_contrast_dir, full.names = TRUE, recursive = FALSE)
