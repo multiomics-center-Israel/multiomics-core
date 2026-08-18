@@ -429,10 +429,25 @@ if (dir.exists(per_contrast_dir)) {
                         n_conc, n_total, 100 * n_conc / n_total, tf_msg,
                         file.path("per_contrast", cname, "tables",
                                   "rna_protein_de_concordance.csv")))
-            print(make_dt(de_df,
-                          caption = sprintf("RNA vs protein log2FC per gene-protein pair - %s",
-                                            gsub("_", " ", cname)),
-                          pageLength = 15))
+            # print() inside a results='asis' chunk emits nothing for an
+            # htmlwidget, so this table silently never rendered. knit_child is
+            # the idiom the rest of this file uses for the same reason.
+            # Columns are ordered so the two identifiers lead: the layers use
+            # different ID spaces (RNA evm.TU./BRK_g, proteomics Protein.Group,
+            # sometimes several accessions joined by ";"), and a reader looking
+            # up a gene in the proteomics table needs the protein id to join on.
+            show_cols <- intersect(
+                c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+                  "protein_log2FC", "protein_padj", "concordant", "category"),
+                names(de_df))
+            de_show <- de_df[, show_cols, drop = FALSE]
+            de_csv_abs <- normalizePath(de_csv, winslash = "/", mustWork = FALSE)
+            cat(knitr::knit_child(text = sprintf(
+                '```{r rna-prot-tbl-%s, echo=FALSE}\nd <- read.csv("%s", stringsAsFactors = FALSE)\nd <- d[, intersect(c(%s), names(d)), drop = FALSE]\nmake_dt(d, caption = "RNA vs protein log2FC per gene-protein pair - %s", pageLength = 15)\n```\n',
+                gsub("[^a-zA-Z0-9]", "", cname), de_csv_abs,
+                paste(sprintf('"%s"', show_cols), collapse = ", "),
+                gsub("_", " ", cname)
+            ), quiet = TRUE))
         }
     }
 } else {
@@ -916,7 +931,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
+    figure_legend(paste("Cross-omics pathway enrichment heatmap (all contrasts combined).", "Rows are the top 30 pathways ranked on how many layers reach the chosen significance", "threshold, then by combined p-value; the complete list is in the table below.", "Cell colour and the printed value are read from the figure itself -- it states whether", "it is showing signed GSEA NES (red positive, blue negative) or -log10(p), and marks any", "layer that is over-representation only and therefore has no NES.", "Grey means the pathway was not scored in that layer, which is not the same as", "scored and non-significant.", "Note: for each pathway the per-layer value is the best across contrasts, so a pathway", "with consistent but individually sub-significant signal can appear here and not in the", "per-contrast views."))
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
