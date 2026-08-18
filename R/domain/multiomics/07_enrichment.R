@@ -197,6 +197,7 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                                            kegg_conv_cache = NULL) {
 
     kegg_org <- get_kegg_organism(organism)
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     # For gene-based omics, need org_db and kegg_org
     if (omics_type != "metabolomics") {
@@ -289,6 +290,7 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                 # Use ALL measured KEGG-mapped metabolites as universe (not just DE table)
                 full_universe <- unique(id_map$KEGG_ID[!is.na(id_map$KEGG_ID)])
                 run_compound_ora(de_mapped, out_dir, use_min_gs, max_gs, pval_cutoff,
+                                 exclude_classes = excl_classes,
                                  universe = full_universe, label = contrast_name)
             } else if (use_method == "gsea") {
                 run_gsea_kegg(de_mapped, kegg_org, use_min_gs, max_gs, pval_cutoff)
@@ -982,7 +984,7 @@ get_kegg_compound_pathways <- function(cache_dir = NULL) {
 #'   `all_tested` attribute holding every tested pathway, or NULL.
 run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
                               universe = NULL, out_dir = cache_dir,
-                              label = NULL) {
+                              label = NULL, exclude_classes = NULL) {
 
     # Get compound-pathway associations
     cpd_pathways <- get_kegg_compound_pathways(cache_dir)
@@ -1033,6 +1035,16 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     use_min_gs <- max(2, min_gs)
     N <- length(all_cpds)  # total measured compounds
     k <- length(sig_cpds)  # significant compounds
+
+    # Drop KEGG classes this organism cannot have before testing them, so they
+    # never reach the reported table or the multiple-testing family.
+    if (!is.null(exclude_classes) && length(exclude_classes) > 0) {
+        keep_pw <- keep_kegg_pathways(names(pathway_sets),
+                                      exclude = unlist(exclude_classes),
+                                      cache_dir = cache_dir,
+                                      label = "compound pathways")
+        pathway_sets <- pathway_sets[keep_pw]
+    }
 
     results <- list()
     for (pw in names(pathway_sets)) {
@@ -1442,6 +1454,30 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 
     # Use union for the heatmap (show all enriched), common for meta-analysis
     use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
+
+    # KEGG reference maps are pan-species. For an organism that has no KEGG code
+    # the vertebrate organ and human-disease maps light up purely because the
+    # underlying orthologs are generic, so they are dropped rather than reported
+    # as findings. Configurable; nothing is excluded unless the config asks.
+    excl <- config$modes$multiomics$enrichment$exclude_pathway_classes
+    if (!is.null(excl) && length(excl) > 0) {
+        keep <- keep_kegg_pathways(use_pathways, exclude = unlist(excl),
+                                   cache_dir = out_dir,
+                                   label = "cross-omics pathways")
+        use_pathways <- use_pathways[keep]
+
+        # The per-omics tables are written to disk and drive the per-layer
+        # barplots, so they need the same treatment; filtering only the merged
+        # selection would leave the excluded classes visible one section away.
+        pathway_tables <- lapply(pathway_tables, function(df) {
+            col <- if ("pathway" %in% names(df)) "pathway"
+                   else if ("ID" %in% names(df)) "ID" else NULL
+            if (is.null(col)) return(df)
+            df[keep_kegg_pathways(df[[col]], exclude = unlist(excl),
+                                  cache_dir = out_dir,
+                                  label = "per-omics pathways"), , drop = FALSE]
+        })
+    }
 
     # Merge pathway p-values for meta-analysis
     merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics)
@@ -2013,6 +2049,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
     organism <- config$global$organism
     kegg_org <- get_kegg_organism(organism)
     org_db <- get_organism_db(organism)
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     results <- list()
 
@@ -2024,6 +2061,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$diablo <- tryCatch(
             run_diablo_loadings_enrichment(
+                exclude_classes = excl_classes,
                 diablo_results = integration_res$diablo_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -2047,6 +2085,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$mofa <- tryCatch(
             run_mofa_weights_enrichment(
+                exclude_classes = excl_classes,
                 mofa_results = integration_res$mofa_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -2070,7 +2109,8 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 #' Run enrichment on DIABLO top loadings per component
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
-                                            out_dir, top_n = 50) {
+                                            out_dir, top_n = 50,
+                                            exclude_classes = NULL) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -2095,7 +2135,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "DIABLO"
@@ -2173,7 +2214,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 #' Run enrichment on MOFA2 top weights per factor
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
-                                         out_dir, top_n = 50) {
+                                         out_dir, top_n = 50,
+                                         exclude_classes = NULL) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -2195,7 +2237,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "MOFA2"
@@ -2267,7 +2310,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 #' @param out_dir Output directory for CSVs and plots
 #' @param label Label prefix for output files
 #' @return data.frame of enriched pathways, or NULL
-run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label) {
+run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label,
+                                        exclude_classes = NULL) {
     # Build a pseudo-DE table: treat all top features as significant
     de_tbl <- data.frame(
         feature_id = feature_ids,
@@ -2307,6 +2351,7 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
 
     enrich_df <- tryCatch(
         run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe,
+                         exclude_classes = exclude_classes,
                          label = label),
         error = function(e) {
             message("    Compound ORA failed: ", e$message)

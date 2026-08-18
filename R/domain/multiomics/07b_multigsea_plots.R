@@ -2257,6 +2257,18 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         message("  Union pathview: no enriched ", pv_species, " KEGG pathways.")
         return(NULL)
     }
+    # Same reference-map caveat as the cross-omics tables: drop the KEGG classes
+    # this organism cannot have before spending a render on them.
+    excl <- config$modes$multiomics$enrichment$exclude_pathway_classes
+    if (!is.null(excl) && length(excl) > 0) {
+        pathways <- pathways[keep_kegg_pathways(pathways, exclude = unlist(excl),
+                                                cache_dir = out_dir,
+                                                label = "pathview maps")]
+    }
+    if (length(pathways) == 0) {
+        message("  Union pathview: no pathways left after KEGG class filtering.")
+        return(NULL)
+    }
     pathways <- head(pathways, top_n)
 
     # 2. Gene data in the ID space pathview expects: native KEGG gene ids in
@@ -2318,6 +2330,18 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     }
     pv_dir <- file.path(out_dir, "pathview")
     dir.create(pv_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # Clear overlays from a previous run before writing this one. The report
+    # globs this directory, so maps that a narrower pathway selection no longer
+    # produces would otherwise linger and be reported alongside the current set.
+    # The downloaded KEGG templates (ko#####.png / .xml) are the pathview cache
+    # and are deliberately kept.
+    stale <- list.files(pv_dir, pattern = "\\.multi_ora[^/]*\\.png$", full.names = TRUE)
+    if (length(stale) > 0) {
+        unlink(stale)
+        message("  Union pathview: cleared ", length(stale), " map(s) from a previous run")
+    }
+
     cwd <- getwd(); setwd(pv_dir); on.exit(setwd(cwd), add = TRUE)
     generated <- character(0)
     for (pid in pathways) {
