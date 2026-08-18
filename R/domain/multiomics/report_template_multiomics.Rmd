@@ -29,6 +29,11 @@ library(ggplot2)
 library(htmltools)
 library(jsonlite)
 
+# The pipeline renders this template with globalenv() as parent, where tar_source()
+# has already defined %||%. Define it locally too so the template can be re-rendered
+# standalone via render_multiomics_report() without sourcing the whole R/ tree.
+if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
+
 # Helper function for downloadable DT tables
 make_dt <- function(df, caption = NULL, pageLength = 5) {
     # Format real-number columns: < 0.001 → scientific, else 3 decimals
@@ -167,9 +172,44 @@ if (file.exists(commentary_json)) {
 cfg <- yaml::read_yaml(config_path)
 multi_cfg <- cfg$modes$multiomics
 
+# Optional per-project section switches. Every section defaults to TRUE, so a
+# config that says nothing renders exactly what it rendered before; a project
+# turns a section off explicitly under modes.multiomics.report.sections.
+section_cfg <- multi_cfg$report$sections %||% list()
+show_section <- function(name) !identical(section_cfg[[name]], FALSE)
+
+show_mechanistic         <- show_section("mechanistic")
+show_sample_concordance  <- show_section("sample_concordance")
+show_snf                 <- show_section("snf")
+show_diablo_variable     <- show_section("diablo_variable_plot")
+show_diablo_interactive  <- show_section("diablo_interactive_loadings")
+show_rna_prot_hist       <- show_section("rna_protein_concordance_hist")
+
+#' Emit a heading together with its content, or a single fallback line
+#'
+#' The template used to place static markdown sub-headings above chunks gated on
+#' `eval=has_<module>`. When the module was off the chunk never ran, so neither
+#' its content nor its own fallback message appeared and the heading was left
+#' orphaned. Keeping the heading inside the guard makes that impossible.
+#'
+#' @param heading Heading text, without leading hashes.
+#' @param has_content TRUE when there is something to render.
+#' @param body Zero-argument function emitting the content.
+#' @param note Fallback line shown when `has_content` is FALSE; NULL suppresses
+#'   the heading entirely.
+#' @param level Heading level (2 renders "##").
+#' @return Invisibly NULL; called for its `cat()` side effects.
+report_block <- function(heading, has_content, body,
+                         note = "*Not produced for this run.*", level = 2) {
+    if (!isTRUE(has_content) && is.null(note)) return(invisible(NULL))
+    cat(sprintf("\n%s %s\n\n", strrep("#", level), heading))
+    if (isTRUE(has_content)) body() else cat(note, "\n\n")
+    invisible(NULL)
+}
+
 # Detect which sections have data
 has_diablo      <- dir.exists(diablo_dir) && length(list.files(diablo_dir, "\\.png$")) > 0
-has_snf         <- dir.exists(snf_dir) && length(list.files(snf_dir, "\\.png$")) > 0
+has_snf         <- show_snf && dir.exists(snf_dir) && length(list.files(snf_dir, "\\.png$")) > 0
 has_mofa        <- dir.exists(mofa_dir) && length(list.files(mofa_dir, "\\.png$")) > 0
 has_integration <- has_diablo || has_snf || has_mofa
 has_enrichment  <- dir.exists(enrichment_dir) && length(list.files(enrichment_dir, "\\.png$|\\.csv$")) > 0
@@ -276,16 +316,16 @@ kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
 cat("*No RNA-protein correlation results found. This analysis requires both transcriptomics and proteomics data.*\n")
 ```
 
-## Concordance Distribution
+`r if (show_rna_prot_hist) "## Concordance Distribution"`
 
-```{r rna-prot-concordance, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-concordance, eval=has_transcriptomics && has_rna_prot && show_rna_prot_hist, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "rna_protein_concordance.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
 }
 ```
 
-```{r rna-prot-concordance-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-concordance-legend, eval=has_transcriptomics && has_rna_prot && show_rna_prot_hist, results='asis'}
 figure_legend("Distribution of per-gene RNA-protein Pearson correlations across samples. The histogram shows how well transcript levels predict protein abundance for individual genes.")
 render_commentary("rna_protein_concordance")
 ```
@@ -312,6 +352,14 @@ render_commentary("rna_protein_de_scatter")
 per_contrast_dir <- file.path(rna_prot_dir, "per_contrast")
 if (dir.exists(per_contrast_dir)) {
     contrast_dirs <- list.dirs(per_contrast_dir, full.names = TRUE, recursive = FALSE)
+    # Emit a heading only for contrasts that actually produced something. Empty
+    # per-contrast directories used to yield a bare "### contrast 1" with no
+    # content and no explanation.
+    contrast_dirs <- Filter(
+        function(d) length(list.files(d, recursive = TRUE)) > 0, contrast_dirs)
+    if (length(contrast_dirs) == 0) {
+        cat("*No per-contrast RNA-protein concordance was produced for this run.*\n\n")
+    }
     for (cdir in contrast_dirs) {
         cname <- basename(cdir)
         cat(sprintf("\n### %s\n\n", gsub("_", " ", cname)))
@@ -352,11 +400,24 @@ if (dir.exists(per_contrast_dir)) {
                 n_tf <- sum(de_df$is_transcription_factor, na.rm = TRUE)
                 if (n_tf > 0) tf_msg <- sprintf(", %d known TFs", n_tf)
             }
-            cat(sprintf("\n**%s:** %d gene-protein pairs, r = %.3f, %d/%d (%.0f%%) concordant%s\n\n",
-                        gsub("_", " ", cname), n_total, r_val,
-                        n_conc, n_total, 100 * n_conc / n_total, tf_msg))
+            rho_val <- suppressWarnings(cor(de_df$rna_log2FC, de_df$protein_log2FC,
+                                            method = "spearman", use = "complete.obs"))
+            cat(sprintf(paste0("\n**%s:** %d gene-protein pairs, Pearson r = %.3f, ",
+                               "Spearman rho = %.3f, %d/%d (%.0f%%) same sign%s. ",
+                               "Every number here is computed from `%s`, ",
+                               "which is downloadable from the table below.\n\n"),
+                        gsub("_", " ", cname), n_total, r_val, rho_val,
+                        n_conc, n_total, 100 * n_conc / n_total, tf_msg,
+                        file.path("per_contrast", cname, "tables",
+                                  "rna_protein_de_concordance.csv")))
+            print(make_dt(de_df,
+                          caption = sprintf("RNA vs protein log2FC per gene-protein pair - %s",
+                                            gsub("_", " ", cname)),
+                          pageLength = 15))
         }
     }
+} else {
+    cat("*No per-contrast RNA-protein concordance was produced for this run.*\n\n")
 }
 ```
 
@@ -590,8 +651,22 @@ cat("*No metabolomics compound ORA results found. Compound enrichment requires m
 ```{r metab-ora-results, eval=has_metab_ora, results='asis'}
 metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
 if (nrow(metab_df) > 0) {
-    cat("\nCompound-based over-representation analysis identified **", nrow(metab_df),
-        "** enriched KEGG pathways from significantly altered metabolites.\n\n")
+    # Report what actually passed FDR. The upstream filter is on nominal p, so
+    # calling every returned row "enriched" overstated a null result: for a run
+    # where nothing passes, all padj values are identical by BH monotonicity.
+    n_fdr <- if ("padj" %in% names(metab_df)) sum(metab_df$padj < 0.05, na.rm = TRUE) else NA_integer_
+    if (!is.na(n_fdr) && n_fdr > 0) {
+        cat(sprintf(paste0("\nCompound-based over-representation analysis found **%d** ",
+                           "KEGG pathways at FDR < 0.05, out of %d candidates listed ",
+                           "below.\n\n"), n_fdr, nrow(metab_df)))
+    } else {
+        cat(sprintf(paste0("\nNo KEGG compound pathway reached FDR < 0.05. The %d rows ",
+                           "below are the nominally over-represented candidates ",
+                           "(unadjusted p < 0.1) and are hypothesis-generating only. ",
+                           "Identical adjusted p-values across rows are expected here: ",
+                           "under Benjamini-Hochberg they inherit the smallest ",
+                           "adjusted value in the ranking.\n\n"), nrow(metab_df)))
+    }
 }
 ```
 
@@ -605,12 +680,15 @@ if (file.exists(metab_bp)) {
 
 ```{r metab-ora-table, eval=has_metab_ora}
 metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
-display_cols <- intersect(c("pathway", "ID", "pvalue", "padj", "setSize", "compounds"), colnames(metab_df))
+display_cols <- intersect(c("pathway", "pathway_name", "ID", "pvalue", "padj", "setSize", "compounds"),
+                          colnames(metab_df))
 metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), display_cols, drop = FALSE]
-col_labels <- c(pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
-                padj = "Adj. P-value", setSize = "Compound Count", compounds = "Compounds")
+col_labels <- c(pathway = "Pathway ID", pathway_name = "Pathway", ID = "KEGG ID",
+                pvalue = "P-value", padj = "Adj. P-value",
+                setSize = "Compound Count", compounds = "Compounds")
 colnames(metab_show) <- col_labels[display_cols]
-knitr::kable(metab_show, row.names = FALSE, caption = "Metabolomics compound ORA - enriched KEGG pathways")
+knitr::kable(metab_show, row.names = FALSE,
+             caption = "Metabolomics compound ORA - candidate KEGG pathways (nominal p < 0.1)")
 ```
 
 ```{r metab-ora-commentary, eval=has_metab_ora, results='asis'}
@@ -915,7 +993,7 @@ render_commentary("gene_protein_mapping")
 
 ---
 
-# Sample Concordance Across Omics
+`r if (show_sample_concordance) "# Sample Concordance Across Omics"`
 
 ```{r mantel-setup, include=FALSE}
 foundational_dir <- file.path(run_dir, "foundational", "foundational")
@@ -944,7 +1022,8 @@ has_corr_heatmaps <- length(mantel_corr_heatmaps) > 0
 ```{r group-dist-setup, include=FALSE}
 group_dist_scatter <- file.path(foundational_dir, "plots", "sample_within_vs_cross_group_distance.png")
 group_dist_boxplot <- file.path(foundational_dir, "plots", "sample_group_distance_boxplot.png")
-has_group_dist <- file.exists(group_dist_scatter) || file.exists(group_dist_boxplot)
+has_group_dist <- show_sample_concordance &&
+    (file.exists(group_dist_scatter) || file.exists(group_dist_boxplot))
 ```
 
 ```{r group-dist-section, eval=has_group_dist, results='asis'}
@@ -998,14 +1077,14 @@ figure_legend("DIABLO sample scores plot. Samples are projected onto the first t
 render_commentary("diablo_sample_plot")
 ```
 
-```{r diablo-variable-plot, eval=has_diablo, results='asis'}
+```{r diablo-variable-plot, eval=has_diablo && show_diablo_variable, results='asis'}
 p <- file.path(diablo_dir, "diablo_variable_plot.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
 }
 ```
 
-```{r diablo-variable-legend, eval=has_diablo, results='asis'}
+```{r diablo-variable-legend, eval=has_diablo && show_diablo_variable, results='asis'}
 figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
 render_commentary("diablo_variable_plot")
 ```
@@ -1025,7 +1104,7 @@ if (file.exists(file.path(diablo_dir, "diablo_circos.png"))) {
 }
 ```
 
-```{r diablo-loadings-interactive, eval=has_diablo, results='asis'}
+```{r diablo-loadings-interactive, eval=has_diablo && show_diablo_interactive, results='asis'}
 int_html <- file.path(diablo_dir, "diablo_loadings_interactive.html")
 int_rds <- file.path(diablo_dir, "diablo_loadings_interactive.rds")
 if (file.exists(int_rds)) {
@@ -1094,6 +1173,9 @@ if (length(lfc_plots) > 0) {
 # it the cat()ed headers were emitted as literal "## ### Top DIABLO Features"
 # text and the DT widgets never rendered.
 diablo_feat_files <- list.files(diablo_dir, pattern = "diablo_top_features_.*\\.csv$", full.names = TRUE)
+    # "Y" is the mixOmics outcome dummy matrix, not an omics layer. The writer now
+    # skips it, but runs completed before that fix still have the file on disk.
+    diablo_feat_files <- diablo_feat_files[!grepl("_Y\\.csv$", diablo_feat_files)]
 if (length(diablo_feat_files) > 0) {
     for (ff in diablo_feat_files) {
         omics_name <- gsub("diablo_top_features_|\\.csv$", "", basename(ff))
@@ -1110,7 +1192,7 @@ if (length(diablo_feat_files) > 0) {
 }
 ```
 
-## SNF
+`r if (show_snf) "## SNF"`
 
 ```{r snf-heatmap, eval=has_snf, results='asis'}
 p <- file.path(snf_dir, "snf_network_heatmap.png")
@@ -1435,20 +1517,20 @@ if (file.exists(robust_csv)) {
 
 ---
 
-# Mechanistic & Causal Inference {.tabset}
+`r if (show_mechanistic) "# Mechanistic & Causal Inference {.tabset}"`
 
 ```{r mech-setup, include=FALSE}
 mechanistic_dir <- file.path(run_dir, "mechanistic", "mechanistic")
-has_mechanistic <- dir.exists(mechanistic_dir) &&
+has_mechanistic <- show_mechanistic && dir.exists(mechanistic_dir) &&
     (length(list.files(file.path(mechanistic_dir, "plots"), "\\.png$")) > 0 ||
      length(list.files(file.path(mechanistic_dir, "tables"), "\\.csv$")) > 0)
 ```
 
-```{r mech-note, eval=!has_mechanistic, results='asis'}
+```{r mech-note, eval=show_mechanistic && !has_mechanistic, results='asis'}
 cat("*Mechanistic inference was not run or produced no results. Enable in config: `mechanistic.run_mechanistic: true`*\n")
 ```
 
-## Protein-Metabolite Correlations
+`r if (show_mechanistic) "## Protein-Metabolite Correlations"`
 
 ```{r mech-prot-metab-summary, eval=has_mechanistic, results='asis'}
 pm_csv <- file.path(mechanistic_dir, "tables", "protein_metabolite_significant_pairs.csv")
@@ -1483,7 +1565,7 @@ if (file.exists(pm_pairs)) {
 }
 ```
 
-## Mediation: RNA -> Protein -> Phenotype
+`r if (show_mechanistic) "## Mediation: RNA -> Protein -> Phenotype"`
 
 ```{r mech-mediation-prop, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_mediation_proportion_barplot.png")
@@ -1538,7 +1620,7 @@ if (file.exists(med_csv)) {
 }
 ```
 
-## Protein -> Metabolite -> Phenotype Mediation
+`r if (show_mechanistic) "## Protein -> Metabolite -> Phenotype Mediation"`
 
 ```{r mech-prot-metab-med-plot, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_prot_metab_mediation_barplot.png")
@@ -1572,7 +1654,7 @@ if (file.exists(pm_csv)) {
 }
 ```
 
-## Multi-Layer Mediation: Protein -> Metabolite -> Phenotype
+`r if (show_mechanistic) "## Multi-Layer Mediation: Protein -> Metabolite -> Phenotype"`
 
 ```{r mech-multilayer-plot, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_multilayer_mediation_barplot.png")
@@ -1598,7 +1680,7 @@ if (file.exists(ml_csv)) {
 }
 ```
 
-## COSMOS Causal Network
+`r if (show_mechanistic) "## COSMOS Causal Network"`
 
 ```{r cosmos-network, eval=has_mechanistic, results='asis'}
 cosmos_plot <- file.path(mechanistic_dir, "plots", "cosmos_causal_network.png")
@@ -1638,7 +1720,7 @@ if (file.exists(cosmos_edges)) {
 }
 ```
 
-## TF Activity
+`r if (show_mechanistic) "## TF Activity"`
 
 ```{r mech-tf-heatmap, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_tf_activity_heatmap.png")
@@ -1670,7 +1752,7 @@ if (file.exists(p)) {
 }
 ```
 
-## Pathway Activity (PROGENy)
+`r if (show_mechanistic) "## Pathway Activity (PROGENy)"`
 
 ```{r mech-pathway-heatmap, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_pathway_activity_heatmap.png")
@@ -1712,7 +1794,7 @@ if (file.exists(pa_csv)) {
 }
 ```
 
-## Regulatory / Co-expression Network {.tabset}
+`r if (show_mechanistic) "## Regulatory / Co-expression Network {.tabset}"`
 
 ```{r mech-network, eval=has_mechanistic, results='asis'}
 p <- file.path(mechanistic_dir, "plots", "mech_regulatory_network.png")
