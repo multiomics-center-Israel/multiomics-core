@@ -45,16 +45,18 @@ render_multiomics_report <- function(run_dir, config, config_file = NULL) {
     dest_rmd <- file.path(run_dir, "report_multiomics.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template)
+    # Refresh execution_info/config_used.yaml (the template reads its settings
+    # from this snapshot, not from the live config). It is rewritten on every
+    # render rather than only when absent: a stale snapshot from an earlier run
+    # silently overrode any config change, so edits to the report section
+    # switches appeared to do nothing until the file was deleted by hand.
     exec_dir <- file.path(run_dir, "execution_info")
     config_used <- file.path(exec_dir, "config_used.yaml")
-    if (!file.exists(config_used)) {
-        dir.create(exec_dir, recursive = TRUE, showWarnings = FALSE)
-        if (!is.null(config_file) && file.exists(config_file)) {
-            file.copy(config_file, config_used, overwrite = TRUE)
-        } else {
-            yaml::write_yaml(config, config_used)
-        }
+    dir.create(exec_dir, recursive = TRUE, showWarnings = FALSE)
+    if (!is.null(config_file) && file.exists(config_file)) {
+        file.copy(config_file, config_used, overwrite = TRUE)
+    } else {
+        yaml::write_yaml(config, config_used)
     }
 
     # Render
