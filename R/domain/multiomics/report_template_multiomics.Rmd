@@ -731,7 +731,25 @@ for (pv_png in pv_pngs) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", label))
     cat(sprintf("![%s](%s)\n\n", label, pv_png))
 }
-figure_legend("KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.")
+pv_species <- multi_cfg$enrichment$pathview$species %||% ""
+if (identical(pv_species, "ko")) {
+    figure_legend(paste(
+        "KEGG reference pathway maps generated with pathview in KEGG Orthology space.",
+        "This organism has no KEGG organism code, so species-specific maps do not exist;",
+        "each gene box is a KO group rather than a single gene.",
+        "Boxes are split: the left half carries the transcriptomics log2FC and the right half",
+        "the proteomics log2FC, white where that layer has no value for the KO.",
+        "Circles are compounds, coloured on a separate scale from the metabolomics log2FC;",
+        "compound values are single-state, so only one half of each circle is filled.",
+        "Red is higher and green or blue lower in the first group of the contrast.",
+        "Two caveats: a KO can collect several paralogous genes, whose fold changes are averaged,",
+        "and features with no KO assignment do not appear on the map at all."))
+} else {
+    figure_legend(paste(
+        "KEGG pathway maps generated with pathview, shown per contrast.",
+        "Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available.",
+        "Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated."))
+}
 render_commentary("multi_ora_pathview")
 ```
 
