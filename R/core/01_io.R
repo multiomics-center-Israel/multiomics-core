@@ -237,3 +237,74 @@ read_table_auto <- function(path) {
   df <- sanitize_character_columns(df, source = basename(path))
   df
 }
+
+
+# =============================================================================
+# Pre-computed DE summary tables
+# =============================================================================
+
+#' Resolve a column in a per-contrast DE summary table
+#'
+#' Our own \code{Datasets/*_summary_p0.05.tsv} exports hold every contrast in one
+#' table and suffix the statistic columns with the contrast name, e.g.
+#' \code{log2FC.S_vs_NS} or \code{padj.imputs.SP_vs_NSP}. The pre-computed DE
+#' loaders originally matched bare names only, so pointing them at one of our own
+#' exports silently produced all-NA statistics. This resolves both shapes.
+#'
+#' Matching order: an exact bare name first, then a suffixed column. When several
+#' contrasts are present the label decides; when only one is present it is used
+#' regardless of what it is called, since the multiomics contrast label often
+#' differs from the short code the single-omics run used.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param bare Candidate bare column names, in preference order.
+#' @param prefixes Candidate prefixes for the suffixed form (e.g. "log2FC",
+#'   "linearFC.imputs"), in preference order.
+#' @param contrast_label Contrast name to prefer when the table holds several.
+#' @return The resolved column name, or NA_character_ when nothing matches.
+resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
+    hit <- cn[cn %in% bare]
+    if (length(hit) > 0) return(hit[1])
+
+    for (pre in prefixes) {
+        stem <- paste0(pre, ".")
+        suffixed <- cn[startsWith(cn, stem)]
+        if (length(suffixed) == 0) next
+        if (!is.null(contrast_label)) {
+            exact <- suffixed[suffixed == paste0(stem, contrast_label)]
+            if (length(exact) > 0) return(exact[1])
+        }
+        # One contrast in the file: its short code need not match the label.
+        if (length(suffixed) == 1) return(suffixed[1])
+        if (!is.null(contrast_label)) {
+            stop("Cannot resolve column '", pre, "' for contrast '", contrast_label,
+                 "': the table holds several contrasts (",
+                 paste(substring(suffixed, nchar(stem) + 1L), collapse = ", "),
+                 "). Rename the contrast or split the table.")
+        }
+    }
+    NA_character_
+}
+
+
+#' Convert a signed linear fold change to log2
+#'
+#' Proteomics summaries store linearFC as a signed linear ratio: 2^log2FC when
+#' the change is non-negative and -1 / 2^log2FC when it is negative (see
+#' build_provenance_notes() in R/core/05_export_excel.R). A plain log2() returns
+#' NaN for every down-regulated feature, silently dropping about half the
+#' proteome wherever the value is reused.
+#'
+#' @param x Numeric vector of signed linear fold changes.
+#' @return Numeric vector of log2 fold changes; NA where x is NA or zero.
+signed_linear_fc_to_log2 <- function(x) {
+    x <- as.numeric(x)
+    out <- rep(NA_real_, length(x))
+    # Index rather than ifelse(): ifelse evaluates both branches, so log2() of
+    # the negative values emits a NaN warning even though those are discarded.
+    up   <- !is.na(x) & x > 0
+    down <- !is.na(x) & x < 0
+    out[up]   <- log2(x[up])
+    out[down] <- -log2(abs(x[down]))
+    out
+}

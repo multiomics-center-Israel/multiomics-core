@@ -622,6 +622,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
 
         raw <- read_table_auto(abs_path)
         cn <- colnames(raw)
+        label <- contrast_labels[i]
 
         # Feature IDs
         prot_id_col <- cfg$id_columns$protein_id %||% "Protein.Group"
@@ -634,19 +635,51 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
             feat_ids <- as.character(raw[[feat_col]])
         }
 
-        # logFC
-        lfc_col <- cn[cn %in% c("logFC", "log2FoldChange", "log2FC",
-                                 "log2(FC)", "log2.FC.")][1]
-        lfc_vals <- if (!is.na(lfc_col)) as.numeric(raw[[lfc_col]]) else NA_real_
+        # logFC. resolve_de_summary_col() also accepts the contrast-suffixed form
+        # our own limma_multimp_summary export uses.
+        lfc_col <- resolve_de_summary_col(
+            cn,
+            bare = c("logFC", "log2FoldChange", "log2FC", "log2(FC)", "log2.FC."),
+            prefixes = c("logFC", "log2FC", "log2FoldChange"),
+            contrast_label = label
+        )
+        if (!is.na(lfc_col)) {
+            lfc_vals <- as.numeric(raw[[lfc_col]])
+        } else {
+            # The multi-imputation summary stores only linearFC, a SIGNED linear
+            # ratio; log2() of it would drop every down-regulated protein to NaN.
+            lin_col <- resolve_de_summary_col(
+                cn,
+                bare = c("linearFC"),
+                prefixes = c("linearFC.imputs", "linearFC"),
+                contrast_label = label
+            )
+            if (is.na(lin_col)) {
+                # Silently returning NA here used to make a mis-pointed config
+                # look like a run with no differential abundance at all.
+                stop("Pre-computed proteomics DE table has no recognisable fold-",
+                     "change column: ", abs_path, "\n  columns: ",
+                     paste(cn, collapse = ", "))
+            }
+            lfc_vals <- signed_linear_fc_to_log2(raw[[lin_col]])
+        }
 
         # P.Value
-        pval_col <- cn[cn %in% c("P.Value", "pvalue", "PValue", "p.value",
-                                  "raw.pval")][1]
+        pval_col <- resolve_de_summary_col(
+            cn,
+            bare = c("P.Value", "pvalue", "PValue", "p.value", "raw.pval"),
+            prefixes = c("pvalue.imputs", "P.Value", "pvalue"),
+            contrast_label = label
+        )
         pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
 
         # adj.P.Val
-        padj_col_name <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "q.value",
-                                       "p.adjust", "qvalue")][1]
+        padj_col_name <- resolve_de_summary_col(
+            cn,
+            bare = c("adj.P.Val", "padj", "FDR", "q.value", "p.adjust", "qvalue"),
+            prefixes = c("padj.imputs", "adj.P.Val", "padj", "FDR"),
+            contrast_label = label
+        )
         padj_vals <- if (!is.na(padj_col_name)) {
             as.numeric(raw[[padj_col_name]])
         } else {

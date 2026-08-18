@@ -661,13 +661,7 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
 #'
 #' @param x Numeric vector of signed linear fold changes.
 #' @return Numeric vector of log2 fold changes, NA where \code{x} is NA or zero.
-.signed_linear_fc_to_log2 <- function(x) {
-    x <- as.numeric(x)
-    out <- rep(NA_real_, length(x))
-    ok <- !is.na(x) & x != 0
-    out[ok] <- ifelse(x[ok] > 0, log2(x[ok]), -log2(abs(x[ok])))
-    out
-}
+.signed_linear_fc_to_log2 <- function(x) signed_linear_fc_to_log2(x)
 
 
 #' Extract a simple DE data frame from complex DE result objects
