@@ -1479,10 +1479,20 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         })
     }
 
-    # Merge pathway p-values for meta-analysis
-    merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics)
+    # One significance statistic for the whole section — figures and meta table
+    # alike — so a reader never has to guess whether a bar is raw or adjusted.
+    pvalue_type <- resolve_pvalue_type(config)
 
-    # Combine p-values using Stouffer's method (only for pathways with >= 2 p-values)
+    # Merge pathway significance values for meta-analysis
+    merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics,
+                                             pvalue_type = pvalue_type)
+    types_used <- attr(merged_pathways, "pvalue_type_used")
+    value_label <- describe_pvalue_axis(pvalue_type, types_used)
+
+    # Combine across layers using Stouffer's method (only for pathways with >= 2
+    # values). With pvalue_type = "padj" the inputs are already BH-adjusted, so
+    # combined_padj is conservative — treat it as a ranking key, not a calibrated
+    # test.
     meta_results <- stouffer_combined_pvalues(merged_pathways)
 
     # Sort by combined p-value. This ordering is the contract of the meta CSV —
@@ -1493,6 +1503,13 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # every label downstream is a bare accession (GO:0034329, map01523).
     meta_results <- attach_pathway_names_from_tables(meta_results, pathway_tables)
 
+    # The pval_<omics> column names are a fixed contract, so the table has to say
+    # in-band which statistic they actually hold.
+    fell_back <- names(types_used)[types_used != pvalue_type]
+    meta_results$pvalue_type <- if (length(fell_back) == 0) pvalue_type else
+        paste0(pvalue_type, " (", if (identical(pvalue_type, "padj")) "raw p" else "padj",
+               " for ", paste(fell_back, collapse = ", "), ")")
+
     # Generate plots
     plots <- list()
     if (!is.null(out_dir) && nrow(meta_results) > 0) {
@@ -1502,7 +1519,10 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         plots$pathway_heatmap <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
         png(plots$pathway_heatmap, width = 1200, height = 900, res = 120)
         tryCatch({
-            plot_cross_omics_pathway_heatmap(meta_results, omics)
+            plot_cross_omics_pathway_heatmap(meta_results, omics,
+                                             pathway_tables = pathway_tables,
+                                             value_label = value_label,
+                                             pvalue_type = pvalue_type)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
@@ -1513,7 +1533,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         plots$dot_plot <- file.path(out_dir, "cross_omics_enrichment_dotplot.png")
         png(plots$dot_plot, width = 1200, height = 800, res = 120)
         tryCatch({
-            plot_enrichment_dotplot(meta_results, omics)
+            plot_enrichment_dotplot(meta_results, omics, value_label = value_label)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Dot plot failed:", e$message), cex = 1.2)
@@ -1527,7 +1547,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
             plots[[paste0(om, "_barplot")]] <- plot_path
             png(plot_path, width = 1000, height = 700, res = 120)
             tryCatch({
-                plot_per_omics_barplot(pt, om)
+                plot_per_omics_barplot(pt, om, pvalue_type = pvalue_type)
             }, error = function(e) {
                 plot.new()
                 text(0.5, 0.5, paste(om, "barplot failed:", e$message), cex = 1.2)
@@ -1543,6 +1563,8 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         union_pathways = union_pathways,
         meta_analysis = meta_results,
         pathway_tables = pathway_tables,
+        pvalue_type = pvalue_type,
+        pvalue_type_used = types_used,
         plots = plots
     )
 }
@@ -1692,10 +1714,103 @@ pathway_name_column <- function(df) {
 }
 
 
-#' Merge pathway p-values from multiple omics
-merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
+#' Read the significance statistic the cross-omics figures should use
+#'
+#' Historically every cross-omics figure plotted the raw p-value even where the
+#' per-omic table carried a BH-adjusted one, which over-states how many pathways
+#' clear the 0.05 line. The statistic is now a config choice so a run cannot
+#' drift between figures.
+#'
+#' @param config Full pipeline config; the key read is
+#'   `modes.multiomics.enrichment.pvalue_type`.
+#' @return "padj" (the default) or "pvalue".
+resolve_pvalue_type <- function(config) {
+    requested <- config$modes$multiomics$enrichment$pvalue_type
+    if (is.null(requested) || !nzchar(as.character(requested)[1])) return("padj")
+    requested <- tolower(trimws(as.character(requested)[1]))
+    if (requested %in% c("padj", "pvalue")) return(requested)
+    warning("Unknown modes.multiomics.enrichment.pvalue_type '", requested,
+            "'; expected \"padj\" or \"pvalue\". Using \"padj\".")
+    "padj"
+}
+
+
+#' Pick the significance column of an enrichment table
+#'
+#' Enrichment tables reach the cross-omics layer from four different producers
+#' (fgsea, clusterProfiler ORA, the Fisher fallback, compound ORA) and spell the
+#' same two quantities differently. This resolves the requested statistic and
+#' reports what it actually found, so a fallback can be shown on the figure
+#' rather than silently swapped in.
+#'
+#' @param df Enrichment data frame.
+#' @param pvalue_type "padj" or "pvalue" — the statistic asked for.
+#' @return `NULL` when the table has neither, otherwise a list with `column`
+#'   (the column name) and `type` ("padj" or "pvalue" — what that column holds).
+pick_pvalue_column <- function(df, pvalue_type = "padj") {
+    if (!is.data.frame(df)) return(NULL)
+    adj_cols <- c("padj", "p.adjust", "FDR", "qvalue")
+    raw_cols <- c("pvalue", "pval", "PValue", "p_value")
+
+    first_present <- function(candidates) {
+        hit <- candidates[candidates %in% names(df)]
+        if (length(hit) == 0) return(NULL)
+        # A column of all-NA is present but unusable, and the merge downstream
+        # cannot tell the difference between that and "not tested".
+        for (h in hit) if (any(!is.na(df[[h]]))) return(h)
+        NULL
+    }
+
+    order_pref <- if (identical(pvalue_type, "pvalue")) {
+        list(c(raw_cols, "pvalue"), adj_cols)
+    } else {
+        list(adj_cols, raw_cols)
+    }
+    wanted <- if (identical(pvalue_type, "pvalue")) "pvalue" else "padj"
+    other  <- if (identical(pvalue_type, "pvalue")) "padj" else "pvalue"
+
+    col <- first_present(order_pref[[1]])
+    if (!is.null(col)) return(list(column = col, type = wanted))
+    col <- first_present(order_pref[[2]])
+    if (!is.null(col)) return(list(column = col, type = other))
+    NULL
+}
+
+
+#' Describe the statistic on an axis, naming any layer that fell back
+#'
+#' @param pvalue_type The statistic requested ("padj" or "pvalue").
+#' @param types_used Named character vector: layer -> statistic actually used.
+#' @return A one-line label such as "-log10(adjusted p)" or
+#'   "-log10(adjusted p); raw p for: transcriptomics".
+describe_pvalue_axis <- function(pvalue_type = "padj", types_used = NULL) {
+    base <- if (identical(pvalue_type, "pvalue")) "-log10(p-value)" else "-log10(adjusted p)"
+    if (is.null(types_used) || length(types_used) == 0) return(base)
+    fallback <- names(types_used)[types_used != pvalue_type]
+    if (length(fallback) == 0) return(base)
+    other <- if (identical(pvalue_type, "pvalue")) "adjusted p" else "raw p"
+    paste0(base, "; ", other, " for: ", paste(fallback, collapse = ", "))
+}
+
+
+#' Merge pathway significance values from multiple omics
+#'
+#' Column names stay `pval_<omics>` whichever statistic is selected: they are the
+#' contract `select_multi_omics_pathways()`, the plots and the report all key on.
+#' The statistic actually taken per layer is returned as the `pvalue_type_used`
+#' attribute so the figures can say so.
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames.
+#' @param target_pathways Pathway accessions to keep.
+#' @param omics Character vector of omics layer names, in column order.
+#' @param pvalue_type "padj" (default) or "pvalue".
+#' @return Data frame with one `pval_<omics>` column per layer, carrying a
+#'   `pvalue_type_used` attribute (named character vector, layer -> statistic).
+merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
+                                  pvalue_type = "padj") {
 
     merged <- data.frame(pathway = target_pathways, stringsAsFactors = FALSE)
+    types_used <- character(0)
 
     for (om in omics) {
         df <- pathway_tables[[om]]
@@ -1711,21 +1826,22 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
             next
         }
 
-        # Identify p-value column
-        pval_col <- if ("pvalue" %in% names(df)) "pvalue"
-                    else if ("pval" %in% names(df)) "pval"
-                    else if ("p.adjust" %in% names(df)) "p.adjust"
-                    else if ("padj" %in% names(df)) "padj"
-                    else NULL
+        picked <- pick_pvalue_column(df, pvalue_type)
 
-        if (is.null(pval_col)) {
-            warning("Cannot identify p-value column in ", om, " enrichment table")
+        if (is.null(picked)) {
+            warning("Cannot identify a significance column in ", om,
+                    " enrichment table")
             next
         }
+        if (picked$type != pvalue_type) {
+            message("  ", om, ": no usable ", pvalue_type, " column, using ",
+                    picked$column, " instead")
+        }
+        types_used[om] <- picked$type
 
-        # For multiple contrasts, take the minimum p-value per pathway
+        # For multiple contrasts, take the most significant value per pathway
         df_agg <- aggregate(
-            stats::as.formula(paste(pval_col, "~", pathway_col)),
+            stats::as.formula(paste(picked$column, "~", pathway_col)),
             data = df,
             FUN = min
         )
@@ -1738,6 +1854,7 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
         merged <- merge(merged, df_sub, by = "pathway", all.x = TRUE)
     }
 
+    attr(merged, "pvalue_type_used") <- types_used
     merged
 }
 
@@ -1794,23 +1911,97 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # Plotting functions
 # =============================================================================
 
+#' Build a per-layer NES matrix for a set of pathways
+#'
+#' Pulls the signed GSEA normalised enrichment score out of each layer's
+#' enrichment table. A layer may hold several rows per pathway (one per contrast,
+#' database or method), so the NES is taken from the most significant row that
+#' has one — the same "best row wins" rule `merge_pathway_pvalues()` applies to
+#' the p-values, so a cell's colour and its p-value describe the same test.
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames.
+#' @param pathways Pathway accessions, in the row order wanted.
+#' @param omic_names Layer names, in the column order wanted.
+#' @param pvalue_type "padj" or "pvalue" — which statistic ranks the rows.
+#' @return Numeric matrix (pathways x layers) of NES values with NA where the
+#'   pathway was not scored, or NULL when no layer reports NES at all.
+build_layer_nes_matrix <- function(pathway_tables, pathways, omic_names,
+                                   pvalue_type = "padj") {
+    if (is.null(pathway_tables) || length(pathways) == 0) return(NULL)
+
+    nes_mat <- matrix(NA_real_, nrow = length(pathways), ncol = length(omic_names),
+                      dimnames = list(pathways, omic_names))
+    any_nes <- FALSE
+
+    for (om in omic_names) {
+        df <- pathway_tables[[om]]
+        if (!is.data.frame(df) || !("NES" %in% names(df))) next
+
+        pathway_col <- if ("pathway" %in% names(df)) "pathway"
+                       else if ("ID" %in% names(df)) "ID"
+                       else if ("Description" %in% names(df)) "Description"
+                       else NULL
+        if (is.null(pathway_col)) next
+
+        keep <- !is.na(df$NES)
+        if (!any(keep)) next
+        sub <- df[keep, , drop = FALSE]
+
+        picked <- pick_pvalue_column(sub, pvalue_type)
+        rank_by <- if (is.null(picked)) rep(0, nrow(sub)) else
+            suppressWarnings(as.numeric(sub[[picked$column]]))
+        rank_by[is.na(rank_by)] <- Inf
+
+        # order() then !duplicated() keeps exactly one row per pathway, the one
+        # with the smallest p; ties resolve on the table's own row order so the
+        # figure is reproducible across runs.
+        sub <- sub[order(rank_by), , drop = FALSE]
+        sub <- sub[!duplicated(as.character(sub[[pathway_col]])), , drop = FALSE]
+
+        hit <- match(pathways, as.character(sub[[pathway_col]]))
+        nes_mat[, om] <- suppressWarnings(as.numeric(sub$NES[hit]))
+        any_nes <- TRUE
+    }
+
+    if (!any_nes || all(is.na(nes_mat))) return(NULL)
+    nes_mat
+}
+
+
 #' Plot cross-omics pathway heatmap
 #'
 #' Rows are the pathways seen by the most omics layers first, then the most
 #' significant — not simply the most significant, which would fill the figure
 #' with single-layer rows and leave the other columns blank.
 #'
+#' Cells show the signed GSEA NES: red positive, blue negative, white near zero,
+#' on a scale symmetric about zero. Over-representation layers (compound ORA,
+#' Fisher ORA) have no NES at all; such a column would otherwise be a block of
+#' grey reading as "not tested", so its header is marked "(no NES)" and the
+#' caption says what that grey means. With no NES anywhere the figure falls back
+#' to the unsigned -log10 scale it used before.
+#'
 #' @param meta_results Meta-analysis data frame from `stouffer_combined_pvalues()`,
 #'   optionally carrying `pathway_name`.
 #' @param omics Character vector of omics layer names (kept for signature
 #'   compatibility with the other cross-omics plotters).
 #' @param top_n Number of pathways to show.
+#' @param pathway_tables Named list of per-omics enrichment data frames, the
+#'   source of the NES values. NULL keeps the -log10 scale.
+#' @param value_label Axis/title wording for the significance statistic, from
+#'   `describe_pvalue_axis()`.
+#' @param pvalue_type "padj" or "pvalue" — which statistic picks a pathway's NES
+#'   when a layer scored it more than once.
 #' @return Invisibly NULL; called for the plot it draws on the active device.
-plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
+plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
+                                             pathway_tables = NULL,
+                                             value_label = "-log10(p-value)",
+                                             pvalue_type = "padj") {
 
     top_pathways <- select_multi_omics_pathways(meta_results, top_n)
 
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
+    omic_names <- sub("^pval_", "", pval_cols)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
     pathway_labels <- format_pathway_labels(
@@ -1819,39 +2010,90 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
         append_id = TRUE
     )
     rownames(pval_matrix) <- pathway_labels
+    colnames(pval_matrix) <- omic_names
 
-    # Transform to -log10(p)
-    log_pval_matrix <- -log10(pval_matrix + 1e-300)
-    # Cap at 10 for display
-    log_pval_matrix[] <- pmin(log_pval_matrix, 10)  # pmin keeps NA as NA
-    colnames(log_pval_matrix) <- gsub("^pval_", "", colnames(log_pval_matrix))
+    nes_matrix <- build_layer_nes_matrix(pathway_tables,
+                                         as.character(top_pathways$pathway),
+                                         omic_names, pvalue_type)
+    no_nes <- if (is.null(nes_matrix)) omic_names else
+        omic_names[colSums(!is.na(nes_matrix)) == 0]
 
-    # State the ordering on the figure — a reader who assumes "top 30 by p-value"
-    # would misread the row order.
-    heatmap_title <- paste0(
-        "Cross-Omics Pathway Enrichment (-log10 p-value)\n",
-        "rows: most layers with p < 0.05 first, then combined p\n",
-        "grey = not tested in that layer"
-    )
+    # pheatmap draws `main` at full size and clips it against the device rather
+    # than wrapping, so every title line below is kept short deliberately.
+    stat_word <- if (identical(pvalue_type, "pvalue")) "p" else "adjusted p"
+    rank_note <- paste0("rows ranked on layers with ", stat_word,
+                        " < 0.05, then combined p")
+    col_labels <- omic_names
+
+    if (!is.null(nes_matrix)) {
+        plot_matrix <- nes_matrix
+        rownames(plot_matrix) <- pathway_labels
+        # A layer that never reports NES is grey top to bottom, which on its own
+        # reads as "not tested". Marking its header is what keeps the two kinds
+        # of grey apart; a bare asterisk rather than a word because pheatmap
+        # clips a long rotated label of the leftmost column against the device.
+        marked <- omic_names %in% no_nes
+        col_labels[marked] <- paste0(omic_names[marked], " *")
+        # Symmetric limits so zero sits on the white midpoint of the ramp and a
+        # +1.8 in one layer is the same colour distance from white as a -1.8.
+        lim <- max(abs(plot_matrix), na.rm = TRUE)
+        if (!is.finite(lim) || lim <= 0) lim <- 1
+        # Mid-tone ends rather than the full RdBu extremes: the per-cell NES has
+        # to stay readable in black on top of the darkest colour in the ramp.
+        heat_colors <- colorRampPalette(c("#4393C3", "#F7F7F7", "#D6604D"))(51)
+        heat_breaks <- seq(-lim, lim, length.out = 52)
+        cell_labels <- matrix(formatC(plot_matrix, format = "f", digits = 2),
+                              nrow = nrow(plot_matrix),
+                              dimnames = dimnames(plot_matrix))
+        cell_labels[is.na(plot_matrix)] <- ""
+        grey_note <- if (length(no_nes) == 0) {
+            "grey = pathway not scored in that layer"
+        } else {
+            "grey = not scored; * = over-representation layer, no NES"
+        }
+        heatmap_title <- paste0(
+            "Cross-Omics Pathway Enrichment (GSEA NES)\n",
+            "red = positive, blue = negative\n",
+            rank_note, "\n",
+            grey_note
+        )
+    } else {
+        plot_matrix <- -log10(pval_matrix + 1e-300)
+        plot_matrix[] <- pmin(plot_matrix, 10)  # pmin keeps NA as NA
+        heat_colors <- colorRampPalette(c("white", "gold", "orange", "red"))(50)
+        heat_breaks <- NULL
+        cell_labels <- FALSE
+        heatmap_title <- paste0(
+            "Cross-Omics Pathway Enrichment\n",
+            value_label, "; no GSEA NES in any layer\n",
+            rank_note, "\n",
+            "grey = not tested in that layer"
+        )
+    }
 
     # Heatmap. NAs stay NA so na_col separates "not tested in this layer" from
-    # "tested, p close to 1" — coercing them to 0 painted both white.
+    # "tested, no effect" — coercing them to 0 painted both like a real result.
     if (requireNamespace("pheatmap", quietly = TRUE)) {
-        pheatmap::pheatmap(log_pval_matrix,
-                           cluster_rows = FALSE,
-                           cluster_cols = FALSE,
-                           main = heatmap_title,
-                           color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
-                           fontsize_row = 7, fontsize_col = 10,
-                           angle_col = 45,
-                           na_col = "grey90",
-                           border_color = "grey80")
+        args <- list(plot_matrix,
+                     cluster_rows = FALSE,
+                     cluster_cols = FALSE,
+                     main = heatmap_title,
+                     color = heat_colors,
+                     labels_col = col_labels,
+                     fontsize = 9,
+                     fontsize_row = 7, fontsize_col = 10,
+                     fontsize_number = 6, number_color = "black",
+                     angle_col = 45,
+                     na_col = "grey90",
+                     border_color = "grey80",
+                     display_numbers = cell_labels)
+        if (!is.null(heat_breaks)) args$breaks <- heat_breaks
+        do.call(pheatmap::pheatmap, args)
     } else {
         # stats::heatmap() has no na_col, so the fallback keeps the old coercion
-        log_pval_matrix[is.na(log_pval_matrix)] <- 0
-        heatmap(log_pval_matrix, scale = "none", Colv = NA,
-                main = heatmap_title,
-                col = colorRampPalette(c("white", "orange", "red"))(50))
+        plot_matrix[is.na(plot_matrix)] <- 0
+        heatmap(plot_matrix, scale = "none", Colv = NA,
+                main = heatmap_title, col = heat_colors)
     }
 
     invisible(NULL)
@@ -1868,8 +2110,11 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 #' @param omics Character vector of omics layer names (kept for signature
 #'   compatibility with the other cross-omics plotters).
 #' @param top_n Number of pathways to show.
+#' @param value_label Axis wording for the significance statistic, from
+#'   `describe_pvalue_axis()`.
 #' @return Invisibly NULL; called for the plot it draws on the active device.
-plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
+plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20,
+                                    value_label = "-log10(p-value)") {
 
     top <- select_multi_omics_pathways(meta_results, top_n)
 
@@ -1923,7 +2168,7 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     par(mar = c(5, 15, 3, 2))
     plot(NULL, xlim = c(0, max(plot_df$neg_log10_p, na.rm = TRUE) * 1.1),
          ylim = c(0.5, length(pathway_order) + 0.5),
-         xlab = "-log10(p-value)", ylab = "",
+         xlab = value_label, ylab = "",
          yaxt = "n", main = "Cross-Omics Pathway Enrichment")
     mtext("ordered by number of omics layers, then combined p-value",
           side = 3, line = 0.2, cex = 0.7)
@@ -1954,13 +2199,15 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 #'   `pathway_name`.
 #' @param omics_name Name of the omics layer, used for the title and bar colour.
 #' @param top_n Number of pathways to show.
+#' @param pvalue_type "padj" (default) or "pvalue". When the table has no usable
+#'   column of the requested kind the other one is plotted and the axis label
+#'   says so, so the bars are never ambiguous.
 #' @return Invisibly NULL; called for the plot it draws on the active device.
-plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
+plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15,
+                                   pvalue_type = "padj") {
 
-    pval_col <- if ("pvalue" %in% names(pathway_table)) "pvalue"
-                else if ("pval" %in% names(pathway_table)) "pval"
-                else if ("padj" %in% names(pathway_table)) "padj"
-                else NULL
+    picked <- pick_pvalue_column(pathway_table, pvalue_type)
+    pval_col <- picked$column
 
     pathway_col <- if ("pathway" %in% names(pathway_table)) "pathway"
                    else if ("Description" %in% names(pathway_table)) "Description"
@@ -1973,7 +2220,12 @@ plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
         return(invisible(NULL))
     }
 
-    # Aggregate across contrasts: take min p-value per pathway
+    x_label <- describe_pvalue_axis(
+        pvalue_type,
+        stats::setNames(picked$type, omics_name)
+    )
+
+    # Aggregate across contrasts: take the most significant value per pathway
     agg <- aggregate(
         stats::as.formula(paste(pval_col, "~", pathway_col)),
         data = pathway_table,
@@ -2004,10 +2256,17 @@ plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
     )
     bar_col <- if (omics_name %in% names(omics_colors)) omics_colors[omics_name] else "steelblue"
 
+    # Anchor the axis so the 0.05 reference line is always on scale. Under
+    # adjusted p a layer can have nothing significant at all, and barplot()'s
+    # automatic range would then draw a bare -1..1 axis with the reference line
+    # off-screen — a reader could not tell "nothing survives correction" from a
+    # broken figure.
+    x_max <- max(c(neg_log_p, -log10(0.05) * 1.15), na.rm = TRUE)
+
     par(mar = c(5, 15, 3, 2))
     barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(agg$label),
             las = 1, cex.names = 0.7, col = bar_col,
-            xlab = "-log10(p-value)",
+            xlab = x_label, xlim = c(0, x_max),
             main = paste("Top Pathways -", omics_name))
     abline(v = -log10(0.05), col = "red", lty = 2)
 }
@@ -2080,6 +2339,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
                 org_db = org_db,
+                config = config,
                 out_dir = diablo_dir,
                 top_n = top_n
             ),
@@ -2104,6 +2364,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
                 org_db = org_db,
+                config = config,
                 out_dir = mofa_dir,
                 top_n = top_n
             ),
@@ -2120,10 +2381,23 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
 
 #' Run enrichment on DIABLO top loadings per component
+#'
+#' @param diablo_results DIABLO integration result carrying `$top_features`.
+#' @param harmonization_res Harmonization result (ID resolution + universe).
+#' @param organism Organism name from the config.
+#' @param kegg_org KEGG organism code, or NULL when the organism has none.
+#' @param org_db OrgDb package name, or NULL when the organism has none.
+#' @param config Full pipeline config; needed for the per-omic custom GMTs that
+#'   gene views fall back to when there is no KEGG organism / OrgDb.
+#' @param out_dir Output directory for CSVs and barplots.
+#' @param top_n Number of top-loading features per component to enrich.
+#' @param exclude_classes KEGG pathway classes to drop (compound ORA only).
+#' @return Row-bound data frame of enriched pathways over all components, or NULL.
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
                                             out_dir, top_n = 50,
-                                            exclude_classes = NULL) {
+                                            exclude_classes = NULL,
+                                            config = NULL) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -2176,7 +2450,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -2225,10 +2500,23 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 
 
 #' Run enrichment on MOFA2 top weights per factor
+#'
+#' @param mofa_results MOFA2 integration result carrying `$weights` per view.
+#' @param harmonization_res Harmonization result (ID resolution + universe).
+#' @param organism Organism name from the config.
+#' @param kegg_org KEGG organism code, or NULL when the organism has none.
+#' @param org_db OrgDb package name, or NULL when the organism has none.
+#' @param config Full pipeline config; needed for the per-omic custom GMTs that
+#'   gene views fall back to when there is no KEGG organism / OrgDb.
+#' @param out_dir Output directory for CSVs and barplots.
+#' @param top_n Number of top-weight features per factor to enrich.
+#' @param exclude_classes KEGG pathway classes to drop (compound ORA only).
+#' @return Row-bound data frame of enriched pathways over all factors, or NULL.
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
                                          out_dir, top_n = 50,
-                                         exclude_classes = NULL) {
+                                         exclude_classes = NULL,
+                                         config = NULL) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -2280,7 +2568,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -2391,16 +2680,34 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
 
 #' Run ORA enrichment on a list of feature IDs
 #'
-#' Maps feature IDs to ENTREZ IDs and runs KEGG ORA via clusterProfiler.
-#' Handles GENE_N synthetic IDs from the harmonized MAE by translating
-#' them to WBGene IDs via the gene_protein_mapping table.
+#' Maps feature IDs to ENTREZ IDs and runs KEGG ORA via clusterProfiler. Handles
+#' GENE_N synthetic IDs from the harmonized MAE by translating them back to the
+#' native gene / protein namespace via the gene_protein_mapping table.
+#'
+#' @param feature_ids Top-loading feature IDs of one view (GENE_N or native).
+#' @param omics_type One of "transcriptomics" / "proteomics".
+#' @param harmonization_res Harmonization result (ID resolution + universe).
+#' @param organism Organism name from the config.
+#' @param kegg_org KEGG organism code, or NULL when the organism has none.
+#' @param org_db OrgDb package name, or NULL when the organism has none.
+#' @param config Full pipeline config, used only by the GMT fallback below.
+#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, setSize), or NULL.
 enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
-                                 organism, kegg_org, org_db) {
+                                 organism, kegg_org, org_db, config = NULL) {
 
-    if (is.null(kegg_org) || is.null(org_db)) return(NULL)
-
-    # Resolve IDs using the actual omics type
+    # Resolve IDs using the actual omics type. Needed by both branches below,
+    # so it happens before the KEGG/OrgDb decision rather than after it.
     resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res, omics_type)
+
+    # Non-model organism: clusterProfiler has neither a KEGG code nor an OrgDb
+    # to map against, so the whole gene view used to return NULL and the
+    # loadings-enrichment folder came out metabolomics-only. The per-omic custom
+    # GMTs are the same gene sets the DE-driven enrichment already uses, so fall
+    # back to those instead of skipping the view.
+    if (is.null(kegg_org) || is.null(org_db)) {
+        return(enrich_feature_list_gmt(resolved_ids, omics_type,
+                                       harmonization_res, config))
+    }
 
     # Map ALL features to ENTREZ (needed for both query and universe)
     # Then filter to only the query features for the enrichment test
@@ -2489,17 +2796,103 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
 }
 
 
+#' GMT-based ORA over a loadings feature list (non-model fallback)
+#'
+#' Over-representation of one view's top-loading features against that omic's
+#' custom gene sets (\code{modes.<omic>.pathway.gmt_file}), for organisms with
+#' no KEGG code / OrgDb. Mirrors \code{run_multi_ora_gmt()}: same path
+#' resolution, same GMT reader, same \code{clusterProfiler::enricher} wrapper,
+#' so a pathway reported here means the same thing as one reported by the
+#' DE-driven Multi-ORA.
+#'
+#' @param resolved_ids Native-namespace feature IDs of the top loadings
+#'   (already through \code{resolve_gene_n_ids()}).
+#' @param omics_type One of "transcriptomics" / "proteomics"; other views have
+#'   no gene-set collection here and return NULL.
+#' @param harmonization_res Harmonization result; its per-omic \code{expr_work}
+#'   supplies the tested-feature background.
+#' @param config Full pipeline config, for the per-omic \code{gmt_file}.
+#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, setSize), or NULL.
+enrich_feature_list_gmt <- function(resolved_ids, omics_type,
+                                    harmonization_res, config) {
+    if (is.null(config)) return(NULL)
+
+    cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")[omics_type]
+    if (is.na(cfg_key)) return(NULL)
+
+    # gmt_file may be a single path or a YAML list (GO + KEGG + PFAM);
+    # resolve_input_path() vectorises and leaves absolute paths alone, and
+    # read_gmt() (via gmt_to_term2gene) merges several files into one collection.
+    gmt_path <- unlist(config$modes[[cfg_key]]$pathway$gmt_file, use.names = FALSE)
+    if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) return(NULL)
+    gmt_abs <- resolve_input_path(config, gmt_path)
+    if (any(!file.exists(gmt_abs))) {
+        message("    Loadings ORA (GMT): ", omics_type, " gmt_file not found: ",
+                paste(gmt_abs[!file.exists(gmt_abs)], collapse = ", "))
+        return(NULL)
+    }
+
+    gs <- gmt_to_term2gene(gmt_abs)
+    if (is.null(gs) || nrow(gs$t2g) == 0) return(NULL)
+
+    # Background = every feature of this view that survived preprocessing, in the
+    # same namespace as the query. Without it enricher() would silently use the
+    # gene sets themselves as the universe and inflate every p-value.
+    universe <- NULL
+    pre_data <- harmonization_res$inputs[[omics_type]]
+    if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
+        universe <- unique(resolve_gene_n_ids(rownames(pre_data$expr_work),
+                                              harmonization_res, omics_type))
+    }
+
+    sig_genes <- unique(resolved_ids[!is.na(resolved_ids)])
+    message("    Loadings ORA (GMT) ", omics_type, ": ", length(sig_genes),
+            " query / ", length(universe), " background features, ",
+            length(unique(gs$t2g$term)), " gene sets")
+
+    ora <- run_multi_ora_enricher(
+        sig_genes = sig_genes,
+        universe  = universe,
+        term2gene = gs$t2g,
+        term2name = gs$t2n,
+        label     = paste0(omics_type, " loadings")
+    )
+    if (is.null(ora) || nrow(ora) == 0) return(NULL)
+
+    # Same column shape as the KEGG branch above, so .rbind_fill() can stack
+    # gene-view and compound-view results into one loadings table.
+    data.frame(
+        pathway   = ora$pathway,
+        ID        = ora$ID,
+        pvalue    = ora$pvalue,
+        padj      = ora$padj,
+        GeneRatio = ora$GeneRatio,
+        setSize   = ora$Count,
+        stringsAsFactors = FALSE
+    )
+}
+
+
 #' Resolve GENE_N synthetic IDs to original feature IDs
 #'
 #' The harmonized MAE uses GENE_N IDs (where N = row in gene_protein_mapping).
-#' This function translates them back to WBGene (for transcriptomics) or
-#' protein IDs (for proteomics).
+#' This function translates them back to the native gene ID (transcriptomics) or
+#' protein ID (proteomics). MOFA2 requires feature names to be unique across
+#' views and appends the view name to the ones it finds in more than one view,
+#' so "GENE_12" and "GENE_12_transcriptomics" both have to resolve — matching
+#' only the bare form left 41% of the MOFA weights unresolved.
+#'
+#' @param feature_ids Character vector of feature IDs, GENE_N or native.
+#' @param harmonization_res Harmonization result carrying `gene_protein_mapping`.
+#' @param omics_type One of "transcriptomics" / "proteomics"; anything else is
+#'   returned untouched (metabolomics does not use GENE_N).
+#' @return Character vector of resolved IDs; entries with no mapping are dropped.
 resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
     gpm <- harmonization_res$gene_protein_mapping
     if (is.null(gpm)) return(feature_ids)
 
-    # Check if IDs look like GENE_N
-    is_gene_n <- grepl("^GENE_\\d+$", feature_ids)
+    gene_n_pattern <- "^GENE_\\d+(_.+)?$"
+    is_gene_n <- grepl(gene_n_pattern, feature_ids)
     if (!any(is_gene_n)) return(feature_ids)
 
     # Build lookup: GENE_N -> original ID
@@ -2512,12 +2905,13 @@ resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
     }
 
     lookup <- setNames(gpm[[id_col]], paste0("GENE_", seq_len(nrow(gpm))))
+    keys <- sub("^(GENE_\\d+)(_.+)?$", "\\1", feature_ids[is_gene_n])
 
     resolved <- feature_ids
-    resolved[is_gene_n] <- lookup[feature_ids[is_gene_n]]
+    resolved[is_gene_n] <- lookup[keys]
     resolved <- resolved[!is.na(resolved)]
 
-    n_mapped <- sum(is_gene_n) - sum(is.na(lookup[feature_ids[is_gene_n]]))
+    n_mapped <- sum(!is.na(lookup[keys]))
     message("    Resolved ", n_mapped, "/", sum(is_gene_n),
             " GENE_N IDs to ", id_col, " (", omics_type, ")")
 
@@ -2549,10 +2943,12 @@ plot_loadings_enrichment_barplot <- function(enrich_df, title, out_path, top_n =
 
     png(out_path, width = 900, height = 600, res = 120)
     par(mar = c(5, 15, 3, 2))
+    # The component/factor labels run long ("MOFA_transcriptomics_Factor1"), so
+    # the title needs shrinking to survive the 900px device.
     barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
             las = 1, cex.names = 0.65, col = "steelblue",
             xlab = "-log10(p-value)",
-            main = paste("Loadings Enrichment:", title))
+            main = paste("Loadings Enrichment:", title), cex.main = 0.9)
     abline(v = -log10(0.05), col = "red", lty = 2)
     dev.off()
     message("    Saved: ", out_path)
