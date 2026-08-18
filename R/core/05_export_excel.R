@@ -1,3 +1,113 @@
+#' Does this mode's DE step gate significance on the adjusted p-value?
+#'
+#' The three omics modes spell the same switch three different ways in their
+#' configs — proteomics \code{use_adj_for_pass1}, RNA \code{use_adj},
+#' metabolomics/lipidomics \code{use_adjusted_pval} — so a single hard-coded
+#' lookup silently reads NULL for two of them. Resolved here once and reused by
+#' both the Cutoffs sheet and the manual_cutoffs formulas, so the sheet cannot
+#' claim one thing while the formulas do another.
+#'
+#' The per-mode fallback matches what the DE step actually does when the key is
+#' absent: RNA gates on padj unconditionally
+#' (\code{build_rnaseq_summary_df()}), metabolomics defaults
+#' \code{use_adjusted_pval} to TRUE, proteomics defaults \code{use_adj_for_pass1}
+#' to FALSE.
+#'
+#' @param de_cfg The \code{de} config list for the mode (may be NULL).
+#' @param mode Mode string, e.g. "rna", "proteomics", "metabolomics".
+#' @return TRUE if significance was gated on the adjusted p-value (FDR),
+#'   FALSE if it was gated on the raw p-value.
+de_uses_adjusted_p <- function(de_cfg, mode = "proteomics") {
+    # Canonical key for the mode first, then the other spellings, so a config
+    # carrying several mode blocks cannot pick up a neighbour's setting.
+    key_order <- switch(
+        mode,
+        rna          = c("use_adj", "use_adj_for_pass1", "use_adjusted_pval"),
+        metabolomics = ,
+        lipidomics   = c("use_adjusted_pval", "use_adj", "use_adj_for_pass1"),
+        c("use_adj_for_pass1", "use_adj", "use_adjusted_pval")
+    )
+    default <- mode %in% c("rna", "metabolomics", "lipidomics")
+
+    de_cfg <- de_cfg %||% list()
+    for (key in key_order) {
+        val <- de_cfg[[key]]
+        if (!is.null(val) && length(val) == 1L && !is.na(val)) {
+            if (identical(mode, "rna") && !isTRUE(val)) {
+                # RNA's pass column is built from padj no matter what the config
+                # says, so honouring FALSE here would put the sheet back out of
+                # step with the data it describes.
+                warning("mode 'rna': de$use_adj is FALSE but the RNA DE step gates on padj; ",
+                        "the Cutoffs sheet will report FDR.")
+                return(TRUE)
+            }
+            return(isTRUE(val))
+        }
+    }
+    default
+}
+
+#' Drop worksheet relationships for parts openxlsx never writes
+#'
+#' \code{openxlsx::addWorksheet()} registers a drawing relationship, a
+#' vmlDrawing relationship and a \code{[Content_Types].xml} Override for every
+#' sheet, but \code{saveWorkbook()} only emits those parts when the sheet holds
+#' a real drawing or comment. A workbook that never calls \code{insertImage()}
+#' therefore ships with relationships pointing at parts that are not in the
+#' archive: Excel offers to repair the file and strict readers such as
+#' \code{openpyxl.load_workbook()} abort with a missing-part error.
+#'
+#' Call immediately before \code{openxlsx::saveWorkbook()}. \code{Workbook} is a
+#' reference class, so the fields are edited in place. Every removal is guarded
+#' on the workbook's own drawing/vml/comment contents, which makes this a no-op
+#' the moment somebody does add a real image or comment.
+#'
+#' @param wb An openxlsx \code{Workbook} object.
+#' @return \code{wb}, invisibly, with the dangling relationships and Overrides
+#'   removed.
+drop_dangling_drawing_rels <- function(wb) {
+    drawing_rel_type <- "/relationships/drawing\""
+    kept_drawing_parts <- character(0)
+
+    for (i in seq_along(wb$worksheets)) {
+        # Mirror openxlsx's own write conditions (writeSheetDataXML /
+        # writeDrawingVML) so the guard tracks upstream rather than guessing.
+        has_drawing <- length(wb$drawings) >= i &&
+            length(wb$drawings[[i]]) > 0L &&
+            any(unlist(wb$drawings[[i]]) != "")
+        n_client_data <- if (length(wb$comments) >= i) {
+            length(unlist(lapply(wb$comments[[i]], "[[", "clientData")))
+        } else 0L
+        has_vml <- (length(wb$vml) >= i && length(wb$vml[[i]]) > 0L) || n_client_data > 0L
+
+        rels <- wb$worksheets_rels[[i]]
+        if (has_drawing) {
+            # openxlsx names the part after the sheet's position at save time,
+            # so derive it the same way rather than trusting the rel Target.
+            kept_drawing_parts <- c(kept_drawing_parts,
+                                    sprintf("/xl/drawings/drawing%s.xml", i))
+        } else {
+            rels <- rels[!grepl(drawing_rel_type, rels, fixed = TRUE)]
+        }
+        if (!has_vml) {
+            rels <- rels[!grepl("vmlDrawing", rels, fixed = TRUE)]
+        }
+        wb$worksheets_rels[[i]] <- rels
+    }
+
+    is_drawing_override <- grepl("PartName=\"/xl/drawings/drawing", wb$Content_Types, fixed = TRUE)
+    is_kept <- Reduce(
+        `|`,
+        lapply(kept_drawing_parts, function(p) {
+            grepl(sprintf("PartName=\"%s\"", p), wb$Content_Types, fixed = TRUE)
+        }),
+        init = rep(FALSE, length(wb$Content_Types))
+    )
+    wb$Content_Types <- wb$Content_Types[!is_drawing_override | is_kept]
+
+    invisible(wb)
+}
+
 #' Add legacy Cutoffs sheet + named regions (PVAL_CO/FDR_CO/LFC_CO)
 #'
 #' Generic version for any omics mode (proteomics / rna / metabolomics ...)
@@ -6,13 +116,14 @@
 #' @param config full config
 #' @param mode string; e.g. "proteomics", "rna"
 #' @param sheet sheet name (default "Cutoffs")
+#' @return TRUE, invisibly.
 add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "Cutoffs") {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
     de_cfg <- config$modes[[mode]]$de
     if (is.null(de_cfg)) stop("No de config found for mode: ", mode)
 
-    FDR_ADJ <- isTRUE(de_cfg$use_adj_for_pass1)
+    FDR_ADJ <- de_uses_adjusted_p(de_cfg, mode)
     P_CUTOFF <- de_cfg$p_cutoff %||% 0.05
     LINEAR_FC_CUTOFF <- de_cfg$linear_fc_cutoff %||% 1.5
 
@@ -20,7 +131,17 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = TRUE)
 
     openxlsx::writeData(wb, sheet, x = c("p-value", "Adjusted pvalue (FDR)", "linear Fold Change (linearFC)"), startCol = 2, startRow = 4, colNames = FALSE, rowNames = FALSE)
-    openxlsx::writeData(wb, sheet, x = c(ifelse(FDR_ADJ, "", P_CUTOFF), ifelse(FDR_ADJ, P_CUTOFF, ""), LINEAR_FC_CUTOFF), startCol = 3, startRow = 4, colNames = FALSE, rowNames = FALSE)
+    # These three cells are the named regions the manual_cutoffs formulas
+    # compare against, so they must land as numbers. Padding the unused row with
+    # "" would coerce the whole vector to character and Excel sorts every number
+    # below every string, which silently makes p<=PVAL_CO always true and
+    # ABS(fc)>=LFC_CO always false. NA writes an empty cell without that.
+    cutoff_cells <- c(
+        if (FDR_ADJ) NA_real_ else as.numeric(P_CUTOFF),
+        if (FDR_ADJ) as.numeric(P_CUTOFF) else NA_real_,
+        as.numeric(LINEAR_FC_CUTOFF)
+    )
+    openxlsx::writeData(wb, sheet, x = cutoff_cells, startCol = 3, startRow = 4, colNames = FALSE, rowNames = FALSE)
 
     openxlsx::createNamedRegion(wb, sheet = sheet, cols = 3, rows = 4, name = "PVAL_CO")
     openxlsx::createNamedRegion(wb, sheet = sheet, cols = 3, rows = 5, name = "FDR_CO")
@@ -462,6 +583,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         if (isTRUE(provenance_sheet)) {
             add_provenance_sheet(wb, mode = mode)
         }
+        # openxlsx registers drawing/vml parts it will not write; leaving the
+        # relationships in place produces a zip Excel offers to repair.
+        drop_dangling_drawing_rels(wb)
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
         path
     }
@@ -638,10 +762,26 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
     }
 }
 
+#' Write the manual_cutoffs Excel formulas next to each contrast's stats
+#'
+#' Emits, per \code{manual_cutoffs.<contrast>} column, a formula that re-applies
+#' the significance rule against the named regions on the Cutoffs sheet, so a
+#' reader can move a cutoff and watch the calls update. Which p-value column the
+#' formula reads is resolved through \code{\link{de_uses_adjusted_p}} — the same
+#' helper the Cutoffs sheet uses, so the two cannot drift apart.
+#'
+#' @param wb openxlsx workbook.
+#' @param sheet Sheet name holding the results table.
+#' @param final_results Data.frame as written to \code{sheet}; column positions
+#'   are taken from it.
+#' @param config Full config.
+#' @param mode Mode string, e.g. "rna" or "proteomics".
+#' @param start_row First data row of the table in \code{sheet}.
+#' @return TRUE invisibly, or NULL if there was nothing to write.
 fill_manual_cutoffs_formulas_legacy <- function(wb, sheet, final_results, config,
                                                 mode = "proteomics", start_row = 2) {
     de_cfg <- config$modes[[mode]]$de
-    use_fdr <- isTRUE(de_cfg$use_adj_for_pass1)
+    use_fdr <- de_uses_adjusted_p(de_cfg, mode)
 
     manual_cols <- grep("^manual_cutoffs\\.", names(final_results), value = TRUE)
     if (length(manual_cols) == 0) {
