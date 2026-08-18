@@ -1817,8 +1817,8 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # would misread the row order.
     heatmap_title <- paste0(
         "Cross-Omics Pathway Enrichment (-log10 p-value)\n",
-        "rows ordered by number of omics layers, then combined p-value\n",
-        "grey = pathway not tested in that layer"
+        "rows: most omics layers first, then combined p\n",
+        "grey = not tested in that layer"
     )
 
     # Heatmap. NAs stay NA so na_col separates "not tested in this layer" from
