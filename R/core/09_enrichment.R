@@ -809,8 +809,13 @@ run_pathway_analysis <- function(de_tables,
                 if (method %in% c("fgsea", "both")) {
 
                     # Build ranked gene list from DE table
-                    # Prefer stat column (Wald statistic); fallback to sign(lfc)*-log10(p)
-                    if ("stat" %in% colnames(res)) {
+                    # Prefer stat column (Wald statistic); fallback to sign(lfc)*-log10(p).
+                    # Test for usable VALUES, not just column presence: the
+                    # pre-computed DE loaders always emit a `stat` column and fill
+                    # it with NA when the source export has none, which silenced
+                    # fgsea entirely ("no gene set overlap") because every rank
+                    # was dropped as NA.
+                    if ("stat" %in% colnames(res) && any(is.finite(res$stat))) {
                         ranks <- setNames(res$stat, res$FeatureID)
                     } else {
                         ranks <- setNames(

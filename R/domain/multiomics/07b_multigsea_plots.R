@@ -6,17 +6,25 @@
 #' @name multigsea_plots
 NULL
 
-#' Run MultiGSEA Correlation Analysis
+#' Run MultiGSEA cross-omics enrichment summary
 #'
-#' Generates scatter plots comparing enrichment scores between pairs of omics.
+#' Builds the combined MultiGSEA summary panel from the per-omics enrichment
+#' tables.
+#'
+#' Pairwise "omics vs omics" scatter plots are deliberately not produced. They
+#' were built over the *union* of the two layers' terms, so a term enriched in
+#' one layer and simply absent from the other entered as -log10(FDR) = 0 and sat
+#' on an axis; the reported correlation then tracked how much term coverage the
+#' two GMTs happened to share rather than agreement between the layers.
 #'
 #' @param enrichment_results List containing enrichment results from run_multiomics_enrichment.
 #' @param config Pipeline configuration list.
 #' @param out_dir Output directory for plots and tables.
-#' @return A list of ggplot objects.
+#' @return A named list holding the combined summary plot, or NULL when there is
+#'   nothing to plot.
 #' @export
 run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
-    message("=== Running MultiGSEA Correlation Analysis ===")
+    message("=== Running MultiGSEA Cross-Omics Summary ===")
 
     if (is.null(enrichment_results) || is.null(enrichment_results$per_omics)) {
         message("No enrichment results available for MultiGSEA.")
@@ -29,469 +37,38 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         return(NULL)
     }
 
-    p_thresh <- mg_config$pvalue_threshold %||% 0.05
-    corr_method <- mg_config$correlation_method %||% "pearson"
-
-    # Create output directory
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
     }
 
-    # Extract results per omic
     per_omics <- enrichment_results$per_omics
-    omics_names <- names(per_omics)
 
-    if (length(omics_names) < 2) {
+    if (length(per_omics) < 2) {
         message("Need at least 2 omics with enrichment results for MultiGSEA.")
         return(NULL)
     }
 
-    # Identify pairs
-    pairs <- utils::combn(omics_names, 2, simplify = FALSE)
     plots <- list()
-
-    for (pair in pairs) {
-        omic1 <- pair[1]
-        omic2 <- pair[2]
-
-        res1 <- per_omics[[omic1]]
-        res2 <- per_omics[[omic2]]
-
-        if (is.null(res1) || is.null(res2)) next
-
-        # Standardize 'term' column helper
-        get_term_col <- function(df) {
-            if ("term" %in% colnames(df)) {
-                return(df$term)
-            }
-            if ("ID" %in% colnames(df)) {
-                return(df$ID)
-            }
-            if ("Description" %in% colnames(df)) {
-                return(df$Description)
-            }
-            return(rownames(df))
-        }
-
-        res1$term <- get_term_col(res1)
-        res2$term <- get_term_col(res2)
-
-        # Build ID → pathway name lookup
-        id_to_name <- character(0)
-        for (df_tmp in list(res1, res2)) {
-            if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-                nms <- setNames(df_tmp$pathway, df_tmp$ID)
-                id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
-            }
-        }
-
-        # Union of terms
-        common_terms <- union(res1$term, res2$term)
-
-        if (length(common_terms) < 3) {
-            message("Too few terms (union) between ", omic1, " and ", omic2)
-            next
-        }
-
-        # Align data
-        df1 <- res1[match(common_terms, res1$term), ]
-        df2 <- res2[match(common_terms, res2$term), ]
-
-        # Calculate -log10(padj) scores
-        get_score <- function(df) {
-            # Robustly find p-adj column
-            padj_col <- NULL
-            for (col in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
-                if (col %in% colnames(df)) {
-                    padj_col <- col
-                    break
-                }
-            }
-
-            if (is.null(padj_col)) {
-                warning("No p-value column found in enrichment results")
-                return(rep(0, nrow(df)))
-            }
-
-            padj <- df[[padj_col]]
-            padj[is.na(padj)] <- 1
-
-            # Handle zero p-values
-            non_zeros <- padj[padj > 0 & padj < 1]
-            if (length(non_zeros) > 0) {
-                min_nz <- min(non_zeros, na.rm = TRUE)
-            } else {
-                min_nz <- 1e-10
-            }
-
-            padj[padj == 0] <- min_nz / 10
-            -log10(padj)
-        }
-
-        score1 <- get_score(df1)
-        score2 <- get_score(df2)
-
-        # Extract count (setSize) and compute fold enrichment from GeneRatio
-        get_count <- function(df) {
-            if ("setSize" %in% colnames(df)) return(df$setSize)
-            if ("Count" %in% colnames(df)) return(df$Count)
-            return(rep(NA_real_, nrow(df)))
-        }
-
-        parse_gene_ratio <- function(df) {
-            if ("Fold Enrichment" %in% colnames(df)) return(df[["Fold Enrichment"]])
-            if ("fold_enrichment" %in% colnames(df)) return(df$fold_enrichment)
-            if ("GeneRatio" %in% colnames(df)) {
-                gr <- as.character(df$GeneRatio)
-                parts <- strsplit(gr, "/")
-                ratio <- vapply(parts, function(p) {
-                    if (length(p) == 2) as.numeric(p[1]) / as.numeric(p[2])
-                    else NA_real_
-                }, numeric(1))
-                return(ratio)
-            }
-            return(rep(NA_real_, nrow(df)))
-        }
-
-        count1 <- get_count(df1)
-        count2 <- get_count(df2)
-        fold1 <- parse_gene_ratio(df1)
-        fold2 <- parse_gene_ratio(df2)
-
-        plot_df <- data.frame(
-            term = common_terms,
-            x = score1,
-            y = score2,
-            count1 = count1,
-            count2 = count2,
-            fold1 = fold1,
-            fold2 = fold2,
-            stringsAsFactors = FALSE
-        )
-
-        # Impute NAs (terms present in one omic but not the other)
-        plot_df$count1[is.na(plot_df$count1)] <- 0
-        plot_df$count2[is.na(plot_df$count2)] <- 0
-        plot_df$fold1[is.na(plot_df$fold1)] <- 0
-        plot_df$fold2[is.na(plot_df$fold2)] <- 0
-
-        plot_df$avg_count <- (plot_df$count1 + plot_df$count2) / 2
-        plot_df$avg_fold <- (plot_df$fold1 + plot_df$fold2) / 2
-
-        # Resolve term to readable name, truncate long names
-        resolve_term <- function(term) {
-            # Look up pathway name from ID
-            if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
-                t <- id_to_name[[term]]
-            } else {
-                # Fallback: strip GO/KEGG ID prefixes
-                t <- sub("^GO:\\d+~", "", term)
-                t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-                if (nchar(t) == 0) t <- term
-            }
-            if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
-            t
-        }
-        plot_df$label <- vapply(plot_df$term, resolve_term, character(1))
-
-        # Calculate correlation
-        cor_res <- cor.test(plot_df$x, plot_df$y, method = corr_method)
-        cor_val <- round(cor_res$estimate, 3)
-        p_val <- signif(cor_res$p.value, 3)
-
-        omic1_label <- gsub("_", " ", tools::toTitleCase(omic1))
-        omic2_label <- gsub("_", " ", tools::toTitleCase(omic2))
-
-        # Determine whether we have meaningful count/fold data
-        has_count <- any(plot_df$avg_count > 0, na.rm = TRUE)
-        has_fold <- any(plot_df$avg_fold > 0, na.rm = TRUE)
-
-        # Create plot matching DAVID scatter style
-        p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = x, y = y))
-
-        if (has_count && has_fold) {
-            p <- p + ggplot2::geom_point(
-                ggplot2::aes(size = avg_count, color = avg_fold), alpha = 0.7
-            ) +
-            ggplot2::scale_color_viridis_c(name = "Avg Fold Enrichment") +
-            ggplot2::scale_size_continuous(name = "Avg Count")
-        } else if (has_count) {
-            p <- p + ggplot2::geom_point(
-                ggplot2::aes(size = avg_count), color = "steelblue", alpha = 0.7
-            ) +
-            ggplot2::scale_size_continuous(name = "Avg Count")
-        } else if (has_fold) {
-            p <- p + ggplot2::geom_point(
-                ggplot2::aes(color = avg_fold), size = 3, alpha = 0.7
-            ) +
-            ggplot2::scale_color_viridis_c(name = "Avg Fold Enrichment")
-        } else {
-            p <- p + ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7)
-        }
-
-        p <- p +
-            ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
-            ggplot2::labs(
-                title = paste0(omic1_label, " vs ", omic2_label),
-                subtitle = paste0("Total Unique Terms: ", nrow(plot_df),
-                                  "  |  ", corr_method, " r = ", cor_val, ", p = ", p_val),
-                x = paste0(omic1_label, " [-log10(FDR)]"),
-                y = paste0(omic2_label, " [-log10(FDR)]")
-            ) +
-            ggplot2::theme_minimal() +
-            ggplot2::theme(
-                axis.title = ggplot2::element_text(face = "bold"),
-                plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
-                plot.subtitle = ggplot2::element_text(hjust = 0.5)
-            )
-
-        # Label terms with ggrepel — top terms from each axis + any with both
-        if (requireNamespace("ggrepel", quietly = TRUE)) {
-            cut_score <- -log10(p_thresh)
-            both_sig <- plot_df[plot_df$x > cut_score & plot_df$y > cut_score, ]
-            top_x <- head(plot_df[order(plot_df$x, decreasing = TRUE), ], 10)
-            top_y <- head(plot_df[order(plot_df$y, decreasing = TRUE), ], 5)
-            label_df <- unique(rbind(both_sig, top_x, top_y))
-            label_df <- label_df[label_df$x > 0 | label_df$y > 0, ]
-
-            p <- p + ggrepel::geom_text_repel(
-                data = label_df,
-                ggplot2::aes(label = label),
-                size = 3,
-                max.overlaps = Inf,
-                box.padding = 0.5,
-                force = 2,
-                min.segment.length = 0
-            )
-        }
-
-        # Save plot and data
-        if (!is.null(out_dir)) {
-            filename <- paste0("multigsea_", omic1, "_vs_", omic2)
-            ggplot2::ggsave(
-                file.path(out_dir, paste0(filename, ".png")),
-                plot = p, width = 8, height = 8, dpi = 300
-            )
-            ggplot2::ggsave(
-                file.path(out_dir, paste0(filename, ".pdf")),
-                plot = p, width = 8, height = 8
-            )
-            write.csv(plot_df, file.path(out_dir, paste0(filename, ".csv")),
-                      row.names = FALSE)
-        }
-
-        plots[[paste0(omic1, "_vs_", omic2)]] <- p
-    }
-
-    # Generate combined 2x2 plot
-    if (length(plots) > 0 && !is.null(out_dir)) {
-        combined <- plot_multigsea_combined(plots, per_omics, out_dir)
-        if (!is.null(combined)) {
-            plots[["combined"]] <- combined
-        }
-    }
-
-    # --- Per-contrast MultiGSEA plots ---
-    contrast_names_mg <- unique(unlist(lapply(per_omics, function(df) {
-        if (is.data.frame(df) && "contrast" %in% colnames(df)) unique(df$contrast)
-        else NULL
-    })))
-
-    if (length(contrast_names_mg) > 1 && !is.null(out_dir)) {
-        message("  Generating per-contrast MultiGSEA plots for ",
-                length(contrast_names_mg), " contrasts")
-        per_contrast_dir <- file.path(out_dir, "per_contrast")
-
-        for (cname in contrast_names_mg) {
-            safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
-            contrast_out <- file.path(per_contrast_dir, safe_dir)
-            dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
-
-            per_omics_contrast <- list()
-            for (om in omics_names) {
-                df <- per_omics[[om]]
-                if (is.data.frame(df) && "contrast" %in% colnames(df)) {
-                    df_c <- df[df$contrast == cname, , drop = FALSE]
-                } else {
-                    df_c <- df
-                }
-                if (is.data.frame(df_c) && nrow(df_c) > 0) {
-                    per_omics_contrast[[om]] <- df_c
-                }
-            }
-
-            if (length(per_omics_contrast) < 2) next
-
-            contrast_pairs <- utils::combn(names(per_omics_contrast), 2, simplify = FALSE)
-            for (pair in contrast_pairs) {
-                omic1 <- pair[1]
-                omic2 <- pair[2]
-                res1 <- per_omics_contrast[[omic1]]
-                res2 <- per_omics_contrast[[omic2]]
-                if (is.null(res1) || is.null(res2)) next
-
-                tryCatch({
-                    .save_multigsea_pair_plot(
-                        res1, res2, omic1, omic2,
-                        corr_method = corr_method,
-                        p_thresh = p_thresh,
-                        out_dir = contrast_out
-                    )
-                }, error = function(e) {
-                    message("    MultiGSEA plot failed for ", omic1, " vs ", omic2,
-                            " (", cname, "): ", e$message)
-                })
-            }
-        }
-        message("  Per-contrast MultiGSEA output saved to: ", per_contrast_dir)
+    if (!is.null(out_dir)) {
+        combined <- plot_multigsea_combined(per_omics, out_dir)
+        if (!is.null(combined)) plots[["combined"]] <- combined
     }
 
     message("MultiGSEA plots generated: ", length(plots))
-    return(plots)
-}
-
-
-#' Save a single MultiGSEA pairwise scatter plot
-#'
-#' Generates and saves the enrichment correlation scatter plot for one pair
-#' of omics layers. Used by both the combined and per-contrast MultiGSEA code.
-#'
-#' @param res1 Enrichment data frame for omics 1
-#' @param res2 Enrichment data frame for omics 2
-#' @param omic1 Name of omics 1
-#' @param omic2 Name of omics 2
-#' @param corr_method Correlation method (default "pearson")
-#' @param p_thresh P-value threshold for labeling (default 0.05)
-#' @param out_dir Output directory for saved files
-#' @return Invisible NULL
-.save_multigsea_pair_plot <- function(res1, res2, omic1, omic2,
-                                      corr_method = "pearson",
-                                      p_thresh = 0.05, out_dir) {
-
-    get_term_col <- function(df) {
-        if ("term" %in% colnames(df)) return(df$term)
-        if ("ID" %in% colnames(df)) return(df$ID)
-        if ("Description" %in% colnames(df)) return(df$Description)
-        return(rownames(df))
-    }
-
-    res1$term <- get_term_col(res1)
-    res2$term <- get_term_col(res2)
-
-    # Build ID -> pathway name lookup
-    id_to_name <- character(0)
-    for (df_tmp in list(res1, res2)) {
-        if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-            nms <- setNames(df_tmp$pathway, df_tmp$ID)
-            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
-        }
-    }
-
-    common_terms <- union(res1$term, res2$term)
-    if (length(common_terms) < 3) return(invisible(NULL))
-
-    df1 <- res1[match(common_terms, res1$term), ]
-    df2 <- res2[match(common_terms, res2$term), ]
-
-    get_score <- function(df) {
-        padj_col <- NULL
-        for (col in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
-            if (col %in% colnames(df)) { padj_col <- col; break }
-        }
-        if (is.null(padj_col)) return(rep(0, nrow(df)))
-        padj <- df[[padj_col]]
-        padj[is.na(padj)] <- 1
-        non_zeros <- padj[padj > 0 & padj < 1]
-        min_nz <- if (length(non_zeros) > 0) min(non_zeros, na.rm = TRUE) else 1e-10
-        padj[padj == 0] <- min_nz / 10
-        -log10(padj)
-    }
-
-    score1 <- get_score(df1)
-    score2 <- get_score(df2)
-
-    resolve_term <- function(term) {
-        if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
-            t <- id_to_name[[term]]
-        } else {
-            t <- sub("^GO:\\d+~", "", term)
-            t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-            if (nchar(t) == 0) t <- term
-        }
-        if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
-        t
-    }
-
-    plot_df <- data.frame(
-        term = common_terms,
-        x = score1, y = score2,
-        stringsAsFactors = FALSE
-    )
-    plot_df$label <- vapply(plot_df$term, resolve_term, character(1))
-
-    cor_res <- cor.test(plot_df$x, plot_df$y, method = corr_method)
-    cor_val <- round(cor_res$estimate, 3)
-    p_val <- signif(cor_res$p.value, 3)
-
-    omic1_label <- gsub("_", " ", tools::toTitleCase(omic1))
-    omic2_label <- gsub("_", " ", tools::toTitleCase(omic2))
-
-    p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = x, y = y)) +
-        ggplot2::geom_point(color = "steelblue", size = 3, alpha = 0.7) +
-        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
-        ggplot2::labs(
-            title = paste0(omic1_label, " vs ", omic2_label),
-            subtitle = paste0("Terms: ", nrow(plot_df),
-                              "  |  ", corr_method, " r = ", cor_val, ", p = ", p_val),
-            x = paste0(omic1_label, " [-log10(FDR)]"),
-            y = paste0(omic2_label, " [-log10(FDR)]")
-        ) +
-        ggplot2::theme_minimal() +
-        ggplot2::theme(
-            axis.title = ggplot2::element_text(face = "bold"),
-            plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
-            plot.subtitle = ggplot2::element_text(hjust = 0.5)
-        )
-
-    if (requireNamespace("ggrepel", quietly = TRUE)) {
-        cut_score <- -log10(p_thresh)
-        both_sig <- plot_df[plot_df$x > cut_score & plot_df$y > cut_score, ]
-        top_x <- utils::head(plot_df[order(plot_df$x, decreasing = TRUE), ], 10)
-        top_y <- utils::head(plot_df[order(plot_df$y, decreasing = TRUE), ], 5)
-        label_df <- unique(rbind(both_sig, top_x, top_y))
-        label_df <- label_df[label_df$x > 0 | label_df$y > 0, ]
-        p <- p + ggrepel::geom_text_repel(
-            data = label_df, ggplot2::aes(label = label),
-            size = 3, max.overlaps = Inf, box.padding = 0.5,
-            force = 2, min.segment.length = 0
-        )
-    }
-
-    filename <- paste0("multigsea_", omic1, "_vs_", omic2)
-    ggplot2::ggsave(file.path(out_dir, paste0(filename, ".png")),
-                    plot = p, width = 8, height = 8, dpi = 300)
-    write.csv(plot_df, file.path(out_dir, paste0(filename, ".csv")),
-              row.names = FALSE)
-
-    invisible(NULL)
+    plots
 }
 
 
 #' Combined MultiGSEA Enrichment Plot
 #'
-#' Creates a 2x2 grid combining pairwise scatter plots with a summary dot plot.
+#' Dot plot of the pathways enriched in more than one omics layer (or, when
+#' there are none, the strongest terms overall), one column per layer.
 #'
-#' @param pairwise_plots Named list of pairwise ggplot objects.
 #' @param per_omics Per-omics enrichment results list.
 #' @param out_dir Output directory.
-#' @return The combined ggplot/patchwork object, or NULL on failure.
-plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
-    if (!requireNamespace("patchwork", quietly = TRUE)) {
-        message("Package 'patchwork' not available. Skipping combined plot.")
-        return(NULL)
-    }
-
-    # Build summary dot plot of top co-significant pathways across omics
+#' @return The summary ggplot object, or NULL when no layer carries usable
+#'   term / p-value columns.
+plot_multigsea_combined <- function(per_omics, out_dir) {
     omics_names <- names(per_omics)
     summary_rows <- list()
 
@@ -499,9 +76,12 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
         res <- per_omics[[om]]
         if (is.null(res) || !is.data.frame(res)) next
 
-        # Find term column
+        # "pathway" belongs in this list: the fgsea / ORA tables the gene layers
+        # arrive in key their term on `pathway` (`pathway_name` holds the
+        # readable label) and carry none of the other three, so without it both
+        # gene layers were dropped here and the panel drew metabolomics alone.
         term_col <- NULL
-        for (tc in c("term", "ID", "Description")) {
+        for (tc in c("term", "ID", "Description", "pathway")) {
             if (tc %in% colnames(res)) { term_col <- tc; break }
         }
         if (is.null(term_col)) next
@@ -513,12 +93,14 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
         }
         if (is.null(padj_col)) next
 
-        # Resolve pathway name: prefer 'pathway' column over raw ID
+        # Resolve a readable label, falling back to the raw id
         term_ids <- res[[term_col]]
-        if ("pathway" %in% colnames(res)) {
-            term_names <- res$pathway
+        term_names <- if ("pathway_name" %in% colnames(res)) {
+            res$pathway_name
+        } else if ("pathway" %in% colnames(res)) {
+            res$pathway
         } else {
-            term_names <- term_ids
+            term_ids
         }
 
         df_tmp <- data.frame(
@@ -538,6 +120,13 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
     }
 
     summary_df <- do.call(rbind, summary_rows)
+
+    # Collapse to one row per (omic, term), keeping that layer's best padj. The
+    # gene layers arrive with contrasts, databases and methods stacked in one
+    # frame, so without this a term significant twice inside a single layer
+    # would satisfy the "supported by >= 2 omics" rule on its own.
+    summary_df <- summary_df[order(summary_df$padj), ]
+    summary_df <- summary_df[!duplicated(summary_df[, c("omic", "term")]), ]
 
     # Find terms significant in at least 2 omics
     sig_terms <- summary_df[summary_df$padj < 0.05, ]
@@ -572,7 +161,7 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
     )
     plot_data$omic_label <- gsub("_", " ", tools::toTitleCase(plot_data$omic))
 
-    summary_panel <- ggplot2::ggplot(plot_data,
+    combined <- ggplot2::ggplot(plot_data,
         ggplot2::aes(x = omic_label, y = stats::reorder(term_short, neg_log10_padj),
                      size = neg_log10_padj, color = neg_log10_padj)) +
         ggplot2::geom_point() +
@@ -586,20 +175,15 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
             axis.title = ggplot2::element_text(face = "bold")
         )
 
-    # Assemble 2x2 grid: up to 3 pairwise + summary panel
-    scatter_plots <- pairwise_plots[!names(pairwise_plots) %in% "combined"]
-    panels <- scatter_plots[1:min(3, length(scatter_plots))]
-    panels[[length(panels) + 1]] <- summary_panel
-
-    combined <- patchwork::wrap_plots(panels, ncol = 2)
-
+    # Filename kept as-is: the deck builder in scripts/ and the report both
+    # look for multigsea_combined_enrichment.png.
     ggplot2::ggsave(
         file.path(out_dir, "multigsea_combined_enrichment.png"),
-        plot = combined, width = 16, height = 16, dpi = 300
+        plot = combined, width = 10, height = 8, dpi = 300
     )
     message("Saved combined MultiGSEA plot.")
 
-    return(combined)
+    combined
 }
 
 
@@ -814,6 +398,9 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param out_dir Output directory for results and plots
 #' @return List with: results (data.frame), plots (list of paths)
 run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
+    # KEGG classes this organism cannot have; shared with the cross-omics tables
+    # and the pathway maps so every figure filters the same way.
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
 
@@ -991,7 +578,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             compound_bp_path <- file.path(out_dir, "compound_ora_barplot.png")
             png(compound_bp_path, width = 1000, height = 700, res = 120)
             tryCatch({
-                plot_multi_ora_barplot(metab_ora, "Metabolomics Compound ORA (KEGG Pathways)")
+                plot_multi_ora_barplot(metab_ora, "Metabolomics Compound ORA (KEGG Pathways)",
+                                       exclude_classes = excl_classes, cache_dir = out_dir)
             }, error = function(e) {
                 plot.new()
                 text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
@@ -1028,7 +616,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
         png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
         tryCatch({
-            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (All Gene-Based Omics)")
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (All Gene-Based Omics)",
+                                   exclude_classes = excl_classes, cache_dir = out_dir)
         }, error = function(e) {
             plot.new()
             text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2)
@@ -1366,7 +955,11 @@ gmt_to_term2gene <- function(gmt_file) {
 #' @param term2name Optional data.frame(term, name) for readable pathway labels.
 #' @param label Label used in progress messages.
 #' @param pval_cutoff Adjusted-p cutoff (falls back to raw p < 0.05).
-#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, Count, geneID), or NULL.
+#' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, Count, geneID), or
+#'   NULL. Every tested set (not only the enriched ones) travels along in an
+#'   \code{all_tested} attribute, the same way \code{run_compound_ora()} does
+#'   it: the per-collection audit needs the sets that were tested and came out
+#'   flat, and they are invisible in the filtered table.
 run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = NULL,
                                    label = "pooled", pval_cutoff = 0.1) {
 
@@ -1403,11 +996,15 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
                 stringsAsFactors = FALSE
             )
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
-            if (nrow(padj_hits) > 0) return(padj_hits)
+            if (nrow(padj_hits) > 0) {
+                attr(padj_hits, "all_tested") <- out
+                return(padj_hits)
+            }
             pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
             if (nrow(pval_hits) > 0) {
                 message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                         nrow(pval_hits), " pathways)")
+                attr(pval_hits, "all_tested") <- out
                 return(pval_hits)
             }
         }
@@ -1421,6 +1018,45 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
         message("    ", label, ": ", nrow(ora_res), " enriched pathways")
     }
     ora_res
+}
+
+
+#' Summarise a pooled ORA by gene-set collection
+#'
+#' Answers the question a mixed-collection bar plot cannot: how many sets each
+#' GMT contributed, how many of them the ORA could actually test (a set is only
+#' tested when at least one hit gene falls in it and it survives the size
+#' filter), and how many came out enriched. A collection with zero enriched
+#' terms is then visibly absent-because-flat rather than absent-because-dropped.
+#'
+#' @param term2gene data.frame(term, gene) of the pooled gene-set membership.
+#' @param pooled_ora Pooled ORA table from \code{run_multi_ora_enricher()},
+#'   carrying its \code{all_tested} attribute; may be NULL.
+#' @return data.frame(collection, n_sets, n_tested, n_p05, n_reported), ordered
+#'   by descending n_reported.
+summarize_ora_collections <- function(term2gene, pooled_ora) {
+    sets <- unique(as.character(term2gene$term))
+    set_coll <- classify_pathway_collection(sets)
+    colls <- sort(unique(set_coll))
+
+    tested <- attr(pooled_ora, "all_tested")
+    tested_coll <- if (is.null(tested)) character(0) else classify_pathway_collection(tested$ID)
+    p05_coll <- if (is.null(tested)) character(0) else {
+        tested_coll[!is.na(tested$pvalue) & tested$pvalue < 0.05]
+    }
+    rep_coll <- if (is.null(pooled_ora)) character(0) else classify_pathway_collection(pooled_ora$ID)
+
+    n_in <- function(x, coll) vapply(coll, function(cl) sum(x == cl), integer(1))
+    out <- data.frame(
+        collection  = colls,
+        n_sets      = n_in(set_coll, colls),
+        n_tested    = n_in(tested_coll, colls),
+        n_p05       = n_in(p05_coll, colls),
+        n_reported  = n_in(rep_coll, colls),
+        stringsAsFactors = FALSE
+    )
+    rownames(out) <- NULL
+    out[order(-out$n_reported, -out$n_tested), , drop = FALSE]
 }
 
 
@@ -1442,8 +1078,13 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
 #' @param harmonization_res Harmonization result (for \code{extract_de_tables}).
 #' @param config Full config object.
 #' @param out_dir Output directory for results and plots.
-#' @return list(pooled, per_omics, metabolomics, combined, plots), or NULL.
+#' @return list(pooled, per_omics, metabolomics, combined, collections, plots),
+#'   or NULL. \code{collections} is the per-collection audit also written to
+#'   multi_ora_collection_summary.csv.
 run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
+    # KEGG classes this organism cannot have; shared with the cross-omics tables
+    # and the pathway maps so every figure filters the same way.
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     gene_omics   <- c("transcriptomics", "proteomics")
     omic_cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")
@@ -1534,12 +1175,20 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     write.csv(combined, file.path(out_dir, "multi_ora_results.csv"), row.names = FALSE)
     message("  Multi-ORA (GMT) found ", nrow(combined), " enriched pathways (pooled)")
 
+    coll_summary <- summarize_ora_collections(comb_t2g, pooled_ora)
+    write.csv(coll_summary, file.path(out_dir, "multi_ora_collection_summary.csv"),
+              row.names = FALSE)
+    message("  Multi-ORA (GMT) per collection (enriched/tested/sets): ",
+            paste(sprintf("%s %d/%d/%d", coll_summary$collection, coll_summary$n_reported,
+                          coll_summary$n_tested, coll_summary$n_sets), collapse = "; "))
+
     plots <- list()
     if (!is.null(pooled_ora) && nrow(pooled_ora) > 0) {
         plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
         png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
         tryCatch(
-            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)"),
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)",
+                                   exclude_classes = excl_classes, cache_dir = out_dir),
             error = function(e) { plot.new(); text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2) }
         )
         dev.off()
@@ -1552,7 +1201,7 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
              error = function(e) message("  Multi-ORA support plot failed: ", e$message))
 
     list(pooled = pooled_ora, per_omics = per_omics_ora, metabolomics = NULL,
-         combined = combined, plots = plots)
+         combined = combined, collections = coll_summary, plots = plots)
 }
 
 
@@ -1669,23 +1318,172 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 }
 
 
-#' Plot multi-ORA pooled barplot
-plot_multi_ora_barplot <- function(ora_df, title, top_n = 20) {
-    df <- ora_df[order(ora_df$pvalue), ]
-    df <- df[seq_len(min(top_n, nrow(df))), ]
+#' Classify pathway IDs by the gene-set collection they come from
+#'
+#' Multi-ORA pools gene sets from several GMTs whose IDs live in different
+#' namespaces (GO:0006955, map00010, PF00001). Once the TERM2GENE tables are
+#' row-bound nothing downstream can tell them apart, so the collection is
+#' recovered from the shape of the ID itself.
+#'
+#' @param ids Character vector of pathway / gene-set IDs.
+#' @return Character vector the same length as \code{ids}, each element one of
+#'   "GO", "KEGG", "Pfam", "InterPro" or "Other".
+classify_pathway_collection <- function(ids) {
+    ids <- as.character(ids)
+    out <- rep("Other", length(ids))
+    out[grepl("^GO:?[0-9]+", ids)] <- "GO"
+    # KEGG pathway ids are a 2-4 letter prefix plus 5 digits: the reference maps
+    # ("map00010", "ko00010") and every organism code ("hsa04110", "cel04110").
+    out[grepl("^[a-z]{2,4}[0-9]{5}$", ids)] <- "KEGG"
+    out[grepl("^PF[0-9]{5}", ids)] <- "Pfam"
+    out[grepl("^IPR[0-9]{6}", ids)] <- "InterPro"
+    out[is.na(ids) | !nzchar(ids)] <- "Other"
+    out
+}
 
-    df$label <- ifelse(nchar(df$pathway) > 50,
-                        paste0(substr(df$pathway, 1, 47), "..."),
-                        df$pathway)
-    neg_log_p <- -log10(df$pvalue + 1e-300)
+
+#' Pick top ORA terms while keeping every collection represented
+#'
+#' Draws terms round-robin from each collection in ascending p-value. A pooled
+#' ORA over GO + KEGG + Pfam is dominated by GO purely by set count (thousands
+#' of GO terms against a few hundred KEGG maps), so a plain top-n by p-value
+#' leaves the plot looking like a GO-only analysis. Collections enter the
+#' rotation best-first, so with fewer slots than collections the strongest ones
+#' are still the ones shown. With a single collection this is exactly the plain
+#' top-n.
+#'
+#' @param ora_df ORA table carrying \code{pvalue} and \code{collection} columns.
+#' @param top_n Maximum number of rows to keep.
+#' @return A subset of \code{ora_df}, ordered by ascending p-value.
+select_top_ora_per_collection <- function(ora_df, top_n = 20) {
+    # Rank on adjusted p where it exists. Ranking on raw p put terms at the top
+    # that multiple testing does not support, and the rest of the report moved to
+    # FDR; a figure ordered on a different statistic invites the wrong comparison.
+    rank_by <- if ("padj" %in% names(ora_df) && any(is.finite(ora_df$padj))) {
+        ora_df$padj
+    } else ora_df$pvalue
+
+    ord <- order(rank_by)
+    df <- ora_df[ord, , drop = FALSE]
+    rank_by <- rank_by[ord]
+    if (nrow(df) <= top_n) return(df)
+
+    by_coll <- split(seq_len(nrow(df)), df$collection)
+    by_coll <- by_coll[order(vapply(by_coll, function(i) rank_by[i[1]], numeric(1)))]
+
+    keep <- integer(0)
+    rank <- 1L
+    while (length(keep) < top_n && any(lengths(by_coll) >= rank)) {
+        for (idx in by_coll) {
+            if (length(keep) >= top_n) break
+            if (length(idx) >= rank) keep <- c(keep, idx[rank])
+        }
+        rank <- rank + 1L
+    }
+    df[sort(keep), , drop = FALSE]
+}
+
+
+#' Plot multi-ORA pooled barplot
+#'
+#' Horizontal bar plot of the strongest enriched terms. When the table mixes
+#' gene-set collections each bar is tagged and coloured by its collection, so
+#' GO terms, KEGG maps and Pfam domains are never silently pooled into one
+#' anonymous ranking.
+#'
+#' A collection that was searched but produced no enriched term cannot have a
+#' bar, and an absent bar reads the same as an unconfigured GMT. Where the table
+#' carries the \code{all_tested} attribute \code{run_multi_ora_enricher()}
+#' attaches, those collections are named in the caption instead of vanishing.
+#'
+#' @param ora_df ORA table with \code{pathway}, \code{ID} and \code{pvalue},
+#'   optionally carrying an \code{all_tested} attribute of every tested set.
+#' @param title Plot title.
+#' @param top_n Maximum number of terms to draw (default 20).
+#' @return Invisible character vector of the collections drawn.
+plot_multi_ora_barplot <- function(ora_df, title, top_n = 20,
+                                   exclude_classes = NULL, cache_dir = NULL) {
+    ids <- if ("ID" %in% colnames(ora_df)) ora_df$ID else ora_df$pathway
+    tested <- attr(ora_df, "all_tested")
+
+    # KEGG reference maps are pan-species, so an organism with no KEGG code
+    # scores vertebrate-organ and human-disease maps purely on generic orthologs.
+    # The cross-omics tables and the pathway maps already drop those classes;
+    # without this the pooled barplot was the one figure still showing
+    # "Viral myocarditis" and "Bile secretion" for a parasitoid wasp.
+    if (!is.null(exclude_classes) && length(exclude_classes) > 0) {
+        keep <- keep_kegg_pathways(ids, exclude = unlist(exclude_classes),
+                                   cache_dir = cache_dir,
+                                   label = "pooled Multi-ORA pathways")
+        ora_df <- ora_df[keep, , drop = FALSE]
+        ids <- ids[keep]
+        if (nrow(ora_df) == 0) {
+            plot.new()
+            text(0.5, 0.5, "No pathways left after KEGG class filtering", cex = 1.1)
+            return(invisible(NULL))
+        }
+    }
+
+    ora_df$collection <- classify_pathway_collection(ids)
+    df <- select_top_ora_per_collection(ora_df, top_n)
+
+    collections <- unique(df$collection)
+    mixed <- length(collections) > 1
+
+    tested_coll <- if (is.null(tested) || !"ID" %in% colnames(tested)) {
+        character(0)
+    } else {
+        classify_pathway_collection(tested$ID)
+    }
+    flat <- setdiff(unique(tested_coll), collections)
+
+    # Tag width has to come out of the name, not be added on top of it: the
+    # left margin below is fixed and a longer string just runs off the device.
+    name_width <- if (mixed) 42L else 50L
+    label <- ifelse(nchar(df$pathway) > name_width,
+                    paste0(substr(df$pathway, 1, name_width - 3), "..."),
+                    df$pathway)
+    if (mixed) label <- paste0("[", df$collection, "] ", label)
+
+    palette <- rep_len(c("#7B2D8E", "#2C7FB8", "#D95F02", "#1B9E77", "#666666"),
+                       length(collections))
+    bar_col <- if (mixed) palette[match(df$collection, collections)] else "#7B2D8E"
+
+    # Plot whatever the ranking used, so bar length and bar order agree.
+    use_padj <- "padj" %in% names(df) && any(is.finite(df$padj))
+    stat_vals <- if (use_padj) df$padj else df$pvalue
+    stat_label <- if (use_padj) "-log10(FDR)" else "-log10(p-value)"
+    neg_log_p <- -log10(stat_vals + 1e-300)
     neg_log_p <- pmin(neg_log_p, 15)
 
-    par(mar = c(5, 17, 3, 2))
-    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
-            las = 1, cex.names = 0.65, col = "#7B2D8E",
-            xlab = "-log10(p-value)",
+    caption <- character(0)
+    if (mixed) {
+        caption <- c(caption, paste0("terms drawn in turn from each collection (",
+                                     paste(collections, collapse = ", "), ")"))
+    }
+    if (length(flat) > 0) {
+        n_flat <- vapply(flat, function(cl) sum(tested_coll == cl), integer(1))
+        caption <- c(caption, paste0(
+            "searched, no enriched term: ",
+            paste(sprintf("%s (%d sets tested)", flat, n_flat), collapse = ", ")))
+    }
+
+    # One caption per line, and one margin line per caption: joined into a single
+    # `sub =` string the tail runs off the right edge of the device at this width.
+    par(mar = c(4 + max(length(caption), 1L), 17, 3, 2))
+    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(label),
+            las = 1, cex.names = 0.65, col = rev(bar_col),
+            xlab = stat_label,
             main = title)
+    for (i in seq_along(caption)) {
+        mtext(caption[i], side = 1, line = 3 + i, cex = 0.7)
+    }
     abline(v = -log10(0.05), col = "red", lty = 2)
+    if (mixed) {
+        legend("bottomright", legend = collections, fill = palette,
+               bty = "n", cex = 0.75)
+    }
+    invisible(collections)
 }
 
 
@@ -2221,12 +2019,146 @@ pick_key_position <- function(template_png, frac = 0.28) {
 }
 
 
+#' Thresholds behind the multi-omics KEGG (pathview) maps
+#'
+#' One place to keep the three numbers, so the pathway filter, the node filter
+#' and the figure legend cannot drift apart.
+#'
+#' \itemize{
+#'   \item `fdr_alpha` -- adjusted ORA p below which a pathway is drawn.
+#'   \item `node_fc` -- linear fold change (either direction) above which a
+#'     feature may colour its node.
+#'   \item `node_p` -- raw DE p below which a feature may colour its node,
+#'     regardless of effect size.
+#' }
+PATHVIEW_SIGNIFICANCE <- list(fdr_alpha = 0.05, node_fc = 1.5, node_p = 0.05)
+
+
+#' Describe, for a figure legend, how the pathview maps were thresholded
+#'
+#' The report template picks this up so the maps state their own selection
+#' rules instead of leaving the reader to guess why a node is white.
+#'
+#' @param thresholds List as in \code{PATHVIEW_SIGNIFICANCE}, with elements
+#'   `fdr_alpha`, `node_fc` and `node_p`.
+#' @return A single character string, ready to pass to `figure_legend()`.
+pathview_significance_caption <- function(thresholds = PATHVIEW_SIGNIFICANCE) {
+    paste0(
+        "Pathways were selected at FDR < ", thresholds$fdr_alpha,
+        " (adjusted over-representation p) in at least one omics layer; where a ",
+        "layer's ORA table carries no adjusted p, raw p < ", thresholds$fdr_alpha,
+        " was used for that layer and the substitution is recorded in the run log. ",
+        "A node is coloured only where the feature mapping to it both changed by more than ",
+        thresholds$node_fc, "-fold in either direction (|log2 fold change| > ",
+        round(log2(thresholds$node_fc), 2), ") and reached raw p < ", thresholds$node_p,
+        ". A node left at the map's own colour either carries no measured feature ",
+        "in that layer or carries only features that failed one or both cut-offs -- ",
+        "the map does not separate the two. Where several features map to one node, the ",
+        "node carries the mean log2 fold change of those that passed."
+    )
+}
+
+
+#' Select KEGG pathways from per-omic ORA tables on adjusted p
+#'
+#' A pathway qualifies if any single layer calls it enriched, so the union is
+#' taken across files. A layer with no usable adjusted p -- the column is absent,
+#' or empty over this ID space -- is judged on the raw p instead. That is a laxer
+#' scale, so the substitution is announced rather than folded silently into the
+#' union.
+#'
+#' @param ora_files Character vector of per-omic ORA CSV paths.
+#' @param id_pattern Regex the `pathway` column must match (organism or KO space).
+#' @param alpha Adjusted-p cut-off.
+#' @return Character vector of unique pathway ids, possibly empty.
+select_ora_pathways_by_fdr <- function(ora_files, id_pattern,
+                                       alpha = PATHVIEW_SIGNIFICANCE$fdr_alpha) {
+    selected <- character(0)
+    for (f in ora_files) {
+        d <- tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
+        if (is.null(d) || !"pathway" %in% names(d)) next
+        in_space <- grepl(id_pattern, d$pathway)
+        if (!any(in_space)) next
+
+        pcol <- intersect(c("padj", "adj.P.Val"), names(d))
+        # An adjusted-p column that is empty over this ID space is no adjusted p
+        # at all: judging on it would drop the layer without a word.
+        if (length(pcol) > 0 && all(is.na(d[[pcol[1]]][in_space]))) {
+            pcol <- character(0)
+        }
+        if (length(pcol) == 0) {
+            pcol <- intersect(c("pvalue", "P.Value"), names(d))
+            if (length(pcol) == 0) {
+                message("    Union pathview: ", basename(f),
+                        " has no p-value column; skipped")
+                next
+            }
+            message("    Union pathview: ", basename(f), " has no usable adjusted p; ",
+                    "selecting on raw ", pcol[1], " < ", alpha, " for this layer")
+        }
+        pcol <- pcol[1]
+        keep <- in_space & !is.na(d[[pcol]]) & d[[pcol]] < alpha
+        selected <- c(selected, d$pathway[keep])
+    }
+    unique(selected)
+}
+
+
+#' Keep only the features allowed to colour a pathview node
+#'
+#' Colouring every measured feature makes a KEGG map look like a heat map of
+#' noise: most nodes end up tinted by fold changes indistinguishable from zero.
+#' Features that neither moved by `node_fc` nor reached `node_p` are dropped, so
+#' pathview leaves their nodes at the template colour rather than painting them
+#' the mid-point of the scale.
+#'
+#' @param de_table Standardized DE table with `log2fc` and a p-value column
+#'   (`pvalue`, `P.Value`, `padj` or `adj.P.Val`), as returned by
+#'   \code{extract_de_tables}. `log2fc` must already be on the log2 scale.
+#' @param thresholds List as in \code{PATHVIEW_SIGNIFICANCE}.
+#' @param label Layer name used in the console message.
+#' @return The subset of rows eligible to colour a node; zero rows if the table
+#'   carries no usable log2 fold change.
+filter_changed_features <- function(de_table, thresholds = PATHVIEW_SIGNIFICANCE,
+                                    label = "features") {
+    if (is.null(de_table) || !is.data.frame(de_table) || nrow(de_table) == 0) {
+        return(de_table)
+    }
+    if (!"log2fc" %in% names(de_table)) return(de_table[0, , drop = FALSE])
+
+    pcol <- intersect(c("pvalue", "P.Value", "padj", "adj.P.Val"), names(de_table))
+    pcol <- if (length(pcol) > 0) pcol[1] else NA_character_
+
+    usable <- is.finite(de_table$log2fc)
+    moved <- usable & abs(de_table$log2fc) > log2(thresholds$node_fc)
+    sig <- if (is.na(pcol)) {
+        rep(FALSE, nrow(de_table))
+    } else {
+        !is.na(de_table[[pcol]]) & de_table[[pcol]] < thresholds$node_p
+    }
+    # Both conditions, not either: a fold change that large with a weak p is
+    # usually a noisy low-abundance feature, and a small but confident change is
+    # not what a pathway map is meant to highlight. Requiring both keeps the
+    # coloured nodes to features that moved AND are supported.
+    keep <- usable & moved & sig
+
+    message("    Union pathview: ", label, " ", sum(keep), "/", nrow(de_table),
+            " features eligible to colour a node (|log2FC| > ",
+            round(log2(thresholds$node_fc), 2), " and ",
+            if (is.na(pcol)) "no p column" else paste0(pcol, " < ", thresholds$node_p),
+            ")")
+    de_table[keep, , drop = FALSE]
+}
+
+
 #' Render KEGG maps for the union of pathways enriched in either gene omic
 #'
 #' Reads the per-omic ORA tables written by the RNA / proteomics enrichment
-#' steps, takes the union of the KEGG pathways they call enriched (p < 0.05),
-#' and renders one map per pathway with the RNA and protein log2FC overlaid as
-#' two states.
+#' steps, takes the union of the KEGG pathways they call enriched at
+#' FDR < 0.05, and renders one map per pathway with the RNA and protein log2FC
+#' overlaid as two states. Only features that actually changed colour a node
+#' (see \code{filter_changed_features}); the rest are left at the template
+#' colour so a map shows its signal rather than its coverage.
 #'
 #' Runs in one of two ID spaces:
 #' \itemize{
@@ -2267,9 +2199,9 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     pv_species <- if (ko_mode) "ko" else kegg_org
     kegg_re <- if (ko_mode) "^map[0-9]+$" else paste0("^", kegg_org, "[0-9]+$")
 
-    # 1. Union of KEGG pathways enriched (p < 0.05) in RNA OR protein, read from
-    #    the per-omic ORA tables written by the RNA/proteomics enrichment steps.
-    #    Locate them by walking up from out_dir to the run root.
+    # 1. Union of KEGG pathways enriched at FDR < 0.05 in RNA OR protein, read
+    #    from the per-omic ORA tables written by the RNA/proteomics enrichment
+    #    steps. Locate them by walking up from out_dir to the run root.
     run_root <- out_dir
     for (i in seq_len(8)) {
         if (dir.exists(file.path(run_root, "rna", "Enrichment")) ||
@@ -2282,18 +2214,15 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
                               "_ora_(up|down)\\.csv$", full.names = TRUE),
                    list.files(file.path(run_root, "proteomics", "Enrichment"),
                               "_ora_(up|down)\\.csv$", full.names = TRUE))
-    pathways <- unique(unlist(lapply(ora_files, function(f) {
-        d <- tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
-        if (is.null(d) || !"pathway" %in% names(d)) return(character(0))
-        pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
-        keep <- grepl(kegg_re, d$pathway)
-        if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < 0.05
-        unique(d$pathway[keep])
-    })))
+    pathways <- select_ora_pathways_by_fdr(ora_files, kegg_re,
+                                           alpha = PATHVIEW_SIGNIFICANCE$fdr_alpha)
     if (length(pathways) == 0) {
-        message("  Union pathview: no enriched ", pv_species, " KEGG pathways.")
+        message("  Union pathview: no ", pv_species, " KEGG pathways at FDR < ",
+                PATHVIEW_SIGNIFICANCE$fdr_alpha, ".")
         return(NULL)
     }
+    message("  Union pathview: ", length(pathways), " pathway(s) at FDR < ",
+            PATHVIEW_SIGNIFICANCE$fdr_alpha, " in at least one layer")
     # Same reference-map caveat as the cross-omics tables: drop the KEGG classes
     # this organism cannot have before spending a render on them.
     excl <- config$modes$multiomics$enrichment$exclude_pathway_classes
@@ -2317,6 +2246,10 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         if (is.null(tbls) || length(tbls) == 0) return(NULL)
         df <- tbls[[1]]
         if (!all(c("feature_id", "log2fc") %in% names(df))) return(NULL)
+        # Filter before aggregating: an unchanged paralogue must not drag the
+        # node's mean towards zero, it must simply not be part of it.
+        df <- filter_changed_features(df, label = om)
+        if (nrow(df) == 0) return(NULL)
         if (ko_mode) return(aggregate_log2fc_by_ko(df, ko_map, om))
         ids <- df$feature_id
         if (identical(om, "proteomics") && !is.null(gpm)) {
@@ -2337,7 +2270,7 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     if (!is.null(rna_fc))  gene_data[names(rna_fc), 1]  <- rna_fc
     if (!is.null(prot_fc)) gene_data[names(prot_fc), 2] <- prot_fc
     message("  Union pathview: ", length(genes), " ",
-            if (ko_mode) "KO" else "gene", " nodes with log2FC")
+            if (ko_mode) "KO" else "gene", " nodes coloured (changed features only)")
 
     # 3. Compound data, so metabolites colour the compound nodes. Only in KO
     #    mode: organism mode keeps the two-layer view the caller already had.
@@ -2350,13 +2283,21 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
             if (is.null(metab_map) || nrow(metab_map) == 0 || length(metab_tbls) == 0) {
                 NULL
             } else {
-                md <- merge(metab_tbls[[1]], metab_map, by = "feature_id")
-                fc <- tapply(md$log2fc, md$KEGG_CPD, mean, na.rm = TRUE)
-                stats::setNames(as.numeric(fc), names(fc))
+                # Same rule as the gene layers, so a compound node is never
+                # coloured on a difference the DA analysis did not support.
+                mt <- filter_changed_features(metab_tbls[[1]], label = "metabolomics")
+                if (nrow(mt) == 0) {
+                    NULL
+                } else {
+                    md <- merge(mt, metab_map, by = "feature_id")
+                    fc <- tapply(md$log2fc, md$KEGG_CPD, mean, na.rm = TRUE)
+                    stats::setNames(as.numeric(fc), names(fc))
+                }
             }
         }, error = function(e) NULL)
         if (!is.null(cpd_data)) {
-            message("  Union pathview: ", length(cpd_data), " compound nodes with log2FC")
+            message("  Union pathview: ", length(cpd_data),
+                    " compound nodes coloured (changed features only)")
         }
     }
 

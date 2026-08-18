@@ -137,9 +137,14 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             )
 
             if (!is.null(out_dir)) {
-                write.csv(cor_df,
-                          file.path(out_dir, "tables", "rna_protein_correlations.csv"),
-                          row.names = FALSE)
+                # The per-gene across-sample correlation is deliberately NOT
+                # written any more. Its feature ids are the harmonized MAE
+                # rownames (GENE_1, GENE_2, ...), which cannot be traced back to
+                # a gene or protein, and at 8 samples -- paired arbitrarily
+                # across omics for this design -- the per-gene coefficient is not
+                # interpretable. The summary scalar is still computed below for
+                # the foundational summary. The checkable artifact is
+                # rna_protein_log2FC_pairs.csv, written after the DE join.
 
                 p <- ggplot2::ggplot(cor_df, ggplot2::aes(x = correlation)) +
                     ggplot2::geom_histogram(bins = 50, fill = "steelblue",
@@ -197,7 +202,8 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
     # Match RNA and protein DE tables by position (contrast order from config)
     n_contrasts <- min(length(rna_de_tables), length(prot_de_tables))
 
-    if (n_contrasts > 0 && !is.null(gene_mapping)) {
+    if (n_contrasts > 0 && !is.null(gene_protein_mapping) &&
+        nrow(gene_protein_mapping) > 0) {
         contrast_names <- names(rna_de_tables)
         if (is.null(contrast_names)) contrast_names <- paste0("contrast_", seq_len(n_contrasts))
 
@@ -215,7 +221,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             res <- compute_de_concordance(
                 rna_de = rna_de_tables[[ci]],
                 prot_de = prot_de_tables[[ci]],
-                gene_mapping = gene_mapping,
+                mapping = gene_protein_mapping,
                 out_dir = contrast_out_dir,
                 contrast_label = cname
             )
@@ -228,6 +234,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         # Also save a combined summary plot to the main plots dir
         if (length(de_concordance_list) > 0 && !is.null(out_dir)) {
             .save_combined_de_scatter(de_concordance_list, out_dir)
+            .write_log2fc_pairs_table(de_concordance_list, out_dir)
         }
     } else {
         message("  Skipping DE concordance: missing DE tables or gene mapping")
@@ -260,6 +267,159 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         return(gsub("\\s*-\\s*", "_vs_", trimws(as.character(cand[[1]]))))
     }
     "contrast_1"
+}
+
+
+#' Reduce a proteomics accession to its gene id
+#'
+#' The Spalangia annotation carries two model naming schemes and the proteomics
+#' accessions are transcript-level, so a Protein.Group member reduces to a gene:
+#' \code{evm.model.X[.k.hash]|species} -> \code{evm.TU.X}, and
+#' \code{BRK_gN.tK[.k.hash]|species} -> \code{BRK_gN}.
+#'
+#' @param acc Character vector of accessions.
+#' @return Character vector of gene ids; the input stem when no rule applies.
+.accession_to_gene <- function(acc) {
+    a <- sub("\\|.*$", "", acc)
+    is_evm <- startsWith(a, "evm.model.")
+    a[is_evm] <- paste0("evm.TU.", substring(a[is_evm], nchar("evm.model.") + 1L))
+    a[is_evm] <- sub("\\.[0-9]+\\.[0-9a-f]{8}$", "", a[is_evm])
+    a[!is_evm] <- sub("\\.t[0-9]+(\\.[0-9]+\\.[0-9a-f]{8})?$", "", a[!is_evm])
+    a
+}
+
+
+#' Resolve which accession of a protein group belongs to the paired gene
+#'
+#' A DIA-NN Protein.Group can list several accessions, but they are not
+#' necessarily ambiguous for the gene in hand: usually exactly one reduces to
+#' that gene, and where several do they are transcript models of the same gene.
+#' Recording which one matches keeps the pair attributable instead of leaving a
+#' long semicolon-joined string to be read by eye.
+#'
+#' @param gene_id Character vector of gene ids.
+#' @param protein_id Character vector of Protein.Group strings, same length.
+#' @return Data frame with matched_accession, accession_match
+#'   ("unique" / "gene_isoforms" / "none") and n_other_gene_accessions.
+.resolve_matched_accession <- function(gene_id, protein_id) {
+    accs <- strsplit(protein_id, ";", fixed = TRUE)
+    matched <- character(length(gene_id))
+    status  <- character(length(gene_id))
+    n_other <- integer(length(gene_id))
+
+    for (i in seq_along(gene_id)) {
+        a <- accs[[i]]
+        g <- .accession_to_gene(a)
+        hit <- a[g == gene_id[i]]
+        n_other[i] <- sum(g != gene_id[i])
+        if (length(hit) == 1L) {
+            matched[i] <- hit
+            status[i]  <- "unique"
+        } else if (length(hit) > 1L) {
+            matched[i] <- paste(hit, collapse = ";")
+            status[i]  <- "gene_isoforms"
+        } else {
+            matched[i] <- NA_character_
+            status[i]  <- "none"
+        }
+    }
+    data.frame(matched_accession = matched, accession_match = status,
+               n_other_gene_accessions = n_other, stringsAsFactors = FALSE)
+}
+
+
+#' Write the gene-protein log2FC pairs table
+#'
+#' The one artifact a reader needs to check the RNA-protein correlation by hand:
+#' one row per gene-protein pair, carrying both original identifiers and both
+#' fold changes, stacked over every contrast. Recomputing the correlation from
+#' these two columns reproduces the figure in the report exactly.
+#'
+#' @param de_concordance_list Named list of per-contrast concordance tables.
+#' @param out_dir Directory whose tables/ subdirectory receives the file.
+#' @return Invisibly the path written, or NULL when there is nothing to write.
+.write_log2fc_pairs_table <- function(de_concordance_list, out_dir) {
+    cols <- c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+              "protein_log2FC", "protein_padj", "concordant")
+    parts <- lapply(names(de_concordance_list), function(cname) {
+        d <- de_concordance_list[[cname]]
+        have <- intersect(cols, names(d))
+        if (!all(c("rna_log2FC", "protein_log2FC") %in% have)) return(NULL)
+        out <- d[, have, drop = FALSE]
+        out$contrast <- cname
+        out
+    })
+    parts <- Filter(Negate(is.null), parts)
+    if (length(parts) == 0) return(invisible(NULL))
+
+    tbl <- do.call(rbind, parts)
+
+    # A DIA-NN Protein.Group can name several accessions that share the observed
+    # peptides. It is ONE quantified unit with ONE fold change -- the individual
+    # accessions do not exist as separate rows in the proteomics DE table -- so
+    # the group string stays the join key. Surfacing the count keeps that
+    # ambiguity visible instead of buried in a long semicolon-joined field.
+    tbl$n_protein_accessions <- lengths(strsplit(tbl$protein_id, ";", fixed = TRUE))
+    tbl <- cbind(tbl, .resolve_matched_accession(tbl$gene_id, tbl$protein_id))
+
+    # protein_accession is the correlation-ready identifier: the Protein.Group
+    # split on ";" and reduced to the single accession that IS this gene. One
+    # row per gene, one accession, nothing repeated. Exploding the group instead
+    # and keeping every accession inflates r from 0.061 to 0.072 purely by
+    # repeating 590 measurements across 1,493 rows, so that expansion is written
+    # separately and labelled for lookup only.
+    tbl$protein_accession <- vapply(
+        strsplit(tbl$matched_accession, ";", fixed = TRUE),
+        function(x) if (length(x) == 0 || is.na(x[1])) NA_character_ else x[1],
+        character(1)
+    )
+
+    front <- c("gene_id", "protein_accession", "rna_log2FC", "protein_log2FC",
+               "rna_padj", "protein_padj", "accession_match", "protein_id")
+    tbl <- tbl[, c(intersect(front, names(tbl)),
+                   setdiff(names(tbl), front)), drop = FALSE]
+
+    dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+    f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs.csv")
+    write.csv(tbl, f, row.names = FALSE)
+    message("  Wrote ", nrow(tbl), " gene-protein log2FC pairs to ", basename(f),
+            " (", sum(tbl$accession_match == "unique"), " resolve to one accession, ",
+            sum(tbl$accession_match == "gene_isoforms"), " to isoforms of the gene, ",
+            sum(tbl$accession_match == "none"), " unresolved)")
+
+    .write_log2fc_pairs_by_accession(tbl, out_dir)
+    invisible(f)
+}
+
+
+#' Write the per-accession expansion of the pairs table
+#'
+#' One row per accession for anyone joining on a single protein identifier. The
+#' fold change is NOT per accession: every accession of a group carries that
+#' group's single measured value, repeated. Use it for lookup and annotation, not
+#' to count proteins or to compute a correlation -- the repeats would weight
+#' multi-accession groups by their size.
+#'
+#' @param tbl The pairs table, already carrying n_protein_accessions.
+#' @param out_dir Directory whose tables/ subdirectory receives the file.
+#' @return Invisibly the path written.
+.write_log2fc_pairs_by_accession <- function(tbl, out_dir) {
+    acc <- strsplit(tbl$protein_id, ";", fixed = TRUE)
+    long <- tbl[rep(seq_len(nrow(tbl)), lengths(acc)), , drop = FALSE]
+    long$protein_accession <- unlist(acc, use.names = FALSE)
+    long$shared_measurement <- long$n_protein_accessions > 1
+    rownames(long) <- NULL
+
+    front <- c("gene_id", "protein_accession", "protein_id",
+               "n_protein_accessions", "shared_measurement")
+    long <- long[, c(intersect(front, names(long)),
+                     setdiff(names(long), front)), drop = FALSE]
+
+    f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs_by_accession.csv")
+    write.csv(long, f, row.names = FALSE)
+    message("  Wrote ", nrow(long), " gene-accession rows to ", basename(f),
+            " (fold changes repeat within a protein group)")
+    invisible(f)
 }
 
 
@@ -429,70 +589,44 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 
 #' Compute differential expression concordance between RNA and protein
 #'
-#' @param rna_de RNA DE table (must have feature_id and log2FC columns)
-#' @param prot_de Protein DE/DA table (must have feature_id and log2FC columns)
-#' @param gene_mapping Gene mapping table
-#' @param out_dir Output directory (optional)
-#' @return Data frame with merged DE results and concordance metrics
-compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL,
+#' Pairs the two layers with build_rna_protein_pairs(), the single join shared
+#' with analyze_rna_protein_concordance(), then adds the significance category,
+#' sign agreement and translation-efficiency columns this path reports.
+#'
+#' @param rna_de RNA DE table (must have feature_id and log2FC columns).
+#' @param prot_de Protein DE/DA table (must have feature_id and log2FC columns).
+#' @param mapping Gene-protein mapping with gene_id and protein_id columns, in
+#'   the original ID space of both DE tables.
+#' @param out_dir Output directory; NULL writes nothing.
+#' @param contrast_label Contrast name used in plot titles.
+#' @return Data frame with gene_id, protein_id, both log2FCs and padj values,
+#'   category, concordant and te_log2FC; NULL when nothing joins.
+compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
                                    contrast_label = NULL) {
 
-    # Helper to get padj column name
-    get_padj_col <- function(df) {
-        if ("adj.P.Val" %in% colnames(df)) return("adj.P.Val")
-        if ("padj" %in% colnames(df)) return("padj")
-        if ("FDR" %in% colnames(df)) return("FDR")
+    # The RNA-protein pairing comes from build_rna_protein_pairs() so this path
+    # and the one in 06_concordance.R cannot drift. They previously joined
+    # independently and disagreed by 60 pairs -- every one a semicolon-separated
+    # Protein.Group that only the other path matched.
+    pairs <- build_rna_protein_pairs(rna_de, prot_de, mapping)
+
+    if (nrow(pairs) == 0) {
+        message("  No RNA-protein pairs joined; skipping DE concordance")
         return(NULL)
     }
 
-    # Prepare RNA
-    rna_map_sub <- gene_mapping[gene_mapping$omics == "transcriptomics", ]
-
-    if (!"log2FC" %in% colnames(rna_de)) {
-        message("  RNA DE table missing log2FC column")
-        return(NULL)
-    }
-
-    rna_de$gene_symbol <- rna_map_sub$gene_symbol[match(rna_de$feature_id, rna_map_sub$feature_id)]
-
-    padj_col <- get_padj_col(rna_de)
-    cols_to_keep <- c("gene_symbol", "log2FC")
-    if (!is.null(padj_col)) cols_to_keep <- c(cols_to_keep, padj_col)
-
-    rna_de_clean <- rna_de[!is.na(rna_de$gene_symbol), cols_to_keep, drop = FALSE]
-
-    if (!is.null(padj_col)) {
-        colnames(rna_de_clean) <- c("gene_symbol", "rna_log2FC", "rna_padj")
-    } else {
-        colnames(rna_de_clean) <- c("gene_symbol", "rna_log2FC")
-        rna_de_clean$rna_padj <- NA
-    }
-
-    # Prepare Protein
-    prot_map_sub <- gene_mapping[gene_mapping$omics == "proteomics", ]
-
-    if (!"log2FC" %in% colnames(prot_de)) {
-        message("  Protein DE table missing log2FC column")
-        return(NULL)
-    }
-
-    prot_de$gene_symbol <- prot_map_sub$gene_symbol[match(prot_de$feature_id, prot_map_sub$feature_id)]
-
-    padj_col <- get_padj_col(prot_de)
-    cols_to_keep <- c("gene_symbol", "log2FC")
-    if (!is.null(padj_col)) cols_to_keep <- c(cols_to_keep, padj_col)
-
-    prot_de_clean <- prot_de[!is.na(prot_de$gene_symbol), cols_to_keep, drop = FALSE]
-
-    if (!is.null(padj_col)) {
-        colnames(prot_de_clean) <- c("gene_symbol", "protein_log2FC", "protein_padj")
-    } else {
-        colnames(prot_de_clean) <- c("gene_symbol", "protein_log2FC")
-        prot_de_clean$protein_padj <- NA
-    }
-
-    # Merge
-    de_merged <- merge(rna_de_clean, prot_de_clean, by = "gene_symbol")
+    # Legacy column names are kept beside the identifiers: the report template
+    # and other projects read rna_log2FC / protein_log2FC.
+    de_merged <- data.frame(
+        gene_id        = pairs$gene_id,
+        protein_id     = pairs$protein_id,
+        gene_symbol    = pairs$gene_id,
+        rna_log2FC     = pairs$logFC_rna,
+        rna_padj       = pairs$padj_rna,
+        protein_log2FC = pairs$logFC_prot,
+        protein_padj   = pairs$padj_prot,
+        stringsAsFactors = FALSE
+    )
 
     if (nrow(de_merged) < 10) {
         message("  Fewer than 10 genes merged, skipping DE concordance")

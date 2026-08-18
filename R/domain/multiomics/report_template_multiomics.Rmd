@@ -202,6 +202,14 @@ show_snf                 <- show_section("snf")
 show_diablo_variable     <- show_section("diablo_variable_plot")
 show_diablo_interactive  <- show_section("diablo_interactive_loadings")
 show_rna_prot_hist       <- show_section("rna_protein_concordance_hist")
+show_translation_eff     <- show_section("translation_efficiency")
+
+# With a single contrast the "All Contrasts (Combined)" and "Per-Contrast"
+# sections describe the same comparison, so the split is noise. Section headings
+# collapse to one and the per-contrast duplicates are suppressed.
+n_contrasts    <- length(cfg$design$contrasts %||% list())
+single_contrast <- n_contrasts <= 1
+combined_label <- if (single_contrast) "" else " (All Contrasts Combined)"
 
 #' Emit a heading together with its content, or a single fallback line
 #'
@@ -391,7 +399,7 @@ if (dir.exists(per_contrast_dir)) {
         }
 
         te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
-        if (file.exists(te_hist)) {
+        if (show_translation_eff && file.exists(te_hist)) {
             cat(knitr::knit_child(text = sprintf(
                 '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                 gsub("[^a-zA-Z0-9]", "", cname), te_hist
@@ -399,7 +407,7 @@ if (dir.exists(per_contrast_dir)) {
         }
 
         te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
-        if (file.exists(te_scatter)) {
+        if (show_translation_eff && file.exists(te_scatter)) {
             cat(knitr::knit_child(text = sprintf(
                 '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                 gsub("[^a-zA-Z0-9]", "", cname), te_scatter
@@ -428,10 +436,25 @@ if (dir.exists(per_contrast_dir)) {
                         n_conc, n_total, 100 * n_conc / n_total, tf_msg,
                         file.path("per_contrast", cname, "tables",
                                   "rna_protein_de_concordance.csv")))
-            print(make_dt(de_df,
-                          caption = sprintf("RNA vs protein log2FC per gene-protein pair - %s",
-                                            gsub("_", " ", cname)),
-                          pageLength = 15))
+            # print() inside a results='asis' chunk emits nothing for an
+            # htmlwidget, so this table silently never rendered. knit_child is
+            # the idiom the rest of this file uses for the same reason.
+            # Columns are ordered so the two identifiers lead: the layers use
+            # different ID spaces (RNA evm.TU./BRK_g, proteomics Protein.Group,
+            # sometimes several accessions joined by ";"), and a reader looking
+            # up a gene in the proteomics table needs the protein id to join on.
+            show_cols <- intersect(
+                c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+                  "protein_log2FC", "protein_padj", "concordant", "category"),
+                names(de_df))
+            de_show <- de_df[, show_cols, drop = FALSE]
+            de_csv_abs <- normalizePath(de_csv, winslash = "/", mustWork = FALSE)
+            cat(knitr::knit_child(text = sprintf(
+                '```{r rna-prot-tbl-%s, echo=FALSE}\nd <- read.csv("%s", stringsAsFactors = FALSE)\nd <- d[, intersect(c(%s), names(d)), drop = FALSE]\nmake_dt(d, caption = "RNA vs protein log2FC per gene-protein pair - %s", pageLength = 15)\n```\n',
+                gsub("[^a-zA-Z0-9]", "", cname), de_csv_abs,
+                paste(sprintf('"%s"', show_cols), collapse = ", "),
+                gsub("_", " ", cname)
+            ), quiet = TRUE))
         }
     }
 } else {
@@ -439,9 +462,129 @@ if (dir.exists(per_contrast_dir)) {
 }
 ```
 
-## Translation Efficiency (All Contrasts)
+## Top Proteins by RNA Agreement
 
-```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-topn-bars, eval=has_transcriptomics && has_rna_prot, fig.width=10, fig.height=7}
+# Ported from the Serge run's "Top Proteins by RNA Agreement" and adapted: top 50
+# rather than 100, the threshold is linear FC 1.5 rather than log2 0.5, the RNA
+# fold change gets its own panel instead of only tinting the protein bar, and the
+# panel label carries a hypergeometric p rather than a bare count.
+#
+# The two axes are NOT the same statistic: the protein side is the limma
+# moderated log2FC, the RNA side the DESeq2 log2FC. Read the comparison as
+# direction agreement, not as agreement of magnitude.
+TOPN <- 50
+fc_thr <- log2(1.5)
+
+pairs_csv <- file.path(rna_prot_dir, "tables", "rna_protein_log2FC_pairs.csv")
+tb_ok <- file.exists(pairs_csv)
+if (tb_ok) {
+    pr <- read.csv(pairs_csv, stringsAsFactors = FALSE)
+    pr <- pr[is.finite(pr$rna_log2FC) & is.finite(pr$protein_log2FC), , drop = FALSE]
+    tb_ok <- nrow(pr) >= 2 * TOPN
+}
+
+if (!tb_ok) {
+    cat("*Not enough mapped gene-protein pairs for the top-protein bar plot.*\n")
+} else {
+    # Hypergeometric: of the TOPN most extreme proteins, how many have an RNA
+    # fold change past the threshold in the SAME direction, against the rate over
+    # every mapped pair. lower.tail = FALSE with q - 1 gives P(X >= k).
+    enrich_p <- function(k, K, n, N) {
+        if (K == 0 || n == 0) return(NA_real_)
+        stats::phyper(k - 1, K, N - K, n, lower.tail = FALSE)
+    }
+
+    panels <- list()
+    for (cn in unique(pr$contrast)) {
+        d <- pr[pr$contrast == cn, , drop = FALSE]
+        n <- min(TOPN, floor(nrow(d) / 2))
+        if (n < 10) next
+        N <- nrow(d)
+
+        for (dir in c("up", "down")) {
+            sel <- if (dir == "up") {
+                d[order(-d$protein_log2FC), ][seq_len(n), ]
+            } else {
+                d[order(d$protein_log2FC), ][seq_len(n), ]
+            }
+            agree <- if (dir == "up") sel$rna_log2FC >= fc_thr else sel$rna_log2FC <= -fc_thr
+            K <- if (dir == "up") sum(d$rna_log2FC >= fc_thr) else sum(d$rna_log2FC <= -fc_thr)
+            k <- sum(agree)
+            p <- enrich_p(k, K, n, N)
+
+            sel$rank <- seq_len(n)
+            sel$agree <- agree
+            sel$direction <- if (dir == "up") "top 50 up in protein" else "top 50 down in protein"
+            sel$contrast_lab <- gsub("_", " ", cn)
+            sel$note <- sprintf("%d/%d agree (expected %.1f), hypergeometric p = %s",
+                                k, n, n * K / N,
+                                if (is.na(p)) "NA" else format.pval(p, digits = 2))
+            panels[[paste(cn, dir)]] <- sel
+        }
+    }
+
+    if (length(panels) == 0) {
+        cat("*Not enough pairs per contrast for the top-protein bar plot.*\n")
+    } else {
+        tb <- do.call(rbind, panels)
+        long <- rbind(
+            transform(tb[, c("rank", "direction", "contrast_lab", "agree", "note")],
+                      value = tb$protein_log2FC, layer = "protein log2FC"),
+            transform(tb[, c("rank", "direction", "contrast_lab", "agree", "note")],
+                      value = tb$rna_log2FC, layer = "RNA log2FC")
+        )
+        long$layer <- factor(long$layer, levels = c("protein log2FC", "RNA log2FC"))
+
+        lab <- unique(tb[, c("direction", "contrast_lab", "note")])
+        lab$layer <- factor("protein log2FC", levels = levels(long$layer))
+
+        print(
+            ggplot2::ggplot(long, ggplot2::aes(rank, value, fill = agree)) +
+                ggplot2::geom_col(width = 1) +
+                ggplot2::geom_hline(yintercept = 0, linewidth = 0.2, colour = "grey40") +
+                ggplot2::geom_hline(
+                    data = data.frame(y = c(fc_thr, -fc_thr)),
+                    ggplot2::aes(yintercept = y), inherit.aes = FALSE,
+                    linetype = "dashed", linewidth = 0.25, colour = "grey55") +
+                ggplot2::geom_text(data = lab,
+                    ggplot2::aes(x = Inf, y = Inf, label = note), inherit.aes = FALSE,
+                    hjust = 1.02, vjust = 1.4, size = 2.6) +
+                ggplot2::facet_grid(layer ~ direction + contrast_lab, scales = "free_y") +
+                ggplot2::scale_fill_manual(
+                    values = c("TRUE" = "#2166ac", "FALSE" = "grey78"),
+                    labels = c("TRUE" = "RNA agrees (past 1.5-fold, same direction)",
+                               "FALSE" = "RNA does not"),
+                    name = NULL) +
+                ggplot2::theme_bw(base_size = 9) +
+                ggplot2::theme(legend.position = "top") +
+                ggplot2::labs(
+                    x = "protein rank (1 = most extreme)", y = "log2 fold change",
+                    title = "Top proteins by log2FC, with the RNA fold change of the same features")
+        )
+    }
+}
+```
+
+```{r rna-prot-topn-bars-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+figure_legend(paste(
+    "Rows share an order: each column position is one gene-protein pair, ranked by",
+    "the protein log2 fold change, most extreme first. The upper row is that protein",
+    "fold change, the lower row the RNA fold change of the same pair, so the two are",
+    "read down the column. Blue marks pairs whose RNA moved past 1.5-fold in the same",
+    "direction; dashed lines mark that threshold. The panel label gives the observed",
+    "count, the count expected if the top proteins were a random draw from every",
+    "mapped pair, and a hypergeometric p for the excess.",
+    "The two rows are not the same statistic -- protein is the limma moderated log2FC",
+    "and RNA the DESeq2 log2FC -- so this shows agreement of direction, not of size.",
+    "Only pairs present in gene_protein_mapping.csv appear: proteins with no host",
+    "transcript, including every symbiont protein group, are absent by construction.",
+    "Source: rna_protein_log2FC_pairs.csv. Descriptive and hypothesis-generating."))
+```
+
+`r if (show_translation_eff) "## Translation Efficiency (All Contrasts)"`
+
+```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
@@ -450,12 +593,12 @@ if (file.exists(p)) {
 }
 ```
 
-```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
+```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
 figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
 render_commentary("translation_efficiency_hist")
 ```
 
-```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-te-scatter, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
@@ -464,7 +607,7 @@ if (file.exists(p)) {
 }
 ```
 
-```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
+```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && show_translation_eff && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
 figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
 render_commentary("translation_efficiency_scatter")
 ```
@@ -477,7 +620,7 @@ render_commentary("translation_efficiency_scatter")
 cat("*No MultiGSEA plots found.*\n")
 ```
 
-## All Contrasts (Combined) {.unnumbered}
+`r if (single_contrast) "" else "## All Contrasts (Combined) {.unnumbered}"`
 
 ```{r multigsea-plots, eval=has_multigsea, results='asis'}
 # Exclude pairwise "omics_vs_omics" scatter plots; keep combined/summary plots only.
@@ -493,9 +636,9 @@ for (gp in gsea_pngs) {
 }
 ```
 
-## Per-Contrast MultiGSEA {.tabset .unnumbered}
+`r if (single_contrast) "" else "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`
 
-```{r multigsea-per-contrast, eval=has_multigsea, results='asis'}
+```{r multigsea-per-contrast, eval=has_multigsea && !single_contrast, results='asis'}
 multigsea_per_contrast_dir <- file.path(multigsea_dir, "per_contrast")
 if (dir.exists(multigsea_per_contrast_dir)) {
     contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
@@ -558,7 +701,7 @@ if (file.exists(ora_issues_file)) {
 }
 ```
 
-### All Contrasts (Pooled) {.unnumbered}
+`r if (single_contrast) "" else "### All Contrasts (Pooled) {.unnumbered}"`
 
 ```{r multi-ora-plots, eval=has_multi_ora, results='asis'}
 # Pooled barplot
@@ -606,9 +749,9 @@ if (file.exists(multi_ora_csv)) {
 render_commentary("multi_ora")
 ```
 
-### Per-Contrast Multi-ORA {.tabset .unnumbered}
+`r if (single_contrast) "" else "### Per-Contrast Multi-ORA {.tabset .unnumbered}"`
 
-```{r multi-ora-per-contrast, eval=has_multi_ora, results='asis'}
+```{r multi-ora-per-contrast, eval=has_multi_ora && !single_contrast, results='asis'}
 mora_per_contrast_dir <- file.path(multi_ora_dir, "per_contrast")
 if (dir.exists(mora_per_contrast_dir)) {
     mora_contrast_dirs <- list.dirs(mora_per_contrast_dir, full.names = TRUE, recursive = FALSE)
@@ -764,12 +907,16 @@ if (identical(pv_species, "ko")) {
         "compound values are single-state, so only one half of each circle is filled.",
         "Red is higher and green or blue lower in the first group of the contrast.",
         "Two caveats: a KO can collect several paralogous genes, whose fold changes are averaged,",
-        "and features with no KO assignment do not appear on the map at all."))
+        "and features with no KO assignment do not appear on the map at all.",
+        # The selection rules come from the code that applied them, so the legend
+        # cannot drift from the thresholds actually used.
+        if (exists("pathview_significance_caption")) pathview_significance_caption() else ""))
 } else {
     figure_legend(paste(
         "KEGG pathway maps generated with pathview, shown per contrast.",
         "Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available.",
-        "Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated."))
+        "Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.",
+        if (exists("pathview_significance_caption")) pathview_significance_caption() else ""))
 }
 render_commentary("multi_ora_pathview")
 ```
@@ -860,7 +1007,7 @@ if (length(all_pv_pngs) > 0) {
 cat("*No cross-omics enrichment results found. Enrichment analysis requires pathway results from at least 1 omics layer.*\n")
 ```
 
-## All Contrasts (Combined) {.unnumbered}
+`r if (single_contrast) "" else "## All Contrasts (Combined) {.unnumbered}"`
 
 ```{r enrichment-per-omics, eval=has_enrichment, results='asis'}
 # Show per-omics enrichment barplots
@@ -915,7 +1062,7 @@ if (file.exists(p)) {
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
 if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways ordered by Stouffer combined p-value; the complete list is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
+    figure_legend(paste("Cross-omics pathway enrichment heatmap (all contrasts combined).", "Rows are the top 30 pathways ranked on how many layers reach the chosen significance", "threshold, then by combined p-value; the complete list is in the table below.", "Cell colour and the printed value are read from the figure itself -- it states whether", "it is showing signed GSEA NES (red positive, blue negative) or -log10(p), and marks any", "layer that is over-representation only and therefore has no NES.", "Grey means the pathway was not scored in that layer, which is not the same as", "scored and non-significant.", "Note: for each pathway the per-layer value is the best across contrasts, so a pathway", "with consistent but individually sub-significant signal can appear here and not in the", "per-contrast views."))
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
@@ -940,9 +1087,9 @@ if (file.exists(meta_file)) {
 }
 ```
 
-## Per-Contrast Enrichment {.tabset .unnumbered}
+`r if (single_contrast) "" else "## Per-Contrast Enrichment {.tabset .unnumbered}"`
 
-```{r enrichment-per-contrast, eval=has_enrichment, results='asis'}
+```{r enrichment-per-contrast, eval=has_enrichment && !single_contrast, results='asis'}
 enrich_per_contrast_dir <- file.path(enrichment_dir, "per_contrast")
 if (dir.exists(enrich_per_contrast_dir)) {
     enrich_contrast_dirs <- list.dirs(enrich_per_contrast_dir, full.names = TRUE, recursive = FALSE)
@@ -1076,13 +1223,13 @@ cat("## Per-Sample Within vs Cross-Group Distance\n\n")
 cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. The x axis is the within-group distance and the y axis the cross-group distance, so samples ABOVE the diagonal are closer to their own group; samples below it are ambiguous or misplaced.\n\n")
 ```
 
-```{r group-dist-scatter, eval=file.exists(group_dist_scatter), results='asis'}
+```{r group-dist-scatter, eval=has_group_dist && file.exists(group_dist_scatter), results='asis'}
 knitr::include_graphics(group_dist_scatter)
 figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points above the diagonal line indicate samples that are closer to their own condition group (x = within-group, y = cross-group distance). Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
 render_commentary("sample_group_distances")
 ```
 
-```{r group-dist-boxplot, eval=file.exists(group_dist_boxplot), results='asis'}
+```{r group-dist-boxplot, eval=has_group_dist && file.exists(group_dist_boxplot), results='asis'}
 knitr::include_graphics(group_dist_boxplot)
 figure_legend("Distribution of within-group and cross-group mean distances across all samples per omics layer. Clear separation between the two distributions indicates strong condition effect in that omics layer.")
 ```

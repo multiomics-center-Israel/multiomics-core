@@ -93,11 +93,16 @@ test_that("keep_kegg_pathways is a no-op without an exclusion list", {
 
 test_that("keep_kegg_pathways keeps everything when the classification is unavailable", {
   # Offline or first-run-without-cache must degrade to reporting more, not less.
-  empty_cache <- withr::local_tempdir()
-  keep <- with_mocked_bindings(
-    kegg_pathway_categories = function(...) NULL,
-    keep_kegg_pathways(c("map05416", "map04260"),
-                       exclude = "Human Diseases", cache_dir = empty_cache)
-  )
+  # The stub is installed by assignment rather than with_mocked_bindings(): these
+  # functions are sourced into the global environment, not loaded from a package,
+  # and the mocking helper requires a package namespace to rebind in.
+  env <- environment(keep_kegg_pathways)
+  original <- get("kegg_pathway_categories", envir = env)
+  assign("kegg_pathway_categories", function(...) NULL, envir = env)
+  on.exit(assign("kegg_pathway_categories", original, envir = env), add = TRUE)
+
+  keep <- keep_kegg_pathways(c("map05416", "map04260"),
+                             exclude = "Human Diseases",
+                             cache_dir = withr::local_tempdir())
   expect_equal(keep, c(TRUE, TRUE))
 })
