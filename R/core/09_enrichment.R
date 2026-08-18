@@ -585,6 +585,116 @@ lookup_go_term_names <- function(go_ids) {
     term_names
 }
 
+# =============================================================================
+# KEGG pathway classification
+# =============================================================================
+
+#' Fetch and cache the KEGG pathway BRITE classification
+#'
+#' KEGG's reference maps are pan-species, so a non-model organism lights up
+#' vertebrate organ and human-disease maps purely because the underlying
+#' orthologs are generic (kinases, ion channels, cytoskeleton). Classifying each
+#' map lets those be excluded rather than reported as findings.
+#'
+#' The hierarchy is br08901; it is downloaded once and cached as an RDS.
+#'
+#' @param cache_dir Directory for the cached RDS. NULL disables caching.
+#' @return Data frame with columns pathway_id (5-digit, no organism prefix),
+#'   category, subcategory, pathway_name; or NULL when unavailable offline.
+kegg_pathway_categories <- function(cache_dir = NULL) {
+    cache_file <- if (is.null(cache_dir)) NULL else
+        file.path(cache_dir, "kegg_pathway_categories.rds")
+
+    if (!is.null(cache_file) && file.exists(cache_file)) {
+        cached <- tryCatch(readRDS(cache_file), error = function(e) NULL)
+        if (is.data.frame(cached) && nrow(cached) > 0) return(cached)
+    }
+
+    lines <- tryCatch(
+        readLines("https://rest.kegg.jp/get/br:br08901", warn = FALSE),
+        error = function(e) {
+            message("Could not fetch KEGG pathway classification: ", conditionMessage(e))
+            NULL
+        }
+    )
+    if (is.null(lines) || length(lines) == 0) return(NULL)
+
+    category <- NA_character_
+    subcategory <- NA_character_
+    out <- list()
+    for (ln in lines) {
+        if (startsWith(ln, "A")) {
+            category <- trimws(sub("^A", "", ln))
+            subcategory <- NA_character_
+        } else if (startsWith(ln, "B")) {
+            subcategory <- trimws(sub("^B", "", ln))
+        } else if (grepl("^C\\s+\\d{5}\\s", ln)) {
+            id <- sub("^C\\s+(\\d{5})\\s+.*$", "\\1", ln)
+            nm <- trimws(sub("^C\\s+\\d{5}\\s+", "", ln))
+            out[[length(out) + 1L]] <- data.frame(
+                pathway_id = id, category = category,
+                subcategory = subcategory, pathway_name = nm,
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+    if (length(out) == 0) return(NULL)
+    res <- do.call(rbind, out)
+
+    if (!is.null(cache_file)) {
+        dir.create(dirname(cache_file), recursive = TRUE, showWarnings = FALSE)
+        tryCatch(saveRDS(res, cache_file), error = function(e) NULL)
+    }
+    res
+}
+
+
+#' Drop KEGG pathways belonging to excluded BRITE classes
+#'
+#' Matching is on the bare 5-digit map number, so it works for \code{map#####},
+#' \code{ko#####} and organism-prefixed ids alike. Pathways with no
+#' classification are kept, so an offline run or a novel id is never silently
+#' dropped.
+#'
+#' @param pathway_ids Character vector of KEGG pathway ids.
+#' @param exclude Character vector of BRITE categories or subcategories to drop.
+#'   An empty vector or NULL keeps everything.
+#' @param cache_dir Directory for the cached classification.
+#' @param label Short context string used in the message naming what was dropped.
+#' @return Logical vector, TRUE for pathways to keep, same length as
+#'   \code{pathway_ids}.
+keep_kegg_pathways <- function(pathway_ids, exclude = NULL, cache_dir = NULL,
+                               label = "pathways") {
+    keep <- rep(TRUE, length(pathway_ids))
+    if (is.null(exclude) || length(exclude) == 0) return(keep)
+
+    cls <- kegg_pathway_categories(cache_dir)
+    if (is.null(cls)) {
+        message("  KEGG classification unavailable; keeping all ", label)
+        return(keep)
+    }
+
+    bare <- sub("^[a-zA-Z]+", "", as.character(pathway_ids))
+    idx <- match(bare, cls$pathway_id)
+    hit_cat <- cls$category[idx]
+    hit_sub <- cls$subcategory[idx]
+    drop <- (!is.na(hit_cat) & hit_cat %in% exclude) |
+            (!is.na(hit_sub) & hit_sub %in% exclude)
+    keep <- !drop
+
+    if (any(drop)) {
+        # Name what was dropped: a silent filter reads as "nothing was there".
+        dropped <- table(ifelse(hit_cat[drop] %in% exclude,
+                                hit_cat[drop], hit_sub[drop]))
+        message("  Excluded ", sum(drop), " of ", length(pathway_ids), " ", label,
+                " by KEGG class (",
+                paste(sprintf("%s: %d", names(dropped), as.integer(dropped)),
+                      collapse = "; "), ")")
+    }
+    keep
+}
+
+
 #' Add pathway names to fGSEA/ORA results
 #'
 #' @param pathway_df Data frame with pathway analysis results (has 'pathway' column)

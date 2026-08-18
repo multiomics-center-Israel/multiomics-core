@@ -1,7 +1,36 @@
 pipe_rnaseq <- function(skip_outputs = FALSE) {
   # ---- Core targets — always needed (multiomics depends on these) ----
   targets <- list(
-    tar_target(rna_inputs, load_rna_inputs(config)),
+    # ---- declare input files as file targets (so changes retrigger) ----
+    # Mirrors prot_input_files / metab_input_files. Without this the RNA counts,
+    # metadata and contrasts were untracked, so editing them left the pipeline
+    # believing it was up to date and the run silently kept the old results.
+    tar_target(
+      rna_input_files,
+      {
+        cfg <- config$modes$rna
+        paths <- c(
+          resolve_raw_path(config, cfg$files$counts),
+          resolve_raw_path(config, cfg$files$metadata),
+          resolve_raw_path(config, cfg$files$contrasts)
+        )
+        for (opt in c("sample_map", "annotation", "trinotate")) {
+          val <- cfg$files[[opt]] %||% ""
+          if (nzchar(val)) paths <- c(paths, resolve_raw_path(config, val))
+        }
+        paths[nzchar(paths) & file.exists(paths)]
+      },
+      format = "file"
+    ),
+
+    # ---- load inputs (forced dependency on rna_input_files) ----
+    tar_target(
+      rna_inputs,
+      {
+        rna_input_files
+        load_rna_inputs(config)
+      }
+    ),
     # Optional annotation inputs (NULL if not configured)
     tar_target(rna_annot, load_and_process_annotation(config)),
     tar_target(rna_trinotate_main, load_and_process_trinotate(config)),

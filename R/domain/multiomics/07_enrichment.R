@@ -197,6 +197,7 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                                            kegg_conv_cache = NULL) {
 
     kegg_org <- get_kegg_organism(organism)
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     # For gene-based omics, need org_db and kegg_org
     if (omics_type != "metabolomics") {
@@ -289,7 +290,8 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                 # Use ALL measured KEGG-mapped metabolites as universe (not just DE table)
                 full_universe <- unique(id_map$KEGG_ID[!is.na(id_map$KEGG_ID)])
                 run_compound_ora(de_mapped, out_dir, use_min_gs, max_gs, pval_cutoff,
-                                 universe = full_universe)
+                                 exclude_classes = excl_classes,
+                                 universe = full_universe, label = contrast_name)
             } else if (use_method == "gsea") {
                 run_gsea_kegg(de_mapped, kegg_org, use_min_gs, max_gs, pval_cutoff)
             } else {
@@ -735,8 +737,11 @@ load_hmdb_to_kegg_map <- function(mapping_file = NULL) {
 
 #' Map metabolite feature IDs to KEGG compound IDs
 #'
-#' Uses row_data HMDB column and the HMDB-to-KEGG mapping file to convert
-#' metabolite feature IDs to KEGG compound IDs (C00xxx format).
+#' Two routes are combined. The HMDB route translates the row_data HMDB column
+#' through the HMDB-to-KEGG mapping file; the direct route reads a `KEGG` column
+#' when the annotation table already carries one. Many vendor tables annotate
+#' compounds KEGG-side that have no HMDB accession, so consulting only HMDB
+#' silently drops them from every downstream compound test.
 #'
 #' @param de_tables Named list of DE tables
 #' @param harmonization_res Harmonization result with inputs$metabolomics
@@ -752,29 +757,38 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
 
     # Find HMDB column
     hmdb_col <- intersect(c("HMDB", "hmdb", "HMDB_ID"), colnames(row_data))
-    if (length(hmdb_col) == 0) {
-        message("    No HMDB column in metabolomics row_data")
+    # Find a pre-annotated KEGG compound column
+    kegg_col <- intersect(c("KEGG", "kegg", "KEGG_ID", "KEGG_CPD", "KEGG_COMPOUND"),
+                          colnames(row_data))
+
+    if (length(hmdb_col) == 0 && length(kegg_col) == 0) {
+        message("    No HMDB or KEGG column in metabolomics row_data")
         return(NULL)
     }
 
-    # Load HMDB -> KEGG compound mapping
-    hmdb_kegg <- load_hmdb_to_kegg_map()
-    if (is.null(hmdb_kegg)) return(NULL)
+    # Load HMDB -> KEGG compound mapping. Missing is only fatal when it is the
+    # only route available.
+    hmdb_kegg <- if (length(hmdb_col) > 0) load_hmdb_to_kegg_map() else NULL
+    if (is.null(hmdb_kegg) && length(kegg_col) == 0) return(NULL)
 
     # Collect all unique feature_ids from DE tables
     all_de_ids <- unique(unlist(lapply(de_tables, function(df) df$feature_id)))
 
     # Check if DE feature_ids are already HMDB IDs (direct mapping, no row_data needed)
     hmdb_pattern <- sum(grepl("^HMDB\\d+$", all_de_ids, ignore.case = TRUE), na.rm = TRUE)
-    uses_hmdb_direct <- hmdb_pattern > length(all_de_ids) * 0.5
+    uses_hmdb_direct <- !is.null(hmdb_kegg) &&
+        hmdb_pattern > length(all_de_ids) * 0.5
 
-    hmdb_ids <- as.character(row_data[[hmdb_col[1]]])
+    hmdb_ids <- if (length(hmdb_col) > 0) {
+        as.character(row_data[[hmdb_col[1]]])
+    } else {
+        rep(NA_character_, nrow(row_data))
+    }
 
     if (uses_hmdb_direct) {
         # DE tables already use HMDB IDs as feature_ids — direct mapping
         message("    DE tables use HMDB IDs as feature_ids (direct mapping)")
         feat_ids <- hmdb_ids
-        kegg_cpds <- hmdb_kegg[hmdb_ids]
     } else {
         # Determine whether DE feature_ids are metabolite names or synthetic IDs.
         # DE tables may use metabolite names (e.g., "Palmitoleic acid") while
@@ -815,10 +829,30 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
             feat_ids <- rownames(row_data)
             if (is.null(feat_ids)) feat_ids <- paste0("feature_", seq_len(nrow(row_data)))
         }
-
-        # Map HMDB -> KEGG compound
-        kegg_cpds <- hmdb_kegg[hmdb_ids]
     }
+
+    # Route 1: HMDB accession -> KEGG compound via the mapping file.
+    kegg_from_hmdb <- if (!is.null(hmdb_kegg)) {
+        as.character(hmdb_kegg[hmdb_ids])
+    } else {
+        rep(NA_character_, length(hmdb_ids))
+    }
+
+    # Route 2: a KEGG compound column the annotation table already carries.
+    # Take the first id when a row lists several.
+    kegg_direct <- if (length(kegg_col) > 0) {
+        raw <- trimws(as.character(row_data[[kegg_col[1]]]))
+        raw[!nzchar(raw) | raw %in% c("NA", "-")] <- NA_character_
+        sub("[;,|/[:space:]].*$", "", raw)
+    } else {
+        rep(NA_character_, nrow(row_data))
+    }
+
+    # HMDB wins where both routes fire, so nothing that maps today changes id;
+    # the direct column only fills the gaps.
+    kegg_cpds <- kegg_from_hmdb
+    fill <- is.na(kegg_cpds) | !nzchar(kegg_cpds)
+    kegg_cpds[fill] <- kegg_direct[fill]
 
     mapped <- data.frame(
         feature_id = feat_ids,
@@ -837,8 +871,11 @@ map_metabolite_ids_to_kegg <- function(de_tables, harmonization_res) {
     }
 
     n_total <- length(unique(feat_ids))
+    n_hmdb_route <- sum(!is.na(kegg_from_hmdb) & nzchar(kegg_from_hmdb))
+    n_direct_only <- sum(fill & !is.na(kegg_direct) & nzchar(kegg_direct))
     message("    Mapped ", nrow(mapped), "/", n_total,
-            " metabolites to KEGG compound IDs")
+            " metabolites to KEGG compound IDs (", n_hmdb_route, " via HMDB, ",
+            n_direct_only, " added from the KEGG column)")
 
     mapped[, c("feature_id", "KEGG_CPD")]
 }
@@ -919,17 +956,35 @@ get_kegg_compound_pathways <- function(cache_dir = NULL) {
 
 #' Run ORA for metabolite compounds against KEGG pathways
 #'
-#' Uses clusterProfiler::enricher() with custom TERM2GENE built from
-#' KEGG compound-pathway associations.
+#' Hypergeometric ORA computed directly with `stats::phyper()` against
+#' pathway-compound sets built from the KEGG compound-pathway associations —
+#' `clusterProfiler` is not involved. Compound sets are restricted to the
+#' measured background before sizing, so the universe is the measured
+#' metabolome, not all of KEGG.
+#'
+#' The returned table is filtered to `pvalue < pval_cutoff`, which is a
+#' candidate list rather than a set of FDR-significant pathways. The full
+#' tested table (every pathway that passed the size filter, unfiltered by
+#' p-value, with its BH-adjusted p) is written to `out_dir` and attached to the
+#' return value as the `all_tested` attribute so the correction stays auditable.
 #'
 #' @param de_mapped DE table with KEGG_ID (compound IDs) column
 #' @param cache_dir Directory for caching KEGG data
-#' @param min_gs Minimum gene set size
-#' @param max_gs Maximum gene set size
-#' @param pval_cutoff P-value cutoff
-#' @return data.frame with enrichment results, or NULL
+#' @param min_gs Minimum compound set size, honoured as given (floored at 2,
+#'   below which the hypergeometric test is degenerate)
+#' @param max_gs Maximum compound set size
+#' @param pval_cutoff Nominal p-value cutoff applied to the returned table
+#' @param universe Character vector of all measured KEGG compound IDs. When
+#'   NULL, the compounds present in `de_mapped` are used.
+#' @param out_dir Directory to write the full tested table to; NULL to skip the
+#'   write. Defaults to `cache_dir`, which is what every caller passes.
+#' @param label Optional prefix for the full-table filename, so several
+#'   contrasts writing to one directory do not overwrite each other.
+#' @return data.frame of candidate pathways (`pvalue < pval_cutoff`) with an
+#'   `all_tested` attribute holding every tested pathway, or NULL.
 run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
-                              universe = NULL) {
+                              universe = NULL, out_dir = cache_dir,
+                              label = NULL, exclude_classes = NULL) {
 
     # Get compound-pathway associations
     cpd_pathways <- get_kegg_compound_pathways(cache_dir)
@@ -946,11 +1001,15 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     }
 
     # Significant compounds from DE table
+    query_rule <- "padj<0.05"
     sig_cpds <- de_mapped$KEGG_ID[!is.na(de_mapped$padj) & de_mapped$padj < 0.05]
     sig_cpds <- unique(sig_cpds[!is.na(sig_cpds)])
 
     if (length(sig_cpds) < 3) {
-        # Relax to nominal p-value
+        # Relax to nominal p-value. Recorded on every row: the relaxed query is
+        # a different, weaker question than the FDR one and the reader has no
+        # other way to tell which was asked.
+        query_rule <- "pvalue<0.05 (relaxed: <3 compounds at padj<0.05)"
         sig_cpds <- de_mapped$KEGG_ID[!is.na(de_mapped$pvalue) & de_mapped$pvalue < 0.05]
         sig_cpds <- unique(sig_cpds[!is.na(sig_cpds)])
     }
@@ -961,7 +1020,7 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     }
 
     message("    Running compound ORA: ", length(sig_cpds), " significant / ",
-            length(all_cpds), " total compounds")
+            length(all_cpds), " total compounds [query rule: ", query_rule, "]")
 
     # Build pathway -> compound sets
     pathway_sets <- split(cpd_pathways$compound, cpd_pathways$pathway)
@@ -970,10 +1029,22 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     pathway_names <- stats::setNames(cpd_pathways$name, cpd_pathways$pathway)
     pathway_names <- pathway_names[!duplicated(names(pathway_names))]
 
-    # Filter pathways by size (intersection with measured compounds)
-    use_min_gs <- max(2, min(min_gs, 3))
+    # Filter pathways by size (intersection with measured compounds).
+    # The configured minimum is honoured: silently clamping it to 3 let
+    # 3-compound pathways top the table under a config asking for >= 10.
+    use_min_gs <- max(2, min_gs)
     N <- length(all_cpds)  # total measured compounds
     k <- length(sig_cpds)  # significant compounds
+
+    # Drop KEGG classes this organism cannot have before testing them, so they
+    # never reach the reported table or the multiple-testing family.
+    if (!is.null(exclude_classes) && length(exclude_classes) > 0) {
+        keep_pw <- keep_kegg_pathways(names(pathway_sets),
+                                      exclude = unlist(exclude_classes),
+                                      cache_dir = cache_dir,
+                                      label = "compound pathways")
+        pathway_sets <- pathway_sets[keep_pw]
+    }
 
     results <- list()
     for (pw in names(pathway_sets)) {
@@ -1009,30 +1080,51 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
             BgRatio = paste0(m, "/", N),
             setSize = q,
             compounds = paste(overlap, collapse = "/"),
+            query_rule = query_rule,
             stringsAsFactors = FALSE
         )
     }
 
     if (length(results) == 0) {
-        message("    No enriched compound pathways found")
+        message("    No compound pathways passed the size filter (min ",
+                use_min_gs, ", max ", max_gs, ")")
         return(NULL)
     }
 
     df <- do.call(rbind, results)
     rownames(df) <- NULL
 
-    # Multiple testing correction
+    # Multiple testing correction over every pathway actually tested
     df$padj <- stats::p.adjust(df$pvalue, method = "BH")
+    df <- df[order(df$pvalue), ]
 
-    # Filter by p-value cutoff and sort
+    all_tested <- df
+    message("    Tested ", nrow(all_tested), " compound pathways (min set size ",
+            use_min_gs, "); ", sum(all_tested$padj < 0.05, na.rm = TRUE),
+            " at BH padj < 0.05")
+
+    if (!is.null(out_dir)) {
+        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+        fname <- if (is.null(label)) {
+            "compound_ora_all_tested.csv"
+        } else {
+            paste0(label, "_compound_ora_all_tested.csv")
+        }
+        utils::write.csv(all_tested, file.path(out_dir, fname), row.names = FALSE)
+    }
+
+    # The returned table is the nominal-p candidate list the report consumes.
+    # It is deliberately NOT an FDR-significant set — `padj` travels with every
+    # row and `all_tested` holds what it was corrected against.
     df <- df[df$pvalue < pval_cutoff, ]
     if (nrow(df) == 0) {
-        message("    No enriched compound pathways after p-value filtering")
+        message("    No compound pathways below nominal p < ", pval_cutoff)
         return(NULL)
     }
 
-    df <- df[order(df$pvalue), ]
-    message("    Found ", nrow(df), " enriched compound pathways")
+    message("    Found ", nrow(df), " candidate compound pathways at nominal p < ",
+            pval_cutoff)
+    attr(df, "all_tested") <- all_tested
     df
 }
 
@@ -1070,7 +1162,21 @@ get_organism_db <- function(organism) {
 
 
 #' Get KEGG organism code
+#'
+#' @param organism Organism identifier from `config$global$organism`, e.g.
+#'   "human" or "Caenorhabditis elegans".
+#' @return Three-letter KEGG organism code, or NULL when the organism is
+#'   unknown, absent, or not a single usable string. Callers treat NULL as
+#'   "no KEGG for this organism" and skip the KEGG path.
 get_kegg_organism <- function(organism) {
+    # A missing/blank organism must not reach kegg_map[[...]]: a zero-length or
+    # NA subscript there is an error, not a lookup miss, and non-model configs
+    # legitimately leave this unset.
+    if (is.null(organism) || length(organism) != 1L) return(NULL)
+    if (is.na(organism) || !nzchar(trimws(as.character(organism)))) return(NULL)
+
+    organism <- as.character(organism)
+
     kegg_map <- list(
         c_elegans = "cel",
         "Caenorhabditis elegans" = "cel",
@@ -1349,14 +1455,43 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # Use union for the heatmap (show all enriched), common for meta-analysis
     use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
 
+    # KEGG reference maps are pan-species. For an organism that has no KEGG code
+    # the vertebrate organ and human-disease maps light up purely because the
+    # underlying orthologs are generic, so they are dropped rather than reported
+    # as findings. Configurable; nothing is excluded unless the config asks.
+    excl <- config$modes$multiomics$enrichment$exclude_pathway_classes
+    if (!is.null(excl) && length(excl) > 0) {
+        keep <- keep_kegg_pathways(use_pathways, exclude = unlist(excl),
+                                   cache_dir = out_dir,
+                                   label = "cross-omics pathways")
+        use_pathways <- use_pathways[keep]
+
+        # The per-omics tables are written to disk and drive the per-layer
+        # barplots, so they need the same treatment; filtering only the merged
+        # selection would leave the excluded classes visible one section away.
+        pathway_tables <- lapply(pathway_tables, function(df) {
+            col <- if ("pathway" %in% names(df)) "pathway"
+                   else if ("ID" %in% names(df)) "ID" else NULL
+            if (is.null(col)) return(df)
+            df[keep_kegg_pathways(df[[col]], exclude = unlist(excl),
+                                  cache_dir = out_dir,
+                                  label = "per-omics pathways"), , drop = FALSE]
+        })
+    }
+
     # Merge pathway p-values for meta-analysis
     merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics)
 
     # Combine p-values using Stouffer's method (only for pathways with >= 2 p-values)
     meta_results <- stouffer_combined_pvalues(merged_pathways)
 
-    # Sort by combined p-value
+    # Sort by combined p-value. This ordering is the contract of the meta CSV —
+    # the plots re-order their own rows (see select_multi_omics_pathways()).
     meta_results <- meta_results[order(meta_results$combined_pval), ]
+
+    # Carry the readable term names over from the per-omics tables, otherwise
+    # every label downstream is a bare accession (GO:0034329, map01523).
+    meta_results <- attach_pathway_names_from_tables(meta_results, pathway_tables)
 
     # Generate plots
     plots <- list()
@@ -1425,6 +1560,135 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 #' @return Character vector of numeric-only pathway IDs (e.g., "00010")
 normalize_kegg_pathway_id <- function(ids) {
     sub("^[a-zA-Z]+", "", ids)
+}
+
+
+#' Attach readable pathway names to a cross-omics meta-analysis table
+#'
+#' The per-omics enrichment tables already carry a `pathway_name` column;
+#' `merge_pathway_pvalues()` keeps only the accession, so the names have to be
+#' joined back on. This deliberately does not reuse `add_pathway_names()` from
+#' `R/core/09_enrichment.R`: that helper re-derives names from a gene-set
+#' collection or GO.db, which is neither available nor needed here — the names
+#' the omics layers already agreed on are the ones we want.
+#'
+#' @param meta_results Meta-analysis data frame with a `pathway` column.
+#' @param pathway_tables Named list of per-omics enrichment data frames, each
+#'   optionally carrying `pathway` and `pathway_name` columns.
+#' @return `meta_results` with a `pathway_name` column added (NA where no source
+#'   table names that accession). Returned unchanged if no table carries names.
+attach_pathway_names_from_tables <- function(meta_results, pathway_tables) {
+    if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
+
+    name_lookup <- do.call(rbind, lapply(pathway_tables, function(df) {
+        if (is.data.frame(df) && all(c("pathway", "pathway_name") %in% names(df))) {
+            unique(data.frame(pathway = as.character(df$pathway),
+                              pathway_name = as.character(df$pathway_name),
+                              stringsAsFactors = FALSE))
+        } else {
+            NULL
+        }
+    }))
+
+    if (is.null(name_lookup) || nrow(name_lookup) == 0) return(meta_results)
+
+    # An accession can be named by more than one layer; first name wins so the
+    # label is stable across reruns.
+    name_lookup <- name_lookup[!duplicated(name_lookup$pathway), , drop = FALSE]
+    meta_results$pathway_name <- name_lookup$pathway_name[
+        match(as.character(meta_results$pathway), name_lookup$pathway)]
+
+    meta_results
+}
+
+
+#' Select the cross-omics pathways to show in a plot
+#'
+#' Ranking by combined p-value alone lets whichever layer contributed the
+#' largest collection monopolise the plot — a genome-wide GO GMT on one omics
+#' produces thousands of tiny p-values and buries every pathway the layers
+#' actually share, which is the opposite of what a cross-omics figure is for.
+#' Ranking by the number of contributing layers first surfaces the overlap.
+#'
+#' @param meta_results Meta-analysis data frame from `stouffer_combined_pvalues()`.
+#' @param top_n Maximum number of rows to return.
+#' @return Data frame with at most `top_n` rows, ordered by `n_omics` descending
+#'   then `combined_pval` ascending.
+select_multi_omics_pathways <- function(meta_results, top_n = 30) {
+    if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
+
+    # Rank on how many layers are ENRICHED, not how many were merely tested.
+    # n_omics counts non-missing p-values, so ordering by it alone floated
+    # pathways that every layer measured and none found anything in above
+    # pathways genuinely significant in two layers.
+    pval_cols <- grep("^pval_", names(meta_results), value = TRUE)
+    n_sig <- if (length(pval_cols) > 0) {
+        pm <- suppressWarnings(vapply(meta_results[pval_cols], as.numeric,
+                                      numeric(nrow(meta_results))))
+        pm <- matrix(pm, nrow = nrow(meta_results))
+        rowSums(!is.na(pm) & pm < 0.05)
+    } else {
+        rep(0L, nrow(meta_results))
+    }
+    n_omics <- if ("n_omics" %in% names(meta_results)) {
+        as.numeric(meta_results$n_omics)
+    } else {
+        rep(1, nrow(meta_results))
+    }
+    combined <- if ("combined_pval" %in% names(meta_results)) {
+        as.numeric(meta_results$combined_pval)
+    } else {
+        rep(NA_real_, nrow(meta_results))
+    }
+
+    ord <- order(-n_sig, -n_omics, combined, na.last = TRUE)
+    meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
+}
+
+
+#' Build readable pathway labels from accessions and names
+#'
+#' @param ids Character vector of pathway accessions (GO:xxxxxxx, map#####, ...).
+#' @param names_vec Character vector of pathway names aligned to `ids`, or NULL
+#'   when the source table carries no name column.
+#' @param max_chars Maximum label length before the name is truncated.
+#' @param append_id Append " (<accession>)" after the name. The heatmap needs
+#'   this: it both keeps the accession visible and guarantees the unique
+#'   rownames `pheatmap` requires.
+#' @return Character vector of labels, one per element of `ids`, falling back to
+#'   the bare accession wherever the name is missing or blank.
+format_pathway_labels <- function(ids, names_vec = NULL, max_chars = 50,
+                                  append_id = FALSE) {
+    ids <- as.character(ids)
+    labels <- if (is.null(names_vec)) {
+        rep(NA_character_, length(ids))
+    } else {
+        as.character(names_vec)
+    }
+
+    unnamed <- is.na(labels) | !nzchar(trimws(labels))
+    labels[unnamed] <- ids[unnamed]
+
+    labels <- ifelse(nchar(labels) > max_chars,
+                     paste0(substr(labels, 1, max_chars - 3), "..."),
+                     labels)
+
+    if (append_id) labels <- paste0(labels, " (", ids, ")")
+
+    labels
+}
+
+
+#' Pull the pathway-name column out of an enrichment table, if it has one
+#'
+#' @param df Enrichment data frame.
+#' @return Character vector of names aligned to `df` rows, or NULL.
+pathway_name_column <- function(df) {
+    if (is.data.frame(df) && "pathway_name" %in% names(df)) {
+        as.character(df$pathway_name)
+    } else {
+        NULL
+    }
 }
 
 
@@ -1531,62 +1795,100 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # =============================================================================
 
 #' Plot cross-omics pathway heatmap
+#'
+#' Rows are the pathways seen by the most omics layers first, then the most
+#' significant — not simply the most significant, which would fill the figure
+#' with single-layer rows and leave the other columns blank.
+#'
+#' @param meta_results Meta-analysis data frame from `stouffer_combined_pvalues()`,
+#'   optionally carrying `pathway_name`.
+#' @param omics Character vector of omics layer names (kept for signature
+#'   compatibility with the other cross-omics plotters).
+#' @param top_n Number of pathways to show.
+#' @return Invisibly NULL; called for the plot it draws on the active device.
 plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 
-    # Select top N pathways by combined p-value
-    top_pathways <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
+    top_pathways <- select_multi_omics_pathways(meta_results, top_n)
 
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
-    # Truncate long pathway names
-    pathway_labels <- top_pathways$pathway
-    pathway_labels <- ifelse(nchar(pathway_labels) > 50,
-                             paste0(substr(pathway_labels, 1, 47), "..."),
-                             pathway_labels)
+    pathway_labels <- format_pathway_labels(
+        top_pathways$pathway,
+        pathway_name_column(top_pathways),
+        append_id = TRUE
+    )
     rownames(pval_matrix) <- pathway_labels
 
     # Transform to -log10(p)
     log_pval_matrix <- -log10(pval_matrix + 1e-300)
     # Cap at 10 for display
-    log_pval_matrix[log_pval_matrix > 10] <- 10
+    log_pval_matrix[] <- pmin(log_pval_matrix, 10)  # pmin keeps NA as NA
     colnames(log_pval_matrix) <- gsub("^pval_", "", colnames(log_pval_matrix))
 
-    # Replace NA with 0
-    log_pval_matrix[is.na(log_pval_matrix)] <- 0
+    # State the ordering on the figure — a reader who assumes "top 30 by p-value"
+    # would misread the row order.
+    heatmap_title <- paste0(
+        "Cross-Omics Pathway Enrichment (-log10 p-value)\n",
+        "rows: most layers with p < 0.05 first, then combined p\n",
+        "grey = not tested in that layer"
+    )
 
-    # Heatmap
+    # Heatmap. NAs stay NA so na_col separates "not tested in this layer" from
+    # "tested, p close to 1" — coercing them to 0 painted both white.
     if (requireNamespace("pheatmap", quietly = TRUE)) {
         pheatmap::pheatmap(log_pval_matrix,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
-                           main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
+                           main = heatmap_title,
                            color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
                            border_color = "grey80")
     } else {
+        # stats::heatmap() has no na_col, so the fallback keeps the old coercion
+        log_pval_matrix[is.na(log_pval_matrix)] <- 0
         heatmap(log_pval_matrix, scale = "none", Colv = NA,
-                main = "Cross-Omics Pathway Enrichment",
+                main = heatmap_title,
                 col = colorRampPalette(c("white", "orange", "red"))(50))
     }
+
+    invisible(NULL)
 }
 
 
 #' Plot enrichment dot plot
+#'
+#' Shares the row selection of `plot_cross_omics_pathway_heatmap()`: layers
+#' first, significance second, so the figure shows where the omics meet.
+#'
+#' @param meta_results Meta-analysis data frame from `stouffer_combined_pvalues()`,
+#'   optionally carrying `pathway_name`.
+#' @param omics Character vector of omics layer names (kept for signature
+#'   compatibility with the other cross-omics plotters).
+#' @param top_n Number of pathways to show.
+#' @return Invisibly NULL; called for the plot it draws on the active device.
 plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
-    top <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
+    top <- select_multi_omics_pathways(meta_results, top_n)
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
+
+    # One label per row, computed once so the long-format frame and the axis
+    # ordering below cannot drift apart.
+    # make.unique(): two accessions can share a term name, and a duplicated
+    # label would collapse two rows onto one axis position.
+    top$plot_label <- make.unique(format_pathway_labels(
+        top$pathway, pathway_name_column(top), max_chars = 45
+    ))
 
     # Build long-format data
     plot_data <- list()
     for (pc in pval_cols) {
         om_name <- sub("^pval_", "", pc)
         df <- data.frame(
-            pathway = top$pathway,
+            pathway = top$plot_label,
             omics = om_name,
             neg_log10_p = -log10(top[[pc]] + 1e-300),
             stringsAsFactors = FALSE
@@ -1606,16 +1908,8 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     # Cap for display
     plot_df$neg_log10_p <- pmin(plot_df$neg_log10_p, 10)
 
-    # Truncate long names
-    plot_df$pathway <- ifelse(nchar(plot_df$pathway) > 45,
-                              paste0(substr(plot_df$pathway, 1, 42), "..."),
-                              plot_df$pathway)
-
     # Reverse pathway order for bottom-to-top display
-    pathway_order <- rev(unique(top$pathway))
-    pathway_order <- ifelse(nchar(pathway_order) > 45,
-                            paste0(substr(pathway_order, 1, 42), "..."),
-                            pathway_order)
+    pathway_order <- rev(unique(top$plot_label))
     plot_df$pathway <- factor(plot_df$pathway, levels = pathway_order)
 
     omics_colors <- c(
@@ -1631,6 +1925,8 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
          ylim = c(0.5, length(pathway_order) + 0.5),
          xlab = "-log10(p-value)", ylab = "",
          yaxt = "n", main = "Cross-Omics Pathway Enrichment")
+    mtext("ordered by number of omics layers, then combined p-value",
+          side = 3, line = 0.2, cex = 0.7)
     axis(2, at = seq_along(pathway_order), labels = pathway_order, las = 1, cex.axis = 0.7)
     abline(h = seq_along(pathway_order), col = "grey90", lty = 2)
 
@@ -1653,6 +1949,12 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
 
 #' Plot per-omics enrichment barplot
+#'
+#' @param pathway_table Per-omics enrichment data frame, optionally carrying
+#'   `pathway_name`.
+#' @param omics_name Name of the omics layer, used for the title and bar colour.
+#' @param top_n Number of pathways to show.
+#' @return Invisibly NULL; called for the plot it draws on the active device.
 plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
 
     pval_col <- if ("pvalue" %in% names(pathway_table)) "pvalue"
@@ -1681,10 +1983,16 @@ plot_per_omics_barplot <- function(pathway_table, omics_name, top_n = 15) {
     agg <- agg[order(agg$pvalue), ]
     agg <- agg[seq_len(min(top_n, nrow(agg))), ]
 
-    # Truncate names
-    agg$label <- ifelse(nchar(agg$pathway) > 45,
-                        paste0(substr(agg$pathway, 1, 42), "..."),
-                        agg$pathway)
+    # aggregate() drops every column but the two it keyed on, so re-join the
+    # names rather than labelling from the accession.
+    names_vec <- NULL
+    all_names <- pathway_name_column(pathway_table)
+    if (!is.null(all_names)) {
+        lookup <- stats::setNames(all_names, as.character(pathway_table[[pathway_col]]))
+        lookup <- lookup[!duplicated(names(lookup))]
+        names_vec <- unname(lookup[as.character(agg$pathway)])
+    }
+    agg$label <- make.unique(format_pathway_labels(agg$pathway, names_vec, max_chars = 45))
 
     neg_log_p <- -log10(agg$pvalue + 1e-300)
     neg_log_p <- pmin(neg_log_p, 15)
@@ -1754,6 +2062,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
     organism <- config$global$organism
     kegg_org <- get_kegg_organism(organism)
     org_db <- get_organism_db(organism)
+    excl_classes <- config$modes$multiomics$enrichment$exclude_pathway_classes
 
     results <- list()
 
@@ -1765,6 +2074,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$diablo <- tryCatch(
             run_diablo_loadings_enrichment(
+                exclude_classes = excl_classes,
                 diablo_results = integration_res$diablo_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -1788,6 +2098,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$mofa <- tryCatch(
             run_mofa_weights_enrichment(
+                exclude_classes = excl_classes,
                 mofa_results = integration_res$mofa_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -1811,7 +2122,8 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 #' Run enrichment on DIABLO top loadings per component
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
-                                            out_dir, top_n = 50) {
+                                            out_dir, top_n = 50,
+                                            exclude_classes = NULL) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -1836,7 +2148,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "DIABLO"
@@ -1914,7 +2227,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 #' Run enrichment on MOFA2 top weights per factor
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
-                                         out_dir, top_n = 50) {
+                                         out_dir, top_n = 50,
+                                         exclude_classes = NULL) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -1936,7 +2250,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "MOFA2"
@@ -2008,7 +2323,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 #' @param out_dir Output directory for CSVs and plots
 #' @param label Label prefix for output files
 #' @return data.frame of enriched pathways, or NULL
-run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label) {
+run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label,
+                                        exclude_classes = NULL) {
     # Build a pseudo-DE table: treat all top features as significant
     de_tbl <- data.frame(
         feature_id = feature_ids,
@@ -2047,7 +2363,9 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
     full_universe <- unique(id_map$KEGG_CPD[!is.na(id_map$KEGG_CPD)])
 
     enrich_df <- tryCatch(
-        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe),
+        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe,
+                         exclude_classes = exclude_classes,
+                         label = label),
         error = function(e) {
             message("    Compound ORA failed: ", e$message)
             NULL
@@ -2208,15 +2526,24 @@ resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
 
 
 #' Plot barplot for loadings enrichment
+#'
+#' @param enrich_df Enrichment data frame with `pathway` and `pvalue` columns,
+#'   optionally carrying `pathway_name`.
+#' @param title Label for the plot title (component or factor name).
+#' @param out_path PNG path to write.
+#' @param top_n Number of pathways to show.
+#' @return Invisibly NULL; called for the PNG it writes.
 plot_loadings_enrichment_barplot <- function(enrich_df, title, out_path, top_n = 15) {
     if (nrow(enrich_df) == 0) return(invisible(NULL))
 
     df <- enrich_df[order(enrich_df$pvalue), ]
     df <- df[seq_len(min(top_n, nrow(df))), ]
 
-    df$label <- ifelse(nchar(df$pathway) > 45,
-                        paste0(substr(df$pathway, 1, 42), "..."),
-                        df$pathway)
+    # The compound-ORA tables key `pathway` on the KEGG map id, so labelling
+    # from it alone renders these barplots as a column of bare accessions.
+    df$label <- make.unique(format_pathway_labels(
+        df$pathway, pathway_name_column(df), max_chars = 45
+    ))
     neg_log_p <- -log10(df$pvalue + 1e-300)
     neg_log_p <- pmin(neg_log_p, 15)
 

@@ -413,9 +413,12 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
 
         raw <- read_table_auto(abs_path)
         cn <- colnames(raw)
+        label <- contrast_labels[i]
 
-        # Feature IDs: try named columns first, then unnamed first column
-        id_col <- cn[cn %in% c("FeatureID", "gene_id", "feature_id", "GeneID")][1]
+        # Feature IDs: try named columns first, then unnamed first column.
+        # "Gene" is what our own Datasets/deseq2_summary_p0.05.tsv export uses.
+        id_col <- cn[cn %in% c("FeatureID", "gene_id", "feature_id", "GeneID",
+                               "Gene")][1]
         if (is.na(id_col)) {
             # Unnamed first column (readr: "...1", base R: "X", "V1")
             id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
@@ -428,19 +431,38 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
             feat_ids <- as.character(raw[[id_col]])
         }
 
-        # log2FoldChange
-        lfc_col <- cn[cn %in% c("log2FoldChange", "logFC", "log2FC",
-                                 "log2(FC)", "log2.FC.")][1]
-        lfc_vals <- if (!is.na(lfc_col)) as.numeric(raw[[lfc_col]]) else NA_real_
+        # log2FoldChange. resolve_de_summary_col() also accepts the
+        # contrast-suffixed form our own summary exports use (log2FC.<contrast>).
+        lfc_col <- resolve_de_summary_col(
+            cn,
+            bare = c("log2FoldChange", "logFC", "log2FC", "log2(FC)", "log2.FC."),
+            prefixes = c("log2FC", "log2FoldChange", "logFC"),
+            contrast_label = label
+        )
+        if (is.na(lfc_col)) {
+            # Silently returning NA here used to make a mis-pointed config look
+            # like a run with no differential expression at all.
+            stop("Pre-computed RNA DE table has no recognisable log2 fold-change ",
+                 "column: ", abs_path, "\n  columns: ", paste(cn, collapse = ", "))
+        }
+        lfc_vals <- as.numeric(raw[[lfc_col]])
 
         # pvalue
-        pval_col <- cn[cn %in% c("pvalue", "P.Value", "PValue", "p.value",
-                                  "raw.pval")][1]
+        pval_col <- resolve_de_summary_col(
+            cn,
+            bare = c("pvalue", "P.Value", "PValue", "p.value", "raw.pval"),
+            prefixes = c("pvalue", "P.Value"),
+            contrast_label = label
+        )
         pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
 
         # padj
-        padj_col <- cn[cn %in% c("padj", "adj.P.Val", "FDR", "q.value",
-                                  "p.adjust", "qvalue")][1]
+        padj_col <- resolve_de_summary_col(
+            cn,
+            bare = c("padj", "adj.P.Val", "FDR", "q.value", "p.adjust", "qvalue"),
+            prefixes = c("padj", "adj.P.Val", "FDR"),
+            contrast_label = label
+        )
         padj_vals <- if (!is.na(padj_col)) {
             as.numeric(raw[[padj_col]])
         } else {
