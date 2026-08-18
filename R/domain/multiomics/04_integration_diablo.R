@@ -253,15 +253,19 @@ write_diablo_results <- function(diablo_results, out_dir) {
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # block.plsda() returns the one-hot outcome as an extra block named "Y".
+    # It carries no biological information (diablo_design_matrix.csv already
+    # records the design), so keep it out of the per-omics CSVs.
+
     # Sample scores
-    for (om in names(diablo_results$sample_scores)) {
+    for (om in setdiff(names(diablo_results$sample_scores), "Y")) {
         scores <- diablo_results$sample_scores[[om]]
         write.csv(scores, file.path(out_dir, paste0("diablo_scores_", om, ".csv")),
                   row.names = TRUE)
     }
 
     # Top features
-    for (om in names(diablo_results$top_features)) {
+    for (om in setdiff(names(diablo_results$top_features), "Y")) {
         feat_df <- diablo_results$top_features[[om]]
         write.csv(feat_df, file.path(out_dir, paste0("diablo_top_features_", om, ".csv")),
                   row.names = FALSE)
