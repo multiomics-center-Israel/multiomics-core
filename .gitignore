@@ -83,8 +83,16 @@ envs/
 MERGE_DISCUSSION_REPORT.*
 PR*_report.html
 
-# Local targets state
+# Local targets state.
+# Per-client stores and their configs stay local: they carry customer names
+# and absolute paths into the shared drive, and this repo is public.
+# _targets.R (the pipeline definition) is deliberately not matched here.
 _targets.yaml
+_targets_*/
+_targets_*.yaml
+
+# Node tooling for the deck builders
+node_modules/
 
 # Test output artifacts
 tests/testthat/test_outputs/
