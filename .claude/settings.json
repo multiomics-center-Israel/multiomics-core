@@ -9,7 +9,15 @@
       "Bash(curl -s https://ftp.ebi.ac.uk/pub/*)",
       "Bash(curl -sI https://ftp.ebi.ac.uk/pub/*)",
       "Bash(curl -s https://www.ebi.ac.uk/interpro/api/*)",
-      "Bash(curl -s \"https://www.ebi.ac.uk/interpro/api/*)"
+      "Bash(curl -s \"https://www.ebi.ac.uk/interpro/api/*)",
+      "Bash(conda activate *)",
+      "Bash(conda env list)",
+      "Bash(conda info *)",
+      "Bash(jupyter nbconvert --to script --stdout *)",
+      "Bash(unzip -l *)",
+      "Bash(railway whoami)",
+      "Bash(railway list)",
+      "Bash(railway status *)"
     ]
   }
 }
