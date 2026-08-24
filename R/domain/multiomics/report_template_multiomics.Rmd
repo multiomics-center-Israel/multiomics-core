@@ -1048,22 +1048,61 @@ for (cf in csv_files) {
 }
 ```
 
-```{r enrichment-heatmap, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
-if (file.exists(p)) {
-    cat("\n### Cross-Omics Pathway Comparison {.unnumbered}\n\n")
-    cat(knitr::knit_child(text = sprintf(
-        '```{r enrich-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
-}
-```
+```{r enrichment-heatmaps, eval=has_enrichment, results='asis'}
+# One figure per gene-set collection. GO is annotated for the gene layers only,
+# while the KEGG map##### space is the one all three layers share, so a single
+# combined figure both mixed ID spaces and let GO -- 4,107 pathways against
+# KEGG's 195 -- win every row.
+hm <- sort(list.files(enrichment_dir,
+                      pattern = "^cross_omics_pathway_heatmap_.*\\.png$",
+                      full.names = TRUE))
+nes_files <- hm[!grepl("_ora_", basename(hm))]
+ora_files <- hm[grepl("_ora_", basename(hm))]
 
-```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
-if (file.exists(p)) {
-    figure_legend(paste("Cross-omics pathway enrichment heatmap (all contrasts combined).", "Rows are the top 30 pathways ranked on how many layers reach the chosen significance", "threshold, then by combined p-value; the complete list is in the table below.", "Cell colour and the printed value are read from the figure itself -- it states whether", "it is showing signed GSEA NES (red positive, blue negative) or -log10(p), and marks any", "layer that is over-representation only and therefore has no NES.", "Grey means the pathway was not scored in that layer, which is not the same as", "scored and non-significant.", "Note: for each pathway the per-layer value is the best across contrasts, so a pathway", "with consistent but individually sub-significant signal can appear here and not in the", "per-contrast views."))
+coll_of <- function(f, ora) {
+    b <- sub("\\.png$", "", basename(f))
+    sub(if (ora) "^cross_omics_pathway_heatmap_ora_" else "^cross_omics_pathway_heatmap_", "", b)
+}
+
+emit <- function(files, ora) {
+    for (i in seq_along(files)) {
+        cl <- coll_of(files[i], ora)
+        cat(sprintf("\n#### %s -- %s {.unnumbered}\n\n", cl,
+                    if (ora) "over-representation" else "enrichment score"))
+        cat(knitr::knit_child(text = sprintf(
+            '```{r xhm-%s-%d, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            if (ora) "ora" else "nes", i, files[i]), quiet = TRUE))
+        cat("\n\n")
+    }
+}
+
+if (length(nes_files) > 0) {
+    cat("\n### Cross-Omics Pathway Comparison {.unnumbered}\n\n")
+    emit(nes_files, FALSE)
+    figure_legend(paste(
+        "One figure per gene-set collection, because the collections do not",
+        "describe the same layers or the same identifier space: GO is annotated",
+        "for the gene layers only, while the KEGG map##### space is the one all",
+        "three layers share. A layer is shown only where it scored something in",
+        "that collection, so an absent column means the layer carries no",
+        "annotation there rather than that it found nothing.",
+        "Cells are the signed enrichment score: red positive, blue negative,",
+        "grey not scored. Rows are ranked on how many layers reach the",
+        "significance threshold, then on the combined p-value."))
     render_commentary("cross_omics_pathway_heatmap")
+}
+
+if (length(ora_files) > 0) {
+    cat("\n### Cross-Omics Pathway Comparison (over-representation) {.unnumbered}\n\n")
+    emit(ora_files, TRUE)
+    figure_legend(paste(
+        "The same collections seen through over-representation alone, coloured by",
+        "-log10 of the adjusted p. These exist because the enrichment-score",
+        "figures above can only colour a layer that ran GSEA: a layer tested end",
+        "to end by over-representation has no enrichment score to show and would",
+        "be blank there whatever it found. Grey still means not scored, which is",
+        "not the same as scored and non-significant -- a layer whose adjusted p is",
+        "1 throughout renders in the palest colour, not grey."))
 }
 ```
 
