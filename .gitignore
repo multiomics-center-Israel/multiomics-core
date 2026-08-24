@@ -98,3 +98,21 @@ node_modules/
 tests/testthat/test_outputs/
 
 results/ 
+
+# Client deliverables and local run configs. This repo is public and holds the
+# pipeline, not the data or the per-client outputs. config/*.yaml above only
+# matches inside config/, so the root-level run config needs its own line.
+/config.yaml
+/multiomics_report.html
+Kehat_summary.pptx
+build_kehat_summary.js
+
+# Local scratch
+/list.txt
+scratchpad_*.R
+
+# Python bytecode
+__pycache__/
+
+# testthat failure artifacts
+tests/testthat/_problems/
