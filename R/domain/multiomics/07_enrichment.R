@@ -1666,8 +1666,14 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     message(sprintf("  Found %d total pathways (%d in common) across %d omics layers",
                     length(union_pathways), length(common_pathways), length(omics)))
 
-    # Use union for the heatmap (show all enriched), common for meta-analysis
-    use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
+    # Always work from the union. The intersection was used whenever it reached 5
+    # pathways, which made the whole analysis depend on the narrowest layer: when
+    # metabolomics carried 6 compound-ORA rows the union was taken (4,471
+    # pathways), and adding compound GSEA to that layer silently collapsed the
+    # table to the 41 pathways all three happen to share. Row *selection* for the
+    # figures already prefers pathways with several layers, so the ranking shows
+    # where the omics meet without the table having to hide everything else.
+    use_pathways <- union_pathways
 
     # KEGG reference maps are pan-species. For an organism that has no KEGG code
     # the vertebrate organ and human-disease maps light up purely because the
@@ -1729,35 +1735,68 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     if (!is.null(out_dir) && nrow(meta_results) > 0) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-        # 1. Cross-omics heatmap
-        plots$pathway_heatmap <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
-        png(plots$pathway_heatmap, width = 1200, height = 900, res = 120)
-        tryCatch({
-            plot_cross_omics_pathway_heatmap(meta_results, omics,
-                                             pathway_tables = pathway_tables,
-                                             value_label = value_label,
-                                             pvalue_type = pvalue_type)
-        }, error = function(e) {
-            plot.new()
-            text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
-        })
-        dev.off()
+        # 1. One heatmap per gene-set collection, not one combined figure.
+        #    The collections do not cover the same layers or the same ID space:
+        #    GO is annotated for the gene layers only, while the KEGG map#####
+        #    space is the one all three share. Mixing them into a single figure
+        #    also let the largest collection win every row -- GO contributes
+        #    4,107 pathways here against KEGG's 195, so a flat top-30 was
+        #    entirely GO and the first KEGG map sat at rank 39.
+        #
+        #    Each figure keeps only the layers that actually scored something in
+        #    that collection, so an empty column means "this layer has no
+        #    annotation here", not "this layer found nothing".
+        coll <- if (exists("classify_pathway_collection")) {
+            classify_pathway_collection(as.character(meta_results$pathway))
+        } else {
+            rep("all", nrow(meta_results))
+        }
 
-        # 1b. The same pathways seen through over-representation only. The NES
-        # figure can only colour a layer that ran GSEA, so a layer whose
-        # enrichment is over-representation end to end has no column there;
-        # here it does. Colour is the FDR by definition of the figure — the
-        # config's pvalue_type governs the NES, dot and bar plots.
-        plots$pathway_heatmap_ora <- file.path(out_dir, "cross_omics_pathway_heatmap_ora.png")
-        png(plots$pathway_heatmap_ora, width = 1200, height = 900, res = 120)
-        tryCatch({
-            plot_cross_omics_ora_heatmap(meta_results, omics,
-                                         pathway_tables = pathway_tables)
-        }, error = function(e) {
-            plot.new()
-            text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
-        })
-        dev.off()
+        for (cl in unique(coll[!is.na(coll)])) {
+            sub <- meta_results[coll == cl, , drop = FALSE]
+            if (nrow(sub) == 0) next
+
+            # Layers with at least one value in this collection.
+            keep_omics <- omics[vapply(omics, function(om) {
+                cn <- paste0("pval_", om)
+                cn %in% names(sub) && any(!is.na(sub[[cn]]))
+            }, logical(1))]
+            if (length(keep_omics) == 0) next
+
+            slug <- gsub("[^A-Za-z0-9]+", "_", cl)
+            key  <- paste0("pathway_heatmap_", slug)
+            plots[[key]] <- file.path(
+                out_dir, paste0("cross_omics_pathway_heatmap_", slug, ".png"))
+            png(plots[[key]], width = 1200, height = 900, res = 120)
+            tryCatch({
+                plot_cross_omics_pathway_heatmap(sub, keep_omics,
+                                                 pathway_tables = pathway_tables,
+                                                 value_label = value_label,
+                                                 pvalue_type = pvalue_type,
+                                                 collection = cl)
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+
+            # The same collection seen through over-representation only. The NES
+            # figure can only colour a layer that ran GSEA, so a layer tested end
+            # to end by over-representation has no column there; here it does.
+            key_ora <- paste0("pathway_heatmap_ora_", slug)
+            plots[[key_ora]] <- file.path(
+                out_dir, paste0("cross_omics_pathway_heatmap_ora_", slug, ".png"))
+            png(plots[[key_ora]], width = 1200, height = 900, res = 120)
+            tryCatch({
+                plot_cross_omics_ora_heatmap(sub, keep_omics,
+                                             pathway_tables = pathway_tables,
+                                             collection = cl)
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+        }
 
         # 2. Dot plot of top pathways per omics
         plots$dot_plot <- file.path(out_dir, "cross_omics_enrichment_dotplot.png")
@@ -1894,7 +1933,34 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30) {
     }
 
     ord <- order(-n_sig, -n_omics, combined, na.last = TRUE)
-    meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
+    keep <- min(top_n, nrow(meta_results))
+
+    # Draw in turn from each gene-set collection rather than taking a flat top-N.
+    # The collections differ by an order of magnitude in size -- 4,107 GO terms
+    # against 195 KEGG maps in this run -- so a flat cut is won outright by the
+    # largest one: every row was GO and the first KEGG map sat at rank 39, which
+    # made the figure look like a GO-only analysis. Ranking within a collection
+    # is unchanged; only the interleaving is new.
+    coll <- if (exists("classify_pathway_collection")) {
+        classify_pathway_collection(as.character(meta_results$pathway))[ord]
+    } else {
+        rep("all", length(ord))
+    }
+    by_coll <- split(ord, coll)
+    # Best-ranked collection first, so the strongest evidence still leads.
+    by_coll <- by_coll[order(vapply(by_coll, function(i) match(i[1], ord), numeric(1)))]
+
+    picked <- integer(0)
+    rank_i <- 1L
+    while (length(picked) < keep && any(lengths(by_coll) >= rank_i)) {
+        for (idx in by_coll) {
+            if (length(picked) >= keep) break
+            if (length(idx) >= rank_i) picked <- c(picked, idx[rank_i])
+        }
+        rank_i <- rank_i + 1L
+    }
+    picked <- picked[order(match(picked, ord))]
+    meta_results[picked, , drop = FALSE]
 }
 
 
@@ -2226,7 +2292,8 @@ build_layer_nes_matrix <- function(pathway_tables, pathways, omic_names,
 plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
                                              pathway_tables = NULL,
                                              value_label = "-log10(p-value)",
-                                             pvalue_type = "padj") {
+                                             pvalue_type = "padj",
+                                             collection = NULL) {
 
     top_pathways <- select_multi_omics_pathways(meta_results, top_n)
 
@@ -2282,6 +2349,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
             "grey = not scored; * = over-representation layer, no NES"
         }
         heatmap_title <- paste0(
+        if (!is.null(collection)) paste0(collection, " gene sets\n"),
             "Cross-Omics Pathway Enrichment (GSEA NES)\n",
             "red = positive, blue = negative\n",
             rank_note, "\n",
@@ -2294,6 +2362,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
         heat_breaks <- NULL
         cell_labels <- FALSE
         heatmap_title <- paste0(
+        if (!is.null(collection)) paste0(collection, " gene sets\n"),
             "Cross-Omics Pathway Enrichment\n",
             value_label, "; no GSEA NES in any layer\n",
             rank_note, "\n",
@@ -2444,7 +2513,8 @@ build_layer_ora_matrix <- function(ora_tables, pathways, omic_names,
 #' @return Invisibly NULL; called for the plot it draws on the active device.
 plot_cross_omics_ora_heatmap <- function(meta_results, omics, top_n = 30,
                                          pathway_tables = NULL,
-                                         pvalue_type = "padj") {
+                                         pvalue_type = "padj",
+                                         collection = NULL) {
 
     omic_names <- if (!is.null(pathway_tables) && length(pathway_tables) > 0) {
         names(pathway_tables)
@@ -2466,6 +2536,21 @@ plot_cross_omics_ora_heatmap <- function(meta_results, omics, top_n = 30,
 
     ora_tables <- lapply(pathway_tables[omic_names], filter_ora_rows)
     names(ora_tables) <- omic_names
+
+    # This figure rebuilds its own ORA-only ranking from pathway_tables rather
+    # than reading meta_results, so a caller that subsets meta_results to one
+    # gene-set collection has no effect unless the same subset is applied here.
+    # Without this every per-collection file came out byte-identical, each one
+    # showing GO, KEGG and Pfam rows together.
+    if (!is.null(collection) && exists("classify_pathway_collection")) {
+        ora_tables <- lapply(ora_tables, function(d) {
+            if (!is.data.frame(d) || nrow(d) == 0) return(d)
+            idc <- pathway_id_column(d)
+            if (is.na(idc)) return(d)
+            d[classify_pathway_collection(as.character(d[[idc]])) %in% collection, ,
+              drop = FALSE]
+        })
+    }
     n_ora <- vapply(ora_tables,
                     function(d) if (is.data.frame(d)) nrow(d) else 0L, integer(1))
 
