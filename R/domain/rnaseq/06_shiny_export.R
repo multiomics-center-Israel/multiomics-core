@@ -39,6 +39,7 @@ build_shiny_payload_rnaseq <- function(
     annot = NULL,
     trinotate_main = NULL,
     xlsx_files = NULL,
+    pathway_res = NULL,
     out_dir = NULL
 ) {
     # ============================================================
@@ -316,6 +317,21 @@ build_shiny_payload_rnaseq <- function(
     if (!is.null(effects_cfg$shape)) {
         payload$shape <- as.character(effects_cfg$shape)
     }
+
+    # ============================================================
+    # ENRICHMENT (optional; compact Stage-3B block or NULL)
+    # ============================================================
+    # Additive, backward-compatible. build_enrichment_payload() returns NULL for
+    # projects without compatible offline enrichment (absent / online workflow /
+    # empty) — no fake empty structure is created. The `payload[...] <- list(x)`
+    # idiom keeps the key present even when x is NULL (a bare `<- NULL` would drop
+    # it). Genes are referenced by index into enrichment$gene_index; expr_norm /
+    # de_stats / feature_annot are NOT duplicated here.
+    payload["enrichment"] <- list(build_enrichment_payload(
+        pathway_res,
+        gene_universe = rownames(payload$expr_norm),
+        config        = config
+    ))
 
     # ============================================================
     # VALIDATION
