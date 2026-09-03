@@ -1,33 +1,6 @@
 # Tests for proteomics core DE summary functions
 # test-proteomics-core.R
 
-# --- Mock data helpers ---
-
-create_mock_de_table <- function(n = 20) {
-    data.frame(
-        FeatureID = paste0("PROT", seq_len(n)),
-        logFC = rnorm(n, 0, 2),
-        adj.P.Val = runif(n, 0, 0.1),
-        P.Value = runif(n, 0, 0.05),
-        t = rnorm(n, 0, 3),
-        stringsAsFactors = FALSE
-    )
-}
-
-create_mock_summary <- function(n = 50) {
-    df <- data.frame(
-        FeatureID = paste0("PROT", seq_len(n)),
-        pass.imputs.A_vs_B = sample(c(1, NA), n, replace = TRUE),
-        pass.imputs.C_vs_D = sample(c(1, NA), n, replace = TRUE),
-        linearFC.imputs.A_vs_B = runif(n, 0.5, 3),
-        linearFC.imputs.C_vs_D = runif(n, 0.5, 3),
-        padj.imputs.A_vs_B = runif(n, 0, 0.2),
-        padj.imputs.C_vs_D = runif(n, 0, 0.2),
-        stringsAsFactors = FALSE
-    )
-    df
-}
-
 # --- Tests for mark_pass1 ---
 
 test_that("mark_pass1 correctly marks passing features", {
