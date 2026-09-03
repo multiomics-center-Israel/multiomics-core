@@ -299,12 +299,19 @@ modes:
     # --------------------------------------------------------
     # Technical report (auto-populated by wizard from log file)
     # --------------------------------------------------------
+    # Rendered as the Methods section of the report. Instrument, kit, column,
+    # gradient and proteome version are project-specific, so they live here
+    # rather than in the report template. The computational paragraph
+    # (imputation, DE method, cutoffs) is generated from the settings that ran
+    # and does not need to be repeated here.
     technical_report:
       facility: ""
       sample_prep: ""
       ms_acquisition: ""
       search_engine: ""
       search_parameters: ""
+      # One entry per citation; rendered as a bulleted References list.
+      references: []
       acknowledgment: ""
 
     # --------------------------------------------------------

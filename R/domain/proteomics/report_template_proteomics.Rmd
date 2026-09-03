@@ -757,6 +757,28 @@ if (isTRUE(show_pca) && !has_replicates) {
 ```{r pca-heading, eval=show_pca_section, results='asis'}
 cat("## PCA {.tabset}\n\n")
 cat("Principal Component Analysis (PCA) reduces high-dimensional expression data to a low-dimensional representation that captures the largest sources of variation. Samples that cluster together share similar expression profiles; separation along PC1 indicates the dominant source of biological or technical variation.\n\n")
+
+# State the input matrix up front: these plots use the imputed matrix, so a
+# reader is not left to infer whether unmeasured values contributed.
+.pca_imp_file <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)[1]
+.pca_n_feat <- NA_integer_
+if (!is.na(.pca_imp_file) && file.exists(.pca_imp_file)) {
+    .pca_n_feat <- tryCatch(
+        nrow(read.delim(.pca_imp_file, stringsAsFactors = FALSE, check.names = FALSE)),
+        error = function(e) NA_integer_)
+}
+if (is.na(.pca_n_feat) && !is.null(de_data)) .pca_n_feat <- nrow(de_data)
+
+.pca_imp_on <- tolower(prot_cfg$imputation$method %||% "none") != "none"
+cat(sprintf("<p style='font-size:1.05em; font-weight:600; margin-bottom:2px;'>%s proteins &middot; %s</p>\n",
+            if (is.na(.pca_n_feat)) "All filtered" else format(.pca_n_feat, big.mark = ","),
+            if (.pca_imp_on) "after imputation" else "no imputation performed"))
+if (.pca_imp_on) {
+    cat("<p style='font-size:0.9em; color:#555; margin-top:0;'>Every protein contributes a value in every sample, including values that were imputed rather than measured. A pre-imputation view of the same samples is in the <em>Robust Proteins</em> tab below.</p>\n\n")
+} else {
+    cat("\n")
+}
+
 cat("### PC1 vs PC2 {.tabset}\n")
 cat("#### Static\n")
 ```
@@ -889,7 +911,7 @@ if (file.exists(p)) knitr::include_graphics(p)
 ```
 
 ```{r legend-pca-13, eval=show_pca_section, results='asis'}
-figure_legend("PCA plot showing sample separation along PC1 and PC3. PC3 may capture additional biological variation or batch effects not visible in the PC1-PC2 projection.")
+figure_legend("PCA of imputed protein expression data, showing sample separation along PC1 and PC3. PC3 may capture additional biological variation or batch effects not visible in the PC1-PC2 projection.")
 ```
 
 ```{r pca-13-labeled-heading, eval=show_pca_section, results='asis'}
@@ -977,6 +999,138 @@ if (length(subset_pngs) > 0) {
         img_uri <- knitr::image_uri(f)
         cat(sprintf("#### %s\n\n", subset_name))
         cat(sprintf('<img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA subset: %s" />\n\n', img_uri, subset_name))
+    }
+}
+```
+
+```{r pca-robust, eval=show_pca_section, results='asis', fig.height=5.5, fig.width=7.5}
+# PCA restricted to well-measured proteins, computed BEFORE imputation.
+# The pipeline's PCA above runs on the imputed matrix, so every protein
+# contributes a value in every sample even where nothing was measured. These
+# tabs show what the same samples look like when only real measurements are
+# used, which is the honest check on whether sample structure survives.
+.rob_file <- list.files(datasets_dir, pattern = "unimputed.*\\.(tsv|csv)$",
+                        full.names = TRUE)[1]
+
+.rob_df <- if (!is.na(.rob_file) && file.exists(.rob_file)) {
+    tryCatch({
+        if (grepl("\\.csv$", .rob_file)) read.csv(.rob_file, stringsAsFactors = FALSE, check.names = FALSE)
+        else read.delim(.rob_file, stringsAsFactors = FALSE, check.names = FALSE)
+    }, error = function(e) NULL)
+} else NULL
+
+# Compute PC1/PC2 and plot. `fill_row_mean` decides what happens to the few
+# remaining gaps: FALSE = the matrix is already complete, TRUE = substitute the
+# protein's own mean across the samples where it was measured. The second is a
+# display convenience and is labelled as such wherever it is used.
+.rob_pca_plot <- function(mat, grp, title, subtitle, fill_row_mean = FALSE) {
+    if (fill_row_mean && anyNA(mat)) {
+        row_mu <- rowMeans(mat, na.rm = TRUE)
+        na_idx <- which(is.na(mat), arr.ind = TRUE)
+        mat[na_idx] <- row_mu[na_idx[, "row"]]
+    }
+    keep <- apply(mat, 1, function(x) stats::var(x) > 0)
+    mat <- mat[keep, , drop = FALSE]
+    if (nrow(mat) < 3 || ncol(mat) < 3) {
+        cat("*Not enough complete proteins for a PCA.*\n\n")
+        return(invisible(NULL))
+    }
+    pca <- stats::prcomp(t(mat), center = TRUE, scale. = FALSE)
+    ve <- (pca$sdev^2) / sum(pca$sdev^2)
+    sc <- data.frame(
+        PC1 = pca$x[, 1], PC2 = pca$x[, 2],
+        sample = rownames(pca$x),
+        group = grp[rownames(pca$x)],
+        stringsAsFactors = FALSE
+    )
+    p <- ggplot2::ggplot(sc, ggplot2::aes(x = PC1, y = PC2, color = group)) +
+        ggplot2::geom_point(size = 3.5, alpha = 0.9) +
+        ggplot2::geom_text(ggplot2::aes(label = sample), size = 2.6,
+                           vjust = -1.1, show.legend = FALSE) +
+        ggplot2::labs(
+            title = title, subtitle = subtitle,
+            x = sprintf("PC1: %.1f%% of variance", 100 * ve[1]),
+            y = sprintf("PC2: %.1f%% of variance", 100 * ve[2]),
+            color = group_col_exp_lbl
+        ) +
+        ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = 0.18)) +
+        ggplot2::theme_bw(base_size = 11) +
+        ggplot2::theme(plot.subtitle = ggplot2::element_text(size = 9, color = "#555555"))
+    print(p)
+    invisible(NULL)
+}
+
+group_col_exp_lbl <- prot_cfg$effects$color %||% "Condition"
+.rob_ok <- FALSE
+
+if (!is.null(.rob_df) && exists("meta") && is.data.frame(meta)) {
+    .rob_sample_col <- prot_cfg$effects$samples %||% "SampleID"
+    .rob_group_col  <- group_col_exp_lbl
+    if (.rob_sample_col %in% names(meta) && .rob_group_col %in% names(meta)) {
+        .rob_ids  <- as.character(meta[[.rob_sample_col]])
+        .rob_cols <- intersect(.rob_ids, names(.rob_df))
+        if (length(.rob_cols) >= 3) {
+            .rob_mat <- as.matrix(.rob_df[, .rob_cols, drop = FALSE])
+            .rob_grp <- setNames(as.character(meta[[.rob_group_col]]), .rob_ids)
+            .rob_nmiss <- rowSums(is.na(.rob_mat))
+            .rob_ok <- TRUE
+        }
+    }
+}
+
+if (.rob_ok) {
+    .n_total    <- nrow(.rob_mat)
+    .n_complete <- sum(.rob_nmiss == 0)
+    .n_atmost1  <- sum(.rob_nmiss <= 1)
+
+    cat("### Robust Proteins (before imputation) {.tabset}\n\n")
+    cat(sprintf(
+        "The PCA tabs above are computed **after imputation**, on all %s proteins that passed filtering. Every value in that matrix is present, including the %s that were never measured (%.1f%% of the matrix). The two tabs below restrict the analysis to well-measured proteins and use the values as measured.\n\n",
+        format(.n_total, big.mark = ","),
+        format(sum(.rob_nmiss), big.mark = ","),
+        100 * sum(.rob_nmiss) / (.n_total * length(.rob_cols))
+    ))
+
+    cat("#### Complete proteins only\n\n")
+    cat(sprintf("<p style='font-size:1.05em; font-weight:600; margin-bottom:2px;'>%s proteins &middot; before imputation &middot; no values substituted</p>\n",
+                format(.n_complete, big.mark = ",")))
+    cat(sprintf("<p style='font-size:0.9em; color:#555; margin-top:0;'>Proteins measured in all %d samples, out of %s that passed filtering.</p>\n\n",
+                length(.rob_cols), format(.n_total, big.mark = ",")))
+    if (.n_complete >= 3) {
+        .rob_pca_plot(
+            .rob_mat[.rob_nmiss == 0, , drop = FALSE], .rob_grp,
+            title = "PCA — complete proteins, before imputation",
+            subtitle = sprintf("%s proteins measured in every sample; no imputed values used",
+                               format(.n_complete, big.mark = ","))
+        )
+        figure_legend(sprintf(
+            "PCA on the %s proteins with a measured value in all %d samples, taken from the pre-imputation matrix (<code>%s</code>). No imputed or substituted values contribute to this projection.",
+            format(.n_complete, big.mark = ","), length(.rob_cols), basename(.rob_file)))
+    } else {
+        cat("*Fewer than 3 proteins are measured in every sample.*\n\n")
+    }
+
+    cat("#### At most one missing value\n\n")
+    cat(sprintf("<p style='font-size:1.05em; font-weight:600; margin-bottom:2px;'>%s proteins &middot; before imputation &middot; single gaps filled with the protein's own mean</p>\n",
+                format(.n_atmost1, big.mark = ",")))
+    cat(sprintf("<p style='font-size:0.9em; color:#555; margin-top:0;'>Proteins missing in at most one of the %d samples. The %s missing entries are replaced by that protein's mean across the samples where it was measured — this is a display convenience, not the pipeline's imputation.</p>\n\n",
+                length(.rob_cols),
+                format(sum(.rob_nmiss[.rob_nmiss <= 1]), big.mark = ",")))
+    if (.n_atmost1 >= 3) {
+        .rob_pca_plot(
+            .rob_mat[.rob_nmiss <= 1, , drop = FALSE], .rob_grp,
+            title = "PCA — proteins missing in at most one sample",
+            subtitle = sprintf("%s proteins; single gaps filled with the protein's own mean, not with %s",
+                               format(.n_atmost1, big.mark = ","),
+                               prot_cfg$imputation$method %||% "imputation"),
+            fill_row_mean = TRUE
+        )
+        figure_legend(sprintf(
+            "PCA on the %s proteins missing in at most one sample, from the pre-imputation matrix (<code>%s</code>). Single gaps are filled with the protein's own observed mean so the matrix is complete; the pipeline's %s imputation is not used here.",
+            format(.n_atmost1, big.mark = ","), basename(.rob_file),
+            prot_cfg$imputation$method %||% "configured"))
+    } else {
+        cat("*Fewer than 3 proteins are missing in at most one sample.*\n\n")
     }
 }
 ```
@@ -1572,6 +1726,69 @@ if (!is.null(de_data)) {
 
 ## Volcano Plots {.tabset}
 
+```{r volcano-cutoff-counts, results='asis'}
+# How many proteins clear each cutoff, so the volcano tabs can be read against
+# a number rather than eyeballed. The adjusted-p row is the pipeline's own
+# significance call; the raw-p row is shown for reference only and is NOT
+# corrected for multiple testing.
+.vc_p_cut   <- prot_cfg$de$p_cutoff %||% 0.05
+.vc_fc_cut  <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+.vc_use_adj <- isTRUE(prot_cfg$de$use_adj_for_pass1)
+
+if (!is.null(de_data) && length(contrast_names) > 0) {
+    .vc_rows <- list()
+    for (.cn in contrast_names) {
+        .padj <- de_data[[paste0("padj.imputs.", .cn)]]
+        .pval <- de_data[[paste0("pvalue.imputs.", .cn)]]
+        .fc   <- de_data[[paste0("linearFC.imputs.", .cn)]]
+        if (is.null(.fc)) next
+
+        .fc_ok <- !is.na(.fc) & abs(.fc) >= .vc_fc_cut
+        for (.pt in c("padj", "pval")) {
+            .pv <- if (.pt == "padj") .padj else .pval
+            if (is.null(.pv)) next
+            .sig  <- !is.na(.pv) & .pv <= .vc_p_cut & .fc_ok
+            .vc_rows[[length(.vc_rows) + 1]] <- data.frame(
+                Contrast = gsub("_", " ", .cn),
+                Cutoff = sprintf("%s &le; %s and |linear FC| &ge; %s",
+                                 if (.pt == "padj") "adjusted p" else "raw p",
+                                 .vc_p_cut, .vc_fc_cut),
+                Up   = sum(.sig & .fc >= .vc_fc_cut, na.rm = TRUE),
+                Down = sum(.sig & .fc <= -.vc_fc_cut, na.rm = TRUE),
+                Total = sum(.sig, na.rm = TRUE),
+                Used = if (.pt == "padj") {
+                    if (.vc_use_adj) "used for the significance call" else "reference only"
+                } else {
+                    if (.vc_use_adj) "reference only, not corrected for multiple testing" else "used for the significance call"
+                },
+                stringsAsFactors = FALSE, check.names = FALSE
+            )
+        }
+    }
+
+    if (length(.vc_rows) > 0) {
+        .vc_tbl <- do.call(rbind, .vc_rows)
+        cat(sprintf("Proteins considered differentially abundant at each cutoff, out of %s tested.\n\n",
+                    format(nrow(de_data), big.mark = ",")))
+        cat('<table style="margin: 8px 0 20px 0; border-collapse: collapse; width: 100%; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; font-size: 14px;">\n')
+        cat('<thead><tr style="background: #f6f8fa; color: #24292f;">\n')
+        for (.h in c("Contrast", "Cutoff", "Up", "Down", "Total", "Role")) {
+            cat(sprintf('<th style="text-align:left; padding: 8px 12px; border-bottom: 1px solid #d0d7de;">%s</th>\n', .h))
+        }
+        cat('</tr></thead><tbody>\n')
+        for (.i in seq_len(nrow(.vc_tbl))) {
+            cat('<tr>\n')
+            for (.j in seq_len(ncol(.vc_tbl))) {
+                cat(sprintf('<td style="padding: 7px 12px; border-bottom: 1px solid #eaecef; color: #57606a;">%s</td>\n',
+                            .vc_tbl[.i, .j]))
+            }
+            cat('</tr>\n')
+        }
+        cat('</tbody></table>\n\n')
+    }
+}
+```
+
 ### Static {.tabset}
 
 ```{r volcano-plots-static, results='asis'}
@@ -2039,7 +2256,14 @@ if (length(heatmap_files) > 0) {
 
 ```{r protein-explorer-heading, eval=show_protein_explorer, results='asis'}
 cat("## Protein Expression Explorer\n\n")
-cat("The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.\n\n")
+cat("Search a protein to see its expression across experimental groups.\n\n")
+cat("**What is plotted.** By default the boxes show *measured* log2 intensities only. Where a protein was not detected in a sample, nothing is plotted for that sample, and the group label states how many of its samples carried a measurement. A group with no measurement at all is kept on the axis and marked, rather than disappearing.\n\n")
+if (tolower(prot_cfg$imputation$method %||% "none") != "none") {
+    .pe_reps <- prot_cfg$imputation$no_repetitions %||% 1
+    cat(sprintf("**Imputed values.** Use the *Show imputed values* checkbox to overlay them as hollow grey points. They are shown for context only: they are one %s draw kept for inspection, whereas the reported fold changes and p-values come from %s. A protein whose boxes look convincing on measured values alone is on firmer ground than one whose separation appears only once the imputed points are added.\n\n",
+                prot_cfg$imputation$method %||% "imputation",
+                if (.pe_reps > 1) sprintf("the mean over %d independent draws", .pe_reps) else "that imputed matrix"))
+}
 ```
 
 ```{r protein-explorer-data, eval=show_protein_explorer, include=FALSE}
@@ -2121,12 +2345,33 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
         round(as.numeric(norm_expr_exp[i, ]), 3)
     })
 
+    # Second layer: the imputed matrix, aligned to the same proteins and
+    # samples. Kept separate from `expr` so the plot can never silently mix a
+    # generated value into the measured boxes.
+    imp_matrix_list <- NULL
+    imp_file_exp <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)
+    imp_file_exp <- imp_file_exp[!grepl("unimputed", basename(imp_file_exp))][1]
+    if (!is.na(imp_file_exp) && file.exists(imp_file_exp)) {
+        imp_df_exp <- tryCatch(
+            read.delim(imp_file_exp, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
+            error = function(e) NULL
+        )
+        if (!is.null(imp_df_exp) && all(colnames(norm_expr_exp) %in% colnames(imp_df_exp))) {
+            imp_aligned <- imp_df_exp[match(protein_ids, rownames(imp_df_exp)),
+                                      colnames(norm_expr_exp), drop = FALSE]
+            imp_matrix_list <- lapply(seq_len(nrow(imp_aligned)), function(i) {
+                round(as.numeric(imp_aligned[i, ]), 3)
+            })
+        }
+    }
+
     explorer_data <- list(
         genes = protein_display,
         samples = colnames(norm_expr_exp),
         groups = sample_groups_exp,
         expr = expr_matrix_list
     )
+    if (!is.null(imp_matrix_list)) explorer_data$imputed <- imp_matrix_list
     explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = TRUE)
     explorer_ready <- TRUE
 }
@@ -2148,6 +2393,13 @@ cat('
 <button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
 </div>
 <div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_imp_toggle_wrap" style="margin-top: 10px; font-size: 0.9em; color: #333; display: none;">
+  <label style="cursor: pointer; user-select: none;">
+    <input type="checkbox" id="boxplot_show_imputed" onchange="renderMultiBoxplot()" style="vertical-align: middle; margin-right: 6px;">
+    Show imputed values (hollow grey points)
+  </label>
+  <span style="color: #777;">&nbsp;— shown for context; the reported statistics use the imputed matrix, these boxes do not.</span>
+</div>
 <div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
 </div>
 <div id="boxplot_container" style="width: 100%; min-height: 450px; margin-bottom: 10px;"></div>
@@ -2157,6 +2409,17 @@ cat('
   <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
 </div>
 ')
+
+# Name the two sources explicitly, so the provenance of every point on the plot
+# can be checked against a file on disk.
+.pe_src <- c("measured log2 intensities from <code>final_results.tsv</code>")
+.pe_imp_src <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)
+.pe_imp_src <- .pe_imp_src[!grepl("unimputed", basename(.pe_imp_src))][1]
+if (!is.na(.pe_imp_src)) {
+    .pe_src <- c(.pe_src, sprintf("imputed values from <code>%s</code>", basename(.pe_imp_src)))
+}
+cat(sprintf("<p style='font-size: 0.85em; color: #666; margin: 4px 0 20px 0;'>Source: %s. Both files are in <code>proteomics/Datasets/</code>.</p>\n",
+            paste(.pe_src, collapse = "; ")))
 ```
 
 ```{r protein-explorer-js, eval=show_protein_explorer && explorer_ready, results='asis'}
@@ -2253,6 +2516,30 @@ function clearBoxplot() {
     document.getElementById("boxplot_export_bar").style.display = "none";
 }
 
+// A value counts as measured only if it is a real number. Note that null is
+// NOT NaN in JavaScript (Number(null) is 0), so a plain isNaN() check would
+// silently count every missing value as a measured zero.
+function bpIsMeasured(v) { return v !== null && v !== undefined && !isNaN(v); }
+
+function bpShowImputed() {
+    var el = document.getElementById("boxplot_show_imputed");
+    return !!(el && el.checked && geneExprData.imputed);
+}
+
+// Per-group measured counts for the currently selected protein, used for the
+// axis labels so an empty or half-empty group is stated, not inferred.
+function bpGroupCounts(geneIdx) {
+    var groups = geneExprData.groups;
+    var values = geneExprData.expr[geneIdx];
+    var counts = {};
+    for (var i = 0; i < groups.length; i++) {
+        if (!counts[groups[i]]) counts[groups[i]] = { obs: 0, total: 0 };
+        counts[groups[i]].total++;
+        if (bpIsMeasured(values[i])) counts[groups[i]].obs++;
+    }
+    return counts;
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2264,32 +2551,71 @@ function renderMultiBoxplot() {
     var colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"];
     var nGenes = selectedGenes.length;
     var traces = [];
+    var showImp = bpShowImputed();
 
     if (nGenes === 1) {
         // Single protein: one box per group, distinct colors
         var geneIdx = selectedGenes[0].idx;
         var values = geneExprData.expr[geneIdx];
+        var impValues = geneExprData.imputed ? geneExprData.imputed[geneIdx] : null;
+        var counts = bpGroupCounts(geneIdx);
+        // Label each group with how many of its samples were measured, and keep
+        // the category on the axis even when that count is zero.
+        var groupLabel = {};
+        uniqueGroups.forEach(function(g) {
+            groupLabel[g] = g + " (" + counts[g].obs + "/" + counts[g].total + " measured)";
+        });
+        var categoryArray = uniqueGroups.map(function(g) { return groupLabel[g]; });
+        var annotations = [];
+
         uniqueGroups.forEach(function(g, gi) {
-            var gValues = [], gSamples = [];
+            var gValues = [], gSamples = [], gX = [];
+            var impX = [], impY = [], impText = [];
             for (var i = 0; i < values.length; i++) {
-                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+                if (groups[i] !== g) continue;
+                if (bpIsMeasured(values[i])) {
+                    gValues.push(values[i]); gSamples.push(samples[i]); gX.push(groupLabel[g]);
+                } else if (showImp && impValues && bpIsMeasured(impValues[i])) {
+                    impX.push(groupLabel[g]); impY.push(impValues[i]); impText.push(samples[i]);
+                }
             }
-            traces.push({
-                y: gValues, type: "box", name: g,
-                boxpoints: "all", jitter: 0.4, pointpos: 0,
-                text: gSamples,
-                hovertemplate: "Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
-                marker: { color: colors[gi % colors.length], size: 6, opacity: 0.7 },
-                line: { color: colors[gi % colors.length] },
-                fillcolor: colors[gi % colors.length] + "33"
-            });
+            if (gValues.length > 0) {
+                traces.push({
+                    x: gX, y: gValues, type: "box", name: g,
+                    boxpoints: "all", jitter: 0.4, pointpos: 0,
+                    text: gSamples,
+                    hovertemplate: "Sample: %{text}<br>Measured log2: %{y:.3f}<extra>" + g + "</extra>",
+                    marker: { color: colors[gi % colors.length], size: 6, opacity: 0.7 },
+                    line: { color: colors[gi % colors.length] },
+                    fillcolor: colors[gi % colors.length] + "33"
+                });
+            } else {
+                annotations.push({
+                    x: groupLabel[g], y: 0.5, xref: "x", yref: "paper",
+                    text: "no measured<br>values",
+                    showarrow: false, font: { size: 11, color: "#999" }
+                });
+            }
+            if (impY.length > 0) {
+                traces.push({
+                    x: impX, y: impY, type: "scatter", mode: "markers",
+                    name: "imputed", legendgroup: "imputed",
+                    showlegend: traces.filter(function(t) { return t.legendgroup === "imputed"; }).length === 0,
+                    text: impText,
+                    hovertemplate: "Sample: %{text}<br>Imputed log2: %{y:.3f}<br>not measured<extra>imputed</extra>",
+                    marker: { color: "rgba(0,0,0,0)", size: 9,
+                              line: { color: "#888", width: 1.6 }, symbol: "circle" }
+                });
+            }
         });
         var layout = {
-            title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
-            yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: bpGroupLabel },
-            showlegend: false,
-            margin: { t: 50, b: 80, l: 70, r: 30 },
+            title: { text: selectedGenes[0].name + (showImp ? " — measured values, imputed shown hollow" : " — measured values only"),
+                     font: { size: 15 } },
+            yaxis: { title: "log2 intensity" },
+            xaxis: { title: bpGroupLabel, categoryorder: "array", categoryarray: categoryArray },
+            annotations: annotations,
+            showlegend: showImp,
+            margin: { t: 50, b: 90, l: 70, r: 30 },
             boxgap: 0.3
         };
         var containerH = 450;
@@ -2298,31 +2624,50 @@ function renderMultiBoxplot() {
         var containerH = Math.max(450, 350 + nGenes * 30);
         uniqueGroups.forEach(function(g, gi) {
             var xVals = [], yVals = [], sampleTexts = [];
+            var impX = [], impY = [], impText = [];
             selectedGenes.forEach(function(sg) {
                 var values = geneExprData.expr[sg.idx];
+                var impValues = geneExprData.imputed ? geneExprData.imputed[sg.idx] : null;
                 for (var i = 0; i < values.length; i++) {
-                    if (groups[i] === g) {
+                    if (groups[i] !== g) continue;
+                    if (bpIsMeasured(values[i])) {
                         xVals.push(sg.name);
                         yVals.push(values[i]);
                         sampleTexts.push(samples[i]);
+                    } else if (showImp && impValues && bpIsMeasured(impValues[i])) {
+                        impX.push(sg.name); impY.push(impValues[i]); impText.push(samples[i]);
                     }
                 }
             });
-            traces.push({
-                x: xVals, y: yVals, type: "box", name: g,
-                boxpoints: "all", jitter: 0.4, pointpos: 0,
-                text: sampleTexts,
-                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
-                marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
-                line: { color: colors[gi % colors.length] },
-                fillcolor: colors[gi % colors.length] + "33"
-            });
+            if (yVals.length > 0) {
+                traces.push({
+                    x: xVals, y: yVals, type: "box", name: g,
+                    boxpoints: "all", jitter: 0.4, pointpos: 0,
+                    text: sampleTexts,
+                    hovertemplate: "%{x}<br>Sample: %{text}<br>Measured log2: %{y:.3f}<extra>" + g + "</extra>",
+                    marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
+                    line: { color: colors[gi % colors.length] },
+                    fillcolor: colors[gi % colors.length] + "33"
+                });
+            }
+            if (impY.length > 0) {
+                traces.push({
+                    x: impX, y: impY, type: "scatter", mode: "markers",
+                    name: "imputed", legendgroup: "imputed",
+                    showlegend: traces.filter(function(t) { return t.legendgroup === "imputed"; }).length === 0,
+                    text: impText,
+                    hovertemplate: "%{x}<br>Sample: %{text}<br>Imputed log2: %{y:.3f}<br>not measured<extra>imputed</extra>",
+                    marker: { color: "rgba(0,0,0,0)", size: 8,
+                              line: { color: "#888", width: 1.5 }, symbol: "circle" }
+                });
+            }
         });
 
         var protNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
-            title: { text: "Protein Expression Comparison", font: { size: 16 } },
-            yaxis: { title: "Expression (log2 intensity)" },
+            title: { text: showImp ? "Measured values, imputed shown hollow" : "Measured values only",
+                     font: { size: 15 } },
+            yaxis: { title: "log2 intensity" },
             xaxis: { title: "Protein", categoryorder: "array", categoryarray: protNames },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
@@ -2336,14 +2681,27 @@ function renderMultiBoxplot() {
     document.getElementById("boxplot_container").style.height = containerH + "px";
     Plotly.newPlot("boxplot_container", traces, layout, { responsive: true });
 
-    // Show info
+    // Show info. The mean is over measured values only and says so; a mean that
+    // quietly folded in imputed values would be the same number the boxes are
+    // meant to let the reader question.
     var infoLines = selectedGenes.map(function(sg) {
-        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
-        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " (" + vals.length + " samples)";
+        var all = geneExprData.expr[sg.idx];
+        var vals = all.filter(bpIsMeasured);
+        var nMissing = all.length - vals.length;
+        var txt = "<strong>" + sg.name + "</strong>: ";
+        if (vals.length === 0) {
+            txt += "no measured values (" + all.length + " samples missing)";
+        } else {
+            var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+            txt += "measured mean " + mean.toFixed(3) + " over " + vals.length + "/" + all.length + " samples";
+            if (nMissing > 0) txt += ", " + nMissing + " not detected";
+        }
+        return txt;
     });
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
+    var impWrap = document.getElementById("boxplot_imp_toggle_wrap");
+    if (impWrap) impWrap.style.display = geneExprData.imputed ? "block" : "none";
 }
 
 function exportBoxplot(format) {
@@ -2913,15 +3271,30 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Ov
 ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora.*\\.csv$", full.names = TRUE)
 if (length(ora_files) > 0) {
     for (of in ora_files) {
-        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", basename(of))
-        label_clean <- gsub("_", " ", label)
+        # ORA is run separately on the up- and down-regulated sets, so each
+        # database yields two files. Dropping the direction from the label left
+        # two tabs with identical names and no way to tell them apart.
+        stem <- sub("\\.csv$", "", sub("^pathway_", "", basename(of)))
+        direction <- if (grepl("_ora_up$", stem)) {
+            "up-regulated"
+        } else if (grepl("_ora_down$", stem)) {
+            "down-regulated"
+        } else {
+            NULL
+        }
+        label_clean <- gsub("_", " ", sub("_ora(_up|_down)?$", "", stem))
+        tab_label <- if (is.null(direction)) label_clean else paste0(label_clean, " — ", direction)
 
         ora_df <- read.csv(of, stringsAsFactors = FALSE)
         # Support both column names: padj (our pipeline) and p.adjust (clusterProfiler)
         padj_col <- if ("padj" %in% names(ora_df)) "padj" else "p.adjust"
         sig <- ora_df[!is.na(ora_df[[padj_col]]) & ora_df[[padj_col]] < 0.05, ]
 
-        cat(sprintf("\n### %s\n\n", label_clean))
+        cat(sprintf("\n### %s\n\n", tab_label))
+        if (!is.null(direction)) {
+            cat(sprintf("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'>Over-representation among the <strong>%s</strong> proteins of this contrast only.</p>\n\n",
+                        direction))
+        }
 
         if (nrow(sig) > 0) {
             sig <- sig[order(sig[[padj_col]]), ]
@@ -2932,7 +3305,7 @@ if (length(ora_files) > 0) {
                 show_cols <- intersect(c("Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "Count"), names(sig))
             }
             if (length(show_cols) > 0) {
-                print(htmltools::tagList(make_dt(head(sig[, show_cols], 30), paste("ORA -", label_clean))))
+                print(htmltools::tagList(make_dt(head(sig[, show_cols], 30), paste("ORA -", tab_label))))
             }
         } else {
             cat("No significant pathways (padj < 0.05).\n\n")
@@ -3769,119 +4142,134 @@ cat("# Methods\n\n")
 ```
 
 ```{r methods-text, eval=show_methods, results='asis'}
+# Methods reads the wet-lab description from `technical_report` in the config
+# (facility / sample_prep / ms_acquisition / search_engine / search_parameters),
+# because instrument, kit, column, gradient and proteome version are specific to
+# a project and must not be hardcoded here. The computational paragraph is
+# generated from the settings that actually ran.
+tech_m <- prot_cfg$technical_report %||% list()
+nz <- function(x) !is.null(x) && is.character(x) && nzchar(trimws(paste(x, collapse = " ")))
+
 imp_method <- prot_cfg$imputation$method %||% "none"
-if (imp_method == "perseus") imp_method <- "perseus_like"
+imp_reps <- prot_cfg$imputation$no_repetitions %||% 1
 de_method <- prot_cfg$de$method %||% "limma"
 padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
 lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+use_adj_m <- isTRUE(prot_cfg$de$use_adj_for_pass1)
 engine <- prot_cfg$engine %||% "unknown"
 
-n_proteins <- if (!is.null(de_data)) nrow(de_data) else "N"
-n_de <- "N"
+n_proteins <- if (!is.null(de_data)) nrow(de_data) else NA_integer_
+n_de <- NA_integer_
 if (!is.null(de_data)) {
     pass_col <- grep("pass_any", names(de_data), value = TRUE)[1]
-    if (!is.na(pass_col)) n_de <- sum(de_data[[pass_col]] == TRUE, na.rm = TRUE)
+    if (!is.na(pass_col)) {
+        n_de <- sum(!is.na(de_data[[pass_col]]) &
+                    (de_data[[pass_col]] == TRUE | de_data[[pass_col]] == 1), na.rm = TRUE)
+    }
+}
+fmt_n <- function(x) if (is.na(x)) "N" else format(x, big.mark = ",")
+
+if (nz(tech_m$facility)) {
+    cat(sprintf("Sample preparation and mass spectrometry were carried out at the %s.\n\n",
+                trimws(tech_m$facility)))
 }
 
-cat("**Proteomics Analysis Methods**\n\n")
-
-cat(sprintf(
-"Proteomics data were acquired using %s and processed using the multiomics-core pipeline. ", engine
-))
-
-if (tolower(imp_method) != "none") {
-    cat(sprintf(
-    "Missing values were imputed using the %s method. ", imp_method
-    ))
+if (nz(tech_m$sample_prep)) {
+    cat("## Sample Preparation\n\n")
+    cat(trimws(tech_m$sample_prep), "\n\n")
+}
+if (nz(tech_m$ms_acquisition)) {
+    cat("## Mass Spectrometry\n\n")
+    cat(trimws(tech_m$ms_acquisition), "\n\n")
+}
+if (nz(tech_m$search_engine) || nz(tech_m$search_parameters)) {
+    cat("## Database Search\n\n")
+    if (nz(tech_m$search_engine)) cat(trimws(tech_m$search_engine), "\n\n")
+    if (nz(tech_m$search_parameters)) cat(trimws(tech_m$search_parameters), "\n\n")
 }
 
-cat(sprintf(
-"Differential expression analysis was performed using %s. ", de_method
-))
+# Computational methods: describes the pipeline that produced this report, and
+# is deliberately kept distinct from the search-engine description above.
+cat("## Downstream Analysis\n\n")
+
+imp_sentence <- if (tolower(imp_method) == "none") {
+    "No imputation was applied; features were required to be quantified in enough samples to be testable."
+} else if (tolower(imp_method) == "perseus") {
+    sprintf("Missing values were imputed by drawing from a down-shifted normal distribution fitted per sample (width %s and downshift %s of the sample standard deviation), the approach introduced in Perseus (Tyanova et al. 2016)%s.",
+            prot_cfg$imputation$width %||% 0.3,
+            prot_cfg$imputation$downshift %||% 1.8,
+            if (imp_reps > 1) sprintf(". Imputation was repeated %d times and the reported statistics summarise all %d draws", imp_reps, imp_reps) else "")
+} else {
+    sprintf("Missing values were imputed using the %s method%s.", imp_method,
+            if (imp_reps > 1) sprintf(", repeated %d times", imp_reps) else "")
+}
+
+de_sentence <- switch(tolower(de_method),
+    limma = "Differential abundance was assessed with moderated t-tests in the limma R/Bioconductor package, which shrinks variance estimates across features and so improves power at small sample sizes.",
+    "limma-voom" = "Differential abundance was assessed with limma-voom, which transforms counts to log-CPM and applies precision weights.",
+    deseq2 = "Differential abundance was assessed with Wald tests in DESeq2.",
+    sprintf("Differential abundance was assessed using the %s method.", de_method)
+)
 
 cat(sprintf(
-"Proteins were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
-padj_cut, lfc_cut
-))
+"Protein group intensities reported by %s were log2-transformed and filtered for missingness before analysis. %s %s p-values were adjusted across features with the Benjamini-Hochberg procedure, and proteins were called differentially abundant at %s p %s %s together with a linear fold change of at least %s.",
+engine, imp_sentence, de_sentence,
+if (use_adj_m) "adjusted" else "raw",
+"≤", padj_cut, lfc_cut))
 
-cat(sprintf(
-"A total of %s proteins were quantified, with %s identified as differentially expressed in at least one contrast.",
-format(as.numeric(n_proteins), big.mark = ","),
-format(as.numeric(n_de), big.mark = ",")
-))
+if (!is.na(n_proteins)) {
+    cat(sprintf(" %s protein groups passed filtering%s.",
+                fmt_n(n_proteins),
+                if (!is.na(n_de)) sprintf(", of which %s met these criteria in at least one contrast", fmt_n(n_de)) else ""))
+}
 
 if (pathway_enabled) {
     pathway_method <- prot_cfg$pathway$method %||% "both"
     pathway_dbs <- paste(prot_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
-    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
-                pathway_method, pathway_dbs))
+    cat(sprintf(" Pathway analysis was performed against %s using %s.", pathway_dbs,
+                switch(tolower(pathway_method),
+                       both = "both gene-set enrichment (fgsea) and over-representation analysis",
+                       fgsea = "gene-set enrichment analysis (fgsea)",
+                       ora = "over-representation analysis",
+                       pathway_method)))
 }
 
 if (ppi_enabled) {
-    cat(" Protein-protein interaction networks were constructed using the STRING database.")
+    cat(" Protein-protein interaction networks were retrieved from STRING.")
 }
 
-cat("\n\n")
-
-cat("**Copy-ready version:**\n\n")
-cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
-
-cat(sprintf(
-"Proteomics analysis was performed using the multiomics-core pipeline (v1.0). Data were acquired using %s. %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f).",
-engine,
-if (tolower(imp_method) != "none") sprintf("Missing values were imputed using the %s method. ", imp_method) else "",
-de_method, padj_cut, lfc_cut
-))
-
-cat("\n</div>\n")
-```
-
-```{r methods-statistical-heading, eval=show_methods, results='asis'}
-cat("## Statistical Analysis\n\n")
+cat(sprintf(" All downstream analysis was performed with the multiomics-core pipeline in R %s.\n\n",
+            paste(R.version$major, R.version$minor, sep = ".")))
 ```
 
 ```{r methods-statistical-analysis, eval=show_methods, results='asis'}
-# Parameterized statistical analysis subsection for the Methods section.
-# If report_cfg$stats_section_text is non-empty, print it verbatim;
-# otherwise auto-generate from pipeline config values.
+# Optional verbatim override. The auto-generated description now lives in the
+# Downstream Analysis paragraph above, so this only renders when a project
+# supplies its own wording and would otherwise repeat it.
 stats_section_text <- report_cfg$stats_section_text %||% ""
 if (nzchar(trimws(stats_section_text))) {
+    cat("## Statistical Analysis\n\n")
     cat(trimws(stats_section_text), "\n\n")
-} else {
-    # Auto-generate from config
-    de_method_m <- prot_cfg$de$method %||% "limma"
-    imp_method_m <- prot_cfg$imputation$method %||% "none"
-    padj_m <- prot_cfg$de$p_cutoff %||% 0.05
-    lfc_m <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+}
+```
 
-    test_desc_m <- switch(tolower(de_method_m),
-        limma = "Moderated t-tests were performed using the *limma* R/Bioconductor package, which applies empirical Bayes shrinkage of variance estimates to improve statistical power in small-sample proteomics studies.",
-        "limma-voom" = "Differential expression was assessed using *limma-voom*, which transforms count data to log-CPM and applies precision-weighted linear modelling.",
-        deseq2 = "Differential expression was assessed using Wald tests implemented in *DESeq2*, which fits negative binomial generalized linear models.",
-        sprintf("Differential expression was assessed using the *%s* method.", de_method_m)
-    )
+```{r methods-references, eval=show_methods, results='asis'}
+# References for the methods above. Supplied per project via
+# modes.<omics>.technical_report.references (character vector, one per entry).
+refs <- prot_cfg$technical_report$references %||% character(0)
+refs <- refs[nzchar(trimws(refs))]
+if (length(refs) > 0) {
+    cat("## References\n\n")
+    for (r in refs) cat("- ", trimws(r), "\n", sep = "")
+    cat("\n")
+}
+```
 
-    cat(test_desc_m, "\n\n")
-
-    if (tolower(imp_method_m) != "none") {
-        imp_desc <- switch(tolower(imp_method_m),
-            perseus_like = "Missing values were imputed using the Perseus-like method (down-shifted normal distribution for MNAR, KNN for MCAR).",
-            minprob = "Missing values were imputed using the MinProb method (random draws from a low-abundance distribution).",
-            knn = "Missing values were imputed using K-nearest neighbours (KNN).",
-            sprintf("Missing values were imputed using the %s method.", imp_method_m)
-        )
-        cat(imp_desc, "\n\n")
-    }
-
-    cat(sprintf(
-        "Multiple testing correction was applied using the Benjamini-Hochberg procedure to control the false discovery rate (FDR). Proteins were considered differentially expressed at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
-        padj_m, lfc_m
-    ))
-
-    cat(sprintf(
-        "All analyses were performed in R (version %s) using the multiomics-core pipeline.\n\n",
-        paste(R.version$major, R.version$minor, sep = ".")
-    ))
+```{r methods-acknowledgement, eval=show_methods, results='asis'}
+ack <- prot_cfg$technical_report$acknowledgment %||% ""
+if (nzchar(trimws(ack))) {
+    cat("## Acknowledgement\n\n")
+    cat(trimws(ack), "\n\n")
 }
 ```
 

@@ -40,6 +40,123 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
     invisible(TRUE)
 }
 
+#' Add a "Column_guide" sheet explaining each block of the Results sheet
+#'
+#' The Results sheet puts measured and imputed intensities side by side, which
+#' is only useful if the reader can tell which is which. This writes a short
+#' provenance key naming, for every block present, what produced the numbers
+#' and whether imputed values went into them.
+#'
+#' @param wb openxlsx workbook.
+#' @param df The data.frame written to the Results sheet (post-renaming).
+#' @param config Full pipeline config.
+#' @param mode Omics mode, e.g. "proteomics".
+#' @param sheet Sheet name (default "Column_guide").
+#' @return Invisibly TRUE if the sheet was written, FALSE if there was nothing
+#'   to describe.
+add_column_guide_sheet <- function(wb, df, config, mode = "proteomics",
+                                   sheet = "Column_guide") {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
+    if (is.null(df) || !is.data.frame(df)) return(invisible(FALSE))
+
+    mode_cfg <- config$modes[[mode]] %||% list()
+    imp_method <- tolower(mode_cfg$imputation$method %||% "none")
+    n_reps <- mode_cfg$imputation$no_repetitions %||% 1
+    imputed <- imp_method != "none"
+
+    draws_txt <- if (!imputed) {
+        "no imputation was performed"
+    } else if (n_reps > 1) {
+        sprintf("mean over %d independent %s imputation draws", n_reps, imp_method)
+    } else {
+        sprintf("a single %s imputation draw", imp_method)
+    }
+
+    has <- function(pat) any(grepl(pat, names(df)))
+    rows <- list()
+    add <- function(block, provenance) rows[[length(rows) + 1]] <<-
+        data.frame(Column = block, Meaning = provenance, stringsAsFactors = FALSE)
+
+    if (has("^CV\\.")) {
+        add("CV.<group>",
+            "Percent CV across the replicates of that group, on linear intensities. Measured values only; imputed values excluded. NA when fewer than 2 values were measured.")
+    }
+    if (has("^n_obs\\.")) {
+        add("n_obs.<group>",
+            "How many samples in that group had a measured (non-missing) value for this feature.")
+    }
+    if (has("^obs\\.log2FC\\.")) {
+        add("obs.log2FC.<contrast>",
+            "Fold change from measured values only: mean(log2 numerator group) - mean(log2 denominator group), ignoring missing values. NA when either group had nothing measured. No imputation involved.")
+    }
+    if (has("^obs\\.linearFC\\.")) {
+        add("obs.linearFC.<contrast>",
+            "The same measured-only fold change on the linear scale, signed (values below 1 are written as -1/ratio).")
+    }
+    if (has("^imp\\.")) {
+        add("imp.<sample>",
+            sprintf("Log2 intensity after imputation, from %s. Where the measured column is blank, this number was generated, not measured.",
+                    if (n_reps > 1) sprintf("a single %s draw kept for inspection (the statistics used all %d draws)", imp_method, n_reps) else sprintf("the %s imputation", imp_method)))
+    }
+    if (has("^linearFC\\.")) {
+        add("linearFC.<contrast>",
+            sprintf("Modelled fold change reported by the pipeline, computed on the imputed matrix (%s). This is the value used for the volcano plots and the significance calls. It differs from obs.linearFC whenever a feature had missing values.",
+                    draws_txt))
+    }
+    if (has("^pvalue\\.")) {
+        add("pvalue.<contrast> / padj.<contrast>",
+            sprintf("Raw and Benjamini-Hochberg adjusted p-values from the differential-abundance model, computed on the imputed matrix (%s).", draws_txt))
+    }
+    if (has("^pass")) {
+        add("pass / pass_any_contrast",
+            "Significance flag against the configured cutoffs. 1 = passed, NA = did not pass.")
+    }
+    if (has("\\.zscore$")) {
+        add("<sample>.zscore",
+            "Row-wise z-score of the imputed intensities, used for heatmap colouring.")
+    }
+
+    if (length(rows) == 0) return(invisible(FALSE))
+    guide <- do.call(rbind, rows)
+
+    if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
+    openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = TRUE)
+
+    # The note has to match what this particular workbook contains. The imputed
+    # block is optional (modes.<mode>.excel.imputed_block), and this sheet is
+    # still written without it whenever CV or observed-only columns are present,
+    # so an unconditional sentence would describe a block that is not there.
+    note <- if (!imputed) {
+        paste0(
+            "Blank cells in the intensity block mean the feature was not detected in that sample. ",
+            "No imputation was performed in this run, so nothing was filled in and the statistics use the measured values only."
+        )
+    } else if (has("^imp\\.")) {
+        paste0(
+            "Blank cells in the measured intensity block mean the feature was not detected in that sample. ",
+            "Those blanks are filled in the imp.<sample> block, and the modelled statistics are computed on the filled matrix."
+        )
+    } else {
+        paste0(
+            "Blank cells in the measured intensity block mean the feature was not detected in that sample. ",
+            "The modelled statistics were computed on a matrix in which those blanks were filled by ", imp_method,
+            " imputation, but the filled values are not exported in this workbook."
+        )
+    }
+    openxlsx::writeData(wb, sheet, x = note, startCol = 1, startRow = 1,
+                        colNames = FALSE, rowNames = FALSE)
+    openxlsx::writeData(wb, sheet, guide, startRow = 3)
+
+    header_style <- openxlsx::createStyle(textDecoration = "bold",
+                                          border = "bottom", borderStyle = "thin")
+    openxlsx::addStyle(wb, sheet, header_style, rows = 3, cols = 1:2, stack = TRUE)
+    openxlsx::addStyle(wb, sheet, openxlsx::createStyle(wrapText = TRUE, valign = "top"),
+                       rows = 4:(3 + nrow(guide)), cols = 2, stack = TRUE)
+    openxlsx::setColWidths(wb, sheet, cols = 1, widths = 34)
+    openxlsx::setColWidths(wb, sheet, cols = 2, widths = 110)
+    invisible(TRUE)
+}
+
 #' Get p-value cutoff tag for filename (generic for any mode)
 p_tag_generic <- function(config, mode, default = "NA") {
     p <- config$modes[[mode]]$de$p_cutoff
@@ -138,6 +255,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 if (sc %in% names(sample_label_map)) {
                     new_name <- sample_label_map[[sc]]
                     colnames(df_out)[colnames(df_out) == sc] <- new_name
+                    # Keep the imputed block's headers in step with the measured
+                    # block, otherwise the two tables label the same sample twice
+                    # under two different names.
+                    colnames(df_out)[colnames(df_out) == paste0("imp.", sc)] <-
+                        paste0("imp.", new_name)
                 }
             }
             # Also rename z-score columns
@@ -176,26 +298,29 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 
         # ---- Write annotation rows (rows 1..n_annot_rows) ----
         if (n_annot_rows > 0) {
-            # Map sample columns to their column indices in df_out
-            # (after potential renaming)
-            sample_col_indices <- vapply(sample_cols_in_df, function(sc) {
+            # Map each sample to every column that carries its values: the
+            # measured block and, when present, the imputed block. Pairing the
+            # ID with its column index (rather than relying on two vectors
+            # staying aligned) keeps the rows correct when a column is absent.
+            sample_col_pos <- do.call(rbind, lapply(sample_cols_in_df, function(sc) {
                 target <- if (!is.null(sample_label_map) && sc %in% names(sample_label_map)) {
                     sample_label_map[[sc]]
                 } else {
                     sc
                 }
-                match(target, colnames(df_out))
-            }, integer(1))
-            sample_col_indices <- sample_col_indices[!is.na(sample_col_indices)]
+                idx <- match(c(target, paste0("imp.", target)), colnames(df_out))
+                idx <- idx[!is.na(idx)]
+                if (length(idx) == 0L) return(NULL)
+                data.frame(sample_id = sc, col = idx, stringsAsFactors = FALSE)
+            }))
 
             row_idx <- 1
             # Write Sample_ID row first
             openxlsx::writeData(wb, sheet, x = "Sample_ID", startCol = 1, startRow = row_idx,
                                 colNames = FALSE, rowNames = FALSE)
-            for (j in seq_along(sample_col_indices)) {
-                sc <- sample_cols_in_df[j]
-                openxlsx::writeData(wb, sheet, x = sc,
-                                    startCol = sample_col_indices[j],
+            for (j in seq_len(nrow(sample_col_pos))) {
+                openxlsx::writeData(wb, sheet, x = sample_col_pos$sample_id[j],
+                                    startCol = sample_col_pos$col[j],
                                     startRow = row_idx,
                                     colNames = FALSE, rowNames = FALSE)
             }
@@ -206,11 +331,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 vals <- annot_row_data[[annot_name]]
                 openxlsx::writeData(wb, sheet, x = annot_name, startCol = 1,
                                     startRow = row_idx, colNames = FALSE, rowNames = FALSE)
-                for (j in seq_along(sample_col_indices)) {
-                    sc <- sample_cols_in_df[j]
+                for (j in seq_len(nrow(sample_col_pos))) {
+                    sc <- sample_col_pos$sample_id[j]
                     val <- if (sc %in% names(vals)) vals[[sc]] else NA
                     openxlsx::writeData(wb, sheet, x = val,
-                                        startCol = sample_col_indices[j],
+                                        startCol = sample_col_pos$col[j],
                                         startRow = row_idx,
                                         colNames = FALSE, rowNames = FALSE)
                 }
@@ -291,6 +416,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                                  mode = mode,
                                                  start_row = data_start_row + 1)
         }
+        add_column_guide_sheet(wb, df_out, config, mode = mode)
         openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
         path
     }
@@ -368,10 +494,15 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             de_df <- de_df[order(de_df$Hierarchical_Order, na.last = TRUE), , drop = FALSE]
         }
 
-        # Reorder columns to: ID, annotations, expression, CV, DE_stats, clustering, z-scores
+        # Reorder columns to: ID, annotations, measured expression, CV,
+        # observed-only FC, imputed expression, DE_stats, clustering, z-scores.
+        # Anything not listed here is treated as an annotation column, so new
+        # blocks MUST be named below or they land next to the ID.
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
+        obs_cols_present <- grep("^(n_obs|obs)\\.", names(de_df), value = TRUE)
+        imp_cols_present <- grep("^imp\\.", names(de_df), value = TRUE)
         de_stat_cols <- grep("^(linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
@@ -380,8 +511,10 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         )
         zscore_cols <- grep("\\.zscore$", names(de_df), value = TRUE)
 
-        # Annotation columns = everything not in ID, expression, CV, DE stats, clustering, z-scores, or 'order'
-        all_known <- c(id_cols, expr_cols, cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
+        # Annotation columns = everything not in ID, expression, CV, observed FC,
+        # imputed expression, DE stats, clustering, z-scores, or 'order'
+        all_known <- c(id_cols, expr_cols, cv_cols_present, obs_cols_present,
+                       imp_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
         annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
@@ -393,6 +526,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             annot_cols_present,
             expr_cols_present,
             cv_cols_present,
+            obs_cols_present,
+            imp_cols_present,
             de_stat_cols,
             clustering_cols,
             zscore_cols
@@ -604,6 +739,131 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
     cv_df
 }
 
+#' Observation counts and observed-only fold changes per contrast
+#'
+#' Computes, from the pre-imputation matrix alone, how many values were actually
+#' measured in each group (\code{n_obs.<group>}) and the fold change implied by
+#' those measurements (\code{obs.log2FC.<contrast>},
+#' \code{obs.linearFC.<contrast>}).
+#'
+#' This is deliberately NOT the modelled fold change. The modelled value comes
+#' from the imputed matrix (or the mean over several imputation draws), so the
+#' two disagree whenever a feature has missing values — most visibly when the
+#' groups lost different numbers of measurements, or when the samples that lost
+#' them have different imputation distributions. Reporting both side by side is
+#' what lets a reader judge how much of a fold change is measurement and how
+#' much is imputation.
+#'
+#' A group with no observed value in a feature yields \code{NA} for that
+#' feature's fold change, never a half-observed difference.
+#'
+#' @param expr_log2 Numeric matrix (features x samples) on the log2 scale,
+#'   BEFORE imputation, so unobserved entries are \code{NA}. Column names must
+#'   match \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding sample IDs that
+#'   match \code{colnames(expr_log2)}.
+#' @param contrasts_df Contrasts table with \code{Contrast_name},
+#'   \code{Numerator}, \code{Denominator} and (optionally) \code{Factor}.
+#' @param group_col Optional override for the grouping column. Defaults to the
+#'   (single) value of \code{contrasts_df$Factor}.
+#' @param mode Naming mode, as in \code{\link{get_contrast_cols}}: proteomics
+#'   strips spaces from contrast names, other modes keep them.
+#' @return A feature-indexed data.frame of \code{n_obs.<group>},
+#'   \code{obs.log2FC.<contrast>} and \code{obs.linearFC.<contrast>} columns
+#'   (rownames = \code{rownames(expr_log2)}), or \code{NULL} when the inputs are
+#'   insufficient.
+#' @examples
+#' m <- matrix(c(10, 11, NA, 12, 13, 14), nrow = 1,
+#'             dimnames = list("F1", paste0("S", 1:6)))
+#' meta <- data.frame(SampleID = paste0("S", 1:6),
+#'                    Group = rep(c("A", "B"), each = 3))
+#' ctr <- data.frame(Contrast_name = "A_vs_B", Factor = "Group",
+#'                   Numerator = "A", Denominator = "B")
+#' compute_observed_fc_columns(m, meta, "SampleID", ctr)
+compute_observed_fc_columns <- function(expr_log2, sample_meta, sample_id_col,
+                                        contrasts_df, group_col = NULL,
+                                        mode = "proteomics") {
+    if (is.null(expr_log2) || is.null(sample_meta) || is.null(sample_id_col)) {
+        return(NULL)
+    }
+    if (!is.data.frame(contrasts_df) ||
+        !all(c("Contrast_name", "Numerator", "Denominator") %in% colnames(contrasts_df))) {
+        return(NULL)
+    }
+    if (!sample_id_col %in% colnames(sample_meta)) {
+        return(NULL)
+    }
+
+    factor_col <- group_col %||% (if ("Factor" %in% colnames(contrasts_df)) {
+        unique(as.character(contrasts_df$Factor))
+    } else NULL)
+    factor_col <- factor_col[!is.na(factor_col) & factor_col %in% colnames(sample_meta)]
+    if (length(factor_col) != 1L) {
+        warning("compute_observed_fc_columns: could not resolve a single grouping column; skipping observed FC.")
+        return(NULL)
+    }
+
+    expr_log2 <- as.matrix(expr_log2)
+    meta_ids <- as.character(sample_meta[[sample_id_col]])
+    meta_grp <- as.character(sample_meta[[factor_col]])
+    col_grp  <- meta_grp[match(colnames(expr_log2), meta_ids)]
+
+    groups <- unique(c(as.character(contrasts_df$Numerator),
+                       as.character(contrasts_df$Denominator)))
+    groups <- groups[!is.na(groups) & nzchar(groups)]
+    if (length(groups) == 0L) return(NULL)
+
+    # Observed mean per group; NA (not NaN) when a group has nothing measured,
+    # so a downstream difference propagates NA instead of silently using one arm.
+    group_mean <- function(g) {
+        cols <- which(col_grp == g)
+        if (length(cols) == 0L) return(rep(NA_real_, nrow(expr_log2)))
+        sub <- expr_log2[, cols, drop = FALSE]
+        n <- rowSums(!is.na(sub))
+        mu <- rowMeans(sub, na.rm = TRUE)
+        mu[n == 0L] <- NA_real_
+        mu
+    }
+
+    out <- list()
+    for (g in groups) {
+        cols <- which(col_grp == g)
+        out[[paste0("n_obs.", g)]] <- if (length(cols) == 0L) {
+            rep(NA_integer_, nrow(expr_log2))
+        } else {
+            as.integer(rowSums(!is.na(expr_log2[, cols, drop = FALSE])))
+        }
+    }
+
+    means <- stats::setNames(lapply(groups, group_mean), groups)
+
+    for (i in seq_len(nrow(contrasts_df))) {
+        cn  <- as.character(contrasts_df$Contrast_name[i])
+        num <- as.character(contrasts_df$Numerator[i])
+        den <- as.character(contrasts_df$Denominator[i])
+        if (is.na(cn) || !nzchar(cn)) next
+        if (!(num %in% names(means)) || !(den %in% names(means))) next
+
+        cn_out <- if (mode %in% c("rna", "metabolomics", "lipidomics")) {
+            cn
+        } else {
+            normalize_contrast_name(cn)
+        }
+
+        lfc <- means[[num]] - means[[den]]
+        ratio <- 2^lfc
+        out[[paste0("obs.log2FC.", cn_out)]]   <- lfc
+        out[[paste0("obs.linearFC.", cn_out)]] <- ifelse(
+            is.na(ratio), NA_real_, ifelse(ratio >= 1, ratio, -1 / ratio)
+        )
+    }
+
+    obs_df <- as.data.frame(out, check.names = FALSE, stringsAsFactors = FALSE)
+    rownames(obs_df) <- rownames(expr_log2)
+    obs_df
+}
+
 #' Build final results table (generic for any mode)
 #'
 #' SEMANTICS (CRITICAL):
@@ -625,8 +885,16 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
 #'   (e.g. from \code{\link{compute_group_cv_columns}}). When supplied, these
 #'   columns are inserted immediately after the per-sample expression block and
 #'   before the per-contrast statistics, matched by feature ID.
+#' @param obs_cols Optional feature-indexed data.frame of observation counts and
+#'   observed-only fold changes (e.g. from
+#'   \code{\link{compute_observed_fc_columns}}), inserted after \code{cv_cols}.
+#' @param imp_expr_df Optional imputed expression matrix (features x samples).
+#'   Added after \code{obs_cols} with an \code{imp.} prefix on every sample
+#'   column, so the measured and imputed intensities sit side by side and a
+#'   reader can tell at a glance which values the statistics were computed on.
 #'
-#' @return data.frame with ID, annotations, expression, [CV.<group>], DE stats, pass_any_contrast
+#' @return data.frame with ID, annotations, expression, [CV.<group>],
+#'   [n_obs/obs FC], [imp.<sample>], DE stats, pass_any_contrast
 build_final_results_generic <- function(
   summary_df,
   expr_df,
@@ -637,7 +905,9 @@ build_final_results_generic <- function(
   fc_is_signed = TRUE,
   fc_direction_col = NULL,
   mode = "proteomics",  # FIX 2: Add mode parameter for column naming
-  cv_cols = NULL
+  cv_cols = NULL,
+  obs_cols = NULL,
+  imp_expr_df = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -765,6 +1035,37 @@ build_final_results_generic <- function(
             cv_matched <- cv_cols[match(base[[feature_id_col]], rownames(cv_cols)), , drop = FALSE]
             rownames(cv_matched) <- NULL
             base <- cbind(base, cv_matched)
+        }
+    }
+
+    # ============================================================
+    # ADD OBSERVED-ONLY COUNTS AND FOLD CHANGES
+    # ============================================================
+
+    if (!is.null(obs_cols) && is.data.frame(obs_cols) && ncol(obs_cols) > 0) {
+        if (is.null(rownames(obs_cols))) {
+            warning("obs_cols has no rownames. Cannot add observed-only FC columns.")
+        } else {
+            obs_matched <- obs_cols[match(base[[feature_id_col]], rownames(obs_cols)), , drop = FALSE]
+            rownames(obs_matched) <- NULL
+            base <- cbind(base, obs_matched)
+        }
+    }
+
+    # ============================================================
+    # ADD IMPUTED EXPRESSION BLOCK (prefixed, so it never collides
+    # with the measured block or with sample-ID column matching)
+    # ============================================================
+
+    if (!is.null(imp_expr_df)) {
+        imp_df <- as.data.frame(imp_expr_df, check.names = FALSE)
+        if (is.null(rownames(imp_df))) {
+            warning("imp_expr_df has no rownames. Cannot add imputed expression block.")
+        } else {
+            imp_matched <- imp_df[match(base[[feature_id_col]], rownames(imp_df)), , drop = FALSE]
+            colnames(imp_matched) <- paste0("imp.", colnames(imp_matched))
+            rownames(imp_matched) <- NULL
+            base <- cbind(base, imp_matched)
         }
     }
 
