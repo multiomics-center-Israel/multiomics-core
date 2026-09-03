@@ -1,13 +1,23 @@
 # R/domain/metabolomics/06_enrichment.R
 #
 # Pathway enrichment analysis for metabolomics:
-#   1. QEA  (Quantitative Enrichment Analysis) via globaltest
-#   2. ssGSEA via GSVA + Wilcoxon rank-sum test
-#   3. ORA  (Over-Representation Analysis) via Fisher's exact test
-#   4. GSEA (Gene-Set Enrichment Analysis) via fgsea, ranked by log2FC
+#   1. QEA  (Quantitative Enrichment Analysis) via globaltest       [self-contained]
+#   2. ssGSEA via GSVA + Wilcoxon rank-sum test                     [competitive]
+#   3. ORA  (Over-Representation Analysis) via Fisher's exact test  [competitive]
+#   4. GSEA (Gene-Set Enrichment Analysis) via fgsea, ranked by log2FC [competitive]
+#   5. Self-contained set test via limma::fry/mroast (rotation)     [self-contained]
 #
 # Operates on the standard pre-processing contract (expr_work, meta, row_data).
-# ORA and GSEA additionally require DE results (de_res).
+# ORA, GSEA and the self-contained test additionally require DE results (de_res).
+#
+# On competitive vs self-contained: the competitive methods (ORA/GSEA/ssGSEA)
+# ask "is this set more changed than the rest of the features?" and lose power
+# when a large fraction of features move (there is nothing left to be a contrast
+# against). The self-contained methods (QEA, and the limma rotation test added
+# here) ask "did this set change at all?", so they still report signal in that
+# regime. The rotation test reuses the SAME limma model as DE (same design,
+# same variance moderation), which QEA — run per-contrast without moderation —
+# does not, so it stays powered at small n.
 # Reuses: %||%
 
 
@@ -264,7 +274,8 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' libraries are combined into a single table with FDR correction across all
 #' pathways.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). QEA runs on the same analysis matrix as DE — see below.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, per_library_tables, method) or NULL if disabled/unavailable.
 run_metabolomics_qea <- function(pre, config) {
@@ -320,11 +331,29 @@ run_metabolomics_qea <- function(pre, config) {
     }
 
     mapping_file <- enr_cfg$mapping_file
+    # standardize (globaltest::gt) rescales predictors so each metabolite gets
+    # equal baseline weight. It changes pathway statistics, so treat it as a
+    # sensitivity setting, not an automatic correction. Validate loudly — a
+    # mistyped value must not silently coerce to FALSE.
+    standardize <- (enr_cfg$qea %||% list())$standardize %||% FALSE
+    if (!is.logical(standardize) || length(standardize) != 1L || is.na(standardize)) {
+        stop("enrichment.qea.standardize must be TRUE or FALSE.")
+    }
 
     # ---- Prepare QEA data ----
     # Map features to compound IDs and transpose into the samples-by-compounds
     # layout expected by globaltest. The result is written to a temp TSV.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    #
+    # Matrix source: QEA now starts from the SAME upstream analysis matrix, scale,
+    # and biological-sample set as DE — via .metab_de_matrix_condition() (the
+    # helper the self-contained test uses) — instead of pre$expr_raw. This makes
+    # the QEA-vs-DE comparison fair (globaltest is scale/parametrization
+    # sensitive). Note: map_compounds_for_enrichment() then applies enrichment-
+    # specific compound mapping, KEGG restriction and dedup, so the FINAL feature
+    # set is not identical to DE's. Behavior change vs the old expr_raw path:
+    # QC/blank samples excluded, values on the log-normalized scale.
+    de_in  <- .metab_de_matrix_condition(pre, config)
+    mapped <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
         return(NULL)
@@ -332,11 +361,28 @@ run_metabolomics_qea <- function(pre, config) {
 
     # Build globaltest input format: rows=samples, cols=compounds.
     # Prepend Sample and Group columns required by run_qea_gmt_internal().
-    meta <- pre$meta
-    mat_t <- as.data.frame(t(mapped$expr_mapped), check.names = FALSE)
-    conditions <- meta[[condition_col]][match(rownames(mat_t), meta[[sample_col]])]
+    # Align conditions against the ALREADY-FILTERED metadata (de_in$meta), matched
+    # by sample id (not position), and guard: a stale sample id or a bad
+    # condition_column must fail loudly here, not surface as NAs deep inside
+    # globaltest.
+    mat_t      <- as.data.frame(t(mapped$expr_mapped), check.names = FALSE)
+    sample_ids <- rownames(mat_t)
+    idx        <- match(sample_ids, de_in$meta[[sample_col]])
+    if (anyNA(idx)) {
+        stop("metabolomics QEA: analysis-matrix samples could not be matched to ",
+             "metadata via '", sample_col, "'.")
+    }
+    conditions <- droplevels(factor(de_in$meta[[condition_col]][idx]))
+    if (anyNA(conditions)) {
+        stop("metabolomics QEA: condition column '", condition_col,
+             "' has missing values after sample alignment.")
+    }
+    if (nlevels(conditions) < 2L) {
+        stop("metabolomics QEA: at least two condition levels are required ",
+             "(column '", condition_col, "').")
+    }
     df_t <- cbind(
-        data.frame(Sample = rownames(mat_t), Group = as.character(conditions),
+        data.frame(Sample = sample_ids, Group = as.character(conditions),
                    stringsAsFactors = FALSE),
         mat_t
     )
@@ -371,7 +417,8 @@ run_metabolomics_qea <- function(pre, config) {
 
     for (lib in libraries) {
         result <- tryCatch(
-            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file),
+            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file,
+                                 standardize = standardize),
             error = function(e) {
                 warning("QEA failed for ", lib, ": ", e$message)
                 NULL
@@ -411,6 +458,20 @@ run_metabolomics_qea <- function(pre, config) {
 
 # ---- QEA internals ----------------------------------------------------------
 
+#' Thin seam around globaltest::gt (isolates the standardize wiring)
+#'
+#' Exists so tests can assert that \code{standardize} is threaded through to
+#' \code{globaltest::gt()} without depending on gt's numeric output.
+#'
+#' @param response   Response factor of sample groups.
+#' @param X          Samples x compounds matrix.
+#' @param subsets    Named list of compound sets (pathways).
+#' @param standardize Logical, forwarded to \code{globaltest::gt()}.
+#' @return A \code{gt.object}.
+.run_globaltest <- function(response, X, subsets, standardize = FALSE) {
+    globaltest::gt(response, X, subsets = subsets, standardize = standardize)
+}
+
 #' Run QEA via globaltest on a single GMT file
 #'
 #' Parses the GMT, optionally translates HMDB IDs to KEGG, filters to pathways
@@ -420,8 +481,13 @@ run_metabolomics_qea <- function(pre, config) {
 #' @param data_file    Path to the tab-delimited QEA data (Sample, Group, compounds).
 #' @param gmt_file     Path to GMT file defining pathway sets.
 #' @param mapping_file Path to HMDB-to-KEGG mapping TSV (or NULL).
+#' @param standardize  Logical, passed to \code{globaltest::gt()}. When TRUE,
+#'   each compound is standardized to equal baseline weight (recommended when the
+#'   features' relative scales are arbitrary). Default FALSE preserves gt()'s
+#'   default.
 #' @return data.frame(pathway, raw_p, hits) or NULL if no testable pathways.
-run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
+run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
+                                 standardize = FALSE) {
     if (!requireNamespace("globaltest", quietly = TRUE)) {
         stop("Package 'globaltest' required for GMT enrichment.")
     }
@@ -465,9 +531,10 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
             " pathways with >= 2 matching compounds")
 
     # Run the global test: tests whether compound profiles in each pathway
-    # are collectively associated with the condition factor.
+    # are collectively associated with the condition factor. Wrapped in
+    # .run_globaltest() so the standardize wiring is a single, testable seam.
     res_gt <- tryCatch(
-        globaltest::gt(response, X, subsets = subsets),
+        .run_globaltest(response, X, subsets = subsets, standardize = standardize),
         error = function(e) { warning("globaltest error: ", e$message); NULL }
     )
     if (is.null(res_gt)) return(NULL)
@@ -493,7 +560,8 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
 #' Requires exactly two condition levels for statistical testing; if more
 #' are present, scores are returned without p-values.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). Scores are computed on the same analysis matrix as DE.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, scores, method) or NULL if disabled/unavailable.
 run_metabolomics_ssgsea <- function(pre, config) {
@@ -525,8 +593,16 @@ run_metabolomics_ssgsea <- function(pre, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build expression matrix with compound IDs ----
-    # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    # Map features to enrichment-ready IDs (Name/HMDB/KEGG). Source matrix: the
+    # DE analysis matrix via .metab_de_matrix_condition(), not pre$expr_raw.
+    # Unlike QEA, ssGSEA is RANK-BASED within each sample, so a monotonic
+    # transform (log) alone would barely move the scores — the alignment here is
+    # for consistency with DE on sample inclusion (QC/blank excluded), the
+    # normalization actually applied, and the feature universe, not for scale per
+    # se. (GSVA's cross-sample score normalization also makes the sample set
+    # matter.)
+    de_in    <- .metab_de_matrix_condition(pre, config)
+    mapped   <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {
         message("metabolomics ssGSEA: too few features — skipping")
@@ -1020,6 +1096,241 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
 }
 
 
+# ==== SELF-CONTAINED SET TEST VIA LIMMA ROTATION ==============================
+
+#' Rebuild the limma DE analysis matrix + condition factor
+#'
+#' Enrichment methods that must run on the SAME data as DE (the self-contained
+#' rotation test, QEA, and ssGSEA) use this to obtain the same expression matrix
+#' (pre-scaling \code{expr_log} when a variance scaling was applied, otherwise
+#' \code{expr_work}), the same biological-sample filtering, and the same
+#' condition factor. It mirrors the matrix/condition setup in
+#' \code{run_metabolomics_de()} (\code{03_differential.R}) without re-running DE;
+#' that function remains the source of truth — if its setup changes, update this
+#' to match.
+#'
+#' PARITY CONTRACT: this is a deliberate duplication of DE's matrix/scale/sample
+#' selection, not an independent policy — \code{run_metabolomics_de()} does not
+#' call this helper, so the two can drift. Any change to DE's matrix selection
+#' (the expr_log-vs-expr_work branch or the biological-sample filtering) MUST be
+#' mirrored here. A single canonical helper used by both is the eventual fix, but
+#' is out of scope for this change.
+#'
+#' @param pre    Preprocessing results (expr_work/expr_log, meta, info).
+#' @param config Full pipeline config.
+#' @return list(mat, condition, meta): the features x biological-samples matrix,
+#'   the condition factor (aligned to matrix columns), and the aligned metadata.
+.metab_de_matrix_condition <- function(pre, config) {
+    cfg    <- config$modes$metabolomics
+    de_cfg <- cfg$de %||% list()
+
+    condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
+    sample_col    <- cfg$effects$samples %||% "sample_id"
+
+    # Variance-scaling (auto/pareto/range) distorts within-group variance, so DE
+    # tests on the pre-scaling matrix (expr_log). Keep this branch identical to
+    # run_metabolomics_de().
+    scaling_used <- pre$info$normalization$scaling %||% "none"
+    mat <- if (scaling_used %in% c("auto", "pareto", "range")) {
+        pre$expr_log %||% pre$expr_work
+    } else {
+        pre$expr_work
+    }
+
+    meta <- pre$meta[match(colnames(mat), pre$meta[[sample_col]]), , drop = FALSE]
+    bio  <- filter_to_biological(mat, meta, condition_col, sample_col,
+                                 label = "metabolomics self-contained",
+                                 qc_flag_column = cfg$qc$qc_flag_column)
+    list(mat = bio$mat, condition = bio$condition, meta = bio$meta)
+}
+
+
+#' Run a self-contained pathway set test via limma rotation (fry / mroast)
+#'
+#' Fifth enrichment method. Unlike ORA/GSEA/ssGSEA (competitive: "is this set
+#' more changed than the rest?"), this is a SELF-CONTAINED test ("did this set
+#' change at all?"), so it retains power when a large fraction of features move.
+#' It reuses the SAME limma design and contrast as DE (via
+#' \code{.metab_de_matrix_condition()} + \code{limma::makeContrasts}), the same
+#' compound->KEGG mapping as the other methods
+#' (\code{map_compounds_for_enrichment()}), and the same GMT pathway definitions.
+#'
+#' The GMT is converted to row indices with \code{limma::ids2indices()} and the
+#' test is run with \code{limma::fry()} (default, deterministic — no seed needed)
+#' or \code{limma::mroast()} (rotation-based, stochastic — seeded via
+#' \code{withr::with_seed()}). Both directional and mixed p-values/FDR are
+#' returned; the directional result ("coordinated up/down") is the interpretable
+#' one. This test is more permissive than the competitive methods, so its hits
+#' are hypothesis-generating, not a correction of the other methods.
+#'
+#' @param pre      Preprocessing results (expr_work/expr_log, meta, row_data, info).
+#' @param config   Full pipeline config (reads modes$metabolomics$enrichment).
+#' @param contrast_str  Contrast in "Numerator - Denominator" form (levels of the
+#'   DE condition column), used to build the limma contrast — same as DE.
+#' @param contrast_label Human-readable contrast label for the output table.
+#' @return list(table, contrast, method) or NULL if disabled/unavailable/empty.
+run_metabolomics_selfcontained <- function(pre, config, contrast_str,
+                                           contrast_label = contrast_str) {
+    cfg     <- config$modes$metabolomics
+    enr_cfg <- cfg$enrichment %||% list()
+
+    # Resolve gmt_file / mapping_file like the data files (see the other methods).
+    enr_cfg$gmt_file     <- resolve_input_path(config, enr_cfg$gmt_file)
+    enr_cfg$mapping_file <- resolve_input_path(config, enr_cfg$mapping_file)
+
+    if (!isTRUE(enr_cfg$run_enrichment)) {
+        message("metabolomics self-contained: enrichment disabled — skipping")
+        return(NULL)
+    }
+
+    # Opt-in: this method runs only when explicitly enabled, since it is more
+    # permissive than the competitive methods and is hypothesis-generating.
+    sc_cfg <- enr_cfg$selfcontained %||% list()
+    if (!isTRUE(sc_cfg$enabled)) {
+        message("metabolomics self-contained: not enabled ",
+                "(enrichment.selfcontained.enabled) — skipping")
+        return(NULL)
+    }
+
+    if (!requireNamespace("limma", quietly = TRUE)) {
+        message("metabolomics self-contained: limma not available — skipping")
+        return(NULL)
+    }
+
+    # fry (deterministic) by default; mroast (rotation) is opt-in and seeded.
+    sc_method <- tolower(sc_cfg$method %||% "fry")
+    if (!sc_method %in% c("fry", "mroast")) {
+        warning("metabolomics self-contained: unknown method '", sc_method,
+                "'; falling back to 'fry'.")
+        sc_method <- "fry"
+    }
+
+    mapping_file <- enr_cfg$mapping_file
+
+    # ---- Same limma model as DE: matrix, condition, design, contrast ----
+    de_in <- .metab_de_matrix_condition(pre, config)
+    if (nlevels(de_in$condition) < 2) {
+        message("metabolomics self-contained: fewer than 2 condition levels — skipping")
+        return(NULL)
+    }
+    condition <- de_in$condition
+    design <- stats::model.matrix(~ 0 + condition)
+    colnames(design) <- levels(condition)
+
+    contrast_matrix <- tryCatch(
+        limma::makeContrasts(contrasts = contrast_str, levels = design),
+        error = function(e) {
+            warning("metabolomics self-contained: cannot build contrast '",
+                    contrast_str, "' from condition levels (",
+                    paste(levels(condition), collapse = ", "), "): ", e$message)
+            NULL
+        }
+    )
+    if (is.null(contrast_matrix)) return(NULL)
+    # fry/mroast expect a numeric contrast vector of length ncol(design); a
+    # single "Num - Den" string gives a one-column makeContrasts matrix.
+    contrast_vec <- contrast_matrix[, 1]
+
+    # ---- Map features to compound IDs (same universe/GMT as the other methods) ----
+    mapped   <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
+    expr_mat <- as.matrix(mapped$expr_mapped)
+    if (nrow(expr_mat) < 3) {
+        message("metabolomics self-contained: too few mapped compounds — skipping")
+        return(NULL)
+    }
+    # map_compounds_for_enrichment subsets rows only, so columns still align to
+    # the design rows (biological samples in condition order).
+
+    # ---- Load + translate GMT sets, tracking their source library ----
+    gene_sets <- list()
+    gmt_files <- unlist(enr_cfg$gmt_file)
+    if (is.null(gmt_files)) {
+        message("metabolomics self-contained: no GMT files — skipping")
+        return(NULL)
+    }
+    for (gf in gmt_files) {
+        if (!file.exists(gf)) next
+        gmt_parsed <- read_gmt_list(gf, include_descriptions = TRUE)
+        gmt <- translate_gmt_hmdb_to_kegg(gmt_parsed$sets, mapping_file)
+        names(gmt) <- make_pathway_labels(names(gmt), gmt_parsed$descriptions)
+        lib_label <- tools::file_path_sans_ext(basename(gf))
+        for (nm in names(gmt)) {
+            gene_sets[[nm]] <- gmt[[nm]]
+            attr(gene_sets[[nm]], "library") <- lib_label
+        }
+        message("self-contained: loaded ", length(gmt), " sets from ", basename(gf))
+    }
+    if (length(gene_sets) == 0) {
+        message("metabolomics self-contained: no gene sets — skipping")
+        return(NULL)
+    }
+
+    # ---- Convert GMT to row indices and keep sets with >= 2 members present ----
+    index <- limma::ids2indices(gene_sets, identifiers = rownames(expr_mat))
+    index <- index[vapply(index, length, integer(1)) >= 2L]
+    if (length(index) == 0) {
+        message("self-contained: no pathways with >= 2 matching compounds")
+        return(NULL)
+    }
+    message("self-contained: testing ", length(index), " pathways (", sc_method, ")")
+
+    # ---- Run the rotation test ----
+    res_raw <- tryCatch({
+        if (sc_method == "mroast") {
+            # Rotation-based → stochastic; seed for reproducibility (repo convention).
+            n_rot <- sc_cfg$n_rotations %||% 9999
+            seed  <- sc_cfg$seed %||% 42
+            withr::with_seed(seed, limma::mroast(
+                y = expr_mat, index = index, design = design,
+                contrast = contrast_vec, nrot = n_rot
+            ))
+        } else {
+            # fry approximates an infinite-rotation mroast → deterministic.
+            limma::fry(y = expr_mat, index = index, design = design,
+                       contrast = contrast_vec)
+        }
+    }, error = function(e) {
+        warning("metabolomics self-contained (", sc_method, ") failed: ", e$message)
+        NULL
+    })
+    if (is.null(res_raw) || nrow(res_raw) == 0) {
+        message("self-contained: no results")
+        return(NULL)
+    }
+
+    # ---- Tidy to the shared enrichment schema ----
+    # fry/mroast both return: NGenes, Direction, PValue, FDR, PValue.Mixed,
+    # FDR.Mixed (rownames = pathway). The directional PValue/FDR is the
+    # interpretable "coordinated up/down" result; the mixed one is retained too.
+    lib_lookup <- vapply(names(gene_sets), function(nm) {
+        attr(gene_sets[[nm]], "library") %||% NA_character_
+    }, character(1))
+
+    result_df <- data.frame(
+        pathway      = rownames(res_raw),
+        n_hits       = res_raw$NGenes,
+        direction    = as.character(res_raw$Direction),
+        PValue       = res_raw$PValue,
+        FDR          = res_raw$FDR,
+        PValue_mixed = res_raw[["PValue.Mixed"]],
+        FDR_mixed    = res_raw[["FDR.Mixed"]],
+        library      = unname(lib_lookup[rownames(res_raw)]),
+        stringsAsFactors = FALSE
+    )
+    result_df <- result_df[order(result_df$FDR), ]
+
+    n_sig <- sum(result_df$FDR < 0.05, na.rm = TRUE)
+    message("self-contained complete: ", nrow(result_df), " pathways, ",
+            n_sig, " with directional FDR < 0.05 (contrast: ", contrast_label, ")")
+
+    list(
+        table    = result_df,
+        contrast = contrast_label,
+        method   = paste0("limma_", sc_method)
+    )
+}
+
+
 # ==== ENRICHMENT PLOTS ========================================================
 
 #' Enrichment barplot (for QEA or ssGSEA results)
@@ -1424,6 +1735,64 @@ plot_ssgsea_lollipop <- function(ssgsea_df, top_n = 20,
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
                        x = "-log10(FDR)", y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 9),
+            plot.title  = ggplot2::element_text(face = "bold")
+        )
+}
+
+
+#' Self-contained set-test lollipop plot
+#'
+#' Lollipop plot of −log10(directional FDR) per pathway from the limma rotation
+#' test, colored by coordinated direction (Up/Down) and sized by the number of
+#' matched compounds (n_hits).
+#'
+#' @param sc_df  data.frame from run_metabolomics_selfcontained() with pathway,
+#'   FDR, direction, n_hits.
+#' @param top_n  Number of top pathways to display (by FDR).
+#' @param title  Plot title.
+#' @return ggplot object or NULL.
+plot_selfcontained_lollipop <- function(sc_df, top_n = 20,
+                                        title = "Self-contained set test") {
+    if (is.null(sc_df) || nrow(sc_df) == 0) return(NULL)
+    if (!"FDR" %in% colnames(sc_df)) return(NULL)
+
+    top_df <- utils::head(sc_df[order(sc_df$FDR), ], top_n)
+    top_df$neg_log10_fdr <- -log10(pmax(top_df$FDR, 1e-20))
+    top_df$pathway_short <- ifelse(
+        nchar(top_df$pathway) > 50,
+        paste0(substr(top_df$pathway, 1, 47), "..."),
+        top_df$pathway
+    )
+    top_df$pathway_short <- factor(top_df$pathway_short,
+                                    levels = rev(top_df$pathway_short))
+
+    direction <- if ("direction" %in% colnames(top_df)) {
+        as.character(top_df$direction)
+    } else {
+        rep("N/A", nrow(top_df))
+    }
+    top_df$direction <- ifelse(direction %in% c("Up", "Down"), direction, "N/A")
+    top_df$n_hits <- if ("n_hits" %in% colnames(top_df)) top_df$n_hits else 1
+
+    ggplot2::ggplot(top_df, ggplot2::aes(x = neg_log10_fdr, y = pathway_short)) +
+        ggplot2::geom_segment(ggplot2::aes(x = 0, xend = neg_log10_fdr,
+                                            yend = pathway_short),
+                               color = "grey60") +
+        ggplot2::geom_point(ggplot2::aes(size = n_hits, color = direction)) +
+        ggplot2::scale_color_manual(values = c(Up = "firebrick",
+                                                Down = "steelblue",
+                                                "N/A" = "grey50"),
+                                     name = "Direction") +
+        ggplot2::scale_size_continuous(name = "Compounds", range = c(2, 7)) +
+        ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+                             color = "grey40") +
+        ggplot2::labs(title = title,
+                       subtitle = paste0("Top ", nrow(top_df),
+                                         " pathways by directional FDR"),
+                       x = "-log10(directional FDR)", y = NULL) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
             axis.text.y = ggplot2::element_text(size = 9),
