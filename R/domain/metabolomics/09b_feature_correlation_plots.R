@@ -23,17 +23,25 @@
 #'   dropped with a message.
 #' @param group_col Metadata column defining the groups on the x-axis. From the
 #'   Shiny payload this is \code{payload$group}.
-#' @param sample_col Metadata column holding sample IDs. Default
-#'   \code{"sample_id"}.
+#' @param sample_col Metadata column holding sample IDs. Default \code{NULL},
+#'   meaning take them from \code{rownames(meta)} -- see
+#'   \code{\link{prepare_correlation_matrix}} for why \code{"sample_id"} is the
+#'   wrong default for the shipped templates.
 #' @param label_map Optional named character vector mapping feature IDs to
 #'   display names. May be partial or absent; any feature without an entry falls
 #'   back to its raw ID.
+#' @section Groups with no observations:
+#' Once missingness is restored, a feature can have every sample in one group
+#' unobserved. The group mean is then undefined, and this draws a \strong{gap}
+#' in the line rather than a point. It never interpolates or substitutes: a
+#' fabricated midpoint would show the reader a measurement that was never made.
+#'
 #' @return A \code{ggplot} object. Nothing is written to disk -- saving belongs
 #'   in a target, not in a plotting function.
 plot_feature_correlation_profiles <- function(expr_mat, meta,
                                               feature_id, partner_ids,
                                               group_col,
-                                              sample_col = "sample_id",
+                                              sample_col = NULL,
                                               label_map = NULL) {
   expr_mat <- as.matrix(expr_mat)
 
@@ -57,16 +65,40 @@ plot_feature_correlation_profiles <- function(expr_mat, meta,
   # plot has nothing to do with clustering and callers (notably the GUI) only
   # have the column name, so hand it a minimal shim rather than demanding a
   # full clustering config.
+  meta <- as.data.frame(meta, stringsAsFactors = FALSE)
+  resolved <- .resolve_sample_ids(meta, expr_mat, sample_col,
+                                  context = "plot_feature_correlation_profiles")
+
   cfg_shim <- list(
     clustering = list(group_col = group_col),
-    effects    = list(samples = sample_col)
+    effects    = list(samples = resolved$sample_col)
   )
-  gm <- build_group_means_from_effects(expr_mat, meta, cfg_shim)
+  gm <- build_group_means_from_effects(expr_mat, resolved$meta, cfg_shim)
 
   ids <- c(feature_id, partner_ids)
+  gmeans <- gm$group_means[ids, , drop = FALSE]
+
+  # A group in which every sample is unobserved makes rowMeans(na.rm = TRUE)
+  # return NaN. Normalise that (and any Inf) to NA deliberately, so geom_line()
+  # renders an honest break instead of us relying on ggplot to drop a
+  # not-a-number by accident. Never interpolate: an invented midpoint would draw
+  # a measurement nobody took.
+  gaps <- !is.finite(gmeans)
+  if (any(gaps)) {
+    gmeans[gaps] <- NA_real_
+    message(sprintf(
+      "feature correlation plot: %d feature x group cell(s) have no observed values; drawn as gaps",
+      sum(gaps)
+    ))
+  }
+
   # zscore_rows() already maps a zero-variance row to zeros rather than NaN, so
-  # a flat profile draws as a flat line instead of vanishing.
-  z <- zscore_rows(gm$group_means[ids, , drop = FALSE])
+  # a flat profile draws as a flat line instead of vanishing. It cannot rescue a
+  # row that is entirely unobserved though -- its row mean is NaN, which then
+  # propagates -- so normalise once more on the way out. After this the plotted
+  # values are finite or NA, never NaN/Inf.
+  z <- zscore_rows(gmeans)
+  z[!is.finite(z)] <- NA_real_
 
   group_levels <- as.character(gm$group_levels)
   long <- data.frame(

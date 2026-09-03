@@ -36,6 +36,11 @@
 #' either side is constant *on the samples the pair shares*, even if that
 #' feature varies perfectly well elsewhere in the matrix.
 #'
+#' \dQuote{Observed} means \code{is.finite()}, not merely \code{!is.na()}:
+#' \code{NaN} and \code{+-Inf} are all treated as unobserved, so a \code{-Inf}
+#' left behind by a log transform is excluded from \code{n} rather than counted
+#' or allowed to poison the sums.
+#'
 #' @param x Numeric vector, the query profile (may contain NA).
 #' @param mat Numeric matrix (features x samples), aligned to \code{x} by
 #'   column position (may contain NA).
@@ -48,20 +53,28 @@
   x <- as.numeric(x)
   mat <- as.matrix(mat)
 
-  ox <- as.numeric(!is.na(x))
-  xz <- x
-  xz[is.na(xz)] <- 0
+  # Two distinct roles, and BOTH must use is.finite() rather than !is.na():
+  #   - the mask (ox/om) decides which samples count toward n;
+  #   - the zero-filled copies (x0/m0) decide what an excluded cell contributes.
+  # is.na() misses -Inf, which transform_metab() can produce by log-transforming
+  # a non-positive value. Left in, it would either be counted as a real
+  # observation or poison every sum it touches.
+  ox <- as.numeric(is.finite(x))
+  # Zero-fill explicitly: `ox * x` does NOT neutralise a missing value, because
+  # in R `0 * NA` is NA (and `0 * -Inf` is NaN). The mask cannot do this job.
+  x0 <- x
+  x0[!is.finite(x0)] <- 0
 
-  om <- matrix(as.numeric(!is.na(mat)), nrow = nrow(mat))
-  mz <- mat
-  mz[is.na(mz)] <- 0
+  om <- matrix(as.numeric(is.finite(mat)), nrow = nrow(mat))
+  m0 <- mat
+  m0[!is.finite(m0)] <- 0
 
   n   <- as.vector(om %*% ox)
-  sx  <- as.vector(om %*% (ox * xz))
-  sxx <- as.vector(om %*% (ox * xz^2))
-  sy  <- as.vector(mz %*% ox)
-  syy <- as.vector((mz^2) %*% ox)
-  sxy <- as.vector(mz %*% (ox * xz))
+  sx  <- as.vector(om %*% (ox * x0))
+  sxx <- as.vector(om %*% (ox * x0^2))
+  sy  <- as.vector(m0 %*% ox)
+  syy <- as.vector((m0^2) %*% ox)
+  sxy <- as.vector(m0 %*% (ox * x0))
 
   # Guard the division before computing the centred moments.
   ok_n <- n > 2
@@ -126,10 +139,13 @@
 #' Pairwise-complete Spearman correlation of one vector against every matrix row
 #'
 #' Ranks must be recomputed within each pair's shared samples, so a single
-#' global rank transform is only valid when the matrix has no missing values.
-#' That is the common case (the Shiny payload median-fills NAs), so it gets a
-#' vectorised fast path; otherwise we fall back to a loop over features. The
-#' loop is over features, not over pairs, so it is a few thousand \code{rank()}
+#' global rank transform is only valid when every value is usable. The
+#' fast-path gate is therefore \code{all(is.finite(mat))} -- \strong{not}
+#' \code{!anyNA(mat)}. An \code{Inf} reaching \code{rank()} would be ranked as
+#' a legitimate extreme value rather than excluded, silently corrupting rho; a
+#' bare NA check would let exactly that through. Otherwise we fall back to a
+#' loop over features, pairing on \code{is.finite(x) & is.finite(y)}. The loop
+#' is over features, not over pairs, so it is a few thousand \code{rank()}
 #' calls on short vectors.
 #'
 #' Because all-tied shared values rank to a constant, the zero-variance guard in
@@ -143,10 +159,11 @@
   x <- as.numeric(x)
   mat <- as.matrix(mat)
 
-  if (!anyNA(mat)) {
+  # all(is.finite(mat)), not !anyNA(mat): an Inf must never reach rank().
+  if (all(is.finite(mat))) {
     # Every feature shares exactly the same samples with x, so subset once and
     # rank once.
-    keep <- !is.na(x)
+    keep <- is.finite(x)
     if (sum(keep) < 3) {
       return(list(r = rep(NA_real_, nrow(mat)), n = rep(sum(keep), nrow(mat))))
     }
@@ -164,7 +181,7 @@
 
   for (i in seq_len(n_feat)) {
     y <- mat[i, ]
-    keep <- !is.na(x) & !is.na(y)
+    keep <- is.finite(x) & is.finite(y)
     n[i] <- sum(keep)
     if (n[i] < 3) next
 
@@ -375,6 +392,159 @@ correlate_feature_vs_all <- function(expr_mat, feature_id, min_n = 5, top_n = NU
 }
 
 
+# ---- internal: sample-ID resolution ------------------------------------------
+
+#' Resolve and validate the sample IDs that align metadata to a matrix
+#'
+#' Two callers need the same thing: a metadata column whose values line up with
+#' \code{colnames(expr_mat)}. The IDs may come from an explicitly named column
+#' or from the rownames, and \strong{both sources get the same validation} --
+#' an explicitly-passed column is not more trustworthy than rownames, and a
+#' duplicated or missing ID mis-aligns samples just as silently either way.
+#'
+#' Defaulting \code{sample_col} to \code{"sample_id"} would be wrong here: the
+#' shipped metabolomics and proteomics templates both set
+#' \code{effects$samples: "SampleID"}, and the Shiny payload does not expose
+#' that configured name. It does, however, set \code{rownames(sample_meta)}
+#' from it -- so the rownames are the reliable default.
+#'
+#' @param meta Sample metadata, one row per sample.
+#' @param expr_mat Matrix whose columns the IDs must cover.
+#' @param sample_col Column name holding IDs, or NULL to use rownames.
+#' @param context Calling function name, for error messages.
+#' @return list with \code{meta} (IDs materialised into a column, since
+#'   downstream helpers require a real column) and \code{sample_col}.
+#' @keywords internal
+.resolve_sample_ids <- function(meta, expr_mat, sample_col = NULL,
+                                context = "feature correlation") {
+  if (is.null(sample_col)) {
+    ids <- rownames(meta)
+    source_desc <- "rownames(sample_meta)"
+    sample_col <- ".sample_id"
+    # A data.frame always has rownames, so a NULL check proves nothing here --
+    # the default "1","2",... is caught by the coverage check below.
+    if (is.null(ids)) {
+      stop(context, "(): `sample_meta` has no rownames to take sample IDs ",
+           "from. Pass `sample_col` naming the column that holds them.",
+           call. = FALSE)
+    }
+    meta[[sample_col]] <- ids
+  } else {
+    if (!sample_col %in% colnames(meta)) {
+      stop(context, "(): sample column '", sample_col, "' not found in ",
+           "`sample_meta`. Available: ",
+           paste(colnames(meta), collapse = ", "),
+           ". Omit `sample_col` to use the rownames instead.", call. = FALSE)
+    }
+    source_desc <- sprintf("column '%s'", sample_col)
+    meta[[sample_col]] <- as.character(meta[[sample_col]])
+  }
+
+  ids <- as.character(meta[[sample_col]])
+
+  # One validation pass, whichever source the IDs came from.
+  if (anyNA(ids) || any(!nzchar(ids))) {
+    stop(context, "(): sample IDs from ", source_desc, " contain missing or ",
+         "empty values; they cannot align metadata to the matrix.",
+         call. = FALSE)
+  }
+  if (anyDuplicated(ids)) {
+    dups <- unique(ids[duplicated(ids)])
+    stop(context, "(): sample IDs from ", source_desc, " are not unique ",
+         "(e.g. ", paste(utils::head(dups, 5), collapse = ", "), "). ",
+         "Duplicated IDs would silently mis-align samples.", call. = FALSE)
+  }
+  missing <- setdiff(colnames(expr_mat), ids)
+  if (length(missing) > 0L) {
+    stop(context, "(): ", length(missing), " matrix column(s) have no row in ",
+         "`sample_meta` using ", source_desc, ", e.g. ",
+         paste(utils::head(missing, 5), collapse = ", "), ". ",
+         if (source_desc == "rownames(sample_meta)") {
+           "Pass `sample_col` naming the column that holds the sample IDs."
+         } else {
+           "Check that `sample_col` names the right column."
+         }, call. = FALSE)
+  }
+
+  list(meta = meta, sample_col = sample_col)
+}
+
+
+# ---- public: restoring erased missingness ------------------------------------
+
+#' Reinstate the missing values the Shiny payload's contract fill erased
+#'
+#' \code{payload$expr_norm} is declared NA-free, and the metabolomics payload
+#' builder enforces that by replacing missing cells with row medians. Those
+#' filled values are indistinguishable from measurements, so any analysis whose
+#' result depends on missingness -- anything pairwise-complete -- is computed on
+#' a partly synthetic sample at the wrong effective n. Schema 2.1 therefore ships
+#' \code{expr_norm_missing} alongside it, and this restores the two into a
+#' matrix that means what it says.
+#'
+#' Call it unconditionally and first, before sample filtering or correlation.
+#'
+#' @section Reading the mask:
+#' \describe{
+#'   \item{logical matrix with any \code{TRUE}}{Missingness was recorded and is
+#'     restored here. Results are genuinely pairwise-complete.}
+#'   \item{logical matrix, all \code{FALSE}}{Schema >= 2.1 verified the data
+#'     complete. Nothing to restore, and a constant \code{n_used} across pairs
+#'     is the correct result -- not a symptom.}
+#'   \item{\code{NULL} or absent}{For metabolomics, a pre-2.1 payload whose
+#'     missingness provenance is unknown: this returns the matrix untouched and
+#'     downstream \code{n_used} cannot be trusted. Re-export the run. For
+#'     rnaseq and proteomics, \code{NULL} is simply not applicable -- those
+#'     builders perform no fill.}
+#' }
+#'
+#' @param expr_mat Numeric matrix, typically \code{payload$expr_norm}.
+#' @param missing_mask Logical matrix from \code{payload$expr_norm_missing}, or
+#'   \code{NULL}.
+#' @return \code{expr_mat} with \code{NA} reinstated wherever the mask is
+#'   \code{TRUE}; returned unchanged when \code{missing_mask} is \code{NULL}.
+#' @seealso \code{\link{correlate_feature_vs_all}}
+#' @examples
+#' m <- matrix(c(1, 2, 3, 4), nrow = 2,
+#'             dimnames = list(c("F1", "F2"), c("S1", "S2")))
+#' mask <- matrix(c(FALSE, FALSE, TRUE, FALSE), nrow = 2,
+#'                dimnames = dimnames(m))
+#' restore_missing_values(m, mask)
+restore_missing_values <- function(expr_mat, missing_mask) {
+  expr_mat <- as.matrix(expr_mat)
+  if (is.null(missing_mask)) return(expr_mat)
+
+  missing_mask <- as.matrix(missing_mask)
+
+  # Validated here as well as in the contract: direct callers can hand us any
+  # pair of matrices, having never gone near a payload.
+  if (!is.logical(missing_mask)) {
+    stop("restore_missing_values(): `missing_mask` must be a logical matrix, ",
+         "got ", typeof(missing_mask), ".", call. = FALSE)
+  }
+  if (anyNA(missing_mask)) {
+    stop("restore_missing_values(): `missing_mask` contains NA. A mask records ",
+         "whether a value was observed; a missing entry is a bug, not a datum.",
+         call. = FALSE)
+  }
+  if (!identical(dim(expr_mat), dim(missing_mask))) {
+    stop("restore_missing_values(): mask is ",
+         paste(dim(missing_mask), collapse = " x "), " but the matrix is ",
+         paste(dim(expr_mat), collapse = " x "), ". A stale or transposed mask ",
+         "would corrupt results silently.", call. = FALSE)
+  }
+  if (!is.null(dimnames(expr_mat)) && !is.null(dimnames(missing_mask)) &&
+      !identical(dimnames(expr_mat), dimnames(missing_mask))) {
+    stop("restore_missing_values(): mask dimnames do not match the matrix. ",
+         "Same shape but different features or samples means the mask belongs ",
+         "to a different run.", call. = FALSE)
+  }
+
+  expr_mat[missing_mask] <- NA_real_
+  expr_mat
+}
+
+
 # ---- public: the filtering boundary ------------------------------------------
 
 #' Drop QC/blank/pool samples before correlating
@@ -395,8 +565,11 @@ correlate_feature_vs_all <- function(expr_mat, feature_id, min_n = 5, top_n = NU
 #'   a column or in the rownames.
 #' @param condition_col Column naming the experimental group. From the Shiny
 #'   payload this is \code{payload$group}.
-#' @param sample_col Column holding sample IDs. Defaults to \code{"sample_id"};
-#'   if absent, the rownames of \code{sample_meta} are used.
+#' @param sample_col Column holding sample IDs. Defaults to \code{NULL}, meaning
+#'   take them from \code{rownames(sample_meta)} -- which is what the Shiny
+#'   payload builder populates, from the configured \code{effects$samples}
+#'   column. Do not assume \code{"sample_id"}: the shipped metabolomics and
+#'   proteomics templates both use \code{"SampleID"}.
 #' @param qc_flag_column Optional column that flags technical samples, for
 #'   projects that set \code{qc.qc_flag_column}. The Shiny payload does not carry
 #'   this setting, so such projects must pass it explicitly -- otherwise those
@@ -404,35 +577,26 @@ correlate_feature_vs_all <- function(expr_mat, feature_id, min_n = 5, top_n = NU
 #' @return The filtered matrix, columns restricted to biological samples.
 #' @seealso \code{filter_to_biological}, which does the actual detection.
 prepare_correlation_matrix <- function(expr_mat, sample_meta, condition_col,
-                                       sample_col = "sample_id",
+                                       sample_col = NULL,
                                        qc_flag_column = NULL) {
   expr_mat <- as.matrix(expr_mat)
   meta <- as.data.frame(sample_meta, stringsAsFactors = FALSE)
 
-  if (!sample_col %in% colnames(meta)) {
-    if (is.null(rownames(meta))) {
-      stop("prepare_correlation_matrix(): no '", sample_col, "' column in ",
-           "`sample_meta` and no rownames to fall back on. Pass `sample_col`.",
-           call. = FALSE)
-    }
-    meta[[sample_col]] <- rownames(meta)
-  }
   if (!condition_col %in% colnames(meta)) {
     stop("prepare_correlation_matrix(): condition column '", condition_col,
          "' not found in `sample_meta`. Available: ",
          paste(colnames(meta), collapse = ", "), call. = FALSE)
   }
 
+  resolved <- .resolve_sample_ids(meta, expr_mat, sample_col,
+                                  context = "prepare_correlation_matrix")
+  meta <- resolved$meta
+  sample_col <- resolved$sample_col
+
   # filter_to_biological() subsets the matrix by sample ID, so meta must
   # describe exactly the columns present, in that order.
-  idx <- match(colnames(expr_mat), as.character(meta[[sample_col]]))
-  if (anyNA(idx)) {
-    missing <- colnames(expr_mat)[is.na(idx)]
-    stop("prepare_correlation_matrix(): ", length(missing), " matrix column(s) ",
-         "have no row in `sample_meta`, e.g. ",
-         paste(utils::head(missing, 5), collapse = ", "), ".", call. = FALSE)
-  }
-  meta <- meta[idx, , drop = FALSE]
+  meta <- meta[match(colnames(expr_mat), as.character(meta[[sample_col]])), ,
+               drop = FALSE]
 
   bio <- filter_to_biological(
     mat            = expr_mat,

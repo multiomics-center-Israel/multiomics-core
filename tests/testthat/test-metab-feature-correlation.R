@@ -224,6 +224,70 @@ test_that("a query constant only on the shared samples is NA for both coefficien
   expect_true(is.finite(ctrl$pearson_r))
 })
 
+test_that("a planted -Inf is excluded from Pearson, Spearman and n_used alike", {
+  # transform_metab() can emit -Inf by log-transforming a non-positive value.
+  # is.na() does not catch it and the payload fill does not replace it, so the
+  # engine must treat non-finite as unobserved in BOTH coefficient paths --
+  # asserting Pearson alone would let an Inf slip into the Spearman rank fast
+  # path, where rank() would score it as a legitimate extreme value.
+  m <- make_mat(list(
+    Q    = c(1, 2, 3, 4, 5, 6, 7, 8),
+    Bad  = c(2, 4, -Inf, 8, 10, 12, 14, 16),
+    Good = c(2, 4, 6, 8, 10, 12, 14, 16)
+  ))
+
+  res <- expect_silent(correlate_feature_vs_all(m, "Q", min_n = 3))
+  bad  <- res[res$feature_id == "Bad", ]
+  good <- res[res$feature_id == "Good", ]
+
+  # The -Inf sample is dropped from the pair, not counted and not ranked.
+  expect_equal(bad$n_used, 7L)
+  expect_equal(good$n_used, 8L)
+
+  # Both coefficients are computed on the 7 usable samples, and both are finite.
+  expect_true(is.finite(bad$pearson_r))
+  expect_true(is.finite(bad$spearman_rho))
+  expect_equal(bad$pearson_r, 1)
+  expect_equal(bad$spearman_rho, 1)
+
+  keep <- is.finite(m["Bad", ])
+  expect_equal(bad$pearson_r,
+               unname(stats::cor(m["Q", keep], m["Bad", keep])))
+})
+
+test_that("a -Inf in the query itself is excluded from every partner", {
+  m <- make_mat(list(
+    Q  = c(1, 2, -Inf, 4, 5, 6, 7, 8),
+    P1 = c(2, 4, 6, 8, 10, 12, 14, 16),
+    P2 = c(8, 7, 6, 5, 4, 3, 2, 1)
+  ))
+
+  res <- expect_silent(correlate_feature_vs_all(m, "Q", min_n = 3))
+
+  expect_true(all(res$n_used == 7L))
+  expect_true(all(is.finite(res$pearson_r)))
+  expect_true(all(is.finite(res$spearman_rho)))
+})
+
+test_that("+Inf routes Spearman to the loop path rather than being ranked", {
+  # If the fast path were gated on !anyNA() instead of all(is.finite()), the Inf
+  # would reach rank() and be scored as the largest observation, silently
+  # inflating rho. Compare against the correlation on the usable samples only.
+  m <- make_mat(list(
+    Q   = c(1, 2, 3, 4, 5, 6, 7, 8),
+    Big = c(1, 2, 3, Inf, 5, 6, 7, 8)
+  ))
+
+  res <- expect_silent(correlate_feature_vs_all(m, "Q", min_n = 3))
+  keep <- is.finite(m["Big", ])
+  expected <- suppressWarnings(
+    stats::cor(m["Q", keep], m["Big", keep], method = "spearman")
+  )
+
+  expect_equal(res$n_used, 7L)
+  expect_equal(res$spearman_rho, unname(expected))
+})
+
 test_that("a globally constant feature is NA and raises no warning", {
   m <- make_mat(list(
     F1   = c(1, 2, 3, 4, 5, 6),
@@ -362,6 +426,84 @@ test_that("degenerate inputs are rejected with actionable messages", {
 })
 
 
+# ---- restore_missing_values --------------------------------------------------
+
+test_that("a mask reinstates NA exactly where TRUE", {
+  m <- make_mat(list(F1 = c(1, 2, 3, 4), F2 = c(5, 6, 7, 8)))
+  mask <- matrix(c(FALSE, TRUE, FALSE, FALSE,
+                   FALSE, FALSE, TRUE, FALSE),
+                 nrow = 2, byrow = TRUE, dimnames = dimnames(m))
+
+  out <- restore_missing_values(m, mask)
+
+  expect_true(is.na(out["F1", "S2"]))
+  expect_true(is.na(out["F2", "S3"]))
+  expect_equal(sum(is.na(out)), 2L)
+  expect_equal(out["F1", "S1"], 1)   # untouched cells unchanged
+})
+
+test_that("a NULL mask is a no-op, so the GUI can call it unconditionally", {
+  m <- make_mat(list(F1 = c(1, 2, 3, 4), F2 = c(5, 6, 7, 8)))
+  expect_identical(restore_missing_values(m, NULL), m)
+})
+
+test_that("an all-FALSE mask restores nothing (verified-complete payload)", {
+  m <- make_mat(list(F1 = c(1, 2, 3, 4), F2 = c(5, 6, 7, 8)))
+  mask <- matrix(FALSE, nrow = 2, ncol = 4, dimnames = dimnames(m))
+  expect_identical(restore_missing_values(m, mask), m)
+})
+
+test_that("a malformed mask is rejected rather than silently mis-indexing", {
+  m <- make_mat(list(F1 = c(1, 2, 3, 4), F2 = c(5, 6, 7, 8)))
+  good <- matrix(FALSE, nrow = 2, ncol = 4, dimnames = dimnames(m))
+
+  numeric_mask <- matrix(0, nrow = 2, ncol = 4, dimnames = dimnames(m))
+  expect_error(restore_missing_values(m, numeric_mask), "logical")
+
+  na_mask <- good; na_mask[1, 1] <- NA
+  expect_error(restore_missing_values(m, na_mask), "contains NA")
+
+  expect_error(restore_missing_values(m, t(good)), "mask is")
+
+  renamed <- good; colnames(renamed) <- paste0("X", 1:4)
+  expect_error(restore_missing_values(m, renamed), "dimnames")
+})
+
+test_that("mask -> fill -> restore round-trips to the un-filled statistics", {
+  # The test that actually pins the fix: it fails if the mask is captured after
+  # the payload builder's row-median fill rather than before it.
+  original <- withr::with_seed(4, make_mat(list(
+    Q  = c(rnorm(6), NA, NA),
+    P1 = rnorm(8),
+    P2 = c(rnorm(5), NA, rnorm(2))
+  )))
+
+  mask <- !is.finite(original)
+
+  filled <- original
+  for (i in seq_len(nrow(filled))) {
+    row_i <- filled[i, ]; na_i <- is.na(row_i)
+    if (any(na_i)) {
+      md <- stats::median(row_i, na.rm = TRUE)
+      filled[i, na_i] <- if (is.na(md)) 0 else md
+    }
+  }
+  expect_false(anyNA(filled))                       # as the payload ships it
+
+  restored <- restore_missing_values(filled, mask)
+  expect_equal(restored, original)
+
+  from_restored <- correlate_feature_vs_all(restored, "Q", min_n = 3)
+  from_original <- correlate_feature_vs_all(original, "Q", min_n = 3)
+  expect_equal(from_restored, from_original)
+
+  # And the filled matrix on its own gives different, wrong-n statistics.
+  from_filled <- correlate_feature_vs_all(filled, "Q", min_n = 3)
+  expect_true(all(from_filled$n_used == ncol(original)))
+  expect_false(isTRUE(all.equal(from_filled$n_used, from_original$n_used)))
+})
+
+
 # ---- prepare_correlation_matrix ----------------------------------------------
 
 test_that("QC, blank and pool samples are removed before correlating", {
@@ -370,6 +512,7 @@ test_that("QC, blank and pool samples are removed before correlating", {
     condition = c("ctrl", "ctrl", "trt", "trt", "QC", "blank"),
     stringsAsFactors = FALSE
   )
+  rownames(meta) <- meta$sample_id
   m <- make_mat(list(F1 = 1:6, F2 = 6:1), samples = meta$sample_id)
 
   out <- prepare_correlation_matrix(m, meta, condition_col = "condition")
@@ -384,6 +527,7 @@ test_that("an all-biological matrix passes through untouched", {
     condition = c("a", "a", "b", "b", "b"),
     stringsAsFactors = FALSE
   )
+  rownames(meta) <- meta$sample_id
   m <- make_mat(list(F1 = 1:5, F2 = 5:1), samples = meta$sample_id)
 
   out <- prepare_correlation_matrix(m, meta, condition_col = "condition")
@@ -408,6 +552,7 @@ test_that("a configured qc_flag_column is honoured when supplied", {
     run_type  = c("sample", "sample", "sample", "sample", "pool"),
     stringsAsFactors = FALSE
   )
+  rownames(meta) <- meta$sample_id
   m <- make_mat(list(F1 = 1:5, F2 = 5:1), samples = meta$sample_id)
 
   kept <- prepare_correlation_matrix(m, meta, condition_col = "condition")
@@ -424,6 +569,7 @@ test_that("misaligned or over-filtered inputs fail loudly", {
     condition = c("a", "b", "QC", "QC"),
     stringsAsFactors = FALSE
   )
+  rownames(meta) <- meta$sample_id
   m <- make_mat(list(F1 = 1:4, F2 = 4:1), samples = meta$sample_id)
 
   # Only 2 biological samples survive -- too few to correlate.
@@ -442,6 +588,110 @@ test_that("misaligned or over-filtered inputs fail loudly", {
 })
 
 
+# ---- sample-ID resolution (both public functions) ----------------------------
+
+# The shipped metabolomics and proteomics templates set effects$samples to
+# "SampleID", and the payload does not expose that name -- it exposes rownames.
+# A "sample_id" default therefore silently mismatched the standard template
+# (and hard-errored inside the plot). These pin the NULL-default behaviour.
+
+sampleid_fixture <- function() {
+  meta <- data.frame(
+    SampleID  = paste0("S", 1:6),
+    treatment = c("ctrl", "ctrl", "mid", "mid", "high", "high"),
+    stringsAsFactors = FALSE
+  )
+  rownames(meta) <- meta$SampleID           # as the payload builder sets it
+  m <- make_mat(list(
+    F1 = c(1, 2, 3, 4, 5, 6),
+    F2 = c(2, 3, 4, 5, 6, 7)
+  ), samples = meta$SampleID)
+  list(m = m, meta = meta)
+}
+
+test_that("a SampleID-style payload works with sample_col omitted", {
+  fx <- sampleid_fixture()
+
+  out <- prepare_correlation_matrix(fx$m, fx$meta, condition_col = "treatment")
+  expect_equal(colnames(out), paste0("S", 1:6))
+
+  p <- plot_feature_correlation_profiles(
+    fx$m, fx$meta, feature_id = "F1", partner_ids = "F2",
+    group_col = "treatment"
+  )
+  expect_s3_class(p, "ggplot")
+})
+
+test_that("an explicit sample_col is honoured by both functions", {
+  fx <- sampleid_fixture()
+
+  out <- prepare_correlation_matrix(fx$m, fx$meta, condition_col = "treatment",
+                                    sample_col = "SampleID")
+  expect_equal(colnames(out), paste0("S", 1:6))
+
+  p <- plot_feature_correlation_profiles(
+    fx$m, fx$meta, feature_id = "F1", partner_ids = "F2",
+    group_col = "treatment", sample_col = "SampleID"
+  )
+  expect_s3_class(p, "ggplot")
+})
+
+test_that("a bogus sample_col errors naming the available columns", {
+  fx <- sampleid_fixture()
+  expect_error(
+    prepare_correlation_matrix(fx$m, fx$meta, condition_col = "treatment",
+                               sample_col = "nope"),
+    "SampleID"
+  )
+})
+
+test_that("integer-defaulted rownames error telling the caller to pass sample_col", {
+  meta <- data.frame(SampleID = paste0("S", 1:4),
+                     treatment = c("a", "a", "b", "b"),
+                     stringsAsFactors = FALSE)   # rownames are "1".."4"
+  m <- make_mat(list(F1 = 1:4, F2 = 4:1), samples = meta$SampleID)
+
+  expect_error(
+    prepare_correlation_matrix(m, meta, condition_col = "treatment"),
+    "Pass `sample_col`"
+  )
+})
+
+test_that("duplicate and NA IDs are rejected via BOTH routes", {
+  # The explicit path must carry the same guarantees as the rownames fallback:
+  # a duplicated ID mis-aligns samples just as silently either way.
+  m <- make_mat(list(F1 = 1:4, F2 = 4:1), samples = paste0("S", 1:4))
+
+  dup <- data.frame(SampleID = c("S1", "S2", "S3", "S3"),
+                    treatment = c("a", "a", "b", "b"),
+                    stringsAsFactors = FALSE)
+  expect_error(
+    prepare_correlation_matrix(m, dup, condition_col = "treatment",
+                               sample_col = "SampleID"),
+    "not unique"
+  )
+
+  na_ids <- data.frame(SampleID = c("S1", "S2", NA, "S4"),
+                       treatment = c("a", "a", "b", "b"),
+                       stringsAsFactors = FALSE)
+  expect_error(
+    prepare_correlation_matrix(m, na_ids, condition_col = "treatment",
+                               sample_col = "SampleID"),
+    "missing or"
+  )
+
+  # And via rownames: make.unique-free duplicates are impossible in rownames, so
+  # the rownames route is exercised by the coverage check instead.
+  mismatched <- data.frame(treatment = c("a", "a", "b", "b"),
+                           stringsAsFactors = FALSE)
+  rownames(mismatched) <- c("S1", "S2", "S9", "S10")
+  expect_error(
+    prepare_correlation_matrix(m, mismatched, condition_col = "treatment"),
+    "no row in"
+  )
+})
+
+
 # ---- plot_feature_correlation_profiles ---------------------------------------
 
 plot_fixture <- function() {
@@ -450,6 +700,7 @@ plot_fixture <- function() {
     condition = c("ctrl", "ctrl", "mid", "mid", "high", "high"),
     stringsAsFactors = FALSE
   )
+  rownames(meta) <- meta$sample_id
   m <- make_mat(list(
     F1   = c(1, 2, 3, 4, 5, 6),
     F2   = c(2, 3, 4, 5, 6, 7),
@@ -513,6 +764,50 @@ test_that("label_map degrades safely when NULL, partial or unnamed", {
   unnamed <- do.call(plot_feature_correlation_profiles,
                      c(args, list(label_map = c("Glucose", "Lactate"))))
   expect_s3_class(unnamed, "ggplot")
+})
+
+test_that("a group with no observed values becomes a gap, never a fabricated point", {
+  # Reachable only once missingness is restored: every sample in one group is
+  # unobserved for this feature, so its group mean is undefined. It must be
+  # drawn as a break in the line -- interpolating would show the reader a
+  # measurement nobody took.
+  fx <- plot_fixture()
+  m <- fx$m
+  m["F2", c("S1", "S2")] <- NA          # the whole "ctrl" group
+
+  expect_message(
+    p <- plot_feature_correlation_profiles(
+      m, fx$meta, feature_id = "F1", partner_ids = "F2",
+      group_col = "condition"
+    ),
+    "no observed values"
+  )
+  expect_s3_class(p, "ggplot")
+
+  built <- ggplot2::ggplot_build(p)
+  ys <- unlist(lapply(built$data, function(d) d$y))
+  expect_false(any(is.nan(ys)))
+  expect_false(any(is.infinite(ys)))
+
+  # F2 still contributes its other two groups -- the gap is one point, not the
+  # whole series.
+  f2_layer <- built$data[[1]]
+  expect_true(sum(!is.na(f2_layer$y)) >= 2)
+})
+
+test_that("a -Inf in the matrix does not reach the plot as a coordinate", {
+  fx <- plot_fixture()
+  m <- fx$m
+  m["F2", "S3"] <- -Inf
+
+  p <- plot_feature_correlation_profiles(
+    m, fx$meta, feature_id = "F1", partner_ids = "F2",
+    group_col = "condition"
+  )
+  built <- ggplot2::ggplot_build(p)
+  ys <- unlist(lapply(built$data, function(d) d$y))
+  expect_false(any(is.nan(ys)))
+  expect_false(any(is.infinite(ys)))
 })
 
 test_that("a flat profile is drawn rather than crashing or producing NaN", {

@@ -1,5 +1,5 @@
 # ============================================================
-# Shiny Payload Contract — Canonical Schema v2.0
+# Shiny Payload Contract — Canonical Schema v2.1
 # ============================================================
 # This file defines the UNIFIED contract for all omics Shiny payloads.
 # All builders (rnaseq, proteomics, metabolomics) MUST return payloads
@@ -69,6 +69,22 @@ get_payload_key_definitions <- function() {
             type = "data.frame",
             required = FALSE,
             description = "Long-format expression data (feature_id, sample_id, value + metadata)"
+        ),
+        expr_norm_missing = list(
+            type = "matrix",
+            required = FALSE,
+            description = paste(
+                "Logical matrix, dim/dimnames matching expr_norm. TRUE where the",
+                "normalized value was not a usable observation (NA/NaN/+-Inf)",
+                "BEFORE expr_norm was made NA-free. Since schema 2.1 metabolomics",
+                "always writes it, so all-FALSE is a positive claim of",
+                "completeness; a metabolomics payload at >= 2.1 without it fails",
+                "validation. NULL means: for metabolomics, a pre-2.1 payload whose",
+                "provenance is unknown; for rnaseq/proteomics, not applicable --",
+                "those builders perform no fill. Restore with",
+                "restore_missing_values() before any analysis whose result depends",
+                "on missingness."
+            )
         ),
 
         # --- QC/PCA (4 keys) ---
@@ -252,7 +268,7 @@ get_optional_keys <- function() {
 #'
 #' @return Named list with all canonical keys initialized
 #' @export
-init_shiny_payload <- function(source, version = "2.0") {
+init_shiny_payload <- function(source, version = "2.1") {
     # Validate source
     valid_sources <- c("rnaseq", "proteomics", "metabolomics")
     if (!source %in% valid_sources) {
@@ -366,6 +382,52 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
   }
   if (anyNA(payload$expr_norm)) {
     signal(paste0(prefix, " expr_norm must NOT contain NA values (imputation required)"))
+  }
+  
+  # expr_norm_missing: the provenance of the line above. expr_norm is made
+  # NA-free by filling, so without this mask a consumer cannot tell a measured
+  # value from a substituted one, and any pairwise-complete analysis silently
+  # computes on a partly synthetic sample at the wrong effective n.
+  if (!is.null(payload$expr_norm_missing)) {
+    mask <- payload$expr_norm_missing
+    if (!is.matrix(mask) || !is.logical(mask)) {
+      signal(paste0(prefix, " expr_norm_missing must be a logical matrix"))
+    } else {
+      if (anyNA(mask)) {
+        signal(paste0(prefix, " expr_norm_missing must not contain NA -- a mask",
+                      " records whether a value was observed, so a missing",
+                      " entry is a bug, not a datum"))
+      }
+      if (!identical(dim(mask), dim(payload$expr_norm))) {
+        signal(paste0(prefix, " expr_norm_missing dim (",
+                      paste(dim(mask), collapse = " x "),
+                      ") must match expr_norm (",
+                      paste(dim(payload$expr_norm), collapse = " x "), ")"))
+      } else if (!identical(dimnames(mask), dimnames(payload$expr_norm))) {
+        signal(paste0(prefix, " expr_norm_missing dimnames must match expr_norm",
+                      " -- same shape but different features or samples means",
+                      " the mask belongs to a different run"))
+      }
+    }
+  }
+  
+  # Metabolomics is the only builder that fills, so from schema 2.1 onward it
+  # must record what it filled. Without this the version bump would promise a
+  # provenance guarantee that nothing enforces.
+  # numeric_version(), not string comparison: "2.9" < "2.10" is FALSE as
+  # strings, so a string gate would quietly stop firing at 2.10.
+  payload_ver <- payload$payload_version
+  is_metab_21 <- identical(payload$payload_source, "metabolomics") &&
+    !is.null(payload_ver) &&
+    length(payload_ver) == 1L &&
+    !is.na(payload_ver) &&
+    tryCatch(numeric_version(payload_ver) >= numeric_version("2.1"),
+             error = function(e) FALSE)
+  
+  if (is_metab_21 && is.null(payload$expr_norm_missing)) {
+    signal(paste0(prefix, " metabolomics payloads at schema >= 2.1 must carry",
+                  " expr_norm_missing; NULL means the missingness provenance of",
+                  " expr_norm was lost"))
   }
   
   # 5. Dimensional consistency

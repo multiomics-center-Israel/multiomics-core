@@ -2,8 +2,9 @@
 
 **Audience:** whoever owns the Shiny app.
 **Status:** engine implemented in `multiomics-core`; the GUI panel is not built.
-**Payload impact:** **none.** No new keys, no contract change, nothing to
-re-run. Everything below works against payloads the pipeline already writes.
+**Payload impact:** **this feature requires payload schema 2.1.** It adds one
+canonical key, `expr_norm_missing`. Runs exported at 2.0 still load, but their
+correlation statistics are not trustworthy — see *Schema 2.1* below.
 
 ---
 
@@ -15,39 +16,39 @@ it across the samples.
 
 The pipeline cannot precompute this: the feature is chosen interactively, so it
 is unknown at `tar_make()` time. It also does not need to. One-vs-all is
-`O(features × samples)` — **measured at ~0.26 s for 3,000 features × 24 samples**,
-~0.36 s with 15% missing values. Compute it on demand in the reactive.
+`O(features × samples)` — measured at ~0.26 s for 3,000 features × 24 samples,
+~0.36 s with 15% missing. Compute it on demand in the reactive.
 
-`multiomics-core` provides three functions. The GUI supplies a dropdown and a
+`multiomics-core` provides four functions. The GUI supplies a dropdown and a
 table.
 
 ---
 
-## The three functions
+## The four functions
 
-All live in `R/domain/metabolomics/09_feature_correlation.R` and
-`R/domain/metabolomics/09b_feature_correlation_plots.R`.
+In `R/domain/metabolomics/09_feature_correlation.R` and
+`09b_feature_correlation_plots.R`.
 
 ```r
+restore_missing_values(expr_mat, missing_mask)
+
 prepare_correlation_matrix(expr_mat, sample_meta, condition_col,
-                           sample_col = "sample_id", qc_flag_column = NULL)
+                           sample_col = NULL, qc_flag_column = NULL)
 
 correlate_feature_vs_all(expr_mat, feature_id, min_n = 5, top_n = NULL)
 
 plot_feature_correlation_profiles(expr_mat, meta, feature_id, partner_ids,
-                                  group_col, sample_col = "sample_id",
+                                  group_col, sample_col = NULL,
                                   label_map = NULL)
 ```
 
 ### Worked example
 
 ```r
-# Once per payload:
-mat <- prepare_correlation_matrix(
-  payload$expr_norm,
-  payload$sample_meta,
-  condition_col = payload$group
-)
+# Once per payload — restore, then filter. Order matters.
+mat <- restore_missing_values(payload$expr_norm, payload$expr_norm_missing)
+mat <- prepare_correlation_matrix(mat, payload$sample_meta,
+                                  condition_col = payload$group)
 
 # Dropdown choices — see "Building the dropdown" below.
 choices <- rownames(mat)
@@ -65,26 +66,91 @@ plot_feature_correlation_profiles(
 )
 ```
 
+Note `sample_col` is omitted in both calls. **Do not pass `"sample_id"`** — see
+*Sample IDs* below.
+
 ---
 
-## ⚠️ Filter first — `expr_norm` still contains QC samples
+## ⚠️ Step 1: restore missingness
 
-`payload$expr_norm` is assigned straight from `pre$expr_work`, and **QC, blank
-and pooled samples are still in it.** This pipeline filters at each point of
-use, not upstream — `mod_metabolomics_clustering()` and the DE code both call
-`filter_to_biological()` themselves.
+`payload$expr_norm` is declared NA-free, and the metabolomics builder enforces
+that by substituting values. Precisely what happens:
 
-Pooled QC samples sit at the average of everything, so leaving them in distorts
-every coefficient in the table. **Always call `prepare_correlation_matrix()`
-first.** It wraps the same `filter_to_biological()` the rest of the pipeline
-uses, so the GUI does not need to know the QC/blank/pool naming conventions.
+- **`NA` and `NaN` cells are replaced with the feature's row median.** They are
+  then indistinguishable from real measurements.
+- **`±Inf` cells are *not* replaced** — the fill only targets `NA`/`NaN`, so an
+  `-Inf` (which `transform_metab()` can produce by log-transforming a
+  non-positive value) remains in `expr_norm` as `-Inf`.
 
-**One gap to be aware of:** the payload does not carry the project's
-`qc.qc_flag_column` setting. Projects that mark technical samples through that
-configured column — rather than through the condition value or the sample ID —
-must pass `qc_flag_column = "<column>"` explicitly, or those samples will not be
-recognised as technical. Surfacing that setting in the payload would be a
-contract change and needs team sign-off; it was deliberately left out of scope.
+Both cases are recorded in `expr_norm_missing`, and
+`restore_missing_values()` turns both back into `NA`. So after restoration the
+matrix contains only finite values and `NA`, and every consumer — Pearson,
+Spearman, and the profile plot — shares one definition of an observed value.
+
+**Skipping this step does not error; it silently changes what the numbers mean.**
+Correlations get computed on substituted values at the wrong effective n, which
+is invalid as pairwise observed-data inference. It can attenuate `r` (filled
+values pull toward the row centre) while simultaneously inflating the degrees of
+freedom, so the error does not even bias p-values in a predictable direction.
+
+---
+
+## ⚠️ Step 2: filter QC samples
+
+`expr_norm` still contains QC, blank and pooled samples. This pipeline filters
+at each point of use, not upstream — `mod_metabolomics_clustering()` and the DE
+code both call `filter_to_biological()` themselves. Pooled QC samples sit at the
+average of everything, so leaving them in distorts every coefficient.
+
+`prepare_correlation_matrix()` wraps the same `filter_to_biological()` the rest
+of the pipeline uses, so the GUI does not need to know the QC/blank/pool naming
+conventions.
+
+**One gap:** the payload does not carry the project's `qc.qc_flag_column`
+setting. Projects that mark technical samples through that configured column —
+rather than through the condition value or the sample ID — must pass
+`qc_flag_column = "<column>"` explicitly. Surfacing that setting in the payload
+would be a further contract change and was left out of scope.
+
+---
+
+## Schema 2.1 and the `expr_norm_missing` key
+
+`expr_norm_missing` is a logical matrix with the same dim and dimnames as
+`expr_norm`, `TRUE` where the cell was not a usable observation before the fill.
+**It has three meaningful states, and they are deliberately distinguishable:**
+
+| Value | Meaning | What the GUI should do |
+|---|---|---|
+| matrix, any `TRUE` | missingness recorded and restorable | normal path; results are pairwise-complete |
+| matrix, all `FALSE` | schema ≥ 2.1 verified the data complete | normal path; nothing to restore |
+| `NULL` / absent | **pre-2.1 payload — provenance unknown** | warn the user; recommend re-export |
+
+`NULL` means something different per omics: for **metabolomics** it means a
+pre-2.1 payload whose missingness was erased; for **rnaseq and proteomics** it
+means *not applicable*, since those builders perform no fill.
+
+Metabolomics payloads at schema ≥ 2.1 are **required** to carry the key —
+`assert_shiny_payload_contract()` fails them otherwise, so the version bump
+enforces the guarantee rather than merely advertising it.
+
+### Checking provenance
+
+```r
+payload$payload_version                 # "2.1" or later
+m <- payload$expr_norm_missing
+if (is.null(m)) {
+  # legacy payload: correlations will run, but n_used is not pairwise-complete
+} else {
+  sprintf("%d of %d cells unobserved", sum(m), length(m))
+}
+```
+
+**Do not infer provenance from `n_used`.** It is tempting to treat "every pair
+reports the same `n_used`" as evidence the mask was missing — it is not. An
+all-`FALSE` mask is a legitimate verified-complete payload, and constant
+`n_used` is exactly the correct result for one. The mask and schema version are
+the authoritative signal; `n_used` is a statistic, not a diagnostic.
 
 ---
 
@@ -124,9 +190,10 @@ disagreement is often the most informative thing in the row.
 
 ## Missing values and untested pairs
 
-Metabolomics has **no imputation stage**, so real `NA`s reach the matrix. Each
-pair is computed on its own mutually-observed samples, and `n_used` reports that
-count — different rows legitimately rest on different numbers of samples.
+Metabolomics has **no imputation stage**, so real missingness reaches the matrix
+once restored. Each pair is computed on its own mutually-observed samples, and
+`n_used` reports that count — different rows legitimately rest on different
+numbers of samples.
 
 Rows can come back with `NA` statistics for three reasons. They are **kept in
 the table on purpose**, so a reader sees "not tested" rather than wondering
@@ -155,6 +222,25 @@ there.
 
 ---
 
+## Sample IDs
+
+**Both** `prepare_correlation_matrix()` and `plot_feature_correlation_profiles()`
+default `sample_col` to `NULL`, meaning *take the IDs from
+`rownames(sample_meta)`* — which is what the payload builder populates, from the
+project's configured `effects$samples` column.
+
+**Do not pass `"sample_id"`.** The shipped metabolomics and proteomics templates
+both set `effects$samples: "SampleID"`, and the payload does not expose that
+name. Omitting the argument is correct for any standard payload. Pass it
+explicitly only when feeding a raw `pre$meta` whose rownames are not the IDs.
+
+Resolved IDs are validated the same way whichever route they came from: no
+missing or empty values, no duplicates, and full coverage of
+`colnames(expr_mat)`. A mismatch errors with a message naming the fix rather
+than mis-aligning samples silently.
+
+---
+
 ## Building the dropdown
 
 Use **`rownames(expr_norm)` as the source of truth** for which features are
@@ -173,6 +259,20 @@ Pass that mapping to the plot as `label_map` (a named character vector, IDs as
 names). It may be partial — anything without an entry falls back to its raw ID.
 An **unnamed** vector is ignored rather than trusted, since indexing by position
 would mislabel every feature.
+
+---
+
+## The profile plot
+
+Overlays z-scored group-mean profiles: the chosen feature in black, its
+correlates in colour. Z-scoring per feature is what lets a low-abundance and a
+high-abundance metabolite be compared — the shape is the point, not the height.
+
+**Gaps are real.** If a feature has no observed values in an entire group, that
+profile point is drawn as a **break in the line**, never interpolated — a
+fabricated midpoint would show a measurement nobody took. The function emits a
+message naming how many feature × group cells are gaps, so a broken line is
+explainable rather than mysterious.
 
 ---
 
@@ -225,8 +325,13 @@ sort was ever tested.
 
 ## Tests
 
-`tests/testthat/test-metab-feature-correlation.R` — 100 assertions covering the
-maths (agreement with `stats::cor.test` for both coefficients, including a
-tied-value case), the pairwise-complete zero-variance guard in both directions,
-BH scope, `min_n`, determinism, and the plot's edge cases. Run it before
-changing anything here.
+- `tests/testthat/test-metab-feature-correlation.R` — the engine: agreement with
+  `stats::cor.test` for both coefficients (including a tied-value case), the
+  pairwise-complete zero-variance guard in both directions, non-finite handling
+  across Pearson *and* Spearman, BH scope, `min_n`, determinism, sample-ID
+  resolution, and the plot's edge cases including group gaps.
+- `tests/testthat/test-metab-expr-norm-missing-mask.R` — the payload key: the
+  three mask states, `-Inf`/`NaN` capture, contract validation, the metabolomics
+  ≥ 2.1 requirement, and v2.0 backward compatibility.
+
+Run both before changing anything here.

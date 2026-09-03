@@ -102,6 +102,26 @@ build_shiny_payload_metabolomics <- function(
     # expr_long: Long-format expression with metadata
     payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
 
+    # expr_norm_missing (schema 2.1): record which cells were NOT usable
+    # observations BEFORE the fill below overwrites them. Without this the
+    # payload carries the numbers but not the missingness, and any
+    # pairwise-complete analysis downstream silently treats substituted values
+    # as measurements at the wrong effective n.
+    #
+    # !is.finite(), not is.na(): transform_metab() can emit -Inf by
+    # log-transforming a non-positive value. The fill below only replaces NA, so
+    # a -Inf would otherwise survive unflagged into every consumer.
+    #
+    # Always written, never NULL, so the three states stay distinguishable:
+    #   any TRUE   -> missingness existed and was recorded
+    #   all FALSE  -> verified complete at export
+    #   NULL       -> a pre-2.1 payload; provenance unknown
+    # Note `payload$key <- NULL` would DELETE the entry rather than blank it, so
+    # there is deliberately no else-branch here.
+    if (!is.null(payload$expr_norm)) {
+        payload$expr_norm_missing <- !is.finite(payload$expr_norm)
+    }
+
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
         na_count <- sum(is.na(payload$expr_norm))
