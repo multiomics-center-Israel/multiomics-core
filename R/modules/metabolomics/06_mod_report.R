@@ -75,6 +75,12 @@ mod_met_qc_summary_report <- function(qc_comparison_file, qc_suite_files,
 #' @param enrichment_res  List from mod_metabolomics_enrichment() (or NULL).
 #' @param config          Full pipeline config.
 #' @param out_dir         Output directory for this mode.
+#' @param mummichog_pathways Per-contrast mummichog pathway tables
+#'   (\code{metab_mummichog_report_pathways}), or NULL.
+#' @param mummichog_files    Flat list of every file the pinned mummichog stage
+#'   produced (\code{metab_mummichog_pinned_files}), or NULL. Supplies the
+#'   EmpiricalCompound tables the GSEA and supporting-evidence layers read; with
+#'   NULL the mummichog section falls back to ORA plot + table only.
 #' @return Character path to the rendered HTML file.
 mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     clustering_res = NULL,
@@ -85,7 +91,8 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
                                     qc_comparison_file = NULL,
                                     qc_suite_files     = NULL,
                                     commentary_file    = NULL,
-                                    mummichog_pathways = NULL) {
+                                    mummichog_pathways = NULL,
+                                    mummichog_files    = NULL) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) {
         warning("rmarkdown not available -- skipping report generation")
         return(character(0))
@@ -128,21 +135,34 @@ mod_metabolomics_report <- function(pre, qc_res, de_res,
     }
 
     # Build per-contrast mummichog report sections (06e) from the per-contrast
-    # pathway tables. Empty list when mummichog is disabled or no contrast has a
-    # result, which keeps the report section hidden.
-    mummi_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    # pathway tables: the ORA table, the complementary GSEA analysis + scatter
+    # (06g) and the pathway supporting-evidence drill-down (06f). The raw file
+    # list is needed for the EC-level tables those two layers read, and the DE
+    # tables supply GSEA's signed ranking statistic. Empty list when mummichog is
+    # disabled or no contrast has a result, which keeps the report section hidden.
+    mummi_sections <- build_mummichog_report_sections(
+        mummichog_pathways, config,
+        files    = mummichog_files,
+        de_res   = de_res,
+        row_data = pre$row_data
+    )
 
-    # Save standalone presentation exports per contrast (PNG + PDF plot, TSV +
-    # CSV table) into mummichog_pinned/, named by the section's de-duplicated
-    # slug (so labels that collapse to the same token don't overwrite each
-    # other), in addition to embedding them in the HTML. The engine's mcg_*
-    # result files are untouched. Paths are returned so the file target tracks them.
+    # Save standalone presentation exports per contrast (plots as PNG + PDF,
+    # tables as TSV + CSV) into mummichog_pinned/, named by the section's
+    # de-duplicated slug (so labels that collapse to the same token don't
+    # overwrite each other), in addition to embedding them in the HTML. The
+    # engine's mcg_* result files are untouched. Paths are returned so the file
+    # target tracks them.
     mummi_exports <- character(0)
     for (contrast in names(mummi_sections)) {
         s <- mummi_sections[[contrast]]
-        mummi_exports <- c(mummi_exports,
-                           save_mummichog_exports(s$plot, s$table, out_dir,
-                                                  contrast_label = s$slug))
+        mummi_exports <- c(
+            mummi_exports,
+            save_mummichog_exports(s$ora_plot, s$table, out_dir,
+                                   contrast_label = s$slug,
+                                   gsea      = s$gsea,
+                                   gsea_plot = s$gsea_plot,
+                                   evidence  = s$evidence))
     }
 
     render_params <- list(
