@@ -380,11 +380,20 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
       tar_target(
         metab_mummichog_report_pathways,
         read_mummichog_pathways_by_contrast(metab_mummichog_pinned_files)
+      ),
+      # Report-facing file list: the same tracked paths, under a stable symbol
+      # the report target can depend on in both branches. The GSEA (06g) and
+      # supporting-evidence (06f) layers read the EmpiricalCompound tables from
+      # these files; the pathway tables above are not enough on their own.
+      tar_target(
+        metab_mummichog_report_files,
+        metab_mummichog_pinned_files
       )
     ))
   } else {
     analysis_core <- c(analysis_core, list(
-      tar_target(metab_mummichog_report_pathways, NULL)
+      tar_target(metab_mummichog_report_pathways, NULL),
+      tar_target(metab_mummichog_report_files, NULL)
     ))
   }
 
@@ -484,7 +493,8 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         qc_comparison_file = NULL,
         qc_suite_files     = NULL,
         commentary_file    = metab_commentary,
-        mummichog_pathways = metab_mummichog_report_pathways
+        mummichog_pathways = metab_mummichog_report_pathways,
+        mummichog_files    = metab_mummichog_report_files
       ),
       format = "file"
     ),

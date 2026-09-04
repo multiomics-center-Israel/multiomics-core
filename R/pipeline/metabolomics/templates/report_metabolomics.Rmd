@@ -309,6 +309,13 @@ rf_res         <- params$rf_res
 plsda_res      <- params$plsda_res
 enrichment_res <- params$enrichment_res
 mummi_sections <- params$mummichog_sections %||% list()
+# Which contrasts got the complementary GSEA (06g). Computed here, in the
+# always-active unpack chunk, because the Output Files and Methods sections read
+# it too — not only the mummichog section, which may be switched off.
+mummi_gsea     <- Filter(Negate(is.null), lapply(mummi_sections, `[[`, "gsea"))
+has_gsea       <- length(mummi_gsea) > 0
+has_mummi_evidence <- any(!vapply(mummi_sections,
+                                  function(s) is.null(s$evidence), logical(1)))
 
 n_features <- if (!is.null(pre)) nrow(pre$expr_work) else NA
 n_samples  <- if (!is.null(pre)) ncol(pre$expr_work) else NA
@@ -2398,33 +2405,133 @@ n_perm  <- mummi_cfg$n_permutations %||% 100
 
 cat("## Methodology\n\n")
 cat("[**Mummichog**](https://shuzhao-li.github.io/mummichog.org/) (Li et al., 2013) performs pathway enrichment analysis directly from mass-spectrometry features (m/z values) without requiring prior metabolite identification. ")
-cat("By testing whether significant m/z features map to pathway members more often than expected by chance, it bypasses the identification bottleneck of traditional approaches. Each contrast below is an INDEPENDENT mummichog run over all features (that contrast's own p-values define its significant set).\n\n")
+cat("Features are grouped into **EmpiricalCompounds** (ECs) — tentative metabolites supported by one or more co-eluting ions — and pathways are tested on those ECs. This bypasses the identification bottleneck of traditional approaches. Each contrast below is an INDEPENDENT mummichog run over all features (that contrast's own p-values define its significant set).\n\n")
+
+cat("Two complementary analyses are reported per contrast, and they answer **different questions**:\n\n")
+cat("- **Mummichog ORA** (the pinned 2.7.0 engine) uses only the features/ECs passing the significance cutoff and asks whether they over-populate a pathway. It reports the overlap, the detected pathway size and an **empirical permutation p-value**, and it is the analysis the *Supporting Evidence* drill-down traces.\n")
+if (has_gsea) {
+  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EC list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / p-value / adjusted p-value, capturing coordinated directional shifts that never reach per-feature significance.\n\n")
+} else {
+  cat("- **GSEA (MS peaks-to-pathways)** was not available for this run (it needs `fgsea`, a readable metabolic model via `model_ref`/`model_json`, and a signed DE statistic), so only the ORA analysis is shown.\n\n")
+}
+cat("Neither analysis replaces the other, and neither is filtered by the other.\n\n")
 
 cat("**Parameters:**\n\n")
-cat(sprintf("- Significance cutoff: p < %s\n", p_cut))
+cat(sprintf("- Significance cutoff (ORA): p < %s\n", p_cut))
 cat(sprintf("- Mass tolerance: %d ppm\n", ppm))
-cat(sprintf("- Permutations: %d\n\n", n_perm))
+cat(sprintf("- Permutations (ORA): %d\n", n_perm))
+if (has_gsea) {
+  g1 <- mummi_gsea[[1]]
+  cat(sprintf("- GSEA ranking statistic: %s\n", g1$metric_label))
+  cat(sprintf("- GSEA: `fgsea::fgseaSimple`, %d permutations, seed %d, EC-space gene sets\n",
+              g1$n_perm, g1$seed))
+}
+cat("\n")
 
-cat("*Reference: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123.*\n\n")
+cat("*References: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123. — Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388–W396 (MS Peaks-to-Pathways GSEA).*\n\n")
+```
+
+```{r mummichog-evidence-helpers, include=FALSE}
+# ---------------------------------------------------------------------------
+# Rendering helpers for the mummichog evidence drill-down.
+# Formatting only — all matching/joining logic lives in the domain layer (06f).
+# Static HTML tables (not DT widgets) inside <details>, so a collapsed section
+# can never render at zero width in the self-contained report.
+# ---------------------------------------------------------------------------
+
+# Cap the drill-down so a model with hundreds of pathways cannot blow up the
+# HTML; the full tables are always on disk as mummichog_evidence_*.tsv.
+MUMMI_EVIDENCE_MAX_PATHWAYS <- 25L
+
+evidence_kable <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
+  cat(knitr::kable(df, format = "html", escape = TRUE, row.names = FALSE,
+                   table.attr = "class='table table-sm' style='font-size:0.85em'"),
+      "\n\n", sep = "")
+}
+
+# One collapsible block per pathway: EC-level evidence, then the measured
+# features behind each EC (every signal, nothing collapsed).
+render_pathway_evidence <- function(ev, pathway) {
+  ec  <- ev$ec_table[ev$ec_table$Pathway == pathway, , drop = FALSE]
+  ft  <- ev$feature_table[ev$feature_table$Pathway == pathway, , drop = FALSE]
+  if (nrow(ec) == 0) return(invisible(NULL))
+  summ <- ev$pathway_summary[ev$pathway_summary$Pathway == pathway, , drop = FALSE]
+
+  cat(sprintf(
+    "<details><summary><b>%s</b> &nbsp;—&nbsp; overlap %s / %s ECs, p = %s, %d supporting EC(s), %d measured feature(s)</summary>\n\n",
+    htmltools::htmlEscape(pathway),
+    summ$Overlap[1], summ[["Detected pathway size"]][1],
+    format.pval(summ[["p.value"]][1], digits = 3),
+    nrow(ec), nrow(ft)))
+
+  evidence_kable(ec[, setdiff(names(ec), "Pathway"), drop = FALSE])
+
+  cat("<details><summary>Underlying measured features</summary>\n\n")
+  evidence_kable(ft[, setdiff(names(ft), "Pathway"), drop = FALSE])
+  cat("</details>\n\n")
+
+  cat("</details>\n\n")
+}
 ```
 
 ```{r mummichog-per-contrast, results='asis', fig.width=11, fig.height=8}
-# One tab per contrast, each with a Bubble Plot + Results Table sub-tab.
+# One tab per contrast: Pathway Plot | ORA Results Table | GSEA Results Table |
+# Supporting Evidence. Tabs with nothing to show are omitted.
 for (contrast in names(mummi_sections)) {
   s     <- mummi_sections[[contrast]]
   label <- gsub("_vs_", " vs ", contrast, fixed = TRUE)
   cat(sprintf("\n## %s {.tabset}\n\n", label))
 
-  cat("### Bubble Plot\n\n")
+  # ---- Pathway Plot -------------------------------------------------------
+  cat("### Pathway Plot\n\n")
   safe_print_plot(s$plot)
-  figure_legend(sprintf("Mummichog pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / pathway size), y = -log10(p-value), point size = pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", label, p_cut))
+  if (identical(s$plot_kind, "gsea_scatter")) {
+    figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis (this is MetaboAnalyst's own size mapping; it re-encodes significance and carries no additional biological quantity). The dashed line marks p = %g and the most significant pathways are labelled. %s.", label, p_cut, s$gsea$direction_note))
+  } else {
+    figure_legend(sprintf("Mummichog ORA pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / detected pathway size), y = -log10(p-value), point size = detected pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled. (The GSEA summary plot is unavailable for this run.)", label, p_cut))
+  }
 
-  cat("\n\n### Results Table\n\n")
+  # ---- ORA Results Table --------------------------------------------------
+  cat("\n\n### ORA Results Table\n\n")
   if (!is.null(s$table)) {
+    cat("Mummichog's over-representation analysis on the significant EmpiricalCompounds. `p.value` is the engine's empirical permutation p-value; `Pathway size` is the number of *detected* ECs in the pathway.\n\n")
     # print() forces the DT widget to render inside the loop.
     print(htmltools::tagList(
-      make_dt(s$table, caption = sprintf("Mummichog Pathway Enrichment — %s", label))))
+      make_dt(s$table, caption = sprintf("Mummichog ORA Pathway Enrichment — %s", label))))
   }
+
+  # ---- GSEA Results Table -------------------------------------------------
+  if (!is.null(s$gsea)) {
+    cat("\n\n### GSEA Results Table\n\n")
+    cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. %s.\n\n",
+                s$gsea$n_ec, s$gsea$metric_label, s$gsea$direction_note))
+    cat("An EC's score is the signed maximum of its member features' statistics (features sharing one m/z are averaged first), and a pathway's gene set is its detected ECs — MetaboAnalyst's EC-space construction for retention-time / v2 runs.\n\n")
+    print(htmltools::tagList(
+      make_dt(s$gsea$table,
+              caption = sprintf("Mummichog GSEA (peaks to pathways) — %s", label))))
+  }
+
+  # ---- Supporting Evidence -----------------------------------------------
+  if (!is.null(s$evidence)) {
+    cat("\n\n### Supporting Evidence\n\n")
+    cat("Which measured features actually support each enriched pathway, and whether the identity mummichog used to map an EmpiricalCompound onto the pathway agrees with this dataset's own annotation.\n\n")
+    cat("A **pathway-matching candidate** is a *putative* identity: it is a candidate compound of the EmpiricalCompound that also belongs to this pathway, i.e. the identity through which the EC maps here. Several candidates can qualify and all of them are listed. This is deliberately **not** mummichog's \"Best guess\" (`face_compound`), which is picked arbitrarily among candidates and pooled across every significant pathway.\n\n")
+    cat("**Agreement** compares the original annotation with those candidates — by KEGG compound ID when both sides have one, otherwise by a conservative name/synonym comparison; never by m/z, formula or mass. `Match` = same compound, `Conflict` = a comparable annotation naming a different metabolite, `Not assessed` = no usable original annotation. Conflicts are reported, not removed: this is an evidence layer, not a re-analysis. **Annotation confidence** (e.g. `Level 1`) is whatever the dataset itself declares and is a separate concept from agreement.\n\n")
+
+    print(htmltools::tagList(
+      make_dt(s$evidence$pathway_summary,
+              caption = sprintf("Pathway evidence summary — %s", label))))
+
+    pws <- s$evidence$pathway_summary$Pathway
+    shown <- utils::head(pws, MUMMI_EVIDENCE_MAX_PATHWAYS)
+    cat(sprintf("\n\n#### Pathway drill-down\n\nExpand a pathway to see its supporting EmpiricalCompounds and, within each, every underlying measured feature.%s\n\n",
+                if (length(pws) > length(shown))
+                  sprintf(" Showing the %d most significant of %d pathways; the complete tables are exported as `mummichog_evidence_*.tsv`.",
+                          length(shown), length(pws)) else ""))
+    for (pw in shown) render_pathway_evidence(s$evidence, pw)
+  }
+
   cat("\n\n")
 }
 ```
@@ -2509,8 +2616,20 @@ if (!is.null(params$network_res)) {
 if (length(mummi_sections) > 0) {
   files_tbl <- rbind(files_tbl, data.frame(
     File = "metabolomics/mummichog_pinned/",
-    Description = "Mummichog pathway analysis: input, v2 result tree, and pathway tables",
+    Description = "Mummichog pathway analysis: input, v2 result tree, and ORA pathway tables",
     stringsAsFactors = FALSE))
+  if (has_gsea) {
+    files_tbl <- rbind(files_tbl, data.frame(
+      File = "metabolomics/mummichog_pinned/mummichog_gsea_*",
+      Description = "MS peaks-to-pathways GSEA per contrast: summary scatter (PNG/PDF) and result table (TSV/CSV)",
+      stringsAsFactors = FALSE))
+  }
+  if (has_mummi_evidence) {
+    files_tbl <- rbind(files_tbl, data.frame(
+      File = "metabolomics/mummichog_pinned/mummichog_evidence_*",
+      Description = "Pathway supporting evidence per contrast: pathway summary, EmpiricalCompounds with pathway-matching candidates and agreement, and the underlying measured features",
+      stringsAsFactors = FALSE))
+  }
 }
 
 make_dt(files_tbl, "Key Output Files")
@@ -2574,6 +2693,14 @@ if (!is.null(enrichment_res)) {
 # whenever its results rendered — outside the enrichment guard above.
 if (length(mummi_sections) > 0) {
   cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was run independently for each differential-abundance contrast — each contrast's own p-values define its significant set against all features — using the version-pinned engine.")
+  if (has_gsea) {
+    g1 <- mummi_gsea[[1]]
+    cat(sprintf(" A complementary MS peaks-to-pathways GSEA (MetaboAnalyst-style) was run on the same mapped EmpiricalCompound universe, over the complete ranked list with no significance cutoff: each EmpiricalCompound scored as the signed maximum of its member features' %s, pathway sets defined as their detected EmpiricalCompounds, and enrichment tested with fgsea's fixed-permutation scheme (%d permutations, seed %d).",
+                g1$metric_label, g1$n_perm, g1$seed))
+  }
+  if (has_mummi_evidence) {
+    cat(" For each enriched pathway, the supporting EmpiricalCompounds were traced back to their pathway-matching candidate compounds (the EmpiricalCompound's candidates intersected with the pathway's compounds) and to the underlying measured features, and each feature's original annotation was compared with those candidates by KEGG compound ID or, where identifiers were unavailable, by a conservative name/synonym comparison.")
+  }
 }
 
 if (!is.null(rf_res) || !is.null(plsda_res)) {

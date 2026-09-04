@@ -260,6 +260,20 @@ modes:
         # force_primary_ion option.
         force_primary_ion: true
 
+        # Complementary GSEA (MetaboAnalyst-style MS peaks-to-pathways), run on
+        # the same mapped EmpiricalCompound / pathway universe IN ADDITION to the
+        # ORA above — the pinned engine and its statistics are untouched. It uses
+        # the FULL ranked EC list (no p-value cutoff), ranked by the moderated t
+        # statistic when the DE table has one (falling back to logFC), with each
+        # EC scored as the signed max of its member features.
+        # Needs `fgsea` and a READABLE model (model_ref / model_json below): the
+        # built-in human_mfn model ships inside the Python package, so pathway
+        # membership cannot be read for it and both GSEA and the pathway
+        # supporting-evidence section are skipped with a message.
+        # Both knobs are optional; these are the defaults.
+        gsea_permutations: 1000        # fgseaSimple permutations
+        gsea_seed: 42                  # seed for those permutations (reproducibility)
+
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # The built-in model is HUMAN ONLY: a non-human `organism` (above) with
         # no custom model is refused, not silently run against human pathways.

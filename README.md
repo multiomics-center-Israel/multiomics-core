@@ -310,9 +310,66 @@ Under `<metab_out_dir>/mummichog_pinned/`, one subdirectory per contrast (`<cont
 -   `<contrast>/v2/<timestamp>.<project>/` — the mummichog result tree: `result.html`, `tables/` (`mcg_pathwayanalysis_*.tsv`/`.xlsx`, `mcg_modularanalysis_*.tsv`/`.xlsx`, `ListOfEmpiricalCompounds.tsv`, `userInputData.txt`, `userInput_to_EmpiricalCompounds.tsv`), `figures/` and `js/`. Result tables are **`.tsv`/`.xlsx`, never `.csv`**.
 -   `<contrast>/v2/mummichog_manifest.tsv` and `<contrast>/v2/runner.log`.
 
-Plus, directly under `mummichog_pinned/`, the report's presentation exports per contrast: `mummichog_pathway_bubble_<contrast>.{png,pdf}` (the bubble plot) and `mummichog_pathway_table_<contrast>.{tsv,csv}` (the sorted pathway table), and `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
+Plus, directly under `mummichog_pinned/`, the report's presentation exports per contrast:
+
+-   `mummichog_pathway_bubble_<contrast>.{png,pdf}` and `mummichog_pathway_table_<contrast>.{tsv,csv}` — the ORA bubble plot and the sorted ORA pathway table.
+-   `mummichog_gsea_scatter_<contrast>.{png,pdf}` and `mummichog_gsea_table_<contrast>.{tsv,csv}` — the complementary GSEA summary scatter and its result table (see below).
+-   `mummichog_evidence_pathways_<contrast>.{tsv,csv}`, `mummichog_evidence_empirical_compounds_<contrast>.{tsv,csv}` and `mummichog_evidence_features_<contrast>.{tsv,csv}` — the pathway supporting-evidence tables (see below).
+-   `contrasts.tsv`, which maps each sanitised subdirectory name back to its original DE contrast label (so the report can show real contrast names).
+
+The GSEA and evidence exports are written only when they could be produced; the ORA exports are always written.
 
 To map pathways back to your feature ids, `join_features_to_results()` uses the feature id mummichog echoes into its own tables (via the 5th input column) — not the fragile post-de-duplication row numbers.
+
+### Complementary GSEA (MS peaks-to-pathways)
+
+Alongside the pinned 2.7.0 **ORA**, the pipeline runs a MetaboAnalyst-style **GSEA** on the same mapped feature / EmpiricalCompound / pathway universe (`R/domain/metabolomics/06g_mummichog_gsea.R`). The mummichog engine and its statistics are untouched — this is an additional analysis, not a replacement — and the two answer different questions:
+
+| | Mummichog ORA | GSEA |
+|---|---|---|
+| Features used | only those passing `p_cutoff` | the **complete ranked list**, no cutoff |
+| Unit | significant EmpiricalCompounds | all detected EmpiricalCompounds |
+| Reports | overlap / detected pathway size, empirical permutation p-value | ES, NES, p-value, adjusted p-value, leading-edge ECs |
+| Catches | over-representation of significant signals | coordinated directional shifts below per-feature significance |
+
+Statistical semantics follow MetaboAnalystR's peaks-to-pathways implementation (verified against `peaks_to_function.R` / `util_fgsea.R`):
+
+-   **Ranking statistic** — the moderated `t` statistic (our per-contrast limma tables carry it as `statistic`), which is what MetaboAnalyst ranks on; `logFC` is used only when a DE table has no usable statistic. **The ORA input contract is unchanged** — it still sends `logFC` as mummichog's `statistic` column. Whichever metric GSEA used is printed in the report and stored in the result.
+-   **EmpiricalCompound score** — features sharing one m/z are merged first (mean, MetaboAnalyst's default), then an EC takes the **signed maximum** of its member features' scores (`ec.exp.vec <- unlist(lapply(ec_exp_dict, max))` in the retention-time/v2 branch). Not the mean, not `max(abs())`.
+-   **Gene sets** — pathway → its *detected* EmpiricalCompounds.
+-   **Engine** — `fgsea::fgseaSimple()`, i.e. the fixed-permutation scheme MetaboAnalystR vendored (`calcGseaStat` + `calcGseaStatCumulativeBatch`, two-sided empirical p, BH adjustment, `NES = ES / mean(same-sign permuted ES)`). Seeded (`gsea_seed`, default 42) so the report is reproducible.
+
+`NES` keeps its sign and the report states what that sign means for the contrast **as written**: for `HL_vs_LL`, a positive NES is enrichment toward a higher ranking statistic in `HL` relative to `LL`. It is never reported as a bare "up"/"down".
+
+Optional knobs (both have sensible defaults, so nothing needs to be set):
+
+``` yaml
+modes:
+  metabolomics:
+    enrichment:
+      mummichog:
+        gsea_permutations: 1000   # fgseaSimple permutations
+        gsea_seed: 42             # RNG seed for those permutations
+```
+
+GSEA needs `fgsea`, a **readable metabolic model** (`model_ref` or `model_json` — see the caveat below) and a signed DE statistic. When any of those is missing it is skipped with a message and the report falls back to showing the ORA bubble plot.
+
+### Pathway supporting evidence
+
+For every enriched pathway the report can trace the chain
+
+    Pathway -> EmpiricalCompound -> pathway-matching candidate -> measured feature -> original annotation -> agreement
+
+so a biologist can see *which measured features supported the pathway* and *whether the identity mummichog used to place them there agrees with the dataset's own annotation* (`R/domain/metabolomics/06f_mummichog_evidence.R`).
+
+-   **Pathway-matching candidate(s)** — all candidate compounds of the EmpiricalCompound intersected with the compounds of *that* pathway. Every surviving candidate is kept; none is arbitrarily picked. This deliberately does **not** use mummichog's `face_compound` / "Best guess": verified in the 2.7.0 sources, `designate_face_cpd()` picks `chosen_compounds[-1]` ("arbitrarily designated" per its own docstring) and `collect_hit_Trios()` fills `chosen_compounds` from the union of *all* significant pathways — which is also what the pathway table's `overlap_features (id)` column contains. Neither is a per-pathway, evidence-ranked identification. A pathway-matching candidate is a **putative** identity: the identity *through which* this EC maps to this pathway.
+-   **Measured features** — every input signal forming the EC is listed with its feature id, m/z, retention time, adduct/ion, p-value, statistic and significance flag. Nothing is summed or collapsed into a representative feature.
+-   **Original annotation** — normalised into a schema-agnostic contract (`original_annotation_name`, `original_annotation_id`, `original_annotation_confidence`), so datasets with MSI identification levels, datasets with annotations but no level system, and unannotated features are all handled. Nothing is hard-coded to "Level 1", and missing information stays `NA`.
+-   **Agreement** — `Match` / `Conflict` / `Not assessed`, kept strictly separate from annotation *confidence*. Compared on stable compound ids (KEGG preferred) when both sides have one, otherwise by a conservative normalised-name/synonym comparison against the model's own `";"`-separated synonym lists. **Never** matched on m/z, molecular formula or mass. Conflicts are reported, never removed — this is an evidence layer, not a re-analysis of the enrichment.
+
+> **Caveat — pathway membership needs a readable model.** mummichog does not export pathway → compound membership (in `reporting.py` the `'all_compounds': P.cpds` line is commented out), so it is read from the metabolic model the stage ran on, resolved through the same `mmc_select_model()`. The built-in **`human_mfn` model lives inside the Python package** and is not a JSON file R can read, so with that model both the GSEA and the evidence layers report themselves unavailable and their report sections are omitted rather than guessed at. Configure `model_ref` or `model_json` (Azimuth or mummichog-2 native JSON) to enable them.
+
+In the HTML report each contrast's mummichog tab becomes **Pathway Plot | ORA Results Table | GSEA Results Table | Supporting Evidence**, where the pathway plot is the MetaboAnalyst-style GSEA scatter (x = NES, y = −log10 p, diverging colour on NES centred at 0, point size = √−log10 p — MetaboAnalyst's own size mapping, which re-encodes significance rather than adding a quantity) and falls back to the ORA bubble plot when GSEA is unavailable. The Supporting Evidence tab shows a pathway summary table plus a collapsible per-pathway drill-down (capped at the 25 most significant pathways in the HTML; the full tables are always exported as `mummichog_evidence_*`).
 
 ### Stochasticity caveat
 

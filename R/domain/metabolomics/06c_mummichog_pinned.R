@@ -641,6 +641,36 @@ read_mummichog_pathways <- function(files) {
 #'   `mummichog_pinned/`. A pathway table that exists but cannot be parsed
 #'   raises (rather than being silently dropped as if the contrast had no result).
 read_mummichog_pathways_by_contrast <- function(files) {
+  groups <- group_mummichog_files_by_contrast(files)
+  out <- list()
+  for (label in names(groups)) {
+    grp <- groups[[label]]
+    # Distinguish "this contrast produced no pathway table" (expected — skip it
+    # quietly so the report just omits the section) from "the table exists but
+    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
+    # a genuine parse error surfaces via read_mummichog_pathways() rather than
+    # silently dropping a contrast whose results are actually broken.
+    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
+    out[[label]] <- read_mummichog_pathways(grp)
+  }
+  out
+}
+
+#' Group a flat mummichog file list by contrast
+#'
+#' The per-contrast stage tracks every file across all contrasts in ONE
+#' `format = "file"` target. This regroups that flat list by contrast directory
+#' — the path segment directly under `mummichog_pinned/` — and restores the
+#' original DE contrast labels from the stage's `contrasts.tsv` map. Shared by
+#' the pathway-table read-back and by the evidence/GSEA layers (06f/06g), so the
+#' grouping and label recovery live in exactly one place.
+#'
+#' @param files Character vector of mummichog output files across all contrasts.
+#' @return A named list keyed by the original contrast label (falling back to the
+#'   sanitised subdir name when the map is absent), each the character vector of
+#'   that contrast's files. Empty list when `files` is empty or nothing lives
+#'   under `mummichog_pinned/`.
+group_mummichog_files_by_contrast <- function(files) {
   if (length(files) == 0) return(list())
   # Tolerate Windows backslash separators (some paths come from normalizePath(),
   # which uses "\\" there): match on a "/"-normalised copy, read from originals.
@@ -669,14 +699,7 @@ read_mummichog_pathways_by_contrast <- function(files) {
 
   out <- list()
   for (dir in unique(contrast)) {
-    grp <- keep[contrast == dir]
-    # Distinguish "this contrast produced no pathway table" (expected — skip it
-    # quietly so the report just omits the section) from "the table exists but
-    # cannot be read" (a corrupt/truncated output). Only the former is suppressed;
-    # a genuine parse error surfaces via read_mummichog_pathways() rather than
-    # silently dropping a contrast whose results are actually broken.
-    if (!any(grepl("^mcg_pathwayanalysis.*\\.tsv$", basename(grp)))) next
-    out[[label_of(dir)]] <- read_mummichog_pathways(grp)
+    out[[label_of(dir)]] <- keep[contrast == dir]
   }
   out
 }
