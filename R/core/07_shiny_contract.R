@@ -208,6 +208,18 @@ get_payload_key_definitions <- function() {
             type = "character",
             required = FALSE,
             description = "Shape aesthetic variable (column name in sample_meta)"
+        ),
+
+        # --- Enrichment (1 key; RNA-seq only for now) ---
+        enrichment = list(
+            type = "list",
+            required = FALSE,
+            description = paste(
+                "Optional compact enrichment block (ORA + GSEA): available,",
+                "gene_index, config, manifest, ora, gsea, gsea_leading_edge,",
+                "gsea_rankings, pathway_membership. NULL when enrichment was not",
+                "run or is incompatible. See validate_enrichment_payload()."
+            )
         )
     )
 }
@@ -313,6 +325,10 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
   # 2. Check all canonical keys exist
   canonical_keys <- get_canonical_keys()
   missing_keys <- setdiff(canonical_keys, names(payload))
+  # `enrichment` is an additive optional field: it may legitimately be ENTIRELY
+  # ABSENT in older/pre-3C RNA payloads and in non-RNA omics. Never flag its
+  # absence (present-but-NULL and present-block are both handled below).
+  missing_keys <- setdiff(missing_keys, "enrichment")
   if (length(missing_keys) > 0) {
     signal(paste0(
       prefix, " missing canonical keys: ",
@@ -367,7 +383,19 @@ assert_shiny_payload_contract <- function(payload, strict = FALSE, context = "pa
   if (anyNA(payload$expr_norm)) {
     signal(paste0(prefix, " expr_norm must NOT contain NA values (imputation required)"))
   }
-  
+
+  # enrichment (optional; RNA-seq). Absent/NULL is fully valid (old payloads and
+  # non-enrichment omics). When present it must be a list; deeper structural
+  # checks live in validate_enrichment_payload() and run here in non-strict mode
+  # so a malformed block warns without over-constraining the generic contract.
+  if (!is.null(payload$enrichment)) {
+    if (!is.list(payload$enrichment)) {
+      signal(paste0(prefix, " enrichment must be a list or NULL"))
+    } else if (exists("validate_enrichment_payload", mode = "function")) {
+      validate_enrichment_payload(payload$enrichment, strict = FALSE)
+    }
+  }
+
   # 5. Dimensional consistency
   expr_samples <- colnames(payload$expr_norm)
   meta_samples <- rownames(payload$sample_meta)

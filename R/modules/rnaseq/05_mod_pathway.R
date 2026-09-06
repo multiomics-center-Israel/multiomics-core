@@ -2,41 +2,47 @@
 #'
 #' Returns a `function(job)` that computes cluster ORA for one job. Defining it
 #' here (not inside mod_rnaseq_pathway) bounds the closure's environment to just
-#' the arguments below, so future.apply serializes only these to parallel
-#' workers — not unrelated large objects (e.g. the expression matrix in `pre`)
-#' that would otherwise be captured from the module frame. The worker does pure
-#' computation only: no file I/O, no plotting, no messages.
+#' the three scalar thresholds below — it captures NO large objects. Everything
+#' the job needs travels IN the job: its `clusters` (gene-list for this
+#' collection/round) and its OWN single database's `term2gene`/`term2name`. The
+#' worker never captures the whole multi-database `local_tables` (nor the
+#' expression matrix in `pre`), so future serializes at most one database's
+#' tables per job. Pure computation only: no file I/O, no plotting, no messages.
 #'
-#' @param gene_lists Output of build_gene_lists().
-#' @param local_tables Output of load_local_pathway_tables().
+#' The returned value carries a SLIM `job` (only the coordinate fields the serial
+#' assembly stage needs) — NOT the heavy `clusters`/`term2gene`/`term2name` — so
+#' the large tables are not serialized back from parallel workers to the master.
+#'
 #' @param pval_cutoff,padj_method ORA thresholds passed to run_cluster_ora_compute().
 #' @param orgdb Reserved for future IC-based GO simplify measures (or NULL). GO
 #'   simplify itself is mandatory for GO results (Wang/GO.db) — see
 #'   run_cluster_ora_compute().
-#' @return A function(job) -> list(job, db_type, result), where result is the
-#'   4-element list from run_cluster_ora_compute() (or list() if not significant).
+#' @return A function(job) -> list(job, db_type, result), where `job` is the slim
+#'   coordinate record and result is the 4-element list from
+#'   run_cluster_ora_compute() (or list() if not significant).
 #' @noRd
-.make_ora_worker <- function(gene_lists, local_tables, pval_cutoff, padj_method,
-                             orgdb) {
-    force(gene_lists); force(local_tables); force(pval_cutoff)
-    force(padj_method); force(orgdb)
+.make_ora_worker <- function(pval_cutoff, padj_method, orgdb) {
+    force(pval_cutoff); force(padj_method); force(orgdb)
     function(job) {
-        clusters <- gene_lists[[job$clust_method]][[job$clust_round]]
-        tbl      <- local_tables[[job$db_name]]
-        db_type  <- if (grepl("^GO", job$db_name)) "GO" else "KEGG"
-        db_ont   <- if (db_type == "GO") sub("^GO_", "", job$db_name) else NULL
+        db_type <- if (grepl("^GO", job$db_name)) "GO" else "KEGG"
+        db_ont  <- if (db_type == "GO") sub("^GO_", "", job$db_name) else NULL
 
         res <- run_cluster_ora_compute(
-            clusters      = clusters,
-            TERM2GENE     = tbl$TERM2GENE,
-            TERM2NAME     = tbl$TERM2NAME,
+            clusters      = job$clusters,
+            TERM2GENE     = job$term2gene,
+            TERM2NAME     = job$term2name,
             type          = db_type,
             pvalueCutoff  = pval_cutoff,
             pAdjustMethod = padj_method,
             orgdb         = orgdb,
             ont           = db_ont
         )
-        list(job = job, db_type = db_type, result = res)
+        # Return only the coordinate fields (not the heavy per-job payload) so
+        # parallel workers don't serialize the tables back to the master.
+        list(job = list(clust_method = job$clust_method,
+                        clust_round  = job$clust_round,
+                        db_name      = job$db_name),
+             db_type = db_type, result = res)
     }
 }
 
@@ -333,7 +339,11 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     if (length(local_tables) == 0) {
         warning("No local pathway tables loaded. Returning empty enrichment result.")
-        return(list(annotation = NULL, pathway_results = list(), plot_files = list()))
+        return(list(annotation = NULL, pathway_results = list(), plot_files = list(),
+                    enrichment_manifest = .empty_enrichment_manifest(),
+                    enrichment_index    = .empty_enrichment_index(),
+                    gsea_rankings       = list(),
+                    pathway_membership  = list()))
     }
 
     enrich_dir  <- file.path(out_dir, "Enrichment")
@@ -373,6 +383,12 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
 
     pathway_results <- list()
     plot_files      <- list()
+    # Stage 3A: availability-manifest + storage-index accumulators. ORA rows are
+    # built here (before empty units are dropped); GSEA rows arrive from
+    # run_gsea_all() below. Combined into rna_pathway_res$enrichment_manifest /
+    # $enrichment_index at return.
+    ora_manifest_rows <- list()
+    ora_index_rows    <- list()
 
     # ------------------------------------------------------------------
     # 2. Cluster-based ORA across all gene-list methods
@@ -405,6 +421,13 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         # round -> database) is preserved by run_enrichment_jobs() and by the
         # serial assembly loop below, so ora_results key order is identical to
         # the previous sequential implementation.
+        # Each job carries EVERYTHING it needs: its `clusters` (tiny) and its OWN
+        # single database's TERM2GENE/TERM2NAME. `local_tables[[db]]$TERM2GENE` is
+        # assigned by REFERENCE (copy-on-write) — jobs sharing a database point at
+        # the same object in the master, so this does NOT duplicate the annotation
+        # tables in memory; only the single database in play is serialized when a
+        # job is dispatched to a worker. The worker (see .make_ora_worker) thus
+        # captures no multi-database `local_tables`.
         ora_jobs <- list()
         for (clust_method in names(gene_lists)) {
             for (clust_round in names(gene_lists[[clust_method]])) {
@@ -414,7 +437,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                     ora_jobs[[length(ora_jobs) + 1]] <- list(
                         clust_method = clust_method,
                         clust_round  = clust_round,
-                        db_name      = db_name
+                        db_name      = db_name,
+                        clusters     = clusters,
+                        term2gene    = local_tables[[db_name]]$TERM2GENE,
+                        term2name    = local_tables[[db_name]]$TERM2NAME
                     )
                 }
             }
@@ -424,19 +450,24 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
             message("  ", length(ora_jobs), " ORA jobs to run",
                     if (workers > 1) paste0(" (", workers, " workers)") else " (sequential)")
 
-            # Build the pure-compute worker with a MINIMAL captured environment
-            # (only the gene sets, tables, and scalar params it uses) — see
-            # .make_ora_worker(). This keeps future from serializing unrelated
-            # large objects (e.g. the expression matrix in `pre`) to workers.
+            # Build the pure-compute worker. It captures ONLY the scalar
+            # thresholds — everything else (clusters + this job's single-database
+            # tables) rides in each job (see .make_ora_worker()), so future never
+            # serializes the multi-database `local_tables` or the expression
+            # matrix in `pre`.
             run_one_ora_job <- .make_ora_worker(
-                gene_lists   = gene_lists,
-                local_tables = local_tables,
                 pval_cutoff  = pval_cutoff,
                 padj_method  = padj_method,
                 orgdb        = orgdb
             )
 
-            ora_job_results <- run_enrichment_jobs(ora_jobs, run_one_ora_job, workers, seed = enr_seed)
+            # ORA is deterministic (enricher + Wang GO-simplify use no RNG), so at
+            # workers <= 1 we take the true base::lapply path
+            # (prefer_lapply_when_sequential = TRUE): no future global discovery,
+            # no future.globals.maxSize guard. workers > 1 still uses future.
+            ora_job_results <- run_enrichment_jobs(
+                ora_jobs, run_one_ora_job, workers, seed = enr_seed,
+                prefer_lapply_when_sequential = TRUE)
 
             # Serial assembly + file writing (deterministic; never in a worker).
             ora_results <- list()
@@ -444,6 +475,21 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                 job         <- jr$job
                 res         <- jr$result
                 result_base <- paste0(job$db_name, "_", job$clust_method, "_", job$clust_round)
+                storage_key <- paste0(result_base, "_ora")
+                simplify_key <- paste0(result_base, "_ora_simplify")
+                has_simpl   <- identical(jr$db_type, "GO")
+                main_df     <- if (length(res) >= 3) res[[3]] else NULL
+                clusters    <- gene_lists[[job$clust_method]][[job$clust_round]]
+
+                # Availability-manifest rows for EVERY evaluated unit (captured
+                # before the empty-unit `next` below, so evaluated-but-empty
+                # clusters/patterns/contrasts get n_significant = 0 rows).
+                ora_manifest_rows[[length(ora_manifest_rows) + 1]] <-
+                    .build_ora_manifest_rows(
+                        collection = job$clust_method, round = job$clust_round,
+                        db_name = job$db_name, main_df = main_df,
+                        has_simplify = has_simpl, clusters = clusters,
+                        storage_key = storage_key)
 
                 if (length(res) == 0) {
                     message("    ORA: ", result_base, " — no significant enrichment")
@@ -463,9 +509,21 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
                 )
 
                 ora_results <- .store_ora_result(
-                    ora_results, res[[3]], paste0(result_base, "_ora"))
+                    ora_results, res[[3]], storage_key)
                 ora_results <- .store_ora_result(
-                    ora_results, res[[4]], paste0(result_base, "_ora_simplify"))
+                    ora_results, res[[4]], simplify_key)
+
+                # Storage-index row (table-level) only when a table was stored.
+                if (storage_key %in% names(ora_results)) {
+                    ora_index_rows[[length(ora_index_rows) + 1]] <- data.frame(
+                        analysis = "ORA", database = job$db_name,
+                        group = job$clust_method, item = job$clust_round,
+                        container = "cluster_ora", storage_key = storage_key,
+                        has_simplify = has_simpl,
+                        simplify_key = if (simplify_key %in% names(ora_results))
+                            simplify_key else NA_character_,
+                        stringsAsFactors = FALSE)
+                }
 
                 n_terms <- if (!is.null(res[[3]])) nrow(res[[3]]) else 0
                 message("    ORA: ", result_base, " — ", n_terms, " enriched terms")
@@ -548,13 +606,43 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     }
     plot_files <- c(plot_files, gsea_out$plot_files)
 
+    # ------------------------------------------------------------------
+    # 4. Stage 3A: preserve enrichment metadata + biological primitives that
+    #    were previously discarded. These are ADDITIVE top-level siblings; the
+    #    existing keys (annotation/pathway_results/plot_files) are unchanged, and
+    #    no biological result, threshold, or output file is affected. Integer
+    #    encoding against a shared gene_index is a Stage 3B (export) concern.
+    # ------------------------------------------------------------------
+    ora_manifest <- if (length(ora_manifest_rows) > 0)
+        do.call(rbind, ora_manifest_rows) else .empty_enrichment_manifest()
+    ora_index    <- if (length(ora_index_rows) > 0)
+        do.call(rbind, ora_index_rows) else .empty_enrichment_index()
+
+    enrichment_manifest <- rbind(
+        ora_manifest, gsea_out$manifest %||% .empty_enrichment_manifest())
+    enrichment_index <- rbind(
+        ora_index, gsea_out$index %||% .empty_enrichment_index())
+
+    # Exact ranked vectors used by GSEA (shared across databases — verified in
+    # run_gsea_all: job$ranked = ranked_genes[[method]][[contrast]] for every db,
+    # no db-specific filtering). Returned verbatim; never recomputed downstream.
+    gsea_rankings <- ranked_genes
+
+    # GSEA pathway membership: significant-pathway union per db from the exact
+    # local TERM2GENE tables GSEA used.
+    pathway_membership <- .build_gsea_pathway_membership(gsea_out$results, local_tables)
+
     message("\n=== Local enrichment complete ===")
     if (length(gene_lists) == 0) message("  ORA: skipped (no gene lists available)")
 
     list(
-        annotation      = NULL,
-        pathway_results = pathway_results,
-        plot_files      = plot_files
+        annotation          = NULL,
+        pathway_results     = pathway_results,
+        plot_files          = plot_files,
+        enrichment_manifest = enrichment_manifest,
+        enrichment_index    = enrichment_index,
+        gsea_rankings       = gsea_rankings,
+        pathway_membership  = pathway_membership
     )
 }
 
@@ -580,6 +668,96 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     }
     ora_results[[key]] <- df
     ora_results
+}
+
+
+#' Build availability-manifest rows for one ORA unit (collection x round x db)
+#'
+#' Produces one manifest row per USER-FACING item, capturing evaluated-but-empty
+#' units (n_significant = 0) that are otherwise dropped from pathway_results:
+#'   - partition / binary_patterns: one row per evaluated cluster/pattern label
+#'     (from the evaluated gene-list, NOT from the result), n_significant counted
+#'     from the result's `Cluster` column (0 when the label is absent);
+#'   - contrasts / contrasts_wo_direction / all_DE: one row for the round
+#'     (contrast or `any_contrast`), n_significant = total rows in the unit table.
+#'
+#' @param collection Collection name (clust_method).
+#' @param round Round within the collection (contrast / any_contrast / k / best).
+#' @param db_name Database.
+#' @param main_df The stored ORA result table for this unit (res[[3]]), or NULL.
+#' @param has_simplify Logical (TRUE for GO databases).
+#' @param clusters The evaluated gene-list for this unit (named vector
+#'   feature -> label); its unique labels are the evaluated cluster/pattern set.
+#' @param storage_key The `<db>_<collection>_<round>_ora` key.
+#' @return A data.frame of manifest rows (schema of .empty_enrichment_manifest()).
+#' @noRd
+.build_ora_manifest_rows <- function(collection, round, db_name, main_df,
+                                     has_simplify, clusters, storage_key) {
+    # ORA compute is not wrapped in a per-unit tryCatch (unlike GSEA), so an ORA
+    # error propagates and aborts the run loudly rather than being silently
+    # recorded — there is no "failed" ORA manifest state to misrepresent. Every
+    # ORA row is therefore a SUCCESSFUL evaluation: "significant" (n_sig > 0) or
+    # "empty" (n_sig == 0).
+    mk <- function(item, n_sig) data.frame(
+        analysis = "ORA", database = db_name, group = collection,
+        item = as.character(item), evaluated = TRUE,
+        status = if (n_sig > 0) "significant" else "empty",
+        n_significant = as.integer(n_sig), has_simplify = has_simplify,
+        storage_key = storage_key, stringsAsFactors = FALSE)
+
+    if (collection %in% c("partition", "binary_patterns")) {
+        labels <- sort(unique(as.character(clusters)))
+        if (length(labels) == 0) return(.empty_enrichment_manifest())
+        rows <- lapply(labels, function(lab) {
+            n <- if (!is.null(main_df) && "Cluster" %in% names(main_df)) {
+                sum(as.character(main_df$Cluster) == lab)
+            } else 0L
+            mk(lab, n)
+        })
+        do.call(rbind, rows)
+    } else {
+        n <- if (!is.null(main_df)) nrow(main_df) else 0L
+        mk(round, n)
+    }
+}
+
+
+#' Preserve GSEA pathway membership (union of significant GSEA pathways per db)
+#'
+#' From the assembled GSEA result tables, collects the union of pathway IDs that
+#' are significant in at least one unit PER database, then subsets the exact
+#' local TERM2GENE table used by GSEA to those pathways. This is the natural
+#' (character) representation; integer encoding against a shared gene_index is a
+#' Stage 3B (export) concern. No ORA memberships are added (ORA keeps `geneID`),
+#' and membership is stored once per database (never per ranking/contrast).
+#'
+#' @param gsea_results The nested `contrast -> key -> data.frame` GSEA results.
+#' @param local_tables Output of load_local_pathway_tables() (per-db TERM2GENE).
+#' @return list(database -> list(pathway_id -> character gene IDs)); empty list
+#'   when no GSEA pathways are significant.
+#' @noRd
+.build_gsea_pathway_membership <- function(gsea_results, local_tables) {
+    ids_by_db <- list()
+    for (contrast in names(gsea_results)) {
+        for (key in names(gsea_results[[contrast]])) {
+            df <- gsea_results[[contrast]][[key]]
+            if (is.null(df) || !all(c("ID", "database") %in% names(df)) ||
+                nrow(df) == 0) next
+            db <- as.character(df$database[1])
+            ids_by_db[[db]] <- unique(c(ids_by_db[[db]], as.character(df$ID)))
+        }
+    }
+
+    membership <- list()
+    for (db in names(ids_by_db)) {
+        t2g <- local_tables[[db]]$TERM2GENE
+        if (is.null(t2g) || !all(c("term", "gene") %in% names(t2g))) next
+        keep <- as.character(t2g$term) %in% ids_by_db[[db]]
+        if (!any(keep)) next
+        membership[[db]] <- split(as.character(t2g$gene[keep]),
+                                  as.character(t2g$term[keep]))
+    }
+    membership
 }
 
 

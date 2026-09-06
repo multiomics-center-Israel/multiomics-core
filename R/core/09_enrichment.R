@@ -1575,36 +1575,44 @@ run_gsea_local <- function(ranked_genes,
 #'   RNG-using enrichment method inherits reproducibility for free. If
 #'   `future`/`future.apply` are not installed, it degrades to plain `lapply()`.
 #' @return List of results, one per job, in input order.
-run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
+#' @param prefer_lapply_when_sequential When TRUE and `workers <= 1`, use a true
+#'   base-R `lapply()` path (no `future_lapply`, hence no future global discovery
+#'   and no `future.globals.maxSize` guard). Only safe for DETERMINISTIC stages
+#'   with no RNG — ORA (`clusterProfiler::enricher`) qualifies; GSEA (fgsea
+#'   permutations) must NOT opt in, so it keeps the `future_lapply(future.seed)`
+#'   path at every worker count and its RNG streams / worker-count invariance are
+#'   unchanged. Default FALSE preserves the previous behavior.
+run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L,
+                                prefer_lapply_when_sequential = FALSE) {
     if (length(jobs) == 0) return(list())
 
     have_future <- requireNamespace("future", quietly = TRUE) &&
         requireNamespace("future.apply", quietly = TRUE)
 
-    if (!have_future) {
-        if (workers > 1) {
+    # True sequential base-R path. Taken when future is unavailable, OR when the
+    # caller opts in for a deterministic (no-RNG) stage at workers <= 1 (ORA).
+    # base::lapply performs NO global export/size check, so the ORA sequential
+    # run never touches the future.globals.maxSize guard — the intended behavior
+    # for workers = 1. withr::with_seed sets the RNG deterministically and
+    # RESTORES the caller's global RNG state on exit (no leak); it has no effect
+    # on ORA (which uses no RNG) and is not used for GSEA (see @param).
+    use_lapply <- !have_future || (isTRUE(prefer_lapply_when_sequential) && workers <= 1)
+    if (use_lapply) {
+        if (!have_future && workers > 1) {
             message("  future/future.apply not available — running sequentially. ",
                     "Install with: renv::install(c('future', 'future.apply'))")
         }
-        # Reproducibility in the no-future fallback: seed the sequential run from
-        # the same project `seed` the future path uses. withr::with_seed sets the
-        # RNG deterministically and RESTORES the caller's global RNG state on exit
-        # (no leak). Streams are not byte-identical to future's L'Ecuyer-CMRG
-        # per-job streams, but results are reproducible across independent runs
-        # with the same seed — which is what matters for permutation-based GSEA.
         return(withr::with_seed(seed, lapply(jobs, fun)))
     }
 
-    # NB: workers must capture ONLY the data they use. Callers build worker
-    # functions with a minimal environment (see .make_ora_worker()), which keeps
-    # exported globals tiny (~5 MiB here) — well under future's default 500 MiB
-    # guard. That guard is intentionally left at its default: it is a useful
-    # early warning if a future method ever starts broadcasting large objects.
-    # Route EVERY worker count through future_lapply with an EXPLICIT integer
-    # future.seed (see @param seed): RNG streams depend only on `seed` + job
-    # position — not on ambient RNG, backend, or worker count — so results are
-    # worker-count-invariant AND identical across independent rebuilds. Sequential
-    # plan for workers <= 1 keeps one-job-at-a-time, in-process semantics.
+    # Future path. Each job carries ONLY the data it needs (its single database's
+    # TERM2GENE/TERM2NAME — see .make_ora_worker()/.make_gsea_worker()), so the
+    # worker closure captures no large objects and future exports at most one
+    # database's tables per job — well under the default 500 MiB guard, which is
+    # intentionally left at its default as an early warning. Route through
+    # future_lapply with an EXPLICIT integer future.seed: RNG streams depend only
+    # on `seed` + job position — not on ambient RNG, backend, or worker count — so
+    # results are worker-count-invariant AND identical across independent rebuilds.
     old_plan <- if (workers > 1) {
         future::plan(future::multisession, workers = workers)
     } else {
@@ -1613,6 +1621,64 @@ run_enrichment_jobs <- function(jobs, fun, workers = 1L, seed = 1L) {
     on.exit(future::plan(old_plan), add = TRUE)
 
     future.apply::future_lapply(jobs, fun, future.seed = seed)
+}
+
+# ==============================================================================
+# ENRICHMENT AVAILABILITY MANIFEST + INDEX — shared empty-schema builders
+# ==============================================================================
+# The enrichment manifest is the three-state availability index consumed by the
+# Shiny payload (see rnaseq-enrichment-shiny.md §14.3). It is built INSIDE the
+# enrichment engine — while every evaluated unit and its per-item significance
+# count are still known — because empty units are dropped from pathway_results
+# and leave no trace afterwards. The index records the storage coordinates of the
+# stored ORA/GSEA objects so downstream (Stage 3B) export never parses the
+# concatenated result keys. These helpers fix the column schema in ONE place so
+# ORA (assembled in mod_rnaseq_pathway) and GSEA (assembled in run_gsea_all)
+# fragments rbind together cleanly.
+
+#' Empty enrichment manifest (canonical column schema)
+#'
+#' The three-state Shiny UX is derived from `status` (+ `n_significant`):
+#'   - "significant" -> evaluated, n_significant > 0  -> enabled;
+#'   - "empty"       -> evaluated, n_significant == 0 -> greyed "no significant results";
+#'   - "failed"      -> technical/computational failure; n_significant = NA, and
+#'                      `evaluated = FALSE` -> hidden (NOT shown as a successful
+#'                      zero-result). A failure is never conflated with a
+#'                      successful empty analysis.
+#' `evaluated = (status != "failed")` is kept as a convenience boolean.
+#'
+#' @return A 0-row data.frame with the manifest columns.
+#' @noRd
+.empty_enrichment_manifest <- function() {
+    data.frame(
+        analysis      = character(0),
+        database      = character(0),
+        group         = character(0),
+        item          = character(0),
+        evaluated     = logical(0),
+        status        = character(0),
+        n_significant = integer(0),
+        has_simplify  = logical(0),
+        storage_key   = character(0),
+        stringsAsFactors = FALSE
+    )
+}
+
+#' Empty enrichment index (canonical column schema)
+#' @return A 0-row data.frame with the index columns.
+#' @noRd
+.empty_enrichment_index <- function() {
+    data.frame(
+        analysis     = character(0),
+        database     = character(0),
+        group        = character(0),
+        item         = character(0),
+        container    = character(0),
+        storage_key  = character(0),
+        has_simplify = logical(0),
+        simplify_key = character(0),
+        stringsAsFactors = FALSE
+    )
 }
 
 # ==============================================================================
@@ -1680,25 +1746,25 @@ ora_unit_dir <- function(ora_root, db_name, clust_method, clust_round) {
 #' Build a pure-compute GSEA worker with a minimal captured environment
 #'
 #' Returns a `function(job)` that runs GSEA for one job. Defining it here (not
-#' nested inside run_gsea_all) bounds the closure's environment to just the
-#' arguments below — so future.apply serializes only `local_tables` + scalars,
-#' never the `run_gsea_all` frame (which holds the large `jobs` list of per-job
-#' ranked vectors and `ranked_genes`). The per-job ranked vector arrives in
-#' `job$ranked` (built in run_gsea_all); the worker does pure computation only
-#' (no file I/O, no messages), with fgsea forced serial via SerialParam.
-#' Analogous to .make_ora_worker().
+#' nested inside run_gsea_all) bounds the closure's environment to just the two
+#' scalar arguments below — so future.apply serializes NOTHING large from the
+#' closure. Everything the job needs travels IN the job: the per-job ranked
+#' vector (`job$ranked`) AND this job's single-database `job$term2gene` /
+#' `job$term2name` (both built in run_gsea_all). The worker never captures the
+#' whole multi-database `local_tables`, so future exports at most one database's
+#' tables per job. Pure computation only (no file I/O, no messages), fgsea forced
+#' serial via SerialParam. Analogous to .make_ora_worker().
 #'
-#' @param local_tables Output of load_local_pathway_tables().
 #' @param pvalueCutoff GSEA adjusted-p cutoff.
 #' @param pAdjustMethod P-value adjustment method.
 #' @return A function(job) -> list(ranking_method, contrast, db_name, gsea_result).
 #' @noRd
-.make_gsea_worker <- function(local_tables, pvalueCutoff, pAdjustMethod) {
-    force(local_tables); force(pvalueCutoff); force(pAdjustMethod)
+.make_gsea_worker <- function(pvalueCutoff, pAdjustMethod) {
+    force(pvalueCutoff); force(pAdjustMethod)
     function(job) {
         ranked    <- job$ranked
-        term2gene <- local_tables[[job$db_name]]$TERM2GENE
-        term2name <- local_tables[[job$db_name]]$TERM2NAME
+        term2gene <- job$term2gene
+        term2name <- job$term2name
 
         res <- tryCatch({
             clusterProfiler::GSEA(
@@ -1765,13 +1831,16 @@ run_gsea_all <- function(ranked_genes,
     }
 
     # ------------------------------------------------------------------
-    # 1. Build flat job list. Each job carries its OWN ranked vector
-    #    (`ranked`), not a reference into `ranked_genes`. This keeps the whole
-    #    `ranked_genes` structure OUT of the worker closure's environment, so it
-    #    is never broadcast as a future global — the per-job vectors ride in the
-    #    `jobs` iteration list (sent one-at-a-time to workers, held once on the
-    #    master), keeping exported globals ~= local_tables regardless of the
-    #    number of contrasts. (`local_tables` stays a captured global: small.)
+    # 1. Build flat job list. Each job carries EVERYTHING it needs: its OWN
+    #    ranked vector (`ranked`) AND its OWN single database's TERM2GENE/
+    #    TERM2NAME (`term2gene`/`term2name`). Neither the whole `ranked_genes`
+    #    structure nor the whole multi-database `local_tables` is captured by the
+    #    worker closure, so future never broadcasts them as globals. The per-job
+    #    payloads ride in the `jobs` iteration list (sent one-at-a-time to
+    #    workers). NB: `local_tables[[db]]$TERM2GENE` is assigned by REFERENCE
+    #    (copy-on-write) — jobs sharing a database point at the same object in the
+    #    master, so this does NOT duplicate the annotation tables in memory; only
+    #    the single database in play is serialized when a job is dispatched.
     # ------------------------------------------------------------------
     jobs <- list()
     for (ranking_method in names(ranked_genes)) {
@@ -1783,14 +1852,18 @@ run_gsea_all <- function(ranked_genes,
                     ranking_method = ranking_method,
                     contrast       = contrast,
                     db_name        = db_name,
-                    ranked         = ranked_genes[[ranking_method]][[contrast]]
+                    ranked         = ranked_genes[[ranking_method]][[contrast]],
+                    term2gene      = local_tables[[db_name]]$TERM2GENE,
+                    term2name      = local_tables[[db_name]]$TERM2NAME
                 )
             }
         }
     }
 
     if (length(jobs) == 0) {
-        return(list(results = list(), plot_files = list()))
+        return(list(results = list(), plot_files = list(),
+                    manifest = .empty_enrichment_manifest(),
+                    index = .empty_enrichment_index()))
     }
 
     message("  ", length(jobs), " GSEA jobs to run",
@@ -1801,12 +1874,13 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     # Build the worker via a factory (NOT a nested closure). A closure defined
     # inside run_gsea_all() would carry this whole execution frame — including
-    # the large `jobs` list (which holds every per-job ranked vector) and
-    # `ranked_genes` — as its environment, and future would serialize all of it
-    # (the 500 MiB-globals failure). The factory bounds the worker's environment
-    # to only `local_tables` + scalars; the ranked vectors ride in `jobs` (the
-    # future_lapply iteration list, sent per-job, not a broadcast global).
-    run_one_gsea_job <- .make_gsea_worker(local_tables, pvalueCutoff, pAdjustMethod)
+    # the large `jobs` list and `ranked_genes` — as its environment, and future
+    # would serialize all of it. The factory bounds the worker's environment to
+    # only two scalar cutoffs; the ranked vector AND the single-database
+    # TERM2GENE/TERM2NAME ride in each `job` (the future_lapply iteration list,
+    # sent per-job), so no multi-database `local_tables` is ever broadcast — the
+    # fix for the >500 MiB future-globals failure exposed by the full Assaf run.
+    run_one_gsea_job <- .make_gsea_worker(pvalueCutoff, pAdjustMethod)
 
     # Dispatch pure GSEA compute through the generic parallel orchestration
     # layer. Assembly + all file I/O happen serially below (deterministic).
@@ -1819,6 +1893,22 @@ run_gsea_all <- function(ranked_genes,
     # ------------------------------------------------------------------
     results <- list()
     plot_files <- list()
+    # Availability manifest + storage index accumulators. One manifest row per
+    # EVALUATED (db x ranking x contrast) job. `status` distinguishes a
+    # SUCCESSFUL-EMPTY analysis ("empty", n_significant = 0) from a TECHNICAL
+    # FAILURE ("failed", n_significant = NA, evaluated = FALSE) so Shiny never
+    # renders a crashed unit as "no significant results". fgsea statistical
+    # warnings (ties, unbalanced p-values) do NOT reach here — they occur inside
+    # a successful GSEA call and never raise the caught `gsea_error` condition.
+    # Index rows are recorded only for units that actually get a stored table.
+    manifest_rows <- list()
+    index_rows    <- list()
+    gsea_manifest_row <- function(status, n_sig) data.frame(
+        analysis = "GSEA", database = db_name, group = ranking_method,
+        item = contrast, evaluated = !identical(status, "failed"),
+        status = status,
+        n_significant = if (identical(status, "failed")) NA_integer_ else as.integer(n_sig),
+        has_simplify = FALSE, storage_key = result_key, stringsAsFactors = FALSE)
 
     for (jr in job_results) {
         db_name        <- jr$db_name
@@ -1827,16 +1917,29 @@ run_gsea_all <- function(ranked_genes,
         res            <- jr$gsea_result
         result_key     <- paste0(db_name, "_gsea_", ranking_method)
 
-        # Handle failed jobs
+        # TECHNICAL FAILURE: the worker caught an error (class "gsea_error"), or —
+        # defensively — returned no result object at all. This is NOT a successful
+        # zero-result: mark status = "failed" (evaluated = FALSE, n_significant = NA)
+        # so the three-state UX hides it rather than greying it as empty.
         if (inherits(res, "gsea_error")) {
-            message("  GSEA failed: ", db_name, " | ", ranking_method, " | ",
-                    contrast, " — ", res$message)
+            message("  GSEA FAILED (technical): ", db_name, " | ", ranking_method,
+                    " | ", contrast, " — ", res$message)
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("failed", NA_integer_)
+            next
+        }
+        if (is.null(res)) {
+            message("  GSEA FAILED (no result object): ", db_name, " | ",
+                    ranking_method, " | ", contrast)
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("failed", NA_integer_)
             next
         }
 
-        if (is.null(res) || nrow(as.data.frame(res)) == 0) {
+        # SUCCESSFUL but zero rows -> evaluated-but-empty (a real biological
+        # outcome), distinct from the failures above.
+        if (nrow(as.data.frame(res)) == 0) {
             message("  ", db_name, " | ", ranking_method, " | ", contrast,
-                    ": no results returned")
+                    ": evaluated, 0 significant")
+            manifest_rows[[length(manifest_rows) + 1]] <- gsea_manifest_row("empty", 0L)
             next
         }
 
@@ -1861,6 +1964,17 @@ run_gsea_all <- function(ranked_genes,
         n_sig <- nrow(.gsea_significant_rows(res_df, pvalueCutoff))
         message("  ", db_name, " | ", ranking_method, " | ", contrast,
                 ": ", n_sig, " significant (padj <= ", pvalueCutoff, ")")
+
+        # Availability manifest + storage index for this stored unit. A stored
+        # table is a successful evaluation; status tracks whether it cleared the
+        # significance cutoff.
+        manifest_rows[[length(manifest_rows) + 1]] <-
+            gsea_manifest_row(if (n_sig > 0) "significant" else "empty", n_sig)
+        index_rows[[length(index_rows) + 1]] <- data.frame(
+            analysis = "GSEA", database = db_name, group = ranking_method,
+            item = contrast, container = contrast, storage_key = result_key,
+            has_simplify = FALSE, simplify_key = NA_character_,
+            stringsAsFactors = FALSE)
 
         # Write CSV
         if (!is.null(output_dir)) {
@@ -1979,7 +2093,10 @@ run_gsea_all <- function(ranked_genes,
         }
     }
 
-    list(results = results, plot_files = plot_files)
+    manifest <- if (length(manifest_rows) > 0) do.call(rbind, manifest_rows) else .empty_enrichment_manifest()
+    index    <- if (length(index_rows) > 0)    do.call(rbind, index_rows)    else .empty_enrichment_index()
+
+    list(results = results, plot_files = plot_files, manifest = manifest, index = index)
 }
 
 # ==============================================================================
