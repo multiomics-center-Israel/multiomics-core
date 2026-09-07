@@ -95,7 +95,11 @@ load_gene_sets <- function(organism,
 
     # Custom GMT takes priority. gmt_file may be a vector/list of paths (GO +
     # KEGG, etc.); keep only those that exist and merge via read_gmt().
-    requested_gmt_paths <- unlist(gmt_file, use.names = FALSE)
+    # as.character() matters: gmt_file is NULL whenever the config says
+    # `gmt_file: null`, and unlist(NULL) stays NULL. file.exists(NULL) is an
+    # error, not FALSE, so without the coercion every built-in GO/KEGG run
+    # aborted here and was reported as "no gene sets" by the caller's tryCatch.
+    requested_gmt_paths <- as.character(unlist(gmt_file, use.names = FALSE))
     requested_gmt_paths <- requested_gmt_paths[nzchar(requested_gmt_paths)]
     missing_gmt_paths <- requested_gmt_paths[!file.exists(requested_gmt_paths)]
     if (length(missing_gmt_paths) > 0) {
