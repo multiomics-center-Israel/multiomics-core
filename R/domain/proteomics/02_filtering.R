@@ -1,6 +1,30 @@
 #' Remove contaminant proteins (e.g. cRAP) by ID prefix
+#'
+#' Drops features whose identifier starts with `filtering$contaminant_prefix`.
+#' The match is anchored, so an id that merely contains the prefix (for example
+#' a protein group like "CXCL8;cRAP-IL8") is kept and still needs checking by
+#' hand.
+#'
+#' Filtering is skipped when `filtering$remove_contaminants` is FALSE. The flag
+#' defaults to TRUE, so a config that does not mention it is unaffected.
+#'
+#' @param expr_mat Numeric matrix, features x samples, with feature ids as rownames.
+#' @param row_data Feature annotation aligned to the rows of `expr_mat`, or NULL.
+#' @param cfg The `modes$<omic>` config branch; reads the `filtering` list.
+#' @return A list with the filtered `expr_mat`, `row_data`, and `n_removed`.
 filter_contaminants <- function(expr_mat, row_data, cfg) {
     contam_prefix <- cfg$filtering$contaminant_prefix %||% "cRAP-"
+
+    # The flag used to be validated but never read, so every run removed
+    # contaminants regardless. Honour it, and say so in the log: a config that
+    # already set FALSE changes behaviour here, and that must not be silent.
+    if (!isTRUE(cfg$filtering$remove_contaminants %||% TRUE)) {
+        n_contam <- sum(grepl(paste0("^", contam_prefix), rownames(expr_mat)))
+        message(sprintf(
+            "Contaminant filtering DISABLED by filtering$remove_contaminants; keeping %d features matching '^%s'.",
+            n_contam, contam_prefix))
+        return(list(expr_mat = expr_mat, row_data = row_data, n_removed = 0L))
+    }
 
     ids <- rownames(expr_mat)
     is_contam <- grepl(paste0("^", contam_prefix), ids)
