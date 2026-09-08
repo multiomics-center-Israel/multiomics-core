@@ -3,8 +3,11 @@
 # Unit tests for the MetaboAnalyst-style MS peaks-to-pathways GSEA layer (06g):
 # the ranking-metric choice, the EmpiricalCompound score construction (signed
 # max over member features, with same-m/z features merged first), the
-# pathway -> detected-EC gene sets, the fgsea run, the NES direction wording,
-# and the summary scatter's encodings.
+# pathway -> detected-EC gene sets, the MetaboAnalyst-equivalent engine, the
+# NES interpretation, and the summary scatter's encodings.
+#
+# Parity against the pinned upstream implementation lives in
+# test-mummichog-gsea-parity.R; this file covers the surrounding contract.
 #
 # The EC-score semantics asserted here are MetaboAnalystR's, verified in
 # peaks_to_function.R (`ec.exp.vec <- unlist(lapply(ec_exp_dict, max))` in the
@@ -35,70 +38,6 @@ feature_scores_fixture <- function() {
   stats::setNames(c(3, -5, 1, 3, -2), paste0("f", 1:5))
 }
 
-# A larger synthetic mummichog tree + model, big enough for a real fgsea run:
-# 24 EmpiricalCompounds, each with one feature and one candidate compound, and
-# three pathways of 8 compounds each. Pathway "PW_pos" holds the 8 highest
-# statistics, "PW_neg" the 8 lowest, "PW_mid" the middle 8.
-build_gsea_fixture <- function(root, contrast_dir = "HL_vs_LL") {
-  n     <- 24L
-  cpds  <- sprintf("C%05d", seq_len(n))
-  eids  <- sprintf("E%03d", seq_len(n))
-  feats <- sprintf("feat_%02d", seq_len(n))
-  # statistics from +12 down to -12 (never 0), so the ranking is unambiguous
-  stat  <- c(seq(12, 1), seq(-1, -12))
-  mzs   <- 100 + seq_len(n)
-
-  tables <- file.path(root, "mummichog_pinned", contrast_dir, "v2",
-                      "1700000000.1.run", "tables")
-  dir.create(tables, recursive = TRUE, showWarnings = FALSE)
-
-  writeLines(c(
-    "EID\tmassfeature_rows\tstr_row_ion\tcompounds\tcompound_names",
-    sprintf("%s\trow%d\trow%d_M+H[1+]\t%s\tcpd %s", eids, seq_len(n),
-            seq_len(n), cpds, cpds)
-  ), file.path(tables, "ListOfEmpiricalCompounds.tsv"))
-
-  writeLines(c(
-    "input_row\tEID\tstr_row_ion\tcompounds\tcompound_names\tinput_row\tm/z\tretention_time\tp_value\tstatistic\tCompoundID_from_user",
-    sprintf("row%d\t%s\trow%d_M+H[1+]\t%s\tcpd %s\trow%d\t%s\t1.0\t0.05\t%s\t%s",
-            seq_len(n), eids, seq_len(n), cpds, cpds, seq_len(n),
-            format(mzs), format(stat), feats)
-  ), file.path(tables, "userInput_to_EmpiricalCompounds.tsv"))
-
-  writeLines(c(
-    "pathway\toverlap_size\tpathway_size\tp-value\toverlap_EmpiricalCompounds (id)\toverlap_features (id)\toverlap_features (name)",
-    sprintf("PW_pos\t3\t8\t0.01\t%s\t\t", paste(eids[1:3], collapse = ",")),
-    sprintf("PW_neg\t3\t8\t0.02\t%s\t\t", paste(eids[22:24], collapse = ","))
-  ), file.path(tables, "mcg_pathwayanalysis_HL_vs_LL.tsv"))
-
-  readr::write_tsv(
-    data.frame(dir = contrast_dir, contrast = "HL_vs_LL",
-               stringsAsFactors = FALSE),
-    file.path(root, "mummichog_pinned", "contrasts.tsv"))
-
-  # Model: three disjoint pathways over the same 24 compounds, in native
-  # mummichog-2 shape (the compact one).
-  model_path <- file.path(root, "model.json")
-  jsonlite::write_json(list(
-    metabolic_pathways = list(
-      list(id = "p1", name = "PW_pos", cpds = as.list(cpds[1:8])),
-      list(id = "p2", name = "PW_mid", cpds = as.list(cpds[9:16])),
-      list(id = "p3", name = "PW_neg", cpds = as.list(cpds[17:24]))
-    ),
-    dict_cpds_def = stats::setNames(as.list(paste("cpd", cpds)), cpds)
-  ), model_path, auto_unbox = TRUE)
-
-  list(
-    files    = list_mummichog_files(root),
-    model    = read_mummichog_model_pathways(model_path),
-    de_table = data.frame(feature_id = feats, logFC = stat / 4,
-                          statistic = stat, P.Value = rep(0.05, n),
-                          stringsAsFactors = FALSE),
-    eids     = eids,
-    stat     = stat
-  )
-}
-
 # A GSEA result table in the shape run_mummichog_gsea()$table returns.
 gsea_table_fixture <- function() {
   data.frame(
@@ -106,13 +45,12 @@ gsea_table_fixture <- function() {
     "Pathway"                         = c("PW_pos", "PW_neg", "PW_mid"),
     "Pathway size (model compounds)"  = c(8, 8, 8),
     "Detected ECs"                    = c(8, 8, 8),
-    "Hits used in GSEA"               = c(8, 8, 8),
+    "Tested size"                     = c(8, 8, 8),
     "ES"                              = c(0.80, -0.75, 0.10),
     "NES"                             = c(2.10, -1.90, 0.00),
     "P.Value"                         = c(0.001, 0.004, 0.700),
     "padj"                            = c(0.003, 0.006, 0.700),
-    "Direction"                       = c("toward HL", "toward LL", "toward HL"),
-    "Leading-edge EmpiricalCompounds" = c("E001;E002", "E024;E023", NA)
+    "Leading-edge EmpiricalCompounds" = c("E001; E002", "E024; E023", NA)
   )
 }
 
@@ -243,22 +181,61 @@ test_that("pathway EC sets are restricted to the ranked universe", {
 
 
 # ---------------------------------------------------------------------------
-# direction wording
+# NES interpretation (must NOT be a biological direction)
 # ---------------------------------------------------------------------------
 
-test_that("the NES direction note carries the contrast orientation", {
-  note <- mmc_gsea_direction_note("HL_vs_LL", "moderated t statistic")
-  expect_match(note, "positive NES")
-  expect_match(note, "higher moderated t statistic in HL relative to LL")
-  # never a bare "up"/"down"
-  expect_false(grepl("\\b(up|down)regulated\\b", note))
+test_that("the NES note describes the |score| ranking, not biology", {
+  note <- mmc_gsea_nes_note()
+
+  expect_match(note, "high-\\|score\\| end")
+  expect_match(note, "low-\\|score\\| end")
+  expect_match(note, "does not encode biological up- or down-regulation")
 })
 
-test_that("an unparseable contrast gets neutral statistic-based wording", {
-  note <- mmc_gsea_direction_note(NULL, "log2 fold change")
-  expect_match(note, "positive end of the ranked log2 fold change")
-  expect_match(mmc_gsea_direction_note("weird-label", "logFC"),
-               "positive end of the ranked")
+test_that("no biological-direction wording survives anywhere in the GSEA layer", {
+  # Regression guard: MetaboAnalyst ranks on |score|, so NES sign must never be
+  # presented as treatment direction. This locks out the wording that used to be
+  # here (a `Direction` column and a numerator/denominator note) and anything
+  # equivalent creeping back in.
+  expect_false(exists("mmc_gsea_direction_note"))
+
+  root <- normalizePath(if (dir.exists("R")) "." else "../..", mustWork = FALSE)
+  targets <- c(
+    file.path(root, "R", "domain", "metabolomics", "06g_mummichog_gsea.R"),
+    file.path(root, "R", "domain", "metabolomics", "06e_mummichog_plots.R"),
+    file.path(root, "R", "pipeline", "metabolomics", "templates",
+              "report_metabolomics.Rmd")
+  )
+  banned <- c("toward numerator", "toward denominator",
+              "up-regulated pathway", "down-regulated pathway",
+              "upregulated", "downregulated",
+              "direction_note", "mmc_gsea_direction_note")
+  for (f in targets) {
+    skip_if_not(file.exists(f), paste("missing", basename(f)))
+    txt <- tolower(paste(readLines(f, warn = FALSE), collapse = "\n"))
+    for (b in banned) {
+      expect_false(grepl(tolower(b), txt, fixed = TRUE),
+                   info = paste0("banned direction wording '", b,
+                                 "' found in ", basename(f)))
+    }
+    # the only sanctioned NES sentence, or none at all
+    expect_false(grepl("toward hl|toward ll", txt, fixed = FALSE),
+                 info = paste("group-direction wording in", basename(f)))
+  }
+})
+
+test_that("the GSEA result table carries no Direction column", {
+  skip_if_not_installed("fgsea")
+  root <- withr::local_tempdir()
+  f    <- build_gsea_fixture(root)
+  res  <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL")
+
+  expect_false("Direction" %in% names(res$table))
+  expect_false(any(grepl("direction", tolower(names(res$table)))))
+  expect_null(res$direction_note)
+  expect_identical(res$nes_note, mmc_gsea_nes_note())
+  # the contrast is carried as provenance only
+  expect_identical(res$contrast, "HL_vs_LL")
 })
 
 
@@ -271,8 +248,7 @@ test_that("GSEA runs over the full ranked EC list and preserves NES sign", {
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
 
-  res <- run_mummichog_gsea(f$files, f$de_table, f$model,
-                            contrast = "HL_vs_LL", n_perm = 500, seed = 42)
+  res <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL")
   expect_false(is.null(res))
 
   # the FULL EC universe is ranked, not only the ORA-significant overlap
@@ -281,27 +257,29 @@ test_that("GSEA runs over the full ranked EC list and preserves NES sign", {
   expect_setequal(res$table$Pathway, c("PW_pos", "PW_mid", "PW_neg"))
 
   expect_true(all(c("Pathway", "Pathway size (model compounds)", "Detected ECs",
-                    "Hits used in GSEA", "ES", "NES", "P.Value", "padj",
-                    "Direction", "Leading-edge EmpiricalCompounds") %in%
-                    names(res$table)))
+                    "Tested size", "ES", "NES", "P.Value", "padj",
+                    "Leading-edge EmpiricalCompounds") %in% names(res$table)))
 
-  # PW_pos holds the 8 highest statistics -> positive NES; PW_neg the lowest.
-  nes <- stats::setNames(res$table$NES, res$table$Pathway)
-  expect_gt(nes[["PW_pos"]], 0)
-  expect_lt(nes[["PW_neg"]], 0)
-  # direction is expressed in the contrast's own terms
-  dir <- stats::setNames(res$table$Direction, res$table$Pathway)
-  expect_identical(dir[["PW_pos"]], "toward HL")
-  expect_identical(dir[["PW_neg"]], "toward LL")
+  # signed ES/NES are preserved (not flattened to absolute values)
+  expect_true(any(res$table$NES < 0) || any(res$table$ES < 0))
+  expect_true(all(is.finite(res$table$NES)))
 
-  # leading edge is reported in EC space
-  le <- res$table[["Leading-edge EmpiricalCompounds"]][
-    res$table$Pathway == "PW_pos"]
-  expect_true(grepl("^E0", le))
+  # engine settings are the MetaboAnalyst-equivalent defaults
+  expect_identical(res$params$n_perm, 100L)
+  expect_equal(res$params$gsea_param, 1)
+  expect_equal(res$params$min_size, 1)
+  expect_equal(res$params$max_size, Inf)
+  expect_identical(res$params$seed, 123L)
 
-  # sorted by ascending p, and the size columns are distinct concepts
+  # sorted by ascending raw p, and the size columns are distinct concepts
   expect_equal(res$table[["P.Value"]], sort(res$table[["P.Value"]]))
   expect_true(all(res$table[["Pathway size (model compounds)"]] == 8))
+  expect_true(all(res$table[["Detected ECs"]] <= 8))
+
+  # BH is taken over the tested pathways only
+  expect_equal(res$table$padj,
+               stats::p.adjust(res$table[["P.Value"]], method = "fdr"),
+               tolerance = 1e-12)
 })
 
 test_that("GSEA is reproducible for a fixed seed", {
@@ -309,12 +287,13 @@ test_that("GSEA is reproducible for a fixed seed", {
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
 
-  a <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
-                          n_perm = 500, seed = 7)
-  b <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL",
-                          n_perm = 500, seed = 7)
+  a <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL")
+  b <- run_mummichog_gsea(f$files, f$de_table, f$model, contrast = "HL_vs_LL")
   expect_equal(a$table[["P.Value"]], b$table[["P.Value"]])
   expect_equal(a$table$NES, b$table$NES)
+  expect_equal(a$table$ES, b$table$ES)
+  # and the default seed is upstream's, not an invented one
+  expect_identical(a$params$seed, 123L)
 })
 
 test_that("GSEA skips gracefully when a prerequisite is missing", {
@@ -427,8 +406,7 @@ test_that("report sections carry the GSEA scatter as the pathway plot", {
   root <- withr::local_tempdir()
   f    <- build_gsea_fixture(root)
   cfg  <- list(modes = list(metabolomics = list(
-    enrichment = list(mummichog = list(p_cutoff = 0.05,
-                                       gsea_permutations = 500)))))
+    enrichment = list(mummichog = list(p_cutoff = 0.05)))))
   pw   <- read_mummichog_pathways_by_contrast(f$files)
 
   secs <- build_mummichog_report_sections(
@@ -446,12 +424,13 @@ test_that("report sections carry the GSEA scatter as the pathway plot", {
   expect_identical(s$plot_kind, "gsea_scatter")
   expect_s3_class(s$plot, "ggplot")
   expect_match(s$plot$labels$x, "NES")
-  # the ORA table and plot are kept alongside, never replaced
+  # the ORA TABLE and its evidence are kept alongside, never replaced
   expect_s3_class(s$table, "data.frame")
   expect_true("p.value" %in% names(s$table))
-  expect_s3_class(s$ora_plot, "ggplot")
   expect_false(is.null(s$gsea))
   expect_false(is.null(s$evidence))
+  # ...but the ORA bubble does NOT compete as a second primary plot
+  expect_null(s$ora_plot)
 })
 
 test_that("report sections fall back to the ORA plot when GSEA cannot run", {
@@ -478,6 +457,8 @@ test_that("report sections fall back to the ORA plot when GSEA cannot run", {
   expect_null(s$gsea_plot)
   expect_null(s$evidence)
   expect_s3_class(s$table, "data.frame")
+  # in the fallback case the ORA bubble IS the primary plot
+  expect_s3_class(s$ora_plot, "ggplot")
 })
 
 test_that("exports write the GSEA and evidence artefacts alongside the ORA ones", {
@@ -487,7 +468,7 @@ test_that("exports write the GSEA and evidence artefacts alongside the ORA ones"
   out  <- withr::local_tempdir()
 
   gsea <- run_mummichog_gsea(f$files, f$de_table, f$model,
-                             contrast = "HL_vs_LL", n_perm = 200, seed = 42)
+                             contrast = "HL_vs_LL")
   pw   <- read_mummichog_pathways(f$files)
   annot <- normalize_metab_annotation(
     data.frame(feature_id = f$de_table$feature_id,

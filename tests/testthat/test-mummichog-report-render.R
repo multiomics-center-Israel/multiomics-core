@@ -50,19 +50,24 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
       "Pathway"                         = c("Fatty acid degradation", "Glycolysis"),
       "Pathway size (model compounds)"  = c(2, 4),
       "Detected ECs"                    = c(2, 2),
-      "Hits used in GSEA"               = c(2, 2),
+      "Tested size"                     = c(2, 2),
       "ES"                              = c(0.8, -0.4),
       "NES"                             = c(1.9, -1.1),
       "P.Value"                         = c(0.002, 0.400),
       "padj"                            = c(0.004, 0.400),
-      "Direction"                       = c("toward HL", "toward LL"),
-      "Leading-edge EmpiricalCompounds" = c("E196;E3", "E2")
+      "Leading-edge EmpiricalCompounds" = c("E196; E3", "E2"),
+      "ES not computed (tied EC scores)" = c(FALSE, FALSE)
     )
-    gsea <- list(table = gtab, n_ec = 24L, n_perm = 1000L, seed = 42L,
+    gsea <- list(table = gtab, n_ec = 24L, n_pathways = 2L,
+                 n_es_defaulted = 0L,
                  metric = "moderated_t",
                  metric_label = "moderated t statistic (DE column 'statistic')",
-                 direction_note = mmc_gsea_direction_note(
-                   "HL_vs_LL", "moderated t statistic"))
+                 nes_note = mmc_gsea_nes_note(),
+                 deviations = character(0),
+                 params = list(n_perm = 100L, min_size = 1, max_size = Inf,
+                               gsea_param = 1, seed = 123L),
+                 reference = list(repo = "xia-lab/MetaboAnalystR",
+                                  commit = .MMC_GSEA_REF_COMMIT))
     gsea_plot <- plot_mummichog_gsea_scatter(gtab, title = "GSEA",
                                              p_cutoff = 0.05)
   }
@@ -79,9 +84,13 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
         "p.value"               = c(0.01, 0.30),
         "Supporting ECs"        = c(2, 1),
         "Supporting features"   = c(3, 1),
-        "Match"                 = c(1, 1),
-        "Conflict"              = c(1, 0),
-        "Not assessed"          = c(0, 0)),
+        "ECs Match"             = c(1, 1),
+        "ECs Conflict"          = c(1, 0),
+        "ECs Mixed"             = c(0, 0),
+        "ECs Not assessed"      = c(0, 0),
+        "features Match"        = c(1, 1),
+        "features Conflict"     = c(1, 0),
+        "features Not assessed" = c(1, 0)),
       ec_table = data.frame(
         check.names = FALSE, stringsAsFactors = FALSE,
         "Pathway"                       = c("Fatty acid degradation",
@@ -93,7 +102,10 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
         "Candidate KEGG ID(s)"          = c("C00020", "C00186", "C00031"),
         "Original annotation"           = c("AMP", "D-Glucose", "D-glucose"),
         "Annotation confidence"         = c("Level 1", "Level 1", "Level 2"),
-        "Agreement"                     = c("Match", "Conflict", "Match")),
+        "Agreement"                     = c("Match", "Conflict", "Match"),
+        "n_match"                       = c(1, 0, 1),
+        "n_conflict"                    = c(0, 1, 0),
+        "n_not_assessed"                = c(1, 0, 0)),
       feature_table = data.frame(
         check.names = FALSE, stringsAsFactors = FALSE,
         "Pathway"               = c("Fatty acid degradation",
@@ -218,8 +230,14 @@ test_that("the mummichog report section renders with GSEA and evidence", {
   expect_match(html, "<details>")
   expect_match(html, "Underlying measured features")
   expect_match(html, "feat_1")
-  # NES direction is expressed in the contrast's own terms
-  expect_match(html, "higher moderated t statistic in HL relative to LL")
+  # NES is described as a |score|-ranking position, never as biology
+  expect_match(html, "high-\\|score\\| end")
+  expect_match(html, "does not encode biological up- or down-regulation")
+  expect_false(grepl("toward HL", html, fixed = TRUE))
+  expect_false(grepl("toward LL", html, fixed = TRUE))
+  # the pinned reference is stated in the report
+  expect_match(html, "MetaboAnalystR")
+  expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 12))
 })
 
 test_that("the mummichog report section renders without GSEA or evidence", {
@@ -234,7 +252,7 @@ test_that("the mummichog report section renders without GSEA or evidence", {
 
   expect_match(html, 'id="pathway-plot"', fixed = TRUE)
   expect_match(html, 'id="ora-results-table"', fixed = TRUE)
-  expect_match(html, "Mummichog ORA pathway analysis")
+  expect_match(html, "Fallback ORA view")
   # the optional tabs are simply absent, and the methodology says why
   expect_false(grepl('id="gsea-results-table"', html, fixed = TRUE))
   expect_false(grepl('id="supporting-evidence"', html, fixed = TRUE))
