@@ -156,9 +156,16 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
     # Save STRING info for report (species + protein list for URL building)
     protein_names_net <- igraph::V(ppi_network$graph)$protein_name
     if (is.null(protein_names_net)) protein_names_net <- igraph::V(ppi_network$graph)$name
+    # Record how the network was built so a reader of string_info.csv can tell a
+    # complete STRINGdb network from a truncated API fallback without digging
+    # through the run log.
+    net_source <- attr(ppi_network, "source") %||% "STRINGdb"
     string_info <- data.frame(
         protein = protein_names_net,
         species_id = species_id,
+        network_source = net_source,
+        n_significant_proteins = length(sig_proteins),
+        n_proteins_in_network = length(protein_names_net),
         stringsAsFactors = FALSE
     )
     write.csv(string_info, file.path(output_dir, "string_info.csv"), row.names = FALSE)
@@ -233,6 +240,24 @@ run_ppi_network_analysis <- function(da_results, metadata, config, out_dir) {
 # STRING Network Construction
 # -----------------------------------------------------------------------------
 
+#' Persistent cache directory for STRINGdb bulk downloads
+#'
+#' STRINGdb defaults to `input_directory = ""`, which resolves to a per-session
+#' tempdir, so every run re-downloads the aliases, info and links files (~100 MB
+#' for human). Point it at a stable per-user cache instead. Falls back to the
+#' old tempdir behaviour if the directory cannot be created.
+#'
+#' @return A directory path, or "" to keep STRINGdb's default.
+string_cache_dir <- function() {
+    dir <- Sys.getenv("MULTIOMICS_STRING_CACHE", unset = "")
+    if (!nzchar(dir)) {
+        dir <- file.path(tools::R_user_dir("multiomics-core", which = "cache"), "stringdb")
+    }
+    ok <- dir.exists(dir) || tryCatch(dir.create(dir, recursive = TRUE, showWarnings = FALSE),
+                                      error = function(e) FALSE)
+    if (isTRUE(ok) || dir.exists(dir)) dir else ""
+}
+
 build_string_network <- function(proteins, species = 9606,
                                   score_threshold = 400, config = NULL) {
     message("Building STRING PPI network...")
@@ -252,11 +277,35 @@ build_string_network <- function(proteins, species = 9606,
         return(build_string_network_api(proteins, species, score_threshold))
     }
 
-    tryCatch({
-        string_db <- STRINGdb::STRINGdb$new(
-            version = "12.0", species = species,
-            score_threshold = score_threshold, input_directory = ""
+    # STRINGdb$new() pings string-db.org for a version check, and that host is
+    # reachable independently of stringdb-downloads.org where the bulk files
+    # live. A transient failure used to drop straight to the API fallback,
+    # which caps at 500 proteins and silently truncates the network -- so retry
+    # before giving up on the complete path.
+    string_db <- NULL
+    for (attempt in seq_len(3)) {
+        string_db <- tryCatch(
+            STRINGdb::STRINGdb$new(
+                version = "12.0", species = species,
+                score_threshold = score_threshold,
+                input_directory = string_cache_dir()
+            ),
+            error = function(e) {
+                message(sprintf("  STRINGdb init attempt %d/3 failed: %s", attempt, e$message))
+                NULL
+            }
         )
+        if (!is.null(string_db)) break
+        if (attempt < 3) Sys.sleep(5 * attempt)
+    }
+    if (is.null(string_db)) {
+        warning("STRINGdb could not be initialised after 3 attempts; falling back to the ",
+                "STRING API, which caps the query at 500 proteins and will TRUNCATE ",
+                "the network. Treat the resulting PPI as incomplete.", call. = FALSE)
+        return(build_string_network_api(proteins, species, score_threshold))
+    }
+
+    tryCatch({
 
         proteins_df <- data.frame(protein = proteins, stringsAsFactors = FALSE)
         mapped <- string_db$map(proteins_df, "protein", removeUnmappedRows = TRUE)
@@ -279,8 +328,10 @@ build_string_network <- function(proteins, species = 9606,
 
         graph <- igraph::simplify(graph, remove.multiple = TRUE, remove.loops = TRUE)
 
-        list(graph = graph, edges = interactions, mapping = mapped,
-             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
+        structure(
+            list(graph = graph, edges = interactions, mapping = mapped,
+                 n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph)),
+            source = "STRINGdb")
 
     }, error = function(e) {
         message("ERROR in STRING network: ", e$message, ". Attempting API fallback...")
@@ -302,10 +353,20 @@ build_string_network_api <- function(proteins, species, score_threshold,
     # Do NOT chunk: the /network endpoint returns edges only among submitted identifiers,
     # so independent per-chunk queries silently drop all inter-chunk edges.
     # Cap explicitly instead so truncation is visible and the user can install STRINGdb.
-    if (length(proteins) > chunk_size) {
-        message("WARNING: ", length(proteins), " proteins exceed the STRING API fallback ",
-                "limit (", chunk_size, "). Capping to ", chunk_size, " proteins. ",
-                "Install STRINGdb for complete cross-protein results.")
+    n_submitted <- length(proteins)
+    n_truncated <- 0L
+    if (n_submitted > chunk_size) {
+        n_truncated <- n_submitted - chunk_size
+        # warning(), not message(): this silently changes the result. The
+        # dropped proteins are chosen by table order, not by biology, so every
+        # downstream topology and community number is computed on an arbitrary
+        # subset.
+        warning(sprintf(
+            paste0("STRING API fallback: %d of %d significant proteins were DROPPED ",
+                   "(limit %d), chosen by table order rather than biology. The PPI ",
+                   "network, its topology metrics and its communities are INCOMPLETE. ",
+                   "Use STRINGdb for the full network."),
+            n_truncated, n_submitted, chunk_size), call. = FALSE)
         proteins <- proteins[seq_len(chunk_size)]
     }
 
@@ -341,8 +402,13 @@ build_string_network_api <- function(proteins, species, score_threshold,
 
     message("  API returned ", igraph::ecount(graph), " unique edges")
 
-    list(graph = graph, edges = combined, mapping = NULL,
-         n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph))
+    structure(
+        list(graph = graph, edges = combined, mapping = NULL,
+             n_nodes = igraph::vcount(graph), n_edges = igraph::ecount(graph)),
+        source = if (n_truncated > 0)
+            sprintf("STRING API (TRUNCATED: %d of %d proteins used)",
+                    length(proteins), n_submitted)
+        else "STRING API")
 }
 
 get_species_name <- function(taxid) {
