@@ -3,10 +3,10 @@
 # Presentation layer for the pinned mummichog v2 stage (06c/05b). It assembles,
 # per contrast, the three views the report shows:
 #
-#   * the MetaboAnalyst-style GSEA summary scatter (06g) — the section's pathway
-#     plot, replacing the earlier ORA bubble plot, which is kept here as the
-#     fallback for when GSEA cannot run (no readable metabolic model, no fgsea,
-#     no signed statistic);
+#   * the MetaboAnalyst-style GSEA summary scatter (06g) — the section's PRIMARY
+#     pathway plot. It replaces the ORA bubble plot, which is now built only as
+#     the fallback for when GSEA cannot run (no readable metabolic model, no
+#     fgsea, no signed statistic), never as a second competing primary plot;
 #   * the mummichog ORA pathway table, unchanged;
 #   * the pathway supporting-evidence drill-down (06f).
 #
@@ -203,11 +203,13 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #' MetaboAnalyst-style scatter (06g), and the pathway supporting-evidence
 #' drill-down (06f). Contrasts with no result are dropped.
 #'
-#' The section's `plot` is the GSEA scatter when GSEA could run, and the ORA
-#' bubble plot otherwise — so the report always has a pathway plot even without
-#' a readable metabolic model, fgsea, or a signed DE statistic. Which one it is
-#' shows in `plot_kind`. The ORA table and its evidence are never replaced by
-#' the GSEA view; they are complementary answers to different questions.
+#' The section's `plot` is the PRIMARY pathway plot: the GSEA scatter whenever
+#' GSEA could run, and the ORA bubble plot only as a fallback when it could not
+#' (no readable metabolic model, no fgsea, no signed DE statistic). `plot_kind`
+#' says which. `ora_plot` is populated only in that fallback case, so the ORA
+#' bubble never appears alongside the GSEA scatter as a second primary plot; the
+#' ORA table and its supporting evidence do remain, as complementary answers to
+#' a different question.
 #'
 #' Every added layer is optional and fail-soft: a GSEA or evidence failure warns
 #' and leaves that part `NULL` rather than losing the contrast's ORA results.
@@ -229,9 +231,10 @@ mummichog_report_titles <- function(config, de_res = NULL, contrast = NULL) {
 #'   `NULL` it is resolved from `config` once for all contrasts.
 #' @return A named list keyed by contrast, each `list(title, subtitle, plot,
 #'   plot_kind, ora_plot, table, gsea, gsea_plot, evidence, slug)`. `plot` is the
-#'   one the report renders and `plot_kind` says which it is; `ora_plot` and
-#'   `gsea_plot` are always the individual plots (the latter `NULL` when GSEA did
-#'   not run), so the exports can write both. `slug` is a filesystem-safe,
+#'   primary plot the report renders and `plot_kind` says which it is;
+#'   `gsea_plot` is `NULL` when GSEA did not run, and `ora_plot` is populated
+#'   ONLY in that case (it is the fallback, not a second primary plot).
+#'   `slug` is a filesystem-safe,
 #'   de-duplicated token for the contrast (mirrors the engine's per-contrast
 #'   directory naming) so the standalone exports never collide. Empty list when
 #'   there is nothing to show.
@@ -289,8 +292,13 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
             de_table = de_tbl,
             model    = model,
             contrast = contrast,
-            n_perm   = mummi_cfg$gsea_permutations %||% 1000,
-            seed     = mummi_cfg$gsea_seed %||% 42
+            # MetaboAnalyst-equivalent defaults unless the config overrides
+            # them, in which case run_mummichog_gsea() records the deviation.
+            n_perm     = mummi_cfg$gsea_permutations %||% .MMC_GSEA_DEFAULTS$n_perm,
+            min_size   = mummi_cfg$gsea_min_size     %||% .MMC_GSEA_DEFAULTS$min_size,
+            max_size   = mummi_cfg$gsea_max_size     %||% .MMC_GSEA_DEFAULTS$max_size,
+            gsea_param = mummi_cfg$gsea_param        %||% .MMC_GSEA_DEFAULTS$gsea_param,
+            seed       = mummi_cfg$gsea_seed         %||% .MMC_GSEA_DEFAULTS$seed
           ),
           error = function(e) {
             warning("mummichog GSEA: contrast '", contrast, "' failed: ",
@@ -323,7 +331,10 @@ build_mummichog_report_sections <- function(pathways_by_contrast, config,
       subtitle  = ttl$subtitle,
       plot      = gsea_plot %||% ora_plot,
       plot_kind = if (is.null(gsea_plot)) "ora_bubble" else "gsea_scatter",
-      ora_plot  = ora_plot,
+      # Fallback only: when the GSEA scatter is the primary plot, the ORA bubble
+      # is not carried at all, so it cannot be rendered or exported as a rival
+      # primary visualisation of the same pathways.
+      ora_plot  = if (is.null(gsea_plot)) ora_plot else NULL,
       table     = tbl,
       gsea      = gsea,
       gsea_plot = gsea_plot,

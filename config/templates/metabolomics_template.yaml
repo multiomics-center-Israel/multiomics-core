@@ -270,9 +270,19 @@ modes:
         # built-in human_mfn model ships inside the Python package, so pathway
         # membership cannot be read for it and both GSEA and the pathway
         # supporting-evidence section are skipped with a message.
-        # Both knobs are optional; these are the defaults.
-        gsea_permutations: 1000        # fgseaSimple permutations
-        gsea_seed: 42                  # seed for those permutations (reproducibility)
+        #
+        # The values below are the MetaboAnalystR Peaks-to-Pathways defaults
+        # (xia-lab/MetaboAnalystR @ 398476ae2a0c996e390925fa62adc46b5ecde334):
+        # PerformPSEA(permNum = 100) and .run_fgsea_inner(gseaParam = 1,
+        # minSize = 1, maxSize = Inf, set.seed(123)). ALL FOUR KEYS ARE OPTIONAL
+        # and are commented out on purpose — overriding any of them is a
+        # methodological deviation from the reference implementation, and it is
+        # recorded as such in the report and in the GSEA result.
+        # gsea_permutations: 100
+        # gsea_seed: 123
+        # gsea_min_size: 1
+        # gsea_max_size: .inf
+        # gsea_param: 1
 
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # The built-in model is HUMAN ONLY: a non-human `organism` (above) with

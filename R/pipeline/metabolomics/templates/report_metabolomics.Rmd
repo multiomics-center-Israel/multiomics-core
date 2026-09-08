@@ -2410,7 +2410,7 @@ cat("Features are grouped into **EmpiricalCompounds** (ECs) — tentative metabo
 cat("Two complementary analyses are reported per contrast, and they answer **different questions**:\n\n")
 cat("- **Mummichog ORA** (the pinned 2.7.0 engine) uses only the features/ECs passing the significance cutoff and asks whether they over-populate a pathway. It reports the overlap, the detected pathway size and an **empirical permutation p-value**, and it is the analysis the *Supporting Evidence* drill-down traces.\n")
 if (has_gsea) {
-  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EC list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / p-value / adjusted p-value, capturing coordinated directional shifts that never reach per-feature significance.\n\n")
+  cat("- **GSEA (MS peaks-to-pathways)** uses the **complete ranked EC list with no significance cutoff** and asks whether a pathway's ECs sit systematically at one end of that ranking. It reports ES / NES / raw p-value / BH-adjusted p-value, and reaches pathways whose ECs shift coherently without any single feature clearing the significance cutoff.\n\n")
 } else {
   cat("- **GSEA (MS peaks-to-pathways)** was not available for this run (it needs `fgsea`, a readable metabolic model via `model_ref`/`model_json`, and a signed DE statistic), so only the ORA analysis is shown.\n\n")
 }
@@ -2423,10 +2423,21 @@ cat(sprintf("- Permutations (ORA): %d\n", n_perm))
 if (has_gsea) {
   g1 <- mummi_gsea[[1]]
   cat(sprintf("- GSEA ranking statistic: %s\n", g1$metric_label))
-  cat(sprintf("- GSEA: `fgsea::fgseaSimple`, %d permutations, seed %d, EC-space gene sets\n",
-              g1$n_perm, g1$seed))
+  cat(sprintf("- GSEA engine: MetaboAnalystR Peaks-to-Pathways semantics (%s @ `%s`), EC-space gene sets\n",
+              g1$reference$repo, substr(g1$reference$commit, 1, 12)))
+  cat(sprintf("- GSEA settings: gseaParam = %s, minSize = %s, maxSize = %s, %s permutations, seed %s\n",
+              g1$params$gsea_param, g1$params$min_size, g1$params$max_size,
+              g1$params$n_perm, g1$params$seed))
+  if (length(g1$deviations) > 0) {
+    cat(sprintf("- **Methodological deviations from the reference defaults:** %s\n",
+                paste(g1$deviations, collapse = "; ")))
+  }
 }
 cat("\n")
+
+if (has_gsea) {
+  cat("**Reading NES.** ", mummi_gsea[[1]]$nes_note, "\n\n", sep = "")
+}
 
 cat("*References: Li S, Park Y, Duraisingham S, et al. Predicting network activity from high throughput metabolomics. PLoS Comput Biol. 2013;9(7):e1003123. — Pang Z, Chong J, Zhou G, et al. MetaboAnalyst 5.0. Nucleic Acids Res. 2021;49(W1):W388–W396 (MS Peaks-to-Pathways GSEA).*\n\n")
 ```
@@ -2487,9 +2498,9 @@ for (contrast in names(mummi_sections)) {
   cat("### Pathway Plot\n\n")
   safe_print_plot(s$plot)
   if (identical(s$plot_kind, "gsea_scatter")) {
-    figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis (this is MetaboAnalyst's own size mapping; it re-encodes significance and carries no additional biological quantity). The dashed line marks p = %g and the most significant pathways are labelled. %s.", label, p_cut, s$gsea$direction_note))
+    figure_legend(sprintf("Mummichog GSEA over the full ranked EmpiricalCompound list (%s), in the style of MetaboAnalyst's MS Peaks-to-Pathways summary. Each point is a pathway: x = NES, y = -log10(raw GSEA p-value), colour = NES on a diverging scale centred at 0, point size = sqrt(-log10 p) — the same quantity as the y axis (this is MetaboAnalyst's own size mapping; it re-encodes significance and carries no additional quantity). The dashed line marks p = %g, the vertical line marks NES = 0, and the most significant pathways are labelled. %s", label, p_cut, s$gsea$nes_note))
   } else {
-    figure_legend(sprintf("Mummichog ORA pathway analysis (%s). Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / detected pathway size), y = -log10(p-value), point size = detected pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled. (The GSEA summary plot is unavailable for this run.)", label, p_cut))
+    figure_legend(sprintf("Fallback ORA view (%s): the MetaboAnalyst-style GSEA summary plot is unavailable for this run, so the mummichog ORA result is plotted instead. Each bubble is a pathway: x = enrichment ratio (overlapping empirical compounds / detected pathway size), y = -log10(empirical ORA p-value), point size = detected pathway size, colour = -log10(p-value). The dashed line marks the p = %g cutoff; the most significant pathways are labelled.", label, p_cut))
   }
 
   # ---- ORA Results Table --------------------------------------------------
@@ -2504,9 +2515,14 @@ for (contrast in names(mummi_sections)) {
   # ---- GSEA Results Table -------------------------------------------------
   if (!is.null(s$gsea)) {
     cat("\n\n### GSEA Results Table\n\n")
-    cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. %s.\n\n",
-                s$gsea$n_ec, s$gsea$metric_label, s$gsea$direction_note))
-    cat("An EC's score is the signed maximum of its member features' statistics (features sharing one m/z are averaged first), and a pathway's gene set is its detected ECs — MetaboAnalyst's EC-space construction for retention-time / v2 runs.\n\n")
+    cat(sprintf("GSEA over the **complete** ranked list of %d EmpiricalCompounds (no significance cutoff), ranked by the %s. `P.Value` is the raw permutation p-value and `padj` its BH adjustment over the %d tested pathways.\n\n",
+                s$gsea$n_ec, s$gsea$metric_label, s$gsea$n_pathways))
+    cat("An EC's score is the signed maximum of its member features' statistics (features sharing one m/z are averaged first), and a pathway's gene set is its detected ECs — MetaboAnalyst's EC-space construction for retention-time / v2 runs. `Detected ECs` is how many of the pathway's ECs this dataset saw; `Tested size` is the ranked-position vector the engine scored, which can differ when ECs share a score.\n\n")
+    cat("**Reading NES.** ", s$gsea$nes_note, "\n\n", sep = "")
+    if (isTRUE(s$gsea$n_es_defaulted > 0)) {
+      cat(sprintf("> **%d pathway(s) could not be scored.** The reference implementation does not de-duplicate tied EmpiricalCompound ranks, so a pathway holding two ECs with an identical score falls back to `ES = 0` with an empty leading edge. Those rows are flagged `TRUE` in *ES not computed (tied EC scores)* and their `ES`/`NES` of 0 is a placeholder, not a measured enrichment score.\n\n",
+                  s$gsea$n_es_defaulted))
+    }
     print(htmltools::tagList(
       make_dt(s$gsea$table,
               caption = sprintf("Mummichog GSEA (peaks to pathways) — %s", label))))
@@ -2517,7 +2533,8 @@ for (contrast in names(mummi_sections)) {
     cat("\n\n### Supporting Evidence\n\n")
     cat("Which measured features actually support each enriched pathway, and whether the identity mummichog used to map an EmpiricalCompound onto the pathway agrees with this dataset's own annotation.\n\n")
     cat("A **pathway-matching candidate** is a *putative* identity: it is a candidate compound of the EmpiricalCompound that also belongs to this pathway, i.e. the identity through which the EC maps here. Several candidates can qualify and all of them are listed. This is deliberately **not** mummichog's \"Best guess\" (`face_compound`), which is picked arbitrarily among candidates and pooled across every significant pathway.\n\n")
-    cat("**Agreement** compares the original annotation with those candidates — by KEGG compound ID when both sides have one, otherwise by a conservative name/synonym comparison; never by m/z, formula or mass. `Match` = same compound, `Conflict` = a comparable annotation naming a different metabolite, `Not assessed` = no usable original annotation. Conflicts are reported, not removed: this is an evidence layer, not a re-analysis. **Annotation confidence** (e.g. `Level 1`) is whatever the dataset itself declares and is a separate concept from agreement.\n\n")
+    cat("**Agreement** compares the original annotation with those candidates — by KEGG compound ID when both sides have one, otherwise by a conservative name/synonym comparison; never by m/z, formula or mass. Per measured feature it is `Match` (same compound), `Conflict` (a comparable annotation naming a different metabolite) or `Not assessed` (no usable original annotation). An EmpiricalCompound rolls its features up into four states: `Match` (some agree, none disagree), `Conflict` (some disagree, none agree), `Mixed` (both), `Not assessed` (nothing comparable) — features with no usable annotation never override assessed evidence. Conflicts are reported, not removed: this is an evidence layer, not a re-analysis. **Annotation confidence** (e.g. `Level 1`) is whatever the dataset itself declares and is a separate concept from agreement.\n\n")
+    cat("Counts come at two grains and are labelled as such: `ECs ...` columns count EmpiricalCompounds by their roll-up state, `features ...` columns count measured features by their own verdict, and `n_match`/`n_conflict`/`n_not_assessed` on an EC row are that EC's feature-level evidence. Neither is the pathway overlap, the detected pathway size, or the number of candidate compounds.\n\n")
 
     print(htmltools::tagList(
       make_dt(s$evidence$pathway_summary,
@@ -2695,8 +2712,10 @@ if (length(mummi_sections) > 0) {
   cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was run independently for each differential-abundance contrast — each contrast's own p-values define its significant set against all features — using the version-pinned engine.")
   if (has_gsea) {
     g1 <- mummi_gsea[[1]]
-    cat(sprintf(" A complementary MS peaks-to-pathways GSEA (MetaboAnalyst-style) was run on the same mapped EmpiricalCompound universe, over the complete ranked list with no significance cutoff: each EmpiricalCompound scored as the signed maximum of its member features' %s, pathway sets defined as their detected EmpiricalCompounds, and enrichment tested with fgsea's fixed-permutation scheme (%d permutations, seed %d).",
-                g1$metric_label, g1$n_perm, g1$seed))
+    cat(sprintf(" A complementary MS peaks-to-pathways GSEA was run on the same mapped EmpiricalCompound universe, reproducing the MetaboAnalystR Peaks-to-Pathways semantics (%s at commit %s): the complete ranked list with no significance cutoff, each EmpiricalCompound scored as the signed maximum of its member features' %s, pathway sets defined as their detected EmpiricalCompounds, the ranking transformed to absolute score magnitude, and enrichment tested with the vendored fixed-permutation scheme (gseaParam = %s, minSize = %s, maxSize = %s, %s permutations, seed %s) with Benjamini-Hochberg adjustment across the tested pathways. Because the ranking is transformed to absolute magnitude, the sign of ES/NES indicates which end of that magnitude ranking a pathway is enriched toward and does not encode biological up- or down-regulation.",
+                g1$reference$repo, substr(g1$reference$commit, 1, 12),
+                g1$metric_label, g1$params$gsea_param, g1$params$min_size,
+                g1$params$max_size, g1$params$n_perm, g1$params$seed))
   }
   if (has_mummi_evidence) {
     cat(" For each enriched pathway, the supporting EmpiricalCompounds were traced back to their pathway-matching candidate compounds (the EmpiricalCompound's candidates intersected with the pathway's compounds) and to the underlying measured features, and each feature's original annotation was compared with those candidates by KEGG compound ID or, where identifiers were unavailable, by a conservative name/synonym comparison.")

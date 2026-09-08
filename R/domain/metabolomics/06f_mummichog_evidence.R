@@ -678,9 +678,14 @@ mmc_annotation_agreement <- function(annot_kegg, annot_name,
 #'   empty pathway table). Otherwise a list with:
 #'   \describe{
 #'     \item{pathway_summary}{One row per pathway: overlap, detected pathway
-#'       size, enrichment ratio, empirical p-value, supporting EC/feature counts
-#'       and the Match / Conflict / Not assessed breakdown.}
-#'     \item{ec_table}{One row per (pathway, supporting EmpiricalCompound).}
+#'       size, enrichment ratio, empirical p-value, supporting EC/feature counts,
+#'       and the agreement breakdown at BOTH grains — `ECs Match/Conflict/Mixed/
+#'       Not assessed` counts EmpiricalCompounds by their roll-up state, while
+#'       `features Match/Conflict/Not assessed` counts measured features by
+#'       their own verdict.}
+#'     \item{ec_table}{One row per (pathway, supporting EmpiricalCompound), with
+#'       the four-state `Agreement` roll-up and the feature-level `n_match`,
+#'       `n_conflict`, `n_not_assessed` counts behind it.}
 #'     \item{feature_table}{One row per (pathway, EmpiricalCompound, measured
 #'       feature) — every underlying signal, nothing collapsed.}
 #'   }
@@ -801,7 +806,13 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
         "Candidate KEGG ID(s)"           = .mmc_join_unique(cand_kegg),
         "Original annotation"            = .mmc_join_unique(a_name),
         "Annotation confidence"          = .mmc_join_unique(a_conf),
-        "Agreement"                      = .mmc_summarise_agreement(agree)
+        "Agreement"                      = .mmc_summarise_agreement(agree),
+        # FEATURE-level counts of the evidence behind this EC's roll-up. They
+        # count measured features, not ECs, candidates or pathway members —
+        # n_match + n_conflict + n_not_assessed == `# Features`.
+        "n_match"                        = sum(agree == "Match"),
+        "n_conflict"                     = sum(agree == "Conflict"),
+        "n_not_assessed"                 = sum(agree == "Not assessed")
       )
     }
 
@@ -813,6 +824,11 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
 
     overlap <- suppressWarnings(as.numeric(pathways$overlap_size[i]))
     pw_size <- suppressWarnings(as.numeric(pathways$pathway_size[i]))
+    # Two grains, never mixed: "ECs ..." columns count EmpiricalCompounds by
+    # their roll-up state, "features ..." columns count measured features by
+    # their own per-feature verdict. Column names carry the grain so a reader
+    # cannot mistake one for the other, and neither is the pathway overlap or
+    # the candidate count.
     summary_rows[[length(summary_rows) + 1L]] <- data.frame(
       check.names = FALSE, stringsAsFactors = FALSE,
       "Pathway"                 = pw_name,
@@ -823,9 +839,13 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
                                     suppressWarnings(as.numeric(pathways[[p_col]][i])),
       "Supporting ECs"          = nrow(ec_df),
       "Supporting features"     = nrow(feat_df),
-      "Match"                   = sum(ec_df$Agreement == "Match"),
-      "Conflict"                = sum(ec_df$Agreement == "Conflict"),
-      "Not assessed"            = sum(ec_df$Agreement == "Not assessed")
+      "ECs Match"               = sum(ec_df$Agreement == "Match"),
+      "ECs Conflict"            = sum(ec_df$Agreement == "Conflict"),
+      "ECs Mixed"               = sum(ec_df$Agreement == "Mixed"),
+      "ECs Not assessed"        = sum(ec_df$Agreement == "Not assessed"),
+      "features Match"          = sum(feat_df$Agreement == "Match"),
+      "features Conflict"       = sum(feat_df$Agreement == "Conflict"),
+      "features Not assessed"   = sum(feat_df$Agreement == "Not assessed")
     )
   }
 
@@ -854,16 +874,34 @@ build_mummichog_pathway_evidence <- function(pathways, files, model, annot,
 #' Roll per-feature agreements up to one EmpiricalCompound verdict
 #'
 #' An EmpiricalCompound is supported by several measured signals, each with its
-#' own original annotation. Precedence is `Match > Conflict > Not assessed`: if
-#' ANY underlying feature was originally annotated as a pathway-matching
-#' candidate, the identity mummichog used does agree with our annotation for
-#' that EC. The per-feature detail stays visible in `feature_table`.
+#' own original annotation, so its roll-up needs four states rather than a
+#' precedence chain — an EC where one feature agrees and another disagrees is
+#' genuinely `Mixed`, and collapsing that to `Match` would hide the
+#' disagreement:
+#'
+#' \preformatted{
+#' has_match && has_conflict   -> "Mixed"
+#' has_match && !has_conflict  -> "Match"
+#' !has_match && has_conflict  -> "Conflict"
+#' otherwise                   -> "Not assessed"
+#' }
+#'
+#' Features with no usable annotation never override assessed evidence, so
+#' `Match + Not assessed` is `Match` and `Conflict + Not assessed` is
+#' `Conflict`. Per-feature verdicts stay unchanged and visible in
+#' `feature_table`.
 #'
 #' @param x Character vector of per-feature verdicts.
-#' @return One of `"Match"`, `"Conflict"`, `"Not assessed"`.
+#' @return One of `"Match"`, `"Conflict"`, `"Mixed"`, `"Not assessed"`.
 #' @noRd
 .mmc_summarise_agreement <- function(x) {
-  if (any(x == "Match"))    return("Match")
-  if (any(x == "Conflict")) return("Conflict")
+  has_match    <- any(x == "Match")
+  has_conflict <- any(x == "Conflict")
+  if (has_match && has_conflict)  return("Mixed")
+  if (has_match)                  return("Match")
+  if (has_conflict)               return("Conflict")
   "Not assessed"
 }
+
+# The four EC-level agreement states, in report order.
+.MMC_AGREEMENT_STATES <- c("Match", "Conflict", "Mixed", "Not assessed")

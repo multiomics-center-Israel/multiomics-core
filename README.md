@@ -329,27 +329,59 @@ Alongside the pinned 2.7.0 **ORA**, the pipeline runs a MetaboAnalyst-style **GS
 |---|---|---|
 | Features used | only those passing `p_cutoff` | the **complete ranked list**, no cutoff |
 | Unit | significant EmpiricalCompounds | all detected EmpiricalCompounds |
-| Reports | overlap / detected pathway size, empirical permutation p-value | ES, NES, p-value, adjusted p-value, leading-edge ECs |
-| Catches | over-representation of significant signals | coordinated directional shifts below per-feature significance |
+| Reports | overlap / detected pathway size, empirical permutation p-value | ES, NES, raw p-value, BH-adjusted p-value, leading-edge ECs |
+| Role in the report | complementary evidence table | the **primary** pathway plot |
 
-Statistical semantics follow MetaboAnalystR's peaks-to-pathways implementation (verified against `peaks_to_function.R` / `util_fgsea.R`):
+#### Behavioural reference
+
+The implementation reproduces a **pinned** upstream version, not a paraphrase of it:
+
+| | |
+|---|---|
+| Repo | `xia-lab/MetaboAnalystR` |
+| Commit | `398476ae2a0c996e390925fa62adc46b5ecde334` |
+| Files | `R/util_fgsea.R`, `R/peaks_to_function.R` |
+| Path | `PerformPSEA` → `.init.RT.Permutations` → `.compute.mummichog.RT.fgsea` → `fgsea2` → `my.fgsea` → `.run_fgsea_inner` |
+
+Both files are byte-identical between that commit and upstream's current default-branch head, so the pin is the live Peaks-to-Pathways code path. A **parity test** (`tests/testthat/test-mummichog-gsea-parity.R`) compares our engine against a fixture produced by running the pinned `.run_fgsea_inner()` itself; see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md`.
+
+#### Semantics
 
 -   **Ranking statistic** — the moderated `t` statistic (our per-contrast limma tables carry it as `statistic`), which is what MetaboAnalyst ranks on; `logFC` is used only when a DE table has no usable statistic. **The ORA input contract is unchanged** — it still sends `logFC` as mummichog's `statistic` column. Whichever metric GSEA used is printed in the report and stored in the result.
--   **EmpiricalCompound score** — features sharing one m/z are merged first (mean, MetaboAnalyst's default), then an EC takes the **signed maximum** of its member features' scores (`ec.exp.vec <- unlist(lapply(ec_exp_dict, max))` in the retention-time/v2 branch). Not the mean, not `max(abs())`.
+-   **EmpiricalCompound score** — features sharing one m/z are merged first (mean, MetaboAnalyst's default), then an EC takes the **signed maximum** of its member features' scores (`ec.exp.vec <- unlist(lapply(ec_exp_dict, max))` in the retention-time/v2 branch). Not the mean, not `max(abs())`, not the most significant feature.
 -   **Gene sets** — pathway → its *detected* EmpiricalCompounds.
--   **Engine** — `fgsea::fgseaSimple()`, i.e. the fixed-permutation scheme MetaboAnalystR vendored (`calcGseaStat` + `calcGseaStatCumulativeBatch`, two-sided empirical p, BH adjustment, `NES = ES / mean(same-sign permuted ES)`). Seeded (`gsea_seed`, default 42) so the report is reproducible.
+-   **Ranked inputs** — ECs sharing a score are collapsed into one ranked position named by their `"; "`-joined ids, and every EC maps to that position's index. This is why the ranked vector can be shorter than the EC universe, and why `Tested size` can differ from `Detected ECs`.
+-   **Engine** — `fgsea::calcGseaStat` for the enrichment score and `fgsea:::calcGseaStatCumulativeBatch` for the permutation tallies, orchestrated exactly as upstream does. `fgsea::fgseaSimple()` **cannot** stand in: it takes one per-item vector rather than the stats/ranks pair, de-duplicates pathway positions, and applies `abs()` *after* sorting rather than before. `mmc_gsea_metaboanalyst()` is the smallest local helper that reproduces the upstream orchestration.
+-   **Defaults** (all MetaboAnalyst's) — `permNum = 100`, `gseaParam = 1`, `minSize = 1`, `maxSize = Inf`, `set.seed(123)` before the per-batch permutation seeds. Overriding any of them is recorded as a methodological deviation in the result and printed in the report.
+-   **Multiple testing** — `p.adjust(..., "fdr")` over exactly the pathways that passed the size filter, i.e. the tested universe. GSEA p-values are never mixed with the ORA's empirical p-values.
 
-`NES` keeps its sign and the report states what that sign means for the contrast **as written**: for `HL_vs_LL`, a positive NES is enrichment toward a higher ranking statistic in `HL` relative to `LL`. It is never reported as a bare "up"/"down".
+#### Reading NES
 
-Optional knobs (both have sensible defaults, so nothing needs to be set):
+`ES`/`NES` keep their sign, but **the sign is not a biological direction.** MetaboAnalyst transforms the ranking to absolute score magnitude (`stats <- abs(stats)^gseaParam`, before the sort), so:
+
+> Positive NES indicates enrichment toward the high-|score| end of the transformed ranking; negative NES indicates enrichment toward the low-|score| end. NES sign in this MetaboAnalyst-style Peaks-to-Pathways analysis does not encode biological up- or down-regulation.
+
+The report, tables, plot and exports carry that wording and nothing stronger; a regression test keeps up/down and numerator/denominator phrasing from coming back.
+
+#### Two upstream behaviours we reproduce rather than "fix"
+
+1.  **Tied EC scores ⇒ `ES = 0`.** Pathway members become tie-group *indices* and are never de-duplicated, so a pathway holding two ECs with the same score passes a non-strictly-increasing `selectedStats`, which `fgsea::calcGseaStat()` rejects; upstream's `tryCatch` substitutes `ES = 0` with an empty leading edge. We reproduce that exactly **and flag it** — the results table has an `ES not computed (tied EC scores)` column and the report says how many pathways are affected, so a placeholder `0` is never read as a measured score.
+2.  **Leading edges are often empty.** Because `abs()` is applied before the sort, pathway indices taken from the signed ordering address a differently-ordered vector; the leading edge is then intersected with the pathway's own ECs and frequently comes back empty.
+
+#### Config
+
+Nothing needs to be set — the defaults above are the reference values. All four keys are optional, and setting any of them is reported as a deviation:
 
 ``` yaml
 modes:
   metabolomics:
     enrichment:
       mummichog:
-        gsea_permutations: 1000   # fgseaSimple permutations
-        gsea_seed: 42             # RNG seed for those permutations
+        # gsea_permutations: 100    # PerformPSEA(permNum = 100)
+        # gsea_seed: 123            # .run_fgsea_inner: set.seed(123)
+        # gsea_min_size: 1
+        # gsea_max_size: .inf
+        # gsea_param: 1
 ```
 
 GSEA needs `fgsea`, a **readable metabolic model** (`model_ref` or `model_json` — see the caveat below) and a signed DE statistic. When any of those is missing it is skipped with a message and the report falls back to showing the ORA bubble plot.
@@ -365,11 +397,28 @@ so a biologist can see *which measured features supported the pathway* and *whet
 -   **Pathway-matching candidate(s)** — all candidate compounds of the EmpiricalCompound intersected with the compounds of *that* pathway. Every surviving candidate is kept; none is arbitrarily picked. This deliberately does **not** use mummichog's `face_compound` / "Best guess": verified in the 2.7.0 sources, `designate_face_cpd()` picks `chosen_compounds[-1]` ("arbitrarily designated" per its own docstring) and `collect_hit_Trios()` fills `chosen_compounds` from the union of *all* significant pathways — which is also what the pathway table's `overlap_features (id)` column contains. Neither is a per-pathway, evidence-ranked identification. A pathway-matching candidate is a **putative** identity: the identity *through which* this EC maps to this pathway.
 -   **Measured features** — every input signal forming the EC is listed with its feature id, m/z, retention time, adduct/ion, p-value, statistic and significance flag. Nothing is summed or collapsed into a representative feature.
 -   **Original annotation** — normalised into a schema-agnostic contract (`original_annotation_name`, `original_annotation_id`, `original_annotation_confidence`), so datasets with MSI identification levels, datasets with annotations but no level system, and unannotated features are all handled. Nothing is hard-coded to "Level 1", and missing information stays `NA`.
--   **Agreement** — `Match` / `Conflict` / `Not assessed`, kept strictly separate from annotation *confidence*. Compared on stable compound ids (KEGG preferred) when both sides have one, otherwise by a conservative normalised-name/synonym comparison against the model's own `";"`-separated synonym lists. **Never** matched on m/z, molecular formula or mass. Conflicts are reported, never removed — this is an evidence layer, not a re-analysis of the enrichment.
+-   **Agreement** — kept strictly separate from annotation *confidence*, and compared on stable compound ids (KEGG preferred) when both sides have one, otherwise by a conservative normalised-name/synonym comparison against the model's own `";"`-separated synonym lists. **Never** matched on m/z, molecular formula or mass. Conflicts are reported, never removed — this is an evidence layer, not a re-analysis of the enrichment.
+
+    Each measured feature gets `Match`, `Conflict` or `Not assessed`. An EmpiricalCompound rolls its features up into **four** states, so a disagreement is never hidden behind an agreement:
+
+    | features | EC verdict |
+    |---|---|
+    | some Match, no Conflict | `Match` |
+    | some Conflict, no Match | `Conflict` |
+    | both Match and Conflict | `Mixed` |
+    | neither | `Not assessed` |
+
+    Features with no usable annotation never override assessed evidence (`Match + Not assessed` → `Match`, `Conflict + Not assessed` → `Conflict`).
+
+-   **Counts come at two grains and are labelled as such.** In the pathway summary, `ECs Match/Conflict/Mixed/Not assessed` count EmpiricalCompounds by their roll-up state; `features Match/Conflict/Not assessed` count measured features by their own verdict. On an EC row, `n_match`/`n_conflict`/`n_not_assessed` are that EC's feature-level evidence and sum to its `# Features`. None of these is the pathway overlap, the detected pathway size, or the number of candidate compounds.
 
 > **Caveat — pathway membership needs a readable model.** mummichog does not export pathway → compound membership (in `reporting.py` the `'all_compounds': P.cpds` line is commented out), so it is read from the metabolic model the stage ran on, resolved through the same `mmc_select_model()`. The built-in **`human_mfn` model lives inside the Python package** and is not a JSON file R can read, so with that model both the GSEA and the evidence layers report themselves unavailable and their report sections are omitted rather than guessed at. Configure `model_ref` or `model_json` (Azimuth or mummichog-2 native JSON) to enable them.
 
-In the HTML report each contrast's mummichog tab becomes **Pathway Plot | ORA Results Table | GSEA Results Table | Supporting Evidence**, where the pathway plot is the MetaboAnalyst-style GSEA scatter (x = NES, y = −log10 p, diverging colour on NES centred at 0, point size = √−log10 p — MetaboAnalyst's own size mapping, which re-encodes significance rather than adding a quantity) and falls back to the ORA bubble plot when GSEA is unavailable. The Supporting Evidence tab shows a pathway summary table plus a collapsible per-pathway drill-down (capped at the 25 most significant pathways in the HTML; the full tables are always exported as `mummichog_evidence_*`).
+In the HTML report each contrast's mummichog tab becomes **Pathway Plot | ORA Results Table | GSEA Results Table | Supporting Evidence**.
+
+The **Pathway Plot** is the MetaboAnalyst-style GSEA scatter: x = NES, y = −log10(raw GSEA p), diverging colour on NES centred at 0, point size = √−log10 p (MetaboAnalyst's own `radi.vec` mapping, which re-encodes the significance already on the y axis rather than adding a quantity — the legend says so and never exposes the upstream variable name), a NES = 0 vertical reference, a p = 0.05 horizontal reference, and `ggrepel` labels on the most significant pathways. It is the **primary and only** pathway plot whenever GSEA ran; the ORA bubble plot is built solely as the fallback for when it could not, so the two never compete as rival primary visualisations. The ORA analysis stays fully available as its own results table plus the supporting-evidence drill-down.
+
+The **Supporting Evidence** tab shows a pathway summary table plus a collapsible per-pathway drill-down (capped at the 25 most significant pathways in the HTML; the full tables are always exported as `mummichog_evidence_*`).
 
 ### Stochasticity caveat
 
