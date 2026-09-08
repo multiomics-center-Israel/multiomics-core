@@ -57,6 +57,51 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
                write_pca_companions(p12, out_qc, pcs = c(1, 2)),
                write_pca_companions(p13, out_qc, pcs = c(1, 3)))
 
+    # ---------- PCA on the full matrix, named for the report dropdown ----------
+    # PCA_PC1.vs.PC2.png above is the same data, but the dropdown needs a panel
+    # whose filename says "all" so "all proteins" can sit beside the top-variable
+    # and robust subsets rather than being an unlabelled special case.
+    f_pca_all <- file.path(out_qc, "PCA_all.png")
+    tryCatch({
+        p_all <- qc_pca_scatter(pre$expr_imp_single, pre$meta, cfg, pcs = c(1, 2),
+                                out_file = f_pca_all)
+        files <- c(files, f_pca_all)
+        plots$pca_all <- p_all
+        message(sprintf("  Generated PCA with all %d proteins", nrow(pre$expr_imp_single)))
+    }, error = function(e) {
+        message(sprintf("  Could not generate all-protein PCA: %s", e$message))
+    })
+
+    # ---------- PCA on the most robustly identified proteins ----------
+    # "Robust" = at most one sample needed imputing. These rows rest on measured
+    # values in at least n-1 samples, so their PCA cannot be driven by the
+    # imputation draw. Skipped when imputation flags are absent (method: none)
+    # or when the subset is too small to decompose.
+    imp_flag <- pre$imputation_qc$imputed_flag
+    if (!is.null(imp_flag)) {
+        n_imputed_per_feature <- rowSums(imp_flag, na.rm = TRUE)
+        robust_idx <- which(n_imputed_per_feature <= 1)
+        if (length(robust_idx) >= 3) {
+            mat_robust <- pre$expr_imp_single[robust_idx, , drop = FALSE]
+            f_pca_robust <- file.path(out_qc, "PCA_robust.png")
+            tryCatch({
+                p_robust <- qc_pca_scatter(mat_robust, pre$meta, cfg, pcs = c(1, 2),
+                                           out_file = f_pca_robust)
+                files <- c(files, f_pca_robust)
+                plots$pca_robust <- p_robust
+                message(sprintf(
+                    "  Generated PCA with %d robustly identified proteins (<=1 imputed value)",
+                    length(robust_idx)))
+            }, error = function(e) {
+                message(sprintf("  Could not generate robust-protein PCA: %s", e$message))
+            })
+        } else {
+            message(sprintf(
+                "  Skipping robust-protein PCA: only %d proteins have <=1 imputed value",
+                length(robust_idx)))
+        }
+    }
+
     # ---------- PCA with top variable proteins (for report dropdown) ----------
     n_top_values <- c(500, 1000, 2000)
     n_features <- nrow(pre$expr_imp_single)
