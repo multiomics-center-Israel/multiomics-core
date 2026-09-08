@@ -24,25 +24,51 @@ current default-branch head**, so this pin is the live code path, not a stale on
 
 The engine calls fgsea **internals** (`calcGseaStatCumulativeBatch`), so "same
 `> 1.24.0` branch" is not sufficient evidence of numerical parity — the exact
-series matters. The generator therefore **refuses to run** unless the installed
-fgsea is in the series `renv.lock` pins, records the exact build in
-`fgsea_version` / `fgsea_series` / `fgsea_locked`, and the parity test **skips
-rather than compares** when the running fgsea is in a different series.
+build matters. Three states, enforced rather than described:
 
-The reference is generated under **fgsea 1.36.0**, the `RELEASE_3_22` branch
-point (`alserglab/fgsea@1adab01`) and the closest obtainable build to the locked
-1.36.2: Bioconductor and CRAN hosts are unreachable from the build environment
-(egress policy), and the `RELEASE_3_22` patch branch carrying 1.36.1/1.36.2 is
-not mirrored to GitHub. Evidence that this does not affect the numbers:
+| installed fgsea vs `renv.lock` | generator | parity test |
+|---|---|---|
+| exact match | generates, `fgsea_exact_match = TRUE` | compares |
+| same `x.y`, different patch | **refuses** unless `MMC_PARITY_ALLOW_FGSEA_PATCH_MISMATCH=1`, and stores `fgsea_mismatch_note` | compares, and asserts the note exists |
+| different `x.y` series | **refuses** | **skips** — a cross-series match is not parity |
 
-* `calcGseaStat` is **byte-identical** between 1.36.0 and 1.39.4 (pure R, no
-  C++ call);
-* `calcGseaStatCumulativeBatch`'s R wrapper and `.Call` signature are identical,
-  and its C++ implementation (`src/fastGSEA.cpp`) differs only by **three
-  comment lines**;
+A further test asserts that whenever the suite runs somewhere the **locked build
+is installed**, the fixture must have been generated on it. So the current
+patch-level gap is an enforced follow-up, not a silent hole: run the suite in the
+project's `renv` environment and it will fail until the fixture is regenerated.
+
+### Current state of that gap
+
+`fgsea_exact_match` is **FALSE**: the fixture is generated under **1.36.0**
+(`alserglab/fgsea@1adab01`, the `RELEASE_3_22` branch point) rather than the
+locked **1.36.2**. 1.36.2 is unobtainable in the authoring environment — every
+route was tried and denied by egress policy or does not exist:
+
+| route | outcome |
+|---|---|
+| `bioconductor.org` (release + Archive) | denied |
+| `git.bioconductor.org` | denied |
+| `cloud.r-project.org`, `packagemanager.posit.co` | denied |
+| `bioc.r-universe.dev`, `api.anaconda.org` | denied |
+| `depot.galaxyproject.org` (bioconda's source mirror) | denied |
+| `alserglab/fgsea` `RELEASE_3_22` branch | not mirrored (branches stop at `RELEASE_3_21`) |
+| `Bioconductor/fgsea`, `Bioconductor-mirror/fgsea`, `ctlab/fgsea` on GitHub | do not exist / no such branch |
+
+Evidence that the gap does not affect the numbers:
+
+* the two primitives this engine calls are **code-identical from 1.36.0 through
+  1.39.4** — the whole devel cycle either side of the branch point:
+  `calcGseaStat` body md5 `9cac7ddd36b45885` at both revisions (pure R, no
+  `.Call`), and `src/fastGSEA.cpp` with comments stripped md5
+  `8060947310be0650` at both. The one post-branch-point commit touching
+  `fastGSEA.cpp` (`7207d6b`) adds three comment lines and nothing else;
 * regenerating the whole fixture under 1.39.4 and under 1.36.0 gives **bitwise
   identical** ES, NES, p, padj, `nMoreExtreme`, sizes, pathway order and leading
   edges.
+
+What remains unverifiable here is only the content of the two patch backports on
+the `RELEASE_3_22` branch (1.36.1, 1.36.2), which cannot be inspected without
+access to that branch.
 
 ## What the generator actually runs
 
@@ -90,5 +116,8 @@ git -C /tmp/mar checkout 398476ae2a0c996e390925fa62adc46b5ecde334
 Rscript tests/testthat/fixtures/mummichog_gsea_parity/generate_reference.R /tmp/mar
 ```
 
-Install the `renv.lock` fgsea series first — the generator aborts otherwise.
-Record the new commit here and in `R/domain/metabolomics/06g_mummichog_gsea.R`.
+Install the exact `renv.lock` fgsea build first — the generator aborts otherwise
+(and only accepts a patch-level difference with
+`MMC_PARITY_ALLOW_FGSEA_PATCH_MISMATCH=1`, which records the deviation in the
+fixture). Record any new MetaboAnalystR commit here and in
+`R/domain/metabolomics/06g_mummichog_gsea.R`.

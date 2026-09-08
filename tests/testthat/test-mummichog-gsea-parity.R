@@ -72,8 +72,43 @@ test_that("the parity fixture is present and records its provenance", {
   expect_identical(ref$fgsea_locked, locked)
   expect_identical(ref$fgsea_series, parity_series(locked))
   expect_match(ref$fgsea_branch, "post-1\\.24\\.0")
-  # and the exact build is recorded, not just the series
+  # the exact build is recorded, not just the series
   expect_true(is.character(ref$fgsea_version) && nzchar(ref$fgsea_version))
+  expect_true(is.logical(ref$fgsea_exact_match))
+  expect_identical(ref$fgsea_exact_match,
+                   identical(ref$fgsea_version, ref$fgsea_locked))
+
+  # A fixture NOT generated on the locked build must carry a documented reason,
+  # so the deviation is asserted rather than living only in prose.
+  if (!isTRUE(ref$fgsea_exact_match)) {
+    expect_true(nzchar(ref$fgsea_mismatch_note))
+    expect_match(ref$fgsea_mismatch_note, ref$fgsea_version, fixed = TRUE)
+    expect_match(ref$fgsea_mismatch_note, ref$fgsea_locked, fixed = TRUE)
+  }
+})
+
+
+test_that("a fixture generated off the locked fgsea build is flagged for redo", {
+  skip_if_not(file.exists(ref_file), "parity reference fixture not found")
+  ref <- readRDS(ref_file)
+  running <- as.character(utils::packageVersion("fgsea"))
+
+  # The moment this suite runs somewhere that HAS the locked build, the fixture
+  # must have been generated on it. That turns "1.36.2 was unobtainable in the
+  # authoring environment" into an enforced follow-up instead of a silent hole.
+  if (identical(running, ref$fgsea_locked)) {
+    expect_true(
+      isTRUE(ref$fgsea_exact_match),
+      info = paste0(
+        "fgsea ", running, " (the renv.lock pin) is installed here, but the ",
+        "parity reference was generated under ", ref$fgsea_version,
+        ". Regenerate it: Rscript tests/testthat/fixtures/",
+        "mummichog_gsea_parity/generate_reference.R <MetaboAnalystR checkout>"))
+  } else {
+    skip(sprintf(paste0("locked fgsea %s is not installed here (running %s); ",
+                        "fixture was generated under %s"),
+                 ref$fgsea_locked, running, ref$fgsea_version))
+  }
 })
 
 
