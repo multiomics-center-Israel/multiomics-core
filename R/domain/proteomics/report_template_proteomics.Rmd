@@ -90,6 +90,26 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     )
 }
 
+# Helper: read a sample sheet without read.csv's row-name heuristic.
+# read.csv treats column 1 as row names whenever a data row has MORE fields
+# than the header, which silently shifts every column by one. That happens on
+# any sample sheet with an unquoted comma in a free-text column, and it is
+# invisible: the frame still has the right column NAMES, just the wrong values
+# under them. readr keeps the header's column count and warns instead.
+read_samplesheet <- function(path) {
+    if (!file.exists(path)) return(NULL)
+    if (requireNamespace("readr", quietly = TRUE)) {
+        df <- tryCatch(
+            suppressWarnings(as.data.frame(
+                readr::read_csv(path, show_col_types = FALSE),
+                stringsAsFactors = FALSE)),
+            error = function(e) NULL
+        )
+        if (!is.null(df) && ncol(df) > 0) return(df)
+    }
+    tryCatch(read.csv(path, stringsAsFactors = FALSE), error = function(e) NULL)
+}
+
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -339,7 +359,7 @@ make_dt(proj, "Analysis Parameters")
 ```{r params-design, results='asis'}
 meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
-    meta <- read.csv(meta_file, stringsAsFactors = FALSE)
+    meta <- read_samplesheet(meta_file)
     group_col <- prot_cfg$effects$color %||% "Condition"
 
     if (group_col %in% names(meta)) {
@@ -2048,7 +2068,7 @@ explorer_json_str <- "{}"
 
 # Load expression data: use final_results.tsv which has per-sample columns + annotations
 meta_file_exp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
-meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+meta_df_exp <- read_samplesheet(meta_file_exp)
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
