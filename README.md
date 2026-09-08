@@ -345,6 +345,8 @@ The implementation reproduces a **pinned** upstream version, not a paraphrase of
 
 Both files are byte-identical between that commit and upstream's current default-branch head, so the pin is the live Peaks-to-Pathways code path. A **parity test** (`tests/testthat/test-mummichog-gsea-parity.R`) compares our engine against a fixture produced by running the pinned `.run_fgsea_inner()` itself; see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md`.
 
+Because the engine calls fgsea **internals**, the fgsea version is pinned too: the fixture is generated under the fgsea series `renv.lock` locks (1.36.x), the generator refuses to run under any other series, and the parity test **skips rather than compares** if the running fgsea is in a different series — a cross-series match is not evidence of parity.
+
 #### Semantics
 
 -   **Ranking statistic** — the moderated `t` statistic (our per-contrast limma tables carry it as `statistic`), which is what MetaboAnalyst ranks on; `logFC` is used only when a DE table has no usable statistic. **The ORA input contract is unchanged** — it still sends `logFC` as mummichog's `statistic` column. Whichever metric GSEA used is printed in the report and stored in the result.
@@ -357,15 +359,20 @@ Both files are byte-identical between that commit and upstream's current default
 
 #### Reading NES
 
-`ES`/`NES` keep their sign, but **the sign is not a biological direction.** MetaboAnalyst transforms the ranking to absolute score magnitude (`stats <- abs(stats)^gseaParam`, before the sort), so:
+`ES`/`NES` keep their sign — but **only for parity**, and the sign is not an interpretable direction. Two things in the reference implementation independently break that reading:
 
-> Positive NES indicates enrichment toward the high-|score| end of the transformed ranking; negative NES indicates enrichment toward the low-|score| end. NES sign in this MetaboAnalyst-style Peaks-to-Pathways analysis does not encode biological up- or down-regulation.
+1.  the ranked vector is transformed to |score| (`stats <- abs(stats)^gseaParam`), so it carries no direction; and
+2.  pathway positions are constructed from the **signed-score ordering** *before* that transform and the subsequent magnitude re-sort, so a pathway's scored indices need not correspond to where its ECs actually sit in the ranking that gets scored.
 
-The report, tables, plot and exports carry that wording and nothing stronger; a regression test keeps up/down and numerator/denominator phrasing from coming back.
+So the sanctioned wording is deliberately weak:
+
+> NES sign is retained to reproduce the pinned MetaboAnalystR result. Because the reference implementation transforms and reorders the score vector after pathway positions are constructed, NES sign should not be interpreted as biological up/down direction or as a direct statement about the magnitude of the pathway members' original scores.
+
+The report, tables, plot and exports carry that wording and nothing stronger; a regression test keeps up/down, numerator/denominator and high/low-|score|-end phrasing from coming back.
 
 #### Two upstream behaviours we reproduce rather than "fix"
 
-1.  **Tied EC scores ⇒ `ES = 0`.** Pathway members become tie-group *indices* and are never de-duplicated, so a pathway holding two ECs with the same score passes a non-strictly-increasing `selectedStats`, which `fgsea::calcGseaStat()` rejects; upstream's `tryCatch` substitutes `ES = 0` with an empty leading edge. We reproduce that exactly **and flag it** — the results table has an `ES not computed (tied EC scores)` column and the report says how many pathways are affected, so a placeholder `0` is never read as a measured score.
+1.  **A failed enrichment score becomes `ES = 0`.** Upstream's `tryCatch` swallows *any* `calcGseaStat()` failure into `ES = 0` with an empty leading edge. The common trigger is tied EC scores: pathway members become tie-group *indices* and are never de-duplicated, so a pathway holding two ECs with the same score passes a non-strictly-increasing `selectedStats`, which `calcGseaStat()` rejects. We reproduce the numbers exactly **and record why** — the results table carries a generic `ES defaulted by reference implementation` flag plus an `ES fallback reason` (classified from the actual condition: duplicate ranked positions, whole-ranking selection, empty/missing members, or the verbatim error prefixed *unexpected*), an unexpected cause also raises an R warning, and the report lists the observed reasons. A placeholder `0` is never read as a measured score, and a non-tie failure is never described as a tie.
 2.  **Leading edges are often empty.** Because `abs()` is applied before the sort, pathway indices taken from the signed ordering address a differently-ordered vector; the leading edge is then intersected with the pathway's own ECs and frequently comes back empty.
 
 #### Config

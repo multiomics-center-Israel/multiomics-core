@@ -14,11 +14,35 @@ Peaks-to-Pathways GSEA engine**, run on the fixture in `generate_reference.R`.
 | `permNum` | 100 (`PerformPSEA()` default) |
 | `gseaParam` / `minSize` / `maxSize` | 1 / 1 / `Inf` (`.run_fgsea_inner()` defaults) |
 | Seed | `set.seed(123)` before `sample.int(10^9, n_batches)` |
-| fgsea at generation | 1.39.4 → the `> 1.24.0` branch (`stats` re-sorted decreasing after `abs()`) |
-| fgsea in `renv.lock` | 1.36.2 → the same `> 1.24.0` branch |
+| fgsea at generation | **1.36.0** → the `> 1.24.0` branch (`stats` re-sorted decreasing after `abs()`) |
+| fgsea in `renv.lock` | 1.36.2 — same 1.36 series |
 
 Both reference files are **byte-identical between the pinned commit and upstream's
 current default-branch head**, so this pin is the live code path, not a stale one.
+
+## Why the fgsea version is pinned too
+
+The engine calls fgsea **internals** (`calcGseaStatCumulativeBatch`), so "same
+`> 1.24.0` branch" is not sufficient evidence of numerical parity — the exact
+series matters. The generator therefore **refuses to run** unless the installed
+fgsea is in the series `renv.lock` pins, records the exact build in
+`fgsea_version` / `fgsea_series` / `fgsea_locked`, and the parity test **skips
+rather than compares** when the running fgsea is in a different series.
+
+The reference is generated under **fgsea 1.36.0**, the `RELEASE_3_22` branch
+point (`alserglab/fgsea@1adab01`) and the closest obtainable build to the locked
+1.36.2: Bioconductor and CRAN hosts are unreachable from the build environment
+(egress policy), and the `RELEASE_3_22` patch branch carrying 1.36.1/1.36.2 is
+not mirrored to GitHub. Evidence that this does not affect the numbers:
+
+* `calcGseaStat` is **byte-identical** between 1.36.0 and 1.39.4 (pure R, no
+  C++ call);
+* `calcGseaStatCumulativeBatch`'s R wrapper and `.Call` signature are identical,
+  and its C++ implementation (`src/fastGSEA.cpp`) differs only by **three
+  comment lines**;
+* regenerating the whole fixture under 1.39.4 and under 1.36.0 gives **bitwise
+  identical** ES, NES, p, padj, `nMoreExtreme`, sizes, pathway order and leading
+  edges.
 
 ## What the generator actually runs
 
@@ -46,8 +70,11 @@ size 1 (kept because `minSize = 1`), and one with no detected EC (dropped).
    `tryCatch` swallows that and substitutes `list(res = 0, leadingEdge = c())`.
    `PW_top` and `PW_overlap_b` are those pathways, and the reference really does
    carry `ES = 0`, `NES = 0`, empty leading edge and one warning each
-   (`upstream_warnings`). We reproduce it and flag it in the results table so a
-   defaulted `0` is never read as a measured score.
+   (`upstream_warnings`). We reproduce it and flag it in the results table with a
+   **generic** `ES defaulted by reference implementation` column plus an
+   `ES fallback reason` classified from the actual condition — so a defaulted `0`
+   is never read as a measured score, and a non-tie failure is never mislabelled
+   as a tie.
 2. **Leading edges are often empty.** `abs()` is applied *before* the sort, so
    pathway indices taken from the signed ordering address a differently-ordered
    vector; the leading edge is then intersected with the pathway's own ECs and
@@ -63,4 +90,5 @@ git -C /tmp/mar checkout 398476ae2a0c996e390925fa62adc46b5ecde334
 Rscript tests/testthat/fixtures/mummichog_gsea_parity/generate_reference.R /tmp/mar
 ```
 
+Install the `renv.lock` fgsea series first — the generator aborts otherwise.
 Record the new commit here and in `R/domain/metabolomics/06g_mummichog_gsea.R`.

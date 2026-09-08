@@ -2520,8 +2520,9 @@ for (contrast in names(mummi_sections)) {
     cat("An EC's score is the signed maximum of its member features' statistics (features sharing one m/z are averaged first), and a pathway's gene set is its detected ECs — MetaboAnalyst's EC-space construction for retention-time / v2 runs. `Detected ECs` is how many of the pathway's ECs this dataset saw; `Tested size` is the ranked-position vector the engine scored, which can differ when ECs share a score.\n\n")
     cat("**Reading NES.** ", s$gsea$nes_note, "\n\n", sep = "")
     if (isTRUE(s$gsea$n_es_defaulted > 0)) {
-      cat(sprintf("> **%d pathway(s) could not be scored.** The reference implementation does not de-duplicate tied EmpiricalCompound ranks, so a pathway holding two ECs with an identical score falls back to `ES = 0` with an empty leading edge. Those rows are flagged `TRUE` in *ES not computed (tied EC scores)* and their `ES`/`NES` of 0 is a placeholder, not a measured enrichment score.\n\n",
-                  s$gsea$n_es_defaulted))
+      cat(sprintf("> **%d pathway(s) could not be scored.** The reference implementation swallows a failed enrichment-score calculation into `ES = 0` with an empty leading edge. Those rows are flagged `TRUE` in *ES defaulted by reference implementation*, their `ES`/`NES` of 0 is a placeholder rather than a measured score, and *ES fallback reason* records why in each case (observed here: %s).\n\n",
+                  s$gsea$n_es_defaulted,
+                  paste(s$gsea$es_fallback_reasons, collapse = "; ")))
     }
     print(htmltools::tagList(
       make_dt(s$gsea$table,
@@ -2712,7 +2713,7 @@ if (length(mummi_sections) > 0) {
   cat(" Mummichog (Li et al., 2013) m/z-based pathway analysis was run independently for each differential-abundance contrast — each contrast's own p-values define its significant set against all features — using the version-pinned engine.")
   if (has_gsea) {
     g1 <- mummi_gsea[[1]]
-    cat(sprintf(" A complementary MS peaks-to-pathways GSEA was run on the same mapped EmpiricalCompound universe, reproducing the MetaboAnalystR Peaks-to-Pathways semantics (%s at commit %s): the complete ranked list with no significance cutoff, each EmpiricalCompound scored as the signed maximum of its member features' %s, pathway sets defined as their detected EmpiricalCompounds, the ranking transformed to absolute score magnitude, and enrichment tested with the vendored fixed-permutation scheme (gseaParam = %s, minSize = %s, maxSize = %s, %s permutations, seed %s) with Benjamini-Hochberg adjustment across the tested pathways. Because the ranking is transformed to absolute magnitude, the sign of ES/NES indicates which end of that magnitude ranking a pathway is enriched toward and does not encode biological up- or down-regulation.",
+    cat(sprintf(" A complementary MS peaks-to-pathways GSEA was run on the same mapped EmpiricalCompound universe, reproducing the MetaboAnalystR Peaks-to-Pathways semantics (%s at commit %s): the complete ranked list with no significance cutoff, each EmpiricalCompound scored as the signed maximum of its member features' %s, pathway sets defined as their detected EmpiricalCompounds, the ranking transformed to absolute score magnitude, and enrichment tested with the vendored fixed-permutation scheme (gseaParam = %s, minSize = %s, maxSize = %s, %s permutations, seed %s) with Benjamini-Hochberg adjustment across the tested pathways. The sign of ES/NES is retained only to reproduce the reference result: because that implementation transforms and reorders the score vector after pathway positions are constructed, the sign does not encode biological up- or down-regulation, nor a direct statement about the magnitude of the pathway members' original scores.",
                 g1$reference$repo, substr(g1$reference$commit, 1, 12),
                 g1$metric_label, g1$params$gsea_param, g1$params$min_size,
                 g1$params$max_size, g1$params$n_perm, g1$params$seed))

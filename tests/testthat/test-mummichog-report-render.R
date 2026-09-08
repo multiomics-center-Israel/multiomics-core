@@ -56,10 +56,11 @@ render_fixture_sections <- function(with_gsea = TRUE, with_evidence = TRUE) {
       "P.Value"                         = c(0.002, 0.400),
       "padj"                            = c(0.004, 0.400),
       "Leading-edge EmpiricalCompounds" = c("E196; E3", "E2"),
-      "ES not computed (tied EC scores)" = c(FALSE, FALSE)
+      "ES defaulted by reference implementation" = c(FALSE, FALSE),
+      "ES fallback reason"                       = c(NA_character_, NA_character_)
     )
     gsea <- list(table = gtab, n_ec = 24L, n_pathways = 2L,
-                 n_es_defaulted = 0L,
+                 n_es_defaulted = 0L, es_fallback_reasons = character(0),
                  metric = "moderated_t",
                  metric_label = "moderated t statistic (DE column 'statistic')",
                  nes_note = mmc_gsea_nes_note(),
@@ -230,11 +231,12 @@ test_that("the mummichog report section renders with GSEA and evidence", {
   expect_match(html, "<details>")
   expect_match(html, "Underlying measured features")
   expect_match(html, "feat_1")
-  # NES is described as a |score|-ranking position, never as biology
-  expect_match(html, "high-\\|score\\| end")
-  expect_match(html, "does not encode biological up- or down-regulation")
+  # NES is described conservatively: parity only, no direction of any kind
+  expect_match(html, "retained to reproduce the pinned MetaboAnalystR result")
+  expect_match(html, "should not be interpreted as biological up/down direction")
   expect_false(grepl("toward HL", html, fixed = TRUE))
   expect_false(grepl("toward LL", html, fixed = TRUE))
+  expect_false(grepl("high-|score| end", html, fixed = TRUE))
   # the pinned reference is stated in the report
   expect_match(html, "MetaboAnalystR")
   expect_match(html, substr(.MMC_GSEA_REF_COMMIT, 1, 12))

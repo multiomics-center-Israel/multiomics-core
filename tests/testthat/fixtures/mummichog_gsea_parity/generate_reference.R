@@ -29,6 +29,22 @@ repo_root <- normalizePath(file.path(here, "..", "..", "..", ".."), mustWork = T
 
 pinned_sha <- system2("git", c("-C", mar_dir, "rev-parse", "HEAD"), stdout = TRUE)
 
+# The implementation depends on fgsea INTERNAL primitives, so the reference must
+# be generated under the fgsea series this project locks. renv.lock pins the
+# Bioconductor 3.22 release series (1.36.x); generate under that, and record the
+# exact build so the parity test can refuse to compare across series.
+lock <- jsonlite::fromJSON(file.path(repo_root, "renv.lock"))
+locked_fgsea <- lock$Packages$fgsea$Version
+fgsea_ver <- as.character(utils::packageVersion("fgsea"))
+series <- function(v) paste(strsplit(v, ".", fixed = TRUE)[[1]][1:2], collapse = ".")
+if (!identical(series(fgsea_ver), series(locked_fgsea))) {
+  stop(sprintf(paste0("installed fgsea %s is not in renv.lock's series (%s). ",
+                      "Install the locked series before generating the ",
+                      "reference — the engine uses fgsea internals."),
+               fgsea_ver, locked_fgsea))
+}
+message("fgsea ", fgsea_ver, " (renv.lock pins ", locked_fgsea, ")")
+
 # ---- the fixture inputs ----------------------------------------------------
 # Signed EC scores: positives and negatives, an exact tie (E02/E03), and a
 # +/- pair with identical magnitude (E01/E16) to exercise the ordering.
@@ -126,7 +142,9 @@ out <- list(
   metaboanalystr_commit = pinned_sha,
   metaboanalystr_files  = c("R/util_fgsea.R", "R/peaks_to_function.R"),
   upstream_entry        = ".compute.mummichog.RT.fgsea -> fgsea2 -> my.fgsea -> .run_fgsea_inner",
-  fgsea_version         = as.character(utils::packageVersion("fgsea")),
+  fgsea_version         = fgsea_ver,
+  fgsea_series          = series(fgsea_ver),
+  fgsea_locked          = locked_fgsea,
   fgsea_branch          = if (utils::packageVersion("fgsea") > "1.24.0")
                             "post-1.24.0 (stats re-sorted decreasing after abs())"
                           else "pre-1.24.0 (no re-sort)",
