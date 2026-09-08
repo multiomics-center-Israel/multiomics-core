@@ -11,6 +11,30 @@
 
 smib <- function(x) length(serialize(x, NULL)) / 1024 / 1024
 
+# What the worker actually CAPTURED — the bindings in its own closure
+# environment. This, not serialize(w), is the contract under test.
+#
+# Do NOT measure smib(w) here. serialize() of a closure also writes its
+# `srcref` attributes, and attr(srcref, "srcfile") is an ordinary environment
+# holding the whole source file's text plus its parseData blob — serialized BY
+# VALUE. With options(keep.source = TRUE) (the default in interactive R and
+# RStudio; FALSE under Rscript, which is why CI never saw it) that makes
+# smib(w) 0.37 MB for the ORA worker and 1.48 MB for the GSEA worker, tracking
+# the SIZE OF THE SOURCE FILE (40 KB of 05_mod_pathway.R vs 143 KB of
+# 09_enrichment.R) rather than anything the worker captured. The closure
+# environment itself is unaffected, and the enclosing environment is
+# globalenv(), which R serializes by reference.
+captured_bindings <- function(w) {
+    as.list.environment(environment(w), all.names = TRUE)
+}
+
+# Measured: the ORA worker captures 154 bytes (three scalars) and the GSEA
+# worker 140 bytes (two scalars), identical with keep.source TRUE or FALSE.
+# 10 KiB leaves ~68x headroom for another scalar parameter, while a worker that
+# really did capture one of the annotation tables measures ~0.38 MB — 38x over
+# this limit — so a genuine regression still fails loudly.
+MAX_CAPTURED_MIB <- 0.01
+
 # --- deterministic synthetic annotation tables (3 DBs so "all" >> "one") ---
 make_local_tables_fix <- function() {
     kegg_g <- data.frame(term = rep(c("p1","p2"), each = 10),
@@ -50,14 +74,27 @@ test_that("ORA worker captures only scalar thresholds (no local_tables / gene_li
     w <- .make_ora_worker(pval_cutoff = 0.05, padj_method = "fdr", orgdb = NULL)
     expect_setequal(ls(environment(w)), c("pval_cutoff", "padj_method", "orgdb"))
     expect_false(any(c("local_tables", "gene_lists") %in% ls(environment(w))))
-    expect_lt(smib(w), 0.1)   # worker closure is tiny
+    # everything the worker captured is a handful of bytes
+    expect_lt(smib(captured_bindings(w)), MAX_CAPTURED_MIB)
 })
 
 test_that("GSEA worker captures only scalar thresholds (no local_tables)", {
     w <- .make_gsea_worker(pvalueCutoff = 0.05, pAdjustMethod = "fdr")
     expect_setequal(ls(environment(w)), c("pvalueCutoff", "pAdjustMethod"))
     expect_false("local_tables" %in% ls(environment(w)))
-    expect_lt(smib(w), 0.1)
+    expect_lt(smib(captured_bindings(w)), MAX_CAPTURED_MIB)
+})
+
+test_that("the captured-bindings measure would catch a worker that captured a table", {
+    # Negative control for the two assertions above: without this, a threshold
+    # that everything passes proves nothing. A factory that DOES close over an
+    # annotation table blows the same limit by ~38x.
+    lt  <- make_local_tables_fix()
+    bad <- (function(tbl) { force(tbl); function(job) nrow(tbl) })(lt$GO_BP$TERM2GENE)
+
+    expect_gt(smib(captured_bindings(bad)), MAX_CAPTURED_MIB)
+    good <- .make_ora_worker(0.05, "fdr", NULL)
+    expect_lt(smib(captured_bindings(good)), smib(captured_bindings(bad)))
 })
 
 test_that("per-job export is a single database, far smaller than all local_tables", {
@@ -119,20 +156,52 @@ test_that("ORA results identical across lapply / future-sequential / future-mult
 #         the future path (GSEA-style) DOES go through future
 # ===========================================================================
 
-test_that("prefer_lapply_when_sequential bypasses future global discovery at workers<=1", {
-    withr::local_options(future.globals.maxSize = 1024^2)   # 1 MiB, test-local (NOT a fix)
-    big <- runif(400000)                                    # ~3 MiB captured global
-    fn  <- local({ b <- big; function(job) length(b) })
+test_that("prefer_lapply_when_sequential picks the base::lapply path at workers<=1", {
+    # Assert the ROUTING directly, by intercepting future.apply::future_lapply.
+    #
+    # This used to be inferred indirectly: lower future.globals.maxSize to 1 MiB
+    # and expect the future path to error on a ~3 MiB captured global. That
+    # asserted future's internal guard rather than our dispatch, and the guard's
+    # plumbing is version-dependent — in future >= 1.4x the limit is a
+    # plan/backend property (FutureBackend(maxSizeOfObjects =
+    # getOption("future.globals.maxSize", +Inf)), whose error text reads "per
+    # plan() argument 'maxSizeOfObjects'"), so whether a test-local option
+    # reaches the check depends on when the backend was built and on prior
+    # session plan state. It passed under Rscript and failed in RStudio.
+    # Intercepting the call proves the dispatch contract with no dependency on
+    # future's globals machinery at all.
+    skip_if_not_installed("future")
+    skip_if_not_installed("future.apply")
 
-    # GSEA-style (future path) trips the (lowered) globals guard even at workers=1
-    expect_error(
-        run_enrichment_jobs(list(1, 2), fn, workers = 1L, seed = 1L,
-                            prefer_lapply_when_sequential = FALSE),
-        "globals|maximum allowed size|maxSize")
-    # ORA-style (base::lapply path) runs with no global check
-    res <- run_enrichment_jobs(list(1, 2), fn, workers = 1L, seed = 1L,
-                               prefer_lapply_when_sequential = TRUE)
-    expect_equal(length(res), 2L)
+    calls <- 0L
+    local_mocked_bindings(
+        future_lapply = function(X, FUN, ...) { calls <<- calls + 1L; base::lapply(X, FUN) },
+        .package = "future.apply")
+
+    # GSEA-style: workers <= 1 still routes through future_lapply (RNG streams)
+    r_future <- run_enrichment_jobs(list(1, 2), function(job) job * 10L,
+                                    workers = 1L, seed = 1L,
+                                    prefer_lapply_when_sequential = FALSE)
+    expect_equal(calls, 1L)
+    expect_equal(unlist(r_future), c(10L, 20L))
+
+    # ORA-style: workers <= 1 takes the true base::lapply path — future is never
+    # called, so there is no global discovery and no future.globals.maxSize guard
+    calls <- 0L
+    r_lapply <- run_enrichment_jobs(list(1, 2), function(job) job * 10L,
+                                    workers = 1L, seed = 1L,
+                                    prefer_lapply_when_sequential = TRUE)
+    expect_equal(calls, 0L)
+    expect_equal(unlist(r_lapply), c(10L, 20L))
+
+    # ...and the opt-in is scoped to workers <= 1: at workers > 1 it must still
+    # go through future even when prefer_lapply_when_sequential = TRUE.
+    calls <- 0L
+    r_multi <- run_enrichment_jobs(list(1, 2), function(job) job * 10L,
+                                   workers = 2L, seed = 1L,
+                                   prefer_lapply_when_sequential = TRUE)
+    expect_equal(calls, 1L)
+    expect_equal(unlist(r_multi), c(10L, 20L))
 })
 
 # ===========================================================================
