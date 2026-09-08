@@ -3196,7 +3196,16 @@ for (vf in pw_volcano_files) {
 
     # Build pathway→genes mapping from the pathways column
     all_pathways <- unique(unlist(strsplit(volcano_df$pathways[nzchar(volcano_df$pathways)], "; ")))
-    all_pathways <- sort(all_pathways[nzchar(all_pathways)])
+    all_pathways <- all_pathways[nzchar(all_pathways)]
+    # Order by |NES| descending so the strongest-shifted sets are reachable at
+    # the top of the dropdown; alphabetical order buried them. Sets with no NES
+    # (ORA-only, or absent from the fgsea tables) sort last, alphabetically,
+    # rather than being dropped.
+    pw_abs_nes <- vapply(all_pathways, function(pw) {
+        nes <- pathway_info[[pw]]$NES
+        if (is.null(nes) || !is.finite(nes)) NA_real_ else abs(nes)
+    }, numeric(1))
+    all_pathways <- all_pathways[order(-pw_abs_nes, all_pathways, na.last = TRUE)]
 
     pw_genes_map <- list()
     for (pw in all_pathways) {
