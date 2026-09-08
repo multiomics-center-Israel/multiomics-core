@@ -29,10 +29,15 @@ repo_root <- normalizePath(file.path(here, "..", "..", "..", ".."), mustWork = T
 
 pinned_sha <- system2("git", c("-C", mar_dir, "rev-parse", "HEAD"), stdout = TRUE)
 
-# The implementation depends on fgsea INTERNAL primitives, so the reference must
-# be generated under the fgsea series this project locks. renv.lock pins the
-# Bioconductor 3.22 release series (1.36.x); generate under that, and record the
-# exact build so the parity test can refuse to compare across series.
+# The implementation depends on fgsea INTERNAL primitives
+# (calcGseaStatCumulativeBatch), so the reference must be generated under the
+# fgsea build this project locks. Three cases:
+#
+#   * exact match to renv.lock            -> ideal, recorded as such
+#   * same x.y series, different patch    -> allowed ONLY with an explicit
+#                                            opt-in, and recorded as a
+#                                            deviation the parity test asserts
+#   * different x.y series                -> refused outright
 lock <- jsonlite::fromJSON(file.path(repo_root, "renv.lock"))
 locked_fgsea <- lock$Packages$fgsea$Version
 fgsea_ver <- as.character(utils::packageVersion("fgsea"))
@@ -43,7 +48,24 @@ if (!identical(series(fgsea_ver), series(locked_fgsea))) {
                       "reference — the engine uses fgsea internals."),
                fgsea_ver, locked_fgsea))
 }
-message("fgsea ", fgsea_ver, " (renv.lock pins ", locked_fgsea, ")")
+fgsea_exact <- identical(fgsea_ver, locked_fgsea)
+mismatch_note <- ""
+if (!fgsea_exact) {
+  if (!identical(Sys.getenv("MMC_PARITY_ALLOW_FGSEA_PATCH_MISMATCH"), "1")) {
+    stop(sprintf(paste0("installed fgsea %s is not the locked %s. Install the ",
+                        "locked build, or set ",
+                        "MMC_PARITY_ALLOW_FGSEA_PATCH_MISMATCH=1 to record a ",
+                        "deliberate patch-level deviation in the fixture."),
+                 fgsea_ver, locked_fgsea))
+  }
+  mismatch_note <- Sys.getenv(
+    "MMC_PARITY_FGSEA_MISMATCH_NOTE",
+    sprintf("generated under fgsea %s, not the locked %s", fgsea_ver,
+            locked_fgsea))
+  message("NOTE: patch-level fgsea deviation recorded: ", mismatch_note)
+}
+message("fgsea ", fgsea_ver, " (renv.lock pins ", locked_fgsea, "; exact: ",
+        fgsea_exact, ")")
 
 # ---- the fixture inputs ----------------------------------------------------
 # Signed EC scores: positives and negatives, an exact tie (E02/E03), and a
@@ -145,6 +167,8 @@ out <- list(
   fgsea_version         = fgsea_ver,
   fgsea_series          = series(fgsea_ver),
   fgsea_locked          = locked_fgsea,
+  fgsea_exact_match     = fgsea_exact,
+  fgsea_mismatch_note   = mismatch_note,
   fgsea_branch          = if (utils::packageVersion("fgsea") > "1.24.0")
                             "post-1.24.0 (stats re-sorted decreasing after abs())"
                           else "pre-1.24.0 (no re-sort)",

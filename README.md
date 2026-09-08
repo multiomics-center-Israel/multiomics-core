@@ -345,7 +345,7 @@ The implementation reproduces a **pinned** upstream version, not a paraphrase of
 
 Both files are byte-identical between that commit and upstream's current default-branch head, so the pin is the live Peaks-to-Pathways code path. A **parity test** (`tests/testthat/test-mummichog-gsea-parity.R`) compares our engine against a fixture produced by running the pinned `.run_fgsea_inner()` itself; see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md`.
 
-Because the engine calls fgsea **internals**, the fgsea version is pinned too: the fixture is generated under the fgsea series `renv.lock` locks (1.36.x), the generator refuses to run under any other series, and the parity test **skips rather than compares** if the running fgsea is in a different series — a cross-series match is not evidence of parity.
+Because the engine calls fgsea **internals**, the fgsea build is pinned too. The generator refuses to run unless the installed fgsea matches `renv.lock` exactly (a patch-level difference needs an explicit opt-in that is then recorded in the fixture, and a different `x.y` series is refused outright), the parity test **skips rather than compares** across series, and a further test fails if the suite runs somewhere the locked build is installed while the fixture was generated on something else. The committed fixture currently carries a recorded patch-level deviation — see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md` for the exact state, why 1.36.2 was unobtainable, and the evidence that it does not change the numbers.
 
 #### Semantics
 
