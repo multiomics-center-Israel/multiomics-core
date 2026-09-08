@@ -217,6 +217,9 @@ build_provenance_notes <- function(mode = "rna") {
         glossary <- data.frame(
             Column = c(
                 "<sample>",
+                "Mean.raw.<group>",
+                "N.observed.<group>",
+                "log2FC_from_raw.<contrast>",
                 "<sample>.norm",
                 "Mean.<group>",
                 "CV.<group>",
@@ -229,6 +232,9 @@ build_provenance_notes <- function(mode = "rna") {
             ),
             Meaning = c(
                 "log2 intensity after filtering and normalization, before imputation. Blank cells were not measured.",
+                "Arithmetic mean of the measured <sample> values in that group, ignoring blanks. Pre-imputation.",
+                "How many of that group's samples were actually measured. Read Mean.raw. and log2FC_from_raw against this: a mean over 2 of 5 replicates is not the same evidence as one over 5 of 5.",
+                "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC_from_means.",
                 "The same matrix after imputation, for one representative imputation run. This is the kind of matrix limma was fitted on.",
                 "Arithmetic mean of the .norm log2 values across the replicates of that group.",
                 "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
@@ -247,6 +253,7 @@ build_provenance_notes <- function(mode = "rna") {
             "2. Apply the linearFC rule above to log2FC.imputs. This step is exact.",
             "log2FC_from_means and log2FC.imputs differ for two reasons: the reported statistic averages over all imputation runs while the Mean columns come from a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
             "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation.",
+            "log2FC_from_raw is the same arithmetic on the measured values alone. Comparing it with log2FC_from_means shows how much of a fold change depends on imputed values; N.observed says how many values that was.",
             "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table."
         )
     } else {
@@ -437,7 +444,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         }
 
         # ---- Detect DE stat columns and group by contrast ----
-        de_col_pattern <- "^(log2FC_from_means|log2FC|linearFC|pvalue|padj|upDown)\\."
+        de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC|pvalue|padj|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
         if (length(de_col_indices) > 0) {
@@ -667,9 +674,16 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         id_cols <- id_col
         expr_cols <- colnames(mat_de)
         norm_cols_present <- intersect(paste0(expr_cols, ".norm"), names(de_df))
-        mean_cols_present <- grep("^Mean\\.", names(de_df), value = TRUE)
+        # Pre-imputation summaries belong with the measured values, not with the
+        # model-input means. Pull them out first: Mean.raw. would otherwise be
+        # swept up by the ^Mean\\. grep and land in the wrong block, and
+        # N.observed. matches nothing at all and would drift into the
+        # annotation columns at the front of the sheet.
+        raw_summary_cols <- grep("^(Mean\\.raw\\.|N\\.observed\\.)", names(de_df), value = TRUE)
+        mean_cols_present <- setdiff(grep("^Mean\\.", names(de_df), value = TRUE),
+                                     raw_summary_cols)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
-        de_stat_cols <- grep("^(log2FC_from_means|log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
               "Binary_Pattern", "Binary_Corr"),
@@ -679,8 +693,9 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
 
         # Annotation columns = everything not in ID, expression, normalized
         # expression, group means, CV, DE stats, clustering, z-scores, or 'order'
-        all_known <- c(id_cols, expr_cols, norm_cols_present, mean_cols_present,
-                       cv_cols_present, de_stat_cols, clustering_cols, zscore_cols, "order")
+        all_known <- c(id_cols, expr_cols, norm_cols_present, raw_summary_cols,
+                       mean_cols_present, cv_cols_present, de_stat_cols,
+                       clustering_cols, zscore_cols, "order")
         annot_cols_present <- setdiff(names(de_df), all_known)
 
         # Check which expression columns are already present (from build_final_results_generic)
@@ -692,6 +707,7 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
             id_cols,
             annot_cols_present,
             expr_cols_present,
+            raw_summary_cols,
             norm_cols_present,
             mean_cols_present,
             cv_cols_present,
@@ -879,14 +895,15 @@ cv_percent <- function(mat) {
 #'   (rownames = \code{rownames(expr_linear)}), or \code{NULL} if CV cannot be
 #'   computed (missing inputs, no contrast groups, or ambiguous Factor).
 compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
-                                     contrasts_df, group_col = NULL) {
+                                     contrasts_df, group_col = NULL,
+                                     prefix = "CV.") {
     compute_group_stat_columns(
         expr          = expr_linear,
         sample_meta   = sample_meta,
         sample_id_col = sample_id_col,
         contrasts_df  = contrasts_df,
         stat_fn       = cv_percent,
-        prefix        = "CV.",
+        prefix        = prefix,
         group_col     = group_col
     )
 }
@@ -911,14 +928,53 @@ compute_group_cv_columns <- function(expr_linear, sample_meta, sample_id_col,
 #' @param group_col Optional override for the grouping column.
 #' @return Feature-indexed data.frame of \code{Mean.<group>} columns, or NULL.
 compute_group_mean_columns <- function(expr, sample_meta, sample_id_col,
-                                       contrasts_df, group_col = NULL) {
+                                       contrasts_df, group_col = NULL,
+                                       prefix = "Mean.") {
     compute_group_stat_columns(
         expr          = expr,
         sample_meta   = sample_meta,
         sample_id_col = sample_id_col,
         contrasts_df  = contrasts_df,
         stat_fn       = function(m) rowMeans(m, na.rm = TRUE),
-        prefix        = "Mean.",
+        prefix        = prefix,
+        group_col     = group_col
+    )
+}
+
+#' Per-group count of observed (non-missing) values
+#'
+#' Emits \code{N.observed.<group>} columns: how many of a group's samples
+#' actually carried a measurement, before any imputation.
+#'
+#' This is what makes the raw group means interpretable. A \code{Mean.raw.}
+#' over two of five replicates is not comparable to one over five of five, and
+#' nothing else in the table distinguishes them — the imputed matrix has no
+#' gaps left to notice. Read the raw mean and the naive fold change derived
+#' from it together with this count.
+#'
+#' @param expr Numeric matrix (features x samples) BEFORE imputation, so that
+#'   unobserved entries are still NA. Column names must match
+#'   \code{sample_meta[[sample_id_col]]}.
+#' @param sample_meta Sample metadata data.frame (one row per sample).
+#' @param sample_id_col Column in \code{sample_meta} holding the sample IDs.
+#' @param contrasts_df Contrasts table with \code{Factor}, \code{Numerator},
+#'   \code{Denominator} columns.
+#' @param group_col Optional override for the grouping column.
+#' @return Feature-indexed data.frame of \code{N.observed.<group>} columns, or NULL.
+compute_group_observed_columns <- function(expr, sample_meta, sample_id_col,
+                                           contrasts_df, group_col = NULL) {
+    # A matrix with no NAs has nothing to report: the count would be the group
+    # size in every cell. That is the RNA-seq case (counts, not intensities),
+    # where a constant column would only widen the workbook.
+    if (!anyNA(expr)) return(NULL)
+
+    compute_group_stat_columns(
+        expr          = expr,
+        sample_meta   = sample_meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df,
+        stat_fn       = function(m) rowSums(!is.na(m)),
+        prefix        = "N.observed.",
         group_col     = group_col
     )
 }
@@ -945,7 +1001,8 @@ compute_group_mean_columns <- function(expr, sample_meta, sample_id_col,
 #' @return Feature-indexed data.frame with one column per contrast, named by
 #'   \code{Contrast_name}, or NULL when no contrast could be computed.
 compute_naive_log2fc_columns <- function(mean_cols, contrasts_df,
-                                         scale = c("linear", "log2")) {
+                                         scale = c("linear", "log2"),
+                                         prefix = "Mean.") {
     scale <- match.arg(scale)
     if (is.null(mean_cols) || !is.data.frame(mean_cols) || ncol(mean_cols) == 0L) {
         return(NULL)
@@ -958,8 +1015,8 @@ compute_naive_log2fc_columns <- function(mean_cols, contrasts_df,
     out <- list()
     for (i in seq_len(nrow(contrasts_df))) {
         cn  <- as.character(contrasts_df$Contrast_name[i])
-        num <- paste0("Mean.", as.character(contrasts_df$Numerator[i]))
-        den <- paste0("Mean.", as.character(contrasts_df$Denominator[i]))
+        num <- paste0(prefix, as.character(contrasts_df$Numerator[i]))
+        den <- paste0(prefix, as.character(contrasts_df$Denominator[i]))
 
         if (!all(c(num, den) %in% colnames(mean_cols))) {
             warning(sprintf(
@@ -1116,7 +1173,9 @@ build_final_results_generic <- function(
   norm_expr = NULL,
   norm_suffix = ".norm",
   mean_cols = NULL,
-  naive_log2fc = NULL
+  naive_log2fc = NULL,
+  raw_stat_cols = NULL,
+  raw_log2fc = NULL
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -1278,6 +1337,25 @@ build_final_results_generic <- function(
     }
 
     # ============================================================
+    # ADD PRE-IMPUTATION PER-GROUP SUMMARIES
+    # ============================================================
+    # Mean.raw./CV.raw./N.observed. describe what was MEASURED, before any
+    # imputation or normalization. The Mean./CV. block above describes the
+    # matrix the model was fitted on. Keeping both lets a reader see how much
+    # of a fold change survives when only observed values are used, and
+    # N.observed says how many values that actually was.
+
+    if (!is.null(raw_stat_cols) && is.data.frame(raw_stat_cols) && ncol(raw_stat_cols) > 0) {
+        if (is.null(rownames(raw_stat_cols))) {
+            warning("raw_stat_cols has no rownames. Cannot add pre-imputation group columns.")
+        } else {
+            raw_matched <- raw_stat_cols[match(base[[feature_id_col]], rownames(raw_stat_cols)), , drop = FALSE]
+            rownames(raw_matched) <- NULL
+            base <- cbind(base, raw_matched)
+        }
+    }
+
+    # ============================================================
     # ADD PER-GROUP CV COLUMNS (linear-scale CV%, after expression)
     # ============================================================
 
@@ -1335,15 +1413,21 @@ build_final_results_generic <- function(
         if (!is.null(cols$log2fc) && cols$log2fc %in% colnames(summary_df)) {
             base[[cols$log2fc]] <- summary_df[[cols$log2fc]][m]
         }
-        # Model-free counterpart, straight from the exported group means. Sits
-        # next to log2FC so shrinkage shows up as a per-feature gap rather than
-        # something the reader has to go and recompute.
         if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
             cn %in% colnames(naive_log2fc)) {
             base[[cols$log2fc_means]] <-
                 naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
         }
         base[[cols$fc]] <- fc_vals
+        # The same arithmetic on the measured values only. Placed after
+        # linearFC rather than between log2FC and log2FC_from_means: that
+        # adjacency is a pinned contract (test-fc-provenance.R, "P7"), and the
+        # point of the column is the comparison with log2FC_from_means, which
+        # stays two cells away either way.
+        if (!is.null(raw_log2fc) && cn %in% colnames(raw_log2fc)) {
+            base[[paste0("log2FC_from_raw.", cn)]] <-
+                raw_log2fc[[cn]][match(base[[feature_id_col]], rownames(raw_log2fc))]
+        }
         base[[cols$p]] <- summary_df[[cols$p]][m]
         base[[cols$padj]] <- summary_df[[cols$padj]][m]
 

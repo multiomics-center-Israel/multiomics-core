@@ -136,6 +136,11 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     # Intensities are already log2, so the model-free estimate is a difference.
     naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
 
+    # Pre-imputation counterparts, computed on expr_filt (NAs still present).
+    raw_stats <- build_group_raw_stats_proteomics(pre, contrasts_df, config)
+    raw_log2fc <- compute_naive_log2fc_columns(
+        raw_stats$means, contrasts_df, scale = "log2", prefix = "Mean.raw.")
+
     build_final_results_generic(
         summary_df = summary_df,
         expr_df = pre$expr_filt,
@@ -154,8 +159,64 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         # per-sample values to the reported logFC.
         norm_expr = pre$expr_imp_single,
         mean_cols = mean_cols,
-        naive_log2fc = naive_log2fc
+        naive_log2fc = naive_log2fc,
+        raw_stat_cols = raw_stats$combined,
+        raw_log2fc = raw_log2fc
     )
+}
+
+#' Pre-imputation per-group summaries for proteomics final results
+#'
+#' Computes \code{Mean.raw.<group>} and \code{N.observed.<group>} on
+#' \code{expr_filt} — the filtered matrix with its NAs intact — rather than on
+#' the imputed matrix the model was fitted on.
+#'
+#' \code{Mean.<group>} answers "what did limma see"; \code{Mean.raw.<group>}
+#' answers "what was actually measured". They diverge exactly where imputation
+#' did work, and \code{N.observed} is what tells a reader which rows those are.
+#'
+#' No CV counterpart is emitted: \code{build_group_cv_proteomics()} already
+#' computes \code{CV.<group>} from \code{expr_filt}, so a \code{CV.raw.}
+#' column would duplicate it exactly.
+#'
+#' @param pre Proteomics preprocessing results (uses \code{expr_filt},
+#'   \code{meta}).
+#' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag + sample-ID column).
+#' @return list(means, combined) where \code{means} holds only the
+#'   \code{Mean.raw.} columns (for the naive fold change) and \code{combined}
+#'   holds all three blocks, or a list of NULLs when unavailable.
+build_group_raw_stats_proteomics <- function(pre, contrasts_df, config = NULL) {
+    empty <- list(means = NULL, combined = NULL)
+    if (is.null(config)) return(empty)
+    if (!isTRUE(config$modes$proteomics$excel$group_cv %||% TRUE)) return(empty)
+    if (is.null(pre$expr_filt) || is.null(pre$meta)) return(empty)
+
+    prot_cfg <- config$modes$proteomics %||% list()
+    sample_id_col <- prot_cfg$effects$samples %||%
+        prot_cfg$id_columns$sample_col %||% "SampleID"
+
+    raw_log2 <- as.matrix(pre$expr_filt)
+
+    means <- compute_group_mean_columns(
+        expr = raw_log2, sample_meta = pre$meta, sample_id_col = sample_id_col,
+        contrasts_df = contrasts_df, prefix = "Mean.raw.")
+
+    n_obs <- compute_group_observed_columns(
+        expr = raw_log2, sample_meta = pre$meta, sample_id_col = sample_id_col,
+        contrasts_df = contrasts_df)
+
+    # No CV.raw. here: build_group_cv_proteomics() already computes CV. on
+    # expr_filt, i.e. on observed values only. A CV.raw. column would be an
+    # exact duplicate of CV. for this omic.
+
+    blocks <- Filter(function(x) !is.null(x) && is.data.frame(x) && ncol(x) > 0,
+                     list(means, n_obs))
+    if (length(blocks) == 0L) return(empty)
+
+    combined <- do.call(cbind, blocks)
+    rownames(combined) <- rownames(blocks[[1]])
+    list(means = means, combined = combined)
 }
 
 #' Build per-group mean columns for proteomics final results
