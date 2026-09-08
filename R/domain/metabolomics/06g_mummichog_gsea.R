@@ -63,8 +63,12 @@
 # `.run_fgsea_inner()` itself locks this down (see
 # tests/testthat/fixtures/mummichog_gsea_parity/).
 #
-# Consequence for interpretation: because the ranking is transformed to
-# |score|, NES sign does NOT encode biological up-/down-regulation. See
+# Consequence for interpretation: pathway positions are built from the SIGNED
+# ordering and are then scored against a vector that has been made absolute AND
+# re-sorted, so a pathway's indices need not correspond to where its ECs sit in
+# the ranking that is actually scored. ES/NES sign is therefore kept only for
+# parity and must not be read as a direction of any kind — not biological
+# up/down, and not a statement about the members' score magnitudes. See
 # mmc_gsea_nes_note().
 #
 # Other semantics carried over from the pinned source:
@@ -332,7 +336,10 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #'   \item `stats <- abs(stats)^gseaParam`, then — on fgsea > 1.24.0, which is
 #'     the branch upstream takes for any modern fgsea —
 #'     `stats <- sort(stats, decreasing = TRUE)`. `abs()` BEFORE the sort is
-#'     what makes the ranking a |score| ranking.
+#'     what makes the ranking a |score| ranking, and the re-sort happens AFTER
+#'     the pathway positions were derived from the signed ordering, which is why
+#'     ES/NES sign carries no interpretable direction (see
+#'     `mmc_gsea_nes_note()`).
 #'   \item pathway members become tie-group indices via
 #'     `ranks[na.omit(fmatch(members, names(ranks)))]`, NOT de-duplicated, so
 #'     two ECs in one tie group count twice toward `size` and the ES.
@@ -357,8 +364,9 @@ mmc_gsea_ranked_inputs <- function(ec_scores) {
 #' @param seed     Seed for the permutation batch seeds (upstream `set.seed(123)`).
 #' @return A data.frame with one row per TESTED pathway: `pathway`, `pval`,
 #'   `padj`, `ES`, `NES`, `nMoreExtreme`, `size`, `leadingEdge` (`"; "`-joined
-#'   EC ids) and `es_defaulted` (TRUE when upstream's tryCatch fallback supplied
-#'   `ES = 0` instead of a computed score — see the note in the body). Zero rows
+#'   EC ids), `es_defaulted` (TRUE when upstream's tryCatch fallback supplied
+#'   `ES = 0` instead of a computed score) and `es_reason` (why, from
+#'   `.mmc_gsea_fallback_reason()`; `NA` when the score was computed). Zero rows
 #'   when no pathway passes the size filter.
 mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
                                    n_perm     = .MMC_GSEA_DEFAULTS$n_perm,
@@ -426,23 +434,41 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
   # the SAME score passes a non-strictly-increasing `selectedStats`, and
   # fgsea::calcGseaStat asserts `all(head(S, -1) < tail(S, -1))` — so such a
   # pathway really does come out of the reference implementation with ES = 0,
-  # NES = 0 and an empty leading edge. Reproduced exactly, and flagged in
-  # `es_defaulted` so the report can say which pathways scored that way rather
-  # than presenting a defaulted 0 as a measured enrichment score.
+  # NES = 0 and an empty leading edge.
+  #
+  # We reproduce that numerically AND record WHY each fallback happened. A
+  # blanket "tied scores" label would hide any other calcGseaStat failure behind
+  # a plausible-sounding explanation, so the reason is classified from the actual
+  # condition (see .mmc_gsea_fallback_reason()) and anything unrecognised is
+  # reported verbatim as unexpected.
   gsea_res <- lapply(pathways_filtered, function(selected) {
-    tryCatch({
-      if (length(selected) > 0 && !any(is.na(selected))) {
-        fgsea::calcGseaStat(stats = stats, selectedStats = selected,
-                            gseaParam = gsea_param, returnLeadingEdge = TRUE)
-      } else {
-        list(res = 0, leadingEdge = c(), .mmc_defaulted = TRUE)
-      }
-    }, error = function(e) {
-      list(res = 0, leadingEdge = c(), .mmc_defaulted = TRUE)
-    })
+    if (length(selected) == 0 || any(is.na(selected))) {
+      return(list(res = 0, leadingEdge = c(),
+                  .mmc_reason = .mmc_gsea_fallback_reason(selected, NULL)))
+    }
+    tryCatch(
+      fgsea::calcGseaStat(stats = stats, selectedStats = selected,
+                          gseaParam = gsea_param, returnLeadingEdge = TRUE),
+      error = function(e) {
+        list(res = 0, leadingEdge = c(),
+             .mmc_reason = .mmc_gsea_fallback_reason(selected,
+                                                     conditionMessage(e)))
+      })
   })
-  es_defaulted <- vapply(gsea_res, function(x) isTRUE(x$.mmc_defaulted),
+  es_defaulted <- vapply(gsea_res, function(x) !is.null(x$.mmc_reason),
                          logical(1), USE.NAMES = FALSE)
+  es_reason <- vapply(gsea_res,
+                      function(x) if (is.null(x$.mmc_reason)) NA_character_ else
+                        x$.mmc_reason,
+                      character(1), USE.NAMES = FALSE)
+  unexpected <- es_defaulted & startsWith(es_reason, .MMC_GSEA_FALLBACK_UNEXPECTED)
+  if (any(unexpected)) {
+    warning("mummichog GSEA: ", sum(unexpected), " pathway(s) hit an ",
+            "UNEXPECTED calcGseaStat failure and took the reference ",
+            "implementation's ES = 0 fallback: ",
+            paste(unique(es_reason[unexpected]), collapse = " | "),
+            call. = FALSE)
+  }
   pathway_scores <- vapply(gsea_res, function(x) as.numeric(x$res), numeric(1),
                            USE.NAMES = FALSE)
   leading_edges <- lapply(gsea_res, function(x) {
@@ -520,8 +546,55 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
     size         = as.numeric(pathways_sizes),
     leadingEdge  = lead,
     es_defaulted = es_defaulted,
+    es_reason    = es_reason,
     stringsAsFactors = FALSE
   )
+}
+
+# Prefix marking a fallback whose cause we do NOT recognise. Anything carrying
+# it is surfaced as a warning rather than explained away.
+.MMC_GSEA_FALLBACK_UNEXPECTED <- "unexpected calcGseaStat failure: "
+
+#' Classify why the reference implementation's ES = 0 fallback fired
+#'
+#' Upstream's `tryCatch` swallows every `calcGseaStat` failure into the same
+#' `ES = 0` result, so the reason has to be reconstructed. It is classified from
+#' the CONDITION, not from a guess:
+#'
+#' \describe{
+#'   \item{tied EC scores}{`selectedStats` holds duplicate ranked positions —
+#'     the direct consequence of upstream not de-duplicating tie-group indices,
+#'     and what `calcGseaStat`'s strictly-increasing assertion rejects. Detected
+#'     on the indices themselves, not on the message text.}
+#'   \item{every ranked position selected}{`calcGseaStat` refuses the degenerate
+#'     case where the pathway covers the whole ranking.}
+#'   \item{empty or missing members}{upstream's own pre-check branch, which
+#'     returns the default without calling `calcGseaStat` at all.}
+#'   \item{anything else}{reported verbatim behind
+#'     `.MMC_GSEA_FALLBACK_UNEXPECTED`, so a genuine bug or a future fgsea change
+#'     is visible instead of being mislabelled as a tie.}
+#' }
+#'
+#' @param selected The pathway's ranked-position vector.
+#' @param msg      `conditionMessage()` of the caught error, or `NULL` when the
+#'   fallback came from upstream's pre-check rather than an error.
+#' @return A single character scalar describing the cause.
+#' @noRd
+.mmc_gsea_fallback_reason <- function(selected, msg) {
+  if (is.null(msg)) {
+    return(if (length(selected) == 0) "pathway has no ranked members" else
+      "pathway members include a missing rank")
+  }
+  # The tie condition IS duplicated ranked positions; check that directly.
+  if (any(duplicated(selected))) {
+    n <- sum(duplicated(selected))
+    return(sprintf("tied EC scores (%d duplicate ranked position%s)",
+                   n, if (n == 1) "" else "s"))
+  }
+  if (grepl("all genes are selected", msg, fixed = TRUE)) {
+    return("pathway selects every ranked position")
+  }
+  paste0(.MMC_GSEA_FALLBACK_UNEXPECTED, msg)
 }
 
 #' Call fgsea's cumulative permutation batch the way upstream does
@@ -556,20 +629,31 @@ mmc_gsea_metaboanalyst <- function(pathways, stats, ranks,
 
 #' The one sanctioned description of NES sign for this analysis
 #'
-#' MetaboAnalyst ranks on |score| (`stats <- abs(stats)^gseaParam` before the
-#' sort), so the sign of ES/NES says which END of that magnitude ranking a
-#' pathway is enriched toward — it is NOT a biological up-/down-regulation
-#' call, and must never be paired with a contrast's numerator/denominator.
-#' Kept as a single function so every table, plot, export and report sentence
-#' says the same thing, and so the regression test has one place to assert.
+#' Two independent reasons NES sign must not be over-read here:
+#'
+#'   1. the ranked vector is transformed to |score|
+#'      (`stats <- abs(stats)^gseaParam`), so it carries no direction; and
+#'   2. pathway positions are built from the SIGNED-score ordering
+#'      (`ranks[fmatch(members, names(ranks))]`) BEFORE that transform and the
+#'      subsequent magnitude re-sort, so the indices a pathway is scored at no
+#'      longer necessarily correspond to where its ECs sit in the transformed
+#'      ranking at all.
+#'
+#' Sign is therefore retained purely for parity with the reference
+#' implementation, and is deliberately NOT described as a direction — neither
+#' biological up/down, nor a claim about the magnitude of the pathway members'
+#' own scores. Kept as a single function so every table, plot, export and
+#' report sentence says the same thing, and so the regression test has one
+#' place to assert.
 #'
 #' @return A single character scalar.
 mmc_gsea_nes_note <- function() {
-  paste0("Positive NES indicates enrichment toward the high-|score| end of ",
-         "the transformed ranking; negative NES indicates enrichment toward ",
-         "the low-|score| end. NES sign in this MetaboAnalyst-style ",
-         "Peaks-to-Pathways analysis does not encode biological up- or ",
-         "down-regulation.")
+  paste0("NES sign is retained to reproduce the pinned MetaboAnalystR result. ",
+         "Because the reference implementation transforms and reorders the ",
+         "score vector after pathway positions are constructed, NES sign ",
+         "should not be interpreted as biological up/down direction or as a ",
+         "direct statement about the magnitude of the pathway members' ",
+         "original scores.")
 }
 
 
@@ -694,7 +778,10 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
     "padj"                             = res$padj,
     "Leading-edge EmpiricalCompounds"  = res$leadingEdge,
     # Reported so a defaulted 0 is never read as a measured enrichment score.
-    "ES not computed (tied EC scores)" = res$es_defaulted
+    # The flag is deliberately generic and the cause lives beside it, rather
+    # than every fallback being labelled a tie.
+    "ES defaulted by reference implementation" = res$es_defaulted,
+    "ES fallback reason"                       = res$es_reason
   )
   tbl <- tbl[order(tbl[["P.Value"]], na.last = TRUE), , drop = FALSE]
 
@@ -733,10 +820,12 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
 
   n_defaulted <- sum(res$es_defaulted)
   if (n_defaulted > 0) {
-    message("mummichog GSEA: ", n_defaulted, "/", nrow(res), " pathway(s) got ",
-            "the reference implementation's ES = 0 fallback because they hold ",
-            "EmpiricalCompounds with identical scores (tied ranks are not ",
-            "de-duplicated upstream); flagged in the results table.")
+    reasons <- table(res$es_reason[res$es_defaulted])
+    message("mummichog GSEA: ", n_defaulted, "/", nrow(res), " pathway(s) took ",
+            "the reference implementation's ES = 0 fallback (",
+            paste(sprintf("%s x%d", names(reasons), as.integer(reasons)),
+                  collapse = "; "),
+            "); flagged in the results table with the reason.")
   }
   message("mummichog GSEA: ", nrow(tbl), " pathways over ", length(ec_scores),
           " EmpiricalCompounds (", length(ranked$stats),
@@ -762,7 +851,9 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
     n_ec         = length(ec_scores),
     n_positions  = length(ranked$stats),
     n_pathways   = nrow(tbl),
-    n_es_defaulted = n_defaulted
+    n_es_defaulted = n_defaulted,
+    es_fallback_reasons = if (n_defaulted == 0) character(0) else
+      sort(unique(res$es_reason[res$es_defaulted]))
   )
 }
 
@@ -788,8 +879,8 @@ run_mummichog_gsea <- function(files, de_table, model, contrast = NULL,
 #'   \item the most significant pathways labelled with `ggrepel`
 #' }
 #'
-#' NES sign is kept but is NOT a biological direction — see
-#' `mmc_gsea_nes_note()`.
+#' NES sign is kept only for parity with the reference implementation and is not
+#' an interpretable direction — see `mmc_gsea_nes_note()`.
 #'
 #' Two additions to the reference, both non-encoding: the points are drawn as
 #' outlined circles (`shape = 21`) so the near-white middle of the diverging

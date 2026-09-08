@@ -184,12 +184,25 @@ test_that("pathway EC sets are restricted to the ranked universe", {
 # NES interpretation (must NOT be a biological direction)
 # ---------------------------------------------------------------------------
 
-test_that("the NES note describes the |score| ranking, not biology", {
+test_that("the NES note is conservative: parity only, no direction claim", {
   note <- mmc_gsea_nes_note()
 
-  expect_match(note, "high-\\|score\\| end")
-  expect_match(note, "low-\\|score\\| end")
-  expect_match(note, "does not encode biological up- or down-regulation")
+  # what it MUST say
+  expect_match(note, "retained to reproduce the pinned MetaboAnalystR result",
+               fixed = TRUE)
+  expect_match(note, "transforms and reorders the score vector after pathway positions are constructed",
+               fixed = TRUE)
+  expect_match(note, "should not be interpreted as biological up/down direction",
+               fixed = TRUE)
+  expect_match(note, "magnitude of the pathway members' original scores",
+               fixed = TRUE)
+
+  # what it must NOT say: pathway indices come from the SIGNED ordering and are
+  # then scored against a transformed, re-sorted vector, so even a claim about
+  # which |score| END a pathway sits at is unsupported.
+  expect_false(grepl("high-|score| end", note, fixed = TRUE))
+  expect_false(grepl("low-|score| end", note, fixed = TRUE))
+  expect_false(grepl("enrichment toward", note, fixed = TRUE))
 })
 
 test_that("no biological-direction wording survives anywhere in the GSEA layer", {
@@ -209,7 +222,11 @@ test_that("no biological-direction wording survives anywhere in the GSEA layer",
   banned <- c("toward numerator", "toward denominator",
               "up-regulated pathway", "down-regulated pathway",
               "upregulated", "downregulated",
-              "direction_note", "mmc_gsea_direction_note")
+              "direction_note", "mmc_gsea_direction_note",
+              # over-strong magnitude claims: pathway positions come from the
+              # signed ordering, so even an |score|-end reading is unsupported
+              "high-|score| end", "low-|score| end",
+              "enrichment toward the high", "enrichment toward the low")
   for (f in targets) {
     skip_if_not(file.exists(f), paste("missing", basename(f)))
     txt <- tolower(paste(readLines(f, warn = FALSE), collapse = "\n"))
