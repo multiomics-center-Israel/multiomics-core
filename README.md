@@ -345,7 +345,18 @@ The implementation reproduces a **pinned** upstream version, not a paraphrase of
 
 Both files are byte-identical between that commit and upstream's current default-branch head, so the pin is the live Peaks-to-Pathways code path. A **parity test** (`tests/testthat/test-mummichog-gsea-parity.R`) compares our engine against a fixture produced by running the pinned `.run_fgsea_inner()` itself; see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md`.
 
-Because the engine calls fgsea **internals**, the fgsea build is pinned too. The generator refuses to run unless the installed fgsea matches `renv.lock` exactly (a patch-level difference needs an explicit opt-in that is then recorded in the fixture, and a different `x.y` series is refused outright), the parity test **skips rather than compares** across series, and a further test fails if the suite runs somewhere the locked build is installed while the fixture was generated on something else. The committed fixture currently carries a recorded patch-level deviation — see `tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md` for the exact state, why 1.36.2 was unobtainable, and the evidence that it does not change the numbers.
+Because the engine calls fgsea **internals**, the fgsea build is pinned too.
+The generator refuses to run unless the installed fgsea matches `renv.lock`
+exactly (a patch-level difference needs an explicit opt-in that is then recorded
+in the fixture, and a different `x.y` series is refused outright), the parity
+test **skips rather than compares** across series, and a further test fails if
+the suite runs somewhere the locked build is installed while the fixture was
+generated on something else. The committed fixture has now been regenerated
+under the exact locked build, **fgsea 1.36.2**, with
+`fgsea_exact_match = TRUE`; its reference results are identical to the previous
+1.36.0 fixture. See
+`tests/testthat/fixtures/mummichog_gsea_parity/REFERENCE.md` for provenance and
+validation details.
 
 #### Semantics
 
