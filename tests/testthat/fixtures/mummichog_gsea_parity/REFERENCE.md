@@ -14,7 +14,7 @@ Peaks-to-Pathways GSEA engine**, run on the fixture in `generate_reference.R`.
 | `permNum` | 100 (`PerformPSEA()` default) |
 | `gseaParam` / `minSize` / `maxSize` | 1 / 1 / `Inf` (`.run_fgsea_inner()` defaults) |
 | Seed | `set.seed(123)` before `sample.int(10^9, n_batches)` |
-| fgsea at generation | **1.36.0** → the `> 1.24.0` branch (`stats` re-sorted decreasing after `abs()`) |
+| fgsea at generation | **1.36.2** → the `> 1.24.0` branch (`stats` re-sorted decreasing after `abs()`) |
 | fgsea in `renv.lock` | 1.36.2 — same 1.36 series |
 
 Both reference files are **byte-identical between the pinned commit and upstream's
@@ -33,16 +33,22 @@ build matters. Three states, enforced rather than described:
 | different `x.y` series | **refuses** | **skips** — a cross-series match is not parity |
 
 A further test asserts that whenever the suite runs somewhere the **locked build
-is installed**, the fixture must have been generated on it. So the current
-patch-level gap is an enforced follow-up, not a silent hole: run the suite in the
-project's `renv` environment and it will fail until the fixture is regenerated.
+is installed**, the fixture must have been generated on it. The committed fixture
+now satisfies that requirement.
 
-### Current state of that gap
+### Current locked-version state
 
-`fgsea_exact_match` is **FALSE**: the fixture is generated under **1.36.0**
-(`alserglab/fgsea@1adab01`, the `RELEASE_3_22` branch point) rather than the
-locked **1.36.2**. 1.36.2 is unobtainable in the authoring environment — every
-route was tried and denied by egress policy or does not exist:
+`fgsea_exact_match` is **TRUE**: the committed fixture was regenerated under the
+exact `renv.lock` build, **fgsea 1.36.2**.
+
+The regenerated fixture produced a reference table that is identical to the
+previous 1.36.0 fixture (`all.equal(old$reference, new$reference) == TRUE`).
+The MetaboAnalystR commit, permutation count, GSEA parameters and seed are unchanged;
+only fixture provenance changed (`fgsea_version`, `fgsea_exact_match`,
+`fgsea_mismatch_note`, and generation timestamp).
+
+The earlier 1.36.0 work remains useful as historical validation context.
+In the original authoring environment, the exact 1.36.2 build could not be obtained:
 
 | route | outcome |
 |---|---|
@@ -54,21 +60,20 @@ route was tried and denied by egress policy or does not exist:
 | `alserglab/fgsea` `RELEASE_3_22` branch | not mirrored (branches stop at `RELEASE_3_21`) |
 | `Bioconductor/fgsea`, `Bioconductor-mirror/fgsea`, `ctlab/fgsea` on GitHub | do not exist / no such branch |
 
-Evidence that the gap does not affect the numbers:
+Historical validation performed before the exact 1.36.2 build became available:
 
-* the two primitives this engine calls are **code-identical from 1.36.0 through
-  1.39.4** — the whole devel cycle either side of the branch point:
-  `calcGseaStat` body md5 `9cac7ddd36b45885` at both revisions (pure R, no
-  `.Call`), and `src/fastGSEA.cpp` with comments stripped md5
+* the two primitives this engine calls were code-identical from 1.36.0 through
+  1.39.4: `calcGseaStat` body md5 `9cac7ddd36b45885` at both revisions
+  (pure R, no `.Call`), and `src/fastGSEA.cpp` with comments stripped md5
   `8060947310be0650` at both. The one post-branch-point commit touching
   `fastGSEA.cpp` (`7207d6b`) adds three comment lines and nothing else;
-* regenerating the whole fixture under 1.39.4 and under 1.36.0 gives **bitwise
+* regenerating the whole fixture under 1.39.4 and under 1.36.0 gave **bitwise
   identical** ES, NES, p, padj, `nMoreExtreme`, sizes, pathway order and leading
   edges.
 
-What remains unverifiable here is only the content of the two patch backports on
-the `RELEASE_3_22` branch (1.36.1, 1.36.2), which cannot be inspected without
-access to that branch.
+The exact 1.36.2 regeneration now supersedes that historical bounding evidence:
+the committed reference table is identical to the previous fixture while
+`fgsea_exact_match` is `TRUE`.
 
 ## What the generator actually runs
 

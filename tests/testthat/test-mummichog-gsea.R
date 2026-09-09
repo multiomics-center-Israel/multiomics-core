@@ -349,7 +349,10 @@ test_that("the GSEA scatter maps NES on x, -log10(p) on y and NES to colour", {
   expect_identical(p$labels$subtitle, "S")
   expect_match(p$labels$x, "NES")
   expect_match(p$labels$y, "-log10\\(GSEA p-value\\)")
-  expect_identical(p$labels$fill, "NES")
+  expect_identical(
+    p$scales$get_scales("fill")$name,
+    "NES"
+  )
 
   geoms <- vapply(p$layers, function(l) class(l$geom)[1], character(1))
   expect_true("GeomPoint" %in% geoms)
