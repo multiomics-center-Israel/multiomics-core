@@ -28,7 +28,8 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
             contrasts_df = inputs$contrasts,
             row_data = pre$row_data,
             feature_id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID",
-            config = config
+            config = config,
+            expr_model = de_res$imputations[[1]]
         )
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 
@@ -130,13 +131,27 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 #'
 #' @return A consolidated dataframe with statistics, expression values, and Z-scores.
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
-                                            feature_id_col = "FeatureID", config = NULL) {
-    cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
-    mean_cols <- build_group_mean_proteomics(pre, contrasts_df, config)
-    # Intensities are already log2, so the model-free estimate is a difference.
-    naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
+                                            feature_id_col = "FeatureID", config = NULL,
+                                            expr_model = NULL) {
+    # The exported .norm and Mean. columns must describe the SAME imputation
+    # limma was fitted on. perseus_like is stochastic and the pipeline draws
+    # twice -- once in preprocessing (expr_imp_single) and once per model run
+    # via make_imputations_proteomics(), under different seeds. Exporting the
+    # preprocessing draw made Mean.<num> - Mean.<den> disagree with the
+    # reported log2FC on exactly the features that were imputed, by up to
+    # 2.8 in log2. Pass the model's matrix; fall back only if unavailable.
+    expr_for_model <- expr_model %||% pre$expr_imp_single
+    pre_model <- pre
+    pre_model$expr_imp_single <- expr_for_model
 
-    # Pre-imputation counterparts, computed on expr_filt (NAs still present).
+    cv_cols <- build_group_cv_proteomics(pre, contrasts_df, config)
+    mean_cols <- build_group_mean_proteomics(pre_model, contrasts_df, config)
+
+    # Pre-imputation estimate, computed on expr_filt (NAs still present). This
+    # is the only genuinely model-free fold change in the table: with a
+    # two-group design, a difference of means taken on the model's own matrix
+    # is the model coefficient, so log2FC_from_means carried no information
+    # that log2FC.imputs did not already carry and has been dropped.
     raw_stats <- build_group_raw_stats_proteomics(pre, contrasts_df, config)
     raw_log2fc <- compute_naive_log2fc_columns(
         raw_stats$means, contrasts_df, scale = "log2", prefix = "Mean.raw.")
@@ -157,9 +172,9 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         # expr_filt above is what was measured (NAs for unobserved); this is the
         # imputed matrix limma was fitted on. Both are needed to walk from the
         # per-sample values to the reported logFC.
-        norm_expr = pre$expr_imp_single,
+        norm_expr = expr_for_model,
         mean_cols = mean_cols,
-        naive_log2fc = naive_log2fc,
+        naive_log2fc = NULL,
         raw_stat_cols = raw_stats$combined,
         raw_log2fc = raw_log2fc
     )

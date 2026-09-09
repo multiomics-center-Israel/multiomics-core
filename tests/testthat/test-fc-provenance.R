@@ -386,15 +386,15 @@ test_that("P7 proteomics final results carry the imputed block and group means",
     expect_equal(p2$S_2.norm, 7.5)
     # Means come from the imputed matrix, so the gap does not skew the group
     expect_equal(p2$Mean.S, mean(c(8, 7.5)))
-    # Stat block order: the model estimate, its model-free counterpart, then
-    # the linear presentation of the model estimate.
+    # Stat block order: the model estimate, then its linear presentation.
     nm <- names(fr)
     expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 1L],
-                 "log2FC_from_means.S_vs_NS")
-    expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 2L],
                  "linearFC.imputs.S_vs_NS")
-    # And it is recomputable from the two Mean cells in the same row
-    expect_equal(fr$log2FC_from_means.S_vs_NS, fr$Mean.S - fr$Mean.NS)
+    # Proteomics no longer emits log2FC_from_means. The Mean. columns come from
+    # the model's own imputed matrix, so on a two-group design their difference
+    # IS the model coefficient and a separate column carried no information.
+    expect_false("log2FC_from_means.S_vs_NS" %in% nm)
+    expect_true("log2FC_from_raw.S_vs_NS" %in% nm)
 })
 
 
@@ -735,7 +735,10 @@ test_that("P10 proteomics column naming resolves too", {
     df <- data.frame(
         FeatureID                      = paste0("p", 1:4),
         `log2FC.imputs.S_vs_NS`        = c(2, -2, 2, -2),
-        `log2FC_from_means.S_vs_NS`    = c(2, -2, 2, -2),
+        # The proteomics shrinkage check compares the model estimate against
+        # the measured-values estimate, not against a difference of the
+        # model's own means (which would be the same number by construction).
+        `log2FC_from_raw.S_vs_NS`      = c(2, -2, 2, -2),
         `padj.imputs.S_vs_NS`          = 1e-6,
         stringsAsFactors = FALSE, check.names = FALSE
     )
@@ -756,8 +759,10 @@ test_that("P6 provenance notes cover every column family the mode emits", {
 
     prot <- build_provenance_notes("proteomics")
     expect_true(all(c("<sample>", "<sample>.norm", "Mean.<group>", "CV.<group>",
-                      "log2FC.imputs.<contrast>", "log2FC_from_means.<contrast>",
+                      "log2FC.imputs.<contrast>", "log2FC_from_raw.<contrast>",
+                      "Mean.raw.<group>", "N.observed.<group>",
                       "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
+    expect_false("log2FC_from_means.<contrast>" %in% prot$glossary$Column)
 
     # Both must name the shrinkage comparison the naive column exists for
     expect_true(any(grepl("shrinkage", rna$notes)))
