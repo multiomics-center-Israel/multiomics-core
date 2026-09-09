@@ -224,7 +224,6 @@ build_provenance_notes <- function(mode = "rna") {
                 "Mean.<group>",
                 "CV.<group>",
                 "log2FC.imputs.<contrast>",
-                "log2FC_from_means.<contrast>",
                 "linearFC.imputs.<contrast>",
                 "pvalue.imputs.<contrast>",
                 "padj.imputs.<contrast>",
@@ -234,12 +233,11 @@ build_provenance_notes <- function(mode = "rna") {
                 "log2 intensity after filtering and normalization, before imputation. Blank cells were not measured.",
                 "Arithmetic mean of the measured <sample> values in that group, ignoring blanks. Pre-imputation.",
                 "How many of that group's samples were actually measured. Read Mean.raw. and log2FC_from_raw against this: a mean over 2 of 5 replicates is not the same evidence as one over 5 of 5.",
-                "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC_from_means.",
-                "The same matrix after imputation, for one representative imputation run. This is the kind of matrix limma was fitted on.",
-                "Arithmetic mean of the .norm log2 values across the replicates of that group.",
+                "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC.imputs exactly.",
+                "The same matrix after imputation. This is the exact matrix limma was fitted on, not a separate draw.",
+                "Arithmetic mean of the .norm log2 values across the replicates of that group. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs.",
                 "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
                 "log2 of the mean linear ratio across the imputation runs: log2( mean of 2^logFC over runs ).",
-                "Mean.<numerator> minus Mean.<denominator>, computed from the two Mean columns in this row (a difference, because the values are log2). No model behind it.",
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
@@ -249,12 +247,12 @@ build_provenance_notes <- function(mode = "rna") {
         )
         notes <- c(
             "Reconciling the fold change from this row:",
-            "1. log2FC_from_means is Mean.<numerator> minus Mean.<denominator>, so it can be recomputed from the two Mean cells alone.",
+            "1. log2FC.imputs is Mean.<numerator> minus Mean.<denominator>, recomputable from the two Mean cells alone. The Mean columns come from the same imputed matrix the model used, so this is exact for a two-group contrast.",
             "2. Apply the linearFC rule above to log2FC.imputs. This step is exact.",
-            "log2FC_from_means and log2FC.imputs differ for two reasons: the reported statistic averages over all imputation runs while the Mean columns come from a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
-            "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation.",
-            "log2FC_from_raw is the same arithmetic on the measured values alone. Comparing it with log2FC_from_means shows how much of a fold change depends on imputed values; N.observed says how many values that was.",
-            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table."
+            "log2FC_from_raw is the same arithmetic on the MEASURED values only, ignoring blanks. Where a feature was fully measured the two agree exactly.",
+            "Where a feature was not fully measured, log2FC_from_raw and log2FC.imputs differ for two reasons: the imputed values are included in one and not the other, and the raw means may rest on unequal numbers of replicates per group. N.observed says how many values each raw mean rests on, and should be read alongside it.",
+            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect.",
+            "There is no separate log2FC_from_means column. On a two-group design a difference of means taken on the model's own matrix is the model coefficient, so it carried nothing log2FC.imputs did not already carry."
         )
     } else {
         glossary <- data.frame(
@@ -764,10 +762,14 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else {
-        # Proteomics (uses imputation naming)
+        # Proteomics (uses imputation naming). log2fc_means points at
+        # log2FC_from_raw, the measured-values estimate: the .norm and Mean.
+        # columns now come from the model's own imputation, so a difference of
+        # those means IS the model coefficient on a two-group design and a
+        # shrinkage check against it would compare a number with itself.
         list(
             log2fc = paste0("log2FC.imputs.", contrast),
-            log2fc_means = paste0("log2FC_from_means.", contrast),
+            log2fc_means = paste0("log2FC_from_raw.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),

@@ -85,7 +85,8 @@ mod_proteomics_exports <- function(
             contrasts_df = inputs$contrasts,
             row_data = pre$row_data,
             feature_id_col = id_col,
-            config = config
+            config = config,
+            expr_model = de_res$imputations[[1]]
         )
 
         # Write final_results TSV
