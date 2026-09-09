@@ -85,6 +85,8 @@ validate_proteomics_config <- function(cfg) {
         if (!is.null(cfg$de$paired)) {
             assert_scalar_bool(cfg$de$paired, "de$paired", allow_null = TRUE)
         }
+        assert_scalar_num(cfg$de$volcano_n_label, "de$volcano_n_label",
+                          allow_null = TRUE, min_val = 0)
         if (!is.null(cfg$de$pairing_col)) {
             assert_scalar_chr(cfg$de$pairing_col, "de$pairing_col", allow_null = TRUE)
         }
