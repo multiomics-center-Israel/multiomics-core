@@ -90,6 +90,28 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     )
 }
 
+# Helper: get log2 fold changes for a contrast, preferring the stored log2FC
+# column over reconstructing it from linearFC.
+#
+# linearFC is written with signif(x, 3), so anything between 1.4950 and 1.5049
+# is stored as 1.50. Converting that back gives log2(1.50) = 0.584963, which is
+# exactly the log2(1.5) threshold, so features genuinely below 1.5-fold were
+# counted as passing. On one run that inflated the interactive volcano's count
+# from 222 to 227 (PLS3, SERINC3, BLTP3A, CKAP2, ISYNA1, all 1.4957-1.4996
+# fold) while the tables, which use log2FC directly, reported 222.
+#
+# The stored log2FC is unrounded, so use it whenever it exists and fall back to
+# the conversion only for tables that predate that column.
+resolve_log2fc <- function(df, contrast) {
+    for (nm in c(paste0("log2FC.imputs.", contrast), paste0("log2FC.", contrast))) {
+        if (nm %in% names(df)) return(as.numeric(df[[nm]]))
+    }
+    for (nm in c(paste0("linearFC.imputs.", contrast), paste0("linearFC.", contrast))) {
+        if (nm %in% names(df)) return(signed_fc_to_log2(as.numeric(df[[nm]])))
+    }
+    rep(NA_real_, nrow(df))
+}
+
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -519,7 +541,9 @@ cat("</div>\n")
 # DE breakdown per contrast
 if (!is.null(de_data) && length(contrast_names) > 0) {
     padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
-    lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+    # Linear, not log2: the comparisons below apply log2() at the point of use.
+    # Named distinctly because `lfc_cut` elsewhere in this file is already log2.
+    lin_fc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 
     cat("<div style='margin: 12px 0;'>\n")
     cat("<strong>Differential Expression per Contrast:</strong>\n<ul style='margin: 6px 0; padding-left: 20px;'>\n")
@@ -536,8 +560,8 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
         } else if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- signed_fc_to_log2(lfc_vals)
-            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
+            log2fc <- resolve_log2fc(de_data, cn)
+            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lin_fc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
         }
@@ -1209,7 +1233,9 @@ Differential expression analysis identifies features with statistically signific
 ```{r de-summary, results='asis'}
 if (!is.null(de_data) && length(contrast_names) > 0) {
     padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
-    lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+    # Linear, not log2: the comparisons below apply log2() at the point of use.
+    # Named distinctly because `lfc_cut` elsewhere in this file is already log2.
+    lin_fc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 
     total_proteins <- nrow(de_data)
 
@@ -1230,8 +1256,8 @@ if (!is.null(de_data) && length(contrast_names) > 0) {
             # Non-imputation fallback: use padj + linearFC thresholds directly
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- signed_fc_to_log2(lfc_vals)
-            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lfc_cut)
+            log2fc <- resolve_log2fc(de_data, cn)
+            is_sig <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= log2(lin_fc_cut)
             n_up <- sum(is_sig & log2fc > 0, na.rm = TRUE)
             n_down <- sum(is_sig & log2fc < 0, na.rm = TRUE)
         } else {
@@ -1287,7 +1313,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- signed_fc_to_log2(lfc_vals)
+            log2fc <- resolve_log2fc(de_data, cn)
             is_de <- !is.na(padj_vals) & padj_vals <= padj_cut & abs(log2fc) >= lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             de_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_de]
@@ -1340,7 +1366,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- signed_fc_to_log2(lfc_vals)
+            log2fc <- resolve_log2fc(de_data, cn)
             is_up <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc >= lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             up_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_up]
@@ -1382,7 +1408,7 @@ if (!is.null(de_data) && length(contrast_names) >= 2) {
         if (padj_col %in% names(de_data) && lfc_col %in% names(de_data)) {
             padj_vals <- as.numeric(de_data[[padj_col]])
             lfc_vals <- as.numeric(de_data[[lfc_col]])
-            log2fc <- signed_fc_to_log2(lfc_vals)
+            log2fc <- resolve_log2fc(de_data, cn)
             is_down <- !is.na(padj_vals) & padj_vals <= padj_cut & log2fc <= -lfc_cut
             protein_col <- if (id_col %in% names(de_data)) id_col else names(de_data)[1]
             down_protein_lists[[gsub("_", " ", cn)]] <- de_data[[protein_col]][is_down]
@@ -1653,7 +1679,7 @@ make_volcano_plotly_prot <- function(df, contrast, padj_cut = 0.05, lfc_cut = lo
         protein = df[[gene_col]],
         accession = accession_vals,
         description = desc_vals,
-        logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
+        logFC = resolve_log2fc(df, contrast),
         padj = as.numeric(df[[padj_col]]),
         stringsAsFactors = FALSE
     )
@@ -1946,7 +1972,7 @@ make_ma_plotly_prot <- function(df, expr_df, contrast, padj_cut = 0.05, lfc_cut 
     # average log2 intensity — use directly as the A axis (no extra log)
     plot_df <- data.frame(
         protein = df[[gene_col]],
-        logFC = signed_fc_to_log2(as.numeric(df[[lfc_col]])),
+        logFC = resolve_log2fc(df, contrast),
         padj = as.numeric(df[[padj_col]]),
         baseMean = baseMean,
         stringsAsFactors = FALSE
