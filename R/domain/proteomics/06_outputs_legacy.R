@@ -177,7 +177,22 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     #     the Mean. columns come from imputations[[1]] alone. On a partially
     #     measured feature those are NOT the same number, and log2FC_from_means
     #     is what makes the gap visible instead of leaving it unstated.
-    multi_imp <- config$modes$proteomics$imputation$multi_imputation %||% TRUE
+    obs_cols <- build_observed_fc_proteomics(pre, contrasts_df, config)
+
+    # config is optional here, as it has always been. Guard the flag lookup
+    # explicitly so callers that relied on config = NULL keep working.
+    imp_enabled <- if (is.null(config)) {
+        TRUE
+    } else {
+        isTRUE(config$modes$proteomics$excel$imputed_block %||% TRUE)
+    }
+    imp_block <- if (imp_enabled) expr_for_model else NULL
+
+    multi_imp <- if (is.null(config)) {
+        TRUE
+    } else {
+        config$modes$proteomics$imputation$multi_imputation %||% TRUE
+    }
     naive_log2fc <- if (isFALSE(multi_imp)) {
         NULL
     } else {
@@ -197,6 +212,7 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         row_data = row_data %||% pre$row_data,
         fc_is_signed = TRUE, # linearFC is signed
         cv_cols = cv_cols,
+        obs_cols = obs_cols,
         # expr_filt above is what was measured (NAs for unobserved); this is the
         # imputed matrix limma was fitted on. Both are needed to walk from the
         # per-sample values to the reported logFC.
@@ -207,6 +223,7 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         raw_log2fc = raw_log2fc,
         # Keep log2FC.imputs adjacent to linearFC.imputs (a pinned contract) and
         # group the two model-free estimates after it.
+        imp_expr_df = imp_block,
         naive_after_fc = TRUE
     )
 }
@@ -289,12 +306,12 @@ build_group_mean_proteomics <- function(pre, contrasts_df, config = NULL) {
     sample_id_col <- prot_cfg$effects$samples %||%
         prot_cfg$id_columns$sample_col %||% "SampleID"
 
-    compute_group_mean_columns(
-        expr          = as.matrix(pre$expr_imp_single),
-        sample_meta   = pre$meta,
-        sample_id_col = sample_id_col,
-        contrasts_df  = contrasts_df
-    )
+compute_group_mean_columns(
+    expr          = as.matrix(pre$expr_imp_single),
+    sample_meta   = pre$meta,
+    sample_id_col = sample_id_col,
+    contrasts_df  = contrasts_df
+)
 }
 
 #' Resolve the log2 pseudocount offset applied to the proteomics assay
@@ -343,5 +360,39 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
         sample_meta   = pre$meta,
         sample_id_col = sample_id_col,
         contrasts_df  = contrasts_df
+    )
+}
+
+#' Build observed-only counts and fold-change columns for proteomics
+#'
+#' Wraps \code{\link{compute_observed_fc_columns}} on \code{pre$expr_filt}, the
+#' log2 matrix before imputation. The resulting \code{obs.log2FC.<contrast>}
+#' sits next to the pipeline's \code{linearFC.imputs.<contrast>} in the final
+#' table so a reader can see how much of a fold change came from measurements
+#' and how much from filling in missing values.
+#'
+#' Disable with \code{modes.proteomics.excel.observed_fc: false}.
+#'
+#' @param pre Proteomics preprocessing results (uses \code{expr_filt}, \code{meta}).
+#' @param contrasts_df Contrasts table (Contrast_name, Factor, Numerator, Denominator).
+#' @param config Full pipeline config (feature flag, sample-ID column).
+#' @return Feature-indexed data.frame of \code{n_obs.<group>} and
+#'   \code{obs.*FC.<contrast>} columns, or NULL.
+build_observed_fc_proteomics <- function(pre, contrasts_df, config = NULL) {
+    if (is.null(config)) return(NULL)
+    enabled <- config$modes$proteomics$excel$observed_fc %||% TRUE
+    if (!isTRUE(enabled)) return(NULL)
+    if (is.null(pre$expr_filt) || is.null(pre$meta)) return(NULL)
+
+    prot_cfg <- config$modes$proteomics %||% list()
+    sample_id_col <- prot_cfg$effects$samples %||%
+        prot_cfg$id_columns$sample_col %||% "SampleID"
+
+    compute_observed_fc_columns(
+        expr_log2     = pre$expr_filt,  # pre-imputation: NAs mark unobserved
+        sample_meta   = pre$meta,
+        sample_id_col = sample_id_col,
+        contrasts_df  = contrasts_df,
+        mode          = "proteomics"
     )
 }
