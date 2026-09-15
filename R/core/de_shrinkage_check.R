@@ -126,10 +126,10 @@ check_log2fc_shrinkage <- function(de_stats,
 warn_log2fc_shrinkage <- function(check, mode = "rna") {
     if (is.null(check) || nrow(check) == 0) return(invisible(check))
 
-    # Name the columns this mode actually writes. Proteomics compares
-    # log2FC.imputs against log2FC_from_raw and carries no log2FC_from_means at
-    # all, so a hard-coded pair sent the analyst to a column that is not in
-    # their workbook. Resolved per contrast so the suffix is right too.
+    # Name the columns this mode actually compares. Proteomics checks
+    # log2FC.imputs against log2FC_from_raw: its log2FC_from_means equals
+    # log2FC.imputs for limma, so pointing the analyst there would show no gap.
+    # Resolved per contrast so the suffix is right too.
     cols_for <- function(cn) {
         cols <- get_contrast_cols(cn, mode = mode)
         list(model = cols$log2fc %||% "log2FC",

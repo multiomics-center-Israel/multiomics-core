@@ -22,14 +22,9 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
 
     # 4) final results TSV
     if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
-        # Guarded on length(), not `%||%`: NULL[[1]] raises "subscript out of
-        # bounds" in R, so a config with no stochastic imputation would abort
-        # here rather than fall back to the preprocessing matrix.
-        expr_model <- if (length(de_res$imputations) > 0) {
-            de_res$imputations[[1]]
-        } else {
-            pre$expr_imp_single
-        }
+        # Same matrix as mod_proteomics_exports(): the average of the imputation
+        # runs, so Mean.<num> - Mean.<den> reproduces log2FC.imputs.
+        expr_model <- average_imputation_runs(de_res$imputations, fallback = pre$expr_imp_single)
 
         final_results <- build_final_results_proteomics(
             pre = pre,
@@ -137,18 +132,21 @@ build_limma_results_multimp_wide <- function(runs_de_tables, contrast_name, stat
 #' @param contrasts_df Dataframe defining the experimental contrasts.
 #' @param row_data Optional annotation data (defaults to pre$row_data).
 #' @param feature_id_col The column name for unique identifiers (default "FeatureID").
+#' @param config Full config list.
+#' @param expr_model Imputed matrix the .norm and Mean. columns come from: the
+#'   average of the imputation runs (average_imputation_runs()). Falls back to
+#'   \code{pre$expr_imp_single} when NULL.
 #'
 #' @return A consolidated dataframe with statistics, expression values, and Z-scores.
 build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_data = NULL,
                                             feature_id_col = "FeatureID", config = NULL,
                                             expr_model = NULL) {
-    # The exported .norm and Mean. columns must describe the SAME imputation
-    # limma was fitted on. perseus_like is stochastic and the pipeline draws
-    # twice -- once in preprocessing (expr_imp_single) and once per model run
-    # via make_imputations_proteomics(), under different seeds. Exporting the
-    # preprocessing draw made Mean.<num> - Mean.<den> disagree with the
-    # reported log2FC on exactly the features that were imputed, by up to
-    # 2.8 in log2. Pass the model's matrix; fall back only if unavailable.
+    # The exported .norm and Mean. columns must reproduce the reported
+    # log2FC.imputs. perseus_like is stochastic: preprocessing draws once
+    # (expr_imp_single) and make_imputations_proteomics() draws once per model
+    # run, under different seeds. Callers pass the average of the model runs,
+    # whose group-mean difference equals log2FC.imputs (the mean of the per-run
+    # coefficients); the preprocessing draw is only a fallback.
     expr_for_model <- expr_model %||% pre$expr_imp_single
     pre_model <- pre
     pre_model$expr_imp_single <- expr_for_model
@@ -163,26 +161,12 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     raw_log2fc <- compute_naive_log2fc_columns(
         raw_stats$means, contrasts_df, scale = "log2", prefix = "Mean.raw.")
 
-    # Whether log2FC_from_means is worth emitting depends on how many times the
-    # pipeline imputed, so it is decided from imputation$multi_imputation rather
-    # than dropped outright:
-    #
-    #   multi_imputation: false -> one draw. log2FC.imputs is that draw's
-    #     coefficient, and on a two-group design a difference of the model
-    #     matrix's own group means IS that coefficient. The column would carry
-    #     nothing log2FC.imputs does not, so it is omitted.
-    #
-    #   multi_imputation: true (default) -> log2FC.imputs is the consensus,
-    #     log2(mean(2^logFC)) across no_repetitions runs (05_de_summary.R), while
-    #     the Mean. columns come from imputations[[1]] alone. On a partially
-    #     measured feature those are NOT the same number, and log2FC_from_means
-    #     is what makes the gap visible instead of leaving it unstated.
-    multi_imp <- config$modes$proteomics$imputation$multi_imputation %||% TRUE
-    naive_log2fc <- if (isFALSE(multi_imp)) {
-        NULL
-    } else {
-        compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
-    }
+    # log2FC_from_means is Mean.<num> - Mean.<den>, computed for the reader. For
+    # limma it equals log2FC.imputs, so it confirms the hand check row by row;
+    # where the DE step did not compare these group means directly (a paired
+    # t-test, blocking with unequal group sizes, a precomputed DE table) it shows
+    # the gap. That is why it is emitted under every imputation setting.
+    naive_log2fc <- compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
 
     build_final_results_generic(
         summary_df = summary_df,
