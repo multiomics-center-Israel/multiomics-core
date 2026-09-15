@@ -545,11 +545,24 @@ build_cluster_profile_plots <- function(long_df, x_label = "Group",
 #'   "pval" (raw p-value). Selecting "pval" when the table has no raw p-value
 #'   column is an error — we'd rather fail loudly than silently draw the FDR plot
 #'   under a "P.Value" title.
+#' @param n_label Number of features to label on EACH side (up and down). 0
+#'   disables labelling. Defaults to `cfg$de$volcano_n_label`, else 0.
 #' @param ... Ignored
 #' @return ggplot object
+#'
+#' @section Which features get labelled:
+#' Only features that pass both cutoffs are eligible, so a label always marks a
+#' called hit. Among those, the top `n_label` per direction are chosen by the
+#' rank product of significance and effect size, |log2FC| * -log10(p), rather
+#' than by either alone. Ranking on p alone crowds the labels onto whatever is
+#' most precisely measured; ranking on fold change alone favours features with
+#' little evidence behind them. The combined statistic is the one described in
+#' Xiao et al. (2014), Bioinformatics 30(6):801-807.
 
-plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pval"), ...) {
+plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pval"),
+                         n_label = NULL, ...) {
   pvalue_type <- match.arg(pvalue_type)
+  n_label <- as.integer(n_label %||% cfg$de$volcano_n_label %||% 0L)
 
   # 1. Flexible Column Mapping
   # Try to find the logFC column
@@ -620,8 +633,11 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
   # 5. Sorting (Significant points on top)
   plot_df <- plot_df[order(plot_df$.direction), ]
 
-  # 6. Plotting
-  ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
+  # 6. Label the strongest hits per direction
+  label_df <- .volcano_label_data(plot_df, n_label)
+
+  # 7. Plotting
+  p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = .logFC, y = .neglog10p)) +
     ggplot2::geom_point(ggplot2::aes(color = .direction, alpha = .direction), size = 1.2, na.rm = TRUE) +
     ggplot2::scale_color_manual(
       values = c("NS" = "grey80", "Down" = "#377eb8", "Up" = "#e41a1c"),
@@ -637,6 +653,61 @@ plot_volcano <- function(de_tbl, cfg, title = NULL, pvalue_type = c("padj", "pva
       y = paste0("-log10(", p_col, ")")
     ) +
     ggplot2::theme_minimal()
+
+  if (!is.null(label_df) && nrow(label_df) > 0) {
+    p <- p + ggrepel::geom_text_repel(
+      data = label_df,
+      mapping = ggplot2::aes(x = .logFC, y = .neglog10p, label = .label),
+      inherit.aes = FALSE, size = 2.8, colour = "grey20",
+      max.overlaps = Inf, min.segment.length = 0,
+      segment.colour = "grey60", segment.size = 0.3,
+      box.padding = 0.4, point.padding = 0.2,
+      # Seeded: geom_text_repel nudges labels with the RNG, so an unseeded
+      # plot moves its labels between renders of identical data.
+      seed = 42
+    )
+  }
+  p
+}
+
+#' Pick the features to label on a volcano plot
+#'
+#' Eligible features are those passing both cutoffs, so a label always marks a
+#' called hit rather than merely an extreme point. Among those, the top
+#' \code{n_label} per direction are taken by |log2FC| * -log10(p), which
+#' balances significance against effect size instead of letting either dominate.
+#'
+#' @param plot_df Volcano frame carrying \code{.logFC}, \code{.neglog10p} and
+#'   \code{.direction}, as built by \code{\link{plot_volcano}}.
+#' @param n_label Number of features per direction. 0 or less returns NULL.
+#' @return A data.frame with a \code{.label} column, or NULL when nothing
+#'   qualifies.
+#' @keywords internal
+.volcano_label_data <- function(plot_df, n_label) {
+  if (is.null(n_label) || is.na(n_label) || n_label <= 0) return(NULL)
+
+  # Prefer a gene symbol; fall back to whatever identifies the row. Protein
+  # groups are semicolon-delimited lists, so keep the first entry only.
+  id_col <- intersect(c("Genes", "gene_name", "SYMBOL", "FeatureID", "Gene",
+                        "Protein.Group", "protein_id"), colnames(plot_df))[1]
+  labels <- if (!is.na(id_col)) as.character(plot_df[[id_col]]) else rownames(plot_df)
+  if (is.null(labels)) return(NULL)
+  labels <- sub(";.*$", "", trimws(labels))
+  labels[is.na(labels) | !nzchar(labels)] <- NA_character_
+
+  plot_df$.label <- labels
+  plot_df$.score <- abs(plot_df$.logFC) * plot_df$.neglog10p
+
+  eligible <- plot_df[plot_df$.direction != "NS" & !is.na(plot_df$.label), , drop = FALSE]
+  if (nrow(eligible) == 0) return(NULL)
+
+  picked <- lapply(c("Up", "Down"), function(dir) {
+    d <- eligible[eligible$.direction == dir, , drop = FALSE]
+    if (nrow(d) == 0) return(NULL)
+    d[order(d$.score, decreasing = TRUE)[seq_len(min(n_label, nrow(d)))], , drop = FALSE]
+  })
+  out <- do.call(rbind, picked[!vapply(picked, is.null, logical(1))])
+  if (is.null(out) || nrow(out) == 0) NULL else out
 }
 
 #' MA plot for a single DE table (one contrast)
