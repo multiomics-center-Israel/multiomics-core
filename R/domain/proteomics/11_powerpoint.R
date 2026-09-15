@@ -291,8 +291,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
 
         # Compute per-contrast stats from summary_df
         padj_vals <- as.numeric(de_res$summary_df[[paste0("padj.imputs.", ctr)]])
-        lfc_vals  <- as.numeric(de_res$summary_df[[paste0("linearFC.imputs.", ctr)]])
-        log2fc    <- signed_fc_to_log2(lfc_vals)
+        log2fc    <- resolve_log2fc(de_res$summary_df, ctr)
 
         is_sig <- !is.na(padj_vals) & padj_vals <= p_cut &
                   !is.na(log2fc) & abs(log2fc) >= lfc_cut
@@ -379,7 +378,7 @@ generate_proteomics_pptx <- function(pre, qc_res, de_res, pathway_res,
 
         padj_vals <- as.numeric(sdf[[paste0("padj.imputs.", ctr)]])
         lfc_vals  <- as.numeric(sdf[[paste0("linearFC.imputs.", ctr)]])
-        log2fc    <- signed_fc_to_log2(lfc_vals)
+        log2fc    <- resolve_log2fc(sdf, ctr)
 
         is_sig <- !is.na(padj_vals) & padj_vals <= p_cut &
                   !is.na(log2fc) & abs(log2fc) >= lfc_cut
