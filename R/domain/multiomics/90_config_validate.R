@@ -4,7 +4,8 @@
 #' at least 2 omics modes are configured.
 #'
 #' @param multiomics_cfg Config object at config$modes$multiomics
-#' @return Invisibly returns TRUE if valid, stops with error otherwise
+#' @return The validated multiomics config section, with defaults applied; the
+#'   caller assigns it back to config$modes$multiomics. Stops on error.
 validate_multiomics_config <- function(multiomics_cfg) {
 
     if (is.null(multiomics_cfg)) {
@@ -177,5 +178,5 @@ validate_multiomics_config <- function(multiomics_cfg) {
     }
 
     message("Multi-omics config validation passed")
-    invisible(TRUE)
+    multiomics_cfg
 }

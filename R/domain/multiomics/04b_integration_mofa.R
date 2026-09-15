@@ -369,10 +369,19 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
         }
     }, error = function(e) message("Failed to create weight plots: ", e$message))
 
-    # 4. Gene-symbol weight plot for proteomics (separate tab)
+    # 4. Gene-symbol weight plot for proteomics (separate tab).
+    #    Only when symbols actually resolve: for a non-model organism the map is
+    #    empty or maps every id to itself, and the plot was an exact duplicate of
+    #    the panel above it. The pathway view written by the loadings-enrichment
+    #    step is the informative second panel in that case.
     tryCatch({
-        if ("proteomics" %in% names(mofa_results$weights) && !is.null(gene_symbol_map) &&
-            length(gene_symbol_map) > 0) {
+        symbols_resolve <- !is.null(gene_symbol_map) && length(gene_symbol_map) > 0 &&
+            {
+                ids <- rownames(mofa_results$weights[["proteomics"]])
+                mapped <- gene_symbol_map[ids]
+                sum(!is.na(mapped) & mapped != ids) > 0
+            }
+        if ("proteomics" %in% names(mofa_results$weights) && isTRUE(symbols_resolve)) {
             p <- plot_mofa_top_weights(mofa_results$weights[["proteomics"]],
                                        "proteomics (Gene Symbol)", n_top = 20,
                                        feature_name_map = gene_symbol_map)
@@ -381,6 +390,10 @@ create_mofa_plots <- function(mofa_model, mofa_results, metadata, config, out_di
                 file.path(out_dir, "mofa_top_weights_proteomics_genesymbol.png"),
                 plot = p, width = 10, height = 8, dpi = 300
             )
+        } else if ("proteomics" %in% names(mofa_results$weights)) {
+            message("MOFA2: no gene symbols resolve for proteomics; ",
+                    "skipping the duplicate symbol panel. The per-factor pathway ",
+                    "barplots under loadings_enrichment/ carry the interpretation.")
         }
     }, error = function(e) message("Failed to create gene-symbol weight plot: ", e$message))
 
@@ -543,6 +556,18 @@ plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
 
         # Guard against NA/empty display names
         display_names[is.na(display_names) | display_names == ""] <- feat_ids[is.na(display_names) | display_names == ""]
+
+        # Shorten before plotting. A non-model annotation produces ids like
+        # "evm.model.ptg000805l_np1212.7.10.6a34fca0|Spalangia_cameroni"; at full
+        # length the axis text consumed the entire device and the proteomics panel
+        # rendered with no visible bars at all. Drop the species tag, which is
+        # constant within a view and carries nothing, then truncate from the LEFT
+        # so the distinguishing tail survives.
+        display_names <- sub("\\|.*$", "", display_names)
+        too_long <- nchar(display_names) > 34
+        display_names[too_long] <- paste0("...", substring(display_names[too_long],
+                                                           nchar(display_names[too_long]) - 30))
+
         # Make unique to avoid factor() issues with duplicates
         display_names <- make.unique(display_names, sep = " ")
 
