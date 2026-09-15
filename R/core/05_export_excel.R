@@ -169,9 +169,14 @@ add_cutoffs_sheet_legacy <- function(wb, config, mode = "proteomics", sheet = "C
 #' without openxlsx.
 #'
 #' @param mode "rna", "proteomics", or any other mode (generic fallback).
+#' @param multi_imputation Logical; the proteomics \code{imputation$multi_imputation}
+#'   setting this workbook was produced under. Under multi-imputation the Mean.
+#'   columns come from the first run while log2FC.imputs is the consensus across
+#'   all of them, so the reconciliation the notes describe is different. Ignored
+#'   for other modes.
 #' @return List with \code{glossary} (data.frame: Column, Meaning) and
 #'   \code{notes} (character vector, one paragraph per element).
-build_provenance_notes <- function(mode = "rna") {
+build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
     fc_rule <- paste(
         "linearFC = 2^log2FC when log2FC is at least 0, and -1 / 2^log2FC when it is negative.",
         "It is a signed linear fold change, not a log: linearFC = -1.61 means 1.61-fold lower in the numerator group."
@@ -214,6 +219,13 @@ build_provenance_notes <- function(mode = "rna") {
             "A large, one-sided gap between them across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC collapses towards zero while log2FC_from_means still carries the effect."
         )
     } else if (identical(mode, "proteomics")) {
+        # Under multi-imputation the Mean. columns come from imputations[[1]]
+        # while log2FC.imputs is the consensus across every run, so the two do
+        # not reconcile on a partially measured feature. The glossary and the
+        # reconciliation notes have to say which of those two worlds this
+        # workbook is from.
+        multi_imp <- !isFALSE(multi_imputation)
+
         glossary <- data.frame(
             Column = c(
                 "<sample>",
@@ -224,7 +236,6 @@ build_provenance_notes <- function(mode = "rna") {
                 "Mean.<group>",
                 "CV.<group>",
                 "log2FC.imputs.<contrast>",
-                "log2FC_from_means.<contrast>",
                 "linearFC.imputs.<contrast>",
                 "pvalue.imputs.<contrast>",
                 "padj.imputs.<contrast>",
@@ -234,12 +245,19 @@ build_provenance_notes <- function(mode = "rna") {
                 "log2 intensity after filtering and normalization, before imputation. Blank cells were not measured.",
                 "Arithmetic mean of the measured <sample> values in that group, ignoring blanks. Pre-imputation.",
                 "How many of that group's samples were actually measured. Read Mean.raw. and log2FC_from_raw against this: a mean over 2 of 5 replicates is not the same evidence as one over 5 of 5.",
-                "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC_from_means.",
-                "The same matrix after imputation, for one representative imputation run. This is the kind of matrix limma was fitted on.",
-                "Arithmetic mean of the .norm log2 values across the replicates of that group.",
+                "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC.imputs exactly.",
+                if (multi_imp) {
+                    "The same matrix after imputation, from the first of the imputation runs -- the run limma was fitted on first, not a separate preprocessing draw."
+                } else {
+                    "The same matrix after imputation. This is the exact matrix limma was fitted on, not a separate draw."
+                },
+                if (multi_imp) {
+                    "Arithmetic mean of the .norm log2 values across the replicates of that group, over the first imputation run. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs exactly for a fully measured feature; see note 3 for partially measured ones."
+                } else {
+                    "Arithmetic mean of the .norm log2 values across the replicates of that group. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs."
+                },
                 "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
                 "log2 of the mean linear ratio across the imputation runs: log2( mean of 2^logFC over runs ).",
-                "Mean.<numerator> minus Mean.<denominator>, computed from the two Mean columns in this row (a difference, because the values are log2). No model behind it.",
                 fc_rule,
                 "Quantile across imputation runs of the moderated t-test p-value.",
                 "Quantile across imputation runs of the Benjamini-Hochberg adjusted p-value.",
@@ -247,14 +265,35 @@ build_provenance_notes <- function(mode = "rna") {
             ),
             stringsAsFactors = FALSE
         )
+
+        if (multi_imp) {
+            glossary <- rbind(glossary, data.frame(
+                Column = "log2FC_from_means.<contrast>",
+                Meaning = "Mean.<numerator> minus Mean.<denominator>, computed from the two Mean cells in this row. It is the first imputation run's coefficient. Comparing it with log2FC.imputs shows how much the consensus across runs moved the estimate.",
+                stringsAsFactors = FALSE
+            ))
+        }
+
         notes <- c(
             "Reconciling the fold change from this row:",
-            "1. log2FC_from_means is Mean.<numerator> minus Mean.<denominator>, so it can be recomputed from the two Mean cells alone.",
+            if (multi_imp) {
+                "1. log2FC_from_means is Mean.<numerator> minus Mean.<denominator>, recomputable from the two Mean cells alone. This step is exact."
+            } else {
+                "1. log2FC.imputs is Mean.<numerator> minus Mean.<denominator>, recomputable from the two Mean cells alone. The Mean columns come from the same imputed matrix the model used, so this is exact for a two-group contrast."
+            },
             "2. Apply the linearFC rule above to log2FC.imputs. This step is exact.",
-            "log2FC_from_means and log2FC.imputs differ for two reasons: the reported statistic averages over all imputation runs while the Mean columns come from a single run, and limma reports a moderated model coefficient rather than a difference of group means.",
-            "The unimputed <sample> columns will differ again, because features with missing values contribute to the model only after imputation.",
-            "log2FC_from_raw is the same arithmetic on the measured values alone. Comparing it with log2FC_from_means shows how much of a fold change depends on imputed values; N.observed says how many values that was.",
-            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table."
+            if (multi_imp) {
+                paste(
+                    "3. log2FC.imputs is NOT that difference. This run used multi-imputation (imputation$multi_imputation: true), so log2FC.imputs is the consensus across every imputation run -- log2( mean of 2^logFC over runs ) -- while the Mean. columns come from the first run alone.",
+                    "For a feature measured in every sample the runs are identical and the two agree to floating-point precision. For a partially measured feature they differ, and that difference is the spread between imputation draws.",
+                    "log2FC_from_means is in the table so that gap is visible rather than unstated. To make the two agree exactly instead, set imputation$multi_imputation: false, which draws once."
+                )
+            } else {
+                "3. With imputation$multi_imputation: false the pipeline draws once, so log2FC.imputs is that draw's coefficient and step 1 reproduces it exactly. There is no separate log2FC_from_means column: it would repeat what log2FC.imputs already says."
+            },
+            "log2FC_from_raw is the same arithmetic on the MEASURED values only, ignoring blanks. Where a feature was fully measured the two agree exactly.",
+            "Where a feature was not fully measured, log2FC_from_raw and log2FC.imputs differ for two reasons: the imputed values are included in one and not the other, and the raw means may rest on unequal numbers of replicates per group. N.observed says how many values each raw mean rests on, and should be read alongside it.",
+            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect."
         )
     } else {
         glossary <- data.frame(
@@ -283,11 +322,14 @@ build_provenance_notes <- function(mode = "rna") {
 #' @param wb openxlsx workbook.
 #' @param mode Mode string, e.g. "rna" or "proteomics".
 #' @param sheet Sheet name (default "How to read").
+#' @param multi_imputation Logical; passed to \code{\link{build_provenance_notes}}
+#'   so the reconciliation notes match how many times this run imputed.
 #' @return TRUE, invisibly.
-add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read") {
+add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read",
+                                 multi_imputation = TRUE) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
 
-    info <- build_provenance_notes(mode)
+    info <- build_provenance_notes(mode, multi_imputation = multi_imputation)
 
     if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
     openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = FALSE)
@@ -588,7 +630,13 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                                  start_row = data_start_row + 1)
         }
         if (isTRUE(provenance_sheet)) {
-            add_provenance_sheet(wb, mode = mode)
+            # The notes describe a different reconciliation depending on how
+            # many times this run imputed, so read the setting rather than
+            # assuming the default.
+            add_provenance_sheet(
+                wb, mode = mode,
+                multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE
+            )
         }
         # openxlsx registers drawing/vml parts it will not write; leaving the
         # relationships in place produces a zip Excel offers to repair.
@@ -744,6 +792,10 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
         list(
             log2fc = paste0("log2FC.", contrast),
             log2fc_means = paste0("log2FC_from_means.", contrast),
+            log2fc_raw = paste0("log2FC_from_raw.", contrast),
+            # RNA has no measured-only estimate, so the means column is also the
+            # shrinkage comparison.
+            log2fc_check = paste0("log2FC_from_means.", contrast),
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
@@ -764,10 +816,22 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
             manual = paste0("manual_cutoffs.", contrast)
         )
     } else {
-        # Proteomics (uses imputation naming)
+        # Proteomics (uses imputation naming).
+        #
+        # log2fc_check is log2FC_from_raw, not log2FC_from_means: the Mean.
+        # columns come from the model's own imputed matrix, so under single
+        # imputation their difference IS the model coefficient and a shrinkage
+        # check against it would compare a number with itself. The measured-only
+        # estimate is the one genuinely free of the model.
+        #
+        # log2fc_means keeps the real column name. Whether that column is
+        # emitted is decided by build_final_results_proteomics() from
+        # imputation$multi_imputation -- see the comment there.
         list(
             log2fc = paste0("log2FC.imputs.", contrast),
             log2fc_means = paste0("log2FC_from_means.", contrast),
+            log2fc_raw = paste0("log2FC_from_raw.", contrast),
+            log2fc_check = paste0("log2FC_from_raw.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),
@@ -1175,7 +1239,8 @@ build_final_results_generic <- function(
   mean_cols = NULL,
   naive_log2fc = NULL,
   raw_stat_cols = NULL,
-  raw_log2fc = NULL
+  raw_log2fc = NULL,
+  naive_after_fc = FALSE
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -1413,19 +1478,38 @@ build_final_results_generic <- function(
         if (!is.null(cols$log2fc) && cols$log2fc %in% colnames(summary_df)) {
             base[[cols$log2fc]] <- summary_df[[cols$log2fc]][m]
         }
-        if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
-            cn %in% colnames(naive_log2fc)) {
-            base[[cols$log2fc_means]] <-
-                naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
+
+        naive_vals <- if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
+                          cn %in% colnames(naive_log2fc)) {
+            naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
+        } else {
+            NULL
+        }
+
+        # Where the means-based estimate sits differs by mode, and both
+        # placements are pinned contracts in test-fc-provenance.R ("P7"/"P9"):
+        # RNA reads log2FC then log2FC_from_means then linearFC, while
+        # proteomics keeps log2FC.imputs adjacent to linearFC.imputs and groups
+        # the model-free estimates after it, next to log2FC_from_raw.
+        if (!is.null(naive_vals) && !isTRUE(naive_after_fc)) {
+            base[[cols$log2fc_means]] <- naive_vals
         }
         base[[cols$fc]] <- fc_vals
+        if (!is.null(naive_vals) && isTRUE(naive_after_fc)) {
+            base[[cols$log2fc_means]] <- naive_vals
+        }
         # The same arithmetic on the measured values only. Placed after
         # linearFC rather than between log2FC and log2FC_from_means: that
         # adjacency is a pinned contract (test-fc-provenance.R, "P7"), and the
         # point of the column is the comparison with log2FC_from_means, which
         # stays two cells away either way.
-        if (!is.null(raw_log2fc) && cn %in% colnames(raw_log2fc)) {
-            base[[paste0("log2FC_from_raw.", cn)]] <-
+        # Keyed through cols$log2fc_raw, not paste0(..., cn): proteomics strips
+        # spaces from contrast names, so a contrast like "A vs B" was written as
+        # "log2FC_from_raw.A vs B" while every reader looked for the normalized
+        # "log2FC_from_raw.AvsB" and silently found nothing.
+        if (!is.null(raw_log2fc) && !is.null(cols$log2fc_raw) &&
+            cn %in% colnames(raw_log2fc)) {
+            base[[cols$log2fc_raw]] <-
                 raw_log2fc[[cn]][match(base[[feature_id_col]], rownames(raw_log2fc))]
         }
         base[[cols$p]] <- summary_df[[cols$p]][m]

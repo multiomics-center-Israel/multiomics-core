@@ -64,6 +64,17 @@ write_rnaseq_outputs_legacy <- function(pre, de_res, inputs, config, out_dir, cl
         final_results <- build_final_results_rnaseq(pre = pre, summary_df = summary_df, contrasts_df = inputs$contrasts, row_data = pre$row_data, config = config, norm_counts = norm_counts)
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 
+        # Alert the analyst if the model estimates have been flattened relative
+        # to the group means — the failure mode that reads as a vertical stripe
+        # at x = 0 in the volcano.
+        files <- c(files, run_log2fc_shrinkage_check(
+            de_stats     = final_results,
+            contrasts_df = inputs$contrasts,
+            mode         = "rna",
+            p_cutoff     = config$modes$rna$de$p_cutoff %||% 0.05,
+            out_dir      = dirs$datasets
+        ))
+
         # 4) Excel outputs
         # Extract excel_order from clustering_res if available
         excel_order <- if (!is.null(clustering_res)) clustering_res$excel_order else NULL

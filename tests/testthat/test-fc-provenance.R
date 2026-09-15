@@ -21,6 +21,7 @@
 #   P8 linearFC vs log2FC, each derived independently of the production code
 #   P9 log2FC_from_means: model-free estimate, and DESeq2 shrinkage detection
 #   P7 proteomics: log2FC.imputs and the imputed .norm block
+#   P10 the analyst-facing shrinkage alert (heavy shrinkage, x = 0 stripe)
 #   P6 build_provenance_notes documents every column family a mode emits
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -37,6 +38,7 @@ find_repo_file <- function(rel) {
 
 source(find_repo_file("R/core/01_io.R"))                        # normalize_contrast_name
 source(find_repo_file("R/core/05_export_excel.R"))
+source(find_repo_file("R/core/de_shrinkage_check.R"))
 source(find_repo_file("R/domain/rnaseq/00a_deseq_factory.R"))   # create_deseq_dataset
 source(find_repo_file("R/domain/rnaseq/01_expression.R"))       # compute_cpm
 source(find_repo_file("R/domain/rnaseq/04_de_summary.R"))
@@ -384,15 +386,64 @@ test_that("P7 proteomics final results carry the imputed block and group means",
     expect_equal(p2$S_2.norm, 7.5)
     # Means come from the imputed matrix, so the gap does not skew the group
     expect_equal(p2$Mean.S, mean(c(8, 7.5)))
-    # Stat block order: the model estimate, its model-free counterpart, then
-    # the linear presentation of the model estimate.
+    # Stat block order: the model estimate, then its linear presentation.
     nm <- names(fr)
     expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 1L],
-                 "log2FC_from_means.S_vs_NS")
-    expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 2L],
                  "linearFC.imputs.S_vs_NS")
-    # And it is recomputable from the two Mean cells in the same row
-    expect_equal(fr$log2FC_from_means.S_vs_NS, fr$Mean.S - fr$Mean.NS)
+    # The fixture runs multi_imputation: TRUE, so log2FC.imputs is the consensus
+    # across runs while the Mean. columns come from the first one. The two do not
+    # reconcile on a partially measured feature, and log2FC_from_means is what
+    # makes that visible.
+    expect_true("log2FC_from_means.S_vs_NS" %in% nm)
+    expect_true("log2FC_from_raw.S_vs_NS" %in% nm)
+})
+
+test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
+    meta <- prov_meta()
+    observed <- matrix(c(10, 10, 12, 12,
+                         8, NA, 9, 9),
+                       nrow = 2, byrow = TRUE,
+                       dimnames = list(c("p1", "p2"), meta$SampleID))
+    imputed <- observed
+    imputed["p2", "S_2"] <- 7.5
+    pre <- list(expr_filt = observed, expr_imp_single = imputed, meta = meta,
+                row_data = NULL)
+    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+    sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    single_cfg <- prot_config()
+    single_cfg$modes$proteomics$imputation$multi_imputation <- FALSE
+
+    fr_single <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = single_cfg
+    )
+    # One draw: log2FC.imputs IS the difference of the Mean. columns, so a
+    # separate column would repeat it.
+    expect_false("log2FC_from_means.S_vs_NS" %in% names(fr_single))
+    # The measured-only estimate is unconditional — it is the shrinkage
+    # comparison in both modes.
+    expect_true("log2FC_from_raw.S_vs_NS" %in% names(fr_single))
+
+    fr_multi <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = prot_config()
+    )
+    expect_true("log2FC_from_means.S_vs_NS" %in% names(fr_multi))
+    # And it really is the difference of the two Mean cells, not a copy of the
+    # consensus coefficient.
+    expect_equal(fr_multi$log2FC_from_means.S_vs_NS,
+                 fr_multi$Mean.S - fr_multi$Mean.NS)
+
+    # Placement: log2FC.imputs stays adjacent to linearFC.imputs, and the two
+    # model-free estimates sit together after it. Restoring log2FC_from_means
+    # between them would break the P7 adjacency, which is how this regressed
+    # the first time.
+    nm <- names(fr_multi)
+    i_lfc <- which(nm == "log2FC.imputs.S_vs_NS")
+    expect_equal(nm[i_lfc + 1L], "linearFC.imputs.S_vs_NS")
+    expect_true(which(nm == "log2FC_from_means.S_vs_NS") > i_lfc + 1L)
+    expect_true(which(nm == "log2FC_from_raw.S_vs_NS") > i_lfc + 1L)
 })
 
 
@@ -627,6 +678,126 @@ test_that("P9 DESeq2 shrinkage is visible as a gap against log2FC_from_means", {
 
 
 # =============================================================================
+# P10 — the analyst-facing shrinkage alert
+# =============================================================================
+shrink_table <- function(model_lfc, naive_lfc, padj) {
+    data.frame(
+        Gene                       = paste0("g", seq_along(model_lfc)),
+        log2FC.S_vs_NS             = model_lfc,
+        log2FC_from_means.S_vs_NS  = naive_lfc,
+        linearFC.S_vs_NS           = signif(ifelse(model_lfc >= 0, 2^model_lfc,
+                                                   -1 * (2^-model_lfc)), 3),
+        pvalue.S_vs_NS             = padj,
+        padj.S_vs_NS               = padj,
+        stringsAsFactors           = FALSE,
+        check.names                = FALSE
+    )
+}
+
+# 100 features with a real effect, 100 null ones. The null half exists to prove
+# it cannot drag the verdict either way (its ratio is 0/0-ish by construction).
+shrink_fixture <- function(factor_applied = 1) {
+    naive <- c(rep(c(2, -2), each = 50L), rep(c(0.002, -0.002), each = 50L))
+    model <- naive * factor_applied
+    padj  <- c(rep(1e-6, 100L), rep(0.9, 100L))
+    shrink_table(model, naive, padj)
+}
+
+test_that("P10 a healthy fit is not flagged", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "ok")
+    expect_equal(chk$median_ratio, 1)
+    expect_equal(chk$n_considered, 100)   # the null half is excluded by the floor
+    expect_equal(chk$frac_flat, 0)
+})
+
+test_that("P10 ordinary betaPrior-scale shrinkage is not flagged", {
+    # ~0.85 is what DESeq2 betaPrior produced in the P9 fixture; that is normal
+    # behaviour and must not fire the alert.
+    chk <- check_log2fc_shrinkage(shrink_fixture(0.85), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "ok")
+    expect_equal(chk$median_ratio, 0.85)
+})
+
+test_that("P10 heavy shrinkage is flagged as 'shrunk'", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(0.3), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "shrunk")
+    expect_equal(chk$median_ratio, 0.3)
+    expect_equal(chk$frac_flat, 0)        # shrunk, but not flattened to zero
+})
+
+test_that("P10 a collapse to zero is flagged as 'collapsed'", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1e-5), "S_vs_NS", mode = "rna")
+    expect_equal(chk$flag, "collapsed")
+    expect_equal(chk$frac_flat, 1)
+    # Every significant feature sits at log2FC ~ 0: the x = 0 volcano stripe
+    expect_equal(chk$frac_sig_flat, 1)
+    expect_equal(chk$n_significant, 100)
+})
+
+test_that("P10 the x = 0 stripe is detected even when the median ratio looks fine", {
+    # Most features are estimated correctly, so the median ratio is 1, but a
+    # block of significant features has been flattened. The median would miss
+    # this; the stripe check must not.
+    naive <- rep(c(2, -2), each = 100L)
+    model <- naive
+    model[1:30] <- 0                       # flattened, and significant below
+    padj  <- c(rep(1e-6, 100L), rep(1e-6, 100L))
+
+    chk <- check_log2fc_shrinkage(shrink_table(model, naive, padj), "S_vs_NS", mode = "rna")
+    expect_equal(chk$median_ratio, 1)      # the median is blind to it
+    expect_equal(chk$frac_sig_flat, 0.15)  # 30 of 200 significant features
+    expect_equal(chk$flag, "collapsed")
+})
+
+test_that("P10 null features cannot trigger the alert on their own", {
+    # This is the evm.TU.ptg000675l_np1212.2 situation: both estimates ~0, so
+    # their ratio is unstable and meaningless. The floor must exclude them.
+    naive <- rep(c(0.005, -0.005), each = 100L)
+    model <- naive / 4.6                   # a ratio of ~0.22, from noise alone
+    chk <- check_log2fc_shrinkage(shrink_table(model, naive, rep(0.99, 200L)),
+                                  "S_vs_NS", mode = "rna")
+    expect_equal(chk$n_considered, 0)
+    expect_true(is.na(chk$median_ratio))
+    expect_equal(chk$flag, "ok")
+})
+
+test_that("P10 the check is skipped, not errored, when the columns are absent", {
+    df <- prov_summary_df()                # has log2FC but no log2FC_from_means
+    expect_null(check_log2fc_shrinkage(df, "S_vs_NS", mode = "rna"))
+    expect_null(check_log2fc_shrinkage(df, "S_vs_NS", mode = "metabolomics"))
+})
+
+test_that("P10 the alert names the contrast, the symptom and the volcano stripe", {
+    chk <- check_log2fc_shrinkage(shrink_fixture(1e-5), "S_vs_NS", mode = "rna")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "S_vs_NS")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "COLLAPSED")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "x = 0")
+    expect_warning(warn_log2fc_shrinkage(chk, mode = "rna"), "log2fc_shrinkage_check.tsv")
+
+    # A healthy run reports, but does not warn
+    ok <- check_log2fc_shrinkage(shrink_fixture(1), "S_vs_NS", mode = "rna")
+    expect_silent(suppressMessages(warn_log2fc_shrinkage(ok, mode = "rna")))
+})
+
+test_that("P10 proteomics column naming resolves too", {
+    df <- data.frame(
+        FeatureID                      = paste0("p", 1:4),
+        `log2FC.imputs.S_vs_NS`        = c(2, -2, 2, -2),
+        # The proteomics shrinkage check compares the model estimate against
+        # the measured-values estimate, not against a difference of the
+        # model's own means (which would be the same number by construction).
+        `log2FC_from_raw.S_vs_NS`      = c(2, -2, 2, -2),
+        `padj.imputs.S_vs_NS`          = 1e-6,
+        stringsAsFactors = FALSE, check.names = FALSE
+    )
+    chk <- check_log2fc_shrinkage(df, "S_vs_NS", mode = "proteomics")
+    expect_equal(chk$median_ratio, 1)
+    expect_equal(chk$flag, "ok")
+})
+
+
+# =============================================================================
 # P6 — the "How to read" sheet documents what each mode actually emits
 # =============================================================================
 test_that("P6 provenance notes cover every column family the mode emits", {
@@ -637,8 +808,23 @@ test_that("P6 provenance notes cover every column family the mode emits", {
 
     prot <- build_provenance_notes("proteomics")
     expect_true(all(c("<sample>", "<sample>.norm", "Mean.<group>", "CV.<group>",
-                      "log2FC.imputs.<contrast>", "log2FC_from_means.<contrast>",
+                      "log2FC.imputs.<contrast>", "log2FC_from_raw.<contrast>",
+                      "Mean.raw.<group>", "N.observed.<group>",
                       "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
+
+    # The glossary must describe the workbook it is bound into, and the two
+    # imputation modes produce different workbooks.
+    expect_true("log2FC_from_means.<contrast>" %in% prot$glossary$Column)
+    prot_single <- build_provenance_notes("proteomics", multi_imputation = FALSE)
+    expect_false("log2FC_from_means.<contrast>" %in% prot_single$glossary$Column)
+
+    # Under multi-imputation the notes must say the Mean. columns are one run
+    # and log2FC.imputs is the consensus — the whole point of the distinction.
+    expect_true(any(grepl("consensus across every imputation run", prot$notes)))
+    expect_true(any(grepl("multi_imputation", prot$notes)))
+    # Under single imputation they must say step 1 reproduces it exactly.
+    expect_true(any(grepl("reproduces it exactly", prot_single$notes)))
+    expect_false(any(grepl("consensus across every imputation run", prot_single$notes)))
 
     # Both must name the shrinkage comparison the naive column exists for
     expect_true(any(grepl("shrinkage", rna$notes)))
@@ -652,4 +838,131 @@ test_that("P6 provenance notes cover every column family the mode emits", {
 
     # Unknown modes still get a usable glossary rather than an error
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")
+})
+
+# ---------------------------------------------------------------------------
+# P9 — a contrast name with spaces must not silently skip the shrinkage check
+#
+# Proteomics strips spaces from contrast names (normalize_contrast_name), so
+# every reader looks for "log2FC_from_raw.AvsB". The builder used to write the
+# column with the raw name, "log2FC_from_raw.A vs B". The two never met: the
+# membership test in check_log2fc_shrinkage() failed, the contrast was dropped,
+# and no warning and no log2fc_shrinkage_check.tsv were produced for it — with
+# nothing in the run log to say the check had not run.
+# ---------------------------------------------------------------------------
+
+spaced_contrasts <- function() {
+    data.frame(
+        Contrast_name = "S vs NS",
+        Factor        = "condition",
+        Numerator     = "S",
+        Denominator   = "NS",
+        stringsAsFactors = FALSE
+    )
+}
+
+# The DE step keys its own tables on the contrast name as the user wrote it, and
+# summarize_limma_mult_imputation() normalizes it on the way into summary_df. To
+# exercise the spaced-name path end to end the runs have to carry the spaced
+# name too, otherwise summary_df comes back keyed on S_vs_NS and nothing lines up.
+spaced_prot_runs <- function(n_runs = 3) {
+    lapply(prot_runs(n_runs), function(run) {
+        names(run) <- "S vs NS"
+        run
+    })
+}
+
+test_that("P9 the raw column is keyed the way get_contrast_cols reads it", {
+    cols <- get_contrast_cols("S vs NS", mode = "proteomics")
+    expect_equal(cols$log2fc_raw, "log2FC_from_raw.SvsNS")
+    # For proteomics the raw column IS the shrinkage comparison — the means
+    # column is a different column with a different job.
+    expect_equal(cols$log2fc_check, cols$log2fc_raw)
+    expect_equal(cols$log2fc_means, "log2FC_from_means.SvsNS")
+    expect_false(identical(cols$log2fc_check, cols$log2fc_means))
+
+    # RNA has no measured-only estimate, so the two coincide there.
+    rna_cols <- get_contrast_cols("S_vs_NS", mode = "rna")
+    expect_equal(rna_cols$log2fc_check, rna_cols$log2fc_means)
+
+    # RNA keeps spaces, so its key is the contrast name unchanged.
+    expect_equal(get_contrast_cols("S vs NS", mode = "rna")$log2fc_raw,
+                 "log2FC_from_raw.S vs NS")
+})
+
+test_that("P9 a spaced proteomics contrast still produces the raw column", {
+    meta <- prov_meta()
+    observed <- matrix(c(10, 10, 12, 12,
+                         8, NA, 9, 9),
+                       nrow = 2, byrow = TRUE,
+                       dimnames = list(c("p1", "p2"), meta$SampleID))
+    imputed <- observed
+    imputed["p2", "S_2"] <- 7.5
+
+    pre <- list(expr_filt = observed, expr_imp_single = imputed, meta = meta,
+                row_data = NULL)
+    sdf <- summarize_limma_mult_imputation(spaced_prot_runs(), prot_config())
+    sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    # The DE step normalized the name on the way in, so the stat columns are
+    # already keyed on SvsNS.
+    expect_true("log2FC.imputs.SvsNS" %in% names(sdf))
+
+    fr <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = spaced_contrasts(),
+        feature_id_col = "FeatureID", config = prot_config()
+    )
+
+    nm <- names(fr)
+    # Written under the normalized key...
+    expect_true("log2FC_from_raw.SvsNS" %in% nm)
+    # ...and never under the raw one, which no reader looks for.
+    expect_false("log2FC_from_raw.S vs NS" %in% nm)
+
+    # And the check can now actually reach it end to end.
+    chk <- check_log2fc_shrinkage(de_stats = fr, contrasts = "S vs NS",
+                                  mode = "proteomics")
+    expect_false(is.null(chk))
+})
+
+test_that("P9 the shrinkage check reaches a spaced contrast instead of skipping it", {
+    # Model estimates flattened to a tenth of the measured ones: the check must
+    # see the pair and flag it. Before the fix it returned NULL for this
+    # contrast because the raw column name did not match.
+    de_stats <- data.frame(
+        FeatureID                  = paste0("p", 1:6),
+        `log2FC.imputs.SvsNS`      = c(0.2, -0.2, 0.3, -0.3, 0.25, -0.25),
+        `log2FC_from_raw.SvsNS`    = c(2, -2, 3, -3, 2.5, -2.5),
+        `padj.imputs.SvsNS`        = rep(0.01, 6),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+
+    check <- check_log2fc_shrinkage(
+        de_stats = de_stats, contrasts = "S vs NS", mode = "proteomics"
+    )
+
+    expect_false(is.null(check))
+    expect_equal(nrow(check), 1L)
+    expect_equal(check$contrast, "S vs NS")   # reported as the user wrote it
+    expect_true(check$flag %in% c("shrunk", "collapsed"))
+})
+
+test_that("P9 the warning names the columns the mode actually writes", {
+    check <- data.frame(
+        contrast = "S vs NS", n_considered = 6L, median_ratio = 0.1,
+        frac_flat = 0, n_significant = 6L, frac_sig_flat = 0,
+        flag = "shrunk", stringsAsFactors = FALSE
+    )
+
+    msg <- tryCatch({
+        warn_log2fc_shrinkage(check, mode = "proteomics")
+        NA_character_
+    }, warning = function(w) conditionMessage(w))
+
+    expect_false(is.na(msg))
+    # Points at columns that exist in a proteomics workbook...
+    expect_true(grepl("log2FC.imputs.SvsNS", msg, fixed = TRUE))
+    expect_true(grepl("log2FC_from_raw.SvsNS", msg, fixed = TRUE))
+    # ...and never at log2FC_from_means, which proteomics no longer emits.
+    expect_false(grepl("log2FC_from_means", msg, fixed = TRUE))
 })
