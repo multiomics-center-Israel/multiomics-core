@@ -16,16 +16,8 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
     gene_ids <- rownames(rna_data$expr_work)
     protein_ids <- rownames(prot_data$expr_work)
 
-    # Check for custom mapping file: modes > multiomics, then global
-    custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
-    if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
-        # Fallback: global.gene_protein_mapping (relative to data dir)
-        gpm <- config$global$gene_protein_mapping
-        if (!is.null(gpm) && nzchar(gpm)) {
-            custom_map_file <- file.path(config$project$dir, config$paths$raw, gpm)
-        }
-    }
-
+    # Check for custom mapping file (resolved from config)
+    custom_map_file <- resolve_gene_protein_mapping_file(config)
     if (!is.null(custom_map_file) && file.exists(custom_map_file)) {
         message("Using gene-protein mapping file: ", basename(custom_map_file))
         return(load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids))
@@ -52,11 +44,119 @@ build_gene_protein_mapping <- function(rna_data, prot_data, config) {
 }
 
 
+#' Resolve the custom gene-protein mapping file path from config
+#'
+#' Looks up the mapping file first under the multiomics mode, then the global
+#' setting (resolved relative to the raw data directory). Returns NULL when no
+#' path is configured.
+#'
+#' @param config Full config object.
+#' @return Character path to the mapping file, or NULL if none is configured.
+resolve_gene_protein_mapping_file <- function(config) {
+    custom_map_file <- config$modes$multiomics$gene_protein_mapping_file
+    if (!is.null(custom_map_file) && file.exists(custom_map_file)) {
+        return(custom_map_file)
+    }
+    gpm <- config$global$gene_protein_mapping
+    if (!is.null(gpm) && nzchar(gpm)) {
+        return(file.path(config$project$dir, config$paths$raw, gpm))
+    }
+    NULL
+}
+
+
+#' Build a gene-protein mapping from scratch for a given set of IDs
+#'
+#' Reads the configured custom mapping file directly and filters it to the
+#' supplied gene and protein IDs. Deliberately independent of the harmonized
+#' MultiAssayExperiment, so downstream steps (e.g. concordance) can rebuild the
+#' mapping from the original ID space rather than trusting harmonized
+#' (\code{GENE_*}) feature IDs.
+#'
+#' When \code{modes$multiomics$require_one_to_one_mapping} is TRUE, the same
+#' 1:1 filter that harmonization applies is applied here, at the same scope.
+#' The order is: narrow to the experiment's measured IDs, judge ambiguity, then
+#' narrow to the supplied (DE) IDs. Both ends of that order matter:
+#' \itemize{
+#'   \item Judging ambiguity on the whole file would drop a valid pair whenever
+#'     a reusable mapping file lists an isoform that this experiment never
+#'     measured — there is no ambiguity to resolve if only one side was observed.
+#'   \item Judging it after narrowing to the DE IDs would call a gene
+#'     unambiguous just because one of its proteins missed the DE cutoffs,
+#'     making "1:1" drift with the cutoffs.
+#' }
+#'
+#' @param gene_ids Character vector of RNA-seq gene IDs, in their original space.
+#' @param protein_ids Character vector of proteomics protein IDs, original space.
+#' @param config Full config object.
+#' @param scope_gene_ids Gene IDs measured in this experiment (the RNA
+#'   expression matrix rownames), defining the scope at which ambiguity is
+#'   judged. NULL falls back to the whole mapping file.
+#' @param scope_protein_ids Protein IDs measured in this experiment, likewise.
+#' @return Data frame (gene_id, protein_id, mapping_source[, gene_symbol]), or
+#'   NULL if no custom mapping file is configured or it cannot be read.
+build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config,
+                                                scope_gene_ids = NULL,
+                                                scope_protein_ids = NULL) {
+    custom_map_file <- resolve_gene_protein_mapping_file(config)
+    if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
+        return(NULL)
+    }
+    mapping <- tryCatch(
+        load_custom_gene_protein_mapping(custom_map_file),
+        error = function(e) {
+            warning("Could not read gene-protein mapping file: ", e$message)
+            NULL
+        }
+    )
+    if (is.null(mapping)) return(NULL)
+
+    # Same scope harmonization uses (build_gene_protein_mapping() narrows to the
+    # expression IDs, then 01_mod_harmonization.R applies the filter).
+    mapping <- narrow_mapping_to_ids(
+        mapping,
+        gene_ids = scope_gene_ids,
+        protein_ids = scope_protein_ids
+    )
+
+    # This mapping replaces the harmonized one for concordance, so it must honour
+    # the same setting: otherwise a gene mapped to several proteins enters the
+    # concordance table once per protein and gets extra weight in the reported r.
+    if (isTRUE(config$modes$multiomics$require_one_to_one_mapping)) {
+        mapping <- filter_to_one_to_one_mapping(mapping)
+    }
+
+    narrow_mapping_to_ids(mapping, gene_ids = gene_ids, protein_ids = protein_ids)
+}
+
+
+#' Narrow a gene-protein mapping to a given ID space
+#'
+#' @param mapping_df Mapping data frame with gene_id / protein_id columns.
+#' @param gene_ids Gene IDs to keep, or NULL to keep every gene.
+#' @param protein_ids Protein IDs to keep, or NULL to keep every protein.
+#' @return The mapping restricted to rows whose gene AND protein are in scope.
+narrow_mapping_to_ids <- function(mapping_df, gene_ids = NULL, protein_ids = NULL) {
+    if (is.null(mapping_df) || nrow(mapping_df) == 0) return(mapping_df)
+
+    keep <- rep(TRUE, nrow(mapping_df))
+    if (!is.null(gene_ids))    keep <- keep & mapping_df$gene_id %in% gene_ids
+    if (!is.null(protein_ids)) keep <- keep & mapping_df$protein_id %in% protein_ids
+
+    mapping_df[keep, , drop = FALSE]
+}
+
+
 #' Load custom gene-protein mapping from file
 #'
 #' Accepts files with gene_id + protein_id columns, or gene_id + uniprot_id.
 #' Also stores gene_symbol if present for downstream correlation analysis.
-load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
+#'
+#' @param file_path Path to the mapping CSV.
+#' @param gene_ids Gene IDs to narrow to, or NULL to return the whole file.
+#' @param protein_ids Protein IDs to narrow to, or NULL to return the whole file.
+#' @return Data frame (gene_id, protein_id, mapping_source[, gene_symbol]).
+load_custom_gene_protein_mapping <- function(file_path, gene_ids = NULL, protein_ids = NULL) {
     df <- read.csv(file_path, stringsAsFactors = FALSE)
 
     # Normalize: accept uniprot_id as protein_id alias
@@ -76,7 +176,7 @@ load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
     }
 
     # Filter to present IDs
-    df <- df[df$gene_id %in% gene_ids & df$protein_id %in% protein_ids, ]
+    df <- narrow_mapping_to_ids(df, gene_ids = gene_ids, protein_ids = protein_ids)
     df$mapping_source <- "custom_file"
 
     keep_cols <- c("gene_id", "protein_id", "mapping_source")
