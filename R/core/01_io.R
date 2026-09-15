@@ -33,13 +33,13 @@ normalize_contrast_name <- function(x) {
 #'     respects the header's column count does.
 #' }
 #'
-#' So the separator is detected from the header line, then the file is read with
-#' readr, which keeps the header's column count and warns rather than shifting.
-#' The base fallback keeps the detected separator; it cannot avoid the row-name
-#' heuristic, but it does not add a wrong-delimiter failure on top of it.
-#'
-#' Lives here rather than in a report template so the report modes can share one
-#' reader and this behaviour can be tested.
+#' \code{read_table_auto()} already reads with readr, so it does not shift; what
+#' it cannot do is spot a sheet whose extension lies about its delimiter, since
+#' it decides from the extension alone. This wrapper reads the separator off the
+#' header line and hands it down, and returns NULL instead of erroring so a
+#' report chunk can carry on without the sheet. Everything else -- the Latin1
+#' retry, the character sanitization, the data.frame conversion -- is
+#' \code{read_table_auto()}'s and is not duplicated here.
 #'
 #' @param path Path to the sample sheet (CSV or TSV).
 #' @return A data.frame, or \code{NULL} when \code{path} is missing, empty or
@@ -48,23 +48,9 @@ read_samplesheet <- function(path) {
   if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
 
   l1  <- tryCatch(readLines(path, n = 1, warn = FALSE), error = function(e) character(0))
-  tab <- length(l1) > 0 && grepl("\t", l1, fixed = TRUE)
+  sep <- if (length(l1) > 0 && grepl("\t", l1, fixed = TRUE)) "\t" else ","
 
-  if (requireNamespace("readr", quietly = TRUE)) {
-    df <- tryCatch(
-      suppressWarnings(as.data.frame(
-        if (tab) readr::read_tsv(path, show_col_types = FALSE)
-        else     readr::read_csv(path, show_col_types = FALSE),
-        stringsAsFactors = FALSE)),
-      error = function(e) NULL
-    )
-    if (!is.null(df) && ncol(df) > 0) return(df)
-  }
-
-  tryCatch(
-    read.delim(path, sep = if (tab) "\t" else ",", stringsAsFactors = FALSE),
-    error = function(e) NULL
-  )
+  tryCatch(read_table_auto(path, sep = sep), error = function(e) NULL)
 }
 
 #' Load omics input files from config
@@ -264,9 +250,18 @@ sanitize_character_columns <- function(df, source = "input") {
 }
 
 #' Read a table automatically detecting TSV vs CSV by extension
-read_table_auto <- function(path) {
+#'
+#' @param path Path to the file.
+#' @param sep Optional separator, \code{"\t"} or \code{","}. Overrides the
+#'   extension, for callers that have determined the delimiter another way (see
+#'   \code{\link{read_samplesheet}}, which reads it off the header because a
+#'   sample sheet's extension often lies). \code{NULL} keeps the extension rule,
+#'   so existing callers are unaffected.
+#' @return A data.frame.
+read_table_auto <- function(path, sep = NULL) {
   ext <- tolower(tools::file_ext(path))
-  read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+  use_tsv <- if (is.null(sep)) ext %in% c("tsv", "txt") else identical(sep, "\t")
+  read_fn <- if (use_tsv) readr::read_tsv else readr::read_csv
   df <- tryCatch(
     read_fn(path, show_col_types = FALSE),
     error = function(e) {
