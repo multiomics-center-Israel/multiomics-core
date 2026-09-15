@@ -152,10 +152,14 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
         return(NULL)
     }
 
-    # Build per-contrast DE tables with gene symbols
+    # Build per-contrast DE tables. When annotation is skipped (non-model runs
+    # whose custom GMT is keyed on the raw Protein.Group FeatureID), do NOT remap
+    # FeatureID to Genes symbols — the DIA-NN Genes column may hold description
+    # text rather than symbols, which would break the FeatureID<->GMT match.
+    skip_symbol_remap <- isTRUE((cfg$annotation %||% list())$skip_annotation)
     de_tables <- lapply(setNames(contrasts, contrasts), function(cn) {
         tbl <- extract_de_table_for_pathway(summary_df, cn, config)
-        map_proteins_to_gene_symbols(tbl, summary_df, config)
+        if (skip_symbol_remap) tbl else map_proteins_to_gene_symbols(tbl, summary_df, config)
     })
 
     # ------------------------------------------------------------------
