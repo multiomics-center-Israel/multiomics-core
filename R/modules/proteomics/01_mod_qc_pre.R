@@ -60,8 +60,13 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     # ---------- PCA on the full matrix, named for the report dropdown ----------
     # PCA_PC1.vs.PC2.png above is the same data, but the dropdown needs a panel
     # whose filename says "all" so "all proteins" can sit beside the top-variable
-    # and robust subsets rather than being an unlabelled special case.
+    # and complete-case sets rather than being an unlabelled special case.
+    #
+    # Every dropdown panel below removes its file before it is rebuilt. A panel
+    # that is skipped or fails would otherwise leave an earlier run's image in
+    # the output directory, and the report would show it as this run's.
     f_pca_all <- file.path(out_qc, "PCA_all.png")
+    if (file.exists(f_pca_all)) file.remove(f_pca_all)
     tryCatch({
         p_all <- qc_pca_scatter(pre$expr_imp_single, pre$meta, cfg, pcs = c(1, 2),
                                 out_file = f_pca_all)
@@ -72,32 +77,37 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
         message(sprintf("  Could not generate all-protein PCA: %s", e$message))
     })
 
-    # ---------- PCA on the most robustly identified proteins ----------
-    # "Robust" = at most one sample needed imputing. These rows rest on measured
-    # values in at least n-1 samples, so their PCA cannot be driven by the
-    # imputation draw. Skipped when imputation flags are absent (method: none)
-    # or when the subset is too small to decompose.
+    # ---------- PCA on proteins measured in every sample ----------
+    # Complete-case proteins carry no imputed value at all, so their PCA cannot
+    # be driven by the imputation draw (select_complete_case_features() says why
+    # one imputed value per protein is not enough). Skipped when the configured
+    # method is "none": the flags are then plain missingness, not imputation.
+    f_pca_robust <- file.path(out_qc, "PCA_robust.png")
+    if (file.exists(f_pca_robust)) file.remove(f_pca_robust)
+    imp_method <- cfg$imputation$method %||% "perseus_like"
     imp_flag <- pre$imputation_qc$imputed_flag
-    if (!is.null(imp_flag)) {
-        n_imputed_per_feature <- rowSums(imp_flag, na.rm = TRUE)
-        robust_idx <- which(n_imputed_per_feature <= 1)
+    if (identical(imp_method, "none")) {
+        message("  Skipping complete-case PCA: imputation.method is 'none', so nothing was imputed")
+    } else if (is.null(imp_flag)) {
+        message("  Skipping complete-case PCA: no imputation flags in the preprocessing output")
+    } else {
+        robust_idx <- select_complete_case_features(imp_flag)
         if (length(robust_idx) >= 3) {
             mat_robust <- pre$expr_imp_single[robust_idx, , drop = FALSE]
-            f_pca_robust <- file.path(out_qc, "PCA_robust.png")
             tryCatch({
                 p_robust <- qc_pca_scatter(mat_robust, pre$meta, cfg, pcs = c(1, 2),
                                            out_file = f_pca_robust)
                 files <- c(files, f_pca_robust)
                 plots$pca_robust <- p_robust
                 message(sprintf(
-                    "  Generated PCA with %d robustly identified proteins (<=1 imputed value)",
-                    length(robust_idx)))
+                    "  Generated PCA with the %d of %d proteins measured in every sample",
+                    length(robust_idx), nrow(imp_flag)))
             }, error = function(e) {
-                message(sprintf("  Could not generate robust-protein PCA: %s", e$message))
+                message(sprintf("  Could not generate complete-case PCA: %s", e$message))
             })
         } else {
             message(sprintf(
-                "  Skipping robust-protein PCA: only %d proteins have <=1 imputed value",
+                "  Skipping complete-case PCA: only %d proteins were measured in every sample",
                 length(robust_idx)))
         }
     }
@@ -108,12 +118,13 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     cfg_temp <- cfg
 
     for (n_top in n_top_values) {
+        f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
+        if (file.exists(f_pca_top)) file.remove(f_pca_top)
         if (n_top <= n_features) {
             prot_vars <- apply(pre$expr_imp_single, 1, var, na.rm = TRUE)
             top_idx <- order(prot_vars, decreasing = TRUE)[1:n_top]
             mat_top <- pre$expr_imp_single[top_idx, , drop = FALSE]
 
-            f_pca_top <- file.path(out_qc, sprintf("PCA_top%d.png", n_top))
             tryCatch({
                 p_top <- qc_pca_scatter(mat_top, pre$meta, cfg_temp, pcs = c(1, 2), out_file = f_pca_top)
                 files <- c(files, f_pca_top)
@@ -126,6 +137,13 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
     }
 
     # ---------- PCA Subsets ----------
+    # Sample subsets are written as PCA_subset_<name>.png, a namespace of their
+    # own: a subset named "all", "robust" or "top500" can no longer overwrite a
+    # dropdown panel, and the report finds subsets by that prefix alone. Earlier
+    # subset images are cleared first, so a removed or renamed subset does not
+    # stay in the report.
+    old_subset_pngs <- list.files(out_qc, pattern = "^PCA_subset_.*\\.png$", full.names = TRUE)
+    if (length(old_subset_pngs) > 0) file.remove(old_subset_pngs)
     pca_subsets <- cfg$qc$pca_subsets
     if (!is.null(pca_subsets) && length(pca_subsets) > 0) {
         group_col_name <- cfg$effects$color %||% "Condition"
@@ -150,7 +168,7 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
             meta_subset <- pre$meta[keep_samples, , drop = FALSE]
 
             safe_name <- gsub("[^a-zA-Z0-9_]", "_", subset_name)
-            f_pca_sub <- file.path(out_qc, sprintf("PCA_%s.png", safe_name))
+            f_pca_sub <- file.path(out_qc, sprintf("PCA_subset_%s.png", safe_name))
             tryCatch({
                 p_sub <- qc_pca_scatter(mat_subset, meta_subset, cfg, pcs = c(1, 2), out_file = f_pca_sub)
                 files <- c(files, f_pca_sub)

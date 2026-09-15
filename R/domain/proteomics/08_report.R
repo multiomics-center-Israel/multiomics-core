@@ -199,3 +199,54 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
 
     out_html
 }
+
+#' PCA feature-set panels for the report's protein-subset dropdown
+#'
+#' Lists the panel images the QC module wrote, in the order the dropdown shows
+#' them: all proteins, the top-variable sets from largest to smallest, then the
+#' complete-case set. Kept out of the template so the order and labels are
+#' tested against the code the report actually runs.
+#'
+#' @param diag_dir Directory holding the proteomics diagnostic plots.
+#' @return Data frame with columns \code{key} (dropdown value), \code{path} and
+#'   \code{label}, one row per panel whose image exists; zero rows if none do.
+list_pca_feature_panels <- function(diag_dir) {
+    panels <- data.frame(key = character(0), path = character(0),
+                         label = character(0), stringsAsFactors = FALSE)
+    add <- function(panels, key, path, label) {
+        if (!file.exists(path)) return(panels)
+        rbind(panels, data.frame(key = key, path = path, label = label,
+                                 stringsAsFactors = FALSE))
+    }
+
+    # All proteins: the named panel, else the main PC1-vs-PC2 plot, which is
+    # computed on the same full matrix (runs before PCA_all.png have only that).
+    all_path <- file.path(diag_dir, "PCA_all.png")
+    if (!file.exists(all_path)) all_path <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
+    panels <- add(panels, "all", all_path, "All proteins")
+
+    top_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
+    n_top <- as.numeric(sub("^PCA_top([0-9]+)\\.png$", "\\1", basename(top_files)))
+    for (i in order(n_top, decreasing = TRUE)) {
+        panels <- add(panels, sprintf("top%d", n_top[i]), top_files[i],
+                      sprintf("Top %s variable proteins", format(n_top[i], big.mark = ",")))
+    }
+
+    add(panels, "robust", file.path(diag_dir, "PCA_robust.png"),
+        "Proteins measured in every sample (no imputed values)")
+}
+
+#' Sample-subset PCA panels for the report's Subsets section
+#'
+#' Only files named \code{PCA_subset_<name>.png} count, so the dropdown's
+#' feature-set panels (all, top-N, complete-case) and the PC1/PC3 plots are
+#' never listed as sample subsets.
+#'
+#' @param diag_dir Directory holding the proteomics diagnostic plots.
+#' @return Data frame with columns \code{name} (the subset name taken from the
+#'   filename) and \code{path}, sorted by name; zero rows if there are none.
+list_pca_subset_panels <- function(diag_dir) {
+    paths <- sort(list.files(diag_dir, pattern = "^PCA_subset_.+\\.png$", full.names = TRUE))
+    data.frame(name = sub("^PCA_subset_(.+)\\.png$", "\\1", basename(paths)),
+               path = paths, stringsAsFactors = FALSE)
+}

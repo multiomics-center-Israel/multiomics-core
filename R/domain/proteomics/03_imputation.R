@@ -256,6 +256,20 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imps
 }
 
+#' Features with no imputed value in any sample
+#'
+#' The rule behind the complete-case PCA panel (PCA_robust.png). A per-feature
+#' allowance of one imputed value is deliberately not used: when missingness sits
+#' in one sample, many features each missing only there would pass and still hand
+#' that sample many imputed values.
+#'
+#' @param imputed_flag Logical matrix (features x samples), TRUE where a value was
+#'   imputed. NA flags are not counted as imputed.
+#' @return Integer vector of the row indices with no TRUE flag.
+select_complete_case_features <- function(imputed_flag) {
+    which(rowSums(as.matrix(imputed_flag), na.rm = TRUE) == 0)
+}
+
 #' Perseus-like imputation (downshifted & narrowed normal distribution)
 perseus_like_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
     expr_mat <- as.matrix(expr_mat)

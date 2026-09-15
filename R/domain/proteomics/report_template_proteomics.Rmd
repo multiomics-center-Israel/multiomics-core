@@ -808,45 +808,15 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 ```
 
 ```{r pca-topvar-block, eval=show_pca_section && show_pca_topvar, echo=FALSE, results='asis'}
-# PCA feature-set selector. Panels are keyed by filename, not by a number, so
-# the non-numeric sets (all proteins, robustly identified) sit in the same
-# dropdown as the top-variable ones. Order: all, then descending top-N, then
-# the robust set.
-pca_panel_files <- c(
-    all    = file.path(diag_dir, "PCA_all.png"),
-    robust = file.path(diag_dir, "PCA_robust.png")
-)
-topvar_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
-
+# PCA feature-set selector. list_pca_feature_panels() in
+# R/domain/proteomics/08_report.R decides which panels exist, their order and
+# their labels, so the dropdown and its tests run the same code.
+pca_panels <- list_pca_feature_panels(diag_dir)
 pca_data_map <- list()
-pca_labels <- character(0)
-
-add_pca_panel <- function(key, path, label) {
-    if (!file.exists(path)) return(invisible(NULL))
-    pca_data_map[[key]] <<- knitr::image_uri(path)
-    pca_labels[[key]] <<- label
-    invisible(NULL)
+for (i in seq_len(nrow(pca_panels))) {
+    pca_data_map[[pca_panels$key[i]]] <- knitr::image_uri(pca_panels$path[i])
 }
-
-# All proteins: prefer the explicitly named panel, else fall back to the main
-# PC1-vs-PC2 plot, which is computed on the full matrix anyway.
-if (file.exists(pca_panel_files[["all"]])) {
-    add_pca_panel("all", pca_panel_files[["all"]], "All proteins")
-} else {
-    add_pca_panel("all", file.path(diag_dir, "PCA_PC1.vs.PC2.png"), "All proteins")
-}
-
-if (length(topvar_files) > 0) {
-    n_vals <- as.numeric(sub(".*PCA_top([0-9]+)\\.png$", "\\1", basename(topvar_files)))
-    ord <- order(n_vals, decreasing = TRUE)
-    for (i in ord) {
-        add_pca_panel(sprintf("top%d", n_vals[i]), topvar_files[i],
-                      sprintf("Top %s variable proteins", format(n_vals[i], big.mark = ",")))
-    }
-}
-
-add_pca_panel("robust", pca_panel_files[["robust"]],
-              "Robustly identified proteins (at most one imputed value)")
+pca_labels <- stats::setNames(pca_panels$label, pca_panels$key)
 
 pca_keys <- names(pca_data_map)
 if (length(pca_keys) > 0) {
@@ -857,7 +827,7 @@ if (length(pca_keys) > 0) {
     default_img_uri <- NULL
 }
 
-cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. All proteins uses the full filtered matrix; the top-variable sets use the most variable proteins; the robust set keeps only proteins with at most one imputed value, so it cannot be driven by the imputation draw.\n\n")
+cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. All proteins uses the full filtered matrix; the top-variable sets use the most variable proteins; the last set keeps only proteins measured in every sample, so no imputed value enters it.\n\n")
 cat('<div style="margin-bottom: 20px;">\n')
 cat('<label for="pca_prot_selector"><strong>Protein subset:</strong></label>\n')
 cat('<select id="pca_prot_selector" onchange="updateProtPCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">\n')
@@ -979,15 +949,15 @@ render_commentary("umap_plot")
 ```
 
 ```{r pca-subsets, eval=show_pca_section && show_pca_subsets, results='asis'}
-subset_pngs <- list.files(diag_dir, pattern = "^PCA_.*\\.png$", full.names = TRUE)
-standard_pat <- "^PCA_(PC1\\.vs\\.PC[23](_labeled)?|top[0-9]+(_labeled)?)\\.png$"
-subset_pngs <- subset_pngs[!grepl(standard_pat, basename(subset_pngs))]
-if (length(subset_pngs) > 0) {
+# Only PCA_subset_<name>.png files are sample subsets (see
+# list_pca_subset_panels()); the dropdown's feature-set panels are never listed.
+subset_panels <- list_pca_subset_panels(diag_dir)
+if (nrow(subset_panels) > 0) {
     cat("### Subsets\n\n")
     cat("PCA computed on user-defined subsets of samples (configured via the wizard's *PCA Subsets* section). Each plot below uses PC1 vs PC2 restricted to the listed conditions.\n\n")
-    for (f in subset_pngs) {
-        subset_name <- sub("^PCA_(.*)\\.png$", "\\1", basename(f))
-        img_uri <- knitr::image_uri(f)
+    for (i in seq_len(nrow(subset_panels))) {
+        subset_name <- subset_panels$name[i]
+        img_uri <- knitr::image_uri(subset_panels$path[i])
         cat(sprintf("#### %s\n\n", subset_name))
         cat(sprintf('<img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA subset: %s" />\n\n', img_uri, subset_name))
     }
