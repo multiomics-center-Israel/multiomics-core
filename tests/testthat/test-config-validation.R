@@ -187,3 +187,38 @@ test_that("validate_rna_config errors on invalid normalization method", {
     cfg$normalization$method <- "invalid_norm"
     expect_error(validate_rna_config(cfg))
 })
+
+# --- Enrichment block validation (the `enrichment` section) ---
+
+test_that("validate_rna_config accepts a valid enrichment block", {
+    cfg <- create_mock_rna_config()
+    cfg$enrichment <- list(
+        enabled        = TRUE,
+        annotation_dir = "data/Func_annot_data_expanded",
+        databases      = c("GO_BP", "GO_MF", "GO_CC"),
+        workers        = 4,
+        pvalue_cutoff  = 0.05,
+        padj_method    = "fdr",
+        plots          = list(dotplot = TRUE, shared_genes = FALSE),
+        gsea           = list(per_pathway_artifacts = TRUE)
+    )
+    expect_true(validate_rna_config(cfg))
+})
+
+test_that("validate_rna_config rejects an out-of-range enrichment pvalue_cutoff", {
+    cfg <- create_mock_rna_config()
+    cfg$enrichment <- list(pvalue_cutoff = 2)
+    expect_error(validate_rna_config(cfg))
+})
+
+test_that("validate_rna_config rejects an unknown enrichment database", {
+    cfg <- create_mock_rna_config()
+    cfg$enrichment <- list(databases = c("GO_BP", "NOT_A_DB"))
+    expect_error(validate_rna_config(cfg))
+})
+
+test_that("validate_rna_config rejects a non-boolean enrichment plot toggle", {
+    cfg <- create_mock_rna_config()
+    cfg$enrichment <- list(plots = list(dotplot = "yes"))
+    expect_error(validate_rna_config(cfg))
+})

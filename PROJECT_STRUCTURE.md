@@ -225,7 +225,7 @@ data/
 outputs/                                  Entire folder is gitignored
 └── Results_<project.name>_<analysis_round>/<mode>/
     ├── Clustering/        Datasets/      Diagnostic_plots/
-    ├── Enrichment/        GSEA_enrichment/
+    ├── Enrichment/
     ├── execution_info/    final_results.tsv
     └── Final_results_*_P_*.xlsx          Excel summaries
 ```
