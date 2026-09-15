@@ -112,6 +112,10 @@ resolve_log2fc <- function(df, contrast) {
     rep(NA_real_, nrow(df))
 }
 
+# read_samplesheet() lives in R/core/01_io.R, sourced before this renders
+# (like signed_fc_to_log2() and cutoff_panel_html() already are), so the
+# report modes share one reader and its behaviour can be tested.
+
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -361,7 +365,7 @@ make_dt(proj, "Analysis Parameters")
 ```{r params-design, results='asis'}
 meta_file <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 if (file.exists(meta_file)) {
-    meta <- read.csv(meta_file, stringsAsFactors = FALSE)
+    meta <- read_samplesheet(meta_file)
     group_col <- prot_cfg$effects$color %||% "Condition"
 
     if (group_col %in% names(meta)) {
@@ -443,10 +447,8 @@ cat("# Technical Summary\n\n")
 ```{r technical-summary, eval=show_technical_summary, results='asis'}
 tech <- prot_cfg$technical_report
 
-meta_ts <- tryCatch(
-    read.csv(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata),
-             stringsAsFactors = FALSE),
-    error = function(e) NULL
+meta_ts <- read_samplesheet(
+    file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 )
 group_col_ts <- prot_cfg$effects$color
 
@@ -2078,7 +2080,7 @@ explorer_json_str <- "{}"
 
 # Load expression data: use final_results.tsv which has per-sample columns + annotations
 meta_file_exp <- file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
-meta_df_exp <- if (file.exists(meta_file_exp)) read.csv(meta_file_exp, stringsAsFactors = FALSE) else NULL
+meta_df_exp <- read_samplesheet(meta_file_exp)
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
