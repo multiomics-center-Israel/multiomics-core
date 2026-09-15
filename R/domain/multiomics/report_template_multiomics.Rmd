@@ -1154,7 +1154,7 @@ if (file.exists(p)) {
 ```
 
 ```{r mofa-variance-legend, eval=has_mofa, results='asis'}
-figure_legend("MOFA2 variance explained heatmap. Each cell shows the proportion of variance in a given omics view (columns) explained by a latent factor (rows). Factors capturing shared variation across multiple views are most informative.")
+figure_legend("MOFA2 variance explained heatmap. Each cell shows the proportion of variance in a given omics view (rows) explained by a latent factor (columns). Factors capturing shared variation across multiple views are most informative.")
 render_commentary("mofa_variance_heatmap")
 ```
 

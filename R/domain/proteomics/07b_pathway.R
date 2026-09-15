@@ -53,11 +53,14 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
         # Default "stat": sign(log2FC) * -log10(pvalue).
         # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
         # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
-        # the p-value. Take the direction from the unrounded linearRatio when it
-        # is available, and treat a genuine zero as +1 rather than discarding it.
-        ratio_col <- paste0("linearRatio.imputs.", cn)
-        dir_vals <- if (ratio_col %in% colnames(summary_df)) {
-            sign(log2(as.numeric(summary_df[[ratio_col]])))
+        # the p-value. Take the direction from the unrounded log2FC when it is
+        # available, and treat a genuine zero as +1 rather than discarding it.
+        # Not linearRatio.imputs: the precomputed-input path writes that as
+        # 2^abs(logFC) (R/domain/proteomics/05_de_summary.R), so it is >= 1 for
+        # every feature and would rank downregulated proteins as upregulated.
+        lfc_col <- paste0("log2FC.imputs.", cn)
+        dir_vals <- if (lfc_col %in% colnames(summary_df)) {
+            sign(as.numeric(summary_df[[lfc_col]]))
         } else {
             sign(lfc_vals)
         }
