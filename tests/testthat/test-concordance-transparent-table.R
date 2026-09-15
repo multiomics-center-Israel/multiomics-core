@@ -67,6 +67,32 @@ test_that("build_gene_protein_mapping_from_ids honours require_one_to_one_mappin
     expect_equal(nrow(res_all), nrow(pairs))
 })
 
+test_that("1:1 filtering judges ambiguity on the file, not on the surviving DE features", {
+    # EHI_001 is ambiguous in the file (two proteins); XP_2 did not survive DE
+    # filtering. Narrowing first would leave EHI_001 -> XP_1 looking unambiguous.
+    pairs <- data.frame(
+        gene_id    = c("EHI_001", "EHI_001", "EHI_002"),
+        protein_id = c("XP_1",    "XP_2",    "XP_3"),
+        stringsAsFactors = FALSE
+    )
+    map_file <- make_mapping_file(pairs)
+    on.exit(unlink(map_file), add = TRUE)
+
+    strict <- list(modes = list(multiomics = list(
+        gene_protein_mapping_file = map_file,
+        require_one_to_one_mapping = TRUE
+    )))
+
+    res <- build_gene_protein_mapping_from_ids(
+        gene_ids = c("EHI_001", "EHI_002"),
+        protein_ids = c("XP_1", "XP_3"),   # XP_2 absent from the DE table
+        config = strict
+    )
+
+    expect_identical(res$gene_id, "EHI_002")
+    expect_identical(res$protein_id, "XP_3")
+})
+
 test_that("concordance table carries original IDs beside both log2FCs, and drives the correlation", {
     n <- 10
     genes <- paste0("EHI_", sprintf("%03d", seq_len(n)))

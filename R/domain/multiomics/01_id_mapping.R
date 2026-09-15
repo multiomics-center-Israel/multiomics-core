@@ -74,8 +74,11 @@ resolve_gene_protein_mapping_file <- function(config) {
 #' (\code{GENE_*}) feature IDs.
 #'
 #' When \code{modes$multiomics$require_one_to_one_mapping} is TRUE, the same
-#' 1:1 filter that harmonization applies is applied here, so both steps work
-#' from the same gene-protein pairs.
+#' 1:1 filter that harmonization applies is applied here. Ambiguity is judged on
+#' the configured file as a whole, \emph{before} narrowing to the supplied IDs:
+#' a gene that the file maps to two proteins is ambiguous whether or not both
+#' proteins survived DE filtering, so which pairs qualify as 1:1 does not drift
+#' with the DE cutoffs.
 #'
 #' @param gene_ids Character vector of RNA-seq gene IDs, in their original space.
 #' @param protein_ids Character vector of proteomics protein IDs, original space.
@@ -88,19 +91,39 @@ build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
         return(NULL)
     }
     mapping <- tryCatch(
-        load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids),
+        load_custom_gene_protein_mapping(custom_map_file),
         error = function(e) {
             warning("Could not read gene-protein mapping file: ", e$message)
             NULL
         }
     )
+    if (is.null(mapping)) return(NULL)
+
     # This mapping replaces the harmonized one for concordance, so it must honour
     # the same setting: otherwise a gene mapped to several proteins enters the
     # concordance table once per protein and gets extra weight in the reported r.
-    if (!is.null(mapping) && isTRUE(config$modes$multiomics$require_one_to_one_mapping)) {
+    if (isTRUE(config$modes$multiomics$require_one_to_one_mapping)) {
         mapping <- filter_to_one_to_one_mapping(mapping)
     }
-    mapping
+
+    narrow_mapping_to_ids(mapping, gene_ids = gene_ids, protein_ids = protein_ids)
+}
+
+
+#' Narrow a gene-protein mapping to a given ID space
+#'
+#' @param mapping_df Mapping data frame with gene_id / protein_id columns.
+#' @param gene_ids Gene IDs to keep, or NULL to keep every gene.
+#' @param protein_ids Protein IDs to keep, or NULL to keep every protein.
+#' @return The mapping restricted to rows whose gene AND protein are in scope.
+narrow_mapping_to_ids <- function(mapping_df, gene_ids = NULL, protein_ids = NULL) {
+    if (is.null(mapping_df) || nrow(mapping_df) == 0) return(mapping_df)
+
+    keep <- rep(TRUE, nrow(mapping_df))
+    if (!is.null(gene_ids))    keep <- keep & mapping_df$gene_id %in% gene_ids
+    if (!is.null(protein_ids)) keep <- keep & mapping_df$protein_id %in% protein_ids
+
+    mapping_df[keep, , drop = FALSE]
 }
 
 
@@ -108,7 +131,12 @@ build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
 #'
 #' Accepts files with gene_id + protein_id columns, or gene_id + uniprot_id.
 #' Also stores gene_symbol if present for downstream correlation analysis.
-load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
+#'
+#' @param file_path Path to the mapping CSV.
+#' @param gene_ids Gene IDs to narrow to, or NULL to return the whole file.
+#' @param protein_ids Protein IDs to narrow to, or NULL to return the whole file.
+#' @return Data frame (gene_id, protein_id, mapping_source[, gene_symbol]).
+load_custom_gene_protein_mapping <- function(file_path, gene_ids = NULL, protein_ids = NULL) {
     df <- read.csv(file_path, stringsAsFactors = FALSE)
 
     # Normalize: accept uniprot_id as protein_id alias
@@ -128,7 +156,7 @@ load_custom_gene_protein_mapping <- function(file_path, gene_ids, protein_ids) {
     }
 
     # Filter to present IDs
-    df <- df[df$gene_id %in% gene_ids & df$protein_id %in% protein_ids, ]
+    df <- narrow_mapping_to_ids(df, gene_ids = gene_ids, protein_ids = protein_ids)
     df$mapping_source <- "custom_file"
 
     keep_cols <- c("gene_id", "protein_id", "mapping_source")
