@@ -1447,14 +1447,20 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     per_omics_t2n  <- list()
 
     for (om in intersect(gene_omics, names(de_results))) {
-        gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
-        if (is.null(gmt_path) || !nzchar(gmt_path)) next
+        # gmt_file may be a single path or a YAML list of paths (GO + KEGG);
+        # read_gmt() already merges several files, so only these guards needed
+        # to vectorise — with a list they were comparing length-2 vectors and
+        # aborting the whole Multi-ORA step.
+        gmt_path <- unlist(config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file,
+                           use.names = FALSE)
+        if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) next
         # Resolve like every other user-supplied input (metabolomics enrichment,
         # data files): absolute paths pass through, relative ones resolve under
         # the raw/ data dir. resolve_raw_path() would mangle an absolute path.
         gmt_abs <- resolve_input_path(config, gmt_path)
-        if (!file.exists(gmt_abs)) {
-            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
+        if (any(!file.exists(gmt_abs))) {
+            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ",
+                    paste(gmt_abs[!file.exists(gmt_abs)], collapse = ", "))
             next
         }
         gs <- gmt_to_term2gene(gmt_abs)
@@ -1639,9 +1645,16 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
         summary$n_omics_support_pval <- summary$n_omics_support
     }
 
-    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only
+    # Sort: gene ORA pathways first (by pooled_pvalue), then compound-only.
+    # The GMT fallback passes metab_ora = NULL, so this column may not exist —
+    # order() aborts on a NULL sort key.
+    metab_sort <- if ("metabolomics_padj" %in% colnames(summary)) {
+        summary$metabolomics_padj
+    } else {
+        rep(NA_real_, nrow(summary))
+    }
     summary <- summary[order(is.na(summary$pooled_pvalue), summary$pooled_pvalue,
-                             summary$metabolomics_padj), ]
+                             metab_sort), ]
 
     # Drop internal helper column
     summary$norm_id <- NULL
