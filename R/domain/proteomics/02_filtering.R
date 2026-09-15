@@ -1,9 +1,13 @@
 #' Remove contaminant proteins (e.g. cRAP) by ID prefix
 #'
 #' Drops features whose identifier starts with `filtering$contaminant_prefix`.
-#' The match is anchored, so an id that merely contains the prefix (for example
-#' a protein group like "CXCL8;cRAP-IL8") is kept and still needs checking by
-#' hand.
+#' The prefix is matched literally via `startsWith()`, never as a regular
+#' expression: `contaminant_prefix` is validated only as a non-empty string, and
+#' a prefix like "sp|" read as a pattern would match every feature (`^sp|` is an
+#' alternation with the empty string) while one like "[" would not compile at
+#' all. The match is anchored, so an id that merely contains the prefix (for
+#' example a protein group like "CXCL8;cRAP-IL8") is kept and still needs
+#' checking by hand.
 #'
 #' Filtering is skipped when `filtering$remove_contaminants` is FALSE. The flag
 #' defaults to TRUE, so a config that does not mention it is unaffected.
@@ -19,15 +23,15 @@ filter_contaminants <- function(expr_mat, row_data, cfg) {
     # contaminants regardless. Honour it, and say so in the log: a config that
     # already set FALSE changes behaviour here, and that must not be silent.
     if (!isTRUE(cfg$filtering$remove_contaminants %||% TRUE)) {
-        n_contam <- sum(grepl(paste0("^", contam_prefix), rownames(expr_mat)))
+        n_contam <- sum(startsWith(rownames(expr_mat), contam_prefix))
         message(sprintf(
-            "Contaminant filtering DISABLED by filtering$remove_contaminants; keeping %d features matching '^%s'.",
+            "Contaminant filtering DISABLED by filtering$remove_contaminants; keeping %d features starting with '%s'.",
             n_contam, contam_prefix))
         return(list(expr_mat = expr_mat, row_data = row_data, n_removed = 0L))
     }
 
     ids <- rownames(expr_mat)
-    is_contam <- grepl(paste0("^", contam_prefix), ids)
+    is_contam <- startsWith(ids, contam_prefix)
     n_contam <- sum(is_contam)
 
     if (n_contam > 0) {

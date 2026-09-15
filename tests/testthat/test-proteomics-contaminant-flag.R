@@ -87,6 +87,50 @@ test_that("a custom prefix is honoured", {
     expect_false(any(startsWith(rownames(res$expr_mat), "P")))
 })
 
+# The prefix is config-supplied and validated only as a non-empty string, so it
+# must be matched literally rather than compiled as a regular expression.
+make_pipe_expr <- function() {
+    ids <- c("sp|P12345", "sp|Q67890", "TRYP_PIG", "KRT1_HUMAN")
+    m <- matrix(seq_len(length(ids) * 4), nrow = length(ids),
+                dimnames = list(ids, paste0("S", 1:4)))
+    storage.mode(m) <- "double"
+    m
+}
+
+test_that("a prefix containing '|' removes only the features that start with it", {
+    e <- make_pipe_expr()
+    res <- suppressMessages(
+        filter_contaminants(e, make_row_data(e),
+                            cfg_with(contaminant_prefix = "sp|"))
+    )
+
+    # As a pattern, "^sp|" is an alternation with the empty string and matches
+    # every id, silently emptying the matrix.
+    expect_equal(res$n_removed, 2)
+    expect_identical(rownames(res$expr_mat), c("TRYP_PIG", "KRT1_HUMAN"))
+})
+
+test_that("a prefix that is not a valid regex does not abort either mode", {
+    e <- make_pipe_expr()
+
+    # A bare "[" fails to compile as a pattern, so reaching grepl() at all would
+    # abort preprocessing — including on the disabled path, which promises to
+    # skip filtering entirely.
+    kept <- suppressMessages(
+        filter_contaminants(e, make_row_data(e),
+                            cfg_with(remove_contaminants = FALSE,
+                                     contaminant_prefix = "["))
+    )
+    expect_equal(nrow(kept$expr_mat), nrow(e))
+    expect_equal(kept$n_removed, 0L)
+
+    res <- suppressMessages(
+        filter_contaminants(e, make_row_data(e), cfg_with(contaminant_prefix = "["))
+    )
+    expect_equal(res$n_removed, 0)
+    expect_equal(nrow(res$expr_mat), nrow(e))
+})
+
 test_that("a NULL row_data is tolerated", {
     e <- make_expr()
     res <- filter_contaminants(e, NULL, cfg_with(remove_contaminants = FALSE))
