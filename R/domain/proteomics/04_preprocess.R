@@ -46,20 +46,18 @@ preprocess_proteomics <- function(inputs, config) {
   expr_raw <- align_matrix_to_meta(expr_raw, col_data, sample_id_col)
   col_data <- align_meta_to_expr(expr_raw, col_data, cfg)
   
-  # Optional: sample_filter
+  # Optional: sample_filter (keep only the configured Group levels, etc.)
   rules <- get_sample_filter_rules(config, mode = "proteomics")
-  if (!is.null(rules)) {
-    # implementation specific to sample filtering would act here
-    # assuming logic similar to utils::apply_sample_filter is available or moved.
-    # We will assume apply_sample_filter is in R/core/something.R or we need to copy it.
-    # I didn't see apply_sample_filter in my extraction list, it was in 00_utils.R (lines 158).
-    # I should have put it in R/core/02_validation.R or 03_alignment.R.
-    # I'll check if I missed it. Just in case, I'll allow this file to assume it's available.
-    if (exists("apply_sample_filter")) {
-      filtered <- apply_sample_filter(sample_col = sample_id_col, meta = col_data, expr = expr_raw, rules = rules, mode = "proteomics")
-      col_data <- filtered$meta
-      expr_raw <- filtered$expr
-    }
+  if (!is.null(rules) && exists("apply_sample_filter")) {
+    # align_meta_to_expr() reorders col_data to the expression columns but leaves
+    # its rownames as positional indices; apply_sample_filter requires the meta
+    # rownames to equal colnames(expr) exactly, so key col_data by sample id first.
+    rownames(col_data) <- as.character(col_data[[sample_id_col]])
+    col_data <- col_data[colnames(expr_raw), , drop = FALSE]
+    filtered <- apply_sample_filter(sample_col = sample_id_col, meta = col_data,
+                                    expr = expr_raw, rules = rules, mode = "proteomics")
+    col_data <- filtered$meta
+    expr_raw <- filtered$expr
   }
   
   # Filtering
