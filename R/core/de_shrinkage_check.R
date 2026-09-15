@@ -122,23 +122,36 @@ check_log2fc_shrinkage <- function(de_stats,
 warn_log2fc_shrinkage <- function(check, mode = "rna") {
     if (is.null(check) || nrow(check) == 0) return(invisible(check))
 
+    # Name the columns this mode actually writes. Proteomics compares
+    # log2FC.imputs against log2FC_from_raw and carries no log2FC_from_means at
+    # all, so a hard-coded pair sent the analyst to a column that is not in
+    # their workbook. Resolved per contrast so the suffix is right too.
+    cols_for <- function(cn) {
+        cols <- get_contrast_cols(cn, mode = mode)
+        list(model = cols$log2fc %||% "log2FC",
+             naive = cols$log2fc_means %||% "log2FC_from_means")
+    }
+
     flagged <- check[check$flag != "ok", , drop = FALSE]
     if (nrow(flagged) == 0) {
+        lbl <- cols_for(check$contrast[1])
         message(sprintf(
-            "[%s] Fold-change check: no shrinkage detected (median |log2FC| / |log2FC_from_means| = %s across %d contrast(s)).",
-            mode, paste(signif(check$median_ratio, 3), collapse = ", "), nrow(check)
+            "[%s] Fold-change check: no shrinkage detected (median |%s| / |%s| = %s across %d contrast(s)).",
+            mode, lbl$model, lbl$naive,
+            paste(signif(check$median_ratio, 3), collapse = ", "), nrow(check)
         ))
         return(invisible(check))
     }
 
     for (i in seq_len(nrow(flagged))) {
         r <- flagged[i, ]
+        lbl <- cols_for(r$contrast)
         headline <- if (identical(r$flag, "collapsed")) {
-            sprintf("fold changes appear COLLAPSED towards zero (%.0f%% of the %d features with a real effect have |log2FC| <= 0.01)",
-                    100 * r$frac_flat, r$n_considered)
+            sprintf("fold changes appear COLLAPSED towards zero (%.0f%% of the %d features with a real effect have |%s| <= 0.01)",
+                    100 * r$frac_flat, r$n_considered, lbl$model)
         } else {
-            sprintf("fold changes appear SHRUNK (median |log2FC| is only %.0f%% of |log2FC_from_means| across %d features)",
-                    100 * r$median_ratio, r$n_considered)
+            sprintf("fold changes appear SHRUNK (median |%s| is only %.0f%% of |%s| across %d features)",
+                    lbl$model, 100 * r$median_ratio, lbl$naive, r$n_considered)
         }
 
         stripe <- if (!is.na(r$frac_sig_flat) && r$frac_sig_flat > 0) {
@@ -147,8 +160,8 @@ warn_log2fc_shrinkage <- function(check, mode = "rna") {
         } else ""
 
         warning(sprintf(
-            "[%s] Contrast '%s': %s.%s Compare the log2FC and log2FC_from_means columns in Final_results, and check the DE settings (for RNA-seq, de$deseq_mode; any log2FC shrinkage applied upstream). Full numbers: Datasets/log2fc_shrinkage_check.tsv",
-            mode, r$contrast, headline, stripe
+            "[%s] Contrast '%s': %s.%s Compare the %s and %s columns in Final_results, and check the DE settings (for RNA-seq, de$deseq_mode; any log2FC shrinkage applied upstream). Full numbers: Datasets/log2fc_shrinkage_check.tsv",
+            mode, r$contrast, headline, stripe, lbl$model, lbl$naive
         ), call. = FALSE)
     }
 

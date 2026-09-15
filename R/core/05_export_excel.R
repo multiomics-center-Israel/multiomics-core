@@ -742,6 +742,7 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
         list(
             log2fc = paste0("log2FC.", contrast),
             log2fc_means = paste0("log2FC_from_means.", contrast),
+            log2fc_raw = paste0("log2FC_from_raw.", contrast),
             fc     = paste0("linearFC.", contrast),
             p      = paste0("pvalue.", contrast),
             padj   = paste0("padj.", contrast),
@@ -767,9 +768,15 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
         # columns now come from the model's own imputation, so a difference of
         # those means IS the model coefficient on a two-group design and a
         # shrinkage check against it would compare a number with itself.
+        #
+        # log2fc_raw carries the same name deliberately: for proteomics the raw
+        # column IS the shrinkage comparison. It exists as its own field so the
+        # builder can write the column through the same normalization the
+        # readers use, instead of pasting the un-normalized contrast name.
         list(
             log2fc = paste0("log2FC.imputs.", contrast),
             log2fc_means = paste0("log2FC_from_raw.", contrast),
+            log2fc_raw = paste0("log2FC_from_raw.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
             padj   = paste0("padj.imputs.", contrast),
@@ -1426,8 +1433,13 @@ build_final_results_generic <- function(
         # adjacency is a pinned contract (test-fc-provenance.R, "P7"), and the
         # point of the column is the comparison with log2FC_from_means, which
         # stays two cells away either way.
-        if (!is.null(raw_log2fc) && cn %in% colnames(raw_log2fc)) {
-            base[[paste0("log2FC_from_raw.", cn)]] <-
+        # Keyed through cols$log2fc_raw, not paste0(..., cn): proteomics strips
+        # spaces from contrast names, so a contrast like "A vs B" was written as
+        # "log2FC_from_raw.A vs B" while every reader looked for the normalized
+        # "log2FC_from_raw.AvsB" and silently found nothing.
+        if (!is.null(raw_log2fc) && !is.null(cols$log2fc_raw) &&
+            cn %in% colnames(raw_log2fc)) {
+            base[[cols$log2fc_raw]] <-
                 raw_log2fc[[cn]][match(base[[feature_id_col]], rownames(raw_log2fc))]
         }
         base[[cols$p]] <- summary_df[[cols$p]][m]

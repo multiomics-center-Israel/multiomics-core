@@ -22,6 +22,15 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
 
     # 4) final results TSV
     if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
+        # Guarded on length(), not `%||%`: NULL[[1]] raises "subscript out of
+        # bounds" in R, so a config with no stochastic imputation would abort
+        # here rather than fall back to the preprocessing matrix.
+        expr_model <- if (length(de_res$imputations) > 0) {
+            de_res$imputations[[1]]
+        } else {
+            pre$expr_imp_single
+        }
+
         final_results <- build_final_results_proteomics(
             pre = pre,
             summary_df = de_res$summary_df,
@@ -29,7 +38,7 @@ write_proteomics_multimpute_outputs <- function(pre, de_res, inputs, config, out
             row_data = pre$row_data,
             feature_id_col = config$modes$proteomics$de_table$id_col %||% "FeatureID",
             config = config,
-            expr_model = de_res$imputations[[1]]
+            expr_model = expr_model
         )
         files <- c(files, save_tsv(final_results, dirs$datasets, "final_results.tsv"))
 

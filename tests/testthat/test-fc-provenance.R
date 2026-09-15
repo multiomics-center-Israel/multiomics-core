@@ -777,3 +777,103 @@ test_that("P6 provenance notes cover every column family the mode emits", {
     # Unknown modes still get a usable glossary rather than an error
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")
 })
+
+# ---------------------------------------------------------------------------
+# P9 — a contrast name with spaces must not silently skip the shrinkage check
+#
+# Proteomics strips spaces from contrast names (normalize_contrast_name), so
+# every reader looks for "log2FC_from_raw.AvsB". The builder used to write the
+# column with the raw name, "log2FC_from_raw.A vs B". The two never met: the
+# membership test in check_log2fc_shrinkage() failed, the contrast was dropped,
+# and no warning and no log2fc_shrinkage_check.tsv were produced for it — with
+# nothing in the run log to say the check had not run.
+# ---------------------------------------------------------------------------
+
+spaced_contrasts <- function() {
+    data.frame(
+        Contrast_name = "S vs NS",
+        Factor        = "condition",
+        Numerator     = "S",
+        Denominator   = "NS",
+        stringsAsFactors = FALSE
+    )
+}
+
+test_that("P9 the raw column is keyed the way get_contrast_cols reads it", {
+    cols <- get_contrast_cols("S vs NS", mode = "proteomics")
+    expect_equal(cols$log2fc_raw, "log2FC_from_raw.SvsNS")
+    # For proteomics the raw column IS the shrinkage comparison.
+    expect_equal(cols$log2fc_raw, cols$log2fc_means)
+
+    # RNA keeps spaces, so its key is the contrast name unchanged.
+    expect_equal(get_contrast_cols("S vs NS", mode = "rna")$log2fc_raw,
+                 "log2FC_from_raw.S vs NS")
+})
+
+test_that("P9 a spaced proteomics contrast still produces the raw column", {
+    meta <- prov_meta()
+    observed <- matrix(c(10, 10, 12, 12,
+                         8, NA, 9, 9),
+                       nrow = 2, byrow = TRUE,
+                       dimnames = list(c("p1", "p2"), meta$SampleID))
+    imputed <- observed
+    imputed["p2", "S_2"] <- 7.5
+
+    pre <- list(expr_filt = observed, expr_imp_single = imputed, meta = meta,
+                row_data = NULL)
+    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+    sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    fr <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = spaced_contrasts(),
+        feature_id_col = "FeatureID", config = prot_config()
+    )
+
+    nm <- names(fr)
+    # Written under the normalized key...
+    expect_true("log2FC_from_raw.SvsNS" %in% nm)
+    # ...and never under the raw one, which no reader looks for.
+    expect_false("log2FC_from_raw.S vs NS" %in% nm)
+})
+
+test_that("P9 the shrinkage check reaches a spaced contrast instead of skipping it", {
+    # Model estimates flattened to a tenth of the measured ones: the check must
+    # see the pair and flag it. Before the fix it returned NULL for this
+    # contrast because the raw column name did not match.
+    de_stats <- data.frame(
+        FeatureID                  = paste0("p", 1:6),
+        `log2FC.imputs.SvsNS`      = c(0.2, -0.2, 0.3, -0.3, 0.25, -0.25),
+        `log2FC_from_raw.SvsNS`    = c(2, -2, 3, -3, 2.5, -2.5),
+        `padj.imputs.SvsNS`        = rep(0.01, 6),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+
+    check <- check_log2fc_shrinkage(
+        de_stats = de_stats, contrasts = "S vs NS", mode = "proteomics"
+    )
+
+    expect_false(is.null(check))
+    expect_equal(nrow(check), 1L)
+    expect_equal(check$contrast, "S vs NS")   # reported as the user wrote it
+    expect_true(check$flag %in% c("shrunk", "collapsed"))
+})
+
+test_that("P9 the warning names the columns the mode actually writes", {
+    check <- data.frame(
+        contrast = "S vs NS", n_considered = 6L, median_ratio = 0.1,
+        frac_flat = 0, n_significant = 6L, frac_sig_flat = 0,
+        flag = "shrunk", stringsAsFactors = FALSE
+    )
+
+    msg <- tryCatch({
+        warn_log2fc_shrinkage(check, mode = "proteomics")
+        NA_character_
+    }, warning = function(w) conditionMessage(w))
+
+    expect_false(is.na(msg))
+    # Points at columns that exist in a proteomics workbook...
+    expect_true(grepl("log2FC.imputs.SvsNS", msg, fixed = TRUE))
+    expect_true(grepl("log2FC_from_raw.SvsNS", msg, fixed = TRUE))
+    # ...and never at log2FC_from_means, which proteomics no longer emits.
+    expect_false(grepl("log2FC_from_means", msg, fixed = TRUE))
+})

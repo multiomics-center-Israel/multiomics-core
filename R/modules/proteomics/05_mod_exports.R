@@ -74,6 +74,20 @@ mod_proteomics_exports <- function(
     # =========================================================================
     final_results <- NULL
 
+    # The matrix limma was actually fitted on. Resolved once, outside the blocks
+    # below, so the TSV, the shrinkage check and the Excel workbook all describe
+    # the same draw and none of them can be reached with it undefined. Falling
+    # back to the preprocessing matrix keeps configs without stochastic
+    # imputation behaving exactly as before.
+    #
+    # Guarded on length(), not `%||%`: NULL[[1]] raises "subscript out of
+    # bounds" in R rather than returning NULL, so the operator never sees it.
+    expr_model <- if (length(de_res$imputations) > 0) {
+        de_res$imputations[[1]]
+    } else {
+        pre$expr_imp_single
+    }
+
     if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
         if (is.null(id_col)) {
             stop("config$modes$proteomics$de_table$id_col is NULL. Check config.yaml.")
@@ -86,7 +100,7 @@ mod_proteomics_exports <- function(
             row_data = pre$row_data,
             feature_id_col = id_col,
             config = config,
-            expr_model = de_res$imputations[[1]]
+            expr_model = expr_model
         )
 
         # Write final_results TSV
@@ -113,13 +127,17 @@ mod_proteomics_exports <- function(
         prot_sample_id_col <- prot_cfg$effects$samples %||%
             prot_cfg$id_columns$sample_col %||% "SampleID"
 
+        # expr_for_de is the matrix the workbook derives its .zscore columns and
+        # its fallback row order from. It must be the same draw the sample
+        # columns beside them come from; pre$expr_imp_single is the separate
+        # preprocessing draw, which described two imputations as one table.
         excel_files <- write_final_results_excels_legacy_generic(
             final_results = final_results,
             config = config,
             out_dir = out_dir,
             mode = "proteomics",
             id_col = id_col,
-            expr_for_de = pre$expr_imp_single,
+            expr_for_de = expr_model,
             with_cutoffs = TRUE,
             clustering_res = clustering_res,
             sample_meta = pre$meta,
