@@ -113,7 +113,8 @@ mod_proteomics_exports <- function(
             sample_meta = pre$meta,
             sample_id_col = prot_sample_id_col,
             annotation_rows = excel_cfg$annotation_rows,
-            sample_label_cols = excel_cfg$sample_label_cols
+            sample_label_cols = excel_cfg$sample_label_cols,
+            provenance_sheet = TRUE
         )
         files <- c(files, excel_files)
     }
