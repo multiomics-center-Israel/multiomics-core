@@ -83,7 +83,15 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
 
         pass_imputs <- ifelse(sum_pass >= MIN_NO_PASSED, 1, NA)
 
-        linearRatio_imputs <- rowMeans(2^logfc_mat, na.rm = TRUE)
+        # Pool the runs on the log2 scale: log2FC.imputs is the mean of the
+        # per-run logFC. For limma each run's coefficient is a difference of
+        # group means, so this equals the group-mean difference of the
+        # run-averaged matrix the exports show (average_imputation_runs()), and a
+        # reader can rebuild it from Mean.<num> - Mean.<den> by hand. Averaging
+        # 2^logFC instead lands slightly above that, so the hand check never
+        # closed on a partially measured feature.
+        log2FC_imputs <- rowMeans(logfc_mat, na.rm = TRUE)
+        linearRatio_imputs <- 2^log2FC_imputs
         linearFC_imputs <- ifelse(linearRatio_imputs >= 1, linearRatio_imputs, -1 / linearRatio_imputs)
 
         pvalue_imputs <- apply(p_mat, 1, quantile, probs = q, na.rm = TRUE)
@@ -99,11 +107,9 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         out[[paste0("sum.pass.", contrast_print)]] <- sum_pass
         out[[paste0("pass.imputs.", contrast_print)]] <- pass_imputs
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linearRatio_imputs
-        # log2 of the consensus linear ratio, not the mean of the per-run logFCs:
-        # this is the exact log2 counterpart of the linearFC reported below, so
-        # readers can move between the two without re-deriving anything. Left
-        # unrounded so that round trip stays exact.
-        out[[paste0("log2FC.imputs.", contrast_print)]] <- log2(linearRatio_imputs)
+        # Left unrounded; linearFC below is derived from it, so readers can move
+        # between the two without re-deriving anything.
+        out[[paste0("log2FC.imputs.", contrast_print)]] <- log2FC_imputs
         out[[paste0("linearFC.imputs.", contrast_print)]] <- signif(linearFC_imputs, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]] <- pvalue_imputs
         out[[paste0("padj.imputs.", contrast_print)]] <- padj_imputs

@@ -256,6 +256,36 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imps
 }
 
+#' Average imputation runs cell by cell
+#'
+#' Measured cells hold the same value in every run, so they come through
+#' unchanged; each imputed cell becomes the mean of its draws. The exports use
+#' this matrix because its group means reproduce log2FC.imputs, the mean of the
+#' per-run limma coefficients (see summarize_limma_mult_imputation()), whereas
+#' any single run's group means reproduce only that run's coefficient.
+#'
+#' @param imputations List of imputed matrices (features x samples), as
+#'   returned by make_imputations_proteomics(). All runs must share dimensions
+#'   and dimnames.
+#' @param fallback Returned unchanged when \code{imputations} is empty, e.g.
+#'   \code{pre$expr_imp_single} for a DE result without imputation runs.
+#' @return Numeric matrix with the rows and columns of one run, or
+#'   \code{fallback}.
+average_imputation_runs <- function(imputations, fallback = NULL) {
+    if (length(imputations) == 0) return(fallback)
+    ref <- imputations[[1]]
+    for (i in seq_along(imputations)) {
+        if (!identical(dim(imputations[[i]]), dim(ref)) ||
+            !identical(dimnames(imputations[[i]]), dimnames(ref))) {
+            stop("Imputation run ", i, " does not have the same features and samples, ",
+                 "in the same order, as run 1, so the runs cannot be averaged cell by ",
+                 "cell. All runs should come from one make_imputations_proteomics() call.",
+                 call. = FALSE)
+        }
+    }
+    Reduce(`+`, imputations) / length(imputations)
+}
+
 #' Perseus-like imputation (downshifted & narrowed normal distribution)
 perseus_like_impute_with_flags <- function(expr_mat, width = 0.3, downshift = 1.8) {
     expr_mat <- as.matrix(expr_mat)

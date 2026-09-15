@@ -43,6 +43,9 @@ source(find_repo_file("R/domain/rnaseq/00a_deseq_factory.R"))   # create_deseq_d
 source(find_repo_file("R/domain/rnaseq/01_expression.R"))       # compute_cpm
 source(find_repo_file("R/domain/rnaseq/04_de_summary.R"))
 source(find_repo_file("R/domain/rnaseq/05_outputs_legacy.R"))   # build_final_results_rnaseq
+source(find_repo_file("R/core/02_validation.R"))                # assert_*, check_has_cols
+source(find_repo_file("R/core/03_alignment.R"))                 # run_limma_proteomics alignment
+source(find_repo_file("R/domain/proteomics/03_imputation.R"))   # average_imputation_runs
 source(find_repo_file("R/domain/proteomics/05_de_summary.R"))
 source(find_repo_file("R/domain/proteomics/06_outputs_legacy.R"))
 
@@ -350,7 +353,11 @@ test_that("P7 proteomics summary emits log2FC.imputs consistent with linearFC.im
     sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
 
     expect_true("log2FC.imputs.S_vs_NS" %in% names(sdf))
-    # It is the log2 of the consensus linear ratio, not the mean of per-run logFCs
+    # The mean of the per-run logFCs: the runs carry -0.7 + 0.01 * i and
+    # 2 - 0.01 * i for i = 1..3, so the means are -0.68 and 1.98.
+    expect_equal(sdf$log2FC.imputs.S_vs_NS[match(c("p1", "p2"), sdf$FeatureID)],
+                 c(-0.68, 1.98))
+    # linearRatio.imputs is its linear counterpart, so the round trip is exact
     expect_equal(sdf$log2FC.imputs.S_vs_NS, log2(sdf$linearRatio.imputs.S_vs_NS))
 
     l <- sdf$log2FC.imputs.S_vs_NS
@@ -390,15 +397,13 @@ test_that("P7 proteomics final results carry the imputed block and group means",
     nm <- names(fr)
     expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 1L],
                  "linearFC.imputs.S_vs_NS")
-    # The fixture runs multi_imputation: TRUE, so log2FC.imputs is the consensus
-    # across runs while the Mean. columns come from the first one. The two do not
-    # reconcile on a partially measured feature, and log2FC_from_means is what
-    # makes that visible.
+    # log2FC_from_means is emitted under every imputation setting: it is the
+    # hand check of Mean.S - Mean.NS against log2FC.imputs.
     expect_true("log2FC_from_means.S_vs_NS" %in% nm)
     expect_true("log2FC_from_raw.S_vs_NS" %in% nm)
 })
 
-test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
+test_that("P7 log2FC_from_means is emitted under single and multi imputation", {
     meta <- prov_meta()
     observed <- matrix(c(10, 10, 12, 12,
                          8, NA, 9, 9),
@@ -418,9 +423,7 @@ test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
         pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
         feature_id_col = "FeatureID", config = single_cfg
     )
-    # One draw: log2FC.imputs IS the difference of the Mean. columns, so a
-    # separate column would repeat it.
-    expect_false("log2FC_from_means.S_vs_NS" %in% names(fr_single))
+    expect_true("log2FC_from_means.S_vs_NS" %in% names(fr_single))
     # The measured-only estimate is unconditional — it is the shrinkage
     # comparison in both modes.
     expect_true("log2FC_from_raw.S_vs_NS" %in% names(fr_single))
@@ -430,8 +433,7 @@ test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
         feature_id_col = "FeatureID", config = prot_config()
     )
     expect_true("log2FC_from_means.S_vs_NS" %in% names(fr_multi))
-    # And it really is the difference of the two Mean cells, not a copy of the
-    # consensus coefficient.
+    # It is computed from the two Mean cells, not copied from log2FC.imputs.
     expect_equal(fr_multi$log2FC_from_means.S_vs_NS,
                  fr_multi$Mean.S - fr_multi$Mean.NS)
 
@@ -444,6 +446,79 @@ test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
     expect_equal(nm[i_lfc + 1L], "linearFC.imputs.S_vs_NS")
     expect_true(which(nm == "log2FC_from_means.S_vs_NS") > i_lfc + 1L)
     expect_true(which(nm == "log2FC_from_raw.S_vs_NS") > i_lfc + 1L)
+})
+
+test_that("P7 average_imputation_runs keeps measured cells and averages imputed ones", {
+    base <- matrix(c(10, NA, 12, 11), nrow = 2,
+                   dimnames = list(c("p1", "p2"), c("A", "B")))
+    runs <- lapply(c(7, 8, 9), function(v) { m <- base; m["p2", "A"] <- v; m })
+
+    avg <- average_imputation_runs(runs)
+    expect_identical(dimnames(avg), dimnames(base))
+    expect_equal(avg["p1", "A"], 10)   # measured: the same in every run
+    expect_equal(avg["p2", "B"], 11)
+    expect_equal(avg["p2", "A"], 8)    # imputed: the mean of 7, 8 and 9
+
+    expect_equal(average_imputation_runs(runs[1]), runs[[1]])
+    expect_identical(average_imputation_runs(list(), fallback = base), base)
+    expect_error(average_imputation_runs(list(runs[[1]], runs[[2]][, c("B", "A")])),
+                 "same features and samples")
+})
+
+test_that("P7 Mean.<num> - Mean.<den> reproduces log2FC.imputs across imputation runs", {
+    skip_if_not_installed("limma")
+
+    meta <- prov_meta()
+    ids <- c("p1", "p2", "p3")
+    observed <- matrix(c(10,  10.4, 12,  12.2,
+                          8,  NA,    9,   9.3,
+                         11,  NA,   NA,  10.1),
+                       nrow = 3, byrow = TRUE,
+                       dimnames = list(ids, meta$SampleID))
+    # Three imputation runs that fill the same three gaps with different draws.
+    draws <- list(c(7.1, 9.0, 8.8), c(7.9, 10.2, 9.5), c(7.4, 9.6, 8.1))
+    imputations <- lapply(draws, function(d) {
+        m <- observed
+        m["p2", "S_2"]  <- d[1]
+        m["p3", "S_2"]  <- d[2]
+        m["p3", "NS_1"] <- d[3]
+        m
+    })
+
+    cfg <- prot_config()
+    cfg$modes$proteomics$de_table$group_col <- "condition"
+    prot_tbl <- data.frame(
+        Protein.Group             = ids,
+        Protein.Names             = paste0("PROT_", ids),
+        Genes                     = paste0("gene_", ids),
+        First.Protein.Description = paste("protein", ids),
+        stringsAsFactors = FALSE
+    )
+
+    runs <- lapply(imputations, function(m) {
+        run_limma_proteomics(m, meta, prov_contrasts(), prot_tbl, cfg)
+    })
+    sdf <- summarize_limma_mult_imputation(lapply(runs, `[[`, "de_tables"), cfg)
+
+    pre <- list(expr_filt = observed, expr_imp_single = imputations[[1]],
+                meta = meta, row_data = NULL)
+    fr <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = cfg,
+        expr_model = average_imputation_runs(imputations)
+    )
+    fr <- fr[match(ids, fr$FeatureID), , drop = FALSE]
+
+    # The hand check: subtract the two Mean cells.
+    expect_equal(fr$Mean.S - fr$Mean.NS, fr$log2FC.imputs.S_vs_NS, tolerance = 1e-10)
+    expect_equal(fr$log2FC_from_means.S_vs_NS, fr$log2FC.imputs.S_vs_NS, tolerance = 1e-10)
+
+    # Run 1 alone does not close it for p3: its group-mean difference is 0.55,
+    # while the three runs (0.55, 0.80, 1.20) average to 0.85.
+    run1 <- imputations[[1]]
+    run1_diff <- rowMeans(run1[, c("S_1", "S_2")]) - rowMeans(run1[, c("NS_1", "NS_2")])
+    expect_equal(unname(run1_diff["p3"]), 0.55)
+    expect_equal(fr$log2FC.imputs.S_vs_NS[3], 0.85, tolerance = 1e-10)
 })
 
 
@@ -812,19 +887,21 @@ test_that("P6 provenance notes cover every column family the mode emits", {
                       "Mean.raw.<group>", "N.observed.<group>",
                       "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
 
-    # The glossary must describe the workbook it is bound into, and the two
-    # imputation modes produce different workbooks.
+    # log2FC_from_means is the hand check, so both imputation settings carry it.
     expect_true("log2FC_from_means.<contrast>" %in% prot$glossary$Column)
     prot_single <- build_provenance_notes("proteomics", multi_imputation = FALSE)
-    expect_false("log2FC_from_means.<contrast>" %in% prot_single$glossary$Column)
+    expect_true("log2FC_from_means.<contrast>" %in% prot_single$glossary$Column)
 
-    # Under multi-imputation the notes must say the Mean. columns are one run
-    # and log2FC.imputs is the consensus — the whole point of the distinction.
-    expect_true(any(grepl("consensus across every imputation run", prot$notes)))
-    expect_true(any(grepl("multi_imputation", prot$notes)))
-    # Under single imputation they must say step 1 reproduces it exactly.
-    expect_true(any(grepl("reproduces it exactly", prot_single$notes)))
-    expect_false(any(grepl("consensus across every imputation run", prot_single$notes)))
+    # Step 1 is the same subtraction under both settings; what differs is what
+    # was averaged to make it exact.
+    expect_true(any(grepl("that subtraction done for you", prot$notes)))
+    expect_true(any(grepl("that subtraction done for you", prot_single$notes)))
+    expect_true(any(grepl("mean of those coefficients", prot$notes)))
+    expect_false(any(grepl("mean of those coefficients", prot_single$notes)))
+    expect_true(any(grepl("matrix it was fitted on", prot_single$notes)))
+    # And both say when the subtraction does not close.
+    expect_true(any(grepl("paired t-test", prot$notes)))
+    expect_true(any(grepl("paired t-test", prot_single$notes)))
 
     # Both must name the shrinkage comparison the naive column exists for
     expect_true(any(grepl("shrinkage", rna$notes)))
@@ -963,6 +1040,6 @@ test_that("P9 the warning names the columns the mode actually writes", {
     # Points at columns that exist in a proteomics workbook...
     expect_true(grepl("log2FC.imputs.SvsNS", msg, fixed = TRUE))
     expect_true(grepl("log2FC_from_raw.SvsNS", msg, fixed = TRUE))
-    # ...and never at log2FC_from_means, which proteomics no longer emits.
+    # ...and never at log2FC_from_means, which equals log2FC.imputs for limma.
     expect_false(grepl("log2FC_from_means", msg, fixed = TRUE))
 })

@@ -74,19 +74,14 @@ mod_proteomics_exports <- function(
     # =========================================================================
     final_results <- NULL
 
-    # The matrix limma was actually fitted on. Resolved once, outside the blocks
-    # below, so the TSV, the shrinkage check and the Excel workbook all describe
-    # the same draw and none of them can be reached with it undefined. Falling
-    # back to the preprocessing matrix keeps configs without stochastic
-    # imputation behaving exactly as before.
-    #
-    # Guarded on length(), not `%||%`: NULL[[1]] raises "subscript out of
-    # bounds" in R rather than returning NULL, so the operator never sees it.
-    expr_model <- if (length(de_res$imputations) > 0) {
-        de_res$imputations[[1]]
-    } else {
-        pre$expr_imp_single
-    }
+    # The matrix the exported .norm and Mean. columns come from. Resolved once,
+    # outside the blocks below, so the TSV, the shrinkage check and the Excel
+    # workbook all describe the same values and none of them can be reached with
+    # it undefined. It is the cell-by-cell average of the imputation runs, whose
+    # group means reproduce log2FC.imputs for limma; one run's means would
+    # reproduce only that run's coefficient. Without imputation runs it falls
+    # back to the preprocessing matrix, as before.
+    expr_model <- average_imputation_runs(de_res$imputations, fallback = pre$expr_imp_single)
 
     if (!is.null(inputs$contrasts) && !is.null(de_res$summary_df)) {
         if (is.null(id_col)) {
