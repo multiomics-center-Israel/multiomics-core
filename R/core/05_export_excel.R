@@ -1239,7 +1239,8 @@ build_final_results_generic <- function(
   mean_cols = NULL,
   naive_log2fc = NULL,
   raw_stat_cols = NULL,
-  raw_log2fc = NULL
+  raw_log2fc = NULL,
+  naive_after_fc = FALSE
 ) {
     # ============================================================
     # VALIDATION (explicit errors, not stopifnot)
@@ -1477,12 +1478,26 @@ build_final_results_generic <- function(
         if (!is.null(cols$log2fc) && cols$log2fc %in% colnames(summary_df)) {
             base[[cols$log2fc]] <- summary_df[[cols$log2fc]][m]
         }
-        if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
-            cn %in% colnames(naive_log2fc)) {
-            base[[cols$log2fc_means]] <-
-                naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
+
+        naive_vals <- if (!is.null(cols$log2fc_means) && !is.null(naive_log2fc) &&
+                          cn %in% colnames(naive_log2fc)) {
+            naive_log2fc[[cn]][match(base[[feature_id_col]], rownames(naive_log2fc))]
+        } else {
+            NULL
+        }
+
+        # Where the means-based estimate sits differs by mode, and both
+        # placements are pinned contracts in test-fc-provenance.R ("P7"/"P9"):
+        # RNA reads log2FC then log2FC_from_means then linearFC, while
+        # proteomics keeps log2FC.imputs adjacent to linearFC.imputs and groups
+        # the model-free estimates after it, next to log2FC_from_raw.
+        if (!is.null(naive_vals) && !isTRUE(naive_after_fc)) {
+            base[[cols$log2fc_means]] <- naive_vals
         }
         base[[cols$fc]] <- fc_vals
+        if (!is.null(naive_vals) && isTRUE(naive_after_fc)) {
+            base[[cols$log2fc_means]] <- naive_vals
+        }
         # The same arithmetic on the measured values only. Placed after
         # linearFC rather than between log2FC and log2FC_from_means: that
         # adjacency is a pinned contract (test-fc-provenance.R, "P7"), and the

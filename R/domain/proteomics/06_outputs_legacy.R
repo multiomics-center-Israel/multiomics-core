@@ -204,7 +204,10 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         mean_cols = mean_cols,
         naive_log2fc = naive_log2fc,
         raw_stat_cols = raw_stats$combined,
-        raw_log2fc = raw_log2fc
+        raw_log2fc = raw_log2fc,
+        # Keep log2FC.imputs adjacent to linearFC.imputs (a pinned contract) and
+        # group the two model-free estimates after it.
+        naive_after_fc = TRUE
     )
 }
 

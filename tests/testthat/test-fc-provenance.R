@@ -434,6 +434,16 @@ test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
     # consensus coefficient.
     expect_equal(fr_multi$log2FC_from_means.S_vs_NS,
                  fr_multi$Mean.S - fr_multi$Mean.NS)
+
+    # Placement: log2FC.imputs stays adjacent to linearFC.imputs, and the two
+    # model-free estimates sit together after it. Restoring log2FC_from_means
+    # between them would break the P7 adjacency, which is how this regressed
+    # the first time.
+    nm <- names(fr_multi)
+    i_lfc <- which(nm == "log2FC.imputs.S_vs_NS")
+    expect_equal(nm[i_lfc + 1L], "linearFC.imputs.S_vs_NS")
+    expect_true(which(nm == "log2FC_from_means.S_vs_NS") > i_lfc + 1L)
+    expect_true(which(nm == "log2FC_from_raw.S_vs_NS") > i_lfc + 1L)
 })
 
 
@@ -851,6 +861,17 @@ spaced_contrasts <- function() {
     )
 }
 
+# The DE step keys its own tables on the contrast name as the user wrote it, and
+# summarize_limma_mult_imputation() normalizes it on the way into summary_df. To
+# exercise the spaced-name path end to end the runs have to carry the spaced
+# name too, otherwise summary_df comes back keyed on S_vs_NS and nothing lines up.
+spaced_prot_runs <- function(n_runs = 3) {
+    lapply(prot_runs(n_runs), function(run) {
+        names(run) <- "S vs NS"
+        run
+    })
+}
+
 test_that("P9 the raw column is keyed the way get_contrast_cols reads it", {
     cols <- get_contrast_cols("S vs NS", mode = "proteomics")
     expect_equal(cols$log2fc_raw, "log2FC_from_raw.SvsNS")
@@ -880,8 +901,12 @@ test_that("P9 a spaced proteomics contrast still produces the raw column", {
 
     pre <- list(expr_filt = observed, expr_imp_single = imputed, meta = meta,
                 row_data = NULL)
-    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+    sdf <- summarize_limma_mult_imputation(spaced_prot_runs(), prot_config())
     sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    # The DE step normalized the name on the way in, so the stat columns are
+    # already keyed on SvsNS.
+    expect_true("log2FC.imputs.SvsNS" %in% names(sdf))
 
     fr <- build_final_results_proteomics(
         pre = pre, summary_df = sdf, contrasts_df = spaced_contrasts(),
@@ -893,6 +918,11 @@ test_that("P9 a spaced proteomics contrast still produces the raw column", {
     expect_true("log2FC_from_raw.SvsNS" %in% nm)
     # ...and never under the raw one, which no reader looks for.
     expect_false("log2FC_from_raw.S vs NS" %in% nm)
+
+    # And the check can now actually reach it end to end.
+    chk <- check_log2fc_shrinkage(de_stats = fr, contrasts = "S vs NS",
+                                  mode = "proteomics")
+    expect_false(is.null(chk))
 })
 
 test_that("P9 the shrinkage check reaches a spaced contrast instead of skipping it", {
