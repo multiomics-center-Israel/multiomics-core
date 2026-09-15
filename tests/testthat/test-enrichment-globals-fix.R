@@ -9,7 +9,44 @@
 # reproducibility. These tests lock in the behaviour and prove results/RNG are
 # unchanged.
 
-smib <- function(x) length(serialize(x, NULL)) / 1024 / 1024
+# Serialized size in MB, with srcrefs stripped first.
+#
+# Without removeSource() this measured the size of the SOURCE FILE the function
+# was defined in, not what the closure captures. options(keep.source) defaults to
+# interactive(), so R attaches a srcref -- a reference to a srcfile environment
+# holding the file's full text -- and serialize() carries it along. That made
+# these assertions pass under Rscript (CI, keep.source = FALSE) and fail every
+# time in a console, which is the worst kind of test to inherit.
+#
+# Measured on this repo, sourcing R/ exactly as helper.R does:
+#
+#   keep.source   ORA worker   GSEA worker
+#   TRUE            0.368 MB     1.478 MB     <- source file size, not capture
+#   FALSE           0.005 MB     0.006 MB
+#   with removeSource(), either   0.001 MB     0.002 MB
+#
+# The structural assertions below (ls(environment(w))) were always correct and
+# always passed; only the size measurement was wrong.
+#
+# smib() is called on three shapes -- a bare closure, a list holding a closure
+# (`list(w, go_job)`), and data.frames -- so the stripping walks the structure
+# instead of calling removeSource() on whatever it is handed. removeSource()
+# accepts only a function or language object and errors on a list.
+strip_srcrefs <- function(x) {
+    if (is.function(x)) return(removeSource(x))
+    # Recurse into plain lists so a closure nested in one is stripped too.
+    # data.frames are left as they are: they carry no functions in these
+    # fixtures, and rebuilding one would change its serialized size, which the
+    # `+ 0.01` tolerance on the term2gene comparison below depends on. `x[] <-`
+    # keeps the list's class and attributes.
+    if (is.list(x) && !is.data.frame(x)) {
+        x[] <- lapply(x, strip_srcrefs)
+        return(x)
+    }
+    x
+}
+
+smib <- function(x) length(serialize(strip_srcrefs(x), NULL)) / 1024 / 1024
 
 # --- deterministic synthetic annotation tables (3 DBs so "all" >> "one") ---
 make_local_tables_fix <- function() {
@@ -58,6 +95,42 @@ test_that("GSEA worker captures only scalar thresholds (no local_tables)", {
     expect_setequal(ls(environment(w)), c("pvalueCutoff", "pAdjustMethod"))
     expect_false("local_tables" %in% ls(environment(w)))
     expect_lt(smib(w), 0.1)
+})
+
+test_that("smib() measures the closure, not the file it was defined in", {
+    # Guards the two assertions above. A srcref points at a srcfile environment
+    # holding the source file's full text, so a naive serialize() of any closure
+    # reports that file's size instead of what the closure captures. Because
+    # keep.source defaults to interactive(), dropping removeSource() would leave
+    # CI green (Rscript: FALSE) while failing in every console (TRUE) -- so CI
+    # cannot catch that regression and this test has to.
+    f <- tempfile(fileext = ".R")
+    writeLines(c("..smib_probe <- function(a) { force(a); function(x) a + x }",
+                 rep(paste0("# ", strrep("x", 500)), 400)), f)   # ~0.2 MB of source
+
+    # Sourced into globalenv with srcrefs kept, which is what helper.R does for
+    # every R/ file in an interactive session.
+    source(f, keep.source = TRUE)
+    withr::defer(rm("..smib_probe", envir = globalenv()))
+
+    w <- ..smib_probe(1)
+    expect_false(is.null(attr(w, "srcref")))          # the hazard is present
+    expect_gt(length(serialize(w, NULL)) / 1024^2, 0.1)  # and naive would fail
+    expect_lt(smib(w), 0.01)                          # smib is not fooled
+
+    # smib() is handed three shapes in this file, not just a bare closure.
+    # A closure nested in a list must be stripped as well -- this is the
+    # smib(list(w, go_job)) call below.
+    expect_lt(smib(list(w, list(a = 1))), 0.01)
+
+    # And a data.frame must pass through untouched: the term2gene comparison
+    # below is a size difference with a 0.01 tolerance, so rebuilding the frame
+    # would move the number it is asserting on.
+    df <- data.frame(x = 1:3, y = letters[1:3], stringsAsFactors = FALSE)
+    expect_equal(smib(df), length(serialize(df, NULL)) / 1024 / 1024)
+
+    # A list of data.frames is the shape of local_tables; it must survive too.
+    expect_equal(smib(list(a = df)), length(serialize(list(a = df), NULL)) / 1024 / 1024)
 })
 
 test_that("per-job export is a single database, far smaller than all local_tables", {
