@@ -27,7 +27,26 @@
 #
 # The structural assertions below (ls(environment(w))) were always correct and
 # always passed; only the size measurement was wrong.
-smib <- function(x) length(serialize(removeSource(x), NULL)) / 1024 / 1024
+#
+# smib() is called on three shapes -- a bare closure, a list holding a closure
+# (`list(w, go_job)`), and data.frames -- so the stripping walks the structure
+# instead of calling removeSource() on whatever it is handed. removeSource()
+# accepts only a function or language object and errors on a list.
+strip_srcrefs <- function(x) {
+    if (is.function(x)) return(removeSource(x))
+    # Recurse into plain lists so a closure nested in one is stripped too.
+    # data.frames are left as they are: they carry no functions in these
+    # fixtures, and rebuilding one would change its serialized size, which the
+    # `+ 0.01` tolerance on the term2gene comparison below depends on. `x[] <-`
+    # keeps the list's class and attributes.
+    if (is.list(x) && !is.data.frame(x)) {
+        x[] <- lapply(x, strip_srcrefs)
+        return(x)
+    }
+    x
+}
+
+smib <- function(x) length(serialize(strip_srcrefs(x), NULL)) / 1024 / 1024
 
 # --- deterministic synthetic annotation tables (3 DBs so "all" >> "one") ---
 make_local_tables_fix <- function() {
@@ -98,6 +117,20 @@ test_that("smib() measures the closure, not the file it was defined in", {
     expect_false(is.null(attr(w, "srcref")))          # the hazard is present
     expect_gt(length(serialize(w, NULL)) / 1024^2, 0.1)  # and naive would fail
     expect_lt(smib(w), 0.01)                          # smib is not fooled
+
+    # smib() is handed three shapes in this file, not just a bare closure.
+    # A closure nested in a list must be stripped as well -- this is the
+    # smib(list(w, go_job)) call below.
+    expect_lt(smib(list(w, list(a = 1))), 0.01)
+
+    # And a data.frame must pass through untouched: the term2gene comparison
+    # below is a size difference with a 0.01 tolerance, so rebuilding the frame
+    # would move the number it is asserting on.
+    df <- data.frame(x = 1:3, y = letters[1:3], stringsAsFactors = FALSE)
+    expect_equal(smib(df), length(serialize(df, NULL)) / 1024 / 1024)
+
+    # A list of data.frames is the shape of local_tables; it must survive too.
+    expect_equal(smib(list(a = df)), length(serialize(list(a = df), NULL)) / 1024 / 1024)
 })
 
 test_that("per-job export is a single database, far smaller than all local_tables", {
