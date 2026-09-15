@@ -856,29 +856,41 @@ run_network_enrichment <- function(graph, community_results, config, output_dir)
         }
     )
 
+    # enrichGO returns a gseaResult carrying the full gene universe and set
+    # mappings. Retaining one per community, plus its protein vector, is what
+    # made this step peak in the gigabytes on a run with many communities --
+    # enough to be OOM-killed on a 16 GB machine. Keep only the report's
+    # columns, drop the retained protein list (it is already in community_df),
+    # and release the fitted object before the next iteration.
+    keep_cols <- c("ID", "Description", "GeneRatio", "BgRatio",
+                   "pvalue", "p.adjust", "qvalue", "Count")
+
     for (comm in communities_ids) {
         comm_proteins <- community_df$protein_name[community_df$community == comm]
         if (length(comm_proteins) < 3) next
 
+        entrez <- entrez_batch[comm_proteins]
+        entrez <- entrez[!is.na(entrez)]
+        if (length(entrez) < 3) next
+
         tryCatch({
-
-            entrez <- entrez_batch[comm_proteins]
-            entrez <- entrez[!is.na(entrez)]
-            if (length(entrez) < 3) next
-
             go_result <- clusterProfiler::enrichGO(
-
                 gene = entrez, OrgDb = org_db,
                 ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05, qvalueCutoff = 0.1
             )
 
             if (!is.null(go_result) && nrow(go_result@result) > 0) {
+                res <- go_result@result
+                res <- res[, intersect(keep_cols, colnames(res)), drop = FALSE]
                 enrichment_results[[paste0("community_", comm)]] <- list(
-                    go = go_result@result, n_proteins = length(comm_proteins), proteins = comm_proteins
+                    go = res, n_proteins = length(comm_proteins)
                 )
             }
+            rm(go_result)
         }, error = function(e) NULL)
     }
+    rm(entrez_batch)
+    invisible(gc(verbose = FALSE))
 
     if (length(enrichment_results) == 0) return(NULL)
 
