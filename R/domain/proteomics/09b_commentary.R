@@ -286,8 +286,7 @@ build_proteomics_extra_data <- function(de_res, qc_pre_obj, config) {
                 if (!(fc_col %in% names(sdf))) next
 
                 padj_vals <- as.numeric(sdf[[pc]])
-                lfc_vals  <- as.numeric(sdf[[fc_col]])
-                log2fc    <- sign(lfc_vals) * log2(pmax(abs(lfc_vals), 1e-10))
+                log2fc    <- resolve_log2fc(sdf, cn)
                 genes     <- as.character(sdf[[gene_col]])
 
                 sig_mask <- !is.na(padj_vals) & padj_vals <= p_cut

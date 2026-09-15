@@ -112,6 +112,44 @@ test_that("the pathway DE table carries the stored log2FC", {
     expect_equal(tbl$log2FoldChange, borderline$`log2FC.imputs.C_vs_V`)
 })
 
+test_that("the pipeline summary fallback counts from the stored log2FC", {
+    config <- list(
+        project = list(name = "test"),
+        modes   = list(proteomics = list(de = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5)))
+    )
+
+    # No pass.imputs columns, so the summary recomputes from padj and log2FC.
+    stats <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                               de_res = list(summary_df = borderline_summary()),
+                                               pathway_res = NULL)
+    expect_named(stats$de$contrasts, "C_vs_V")   # not "imputs.C_vs_V"
+    expect_equal(stats$de$contrasts$C_vs_V$total, 0)
+
+    # A table from before the log2FC column still falls back to linearFC.
+    old_sdf <- borderline_summary()
+    old_sdf$`log2FC.imputs.C_vs_V` <- NULL
+    stats_old <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                                   de_res = list(summary_df = old_sdf),
+                                                   pathway_res = NULL)
+    expect_equal(stats_old$de$contrasts$C_vs_V$total, 5)
+})
+
+test_that("the pipeline summary prefers log2FoldChange in per-contrast tables", {
+    config <- list(
+        project = list(name = "test"),
+        modes   = list(proteomics = list(de = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5)))
+    )
+    tbl <- data.frame(
+        padj           = rep(1e-3, 5),
+        linearFC       = borderline$`linearFC.imputs.C_vs_V`,
+        log2FoldChange = borderline$`log2FC.imputs.C_vs_V`
+    )
+    stats <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                               de_res = list(tables = list(C_vs_V = tbl)),
+                                               pathway_res = NULL)
+    expect_equal(stats$de$contrasts$C_vs_V$total, 0)
+})
+
 test_that("the report template uses the core helper instead of its own copy", {
     f <- repo_file("R", "domain", "proteomics", "report_template_proteomics.Rmd")
     skip_if(is.na(f), "report template not found from the test working directory")
@@ -139,5 +177,23 @@ test_that("pptx, summary, volcano and pathway code read log2FC through the helpe
                          label = paste("signed_fc_to_log2() lines in", rel))
         expect_true(any(grepl("resolve_log2fc(", src, fixed = TRUE)),
                     label = paste("resolve_log2fc() used in", rel))
+    }
+})
+
+test_that("the pipeline summary and AI commentary no longer rebuild log2FC inline", {
+    checks <- list(
+        list(rel = file.path("R", "domain", "proteomics", "10_pipeline_summary.R"),
+             inline = "log2(abs(fc_vals)) * sign(fc_vals)"),
+        list(rel = file.path("R", "domain", "proteomics", "09b_commentary.R"),
+             inline = "log2(pmax(abs(lfc_vals), 1e-10))")
+    )
+    for (chk in checks) {
+        f <- repo_file(chk$rel)
+        skip_if(is.na(f), paste(chk$rel, "not found from the test working directory"))
+        src <- readLines(f, warn = FALSE)
+        expect_identical(grep(chk$inline, src, fixed = TRUE), integer(0),
+                         label = paste("inline log2 rebuild in", chk$rel))
+        expect_true(any(grepl("resolve_log2fc(", src, fixed = TRUE)),
+                    label = paste("resolve_log2fc() used in", chk$rel))
     }
 })
