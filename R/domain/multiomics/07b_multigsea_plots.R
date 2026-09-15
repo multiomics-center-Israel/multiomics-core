@@ -59,33 +59,16 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
         if (is.null(res1) || is.null(res2)) next
 
-        # Standardize 'term' column helper. Our per-omic enrichment tables key the
-        # gene set on `pathway` (e.g. "GO:0000027") with the readable label in
-        # `pathway_name`; other callers may use term/ID/Description. Match on the
-        # stable ID so both omics align on the same key.
-        get_term_col <- function(df) {
-            for (col in c("term", "ID", "pathway", "Description")) {
-                if (col %in% colnames(df)) return(as.character(df[[col]]))
-            }
-            return(rownames(df))
+        term1 <- .multigsea_term_ids(res1)
+        term2 <- .multigsea_term_ids(res2)
+        if (is.null(term1) || is.null(term2)) {
+            message("No term ID column in ", omic1, " or ", omic2,
+                    " enrichment results; skipping this pair")
+            next
         }
-
-        res1$term <- get_term_col(res1)
-        res2$term <- get_term_col(res2)
-
-        # Build term-ID → readable-name lookup. Prefer pathway/pathway_name (our
-        # schema); fall back to ID/pathway for the clusterProfiler-style shape.
-        id_to_name <- character(0)
-        for (df_tmp in list(res1, res2)) {
-            if ("pathway" %in% colnames(df_tmp) && "pathway_name" %in% colnames(df_tmp)) {
-                nms <- setNames(as.character(df_tmp$pathway_name), as.character(df_tmp$pathway))
-            } else if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-                nms <- setNames(as.character(df_tmp$pathway), as.character(df_tmp$ID))
-            } else {
-                next
-            }
-            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
-        }
+        res1$term <- term1
+        res2$term <- term2
+        id_to_name <- .multigsea_term_names(list(res1, res2))
 
         # Union of terms
         common_terms <- union(res1$term, res2$term)
@@ -370,24 +353,12 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                                       corr_method = "pearson",
                                       p_thresh = 0.05, out_dir) {
 
-    get_term_col <- function(df) {
-        if ("term" %in% colnames(df)) return(df$term)
-        if ("ID" %in% colnames(df)) return(df$ID)
-        if ("Description" %in% colnames(df)) return(df$Description)
-        return(rownames(df))
-    }
-
-    res1$term <- get_term_col(res1)
-    res2$term <- get_term_col(res2)
-
-    # Build ID -> pathway name lookup
-    id_to_name <- character(0)
-    for (df_tmp in list(res1, res2)) {
-        if ("pathway" %in% colnames(df_tmp) && "ID" %in% colnames(df_tmp)) {
-            nms <- setNames(df_tmp$pathway, df_tmp$ID)
-            id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
-        }
-    }
+    term1 <- .multigsea_term_ids(res1)
+    term2 <- .multigsea_term_ids(res2)
+    if (is.null(term1) || is.null(term2)) return(invisible(NULL))
+    res1$term <- term1
+    res2$term <- term2
+    id_to_name <- .multigsea_term_names(list(res1, res2))
 
     common_terms <- union(res1$term, res2$term)
     if (length(common_terms) < 3) return(invisible(NULL))
@@ -479,6 +450,48 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 }
 
 
+#' Term IDs of a per-omic enrichment table
+#'
+#' The per-omic tables key each gene set on `pathway` (e.g. "GO:0000027") and
+#' keep the readable label in `pathway_name`; clusterProfiler-style tables use
+#' `ID` and `Description`. Matching two omics on the stable ID keeps them
+#' aligned. There is no row-name fallback on purpose: bound tables carry
+#' positional row names, which would pair unrelated pathways by row number.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @return Character vector of term IDs, one per row, or NULL when the table has
+#'   no recognised ID column.
+.multigsea_term_ids <- function(df) {
+    for (col in c("term", "ID", "pathway", "Description")) {
+        if (col %in% colnames(df)) return(as.character(df[[col]]))
+    }
+    NULL
+}
+
+
+#' Readable names for enrichment term IDs
+#'
+#' @param dfs List of per-omic enrichment data frames.
+#' @return Named character vector mapping term ID to readable name, keeping the
+#'   first name seen for each ID; empty when no table carries a name column.
+.multigsea_term_names <- function(dfs) {
+    id_to_name <- character(0)
+    for (df in dfs) {
+        if (all(c("pathway", "pathway_name") %in% colnames(df))) {
+            nms <- setNames(as.character(df$pathway_name), as.character(df$pathway))
+        } else if (all(c("pathway", "ID") %in% colnames(df))) {
+            # Older shape: the readable label sits in `pathway`, keyed by `ID`.
+            nms <- setNames(as.character(df$pathway), as.character(df$ID))
+        } else {
+            next
+        }
+        nms <- nms[!duplicated(names(nms))]
+        id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+    }
+    id_to_name
+}
+
+
 #' Combined MultiGSEA Enrichment Plot
 #'
 #' Creates a 2x2 grid combining pairwise scatter plots with a summary dot plot.
@@ -501,12 +514,8 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
         res <- per_omics[[om]]
         if (is.null(res) || !is.data.frame(res)) next
 
-        # Find term column
-        term_col <- NULL
-        for (tc in c("term", "ID", "Description")) {
-            if (tc %in% colnames(res)) { term_col <- tc; break }
-        }
-        if (is.null(term_col)) next
+        term_ids <- .multigsea_term_ids(res)
+        if (is.null(term_ids)) next
 
         # Find p-value column
         padj_col <- NULL
@@ -515,13 +524,9 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
         }
         if (is.null(padj_col)) next
 
-        # Resolve pathway name: prefer 'pathway' column over raw ID
-        term_ids <- res[[term_col]]
-        if ("pathway" %in% colnames(res)) {
-            term_names <- res$pathway
-        } else {
-            term_names <- term_ids
-        }
+        # Readable name where the table has one, otherwise the ID itself
+        term_names <- unname(.multigsea_term_names(list(res))[term_ids])
+        term_names[is.na(term_names)] <- term_ids[is.na(term_names)]
 
         df_tmp <- data.frame(
             term = term_ids,

@@ -47,6 +47,59 @@ test_that("mod_rnaseq_pathway: end-to-end wiring with synthetic DE + tiny GMT", 
     )))
 })
 
+test_that("mod_rnaseq_pathway resolves a list of relative GMT paths against the raw dir", {
+    skip_if_not_installed("fgsea")
+
+    # Two GMTs given relative to paths$raw, as a YAML list arrives. Both broke:
+    # a scalar path check errors on a list, and an unresolved relative path
+    # loads zero gene sets.
+    proj <- tempfile("test-rna-gmt-proj-")
+    dir.create(file.path(proj, "data", "gmt"), recursive = TRUE)
+    on.exit(unlink(proj, recursive = TRUE), add = TRUE)
+    writeLines("SET_A\tdesc A\tg1\tg2\tg3\tg4\tg5",
+               file.path(proj, "data", "gmt", "a.gmt"))
+    writeLines("SET_B\tdesc B\tg6\tg7\tg8\tg9\tg10\tg11\tg12",
+               file.path(proj, "data", "gmt", "b.gmt"))
+
+    de_res <- list(tables = list(
+        contrast_A = data.frame(
+            FeatureID      = paste0("g", 1:15),
+            log2FoldChange = c(2.0, -1.5, 0.1, 1.2, -2.1, 0.5, 0.3, -0.7, 1.8, -1.1,
+                               0.4, -0.2, 1.5, -1.8, 0.6),
+            pvalue         = c(0.001, 0.01, 0.8, 0.04, 0.005, 0.2, 0.3, 0.15, 0.002, 0.03,
+                               0.5, 0.7, 0.008, 0.001, 0.4),
+            padj           = c(0.01, 0.05, 0.9, 0.1, 0.02, 0.3, 0.4, 0.25, 0.01, 0.08,
+                               0.6, 0.8, 0.04, 0.01, 0.5),
+            stat           = c(5, -3, 0.2, 2.5, -4, 1, 1.2, -1.5, 4.5, -2.8,
+                               0.8, -0.3, 3.2, -4.5, 1.1),
+            stringsAsFactors = FALSE
+        )
+    ))
+    config <- list(
+        project = list(dir = proj),
+        paths   = list(raw = "data"),
+        modes   = list(rna = list(
+            annotation = list(skip_annotation = TRUE, organism = "Homo sapiens"),
+            pathway    = list(
+                enabled   = TRUE,
+                databases = character(0),
+                gmt_file  = list("gmt/a.gmt", "gmt/b.gmt"),
+                min_size  = 3,
+                max_size  = 50
+            )
+        ))
+    )
+    out_dir <- tempfile("test-rna-pathway-rel-")
+    dir.create(out_dir)
+    on.exit(unlink(out_dir, recursive = TRUE), add = TRUE)
+
+    res <- suppressMessages(suppressWarnings(
+        mod_rnaseq_pathway(de_res, list(expr_filt = NULL, meta = NULL), config, out_dir)
+    ))
+    # With zero gene sets loaded the module returns an empty pathway_results.
+    expect_gt(length(res$pathway_results), 0)
+})
+
 test_that("run_proteomics_pathway: end-to-end wiring with synthetic summary + tiny GMT", {
     skip_if_not_installed("fgsea")
 

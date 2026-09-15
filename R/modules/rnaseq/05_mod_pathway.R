@@ -189,13 +189,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # 4. Load gene sets (GO, KEGG, and/or custom GMT)
     # ------------------------------------------------------------------
     databases <- pw_cfg$databases %||% c("GO", "KEGG")
-    gmt_file  <- pw_cfg$gmt_file
-    # Resolve a relative GMT path against the raw data dir (mirrors proteomics),
-    # so load_gene_sets' file.exists() check succeeds regardless of the run cwd.
-    if (!is.null(gmt_file) && nzchar(gmt_file) &&
-        !grepl("^([A-Za-z]:|/|\\\\)", gmt_file)) {
-        gmt_file <- resolve_raw_path(config, gmt_file)
-    }
+    # Resolve relative GMT paths against the raw data dir so load_gene_sets'
+    # file.exists() check succeeds regardless of the run cwd. gmt_file may be a
+    # list of GMTs, and ~/, drive and UNC paths must be left as they are.
+    gmt_file  <- resolve_input_path(config, pw_cfg$gmt_file)
 
     gene_sets <- load_gene_sets(
         organism         = organism,

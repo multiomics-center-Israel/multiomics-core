@@ -134,11 +134,21 @@ extract_enrichment_df <- function(enrich_res) {
 
     # Contrast-keyed collection. The per-contrast results live either under a
     # $pathway_results slot (RNA) or at the top level of the list keyed by
-    # contrast name (proteomics: list(<contrast> = list(custom_fgsea = df))).
+    # contrast name (proteomics: list(<contrast> = list(<db>_fgsea = df, ...))).
+    # A top-level list only counts as contrast-keyed when every element is a list
+    # of data frames. The metabolomics wrapper (qea, ora, ..., plots, files) fails
+    # that on purpose: its method tables use other p-value columns, and taking
+    # them here would skip the KEGG-from-DE fallback for that layer.
+    is_contrast_keyed <- is.list(enrich_res) && length(enrich_res) > 0 &&
+        all(vapply(enrich_res, function(x) {
+            is.list(x) && !is.data.frame(x) &&
+                all(vapply(x, function(y) is.null(y) || is.data.frame(y), logical(1)))
+        }, logical(1)))
+
     contrast_list <- if (!is.null(enrich_res$pathway_results) &&
                          is.list(enrich_res$pathway_results)) {
         enrich_res$pathway_results
-    } else if (is.list(enrich_res)) {
+    } else if (is_contrast_keyed) {
         enrich_res
     } else {
         NULL
@@ -1052,12 +1062,23 @@ get_organism_db <- function(organism) {
 
 
 #' Get KEGG organism code
+#'
+#' @param organism Organism name from \code{config$global$organism}, e.g.
+#'   "human" or "Homo sapiens".
+#' @return KEGG organism code (e.g. "hsa"), or NULL when the organism is
+#'   missing, blank or not in the lookup.
 get_kegg_organism <- function(organism) {
     # A missing/blank organism (e.g. no global.organism set) must return NULL, not
     # error: list[[character(0)]] throws "attempt to select less than one element".
-    if (is.null(organism) || length(organism) != 1L || is.na(organism) || !nzchar(organism)) {
-        return(NULL)
+    if (length(organism) == 0L) return(NULL)
+    # Several organisms is a config mistake rather than a missing value; returning
+    # NULL would silently drop KEGG enrichment instead of pointing at the cause.
+    if (length(organism) > 1L) {
+        stop("global.organism must be a single organism, but it has ",
+             length(organism), " values (", paste(unlist(organism), collapse = ", "),
+             "). Set one name, e.g. \"human\" or \"Homo sapiens\".", call. = FALSE)
     }
+    if (is.na(organism) || !nzchar(organism)) return(NULL)
     kegg_map <- list(
         c_elegans = "cel",
         "Caenorhabditis elegans" = "cel",
