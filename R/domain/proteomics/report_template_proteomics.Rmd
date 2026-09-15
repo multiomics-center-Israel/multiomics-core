@@ -90,25 +90,9 @@ make_dt <- function(df, caption = NULL, pageLength = 15) {
     )
 }
 
-# Helper: read a sample sheet without read.csv's row-name heuristic.
-# read.csv treats column 1 as row names whenever a data row has MORE fields
-# than the header, which silently shifts every column by one. That happens on
-# any sample sheet with an unquoted comma in a free-text column, and it is
-# invisible: the frame still has the right column NAMES, just the wrong values
-# under them. readr keeps the header's column count and warns instead.
-read_samplesheet <- function(path) {
-    if (!file.exists(path)) return(NULL)
-    if (requireNamespace("readr", quietly = TRUE)) {
-        df <- tryCatch(
-            suppressWarnings(as.data.frame(
-                readr::read_csv(path, show_col_types = FALSE),
-                stringsAsFactors = FALSE)),
-            error = function(e) NULL
-        )
-        if (!is.null(df) && ncol(df) > 0) return(df)
-    }
-    tryCatch(read.csv(path, stringsAsFactors = FALSE), error = function(e) NULL)
-}
+# read_samplesheet() lives in R/core/01_io.R, sourced before this renders
+# (like signed_fc_to_log2() and cutoff_panel_html() already are), so the
+# report modes share one reader and its behaviour can be tested.
 
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
@@ -441,10 +425,8 @@ cat("# Technical Summary\n\n")
 ```{r technical-summary, eval=show_technical_summary, results='asis'}
 tech <- prot_cfg$technical_report
 
-meta_ts <- tryCatch(
-    read.csv(file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata),
-             stringsAsFactors = FALSE),
-    error = function(e) NULL
+meta_ts <- read_samplesheet(
+    file.path(proj_dir_resolved, cfg$paths$raw, prot_cfg$files$metadata)
 )
 group_col_ts <- prot_cfg$effects$color
 

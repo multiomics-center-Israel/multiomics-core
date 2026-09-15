@@ -14,6 +14,59 @@ normalize_contrast_name <- function(x) {
   gsub(" ", "", x)
 }
 
+#' Read a sample sheet, guarding both ways read.csv() mangles one
+#'
+#' \code{read.csv()} fails on a sample sheet in two independent ways, and a
+#' reader that handles one still falls to the other:
+#'
+#' \enumerate{
+#'   \item \strong{Wrong delimiter.} Sample sheets are frequently tab-separated
+#'     (.txt/.tsv). Read as CSV, every column collapses into one, and a consumer
+#'     then finds none of the columns it expects.
+#'   \item \strong{Ragged rows.} \code{read.csv()} treats column 1 as row names
+#'     whenever a data row has MORE fields than the header. One unquoted comma in
+#'     a free-text column is enough. The failure is silent: the frame keeps the
+#'     right column NAMES while every value sits one column to the left. On a
+#'     real run that put the raw file path into \code{SampleName}, no expression
+#'     column matched a sample id, and the report's explorer rendered empty with
+#'     no error. \code{row.names = NULL} does not fix it -- only a reader that
+#'     respects the header's column count does.
+#' }
+#'
+#' So the separator is detected from the header line, then the file is read with
+#' readr, which keeps the header's column count and warns rather than shifting.
+#' The base fallback keeps the detected separator; it cannot avoid the row-name
+#' heuristic, but it does not add a wrong-delimiter failure on top of it.
+#'
+#' Lives here rather than in a report template so the report modes can share one
+#' reader and this behaviour can be tested.
+#'
+#' @param path Path to the sample sheet (CSV or TSV).
+#' @return A data.frame, or \code{NULL} when \code{path} is missing, empty or
+#'   unreadable.
+read_samplesheet <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+
+  l1  <- tryCatch(readLines(path, n = 1, warn = FALSE), error = function(e) character(0))
+  tab <- length(l1) > 0 && grepl("\t", l1, fixed = TRUE)
+
+  if (requireNamespace("readr", quietly = TRUE)) {
+    df <- tryCatch(
+      suppressWarnings(as.data.frame(
+        if (tab) readr::read_tsv(path, show_col_types = FALSE)
+        else     readr::read_csv(path, show_col_types = FALSE),
+        stringsAsFactors = FALSE)),
+      error = function(e) NULL
+    )
+    if (!is.null(df) && ncol(df) > 0) return(df)
+  }
+
+  tryCatch(
+    read.delim(path, sep = if (tab) "\t" else ",", stringsAsFactors = FALSE),
+    error = function(e) NULL
+  )
+}
+
 #' Load omics input files from config
 #'
 #' Generic loader for any omics mode. Validates required files, loads CSV/TSV
