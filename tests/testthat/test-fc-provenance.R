@@ -390,11 +390,50 @@ test_that("P7 proteomics final results carry the imputed block and group means",
     nm <- names(fr)
     expect_equal(nm[which(nm == "log2FC.imputs.S_vs_NS") + 1L],
                  "linearFC.imputs.S_vs_NS")
-    # Proteomics no longer emits log2FC_from_means. The Mean. columns come from
-    # the model's own imputed matrix, so on a two-group design their difference
-    # IS the model coefficient and a separate column carried no information.
-    expect_false("log2FC_from_means.S_vs_NS" %in% nm)
+    # The fixture runs multi_imputation: TRUE, so log2FC.imputs is the consensus
+    # across runs while the Mean. columns come from the first one. The two do not
+    # reconcile on a partially measured feature, and log2FC_from_means is what
+    # makes that visible.
+    expect_true("log2FC_from_means.S_vs_NS" %in% nm)
     expect_true("log2FC_from_raw.S_vs_NS" %in% nm)
+})
+
+test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
+    meta <- prov_meta()
+    observed <- matrix(c(10, 10, 12, 12,
+                         8, NA, 9, 9),
+                       nrow = 2, byrow = TRUE,
+                       dimnames = list(c("p1", "p2"), meta$SampleID))
+    imputed <- observed
+    imputed["p2", "S_2"] <- 7.5
+    pre <- list(expr_filt = observed, expr_imp_single = imputed, meta = meta,
+                row_data = NULL)
+    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+    sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    single_cfg <- prot_config()
+    single_cfg$modes$proteomics$imputation$multi_imputation <- FALSE
+
+    fr_single <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = single_cfg
+    )
+    # One draw: log2FC.imputs IS the difference of the Mean. columns, so a
+    # separate column would repeat it.
+    expect_false("log2FC_from_means.S_vs_NS" %in% names(fr_single))
+    # The measured-only estimate is unconditional — it is the shrinkage
+    # comparison in both modes.
+    expect_true("log2FC_from_raw.S_vs_NS" %in% names(fr_single))
+
+    fr_multi <- build_final_results_proteomics(
+        pre = pre, summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = prot_config()
+    )
+    expect_true("log2FC_from_means.S_vs_NS" %in% names(fr_multi))
+    # And it really is the difference of the two Mean cells, not a copy of the
+    # consensus coefficient.
+    expect_equal(fr_multi$log2FC_from_means.S_vs_NS,
+                 fr_multi$Mean.S - fr_multi$Mean.NS)
 })
 
 
@@ -762,7 +801,20 @@ test_that("P6 provenance notes cover every column family the mode emits", {
                       "log2FC.imputs.<contrast>", "log2FC_from_raw.<contrast>",
                       "Mean.raw.<group>", "N.observed.<group>",
                       "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
-    expect_false("log2FC_from_means.<contrast>" %in% prot$glossary$Column)
+
+    # The glossary must describe the workbook it is bound into, and the two
+    # imputation modes produce different workbooks.
+    expect_true("log2FC_from_means.<contrast>" %in% prot$glossary$Column)
+    prot_single <- build_provenance_notes("proteomics", multi_imputation = FALSE)
+    expect_false("log2FC_from_means.<contrast>" %in% prot_single$glossary$Column)
+
+    # Under multi-imputation the notes must say the Mean. columns are one run
+    # and log2FC.imputs is the consensus — the whole point of the distinction.
+    expect_true(any(grepl("consensus across every imputation run", prot$notes)))
+    expect_true(any(grepl("multi_imputation", prot$notes)))
+    # Under single imputation they must say step 1 reproduces it exactly.
+    expect_true(any(grepl("reproduces it exactly", prot_single$notes)))
+    expect_false(any(grepl("consensus across every imputation run", prot_single$notes)))
 
     # Both must name the shrinkage comparison the naive column exists for
     expect_true(any(grepl("shrinkage", rna$notes)))
@@ -802,8 +854,15 @@ spaced_contrasts <- function() {
 test_that("P9 the raw column is keyed the way get_contrast_cols reads it", {
     cols <- get_contrast_cols("S vs NS", mode = "proteomics")
     expect_equal(cols$log2fc_raw, "log2FC_from_raw.SvsNS")
-    # For proteomics the raw column IS the shrinkage comparison.
-    expect_equal(cols$log2fc_raw, cols$log2fc_means)
+    # For proteomics the raw column IS the shrinkage comparison — the means
+    # column is a different column with a different job.
+    expect_equal(cols$log2fc_check, cols$log2fc_raw)
+    expect_equal(cols$log2fc_means, "log2FC_from_means.SvsNS")
+    expect_false(identical(cols$log2fc_check, cols$log2fc_means))
+
+    # RNA has no measured-only estimate, so the two coincide there.
+    rna_cols <- get_contrast_cols("S_vs_NS", mode = "rna")
+    expect_equal(rna_cols$log2fc_check, rna_cols$log2fc_means)
 
     # RNA keeps spaces, so its key is the contrast name unchanged.
     expect_equal(get_contrast_cols("S vs NS", mode = "rna")$log2fc_raw,

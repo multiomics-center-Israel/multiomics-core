@@ -59,11 +59,15 @@ check_log2fc_shrinkage <- function(de_stats,
 
     rows <- lapply(contrasts, function(cn) {
         cols <- get_contrast_cols(cn, mode = mode)
-        if (is.null(cols$log2fc) || is.null(cols$log2fc_means)) return(NULL)
-        if (!all(c(cols$log2fc, cols$log2fc_means) %in% de_cols)) return(NULL)
+        # log2fc_check, not log2fc_means: proteomics compares against the
+        # measured-only estimate, which is the one the model had no hand in.
+        # Falls back for modes that do not distinguish the two.
+        naive_col <- cols$log2fc_check %||% cols$log2fc_means
+        if (is.null(cols$log2fc) || is.null(naive_col)) return(NULL)
+        if (!all(c(cols$log2fc, naive_col) %in% de_cols)) return(NULL)
 
         model <- as.numeric(de_stats[[cols$log2fc]])
-        naive <- as.numeric(de_stats[[cols$log2fc_means]])
+        naive <- as.numeric(de_stats[[naive_col]])
         padj  <- if (cols$padj %in% de_cols) as.numeric(de_stats[[cols$padj]]) else rep(NA_real_, length(model))
 
         usable <- is.finite(model) & is.finite(naive)
@@ -129,7 +133,7 @@ warn_log2fc_shrinkage <- function(check, mode = "rna") {
     cols_for <- function(cn) {
         cols <- get_contrast_cols(cn, mode = mode)
         list(model = cols$log2fc %||% "log2FC",
-             naive = cols$log2fc_means %||% "log2FC_from_means")
+             naive = cols$log2fc_check %||% cols$log2fc_means %||% "log2FC_from_means")
     }
 
     flagged <- check[check$flag != "ok", , drop = FALSE]

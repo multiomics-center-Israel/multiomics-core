@@ -157,13 +157,32 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
     mean_cols <- build_group_mean_proteomics(pre_model, contrasts_df, config)
 
     # Pre-imputation estimate, computed on expr_filt (NAs still present). This
-    # is the only genuinely model-free fold change in the table: with a
-    # two-group design, a difference of means taken on the model's own matrix
-    # is the model coefficient, so log2FC_from_means carried no information
-    # that log2FC.imputs did not already carry and has been dropped.
+    # is the only genuinely model-free fold change in the table, and the one the
+    # shrinkage check compares against.
     raw_stats <- build_group_raw_stats_proteomics(pre, contrasts_df, config)
     raw_log2fc <- compute_naive_log2fc_columns(
         raw_stats$means, contrasts_df, scale = "log2", prefix = "Mean.raw.")
+
+    # Whether log2FC_from_means is worth emitting depends on how many times the
+    # pipeline imputed, so it is decided from imputation$multi_imputation rather
+    # than dropped outright:
+    #
+    #   multi_imputation: false -> one draw. log2FC.imputs is that draw's
+    #     coefficient, and on a two-group design a difference of the model
+    #     matrix's own group means IS that coefficient. The column would carry
+    #     nothing log2FC.imputs does not, so it is omitted.
+    #
+    #   multi_imputation: true (default) -> log2FC.imputs is the consensus,
+    #     log2(mean(2^logFC)) across no_repetitions runs (05_de_summary.R), while
+    #     the Mean. columns come from imputations[[1]] alone. On a partially
+    #     measured feature those are NOT the same number, and log2FC_from_means
+    #     is what makes the gap visible instead of leaving it unstated.
+    multi_imp <- config$modes$proteomics$imputation$multi_imputation %||% TRUE
+    naive_log2fc <- if (isFALSE(multi_imp)) {
+        NULL
+    } else {
+        compute_naive_log2fc_columns(mean_cols, contrasts_df, scale = "log2")
+    }
 
     build_final_results_generic(
         summary_df = summary_df,
@@ -183,7 +202,7 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
         # per-sample values to the reported logFC.
         norm_expr = expr_for_model,
         mean_cols = mean_cols,
-        naive_log2fc = NULL,
+        naive_log2fc = naive_log2fc,
         raw_stat_cols = raw_stats$combined,
         raw_log2fc = raw_log2fc
     )
