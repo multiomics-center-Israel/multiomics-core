@@ -9,7 +9,25 @@
 # reproducibility. These tests lock in the behaviour and prove results/RNG are
 # unchanged.
 
-smib <- function(x) length(serialize(x, NULL)) / 1024 / 1024
+# Serialized size in MB, with srcrefs stripped first.
+#
+# Without removeSource() this measured the size of the SOURCE FILE the function
+# was defined in, not what the closure captures. options(keep.source) defaults to
+# interactive(), so R attaches a srcref -- a reference to a srcfile environment
+# holding the file's full text -- and serialize() carries it along. That made
+# these assertions pass under Rscript (CI, keep.source = FALSE) and fail every
+# time in a console, which is the worst kind of test to inherit.
+#
+# Measured on this repo, sourcing R/ exactly as helper.R does:
+#
+#   keep.source   ORA worker   GSEA worker
+#   TRUE            0.368 MB     1.478 MB     <- source file size, not capture
+#   FALSE           0.005 MB     0.006 MB
+#   with removeSource(), either   0.001 MB     0.002 MB
+#
+# The structural assertions below (ls(environment(w))) were always correct and
+# always passed; only the size measurement was wrong.
+smib <- function(x) length(serialize(removeSource(x), NULL)) / 1024 / 1024
 
 # --- deterministic synthetic annotation tables (3 DBs so "all" >> "one") ---
 make_local_tables_fix <- function() {
@@ -58,6 +76,28 @@ test_that("GSEA worker captures only scalar thresholds (no local_tables)", {
     expect_setequal(ls(environment(w)), c("pvalueCutoff", "pAdjustMethod"))
     expect_false("local_tables" %in% ls(environment(w)))
     expect_lt(smib(w), 0.1)
+})
+
+test_that("smib() measures the closure, not the file it was defined in", {
+    # Guards the two assertions above. A srcref points at a srcfile environment
+    # holding the source file's full text, so a naive serialize() of any closure
+    # reports that file's size instead of what the closure captures. Because
+    # keep.source defaults to interactive(), dropping removeSource() would leave
+    # CI green (Rscript: FALSE) while failing in every console (TRUE) -- so CI
+    # cannot catch that regression and this test has to.
+    f <- tempfile(fileext = ".R")
+    writeLines(c("..smib_probe <- function(a) { force(a); function(x) a + x }",
+                 rep(paste0("# ", strrep("x", 500)), 400)), f)   # ~0.2 MB of source
+
+    # Sourced into globalenv with srcrefs kept, which is what helper.R does for
+    # every R/ file in an interactive session.
+    source(f, keep.source = TRUE)
+    withr::defer(rm("..smib_probe", envir = globalenv()))
+
+    w <- ..smib_probe(1)
+    expect_false(is.null(attr(w, "srcref")))          # the hazard is present
+    expect_gt(length(serialize(w, NULL)) / 1024^2, 0.1)  # and naive would fail
+    expect_lt(smib(w), 0.01)                          # smib is not fooled
 })
 
 test_that("per-job export is a single database, far smaller than all local_tables", {
