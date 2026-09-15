@@ -74,18 +74,30 @@ resolve_gene_protein_mapping_file <- function(config) {
 #' (\code{GENE_*}) feature IDs.
 #'
 #' When \code{modes$multiomics$require_one_to_one_mapping} is TRUE, the same
-#' 1:1 filter that harmonization applies is applied here. Ambiguity is judged on
-#' the configured file as a whole, \emph{before} narrowing to the supplied IDs:
-#' a gene that the file maps to two proteins is ambiguous whether or not both
-#' proteins survived DE filtering, so which pairs qualify as 1:1 does not drift
-#' with the DE cutoffs.
+#' 1:1 filter that harmonization applies is applied here, at the same scope.
+#' The order is: narrow to the experiment's measured IDs, judge ambiguity, then
+#' narrow to the supplied (DE) IDs. Both ends of that order matter:
+#' \itemize{
+#'   \item Judging ambiguity on the whole file would drop a valid pair whenever
+#'     a reusable mapping file lists an isoform that this experiment never
+#'     measured — there is no ambiguity to resolve if only one side was observed.
+#'   \item Judging it after narrowing to the DE IDs would call a gene
+#'     unambiguous just because one of its proteins missed the DE cutoffs,
+#'     making "1:1" drift with the cutoffs.
+#' }
 #'
 #' @param gene_ids Character vector of RNA-seq gene IDs, in their original space.
 #' @param protein_ids Character vector of proteomics protein IDs, original space.
 #' @param config Full config object.
+#' @param scope_gene_ids Gene IDs measured in this experiment (the RNA
+#'   expression matrix rownames), defining the scope at which ambiguity is
+#'   judged. NULL falls back to the whole mapping file.
+#' @param scope_protein_ids Protein IDs measured in this experiment, likewise.
 #' @return Data frame (gene_id, protein_id, mapping_source[, gene_symbol]), or
 #'   NULL if no custom mapping file is configured or it cannot be read.
-build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
+build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config,
+                                                scope_gene_ids = NULL,
+                                                scope_protein_ids = NULL) {
     custom_map_file <- resolve_gene_protein_mapping_file(config)
     if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
         return(NULL)
@@ -98,6 +110,14 @@ build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
         }
     )
     if (is.null(mapping)) return(NULL)
+
+    # Same scope harmonization uses (build_gene_protein_mapping() narrows to the
+    # expression IDs, then 01_mod_harmonization.R applies the filter).
+    mapping <- narrow_mapping_to_ids(
+        mapping,
+        gene_ids = scope_gene_ids,
+        protein_ids = scope_protein_ids
+    )
 
     # This mapping replaces the harmonized one for concordance, so it must honour
     # the same setting: otherwise a gene mapped to several proteins enters the

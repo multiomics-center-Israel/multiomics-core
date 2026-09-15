@@ -93,9 +93,15 @@ normalize_de_for_concordance <- function(de_res, omics_type = "unknown") {
 #' @param mae MultiAssayExperiment with harmonized features (fallback)
 #' @param config Full config object
 #' @param out_dir Output directory for plots
+#' @param scope_gene_ids Gene IDs measured in this experiment (RNA expression
+#'   matrix rownames). Used to scope 1:1 mapping filtering as harmonization
+#'   does; NULL falls back to the whole mapping file.
+#' @param scope_protein_ids Protein IDs measured in this experiment, likewise.
 #' @return List with: concordance (named list of per-pair results), plots
 analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NULL,
-                                            mae = NULL, config, out_dir = NULL) {
+                                            mae = NULL, config, out_dir = NULL,
+                                            scope_gene_ids = NULL,
+                                            scope_protein_ids = NULL) {
 
     if (length(de_results) < 2) {
         stop("Concordance analysis requires at least 2 omics layers with DE results")
@@ -136,7 +142,9 @@ analyze_multiomics_concordance <- function(de_results, gene_protein_mapping = NU
             build_gene_protein_mapping_from_ids(
                 gene_ids = de_flat$transcriptomics$feature_id,
                 protein_ids = de_flat$proteomics$feature_id,
-                config = config
+                config = config,
+                scope_gene_ids = scope_gene_ids,
+                scope_protein_ids = scope_protein_ids
             ),
             error = function(e) {
                 warning("From-scratch gene-protein mapping failed: ", e$message)

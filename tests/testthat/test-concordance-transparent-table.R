@@ -67,15 +67,18 @@ test_that("build_gene_protein_mapping_from_ids honours require_one_to_one_mappin
     expect_equal(nrow(res_all), nrow(pairs))
 })
 
-test_that("1:1 filtering judges ambiguity on the file, not on the surviving DE features", {
-    # EHI_001 is ambiguous in the file (two proteins); XP_2 did not survive DE
-    # filtering. Narrowing first would leave EHI_001 -> XP_1 looking unambiguous.
-    pairs <- data.frame(
-        gene_id    = c("EHI_001", "EHI_001", "EHI_002"),
-        protein_id = c("XP_1",    "XP_2",    "XP_3"),
-        stringsAsFactors = FALSE
-    )
-    map_file <- make_mapping_file(pairs)
+# Ambiguity is judged at the experiment's measured-ID scope, exactly where
+# harmonization judges it — not on the whole file, and not on the DE survivors.
+# The two tests below pin the two ends of that: same file, same DE IDs, and the
+# scope alone decides whether EHI_001 is ambiguous.
+ambiguous_pairs <- data.frame(
+    gene_id    = c("EHI_001", "EHI_001", "EHI_002"),
+    protein_id = c("XP_1",    "XP_2",    "XP_3"),
+    stringsAsFactors = FALSE
+)
+
+test_that("a protein measured but lost to the DE cutoffs still makes its gene ambiguous", {
+    map_file <- make_mapping_file(ambiguous_pairs)
     on.exit(unlink(map_file), add = TRUE)
 
     strict <- list(modes = list(multiomics = list(
@@ -85,12 +88,40 @@ test_that("1:1 filtering judges ambiguity on the file, not on the surviving DE f
 
     res <- build_gene_protein_mapping_from_ids(
         gene_ids = c("EHI_001", "EHI_002"),
-        protein_ids = c("XP_1", "XP_3"),   # XP_2 absent from the DE table
-        config = strict
+        protein_ids = c("XP_1", "XP_3"),          # XP_2 missed the DE cutoffs
+        config = strict,
+        scope_gene_ids = c("EHI_001", "EHI_002"),
+        scope_protein_ids = c("XP_1", "XP_2", "XP_3")  # but XP_2 was measured
     )
 
+    # Both of EHI_001's proteins exist in the data, so the gene is genuinely
+    # ambiguous; which pairs are 1:1 must not drift with the DE cutoffs.
     expect_identical(res$gene_id, "EHI_002")
     expect_identical(res$protein_id, "XP_3")
+})
+
+test_that("a protein the experiment never measured does not make its gene ambiguous", {
+    map_file <- make_mapping_file(ambiguous_pairs)
+    on.exit(unlink(map_file), add = TRUE)
+
+    strict <- list(modes = list(multiomics = list(
+        gene_protein_mapping_file = map_file,
+        require_one_to_one_mapping = TRUE
+    )))
+
+    res <- build_gene_protein_mapping_from_ids(
+        gene_ids = c("EHI_001", "EHI_002"),
+        protein_ids = c("XP_1", "XP_3"),
+        config = strict,
+        scope_gene_ids = c("EHI_001", "EHI_002"),
+        scope_protein_ids = c("XP_1", "XP_3")     # XP_2 never measured at all
+    )
+
+    # Only one side of EHI_001 was ever observed, so there is no ambiguity to
+    # resolve — a reusable mapping file listing unmeasured isoforms must not
+    # silently delete valid concordance rows.
+    expect_setequal(res$gene_id, c("EHI_001", "EHI_002"))
+    expect_setequal(res$protein_id, c("XP_1", "XP_3"))
 })
 
 test_that("concordance table carries original IDs beside both log2FCs, and drives the correlation", {
