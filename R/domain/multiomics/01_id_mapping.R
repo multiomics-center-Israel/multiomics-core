@@ -73,6 +73,10 @@ resolve_gene_protein_mapping_file <- function(config) {
 #' mapping from the original ID space rather than trusting harmonized
 #' (\code{GENE_*}) feature IDs.
 #'
+#' When \code{modes$multiomics$require_one_to_one_mapping} is TRUE, the same
+#' 1:1 filter that harmonization applies is applied here, so both steps work
+#' from the same gene-protein pairs.
+#'
 #' @param gene_ids Character vector of RNA-seq gene IDs, in their original space.
 #' @param protein_ids Character vector of proteomics protein IDs, original space.
 #' @param config Full config object.
@@ -83,13 +87,20 @@ build_gene_protein_mapping_from_ids <- function(gene_ids, protein_ids, config) {
     if (is.null(custom_map_file) || !file.exists(custom_map_file)) {
         return(NULL)
     }
-    tryCatch(
+    mapping <- tryCatch(
         load_custom_gene_protein_mapping(custom_map_file, gene_ids, protein_ids),
         error = function(e) {
             warning("Could not read gene-protein mapping file: ", e$message)
             NULL
         }
     )
+    # This mapping replaces the harmonized one for concordance, so it must honour
+    # the same setting: otherwise a gene mapped to several proteins enters the
+    # concordance table once per protein and gets extra weight in the reported r.
+    if (!is.null(mapping) && isTRUE(config$modes$multiomics$require_one_to_one_mapping)) {
+        mapping <- filter_to_one_to_one_mapping(mapping)
+    }
+    mapping
 }
 
 

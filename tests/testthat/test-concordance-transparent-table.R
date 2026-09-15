@@ -41,6 +41,32 @@ test_that("build_gene_protein_mapping_from_ids returns NULL when no mapping file
     expect_null(build_gene_protein_mapping_from_ids("EHI_001", "XP_1", config = list()))
 })
 
+test_that("build_gene_protein_mapping_from_ids honours require_one_to_one_mapping", {
+    # EHI_001 maps to two proteins and XP_3 to two genes; only EHI_004/XP_4 is 1:1.
+    pairs <- data.frame(
+        gene_id    = c("EHI_001", "EHI_001", "EHI_002", "EHI_003", "EHI_004"),
+        protein_id = c("XP_1",    "XP_2",    "XP_3",    "XP_3",    "XP_4"),
+        stringsAsFactors = FALSE
+    )
+    map_file <- make_mapping_file(pairs)
+    on.exit(unlink(map_file), add = TRUE)
+    genes <- unique(pairs$gene_id)
+    prots <- unique(pairs$protein_id)
+
+    strict <- list(modes = list(multiomics = list(
+        gene_protein_mapping_file = map_file,
+        require_one_to_one_mapping = TRUE
+    )))
+    res <- build_gene_protein_mapping_from_ids(genes, prots, strict)
+    expect_identical(res$gene_id, "EHI_004")
+    expect_identical(res$protein_id, "XP_4")
+
+    # Unset means off, as in harmonization: every pair in the file survives.
+    lenient <- list(modes = list(multiomics = list(gene_protein_mapping_file = map_file)))
+    res_all <- build_gene_protein_mapping_from_ids(genes, prots, lenient)
+    expect_equal(nrow(res_all), nrow(pairs))
+})
+
 test_that("concordance table carries original IDs beside both log2FCs, and drives the correlation", {
     n <- 10
     genes <- paste0("EHI_", sprintf("%03d", seq_len(n)))
