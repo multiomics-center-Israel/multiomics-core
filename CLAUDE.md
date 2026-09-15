@@ -148,6 +148,18 @@ We work with biological data. Some of it may be unpublished, patient-associated,
 
 ---
 
+## Running R — you don't, we do
+
+- **Never run R.** Not `R`, not `Rscript`, not the test suite, not `tar_validate()`, not a one-liner to check what a function returns.
+- **Never install R or an R package.** Not `install.packages()`, not a system package manager, not into a scratch library. A missing package is a reason to hand the check over, not to go and fetch it.
+- **When you need a result from R, write the commands and ask us to run them.** Give a block we can paste, say what you expect to see, and wait for the answer before continuing.
+
+**Why:** your environment is not the one this pipeline runs in. Different R version, no Bioconductor packages, and options like `keep.source` differ from an interactive session. A green result there can hide a failure we would hit, and a red one can be an artefact of your sandbox — we have had both. Running it yourself does not save a round trip, it adds one.
+
+This applies to verification claims too. If you could not run something, **say so plainly** in the PR body and leave the checklist box unticked, rather than wording it so it reads as checked. Checks that need no R are still yours to do and worth doing: re-reading the diff, brace balance, grepping for a symbol, confirming a function is defined once.
+
+---
+
 ## Working with `renv`
 
 This project uses `{renv}` for reproducible dependencies. The rules:
