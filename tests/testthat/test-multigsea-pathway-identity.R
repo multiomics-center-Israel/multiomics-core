@@ -517,6 +517,87 @@ test_that("a name on a discarded duplicate still reaches the plot label", {
 })
 
 
+test_that("a row with no identity does not take the pairwise plot down with it", {
+    skip_if_not_installed("ggplot2")
+
+    # An unkeyable row used to reach resolve_term() as NA, where
+    # nchar(NA_character_) is NA and `if (nchar(t) == 0)` errors. The main
+    # pairwise loop has no tryCatch around it, so that aborted every MultiGSEA
+    # panel, not just this pair.
+    rows <- data.frame(
+        pathway = c("hsa00010", "hsa00020", "hsa00030", NA),
+        padj    = c(0.01, 0.02, 0.03, 0.04),
+        stringsAsFactors = FALSE
+    )
+
+    out_dir <- withr::local_tempdir()
+    expect_no_error(suppressMessages(suppressWarnings(
+        .save_multigsea_pair_plot(rows, rows, "transcriptomics", "metabolomics",
+                                  out_dir = out_dir, kegg_org = "hsa")
+    )))
+
+    written <- utils::read.csv(
+        file.path(out_dir, "multigsea_transcriptomics_vs_metabolomics.csv"),
+        colClasses = c(term = "character"), stringsAsFactors = FALSE
+    )
+    expect_setequal(written$term, c("00010", "00020", "00030"))
+})
+
+
+# ---- the synthesized label must not undercut resolve_term() ----------------
+#
+# Installing a label in the map shadows resolve_term()'s own fallback, so
+# anything the synthesized label fails to strip is text that used to be removed.
+
+test_that("a GO identifier with a tilde name keeps only the name", {
+    df <- data.frame(pathway = "GO:0006915~Apoptosis", stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["GO:0006915~Apoptosis"]]), "Apoptosis")
+})
+
+test_that("another species' accession is still stripped for display", {
+    # mmu00010 is correctly NOT the same pathway as hsa00010 for joining, so the
+    # key keeps its prefix -- but resolve_term() strips any two or three letter
+    # prefix for display, and the label has to match that.
+    df <- data.frame(pathway = "mmu00010 Glycolysis / Gluconeogenesis",
+                     stringsAsFactors = FALSE)
+
+    keys <- .multigsea_term_ids(df, kegg_org = "hsa")
+    nms  <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(keys, "mmu00010 Glycolysis / Gluconeogenesis")
+    expect_identical(unname(nms[[keys]]), "Glycolysis / Gluconeogenesis")
+})
+
+
+# ---- a stated name outranks one synthesized from an identifier -------------
+
+test_that("an explicit pathway_name beats a bare identifier from an earlier omic", {
+    # "GO:0006915" is not a KEGG accession, so ranking on that alone called it
+    # readable and let it win on input order. It is still not a name.
+    rna   <- data.frame(pathway = "GO:0006915", padj = 0.01,
+                        stringsAsFactors = FALSE)
+    prot  <- data.frame(pathway = "GO:0006915", pathway_name = "Apoptotic process",
+                        padj = 0.02, stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(rna, prot), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["GO:0006915"]]), "Apoptotic process")
+})
+
+test_that("the same holds for a bare PFAM accession", {
+    rna  <- data.frame(pathway = "PF00089", padj = 0.01, stringsAsFactors = FALSE)
+    prot <- data.frame(pathway = "PF00089", pathway_name = "Trypsin",
+                       padj = 0.02, stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(rna, prot), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["PF00089"]]), "Trypsin")
+})
+
+
 # ---- co-significance counts omics, not rows --------------------------------
 
 test_that("duplicate rows within one omic do not make a pathway co-significant", {
