@@ -1,0 +1,218 @@
+# tests/testthat/test-load-gene-sets-split.R
+#
+# Unit tests for load_gene_sets() keeping several custom GMTs apart
+# (R/core/09_enrichment.R). One GMT stays the historical "custom" collection;
+# several GMTs become one collection each, named after the file, so every
+# source is scored and FDR-corrected on its own instead of being pooled.
+#
+# Also covers add_pathway_names() preferring the names a collection already
+# carries, which is what keeps a custom GO GMT naming its own terms once the
+# collection is called "GO_<something>" rather than "custom".
+
+write_gmt_file <- function(lines, name) {
+    path <- file.path(tempfile("gmtdir"), name)
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines(lines, path)
+    path
+}
+
+test_that("a single GMT stays one collection named 'custom'", {
+    gmt <- write_gmt_file(
+        paste(c("PF00089", "Trypsin", paste0("g", 1:4)), collapse = "\t"),
+        "PFAM_example.gmt")
+    on.exit(unlink(dirname(gmt), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = gmt)
+
+    expect_equal(names(gs), "custom")
+    expect_equal(gs$custom[["PF00089"]], paste0("g", 1:4))
+})
+
+test_that("several GMTs become one collection each, named after the file", {
+    kegg <- write_gmt_file(
+        paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
+              collapse = "\t"),
+        "KEGG_example.gmt")
+    pfam <- write_gmt_file(
+        paste(c("PF00089", "Trypsin", paste0("g", 4:9)), collapse = "\t"),
+        "PFAM_example.gmt")
+    on.exit(unlink(c(dirname(kegg), dirname(pfam)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         gmt_file = list(kegg, pfam))
+
+    expect_setequal(names(gs), c("KEGG_example", "PFAM_example"))
+    expect_equal(gs$KEGG_example[["map00500"]], paste0("g", 1:5))
+    expect_equal(gs$PFAM_example[["PF00089"]], paste0("g", 4:9))
+})
+
+test_that("each split collection keeps its own descriptions", {
+    kegg <- write_gmt_file(
+        paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
+              collapse = "\t"),
+        "KEGG_example.gmt")
+    ipr <- write_gmt_file(
+        paste(c("IPR001254", "Serine proteases, trypsin domain", paste0("g", 2:6)),
+              collapse = "\t"),
+        "InterPro_example.gmt")
+    on.exit(unlink(c(dirname(kegg), dirname(ipr)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = c(kegg, ipr))
+
+    expect_equal(attr(gs$KEGG_example, "descriptions")[["map00500"]],
+                 "Starch and sucrose metabolism")
+    expect_equal(attr(gs$InterPro_example, "descriptions")[["IPR001254"]],
+                 "Serine proteases, trypsin domain")
+})
+
+test_that("same basename in different directories still yields distinct names", {
+    a <- write_gmt_file(paste(c("A", "set a", "g1", "g2"), collapse = "\t"),
+                        "pathways.gmt")
+    b <- write_gmt_file(paste(c("B", "set b", "g3", "g4"), collapse = "\t"),
+                        "pathways.gmt")
+    on.exit(unlink(c(dirname(a), dirname(b)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = c(a, b))
+
+    expect_length(gs, 2)
+    expect_false(anyDuplicated(names(gs)) > 0)
+    expect_true("pathways" %in% names(gs))
+})
+
+test_that("a missing path is skipped without dropping the readable ones", {
+    ok <- write_gmt_file(paste(c("A", "set a", "g1", "g2"), collapse = "\t"),
+                         "KEGG_example.gmt")
+    on.exit(unlink(dirname(ok), recursive = TRUE), add = TRUE)
+
+    expect_warning(
+        gs <- load_gene_sets(organism = "Example organism",
+                             gmt_file = c(ok, "/nonexistent/PFAM.gmt")),
+        "not found")
+
+    # One surviving path is a single GMT again, so it keeps the "custom" name.
+    expect_equal(names(gs), "custom")
+    expect_equal(gs$custom$A, c("g1", "g2"))
+})
+
+test_that("add_pathway_names prefers the collection's own GO descriptions", {
+    gs <- list("GO:0000002" = c("g1", "g2"))
+    attr(gs, "descriptions") <- c("GO:0000002" = "mitochondrial genome maintenance [BP]")
+    df <- data.frame(pathway = "GO:0000002", padj = 0.01)
+
+    out <- add_pathway_names(df, "GO_example", gs)
+
+    expect_equal(out$pathway_name, "mitochondrial genome maintenance [BP]")
+})
+
+
+test_that("a GMT named after a built-in collection does not take its slot", {
+    # The GMTs are loaded before load_gene_sets() fills gene_sets$KEGG, so a file
+    # called KEGG.gmt landing on that name would be silently replaced when KEGG
+    # is requested too. The built-in half needs an OrgDb and is not loaded here;
+    # what this pins is the guarantee that makes the overwrite impossible --
+    # the custom collection is renamed, so the KEGG slot is left free.
+    kegg <- write_gmt_file(
+        paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
+              collapse = "\t"),
+        "KEGG.gmt")
+    pfam <- write_gmt_file(
+        paste(c("PF00089", "Trypsin", paste0("g", 4:9)), collapse = "\t"),
+        "PFAM_custom.gmt")
+    on.exit(unlink(c(dirname(kegg), dirname(pfam)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Nonmodel organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(kegg, pfam))
+
+    expect_true("KEGG_1" %in% names(gs))
+    expect_false("KEGG" %in% names(gs))            # left free for the built-in
+    expect_equal(gs$KEGG_1[["map00500"]], paste0("g", 1:5))
+
+    # A basename that collides with nothing keeps its own name.
+    expect_true("PFAM_custom" %in% names(gs))
+    expect_equal(gs$PFAM_custom[["PF00089"]], paste0("g", 4:9))
+})
+
+test_that("every reserved collection name is protected, and only on collision", {
+    reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+    paths <- vapply(reserved, function(nm) {
+        write_gmt_file(paste(c(paste0("SET_", nm), nm, "g1", "g2"), collapse = "\t"),
+                       paste0(nm, ".gmt"))
+    }, character(1))
+    other <- write_gmt_file(paste(c("SET_X", "X", "g3", "g4"), collapse = "\t"),
+                            "my_sets.gmt")
+    on.exit(unlink(c(dirname(paths), dirname(other)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Nonmodel organism",
+                         pathway_database = "KEGG",
+                         gmt_file = as.list(c(unname(paths), other)))
+
+    expect_setequal(names(gs), c(paste0(reserved, "_1"), "my_sets"))
+    expect_equal(gs$KEGG_1[["SET_KEGG"]], c("g1", "g2"))
+    expect_equal(gs$my_sets[["SET_X"]], c("g3", "g4"))
+})
+
+
+test_that("basenames that normalise to the same output name stay distinct", {
+    # save_pathway_results() writes each collection through
+    # gsub("[^a-zA-Z0-9_-]", "_", ...). Two files differing only in a character
+    # that normalises to "_" would otherwise land on one filename, and the
+    # second would overwrite the first.
+    dotted <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "GO.v1.gmt")
+    scored <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "GO_v1.gmt")
+    on.exit(unlink(c(dirname(dotted), dirname(scored)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(dotted, scored))
+
+    expect_length(names(gs), 2)
+    expect_setequal(names(gs), c("GO_v1", "GO_v1_1"))
+    # Every name is already output-safe, so normalising cannot merge them.
+    expect_equal(gsub("[^a-zA-Z0-9_-]", "_", names(gs)), names(gs))
+    expect_length(unique(gsub("[^a-zA-Z0-9_-]", "_", names(gs))), 2)
+
+    # Deterministic: the first path listed keeps the plain name.
+    expect_equal(gs$GO_v1[["SET_A"]], c("g1", "g2"))
+    expect_equal(gs$GO_v1_1[["SET_B"]], c("g3", "g4"))
+})
+
+
+test_that("collection names do not collide case-insensitively with a built-in", {
+    # On a case-insensitive filesystem pathway_<contrast>_kegg_fgsea.csv and
+    # pathway_<contrast>_KEGG_fgsea.csv are one file, so lower-casing has to be
+    # part of the uniqueness check, not just the exact-match check.
+    lower <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "kegg.gmt")
+    other <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "my_sets.gmt")
+    on.exit(unlink(c(dirname(lower), dirname(other)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(lower, other))
+
+    expect_false("kegg" %in% tolower(names(gs)))   # the KEGG slot stays free
+    expect_true("kegg_1" %in% names(gs))           # case preserved, suffixed
+    expect_equal(gs$kegg_1[["SET_A"]], c("g1", "g2"))
+    expect_true("my_sets" %in% names(gs))          # unaffected name untouched
+})
+
+test_that("two GMTs differing only in case stay two collections", {
+    upper <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "Sets.gmt")
+    lower <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "sets.gmt")
+    on.exit(unlink(c(dirname(upper), dirname(lower)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(upper, lower))
+
+    expect_length(names(gs), 2)
+    # Distinct even once the filesystem folds case.
+    expect_length(unique(tolower(names(gs))), 2)
+    expect_equal(gs[[names(gs)[1]]][["SET_A"]], c("g1", "g2"))
+})

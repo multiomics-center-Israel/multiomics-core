@@ -75,7 +75,10 @@ read_gmt <- function(gmt_file) {
 #'
 #' @param organism Organism name (used for OrgDb/KEGG lookups)
 #' @param pathway_database Character vector of databases to use (e.g. "GO", "KEGG")
-#' @param gmt_file Optional custom GMT file path
+#' @param gmt_file Optional custom GMT path, or a vector/list of paths. A single
+#'   path becomes one collection named "custom"; several paths stay separate,
+#'   one collection per file named after its basename, so each source is scored
+#'   and FDR-corrected on its own.
 #' @param annotation Gene annotation data frame (with gene_id and entrez_id columns)
 #' @return Named list of gene set collections (each a named list of character vectors)
 #' @export
@@ -108,9 +111,56 @@ load_gene_sets <- function(organism,
     }
     gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
-        gene_sets$custom <- read_gmt(gmt_paths)
-        message("Loaded custom gene sets from: ",
-                paste(gmt_paths, collapse = ", "))
+        # One GMT keeps the historical "custom" collection name. Several GMTs
+        # stay separate, one collection per file, so that each source gets its
+        # own result table and its own multiple-testing correction — merging
+        # them would pool unrelated (and often redundant) sets into a single
+        # FDR family.
+        if (length(gmt_paths) == 1) {
+            collection_names <- "custom"
+        } else {
+            # Uniqueness has to be established on the name the output will
+            # actually carry. save_pathway_results() writes each collection
+            # through gsub("[^a-zA-Z0-9_-]", "_", ...), so GO.v1.gmt and
+            # GO_v1.gmt are two collections that land on one filename and the
+            # second overwrites the first. Normalise first, then make unique.
+            #
+            # The reserved names are those this function gives its own
+            # collections further down. The GMTs are loaded first, so a file
+            # called KEGG.gmt would take the gene_sets$KEGG slot and then be
+            # silently overwritten when KEGG is requested as well -- a collision
+            # the pooled "custom" name could not produce. Seeding make.unique()
+            # with them renames only a file that actually collides,
+            # deterministically, and leaves every other name exactly as it is.
+            # Uniqueness is decided on the lower-cased name, because the files
+            # these become collide on a case-insensitive filesystem: kegg.gmt
+            # beside the built-in KEGG writes pathway_<contrast>_kegg_fgsea.csv
+            # and pathway_<contrast>_KEGG_fgsea.csv, which are one file on macOS
+            # and Windows. The file's own capitalisation is put back afterwards,
+            # so a name that did not collide is untouched and one that did keeps
+            # its case with the suffix appended.
+            reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+            output_safe <- gsub("[^a-zA-Z0-9_-]", "_",
+                                tools::file_path_sans_ext(basename(gmt_paths)))
+            keys <- make.unique(
+                c(tolower(reserved), tolower(output_safe)),
+                sep = "_")[-seq_along(reserved)]
+            collection_names <- vapply(seq_along(output_safe), function(i) {
+                lower <- tolower(output_safe[i])
+                if (identical(keys[i], lower)) {
+                    output_safe[i]
+                } else {
+                    # make.unique() only ever appends to the string it was given
+                    paste0(output_safe[i], substring(keys[i], nchar(lower) + 1L))
+                }
+            }, character(1))
+        }
+
+        for (i in seq_along(gmt_paths)) {
+            gene_sets[[collection_names[i]]] <- read_gmt(gmt_paths[i])
+            message("Loaded gene set collection '", collection_names[i],
+                    "' from: ", gmt_paths[i])
+        }
 
         # Validate GMT coverage against annotation features if available
         if (!is.null(annotation) && "gene_id" %in% colnames(annotation)) {
@@ -122,17 +172,20 @@ load_gene_sets <- function(organism,
         }
 
         if (!is.null(feature_ids) && length(feature_ids) > 0) {
-            gmt_val <- tryCatch(
-                validate_gmt(gene_sets$custom, feature_ids, verbose = TRUE),
-                error = function(e) {
-                    warning("GMT validation failed: ", e$message)
-                    NULL
+            for (nm in collection_names) {
+                gmt_val <- tryCatch(
+                    validate_gmt(gene_sets[[nm]], feature_ids, verbose = TRUE),
+                    error = function(e) {
+                        warning("GMT validation failed for '", nm, "': ", e$message)
+                        NULL
+                    }
+                )
+                if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
+                    gene_sets[[nm]] <- gmt_val$filtered_pathways
+                    message("GMT '", nm, "' filtered to ",
+                            length(gmt_val$filtered_pathways),
+                            " pathways with coverage in data")
                 }
-            )
-            if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
-                gene_sets$custom <- gmt_val$filtered_pathways
-                message("GMT filtered to ", length(gmt_val$filtered_pathways),
-                        " pathways with coverage in data")
             }
         }
     }
@@ -575,9 +628,18 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_ids <- pathway_df$pathway
 
     if (database == "GO" || grepl("^GO", database, ignore.case = TRUE)) {
-        # Look up GO term names
-        names_vec <- lookup_go_term_names(pathway_ids)
-        pathway_df$pathway_name <- unname(names_vec[pathway_ids])
+        # Prefer the names the collection already carries — a custom GO GMT
+        # names its own terms, and the biomaRt-generated sets attach the same
+        # GO term names — then fill any gap from GO.db.
+        descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL
+        names_vec <- if (!is.null(descriptions)) unname(descriptions[pathway_ids]) else
+            rep(NA_character_, length(pathway_ids))
+        unnamed <- is.na(names_vec) | !nzchar(names_vec)
+        if (any(unnamed)) {
+            looked_up <- lookup_go_term_names(pathway_ids[unnamed])
+            names_vec[unnamed] <- unname(looked_up[pathway_ids[unnamed]])
+        }
+        pathway_df$pathway_name <- names_vec
     } else if (database == "KEGG" || grepl("KEGG", database, ignore.case = TRUE)) {
         # Use the ID -> name lookup attached by load_gene_sets(); fall back to the
         # bare ID for any pathway without a resolved name (e.g. KEGGREST fallback
@@ -795,8 +857,13 @@ save_pathway_results <- function(pathway_results, output_dir) {
 #' For GO terms, uses rrvgo (semantic similarity via GOSemSim).
 #' For KEGG/custom terms, uses Jaccard similarity on gene overlap.
 #'
+#' Which of the two applies is decided by the pathway identifiers, not by
+#' \code{database}: collections are named after their GMT file, so the name is
+#' not evidence of what the identifiers are.
+#'
 #' @param enrichment_df Data frame with enrichment results (must have 'pathway' and 'padj' columns)
-#' @param database Character: "GO", "KEGG", or "custom"
+#' @param database Character: "GO", "KEGG", or "custom". Retained for the
+#'   existing call sites; no longer used to choose the clustering method.
 #' @param gene_sets Named list of gene sets (needed for Jaccard clustering of non-GO terms)
 #' @param organism Character: organism name for OrgDb lookup (needed for GO clustering)
 #' @param threshold Numeric: similarity threshold for merging (0-1, default 0.7). Lower = more aggressive merging.
@@ -817,8 +884,11 @@ cluster_enrichment_terms <- function(enrichment_df,
     sig <- enrichment_df[!is.na(enrichment_df$padj) & enrichment_df$padj < 0.05, ]
     if (nrow(sig) < 2) return(NULL)
 
-    is_go <- grepl("^GO", database, ignore.case = TRUE) ||
-        all(grepl("^GO:[0-9]+", sig$pathway))
+    # Decided by the identifiers, not by the collection's name. Collections are
+    # now named after the GMT file, so a custom set called GOLD_domains would
+    # otherwise be sent to rrvgo semantic clustering with identifiers that are
+    # not GO terms at all. GO ids are what makes semantic similarity meaningful.
+    is_go <- all(grepl("^GO:[0-9]+", sig$pathway))
 
     if (is_go) {
         clustered <- .cluster_go_terms(sig, organism, threshold, ont)
