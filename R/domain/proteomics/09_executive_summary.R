@@ -155,8 +155,7 @@ get_de_summary_stats_proteomics <- function(summary_df, cfg) {
             cn <- sub("^padj\\.imputs\\.", "", pcol)
             fc_col <- paste0("linearFC.imputs.", cn)
             if (!(fc_col %in% colnames(summary_df))) next
-            lfc_vals <- as.numeric(summary_df[[fc_col]])
-            log2fc   <- signed_fc_to_log2(lfc_vals)
+            log2fc   <- resolve_log2fc(summary_df, cn)
             is_sig   <- !is.na(as.numeric(summary_df[[pcol]])) &
                         as.numeric(summary_df[[pcol]]) <= padj_cut &
                         abs(log2fc) >= log2(lfc_cut)

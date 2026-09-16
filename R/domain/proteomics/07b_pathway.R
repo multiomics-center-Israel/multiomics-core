@@ -41,7 +41,7 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
 
     padj_vals <- as.numeric(summary_df[[padj_col]])
     pval_vals <- as.numeric(summary_df[[pval_col]])
-    lfc_vals  <- signed_fc_to_log2(as.numeric(summary_df[[fc_col]]))
+    lfc_vals  <- resolve_log2fc(summary_df, cn)
 
     # Compute stat based on configured GSEA ranking method
     ranking <- config$modes$proteomics$pathway$gsea_ranking %||% "stat"

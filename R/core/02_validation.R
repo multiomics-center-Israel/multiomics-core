@@ -312,6 +312,31 @@ signed_fc_to_log2 <- function(fc) {
     ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
 }
 
+#' Log2 fold changes for one contrast, preferring the stored log2FC column
+#'
+#' Proteomics DE summaries carry an unrounded \code{log2FC.imputs.<contrast>}
+#' beside \code{linearFC.imputs.<contrast>}, which is written with
+#' \code{signif(x, 3)}. Rebuilding log2 from the rounded column moves borderline
+#' features onto the cutoff: any ratio in [1.4950, 1.5049] is stored as 1.50, and
+#' log2(1.50) equals the log2(1.5) threshold exactly, so features just below
+#' 1.5-fold were counted as passing. The stored log2FC is used whenever it
+#' exists; linearFC is converted only for tables that predate that column.
+#'
+#' @param df DE summary or per-contrast table.
+#' @param contrast Contrast name as it appears in the column suffix, e.g.
+#'   "C_vs_V".
+#' @return Numeric vector of log2 fold changes, one per row of \code{df}; all NA
+#'   when \code{df} has no fold-change column for \code{contrast}.
+resolve_log2fc <- function(df, contrast) {
+    for (nm in c(paste0("log2FC.imputs.", contrast), paste0("log2FC.", contrast))) {
+        if (nm %in% names(df)) return(as.numeric(df[[nm]]))
+    }
+    for (nm in c(paste0("linearFC.imputs.", contrast), paste0("linearFC.", contrast))) {
+        if (nm %in% names(df)) return(signed_fc_to_log2(as.numeric(df[[nm]])))
+    }
+    rep(NA_real_, nrow(df))
+}
+
 assert_one_of <- function(x, name, choices, allow_null = FALSE) {
     if (allow_null && is.null(x)) {
         return(invisible(TRUE))

@@ -87,14 +87,14 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
             if (length(padj_cols) == 0) padj_cols <- grep("^padj\\.", names(sdf), value = TRUE)
 
             for (pc in padj_cols) {
-                cn <- sub("^padj\\.imputs\\.", "", sub("^padj\\.", "", pc))
+                # Strip "padj." and an optional "imputs." in one pass: stripping
+                # them in two passes, in that order, left "imputs." in the name.
+                cn <- sub("^padj\\.(imputs\\.)?", "", pc)
                 lfc_col <- paste0("linearFC.imputs.", cn)
                 if (!(lfc_col %in% names(sdf))) lfc_col <- paste0("linearFC.", cn)
                 if (!(lfc_col %in% names(sdf))) next
 
-                fc_vals <- as.numeric(sdf[[lfc_col]])
-                log2fc <- ifelse(is.na(fc_vals) | fc_vals == 0, NA_real_,
-                                 log2(abs(fc_vals)) * sign(fc_vals))
+                log2fc <- resolve_log2fc(sdf, cn)
                 sig <- !is.na(as.numeric(sdf[[pc]])) & as.numeric(sdf[[pc]]) <= p_cut &
                        !is.na(log2fc) & abs(log2fc) >= log2(fc_lin)
                 up <- sum(sig & log2fc > 0, na.rm = TRUE)
@@ -113,16 +113,15 @@ collect_proteomics_pipeline_stats <- function(config, pre, de_res, pathway_res) 
         for (cn in names(de_res$tables)) {
             tbl <- de_res$tables[[cn]]
             if (!is.data.frame(tbl) || !("padj" %in% names(tbl))) next
-            fc_col <- intersect(c("linearFC", "log2FoldChange"), names(tbl))[1]
+            # Prefer a stored log2 column: linearFC is rounded, so rebuilding
+            # log2 from it can move a borderline feature onto the cutoff.
+            fc_col <- intersect(c("log2FoldChange", "log2FC", "linearFC"), names(tbl))[1]
             if (is.na(fc_col)) next
 
-            if (fc_col == "linearFC") {
-                fc_vals <- as.numeric(tbl[[fc_col]])
-                log2fc <- ifelse(is.na(fc_vals) | fc_vals == 0, NA_real_,
-                                 log2(abs(fc_vals)) * sign(fc_vals))
-
+            log2fc <- if (fc_col == "linearFC") {
+                signed_fc_to_log2(tbl[[fc_col]])
             } else {
-                log2fc <- as.numeric(tbl[[fc_col]])
+                as.numeric(tbl[[fc_col]])
             }
             sig <- !is.na(tbl$padj) & tbl$padj <= p_cut &
                    !is.na(log2fc) & abs(log2fc) >= log2(fc_lin)
