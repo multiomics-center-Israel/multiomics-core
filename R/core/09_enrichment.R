@@ -687,8 +687,8 @@ run_pathway_analysis <- function(de_tables,
                     ranks <- ranks[!is.na(ranks)]
                     ranks <- sort(ranks, decreasing = TRUE)
 
-                    # fgseaMultilevel is stochastic: without a seed ~27 of 4087
-                    # GO terms flipped across padj = 0.05 between identical runs.
+                    # fgseaMultilevel is stochastic: without a seed, terms near
+                    # the padj threshold flip between otherwise identical runs.
                     fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
                         pathways = gs,
                         stats = ranks,
