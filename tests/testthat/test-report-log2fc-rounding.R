@@ -5,18 +5,18 @@
 # stored as 1.50, and log2(1.50) = 0.5849625 is EXACTLY the log2(1.5) threshold,
 # so features genuinely below 1.5-fold were counted as passing.
 #
-# On a real run this inflated the interactive volcano from 222 to 227:
-# PLS3, SERINC3, BLTP3A, CKAP2 and ISYNA1, whose true ratios were 1.4957 to
-# 1.4996. The tables, which use log2FC directly, reported 222 throughout.
+# It showed up as the interactive volcano counting a few more features than the
+# tables, which read log2FC directly.
 #
 # resolve_log2fc() lives in R/core/02_validation.R and is shared by the report,
 # the PowerPoint deck, the executive summary, the static volcano tables and the
 # pathway ranking, so they all count the same features.
 
-# The five real features, with their true log2FC and their stored linearFC.
+# Five synthetic features whose true ratios sit just under 1.5, so their stored
+# linearFC rounds to 1.50 and the rebuilt log2 lands exactly on the threshold.
 borderline <- data.frame(
-    Gene                      = c("PLS3", "SERINC3", "BLTP3A", "CKAP2", "ISYNA1"),
-    `log2FC.imputs.C_vs_V`    = c(-0.58329, -0.58461, 0.58085, 0.58300, 0.58202),
+    Gene                      = paste0("P", 1:5),
+    `log2FC.imputs.C_vs_V`    = c(-0.5810, -0.5835, 0.5815, 0.5840, 0.5825),
     `linearFC.imputs.C_vs_V`  = c(-1.5, -1.5, 1.5, 1.5, 1.5),
     check.names = FALSE, stringsAsFactors = FALSE
 )
