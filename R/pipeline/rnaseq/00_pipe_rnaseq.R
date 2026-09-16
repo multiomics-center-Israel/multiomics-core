@@ -78,8 +78,9 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
         format = "file"
       ),
       # Headline numbers paired with the file each can be checked against.
-      # Depends on the outputs and enrichment targets so the artifacts it reads
-      # are already written.
+      # Depends on the outputs, enrichment and execution-metadata targets so the
+      # artifacts it reads are already written. run_dir alone would make it a
+      # dependency on the path string, not on whoever writes into it.
       tar_target(
         rna_fact_sheet,
         mod_rnaseq_fact_sheet(
@@ -89,7 +90,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           out_dir        = rna_out_dir,
           run_dir        = run_dir,
           outputs_legacy = rna_outputs_legacy,
-          pathway_res    = rna_pathway_res
+          pathway_res    = rna_pathway_res,
+          execution_info = execution_info_files
         )
         # deliberately not format = "file": the module returns character(0) if
         # it cannot assemble a sheet, and a convenience artifact must not be
