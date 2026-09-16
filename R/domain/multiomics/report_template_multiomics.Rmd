@@ -636,23 +636,19 @@ if (file.exists(metab_bp)) {
 
 ```{r metab-ora-table, eval=has_metab_ora}
 # Compound ORA writes the readable name in `pathway` and the accession in `ID`;
-# a table that has been through add_pathway_names() carries `pathway_name` as
-# well. Prefer the name where one is actually filled in, rather than writing a
-# pathway_name column back into the raw output to make the choice uniform.
-metab_label_col <- if ("pathway_name" %in% colnames(metab_df) &&
-                       any(nzchar(trimws(as.character(metab_df$pathway_name))),
-                           na.rm = TRUE)) {
-    "pathway_name"
-} else {
-    "pathway"
-}
+# a table that has been through add_pathway_names() carries `pathway_name` too,
+# but it can be filled for some rows and not others. pathway_display_label()
+# resolves that per row, so a row without a name falls back to its own `pathway`
+# instead of rendering blank -- which is what choosing one column for the whole
+# table would do. The label is built into the presentation copy only; the raw
+# compound-ORA result is not modified.
+metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), , drop = FALSE]
+metab_show$pathway <- pathway_display_label(metab_show)
 
-display_cols <- intersect(c("contrast", metab_label_col, "ID", "pvalue", "padj",
-                            "setSize", "compounds"),
-                          colnames(metab_df))
-metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), display_cols, drop = FALSE]
-col_labels <- c(contrast = "Contrast", pathway = "Pathway", pathway_name = "Pathway",
-                ID = "KEGG ID", pvalue = "P-value",
+display_cols <- intersect(c("contrast", "pathway", "ID", "pvalue", "padj", "setSize", "compounds"),
+                          colnames(metab_show))
+metab_show <- metab_show[, display_cols, drop = FALSE]
+col_labels <- c(contrast = "Contrast", pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
                 padj = "Adj. P-value", setSize = "Compound Count", compounds = "Compounds")
 colnames(metab_show) <- col_labels[display_cols]
 knitr::kable(metab_show, row.names = FALSE,

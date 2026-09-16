@@ -224,6 +224,23 @@ test_that("pathway_name wins over pathway for display, and neither is mutated", 
                  c("pathway", "pathway_name", "pvalue"))
 })
 
+test_that("a row with no pathway_name falls back to its own pathway", {
+    # This is the shape the compound-ORA report table hits: add_pathway_names()
+    # fills pathway_name for the rows it could resolve and leaves the rest. A
+    # whole-table column choice renders those rows blank; the label has to be
+    # resolved per row, which is why the report calls this helper.
+    df <- data.frame(
+        pathway      = c("map00010", "map00020", "map00030"),
+        pathway_name = c("Glycolysis / Gluconeogenesis", NA, "   "),
+        stringsAsFactors = FALSE
+    )
+
+    expect_equal(
+        pathway_display_label(df),
+        c("Glycolysis / Gluconeogenesis", "map00020", "map00030")
+    )
+})
+
 test_that("a key no layer names falls back to the key itself", {
     tables <- list(rna = kegg_gene_layer())
     meta <- data.frame(norm_id = "99999", stringsAsFactors = FALSE)
