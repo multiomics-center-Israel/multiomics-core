@@ -544,6 +544,34 @@ test_that("a row with no identity does not take the pairwise plot down with it",
 })
 
 
+test_that("an omic left with no keyed rows is not plotted against imputed zeros", {
+    skip_if_not_installed("ggplot2")
+
+    # Dropping the unkeyable rows can empty one side entirely. union() cannot
+    # see that -- the other omic alone carries the pair past the >= 3 check --
+    # and match() then scores the empty side as all-NA, i.e. a column of zeros
+    # that reads as a real "no enrichment anywhere" result.
+    keyed <- data.frame(
+        pathway = c("hsa00010", "hsa00020", "hsa00030"),
+        padj    = c(0.01, 0.02, 0.03),
+        stringsAsFactors = FALSE
+    )
+    unkeyable <- data.frame(
+        pathway = c(NA_character_, NA_character_, NA_character_),
+        padj    = c(0.01, 0.02, 0.03),
+        stringsAsFactors = FALSE
+    )
+
+    out_dir <- withr::local_tempdir()
+    expect_no_error(suppressMessages(suppressWarnings(
+        .save_multigsea_pair_plot(keyed, unkeyable, "transcriptomics", "metabolomics",
+                                  out_dir = out_dir, kegg_org = "hsa")
+    )))
+
+    expect_length(list.files(out_dir), 0L)
+})
+
+
 # ---- the synthesized label must not undercut resolve_term() ----------------
 #
 # Installing a label in the map shadows resolve_term()'s own fallback, so

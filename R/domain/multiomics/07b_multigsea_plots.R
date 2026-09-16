@@ -87,6 +87,16 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         res1 <- res1[!is.na(term1), , drop = FALSE]; term1 <- term1[!is.na(term1)]
         res2 <- res2[!is.na(term2), , drop = FALSE]; term2 <- term2[!is.na(term2)]
 
+        # An omic left with nothing keyed has no enrichment identity to correlate.
+        # The union below cannot see that -- the other side alone can carry it past
+        # the length check -- and the pair would be plotted against a column of
+        # imputed zeros.
+        if (length(term1) == 0L || length(term2) == 0L) {
+            message("No usable pathway identity in ", omic1, " or ", omic2,
+                    "; skipping this pair")
+            next
+        }
+
         # One row per pathway per omic before anything matches on it: match()
         # below would otherwise resolve a duplicated key by row order.
         keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
@@ -395,6 +405,11 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     # Rows with no identity at all cannot be matched or labelled, as above.
     res1 <- res1[!is.na(term1), , drop = FALSE]; term1 <- term1[!is.na(term1)]
     res2 <- res2[!is.na(term2), , drop = FALSE]; term2 <- term2[!is.na(term2)]
+
+    # An omic left with nothing keyed has no enrichment identity to correlate,
+    # and the union below cannot see that -- the other side alone carries it
+    # past the length check, against a column of imputed zeros.
+    if (length(term1) == 0L || length(term2) == 0L) return(invisible(NULL))
 
     # One row per pathway per omic, as in the pairwise loop above.
     keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
