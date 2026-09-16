@@ -119,17 +119,24 @@ load_gene_sets <- function(organism,
         if (length(gmt_paths) == 1) {
             collection_names <- "custom"
         } else {
-            # Reserve the names this function gives its own collections further
-            # down. The GMTs are loaded first, so a file called KEGG.gmt would
-            # take the gene_sets$KEGG slot and then be silently overwritten when
-            # KEGG is requested as well -- a collision the pooled "custom" name
-            # could not produce. Seeding make.unique() with the reserved names
-            # renames only a file that actually collides, deterministically, and
-            # leaves every other basename exactly as it is.
+            # Uniqueness has to be established on the name the output will
+            # actually carry. save_pathway_results() writes each collection
+            # through gsub("[^a-zA-Z0-9_-]", "_", ...), so GO.v1.gmt and
+            # GO_v1.gmt are two collections that land on one filename and the
+            # second overwrites the first. Normalise first, then make unique.
+            #
+            # The reserved names are those this function gives its own
+            # collections further down. The GMTs are loaded first, so a file
+            # called KEGG.gmt would take the gene_sets$KEGG slot and then be
+            # silently overwritten when KEGG is requested as well -- a collision
+            # the pooled "custom" name could not produce. Seeding make.unique()
+            # with them renames only a file that actually collides,
+            # deterministically, and leaves every other name exactly as it is.
             reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+            output_safe <- gsub("[^a-zA-Z0-9_-]", "_",
+                                tools::file_path_sans_ext(basename(gmt_paths)))
             collection_names <- make.unique(
-                c(reserved, tools::file_path_sans_ext(basename(gmt_paths))),
-                sep = "_")[-seq_along(reserved)]
+                c(reserved, output_safe), sep = "_")[-seq_along(reserved)]
         }
 
         for (i in seq_along(gmt_paths)) {
@@ -833,8 +840,13 @@ save_pathway_results <- function(pathway_results, output_dir) {
 #' For GO terms, uses rrvgo (semantic similarity via GOSemSim).
 #' For KEGG/custom terms, uses Jaccard similarity on gene overlap.
 #'
+#' Which of the two applies is decided by the pathway identifiers, not by
+#' \code{database}: collections are named after their GMT file, so the name is
+#' not evidence of what the identifiers are.
+#'
 #' @param enrichment_df Data frame with enrichment results (must have 'pathway' and 'padj' columns)
-#' @param database Character: "GO", "KEGG", or "custom"
+#' @param database Character: "GO", "KEGG", or "custom". Retained for the
+#'   existing call sites; no longer used to choose the clustering method.
 #' @param gene_sets Named list of gene sets (needed for Jaccard clustering of non-GO terms)
 #' @param organism Character: organism name for OrgDb lookup (needed for GO clustering)
 #' @param threshold Numeric: similarity threshold for merging (0-1, default 0.7). Lower = more aggressive merging.
@@ -855,8 +867,11 @@ cluster_enrichment_terms <- function(enrichment_df,
     sig <- enrichment_df[!is.na(enrichment_df$padj) & enrichment_df$padj < 0.05, ]
     if (nrow(sig) < 2) return(NULL)
 
-    is_go <- grepl("^GO", database, ignore.case = TRUE) ||
-        all(grepl("^GO:[0-9]+", sig$pathway))
+    # Decided by the identifiers, not by the collection's name. Collections are
+    # now named after the GMT file, so a custom set called GOLD_domains would
+    # otherwise be sent to rrvgo semantic clustering with identifiers that are
+    # not GO terms at all. GO ids are what makes semantic similarity meaningful.
+    is_go <- all(grepl("^GO:[0-9]+", sig$pathway))
 
     if (is_go) {
         clustered <- .cluster_go_terms(sig, organism, threshold, ont)

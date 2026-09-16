@@ -151,3 +151,30 @@ test_that("every reserved collection name is protected, and only on collision", 
     expect_equal(gs$KEGG_1[["SET_KEGG"]], c("g1", "g2"))
     expect_equal(gs$my_sets[["SET_X"]], c("g3", "g4"))
 })
+
+
+test_that("basenames that normalise to the same output name stay distinct", {
+    # save_pathway_results() writes each collection through
+    # gsub("[^a-zA-Z0-9_-]", "_", ...). Two files differing only in a character
+    # that normalises to "_" would otherwise land on one filename, and the
+    # second would overwrite the first.
+    dotted <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "GO.v1.gmt")
+    scored <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "GO_v1.gmt")
+    on.exit(unlink(c(dirname(dotted), dirname(scored)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(dotted, scored))
+
+    expect_length(names(gs), 2)
+    expect_setequal(names(gs), c("GO_v1", "GO_v1_1"))
+    # Every name is already output-safe, so normalising cannot merge them.
+    expect_equal(gsub("[^a-zA-Z0-9_-]", "_", names(gs)), names(gs))
+    expect_length(unique(gsub("[^a-zA-Z0-9_-]", "_", names(gs))), 2)
+
+    # Deterministic: the first path listed keeps the plain name.
+    expect_equal(gs$GO_v1[["SET_A"]], c("g1", "g2"))
+    expect_equal(gs$GO_v1_1[["SET_B"]], c("g3", "g4"))
+})
