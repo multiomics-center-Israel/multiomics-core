@@ -79,8 +79,33 @@ test_that("an organism code that is not this run's is left alone", {
 test_that("GO, PFAM, InterPro and custom names are byte-identical", {
     ids <- c("GO:0006915", "PF00089", "IPR001", "Glycolysis_custom",
              "HALLMARK_APOPTOSIS", "ko:K00844")
-    expect_equal(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
     expect_false(any(is_kegg_pathway_accession(ids, kegg_org = "hsa")))
+})
+
+test_that("a non-KEGG identifier keeps even its surrounding whitespace", {
+    # "Byte-identical" has to mean exactly that. Trimming decides whether a cell
+    # counts as empty; it must not become a quiet edit to identifiers this
+    # function does not understand.
+    ids <- c("  MY_CUSTOM_SET  ", " GO:0006915", "PF00089 ", "\tInterPro_domain")
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+})
+
+test_that("a padded KEGG accession is still recognised and normalized", {
+    # Detection runs on a trimmed copy, so padding does not hide a real accession.
+    expect_equal(
+        normalize_pathway_join_key(c(" map00010 ", "hsa00010\t", "\n00010"),
+                                   kegg_org = "hsa"),
+        rep("00010", 3)
+    )
+})
+
+test_that("the join key carries a padded custom value through unaltered", {
+    df <- data.frame(pathway = c("  MY_CUSTOM_SET  ", " map00010 "),
+                     stringsAsFactors = FALSE)
+
+    expect_identical(pathway_join_key(df, kegg_org = "hsa"),
+                     c("  MY_CUSTOM_SET  ", "00010"))
 })
 
 test_that("with no KEGG organism, only the species-neutral forms normalize", {

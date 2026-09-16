@@ -1478,14 +1478,23 @@ is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
 #' would turn "GO:0006915" into ":0006915" and strip the letters off every custom
 #' gene-set name, silently merging unrelated terms.
 #'
+#' Detection and preservation are kept apart. Whether a value is a KEGG
+#' accession is decided on a trimmed copy, so " map00010 " is still recognised,
+#' and that trimmed copy is what gets normalized. Everything else is returned
+#' exactly as it arrived, whitespace included: an identifier this function does
+#' not understand is not one to tidy up. Two layers spelling one custom set with
+#' different padding will not join, which is the correct trade -- silently
+#' rewriting identifiers is the failure mode worth avoiding here.
+#'
 #' @param ids Character vector of pathway identifiers.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @return Character vector the same length as \code{ids}: KEGG accessions
 #'   reduced to their bare map number, everything else byte-identical.
 normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
     ids <- as.character(ids)
-    is_kegg <- is_kegg_pathway_accession(ids, kegg_org)
-    ids[is_kegg] <- normalize_kegg_pathway_id(ids[is_kegg])
+    trimmed <- trimws(ids)
+    is_kegg <- is_kegg_pathway_accession(trimmed, kegg_org)
+    ids[is_kegg] <- normalize_kegg_pathway_id(trimmed[is_kegg])
     ids
 }
 
@@ -1514,8 +1523,10 @@ pathway_join_key <- function(df, kegg_org = NULL) {
 
     for (col in c("ID", "pathway", "Description")) {
         if (!col %in% names(df)) next
-        vals <- trimws(as.character(df[[col]]))
-        fill <- is.na(key) & !is.na(vals) & nzchar(vals)
+        vals <- as.character(df[[col]])
+        # Trimming decides whether the cell is empty; the value carried forward is
+        # the original, so a custom identifier reaches the key unaltered.
+        fill <- is.na(key) & !is.na(vals) & nzchar(trimws(vals))
         key[fill] <- vals[fill]
     }
 
@@ -1529,6 +1540,10 @@ pathway_join_key <- function(df, kegg_org = NULL) {
 #' opposite preference. `pathway_name` is the column \code{add_pathway_names()}
 #' fills, and where it is absent the readable text is whatever sits in `pathway`
 #' or `Description`.
+#'
+#' Unlike the join key, this one does trim: padding is worth removing from a
+#' label a reader sees, and nothing is matched against it. Keep the two that way
+#' round -- trimming an identifier is a silent edit, trimming a label is not.
 #'
 #' @param df Enrichment data frame for one omics layer.
 #' @return Character vector of labels, one per row; NA where the row carries no
