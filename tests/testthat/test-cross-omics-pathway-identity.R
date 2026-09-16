@@ -163,6 +163,38 @@ test_that("an organism only the core registry knows still yields its KEGG code",
     expect_null(resolve_kegg_org_code("Nonexistent organism"))
 })
 
+test_that("a missing organism resolves to no code rather than erroring", {
+    # A config with no global$organism is a legitimate run over custom gene sets.
+    # get_organism_info() cannot take a zero-length value -- its %in% test gives
+    # logical(0) and `if` errors on that -- so the guard has to come first.
+    skip_if_not(exists("get_organism_info", mode = "function"),
+                "source R/core/11_annotation.R for this test")
+
+    expect_null(resolve_kegg_org_code(NULL))
+    expect_null(resolve_kegg_org_code(character(0)))
+    expect_null(resolve_kegg_org_code(NA_character_))
+    expect_null(resolve_kegg_org_code(""))
+    expect_null(resolve_kegg_org_code("   "))
+})
+
+test_that("custom gene sets still join when no organism is configured", {
+    # The end this protects: with kegg_org NULL the pattern falls back to map/ko
+    # and everything else is left alone, so a custom-only run still works.
+    tables <- list(
+        rna        = data.frame(pathway = c("HALLMARK_APOPTOSIS", "PF00089"),
+                                pvalue = c(0.01, 0.02), stringsAsFactors = FALSE),
+        proteomics = data.frame(pathway = c("HALLMARK_APOPTOSIS", "PF00089"),
+                                pvalue = c(0.03, 0.04), stringsAsFactors = FALSE)
+    )
+
+    merged <- merge_pathway_pvalues(tables, c("HALLMARK_APOPTOSIS", "PF00089"),
+                                    names(tables), kegg_org = NULL)
+
+    expect_equal(nrow(merged), 2)
+    expect_false(anyNA(merged$pval_rna))
+    expect_false(anyNA(merged$pval_proteomics))
+})
+
 test_that("a Giardia-style key normalizes once the wider registry supplies the code", {
     skip_if_not(exists("get_organism_info", mode = "function"),
                 "source R/core/11_annotation.R for this test")

@@ -1489,8 +1489,18 @@ is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
 #' @param organism Organism name from \code{config$global$organism}.
 #' @return Three-letter KEGG organism code, or NULL when neither registry has one.
 resolve_kegg_org_code <- function(organism) {
+    # Called first so that its error on several organisms still fires -- that is a
+    # config mistake worth reporting rather than quietly resolving to nothing.
     code <- get_kegg_organism(organism)
     if (!is.null(code) && !is.na(code) && nzchar(code)) return(code)
+
+    # get_kegg_organism() returns NULL for a missing organism as readily as for an
+    # unknown one, and get_organism_info() cannot be handed a zero-length value:
+    # its `%in%` test yields logical(0) and `if` errors on that. A config with no
+    # organism set is a legitimate non-KEGG run, not a crash.
+    if (length(organism) != 1L) return(NULL)
+    organism <- as.character(organism)
+    if (is.na(organism) || !nzchar(trimws(organism))) return(NULL)
 
     code <- get_organism_info(organism)$kegg
     if (is.null(code) || is.na(code) || !nzchar(code)) return(NULL)
