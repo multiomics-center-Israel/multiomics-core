@@ -257,6 +257,16 @@ write_diablo_results <- function(diablo_results, out_dir) {
     # block named "Y" beside the real omics. It carries no biological information
     # -- diablo_design_matrix.csv already records the design -- and every consumer
     # downstream strips it, so it has no business being written as an omics layer.
+    #
+    # Simply not writing it is not enough for a rerun into a directory from before
+    # this change: the two files from that run would stay behind, and the report
+    # globs diablo_top_features_*.csv, so the outcome would keep appearing -- now
+    # as a stale result that no longer tracks the data. Retire exactly those two
+    # paths by name. Never a glob, and never the directory.
+    for (stale in file.path(out_dir, c("diablo_scores_Y.csv",
+                                       "diablo_top_features_Y.csv"))) {
+        if (file.exists(stale)) unlink(stale)
+    }
 
     # Sample scores
     for (om in setdiff(names(diablo_results$sample_scores), "Y")) {

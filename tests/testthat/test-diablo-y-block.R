@@ -8,6 +8,10 @@
 # diablo_scores_Y.csv / diablo_top_features_Y.csv and the report rendered it as
 # an omics layer.
 #
+# The writer also retires those two paths on the way in, so a rerun into a
+# directory from before the fix does not leave them behind for the report's
+# diablo_top_features_*.csv glob to find as stale results.
+#
 # All data below is synthetic.
 
 make_fake_diablo_results <- function() {
@@ -106,6 +110,44 @@ test_that("write_diablo_results() is unaffected when no Y block is present", {
           "diablo_top_features_omicsA.csv", "diablo_top_features_omicsB.csv",
           "diablo_design_matrix.csv")
     )
+})
+
+test_that("stale Y files from an earlier run are retired", {
+    # Not writing the Y block is not enough on a rerun: the report globs
+    # diablo_top_features_*.csv, so a pair left by a run from before this change
+    # would keep surfacing the outcome as an omics layer -- and by then as a
+    # stale result that no longer tracks the data.
+    out_dir <- withr::local_tempdir()
+    writeLines("stale,content", file.path(out_dir, "diablo_scores_Y.csv"))
+    writeLines("stale,content", file.path(out_dir, "diablo_top_features_Y.csv"))
+
+    write_diablo_results(make_fake_diablo_results(), out_dir)
+
+    expect_false(file.exists(file.path(out_dir, "diablo_scores_Y.csv")))
+    expect_false(file.exists(file.path(out_dir, "diablo_top_features_Y.csv")))
+
+    # The real blocks are written as usual, and nothing else was swept up.
+    expect_setequal(
+        list.files(out_dir),
+        c("diablo_scores_omicsA.csv", "diablo_scores_omicsB.csv",
+          "diablo_top_features_omicsA.csv", "diablo_top_features_omicsB.csv",
+          "diablo_design_matrix.csv")
+    )
+})
+
+test_that("only the two Y artifacts are retired, not other files in the directory", {
+    # The removal is by exact path, so anything else a results directory holds --
+    # including an unrelated file whose name contains Y -- is left alone.
+    out_dir <- withr::local_tempdir()
+    writeLines("stale", file.path(out_dir, "diablo_scores_Y.csv"))
+    writeLines("keep",  file.path(out_dir, "diablo_scores_Yeast.csv"))
+    writeLines("keep",  file.path(out_dir, "notes_Y.txt"))
+
+    write_diablo_results(make_fake_diablo_results(), out_dir)
+
+    expect_false(file.exists(file.path(out_dir, "diablo_scores_Y.csv")))
+    expect_true(file.exists(file.path(out_dir, "diablo_scores_Yeast.csv")))
+    expect_true(file.exists(file.path(out_dir, "notes_Y.txt")))
 })
 
 test_that("a block genuinely named Y-something is not caught by the skip", {
