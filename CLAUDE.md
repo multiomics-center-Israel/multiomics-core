@@ -236,6 +236,24 @@ This protects the user from autopilot mistakes while not blocking them when they
 
 ---
 
+## A PR is not ready until Codex comes back clean
+
+Your own reading of a diff is not the bar. A PR is ready to merge when **CI is green and Codex returns with no findings, both on the head you last pushed** — not before.
+
+This is the same reasoning as *Running R — you don't, we do*: it is a check you cannot perform on yourself, so hand it over and wait for the answer.
+
+**Read the review threads, not the summary.** Codex posts a summary comment *and* inline threads. The summary has said "Didn't find any major issues" on a commit that carried three inline P2 findings. When they disagree, the threads are the review.
+
+**A verdict belongs to one commit.** Check the SHA in the review and in the CI run against the current head. A clean pass on a head you have since pushed over says nothing about the head you have now. Every push restarts the gate.
+
+**Expect a fixed finding to open new ground.** A fix changes what the rest of the code sees, and the next review often finds something real in what you just wrote — sometimes a regression the fix introduced. That is not noise and it is not a reason to stop early. Keep going until a review of an *unchanged* head is clean.
+
+**Fix the class, not the instance.** When a finding names one place, sweep the surrounding block for the same mistake before replying. Say what you swept.
+
+**When you disagree, say so with evidence and leave it to the user.** Cite the code that supports you, do not resolve the thread yourself, and do not quietly change the code to make a finding go away when you believe it is wrong.
+
+---
+
 ## Before you tell the user you're done
 
 Mentally walk through:
@@ -248,6 +266,7 @@ Mentally walk through:
 - [ ] If you added a function, did you also add a `roxygen2` docstring and a test?
 - [ ] If anything is stochastic, is it seeded?
 - [ ] Is the diff small and focused on one thing?
+- [ ] Are CI and Codex both clean **on the current head**, with the inline threads read and not just the summary?
 
 ---
 
@@ -274,6 +293,7 @@ Closes #<issue number>
 - [ ] No Shiny app changes
 - [ ] New functions have docstrings + tests
 - [ ] Random components are seeded
+- [ ] CI green and Codex clean on the current head
 ```
 
 ---
