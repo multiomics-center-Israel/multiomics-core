@@ -222,7 +222,18 @@ kable(proj, col.names = c("Parameter", "Value"))
 ```{r params-integration}
 methods <- multi_cfg$integration$methods %||% c("DIABLO", "SNF")
 feat_sel <- multi_cfg$feature_selection$method %||% "variance"
+# feature_selection$per_omics overrides top_n per layer; reporting top_n alone
+# stated a number no layer actually used.
 feat_n <- multi_cfg$feature_selection$top_n %||% 500
+per_omics_n <- multi_cfg$feature_selection$per_omics
+if (!is.null(per_omics_n) && length(per_omics_n) > 0) {
+    feat_n <- paste0(
+        feat_n, " (per omic: ",
+        paste(sprintf("%s=%s", names(per_omics_n), unlist(per_omics_n)),
+              collapse = ", "),
+        ")"
+    )
+}
 cond_col <- multi_cfg$condition_column %||% cfg$design$condition_column %||% "condition"
 
 settings <- data.frame(
@@ -285,10 +296,12 @@ render_commentary("rna_protein_concordance")
 p <- file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
+} else {
+    cat("*Not produced for this run.*\n\n")
 }
 ```
 
-```{r rna-prot-de-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-de-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")), results='asis'}
 figure_legend("RNA vs protein differential expression scatter plot per contrast. Each point is a gene/protein pair. Diagonal concordance indicates matching fold-change direction; off-diagonal points suggest post-transcriptional regulation.")
 render_commentary("rna_protein_de_scatter")
 ```
@@ -353,10 +366,12 @@ if (dir.exists(per_contrast_dir)) {
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
+} else {
+    cat("*Not produced for this run.*\n\n")
 }
 ```
 
-```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-te-hist-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")), results='asis'}
 figure_legend("Distribution of translation efficiency changes per contrast (protein log2FC - RNA log2FC). Values near 0 indicate transcriptional control; large positive/negative values suggest post-transcriptional regulation.")
 render_commentary("translation_efficiency_hist")
 ```
@@ -365,10 +380,12 @@ render_commentary("translation_efficiency_hist")
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")
 if (file.exists(p)) {
     knitr::include_graphics(p)
+} else {
+    cat("*Not produced for this run.*\n\n")
 }
 ```
 
-```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
+```{r rna-prot-te-scatter-legend, eval=has_transcriptomics && has_rna_prot && file.exists(file.path(rna_prot_dir, "plots", "translation_efficiency_scatter.png")), results='asis'}
 figure_legend("Translation efficiency scatter plot per contrast comparing RNA and protein fold-changes.")
 render_commentary("translation_efficiency_scatter")
 ```
@@ -392,7 +409,12 @@ for (gp in gsea_pngs) {
     display_name <- gsub("_", " ", pair_name)
     cat(sprintf("\n### %s {.unnumbered}\n\n", display_name))
     cat(sprintf("![%s](%s)\n\n", display_name, gp))
-    figure_legend(sprintf("MultiGSEA enrichment correlation plot for %s. Each point is a pathway; axis values represent enrichment scores. Color indicates joint significance status.", display_name))
+    # The loop above drops every "_vs_" file, so what is shown here is the
+    # combined multi-panel figure, not one pairwise scatter. Describe the panels
+    # it actually has, and leave the pairwise colour encoding conditional: the
+    # points carry average fold enrichment only when the results include fold
+    # data, and default fgsea output does not.
+    figure_legend(sprintf("MultiGSEA combined enrichment figure for %s. A grid of up to three pairwise panels plus a summary panel. In each pairwise panel a point is a pathway and both axes are -log10(FDR) for the two omics layers being compared; where the results carry fold-enrichment data the points are also sized and coloured by it, otherwise they are drawn in a single colour. The summary panel is a dot plot of the top co-significant pathways across the omics layers, with colour and size both encoding -log10(adjusted p).", display_name))
     render_commentary(paste0("multigsea_", pair_name))
 }
 ```
@@ -407,8 +429,10 @@ if (dir.exists(multigsea_per_contrast_dir)) {
         cname <- basename(cdir)
         cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
 
+        # Per-contrast dirs hold only the pairwise multigsea_<a>_vs_<b>.png
+        # plots — the combined figure is written at the top level only, so
+        # filtering "_vs_" out here (as the top-level block does) left nothing.
         cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
-        cpngs <- cpngs[!grepl("_vs_", basename(cpngs))]
         if (length(cpngs) == 0) {
             cat("*No MultiGSEA plots for this contrast.*\n\n")
             next
@@ -426,7 +450,16 @@ if (dir.exists(multigsea_per_contrast_dir)) {
         }
     }
 } else {
-    cat("*Per-contrast MultiGSEA results not available.*\n")
+    # Per-contrast MultiGSEA is deliberately skipped for single-contrast runs
+    # (the combined output above already covers it), so say that rather than
+    # implying something failed.
+    n_contrasts <- length(cfg$design$contrasts %||% list())
+    if (n_contrasts <= 1) {
+        cat("*Single-contrast run: the combined MultiGSEA results above already",
+            "cover the only contrast, so no per-contrast split is produced.*\n")
+    } else {
+        cat("*Per-contrast MultiGSEA results not available.*\n")
+    }
 }
 ```
 
@@ -541,8 +574,34 @@ if (dir.exists(mora_per_contrast_dir)) {
 ```
 
 ```{r metab-ora-setup, include=FALSE}
+# Compound ORA comes out of run_compound_ora() via two callers, and neither
+# depends on the gene-based multi-ORA having succeeded — but they handle
+# contrasts differently, so the two files do not read the same way:
+#
+#   compound_ora_results.csv          pools every contrast into a single test,
+#                                     one row per pathway
+#   metabolomics_kegg_enrichment.csv  the only one produced for an organism with
+#                                     no OrgDb/KEGG code; tests each contrast
+#                                     separately and row-binds the results under
+#                                     a `contrast` column, so one pathway can
+#                                     appear once per contrast
+#
+# That column decides how the section below reports: reading a per-contrast file
+# as if it were pooled counts the same pathway several times.
 metab_ora_csv <- file.path(multi_ora_dir, "compound_ora_results.csv")
-has_metab_ora <- has_multi_ora && file.exists(metab_ora_csv)
+if (!file.exists(metab_ora_csv)) {
+    metab_ora_csv <- file.path(enrichment_dir, "metabolomics",
+                               "metabolomics_kegg_enrichment.csv")
+}
+has_metab_ora <- file.exists(metab_ora_csv)
+metab_df <- if (has_metab_ora) read.csv(metab_ora_csv, stringsAsFactors = FALSE) else NULL
+metab_ora_by_contrast <- !is.null(metab_df) && "contrast" %in% colnames(metab_df)
+# Each ORA call sorts its own results, so a row-bound file arrives in contrast
+# order rather than p-value order. Restore a global ordering before anything
+# below takes a top-N slice of it.
+if (metab_ora_by_contrast && "pvalue" %in% colnames(metab_df)) {
+    metab_df <- metab_df[order(metab_df$pvalue), , drop = FALSE]
+}
 ```
 
 ## Metabolomics Compound Enrichment {.unnumbered}
@@ -552,10 +611,18 @@ cat("*No metabolomics compound ORA results found. Compound enrichment requires m
 ```
 
 ```{r metab-ora-results, eval=has_metab_ora, results='asis'}
-metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
 if (nrow(metab_df) > 0) {
-    cat("\nCompound-based over-representation analysis identified **", nrow(metab_df),
-        "** enriched KEGG pathways from significantly altered metabolites.\n\n")
+    if (metab_ora_by_contrast) {
+        cat(sprintf(paste0("\nCompound-based over-representation analysis identified **%d** ",
+                           "enriched KEGG pathways from significantly altered metabolites, ",
+                           "tested separately within each of **%d** contrasts.\n\n"),
+                    length(unique(metab_df$pathway)),
+                    length(unique(metab_df$contrast))))
+    } else {
+        cat(sprintf(paste0("\nCompound-based over-representation analysis identified **%d** ",
+                           "enriched KEGG pathways from significantly altered metabolites.\n\n"),
+                    nrow(metab_df)))
+    }
 }
 ```
 
@@ -568,13 +635,16 @@ if (file.exists(metab_bp)) {
 ```
 
 ```{r metab-ora-table, eval=has_metab_ora}
-metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
-display_cols <- intersect(c("pathway", "ID", "pvalue", "padj", "setSize", "compounds"), colnames(metab_df))
+display_cols <- intersect(c("contrast", "pathway", "ID", "pvalue", "padj", "setSize", "compounds"),
+                          colnames(metab_df))
 metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), display_cols, drop = FALSE]
-col_labels <- c(pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
+col_labels <- c(contrast = "Contrast", pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
                 padj = "Adj. P-value", setSize = "Compound Count", compounds = "Compounds")
 colnames(metab_show) <- col_labels[display_cols]
-knitr::kable(metab_show, row.names = FALSE, caption = "Metabolomics compound ORA - enriched KEGG pathways")
+knitr::kable(metab_show, row.names = FALSE,
+             caption = if (metab_ora_by_contrast)
+                 "Metabolomics compound ORA - enriched KEGG pathways, one row per pathway and contrast"
+             else "Metabolomics compound ORA - enriched KEGG pathways")
 ```
 
 ```{r metab-ora-commentary, eval=has_metab_ora, results='asis'}
@@ -723,7 +793,7 @@ if (length(omics_barplots) > 0) {
 ```
 
 ```{r enrichment-per-omics-legend, eval=has_enrichment, results='asis'}
-figure_legend("Per-omics KEGG pathway enrichment (all contrasts combined). Bar length represents -log10(p-value). Red dashed line indicates p = 0.05 significance threshold.")
+figure_legend("Per-omics pathway enrichment across every gene-set collection configured for that layer (all contrasts combined), not KEGG alone. Bar length represents -log10(p-value). Red dashed line indicates p = 0.05 significance threshold.")
 ```
 
 ```{r enrichment-per-omics-table, eval=has_enrichment}
@@ -767,7 +837,7 @@ if (file.exists(meta_file)) {
     meta_tbl <- read.csv(meta_file, stringsAsFactors = FALSE)
     make_dt(
         head(meta_tbl, 200),
-        caption = "Cross-Omics Pathway Meta-Analysis (Fisher combined p-values)",
+        caption = "Cross-Omics Pathway Meta-Analysis (Stouffer combined p-values)",
         pageLength = 15
     )
 }
@@ -776,7 +846,7 @@ if (file.exists(meta_file)) {
 ```{r enrichment-table-legend, eval=has_enrichment, results='asis'}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
-    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Fisher's method. Pathways significant in multiple omics are most informative.")
+    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Stouffer's method. Pathways significant in multiple omics are most informative.")
     render_commentary("cross_omics_meta_analysis")
 }
 ```
@@ -849,10 +919,11 @@ if (file.exists(harmony_summary_file)) {
     cat("Multi-omics data were harmonized into a unified **MultiAssayExperiment** object. ",
         "Each omics layer was aligned to a common set of samples.\n\n")
 
-    # Show omics layers
-    omics_dirs <- list.dirs(integration_dir, full.names = FALSE, recursive = FALSE)
-    if (length(omics_dirs) > 0) {
-        cat("**Omics layers in integration:** ", paste(omics_dirs, collapse = ", "), "\n\n")
+    # These are the integration/ subdirectories — one per method that produced
+    # output (diablo, mofa, snf), not the omics layers.
+    method_dirs <- list.dirs(integration_dir, full.names = FALSE, recursive = FALSE)
+    if (length(method_dirs) > 0) {
+        cat("**Integration methods with output:** ", paste(method_dirs, collapse = ", "), "\n\n")
     }
 }
 ```
@@ -912,12 +983,12 @@ has_group_dist <- file.exists(group_dist_scatter) || file.exists(group_dist_boxp
 
 ```{r group-dist-section, eval=has_group_dist, results='asis'}
 cat("## Per-Sample Within vs Cross-Group Distance\n\n")
-cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. Samples below the diagonal are closer to their own group; samples above the diagonal are ambiguous or misplaced.\n\n")
+cat("For each sample, the mean Euclidean distance to other samples in the same condition group (within-group) and to samples in different groups (cross-group) is computed per omics layer. The x axis is the within-group distance and the y axis the cross-group distance, so samples ABOVE the diagonal are closer to their own group; samples below it are ambiguous or misplaced.\n\n")
 ```
 
 ```{r group-dist-scatter, eval=file.exists(group_dist_scatter), results='asis'}
 knitr::include_graphics(group_dist_scatter)
-figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points below the diagonal line indicate samples that are closer to their own condition group. Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
+figure_legend("Per-sample within-group vs cross-group mean Euclidean distance, faceted by omics layer. Points above the diagonal line indicate samples that are closer to their own condition group (x = within-group, y = cross-group distance). Labeled points (if any) are samples closer to the other group than their own, which may indicate outliers, mislabeling, or biological heterogeneity.")
 render_commentary("sample_group_distances")
 ```
 
@@ -1000,11 +1071,11 @@ if (file.exists(int_rds)) {
         '```'
     ), envir = environment(), quiet = TRUE))
     cat("\n\n")
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
+    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and coloured by KEGG pathway membership where one is known; for organisms with no KEGG mapping every feature shows as Unmapped. Hover for feature details.")
 } else if (file.exists(int_html)) {
     cat("\n### Interactive Loadings Plot {.unnumbered}\n\n")
     cat(sprintf('<iframe src="%s" width="100%%" height="650" frameborder="0" style="border:1px solid #ddd; border-radius:4px;"></iframe>\n\n', int_html))
-    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and colored by KEGG pathway membership. Hover for feature details.")
+    figure_legend("Interactive DIABLO loadings plot. Features are shaped by omics type and coloured by KEGG pathway membership where one is known; for organisms with no KEGG mapping every feature shows as Unmapped. Hover for feature details.")
 }
 ```
 
@@ -1052,8 +1123,10 @@ if (length(lfc_plots) > 0) {
 }
 ```
 
-```{r diablo-top-features, eval=has_diablo}
-# Load top feature tables
+```{r diablo-top-features, eval=has_diablo, results='asis'}
+# Load top feature tables. results='asis' + knit_child is required here: without
+# it the cat()ed headers were emitted as literal "## ### Top DIABLO Features"
+# text and the DT widgets never rendered.
 diablo_feat_files <- list.files(diablo_dir, pattern = "diablo_top_features_.*\\.csv$", full.names = TRUE)
 if (length(diablo_feat_files) > 0) {
     for (ff in diablo_feat_files) {
@@ -1061,7 +1134,11 @@ if (length(diablo_feat_files) > 0) {
         df <- tryCatch(read.csv(ff, stringsAsFactors = FALSE), error = function(e) NULL)
         if (!is.null(df) && nrow(df) > 0) {
             cat(sprintf("\n### Top DIABLO Features: %s\n\n", omics_name))
-            print(make_dt(df, caption = paste("DIABLO top features -", omics_name)))
+            chunk_id <- paste0("diablo-feat-", gsub("[^a-zA-Z0-9]", "", omics_name))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nmake_dt(read.csv("%s", stringsAsFactors = FALSE), caption = "DIABLO top features - %s")\n```\n',
+                chunk_id, ff, omics_name
+            ), quiet = TRUE))
         }
     }
 }
@@ -1289,7 +1366,12 @@ if (file.exists(mofa_le_csv)) {
     df <- read.csv(mofa_le_csv, stringsAsFactors = FALSE)
     if (nrow(df) > 0) {
         cat("\n#### MOFA2 Weights Enrichment Table {.unnumbered}\n\n")
-        print(make_dt(df, caption = "MOFA2 weights KEGG enrichment"))
+        # print() inside a results='asis' chunk emits nothing for an htmlwidget,
+        # so the heading appeared with no table under it.
+        cat(knitr::knit_child(text = sprintf(
+            '```{r mofa-le-table, echo=FALSE}\nmake_dt(read.csv("%s", stringsAsFactors = FALSE), caption = "MOFA2 weights KEGG enrichment")\n```\n',
+            mofa_le_csv
+        ), quiet = TRUE))
     }
 }
 ```
@@ -1323,7 +1405,7 @@ if (has_meta_pca || has_meta_pca_labeled) {
             '```{r meta-pca-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             meta_pca_plot
         ), quiet = TRUE))
-        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, colored by consensus cluster assignment. Ellipses show 95% confidence regions per cluster.")
+        figure_legend("Meta-integration PCA: latent factors from all integration methods (DIABLO, MOFA2, SNF) are concatenated and projected into a combined principal component space. Points represent samples, coloured by the meta-clustering of the concatenated latent space (meta_cluster), which need not agree with the per-method consensus column. A 95% confidence ellipse is drawn only for clusters with enough samples to fit one.")
     }
 
     if (has_meta_pca_labeled) {
@@ -1368,7 +1450,7 @@ if (file.exists(robust_plot)) {
         '```{r robust-feat-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
         robust_plot
     ), quiet = TRUE))
-    figure_legend("Top robust features identified consistently across multiple integration methods. Heatmap shows normalized importance scores per method. Features ranked by combined importance (top 20% in the majority of methods).")
+    figure_legend("Top robust features identified consistently across multiple integration methods. Tiles show each feature's importance rank percentile within a method. Features are kept when at least two methods rank them and their mean rank percentile is <= 0.2; the heatmap shows the top 30 of those, while the table below lists more.")
     render_commentary("robust_features")
 } else {
     cat("*No robust features found across methods. This can occur when methods identify largely different feature sets.*\n")
@@ -1762,7 +1844,7 @@ if ("MOFA2" %in% methods) {
 }
 
 cat(sprintf("%d. **Cross-Omics Enrichment**: Pathway enrichment results were aggregated across omics ", step_num),
-    "using Fisher's method for combined p-values.\n\n")
+    "using Stouffer's method for combined p-values.\n\n")
 
 cat("## Software\n\n")
 cat("```\n")
