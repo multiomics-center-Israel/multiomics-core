@@ -219,11 +219,10 @@ list_pca_feature_panels <- function(diag_dir) {
                                  stringsAsFactors = FALSE))
     }
 
-    # All proteins: the named panel, else the main PC1-vs-PC2 plot, which is
-    # computed on the same full matrix (runs before PCA_all.png have only that).
-    all_path <- file.path(diag_dir, "PCA_all.png")
-    if (!file.exists(all_path)) all_path <- file.path(diag_dir, "PCA_PC1.vs.PC2.png")
-    panels <- add(panels, "all", all_path, "All proteins")
+    # All proteins is the main PC1-vs-PC2 plot, not a panel of its own: it is
+    # already the PCA of the full matrix, so the QC module writes it once and
+    # this maps it to the dropdown's "all" entry.
+    panels <- add(panels, "all", file.path(diag_dir, "PCA_PC1.vs.PC2.png"), "All proteins")
 
     top_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
     n_top <- as.numeric(sub("^PCA_top([0-9]+)\\.png$", "\\1", basename(top_files)))
@@ -232,8 +231,10 @@ list_pca_feature_panels <- function(diag_dir) {
                       sprintf("Top %s variable proteins", format(n_top[i], big.mark = ",")))
     }
 
+    # Says what the selection is, not what it is free of: the panel shares the
+    # matrix and the preprocessing of the others, batch correction included.
     add(panels, "robust", file.path(diag_dir, "PCA_robust.png"),
-        "Proteins measured in every sample (no imputed values)")
+        "Proteins observed in every sample")
 }
 
 #' Sample-subset PCA panels for the report's Subsets section

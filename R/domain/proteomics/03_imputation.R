@@ -256,15 +256,23 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imps
 }
 
-#' Features with no imputed value in any sample
+#' Features observed in every sample
 #'
 #' The rule behind the complete-case PCA panel (PCA_robust.png). A per-feature
 #' allowance of one imputed value is deliberately not used: when missingness sits
 #' in one sample, many features each missing only there would pass and still hand
 #' that sample many imputed values.
 #'
+#' This selects features; it does not make the resulting panel independent of
+#' imputation. Where batch correction was fitted on the full imputed matrix, the
+#' values these features carry were informed by imputed ones. The panel is a
+#' complete-case sensitivity view, not an imputation-free one.
+#'
+#' Pass a flag matrix restricted to the samples the comparison runs on, so a
+#' sample outside it cannot disqualify a feature.
+#'
 #' @param imputed_flag Logical matrix (features x samples), TRUE where a value was
-#'   imputed. NA flags are not counted as imputed.
+#'   imputed or missing. NA flags are not counted.
 #' @return Integer vector of the row indices with no TRUE flag.
 select_complete_case_features <- function(imputed_flag) {
     which(rowSums(as.matrix(imputed_flag), na.rm = TRUE) == 0)

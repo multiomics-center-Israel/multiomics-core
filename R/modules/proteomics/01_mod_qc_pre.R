@@ -58,39 +58,48 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
                write_pca_companions(p13, out_qc, pcs = c(1, 3)))
 
     # ---------- PCA on the full matrix, named for the report dropdown ----------
-    # PCA_PC1.vs.PC2.png above is the same data, but the dropdown needs a panel
-    # whose filename says "all" so "all proteins" can sit beside the top-variable
-    # and complete-case sets rather than being an unlabelled special case.
-    #
-    # Every dropdown panel below removes its file before it is rebuilt. A panel
-    # that is skipped or fails would otherwise leave an earlier run's image in
-    # the output directory, and the report would show it as this run's.
-    f_pca_all <- file.path(out_qc, "PCA_all.png")
-    if (file.exists(f_pca_all)) file.remove(f_pca_all)
-    tryCatch({
-        p_all <- qc_pca_scatter(pre$expr_imp_single, pre$meta, cfg, pcs = c(1, 2),
-                                out_file = f_pca_all)
-        files <- c(files, f_pca_all)
-        plots$pca_all <- p_all
-        message(sprintf("  Generated PCA with all %d proteins", nrow(pre$expr_imp_single)))
-    }, error = function(e) {
-        message(sprintf("  Could not generate all-protein PCA: %s", e$message))
-    })
+    # The "All proteins" dropdown entry reuses PCA_PC1.vs.PC2.png above: it is
+    # the identical call on the identical matrix, so computing and writing a
+    # second copy under another name only risked the two drifting apart.
+    # list_pca_feature_panels() maps that file to the "all" key. A PCA_all.png
+    # from a run made before this is stale and would be picked up by name.
+    f_pca_all_stale <- file.path(out_qc, "PCA_all.png")
+    if (file.exists(f_pca_all_stale)) file.remove(f_pca_all_stale)
 
-    # ---------- PCA on proteins measured in every sample ----------
-    # Complete-case proteins carry no imputed value at all, so their PCA cannot
-    # be driven by the imputation draw (select_complete_case_features() says why
-    # one imputed value per protein is not enough). Skipped when the configured
-    # method is "none": the flags are then plain missingness, not imputation.
+    # ---------- PCA on proteins observed in every sample ----------
+    # A complete-case sensitivity panel: the same matrix and the same
+    # preprocessing as the PCA above -- including batch correction -- with
+    # feature selection as the only difference, so the two are comparable.
+    # It does NOT claim to be free of imputation: where batch correction was
+    # fitted on the full imputed matrix, imputed features informed the values
+    # these rows carry. The claim is narrower and is what the label says:
+    # proteins with an observed measurement in every included sample.
+    #
+    # Each dropdown panel removes its file before rebuilding it, so a panel that
+    # is skipped or fails leaves no earlier run's image for the report to show.
     f_pca_robust <- file.path(out_qc, "PCA_robust.png")
     if (file.exists(f_pca_robust)) file.remove(f_pca_robust)
-    imp_method <- cfg$imputation$method %||% "perseus_like"
     imp_flag <- pre$imputation_qc$imputed_flag
-    if (identical(imp_method, "none")) {
-        message("  Skipping complete-case PCA: imputation.method is 'none', so nothing was imputed")
-    } else if (is.null(imp_flag)) {
-        message("  Skipping complete-case PCA: no imputation flags in the preprocessing output")
+    if (is.null(imp_flag)) {
+        message("  Skipping complete-case PCA: no missingness flags in the preprocessing output")
     } else {
+        # Judge the mask on exactly the samples the PCA runs on: qc_pca_scatter()
+        # aligns the matrix to the metadata, so a sample it drops must not
+        # disqualify a protein. Encoded rather than assumed from preprocessing.
+        sample_col <- cfg$effects$samples %||% cfg$id_columns$sample_col %||% "SampleID"
+        pca_samples <- intersect(as.character(pre$meta[[sample_col]]),
+                                 colnames(pre$expr_imp_single))
+        missing_flag_cols <- setdiff(pca_samples, colnames(imp_flag))
+        if (length(missing_flag_cols) > 0) {
+            stop(sprintf(
+                paste0("Cannot align the missingness flags to the PCA samples: %s ",
+                       "present in the expression matrix and metadata but absent from ",
+                       "imputation_qc$imputed_flag. The complete-case panel would be ",
+                       "judged on a different sample set than the PCA it is compared with."),
+                paste(missing_flag_cols, collapse = ", ")), call. = FALSE)
+        }
+        imp_flag <- imp_flag[, pca_samples, drop = FALSE]
+
         robust_idx <- select_complete_case_features(imp_flag)
         if (length(robust_idx) >= 3) {
             mat_robust <- pre$expr_imp_single[robust_idx, , drop = FALSE]
@@ -100,14 +109,14 @@ mod_proteomics_qc_pre <- function(pre, config, out_dir) {
                 files <- c(files, f_pca_robust)
                 plots$pca_robust <- p_robust
                 message(sprintf(
-                    "  Generated PCA with the %d of %d proteins measured in every sample",
+                    "  Generated PCA with the %d of %d proteins observed in every sample",
                     length(robust_idx), nrow(imp_flag)))
             }, error = function(e) {
                 message(sprintf("  Could not generate complete-case PCA: %s", e$message))
             })
         } else {
             message(sprintf(
-                "  Skipping complete-case PCA: only %d proteins were measured in every sample",
+                "  Skipping complete-case PCA: only %d proteins were observed in every sample",
                 length(robust_idx)))
         }
     }

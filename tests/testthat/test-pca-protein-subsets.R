@@ -42,25 +42,31 @@ test_that("the dropdown lists all proteins first, top-N descending, complete-cas
     d <- tempfile("pca-panels-")
     dir.create(d)
     on.exit(unlink(d, recursive = TRUE), add = TRUE)
-    touch_pngs(d, c("PCA_top1000.png", "PCA_robust.png", "PCA_all.png",
+    touch_pngs(d, c("PCA_top1000.png", "PCA_robust.png",
                     "PCA_top2000.png", "PCA_top500.png", "PCA_PC1.vs.PC2.png"))
 
     panels <- list_pca_feature_panels(d)
     expect_equal(panels$key, c("all", "top2000", "top1000", "top500", "robust"))
-    expect_equal(basename(panels$path[panels$key == "all"]), "PCA_all.png")
+    # "All proteins" is the existing full-matrix PCA, not a second copy of it.
+    expect_equal(basename(panels$path[panels$key == "all"]), "PCA_PC1.vs.PC2.png")
     expect_equal(panels$label[panels$key == "top1000"], "Top 1,000 variable proteins")
-    expect_match(panels$label[panels$key == "robust"], "measured in every sample")
+    # The label states the selection, not an imputation-independence it cannot
+    # promise once batch correction has been fitted on the full imputed matrix.
+    expect_equal(panels$label[panels$key == "robust"], "Proteins observed in every sample")
+    expect_false(grepl("imputed", panels$label[panels$key == "robust"], fixed = TRUE))
 })
 
-test_that("a run without PCA_all.png falls back to the PC1-vs-PC2 plot", {
+test_that("a stale PCA_all.png from an older run is never listed", {
     d <- tempfile("pca-panels-")
     dir.create(d)
     on.exit(unlink(d, recursive = TRUE), add = TRUE)
-    touch_pngs(d, c("PCA_PC1.vs.PC2.png", "PCA_top500.png"))
+    # PCA_all.png is no longer written; one left behind must not be preferred
+    # over this run's full-matrix PCA.
+    touch_pngs(d, c("PCA_PC1.vs.PC2.png", "PCA_all.png", "PCA_top500.png"))
 
     panels <- list_pca_feature_panels(d)
     expect_equal(panels$key, c("all", "top500"))
-    expect_equal(basename(panels$path[1]), "PCA_PC1.vs.PC2.png")
+    expect_equal(basename(panels$path[panels$key == "all"]), "PCA_PC1.vs.PC2.png")
 })
 
 test_that("an empty directory lists no panels and no subsets", {
@@ -97,9 +103,91 @@ test_that("the QC module uses the shared rule, clears old panels and namespaces 
 
     src <- readLines(f, warn = FALSE)
     expect_true(any(grepl("select_complete_case_features(", src, fixed = TRUE)))
-    expect_true(any(grepl('identical(imp_method, "none")', src, fixed = TRUE)))
     expect_true(any(grepl('"PCA_subset_%s.png"', src, fixed = TRUE)))
     expect_false(any(grepl('sprintf("PCA_%s.png"', src, fixed = TRUE)))
-    # all, complete-case and top-N panels, plus earlier subset images
+    # complete-case and top-N panels, plus the stale PCA_all.png and earlier
+    # subset images
     expect_gte(sum(grepl("file.remove(", src, fixed = TRUE)), 4)
+
+    # The panel is no longer skipped on the configured method name. With
+    # imputation.method "none" the flags are plain missingness and the regular
+    # PCA median-imputes inside compute_pca_scores(), so the complete-case view
+    # is if anything more informative there.
+    expect_false(any(grepl('identical(imp_method, "none")', src, fixed = TRUE)))
+
+    # The mask is judged on the samples the PCA runs on, and says so loudly if
+    # it cannot be aligned.
+    expect_true(any(grepl("pca_samples", src, fixed = TRUE)))
+    expect_true(any(grepl("missing_flag_cols", src, fixed = TRUE)))
+
+    # "All proteins" reuses the existing full-matrix PCA rather than writing a
+    # second copy under another name: the full matrix is projected twice, for
+    # PC1-vs-PC2 and PC1-vs-PC3, and not a third time.
+    expect_equal(sum(grepl("qc_pca_scatter(pre$expr_imp_single", src, fixed = TRUE)), 2)
+})
+
+
+# =============================================================================
+# Non-finite intensities are missing measurements
+# =============================================================================
+
+test_that("min-count filtering counts -Inf as an observation, which is why it is normalised upstream", {
+    # The hazard the preprocessing fix exists for: pass_filter() asks !is.na(),
+    # and -Inf is not NA. A feature observed once and zero twice would look like
+    # three observations to the filter.
+    expr <- matrix(c(10, -Inf, -Inf,
+                     10,   11,   12), nrow = 2, byrow = TRUE,
+                   dimnames = list(c("f_zeroes", "f_real"), c("S1", "S2", "S3")))
+    grp <- c("A", "A", "A")
+
+    kept_raw <- pass_filter(expr, group = grp, min_per_group = 3, min_groups = 1)
+    expect_true(kept_raw[["f_zeroes"]])   # -Inf counted as measured
+
+    expr[!is.finite(expr)] <- NA_real_
+    kept_norm <- pass_filter(expr, group = grp, min_per_group = 3, min_groups = 1)
+    expect_false(kept_norm[["f_zeroes"]])
+    expect_true(kept_norm[["f_real"]])
+})
+
+test_that("preprocessing normalises non-finite intensities before it filters", {
+    candidates <- c(
+        testthat::test_path("..", "..", "R", "domain", "proteomics", "04_preprocess.R"),
+        "R/domain/proteomics/04_preprocess.R"
+    )
+    f <- candidates[file.exists(candidates)][1]
+    skip_if(is.na(f), "04_preprocess.R not found from the test working directory")
+
+    src <- readLines(f, warn = FALSE)
+    norm_line <- grep("expr_raw[!is.finite(expr_raw)] <- NA_real_", src, fixed = TRUE)
+    filt_line <- grep("filter_proteomics_by_min_count(", src, fixed = TRUE)
+    imp_line  <- grep("impute_proteomics(", src, fixed = TRUE)
+
+    expect_length(norm_line, 1)
+    # Order is the point: after this, is.na() means the same thing to the
+    # filter, to the imputation flags and to the complete-case selection.
+    expect_lt(norm_line, min(filt_line))
+    expect_lt(norm_line, min(imp_line))
+})
+
+
+# =============================================================================
+# The mask and the PCA must share a sample universe
+# =============================================================================
+
+test_that("restricting the flags to the PCA samples changes which features qualify", {
+    # S4 is in the flag matrix but not in the PCA. Judged on all four samples
+    # f_ok would be disqualified by a sample the comparison never shows.
+    flag <- rbind(
+        f_ok   = c(FALSE, FALSE, FALSE, TRUE),
+        f_bad  = c(FALSE, TRUE,  FALSE, FALSE)
+    )
+    colnames(flag) <- c("S1", "S2", "S3", "S4")
+
+    expect_length(select_complete_case_features(flag), 0)
+
+    pca_samples <- c("S1", "S2", "S3")
+    expect_equal(
+        rownames(flag)[select_complete_case_features(flag[, pca_samples, drop = FALSE])],
+        "f_ok"
+    )
 })

@@ -34,7 +34,22 @@ preprocess_proteomics <- function(inputs, config) {
     }
   }
   assert_numeric_matrix(expr_raw, "expr_raw")
-  
+
+  # A non-finite intensity is a missing measurement, not a measurement. Linear
+  # DIA-NN input carrying a zero becomes -Inf at log2 -- the loader warns and
+  # lets it through -- while every step after this asks is.na(). Left alone,
+  # min-count filtering counts such a cell towards the observations that keep a
+  # feature, and impute_proteomics() records it as measured rather than imputed.
+  # Normalising here, before filtering, is what makes "missing" mean the same
+  # thing everywhere downstream.
+  n_nonfinite <- sum(!is.finite(expr_raw))
+  if (n_nonfinite > 0) {
+    message(sprintf(
+      "Treating %d non-finite intensities as missing (log2 of a zero or negative value).",
+      n_nonfinite))
+    expr_raw[!is.finite(expr_raw)] <- NA_real_
+  }
+
   # Contaminant filtering (e.g. cRAP proteins)
   contam_res <- filter_contaminants(expr_raw, row_data, cfg)
   expr_raw <- contam_res$expr_mat
