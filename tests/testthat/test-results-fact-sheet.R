@@ -150,13 +150,13 @@ test_that("F3 the sheet carries the numbers the files actually contain", {
     expect_equal(val("genes after expression filtering"), "4")
     expect_equal(val("genes receiving an adjusted p-value"), "4")
     expect_equal(val("differentially expressed genes, S_vs_N"), "2 total (1 up, 1 down)")
-    expect_equal(val("genes at raw p < 0.05"), "2")
+    expect_equal(val("genes at raw p < 0.05, S_vs_N"), "2")
     expect_equal(val("significance rule"),
                  "adjusted p <= 0.05 and |linear fold change| >= 1.5")
     # g3 has Mean.S == 0 and passes, so it is the one on-off gene of the two
     expect_match(val("differentially expressed genes with a zero group mean"), "^1 of 2")
     # and the fold-change range must then cover only g1
-    expect_match(val("|linear fold change| among differentially expressed genes detected in both groups"),
+    expect_match(val("|linear fold change| among differentially expressed genes detected in both groups, S_vs_N"),
                  "^5 to 5")
 })
 
@@ -186,7 +186,7 @@ test_that("F3 the collection label drops the contrast prefix", {
                                  pre = list(meta = fixture_meta()),
                                  inputs = list(contrasts = fixture_contrasts()))
     claim <- grep("^gene sets tested", s$claim, value = TRUE)
-    expect_equal(claim, "gene sets tested, ranked and over-representation hits (KEGG_spalangia)")
+    expect_equal(claim, "gene sets tested, ranked and over-representation hits (KEGG_spalangia, S_vs_N)")
     expect_match(s$value[s$claim == claim],
                  "2 tested; 1 ranked at adjusted p <= 0.05; 0 over-represented")
 })
@@ -224,4 +224,172 @@ test_that("F5 every row states where its value came from", {
     expect_true(all(nzchar(s$value)))
     expect_true(all(nzchar(s$source_file)))
     expect_false(any(duplicated(s$claim)))
+})
+
+
+# =============================================================================
+# F6 — claims that must stay true: per contrast, per source, per run
+# =============================================================================
+
+# Two contrasts, and a padj column with NAs where the raw p-value is present --
+# the shape DESeq2's independent filtering produces.
+write_two_contrast_run <- function(root) {
+    ds <- file.path(root, "Datasets")
+    dir.create(ds, recursive = TRUE, showWarnings = FALSE)
+
+    counts <- data.frame(gene = paste0("g", 1:4),
+                         S_1 = c(100, 10, 5, 40), S_2 = c(120, 12, 6, 44),
+                         N_1 = c(20, 11, 30, 42), N_2 = c(24, 9, 34, 38),
+                         check.names = FALSE)
+    write.table(counts, file.path(ds, "rna_counts_filtered.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+    write.table(counts, file.path(ds, "rna_norm_TMMlogCPM.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+
+    final <- data.frame(
+        Gene = paste0("g", 1:4),
+        Mean.S = c(110, 11, 5.5, 42), Mean.N = c(22, 10, 32, 40),
+        linearFC.S_vs_N = c(5.0, 1.1, -6.0, 1.05),
+        pvalue.S_vs_N   = c(1e-8, 0.4, 1e-5, 0.9),
+        padj.S_vs_N     = c(1e-6, NA,  1e-4, NA),      # filtered out for 2 genes
+        S_vs_N_pass     = c(1, NA, 1, NA),
+        linearFC.X_vs_N = c(1.02, 9.0, 1.01, 1.03),
+        pvalue.X_vs_N   = c(0.7, 1e-9, 0.8, 0.6),
+        padj.X_vs_N     = c(0.9, 1e-7, 0.95, 0.85),
+        X_vs_N_pass     = c(NA, 1, NA, NA),
+        pass_any_contrast = c(1, 1, 1, NA),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+    write.table(final, file.path(ds, "final_results.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+    root
+}
+
+two_contrast_inputs <- function() {
+    list(contrasts = data.frame(
+        Contrast_name = c("S_vs_N", "X_vs_N"), Factor = "grp",
+        Numerator = c("S", "X"), Denominator = "N", stringsAsFactors = FALSE))
+}
+
+test_that("F6 every contrast gets its own rows, not just the first", {
+    root <- write_two_contrast_run(file.path(withr::local_tempdir(), "rna"))
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = two_contrast_inputs())
+    val <- function(claim) s$value[s$claim == claim]
+
+    expect_equal(val("genes at raw p < 0.05, S_vs_N"), "2")
+    expect_equal(val("genes at raw p < 0.05, X_vs_N"), "1")
+    expect_equal(val("smallest adjusted p-value, S_vs_N"), "1e-06")
+    expect_equal(val("smallest adjusted p-value, X_vs_N"), "1e-07")
+    expect_false(any(duplicated(s$claim)))
+})
+
+test_that("F6 the by-chance comparator counts genes that have a raw p-value", {
+    root <- write_two_contrast_run(file.path(withr::local_tempdir(), "rna"))
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = two_contrast_inputs())
+
+    # All 4 genes carry a raw p-value for S_vs_N; only 2 survived independent
+    # filtering into padj. Counting the 2 would understate chance by half.
+    expect_match(s$source_file[s$claim == "genes expected at raw p < 0.05 by chance, S_vs_N"],
+                 "0.05 x 4 genes with a raw p-value", fixed = TRUE)
+})
+
+test_that("F6 the fold-change range uses that contrast's own pass flag", {
+    root <- write_two_contrast_run(file.path(withr::local_tempdir(), "rna"))
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = two_contrast_inputs())
+    val <- function(claim) s$value[s$claim == claim]
+
+    # S_vs_N passes g1 (|FC| 5) and g3 (|FC| 6); X_vs_N passes only g2 (|FC| 9).
+    # Under pass_any_contrast both rows would have covered g1, g2 and g3.
+    expect_match(val("|linear fold change| among differentially expressed genes detected in both groups, S_vs_N"),
+                 "^5 to 6")
+    expect_match(val("|linear fold change| among differentially expressed genes detected in both groups, X_vs_N"),
+                 "^9 to 9")
+})
+
+test_that("F6 a legacy padj_cutoff config is reported, not silently replaced by 0.05", {
+    root <- write_run(file.path(withr::local_tempdir(), "rna"), "contrast")
+    cfg <- list(modes = list(rna = list(
+        de = list(padj_cutoff = 0.1, linear_fc_cutoff = 1.5),   # no p_cutoff
+        effects = list(samples = "SampleID", color = "grp")
+    )))
+    s <- build_rnaseq_fact_sheet(root, cfg, pre = list(meta = fixture_meta()),
+                                 inputs = list(contrasts = fixture_contrasts()))
+
+    expect_equal(s$value[s$claim == "significance rule"],
+                 "adjusted p <= 0.1 and |linear fold change| >= 1.5")
+})
+
+test_that("F6 the fresh Datasets DE counts win over a stale copy at the root", {
+    root <- write_run(file.path(withr::local_tempdir(), "rna"), "Name")   # Datasets copy
+    stale <- data.frame(contrast = c("S_vs_N", "any"), up = c(99, 0),
+                        down = c(99, 0), total = c(198, 198))
+    write.table(stale, file.path(root, "de_summary_counts.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+
+    d <- .read_de_summary_counts(root, create_legacy_output_dirs(root, create = FALSE))
+    expect_equal(d$total, 2)   # not the 198 left behind by a previous run
+})
+
+test_that("F6 provenance rows point outside the mode directory", {
+    run <- withr::local_tempdir()
+    root <- file.path(run, "rna")
+    write_run(root, "contrast")
+    info <- file.path(run, "execution_info")
+    dir.create(info, recursive = TRUE, showWarnings = FALSE)
+    writeLines("2026-01-01 00:00:00", file.path(info, "timestamp.txt"))
+
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = list(contrasts = fixture_contrasts()),
+                                 run_dir = run)
+
+    # source_file is relative to the mode directory, and execution_info is that
+    # directory's sibling -- "execution_info/..." would name nothing.
+    expect_equal(s$source_file[s$claim == "run produced at"],
+                 "../execution_info/timestamp.txt")
+    expect_true(all(grepl("^\\.\\./execution_info/",
+                          s$source_file[grepl("execution_info", s$source_file)])))
+})
+
+test_that("F6 the nested local-enrichment layout is found too", {
+    root <- file.path(withr::local_tempdir(), "rna")
+    write_run(root, "contrast")
+    unit <- file.path(root, "Enrichment", "GSEA", "GO_BP", "ranking_by_fc", "S_vs_N")
+    dir.create(unit, recursive = TRUE, showWarnings = FALSE)
+    write.csv(data.frame(ID = c("p1", "p2", "p3"), p.adjust = c(0.01, 0.02, 0.9)),
+              file.path(unit, "results.csv"), row.names = FALSE)
+
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = list(contrasts = fixture_contrasts()))
+    claim <- grep("^gene sets tested and hit", s$claim, value = TRUE)
+
+    expect_length(claim, 1)
+    expect_match(claim, "GO_BP, ranking_by_fc, S_vs_N", fixed = TRUE)
+    expect_equal(s$value[s$claim == claim], "3 tested; 2 significant")
+})
+
+test_that("F6 missing values in the normalised matrix do not silently drop the structure rows", {
+    root <- file.path(withr::local_tempdir(), "rna")
+    write_run(root, "contrast")
+    ds <- file.path(root, "Datasets")
+    norm <- read.delim(file.path(ds, "rna_norm_TMMlogCPM.tsv"), check.names = FALSE)
+    norm[2, "N_1"] <- NA                       # what preprocessed input can carry through
+    write.table(norm, file.path(ds, "rna_norm_TMMlogCPM.tsv"), sep = "\t",
+                quote = FALSE, row.names = FALSE)
+
+    s <- build_rnaseq_fact_sheet(root, fixture_config(),
+                                 pre = list(meta = fixture_meta()),
+                                 inputs = list(contrasts = fixture_contrasts()))
+    pc <- s[s$claim == "variance explained by PC1 and PC2", ]
+
+    expect_equal(nrow(pc), 1)                  # prcomp() would have aborted
+    expect_match(pc$source_file, "3 of 4 genes")
+    expect_false(any(grepl("NA", s$value[s$claim == "pearson correlation between libraries"])))
 })
