@@ -196,10 +196,10 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
                 t <- id_to_name[[term]]
             } else {
-                # Fallback: strip GO/KEGG ID prefixes
-                t <- sub("^GO:\\d+~", "", term)
-                t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-                if (nchar(t) == 0) t <- term
+                # Same stripping rule as the name map synthesizes with. Two
+                # implementations of it is what let the map shadow this fallback
+                # with a worse label.
+                t <- .multigsea_readable_from_identifier(term)
             }
             if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
             t
@@ -432,9 +432,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
             t <- id_to_name[[term]]
         } else {
-            t <- sub("^GO:\\d+~", "", term)
-            t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-            if (nchar(t) == 0) t <- term
+            # Same stripping rule as the name map synthesizes with, as above.
+            t <- .multigsea_readable_from_identifier(term)
         }
         if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
         t

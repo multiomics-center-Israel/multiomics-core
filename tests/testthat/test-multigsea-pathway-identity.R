@@ -549,6 +549,27 @@ test_that("a row with no identity does not take the pairwise plot down with it",
 # Installing a label in the map shadows resolve_term()'s own fallback, so
 # anything the synthesized label fails to strip is text that used to be removed.
 
+test_that("the fallback and the synthesized label share one implementation", {
+    # resolve_term()'s fallback and the name map used to strip separately, which
+    # is how they drifted: the map installed a label the fallback would have
+    # shortened, and shadowed it. Both now call this helper, so agreement is by
+    # construction -- this pins it so a future edit to either cannot re-split it.
+    shapes <- c("GO:0006915~Apoptosis", "gla00010 Glycolysis / Gluconeogenesis")
+
+    fallback <- .multigsea_readable_from_identifier(shapes)
+    expect_identical(fallback, c("Apoptosis", "Glycolysis / Gluconeogenesis"))
+
+    synthesized <- vapply(shapes, function(s) {
+        nms <- .multigsea_term_names(
+            list(data.frame(pathway = s, stringsAsFactors = FALSE)),
+            kegg_org = "gla"
+        )
+        unname(nms[[1]])
+    }, character(1), USE.NAMES = FALSE)
+
+    expect_identical(synthesized, fallback)
+})
+
 test_that("a GO identifier with a tilde name keeps only the name", {
     df <- data.frame(pathway = "GO:0006915~Apoptosis", stringsAsFactors = FALSE)
 
