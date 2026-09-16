@@ -145,6 +145,12 @@ mod_met_raw <- function(inp, config) {
   row_data <- add_kegg_from_hmdb(row_data,
                                  cfg$enrichment$mapping_file %||% NULL)
 
+  # Sanitize the KEGG column: keep only real KEGG compound IDs and route
+  # ChemSpider (CSID…) ids into their own column. Runs AFTER the HMDB fill so it
+  # also cleans anything the mapping introduced, and so a naive non-empty count
+  # of KEGG reflects real coverage (e.g. the 438-non-empty → 315-KEGG case).
+  row_data <- clean_kegg_chemspider(row_data)
+
   list(
     expr_raw      = expr_raw,
     meta          = meta,
