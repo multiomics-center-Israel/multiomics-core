@@ -1,0 +1,67 @@
+# ==============================================================================
+# End-to-end regression fixture — RNA-seq
+# The repo's shipped RNA example (data/example_counts.csv) is a 5-gene x 3-sample
+# toy, too small for a real DESeq2 run, so run_omic_e2e() generates a properly
+# sized synthetic count matrix (seeded) into the temp project's data/rna/ dir.
+# `project.dir` is a placeholder — the helper overrides it with that temp dir.
+# ==============================================================================
+
+project:
+  dir: "__OVERRIDDEN_BY_HELPER__"
+  name: "e2e_rnaseq"
+  analysis_round: "T01"
+
+paths:
+  raw: "data"
+  out: "outputs"
+
+params:
+  seed: 1
+
+modes:
+  rna:
+
+    files:
+      counts: "rna/counts.csv"
+      metadata: "rna/metadata.csv"
+      contrasts: "rna/contrasts.csv"
+
+    id_columns:
+      gene_id: "gene_id"
+      sample_col: "SampleID"
+
+    normalization:
+      method: "TMMlogCPM"
+      prior.count: 1
+
+    filtering:
+      group_col: "group"
+      auto_filter:
+        min: 0.5
+        max: 2.0
+        fallback: 1.0
+
+    de:
+      method: "deseq2"
+      deseq_mode: "default"
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+      # Significance in build_rnaseq_summary_df() is gated on the BH-adjusted
+      # p-value (padj); it does not read use_adj. The injected signal is strong
+      # (~4x) so it is recovered on adjusted p even at n=3/group.
+      use_adj: true
+
+    de_table:
+      id_col: "FeatureID"
+      pass_any_col: "pass_any_contrast"
+
+    effects:
+      color: "group"
+      shape: null
+      samples: "SampleID"
+
+    clustering:
+      enabled: false
+
+    qc:
+      adaptive_plots: true

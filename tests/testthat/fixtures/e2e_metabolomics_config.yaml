@@ -1,0 +1,76 @@
+# ==============================================================================
+# End-to-end regression fixture — metabolomics
+# Points at the repo's shipped synthetic data (data/example_metabolomics/), which
+# injects a known DE signal into the first 25 features (METAB_001..METAB_025).
+# `project.dir` is a placeholder — run_omic_e2e() overrides it with a temp dir so
+# the run is fully isolated (no writes into the repo, no touch of _targets/).
+# ==============================================================================
+
+project:
+  dir: "__OVERRIDDEN_BY_HELPER__"
+  name: "e2e_metabolomics"
+  analysis_round: "T01"
+
+paths:
+  raw: "data"
+  out: "outputs"
+
+params:
+  seed: 1
+
+modes:
+  metabolomics:
+
+    input:
+      format: "processed_wide"
+
+    files:
+      data: "metabolomics/data.csv"
+      metadata: "metabolomics/metadata.csv"
+      contrasts: "metabolomics/contrasts.csv"
+
+    id_columns:
+      name_col: "feature_id"
+      mz_col: "m/z"
+      rt_col: "RT [min]"
+
+    preprocessing:
+      feat_missing_threshold: 0.50
+      sample_missing_threshold: 1.0
+      chosen_norm: "pqn"
+      sample_norm: "pqn"
+      transform: "log2"
+      scaling: "none"
+      pseudocount: 1
+      drift_correction:
+        enabled: false
+
+    sample_filter:
+      enabled: false
+
+    effects:
+      samples: "sample_id"
+      color: "condition"
+
+    qc:
+      enabled: false
+
+    de:
+      method: "limma"
+      condition_column: "condition"
+      p_cutoff: 0.05
+      # Raw p-value so the injected signal is reliably recovered on n=3/group.
+      use_adjusted_pval: false
+      linear_fc_cutoff: 1.5
+
+    clustering:
+      enabled: false
+
+    enrichment:
+      run_enrichment: false
+      run_network: false
+      mummichog:
+        enabled: false
+
+    excel:
+      group_cv: false
