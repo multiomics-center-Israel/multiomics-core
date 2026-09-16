@@ -178,3 +178,41 @@ test_that("basenames that normalise to the same output name stay distinct", {
     expect_equal(gs$GO_v1[["SET_A"]], c("g1", "g2"))
     expect_equal(gs$GO_v1_1[["SET_B"]], c("g3", "g4"))
 })
+
+
+test_that("collection names do not collide case-insensitively with a built-in", {
+    # On a case-insensitive filesystem pathway_<contrast>_kegg_fgsea.csv and
+    # pathway_<contrast>_KEGG_fgsea.csv are one file, so lower-casing has to be
+    # part of the uniqueness check, not just the exact-match check.
+    lower <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "kegg.gmt")
+    other <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "my_sets.gmt")
+    on.exit(unlink(c(dirname(lower), dirname(other)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(lower, other))
+
+    expect_false("kegg" %in% tolower(names(gs)))   # the KEGG slot stays free
+    expect_true("kegg_1" %in% names(gs))           # case preserved, suffixed
+    expect_equal(gs$kegg_1[["SET_A"]], c("g1", "g2"))
+    expect_true("my_sets" %in% names(gs))          # unaffected name untouched
+})
+
+test_that("two GMTs differing only in case stay two collections", {
+    upper <- write_gmt_file(
+        paste(c("SET_A", "Set A", "g1", "g2"), collapse = "\t"), "Sets.gmt")
+    lower <- write_gmt_file(
+        paste(c("SET_B", "Set B", "g3", "g4"), collapse = "\t"), "sets.gmt")
+    on.exit(unlink(c(dirname(upper), dirname(lower)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Example organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(upper, lower))
+
+    expect_length(names(gs), 2)
+    # Distinct even once the filesystem folds case.
+    expect_length(unique(tolower(names(gs))), 2)
+    expect_equal(gs[[names(gs)[1]]][["SET_A"]], c("g1", "g2"))
+})

@@ -132,11 +132,28 @@ load_gene_sets <- function(organism,
             # the pooled "custom" name could not produce. Seeding make.unique()
             # with them renames only a file that actually collides,
             # deterministically, and leaves every other name exactly as it is.
+            # Uniqueness is decided on the lower-cased name, because the files
+            # these become collide on a case-insensitive filesystem: kegg.gmt
+            # beside the built-in KEGG writes pathway_<contrast>_kegg_fgsea.csv
+            # and pathway_<contrast>_KEGG_fgsea.csv, which are one file on macOS
+            # and Windows. The file's own capitalisation is put back afterwards,
+            # so a name that did not collide is untouched and one that did keeps
+            # its case with the suffix appended.
             reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
             output_safe <- gsub("[^a-zA-Z0-9_-]", "_",
                                 tools::file_path_sans_ext(basename(gmt_paths)))
-            collection_names <- make.unique(
-                c(reserved, output_safe), sep = "_")[-seq_along(reserved)]
+            keys <- make.unique(
+                c(tolower(reserved), tolower(output_safe)),
+                sep = "_")[-seq_along(reserved)]
+            collection_names <- vapply(seq_along(output_safe), function(i) {
+                lower <- tolower(output_safe[i])
+                if (identical(keys[i], lower)) {
+                    output_safe[i]
+                } else {
+                    # make.unique() only ever appends to the string it was given
+                    paste0(output_safe[i], substring(keys[i], nchar(lower) + 1L))
+                }
+            }, character(1))
         }
 
         for (i in seq_along(gmt_paths)) {
