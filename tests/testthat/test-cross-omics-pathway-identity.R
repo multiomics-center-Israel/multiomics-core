@@ -328,6 +328,24 @@ test_that("labels that do not collide are untouched", {
     expect_identical(disambiguate_pathway_labels(labs, c("00010", "00020")), labs)
 })
 
+test_that("truncation happens before disambiguation, so the key survives", {
+    # The key suffix sits at the end. Disambiguating first and truncating second
+    # cuts it back off and rebuilds the collision -- which then reaches
+    # factor(levels = ) in the dot plot, and duplicated levels are an error.
+    long <- paste0(strrep("Glycolysis and gluconeogenesis ", 3))
+    labs <- truncate_pathway_label(c(long, long), 45)
+    out <- disambiguate_pathway_labels(labs, c("00010", "00051"))
+
+    expect_false(anyDuplicated(out) > 0)
+    expect_true(all(grepl("(00010)", out[1], fixed = TRUE),
+                    grepl("(00051)", out[2], fixed = TRUE)))
+})
+
+test_that("truncate_pathway_label lands on the stated width and leaves short labels alone", {
+    expect_equal(nchar(truncate_pathway_label(strrep("a", 80), 45)), 45)
+    expect_identical(truncate_pathway_label("Glycolysis", 45), "Glycolysis")
+})
+
 test_that("labels still collide-proof with no keys to fall back on", {
     out <- disambiguate_pathway_labels(c("Glycolysis", "Glycolysis"), NULL)
     expect_false(anyDuplicated(out) > 0)

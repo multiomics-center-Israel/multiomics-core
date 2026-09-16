@@ -1648,6 +1648,24 @@ attach_pathway_display_names <- function(meta_results, pathway_tables,
 }
 
 
+#' Shorten a display label to fit a plot axis
+#'
+#' Pulled out because the order matters and is easy to get wrong: truncate, then
+#' \code{disambiguate_pathway_labels()}. Done the other way round the appended
+#' key is cut straight back off and the collision it was breaking returns.
+#'
+#' @param labels Character vector of display labels.
+#' @param max_chars Longest label to keep whole; longer ones are cut and given an
+#'   ellipsis, ending up \code{max_chars} characters long.
+#' @return Character vector the same length as \code{labels}.
+truncate_pathway_label <- function(labels, max_chars = 50) {
+    labels <- as.character(labels)
+    ifelse(nchar(labels) > max_chars,
+           paste0(substr(labels, 1, max_chars - 3), "..."),
+           labels)
+}
+
+
 #' Make display labels unique without losing which pathway each one is
 #'
 #' Rows are keyed on \code{norm_id} but labelled with a readable name, and two
@@ -1809,11 +1827,8 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
-    # Truncate long pathway names
-    pathway_labels <- top_pathways$pathway
-    pathway_labels <- ifelse(nchar(pathway_labels) > 50,
-                             paste0(substr(pathway_labels, 1, 47), "..."),
-                             pathway_labels)
+    # Truncate first, then disambiguate -- see truncate_pathway_label().
+    pathway_labels <- truncate_pathway_label(top_pathways$pathway, 50)
     pathway_labels <- disambiguate_pathway_labels(pathway_labels,
                                                    top_pathways$norm_id)
     rownames(pval_matrix) <- pathway_labels
@@ -1854,7 +1869,11 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     pval_cols <- grep("^pval_", names(top), value = TRUE)
 
     # The axis is built from the label, so two keys sharing a name would land on
-    # one position and hide each other. Same rule as the heatmap.
+    # one position and hide each other. Truncate before disambiguating, not after:
+    # the key suffix sits at the end of the string, so truncating second cuts it
+    # straight back off and rebuilds the collision -- and the duplicate then
+    # reaches factor(levels = ) below, which rejects duplicated levels outright.
+    top$pathway <- truncate_pathway_label(top$pathway, 45)
     top$pathway <- disambiguate_pathway_labels(top$pathway, top$norm_id)
 
     # Build long-format data
@@ -1882,16 +1901,9 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     # Cap for display
     plot_df$neg_log10_p <- pmin(plot_df$neg_log10_p, 10)
 
-    # Truncate long names
-    plot_df$pathway <- ifelse(nchar(plot_df$pathway) > 45,
-                              paste0(substr(plot_df$pathway, 1, 42), "..."),
-                              plot_df$pathway)
-
-    # Reverse pathway order for bottom-to-top display
+    # Labels were truncated and made unique before plot_df was built, so the
+    # levels are already the strings on the axis and are guaranteed distinct.
     pathway_order <- rev(unique(top$pathway))
-    pathway_order <- ifelse(nchar(pathway_order) > 45,
-                            paste0(substr(pathway_order, 1, 42), "..."),
-                            pathway_order)
     plot_df$pathway <- factor(plot_df$pathway, levels = pathway_order)
 
     omics_colors <- c(
