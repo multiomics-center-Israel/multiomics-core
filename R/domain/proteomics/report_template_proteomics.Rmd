@@ -849,6 +849,8 @@ if (!is.null(default_img_uri)) {
 }
 cat('</div>\n')
 
+figure_legend("How to read these panels. The three sets answer different questions, so where they disagree that is information rather than a fault. Proteins measured in every sample are in practice the abundant, consistently detected ones, and that set carries less between-condition signal than the full matrix: weaker separation by condition here is expected, and a batch or acquisition-order effect becoming visible is this panel doing its job rather than a sign of a problem upstream. The full matrix contains imputed values, so where missingness itself differs between groups it contributes to the separation shown, which can make condition look cleaner than the measurements alone support. Before reading either panel as biology, check whether batch and condition are confounded in the design; if they are, no projection can separate them.")
+
 cat('<script>\n')
 cat(sprintf('var embeddedProtPcaImages = %s;\n',
             if (length(pca_data_map) > 0) jsonlite::toJSON(pca_data_map, auto_unbox = TRUE) else "{}"))
