@@ -7,7 +7,10 @@
 #'
 #' @param run_dir  The results run directory (e.g. outputs/project/Results_...)
 #' @param config   Full pipeline config list
-#' @param config_file Path to the original YAML config file (for embedding)
+#' @param config_file Path to the original YAML config file. Retained for the
+#'   pipeline call sites; the config snapshot is serialized from \code{config}
+#'   rather than copied from this path, so that it matches what the
+#'   \code{execution_info_files} target writes.
 #' @param report_type Type of report: "detailed" (default) or "short"
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
@@ -50,20 +53,23 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
     dest_rmd <- file.path(parent_dir, "report_proteomics.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template).
-    # The template looks for it relative to its own location, so keep a copy
-    # in the parent results dir as well as the proteomics/ subdir.
+    # Write execution_info/config_used.yaml (needed by the template). The template
+    # looks for it relative to its own location, so keep a copy in the parent
+    # results dir as well as the proteomics/ subdir. Rewritten on every render
+    # rather than only when absent: the proteomics/ copy is written by nothing
+    # else, so the old guard left the first run's snapshot in place forever and
+    # config edits appeared to do nothing.
+    #
+    # Always serialized from `config`, never copied from the source YAML. The
+    # parent path is the same file the execution_info_files target owns, and that
+    # target writes it with this same yaml::write_yaml(config, ...). Copying the
+    # raw YAML here would put different content at a tracked path -- load_config()
+    # adds .config_path and .config_mtime, which the source file does not carry --
+    # leaving the target outdated the moment the report finished.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
-        config_used <- file.path(edir, "config_used.yaml")
-        if (!file.exists(config_used)) {
-            dir.create(edir, recursive = TRUE, showWarnings = FALSE)
-            if (!is.null(config_file) && file.exists(config_file)) {
-                file.copy(config_file, config_used, overwrite = TRUE)
-            } else {
-                yaml::write_yaml(config, config_used)
-            }
-        }
+        dir.create(edir, recursive = TRUE, showWarnings = FALSE)
+        yaml::write_yaml(config, file.path(edir, "config_used.yaml"))
     }
 
     # Render into the parent results directory
