@@ -149,20 +149,33 @@ test_that("min-count filtering counts -Inf as an observation, which is why it is
     expect_true(kept_norm[["f_real"]])
 })
 
-test_that("only Inf, -Inf and NaN are converted, and the count matches", {
-    # !is.finite() is also TRUE for cells that are already NA. Reporting those
-    # as newly converted would overstate what the run found.
-    expr <- matrix(c(1, NA, -Inf, Inf, NaN, 6), nrow = 2, byrow = TRUE,
+test_that("the mask counts only Inf, -Inf and NaN, not cells that are already NA", {
+    # !is.finite() is TRUE for NA as well, so counting with it would report
+    # ordinary missingness as values this run converted.
+    expr <- matrix(c(1,  NA,  -Inf,
+                     Inf, NaN, 6), nrow = 2, byrow = TRUE,
                    dimnames = list(c("f1", "f2"), c("S1", "S2", "S3")))
 
     nonfinite <- is.infinite(expr) | is.nan(expr)
-    expect_equal(sum(nonfinite), 3)             # -Inf, Inf, NaN -- not the NA
-    expect_equal(sum(!is.finite(expr)), 4)      # the over-count being avoided
+    expect_equal(sum(nonfinite), 3)          # -Inf, Inf, NaN
+    expect_equal(sum(!is.finite(expr)), 4)   # the over-count being avoided
+})
 
+test_that("converting non-finite cells changes those cells and nothing else", {
+    expr <- matrix(c(1,  NA,  -Inf,
+                     Inf, NaN, 6), nrow = 2, byrow = TRUE,
+                   dimnames = list(c("f1", "f2"), c("S1", "S2", "S3")))
+
+    nonfinite <- is.infinite(expr) | is.nan(expr)
     expr[nonfinite] <- NA_real_
-    expect_true(all(is.na(expr[c("f1", "f2"), c("S2", "S3")])))
-    expect_equal(unname(expr["f1", "S1"]), 1)
-    expect_equal(unname(expr["f2", "S3"]), 6)
+
+    # Stated in full rather than probed cell by cell: an earlier version of this
+    # test asserted a 2x2 block was all NA while also asserting one cell of that
+    # block was 6, and contradicted itself.
+    expected <- matrix(c(1,  NA, NA,
+                         NA, NA, 6), nrow = 2, byrow = TRUE,
+                       dimnames = dimnames(expr))
+    expect_equal(expr, expected)
 })
 
 test_that("preprocessing normalises non-finite intensities before it filters or imputes", {
