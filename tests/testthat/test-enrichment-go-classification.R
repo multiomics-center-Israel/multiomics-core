@@ -8,8 +8,9 @@
 #
 # Both paths are separated cleanly here by using an organism with no OrgDb,
 # whether or not rrvgo is installed: .cluster_go_terms() cannot resolve one and
-# returns NULL, while .cluster_by_jaccard() returns the clustered rows. All data
-# are synthetic.
+# returns NULL, while .cluster_by_jaccard() returns a cluster summary -- one row
+# per cluster, with cluster_id / representative_id / n_members, not the input
+# rows. All data are synthetic.
 
 clust_df <- function(ids) {
     data.frame(pathway = ids, padj = rep(0.001, length(ids)),
@@ -37,9 +38,11 @@ test_that("a collection named like GO but carrying non-GO ids takes the Jaccard 
 
     res <- cluster_with(ids, database = "GOLD_domains")
 
+    # Getting a result at all is the point: the GO path cannot resolve an OrgDb
+    # for this organism and returns NULL, so only Jaccard can have produced one.
     expect_false(is.null(res))
-    expect_true(all(c("cluster", "parentTerm") %in% names(res)))
-    expect_setequal(res$pathway, ids)
+    expect_true(all(c("cluster_id", "representative_id", "n_members") %in% names(res)))
+    expect_true(all(res$representative_id %in% ids))
 })
 
 test_that("real GO ids take the GO path whatever the collection is called", {
@@ -54,12 +57,18 @@ test_that("real GO ids take the GO path whatever the collection is called", {
 })
 
 test_that("the database argument no longer decides the path", {
-    # Same ids under opposite database names: the outcome follows the ids.
+    # Same ids under opposite database names. Comparing the two results to each
+    # other tests the dispatch without depending on either path's schema.
     non_go <- c("IPR001", "IPR002", "IPR003")
     go     <- c("GO:0006915", "GO:0008150", "GO:0016020")
 
-    expect_setequal(cluster_with(non_go, "GO_something")$pathway, non_go)
-    expect_setequal(cluster_with(non_go, "InterPro")$pathway, non_go)
+    non_go_as_go_name <- cluster_with(non_go, "GO_something")
+    non_go_as_custom  <- cluster_with(non_go, "InterPro")
+
+    expect_false(is.null(non_go_as_go_name))
+    expect_false(is.null(non_go_as_custom))
+    expect_equal(non_go_as_go_name, non_go_as_custom)
+
     expect_null(cluster_with(go, "GO_something"))
     expect_null(cluster_with(go, "InterPro"))
 })
