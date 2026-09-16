@@ -47,7 +47,16 @@ run_lipidomics_de <- function(pre, config) {
         log2fc_cut <- log2(linear_fc)
     }
 
-    mat_raw <- pre$expr_filt
+    # Fold change comes from the SAME matrix the test ran on (mat_for_test),
+    # then expressed in log2 units by fc_to_log2_units(). Handing a *second*
+    # matrix to the DE helpers is what let the reported direction contradict
+    # the p-value: pre$expr_filt is neither sample-normalised nor imputed, so
+    # the ratio of its group means disagreed in sign with the tested data for
+    # 72 of 575 lipids (9 at padj <= 0.05) on the Elah Pick lipidomics lane.
+    fc_transform <- pre$info$normalization$transform %||%
+                    cfg$normalization$transform %||% "log2"
+    message("lipidomics DE: fold change computed on the tested matrix ",
+            "(transform = '", fc_transform, "')")
 
     de_tables <- list()
     de_model  <- NULL
@@ -57,11 +66,12 @@ run_lipidomics_de <- function(pre, config) {
         message("lipidomics DE [", method, "]: ", ctr)
 
         tbl <- switch(method,
-            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
+            limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = NULL),
+            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = NULL),
+            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = NULL),
+            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = NULL)
         )
+        tbl <- fc_to_log2_units(tbl, fc_transform, mat_for_test, condition, ctr)
 
         if (method == "limma" && is.null(de_model)) {
             de_model <- attr(tbl, "fit")

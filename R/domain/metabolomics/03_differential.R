@@ -280,32 +280,43 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         log2fc_cut <- log2(linear_fc)
     }
 
-    # Raw filtered matrix for computing log2(FC) from intensity ratios
-    # (MetaboAnalyst-compatible: FC = mean_B / mean_A on raw scale). Align it to
-    # the biological samples used in the fit, in the same column order, so the
-    # two-group idx_A/idx_B (from the filtered condition) index the right columns.
+    # Fold change comes from the SAME matrix the test ran on (mat_for_test),
+    # then expressed in log2 units by fc_to_log2_units(). Handing a *second*
+    # matrix to the DE helpers is what let the reported direction contradict
+    # the p-value: pre$expr_filt is neither sample-normalised nor imputed, so
+    # the ratio of its group means disagreed in sign with the tested data for
+    # 9 of 662 metabolites and 72 of 575 lipids (9 at padj <= 0.05) on the
+    # Elah Pick lanes.
     #
-    # SCALE CAVEAT: expr_filt is the pre-transform filtered matrix and is assumed
-    # to be on a LINEAR scale. The non-limma methods below compute FC as
-    # log2(mean_B / mean_A) on it. When chosen_norm = "none" (an already-processed
-    # table fed in directly), that table may already be log-scaled, which would
-    # make the linear-ratio FC (and the significance flags derived from it) wrong.
-    # limma is unaffected (it derives FC from the model on the log-scale test
-    # matrix). Warn so the mismatch is not silent; the full scale-aware fix is
-    # tracked separately.
+    # This replaces the mat_raw block that used to stand here (the raw filtered
+    # matrix, re-aligned to the biological samples kept by the fit). Nothing is
+    # re-aligned any more because nothing but mat_for_test is read: the fold
+    # change is taken from the very columns the test used.
+    fc_transform <- pre$info$normalization$transform %||%
+                    cfg$preprocessing$transform %||% "log2"
+    message("metabolomics DE: fold change computed on the tested matrix ",
+            "(transform = '", fc_transform, "')")
+
+    # SCALE CAVEAT, inherited from the mat_raw block and narrowed, not dropped.
+    # fc_to_log2_units() believes `transform`. Its "none" branch reads the
+    # tested matrix as LINEAR and takes log2(mean_B / mean_A) of it. On the
+    # chosen_norm = "none" lane -- an already-processed table fed in directly --
+    # the operator is told to also set transform: "none" when that table ALREADY
+    # arrives log-scaled, and then "none" means two different things: "we applied
+    # no transform" (what it records) and "the values are linear" (what the
+    # conversion assumes). That is the one remaining lane where the recorded
+    # transform can lie about the scale, and after this commit it reaches limma
+    # too, whose coefficient goes through the same conversion. Every other
+    # chosen_norm = "none" configuration is now correct -- the fold change and
+    # the p-value come from one matrix in a declared unit -- so the warning no
+    # longer fires for them, and it is no longer limited to the non-limma methods.
     chosen_norm_de <- tolower(cfg$preprocessing$chosen_norm %||% "")
-    if (method != "limma" && identical(chosen_norm_de, "none")) {
+    if (identical(chosen_norm_de, "none") &&
+        identical(tolower(fc_transform), "none")) {
         warning(sprintf(
-            "metabolomics DE: method '%s' with chosen_norm = 'none' computes fold changes as linear-scale ratios log2(mean_B/mean_A) from the raw filtered matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Use method 'limma', or supply the table on a linear scale.",
+            "metabolomics DE: chosen_norm = 'none' with transform = 'none' makes '%s' report fold changes as linear-scale ratios log2(mean_B/mean_A) of the tested matrix. If the upstream table is ALREADY log-scaled, these fold changes and their significance flags will be incorrect. Declare the scale the table arrives on via preprocessing$transform, or supply the table on a linear scale.",
             method
         ))
-    }
-
-    mat_raw <- pre$expr_filt
-    if (!is.null(mat_raw) && all(colnames(mat_for_test) %in% colnames(mat_raw))) {
-        mat_raw <- mat_raw[, colnames(mat_for_test), drop = FALSE]
-    } else {
-        mat_raw <- NULL  # fall back to FC from the (already aligned) fit matrix
     }
 
     # Run DE for each contrast
@@ -320,10 +331,11 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
         tbl <- switch(method,
             limma        = de_limma(mat_for_test, condition, ctr, mat_for_fc = NULL),
-            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = mat_raw),
-            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = mat_raw)
+            t_test       = de_t_test(mat_for_test, condition, ctr, mat_for_fc = NULL),
+            t_test_equal = de_t_test_equal(mat_for_test, condition, ctr, mat_for_fc = NULL),
+            wilcoxon     = de_wilcoxon(mat_for_test, condition, ctr, mat_for_fc = NULL)
         )
+        tbl <- fc_to_log2_units(tbl, fc_transform, mat_for_test, condition, ctr)
 
         # Capture limma model from first contrast
         if (method == "limma" && is.null(de_model)) {
@@ -619,4 +631,55 @@ extract_contrast_table <- function(summary_df, contrast) {
         adj.P.Val  = summary_df[[paste0("padj.", contrast)]],
         stringsAsFactors = FALSE
     )
+}
+
+
+# ---- fold change on the tested scale ---------------------------------------
+
+#' Express a tested-matrix logFC in log2 units
+#'
+#' de_limma() / de_two_group() called with \code{mat_for_fc = NULL} return the
+#' group-mean difference on the SAME matrix the test ran on. That is the only
+#' fold change whose sign is guaranteed to agree with the test statistic --
+#' the property proteomics has always had, because
+#' \code{R/domain/proteomics/05c_de_ttest.R} takes
+#' \code{mean(x_num) - mean(x_den)} on the very vectors it hands to
+#' \code{t.test()}. Supplying a different matrix for the fold change made a
+#' disagreement possible, and it happened.
+#'
+#' The unit of that difference is whatever the tested matrix carries:
+#' \itemize{
+#'   \item \code{log2} -- already log2; returned unchanged.
+#'   \item \code{log10} / \code{glog10} -- multiplied by \code{log2(10)}.
+#'     Exact for log10; exact for glog10 once values sit above the glog offset,
+#'     which glog10 converges to log10 away from.
+#'   \item \code{none} -- the difference is linear, not a log ratio, so the
+#'     log2 ratio of the group means is taken on that same matrix.
+#' }
+#' AveExpr is carried through the same conversion so it stays on one scale
+#' with logFC.
+#'
+#' @param tbl          DE table from de_limma() / de_two_group().
+#' @param transform    Transform the tested matrix carries.
+#' @param mat          The matrix the test ran on.
+#' @param condition    Factor of conditions, aligned to the columns of \code{mat}.
+#' @param contrast_str Character, e.g. "B - A".
+#' @return \code{tbl} with logFC and AveExpr in log2 units.
+fc_to_log2_units <- function(tbl, transform, mat, condition, contrast_str) {
+    transform <- tolower(transform %||% "log2")
+    if (transform %in% c("log10", "glog10")) {
+        tbl$logFC   <- tbl$logFC   * log2(10)
+        tbl$AveExpr <- tbl$AveExpr * log2(10)
+    } else if (transform == "none") {
+        groups <- parse_metab_contrast(contrast_str)
+        idx_A <- which(condition == groups$denominator)
+        idx_B <- which(condition == groups$numerator)
+        mA <- rowMeans(mat[, idx_A, drop = FALSE], na.rm = TRUE)
+        mB <- rowMeans(mat[, idx_B, drop = FALSE], na.rm = TRUE)
+        mA[!is.finite(mA) | mA <= 0] <- 1e-10
+        mB[!is.finite(mB) | mB <= 0] <- 1e-10
+        tbl$logFC   <- log2(mB / mA)
+        tbl$AveExpr <- log2((mA + mB) / 2)
+    }
+    tbl
 }
