@@ -258,6 +258,199 @@ test_that("an empty pathway_name on one row falls back to that row's identifier"
 })
 
 
+# ---- duplicates one omic can now hold --------------------------------------
+#
+# Normalizing the identity makes hsa00010 and map00010 the same pathway, so a
+# bound per-omic table can hold two rows for it where it held two pathways
+# before. The reduction rule is #201's: keep the minimum adjusted p-value.
+
+test_that("two prefix variants in one omic collapse to a single row", {
+    df <- data.frame(pathway = c("hsa00010", "map00010", "hsa00020"),
+                     padj = c(0.20, 0.001, 0.03), stringsAsFactors = FALSE)
+    terms <- .multigsea_term_ids(df, kegg_org = "hsa")
+
+    keep <- .multigsea_collapse_duplicate_terms(df, terms)
+
+    expect_equal(terms[keep], c("00010", "00020"))
+    expect_false(anyDuplicated(terms[keep]) > 0)
+})
+
+test_that("the retained row is the most significant of the duplicates", {
+    df <- data.frame(pathway = c("hsa00010", "map00010"),
+                     padj = c(0.20, 0.001), stringsAsFactors = FALSE)
+    terms <- .multigsea_term_ids(df, kegg_org = "hsa")
+
+    keep <- .multigsea_collapse_duplicate_terms(df, terms)
+
+    expect_equal(df$padj[keep], 0.001)
+})
+
+test_that("a duplicate with no p-value does not displace one that has a value", {
+    df <- data.frame(pathway = c("hsa00010", "map00010"),
+                     padj = c(NA_real_, 0.04), stringsAsFactors = FALSE)
+    terms <- .multigsea_term_ids(df, kegg_org = "hsa")
+
+    keep <- .multigsea_collapse_duplicate_terms(df, terms)
+
+    expect_equal(df$padj[keep], 0.04)
+})
+
+test_that("the collapse reduces on the same column the panel scores on", {
+    # No padj here, so p.adjust is what MultiGSEA would score on and what the
+    # reduction has to read.
+    df <- data.frame(pathway = c("hsa00010", "map00010"),
+                     p.adjust = c(0.30, 0.002), stringsAsFactors = FALSE)
+    terms <- .multigsea_term_ids(df, kegg_org = "hsa")
+
+    keep <- .multigsea_collapse_duplicate_terms(df, terms)
+
+    expect_equal(df$p.adjust[keep], 0.002)
+})
+
+test_that("rows with no key survive the collapse rather than folding together", {
+    df <- data.frame(pathway = c(NA_character_, NA_character_, "hsa00010"),
+                     padj = c(0.01, 0.02, 0.03), stringsAsFactors = FALSE)
+    terms <- .multigsea_term_ids(df, kegg_org = "hsa")
+
+    expect_length(.multigsea_collapse_duplicate_terms(df, terms), 3L)
+})
+
+
+test_that("pairwise matching does not depend on row order among duplicates", {
+    skip_if_not_installed("ggplot2")
+
+    # Same four rows, two of which are prefix variants of one pathway, in two
+    # different orders. match() used to take whichever came first.
+    rows <- data.frame(
+        pathway = c("hsa00010", "map00010", "hsa00020", "hsa00030"),
+        padj    = c(0.20, 0.001, 0.01, 0.02),
+        stringsAsFactors = FALSE
+    )
+
+    run_pair <- function(idx) {
+        out_dir <- withr::local_tempdir()
+        suppressMessages(suppressWarnings(
+            .save_multigsea_pair_plot(rows[idx, , drop = FALSE],
+                                      rows[idx, , drop = FALSE],
+                                      "transcriptomics", "metabolomics",
+                                      out_dir = out_dir, kegg_org = "hsa")
+        ))
+        written <- utils::read.csv(
+            file.path(out_dir, "multigsea_transcriptomics_vs_metabolomics.csv"),
+            stringsAsFactors = FALSE
+        )
+        out <- written[order(written$term), c("term", "x", "y")]
+        rownames(out) <- NULL          # so the two orders compare on content alone
+        out
+    }
+
+    forward <- run_pair(seq_len(4))
+    reversed <- run_pair(rev(seq_len(4)))
+
+    expect_equal(nrow(forward), 3L)
+    expect_setequal(forward$term, c("00010", "00020", "00030"))
+    # Row order changes nothing, and the collapsed pathway kept its best p-value.
+    expect_equal(forward, reversed)
+    expect_equal(forward$x[forward$term == "00010"], -log10(0.001))
+})
+
+
+# ---- co-significance counts omics, not rows --------------------------------
+
+test_that("duplicate rows within one omic do not make a pathway co-significant", {
+    # Both rows are the same omic and the same pathway. Counting rows would call
+    # this co-significant across two layers; it is one layer twice.
+    summary_df <- data.frame(
+        term  = c("00010", "00010"),
+        omic  = c("transcriptomics", "transcriptomics"),
+        padj  = c(0.001, 0.002),
+        stringsAsFactors = FALSE
+    )
+
+    expect_length(.multigsea_cosignificant_terms(summary_df), 0L)
+})
+
+test_that("the same pathway significant in two distinct omics is co-significant", {
+    summary_df <- data.frame(
+        term  = c("00010", "00010"),
+        omic  = c("transcriptomics", "metabolomics"),
+        padj  = c(0.001, 0.002),
+        stringsAsFactors = FALSE
+    )
+
+    expect_equal(.multigsea_cosignificant_terms(summary_df), "00010")
+})
+
+test_that("a pathway below threshold in only one omic is not co-significant", {
+    summary_df <- data.frame(
+        term  = c("00010", "00010"),
+        omic  = c("transcriptomics", "metabolomics"),
+        padj  = c(0.001, 0.900),
+        stringsAsFactors = FALSE
+    )
+
+    expect_length(.multigsea_cosignificant_terms(summary_df), 0L)
+})
+
+
+# ---- ID + Description, with no pathway column ------------------------------
+
+test_that("an ID and Description table contributes its readable Description", {
+    # A supported clusterProfiler shape. Normalizing the id means the accession
+    # cannot be recovered downstream either, so without this the label would be
+    # the bare key.
+    df <- data.frame(ID = "hsa00010",
+                     Description = "Glycolysis / Gluconeogenesis",
+                     stringsAsFactors = FALSE)
+
+    keys <- .multigsea_term_ids(df, kegg_org = "hsa")
+    nms  <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(keys, "00010")
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("Description fills in per row where pathway is blank", {
+    df <- data.frame(
+        ID          = c("hsa00010", "hsa00020"),
+        pathway     = c("Glycolysis / Gluconeogenesis", NA),
+        Description = c("ignored", "Citrate cycle (TCA cycle)"),
+        stringsAsFactors = FALSE
+    )
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    # `pathway` keeps its precedence where it says something.
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle (TCA cycle)")
+})
+
+
+# ---- one label per normalized term across omics ----------------------------
+
+test_that("bare accessions from two omics resolve to a single label", {
+    # Two layers, no names anywhere. Resolved per omic they would label the same
+    # pathway "hsa00010" and "map00010" and take a y-axis row each.
+    rna   <- data.frame(pathway = "hsa00010", padj = 0.01, stringsAsFactors = FALSE)
+    metab <- data.frame(pathway = "map00010", padj = 0.02, stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(rna, metab), kegg_org = "hsa")
+
+    expect_length(nms, 1L)
+    expect_identical(names(nms), "00010")
+})
+
+test_that("a readable name from either omic beats an accession-only label", {
+    # The accession-only layer is first, and must not fix the display name.
+    rna   <- data.frame(pathway = "hsa00010", padj = 0.01, stringsAsFactors = FALSE)
+    metab <- mg_frame("map00010", name = "Glycolysis / Gluconeogenesis")
+
+    nms <- .multigsea_term_names(list(rna, metab), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+
 # ---- no organism configured ----------------------------------------------
 
 test_that("with no KEGG organism the behaviour is what it is today", {

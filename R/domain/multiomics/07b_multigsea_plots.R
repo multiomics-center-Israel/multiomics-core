@@ -72,6 +72,13 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                     " enrichment results; skipping this pair")
             next
         }
+        # One row per pathway per omic before anything matches on it: match()
+        # below would otherwise resolve a duplicated key by row order.
+        keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
+        keep2 <- .multigsea_collapse_duplicate_terms(res2, term2)
+        res1 <- res1[keep1, , drop = FALSE]; term1 <- term1[keep1]
+        res2 <- res2[keep2, , drop = FALSE]; term2 <- term2[keep2]
+
         res1$term <- term1
         res2$term <- term2
         id_to_name <- .multigsea_term_names(list(res1, res2), kegg_org)
@@ -366,6 +373,13 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     term1 <- .multigsea_term_ids(res1, kegg_org)
     term2 <- .multigsea_term_ids(res2, kegg_org)
     if (is.null(term1) || is.null(term2)) return(invisible(NULL))
+
+    # One row per pathway per omic, as in the pairwise loop above.
+    keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
+    keep2 <- .multigsea_collapse_duplicate_terms(res2, term2)
+    res1 <- res1[keep1, , drop = FALSE]; term1 <- term1[keep1]
+    res2 <- res2[keep2, , drop = FALSE]; term2 <- term2[keep2]
+
     res1$term <- term1
     res2$term <- term2
     id_to_name <- .multigsea_term_names(list(res1, res2), kegg_org)
@@ -488,6 +502,79 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 }
 
 
+#' The column MultiGSEA scores a table on
+#'
+#' The same preference order the scoring and summary paths already use, in one
+#' place so a collapse cannot reduce on a different column than the one plotted.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @return Column name, or NULL when the table carries none of them.
+#' @keywords internal
+.multigsea_padj_col <- function(df) {
+    for (col in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
+        if (col %in% colnames(df)) return(col)
+    }
+    NULL
+}
+
+
+#' One row per normalized term within one omic
+#'
+#' Normalizing the identity makes hsa00010 and map00010 the same pathway, so a
+#' bound per-omic table can now hold two rows for it. Left alone those duplicates
+#' make \code{match()} pick whichever row came first -- row order standing in for
+#' biology -- and let one omic satisfy a co-significance test on its own.
+#'
+#' The reduction rule is the one #201 settled on for exactly this collapse:
+#' \code{merge_pathway_pvalues()} aggregates a normalized key with \code{FUN =
+#' min}. Nothing is recomputed or re-adjusted; the most significant of rows
+#' already declared the same pathway is kept.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @param terms Normalized term ids aligned to the rows of \code{df}.
+#' @return Integer row indices to keep, in their original order. Rows whose term
+#'   is NA are all kept: they have no key to be duplicates of.
+#' @keywords internal
+.multigsea_collapse_duplicate_terms <- function(df, terms) {
+    n <- length(terms)
+    if (n == 0L) return(integer(0))
+
+    padj_col <- .multigsea_padj_col(df)
+    p <- if (is.null(padj_col)) {
+        rep(NA_real_, n)
+    } else {
+        v <- df[[padj_col]]
+        if (!is.numeric(v)) v <- suppressWarnings(as.numeric(as.character(v)))
+        v
+    }
+
+    # Sorting by term then p puts the most significant row of each term first;
+    # na.last keeps a row with no p-value behind one that has one.
+    ord <- order(terms, p, na.last = TRUE)
+    keep <- ord[!duplicated(terms[ord]) | is.na(terms[ord])]
+    sort(unique(keep))
+}
+
+
+#' Terms significant in at least two distinct omics
+#'
+#' Counted over distinct omics rather than rows. "Co-significant" has to mean two
+#' layers agreed, and normalizing the identity lets one layer hold several rows
+#' for one pathway -- counting rows would let a single omic satisfy it alone.
+#'
+#' @param summary_df Data frame with \code{term}, \code{omic} and \code{padj}.
+#' @param alpha Significance threshold, unchanged from the panel's own.
+#' @return Character vector of terms, possibly empty.
+#' @keywords internal
+.multigsea_cosignificant_terms <- function(summary_df, alpha = 0.05) {
+    sig <- summary_df[!is.na(summary_df$padj) & summary_df$padj < alpha, ,
+                      drop = FALSE]
+    if (nrow(sig) == 0L) return(character(0))
+    counts <- table(unique(sig[, c("term", "omic")])$term)
+    names(counts[counts >= 2])
+}
+
+
 #' Does this label actually say anything?
 #'
 #' @param x Character vector of candidate labels.
@@ -533,16 +620,23 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' @return Named character vector mapping term ID to readable name, keeping the
 #'   first name seen for each ID; empty when no table carries a name column.
 .multigsea_term_names <- function(dfs, kegg_org = NULL) {
-    id_to_name <- character(0)
-    for (df in dfs) {
-        if (!"pathway" %in% colnames(df)) next
+    all_keys <- character(0)
+    all_vals <- character(0)
 
-        # Resolved per row: a pathway_name column filled for only some rows must
-        # not leave the rest permanently blank just because the column exists.
+    for (df in dfs) {
+        if (!is.data.frame(df)) next
+        keys <- .multigsea_term_ids(df, kegg_org)
+        if (is.null(keys)) next
+        n <- length(keys)
+
+        # Resolved per row throughout: a column filled for only some rows must not
+        # leave the rest permanently blank just because the column exists.
+
+        # An explicit name column comes first.
         vals <- if ("pathway_name" %in% colnames(df)) {
             as.character(df$pathway_name)
         } else {
-            rep(NA_character_, nrow(df))
+            rep(NA_character_, n)
         }
 
         # Which rows key on their ID, judged the same way pathway_join_key() judges
@@ -551,32 +645,58 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         keys_on_id <- if ("ID" %in% colnames(df)) {
             .multigsea_usable_label(df$ID)
         } else {
-            rep(FALSE, nrow(df))
+            rep(FALSE, n)
         }
 
-        # A row that keys on its ID has the readable label sitting in `pathway`
-        # (the older clusterProfiler shape). A row that falls through to `pathway`
-        # for its identity has whatever readable text that identifier carries.
-        fallback <- .multigsea_readable_from_identifier(df$pathway, kegg_org)
-        fallback[keys_on_id] <- as.character(df$pathway)[keys_on_id]
+        # The readable column sitting beside an identifier column: the older shape
+        # puts it in `pathway`, clusterProfiler in `Description`. A table with ID
+        # and Description and no `pathway` is a supported shape, and normalizing
+        # its ids means the accession can no longer be recovered downstream -- so
+        # its Description has to be carried here or the label becomes a bare key.
+        beside_id <- if ("pathway" %in% colnames(df)) {
+            as.character(df$pathway)
+        } else {
+            rep(NA_character_, n)
+        }
+        if ("Description" %in% colnames(df)) {
+            desc <- as.character(df$Description)
+            fill <- !.multigsea_usable_label(beside_id)
+            beside_id[fill] <- desc[fill]
+        }
 
+        # A row that falls through to `pathway` for its identity has whatever
+        # readable text that identifier itself carries.
+        from_identifier <- if ("pathway" %in% colnames(df)) {
+            .multigsea_readable_from_identifier(df$pathway, kegg_org)
+        } else {
+            rep(NA_character_, n)
+        }
+
+        fallback <- ifelse(keys_on_id, beside_id, from_identifier)
         gap <- !.multigsea_usable_label(vals)
         vals[gap] <- fallback[gap]
-
-        keys <- .multigsea_term_ids(df, kegg_org)
-        if (is.null(keys)) next
 
         # A label with nothing in it must not reserve a key. hsa00010 and
         # map00010 collapse to one key now, so a blank name in the layer that
         # happens to be visited first would otherwise lock out a readable name in
         # the next one, and the panel would fall back to the bare map number.
-        # Dropping the blanks leaves first-wins intact among real names.
         keep <- .multigsea_usable_label(vals) & !is.na(keys)
-        nms <- setNames(vals[keep], keys[keep])
-        nms <- nms[!duplicated(names(nms))]
-        id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+        all_keys <- c(all_keys, keys[keep])
+        all_vals <- c(all_vals, vals[keep])
     }
-    id_to_name
+
+    if (length(all_keys) == 0L) return(character(0))
+
+    # Resolved across every frame at once rather than frame by frame, so one
+    # normalized key gets one label: two omics holding bare hsa00010 and map00010
+    # must not name the same pathway differently. A genuinely readable label beats
+    # an accession-only one, and among real names the first seen still wins --
+    # seq_along breaks the tie explicitly rather than relying on a stable sort.
+    readable <- !is_kegg_pathway_accession(all_vals, kegg_org)
+    ord <- order(!readable, seq_along(readable))
+
+    id_to_name <- setNames(all_vals[ord], all_keys[ord])
+    id_to_name[!duplicated(names(id_to_name))]
 }
 
 
@@ -601,6 +721,11 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir,
     omics_names <- names(per_omics)
     summary_rows <- list()
 
+    # Resolved once over every participating omic, not per omic: a normalized key
+    # must carry one label, or two layers holding bare hsa00010 and map00010 would
+    # label the same pathway differently and take a y-axis row each.
+    id_to_name <- .multigsea_term_names(per_omics, kegg_org)
+
     for (om in omics_names) {
         res <- per_omics[[om]]
         if (is.null(res) || !is.data.frame(res)) next
@@ -608,15 +733,11 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir,
         term_ids <- .multigsea_term_ids(res, kegg_org)
         if (is.null(term_ids)) next
 
-        # Find p-value column
-        padj_col <- NULL
-        for (pc in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
-            if (pc %in% colnames(res)) { padj_col <- pc; break }
-        }
+        padj_col <- .multigsea_padj_col(res)
         if (is.null(padj_col)) next
 
-        # Readable name where the table has one, otherwise the ID itself
-        term_names <- unname(.multigsea_term_names(list(res), kegg_org)[term_ids])
+        # Readable name where any omic has one, otherwise the ID itself
+        term_names <- unname(id_to_name[term_ids])
         term_names[is.na(term_names)] <- term_ids[is.na(term_names)]
 
         df_tmp <- data.frame(
@@ -627,6 +748,10 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir,
             stringsAsFactors = FALSE
         )
         df_tmp <- df_tmp[!is.na(df_tmp$padj), ]
+        # One row per pathway per omic, so the co-significance count below cannot
+        # read two prefix variants from this layer as two layers.
+        df_tmp <- df_tmp[.multigsea_collapse_duplicate_terms(df_tmp, df_tmp$term), ,
+                         drop = FALSE]
         summary_rows[[length(summary_rows) + 1]] <- df_tmp
     }
 
@@ -637,10 +762,7 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir,
 
     summary_df <- do.call(rbind, summary_rows)
 
-    # Find terms significant in at least 2 omics
-    sig_terms <- summary_df[summary_df$padj < 0.05, ]
-    term_counts <- table(sig_terms$term)
-    co_sig <- names(term_counts[term_counts >= 2])
+    co_sig <- .multigsea_cosignificant_terms(summary_df)
 
     if (length(co_sig) == 0) {
         # Fall back to top terms by lowest p-value across any omic
