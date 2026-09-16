@@ -50,19 +50,20 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
     dest_rmd <- file.path(parent_dir, "report_proteomics.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template).
-    # The template looks for it relative to its own location, so keep a copy
-    # in the parent results dir as well as the proteomics/ subdir.
+    # Write execution_info/config_used.yaml (needed by the template). The template
+    # looks for it relative to its own location, so keep a copy in the parent
+    # results dir as well as the proteomics/ subdir. Rewritten on every render
+    # rather than only when absent: the snapshot's whole purpose is to record the
+    # config a run actually used, so a leftover from an earlier run into the same
+    # directory silently outranked the current one and config edits looked inert.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
         config_used <- file.path(edir, "config_used.yaml")
-        if (!file.exists(config_used)) {
-            dir.create(edir, recursive = TRUE, showWarnings = FALSE)
-            if (!is.null(config_file) && file.exists(config_file)) {
-                file.copy(config_file, config_used, overwrite = TRUE)
-            } else {
-                yaml::write_yaml(config, config_used)
-            }
+        dir.create(edir, recursive = TRUE, showWarnings = FALSE)
+        if (!is.null(config_file) && file.exists(config_file)) {
+            file.copy(config_file, config_used, overwrite = TRUE)
+        } else {
+            yaml::write_yaml(config, config_used)
         }
     }
 

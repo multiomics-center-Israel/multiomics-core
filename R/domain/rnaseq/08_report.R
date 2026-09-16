@@ -36,18 +36,19 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
     dest_rmd <- file.path(parent_dir, "report_rnaseq.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template).
-    # Keep a copy in both parent and rna/ subdirectories.
+    # Write execution_info/config_used.yaml (needed by the template), keeping a
+    # copy in both parent and rna/ subdirectories. Rewritten on every render
+    # rather than only when absent: the snapshot's whole purpose is to record the
+    # config a run actually used, so a leftover from an earlier run into the same
+    # directory silently outranked the current one and config edits looked inert.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
         config_used <- file.path(edir, "config_used.yaml")
-        if (!file.exists(config_used)) {
-            dir.create(edir, recursive = TRUE, showWarnings = FALSE)
-            if (!is.null(config_file) && file.exists(config_file)) {
-                file.copy(config_file, config_used, overwrite = TRUE)
-            } else {
-                yaml::write_yaml(config, config_used)
-            }
+        dir.create(edir, recursive = TRUE, showWarnings = FALSE)
+        if (!is.null(config_file) && file.exists(config_file)) {
+            file.copy(config_file, config_used, overwrite = TRUE)
+        } else {
+            yaml::write_yaml(config, config_used)
         }
     }
 
