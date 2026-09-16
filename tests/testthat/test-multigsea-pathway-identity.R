@@ -335,8 +335,12 @@ test_that("pairwise matching does not depend on row order among duplicates", {
                                       "transcriptomics", "metabolomics",
                                       out_dir = out_dir, kegg_org = "hsa")
         ))
+        # term is read as character on purpose: a normalized KEGG key is all
+        # digits, and read.csv's default type conversion would turn "00010" into
+        # the number 10 before the assertions below ever see it.
         written <- utils::read.csv(
             file.path(out_dir, "multigsea_transcriptomics_vs_metabolomics.csv"),
+            colClasses = c(term = "character"),
             stringsAsFactors = FALSE
         )
         out <- written[order(written$term), c("term", "x", "y")]
