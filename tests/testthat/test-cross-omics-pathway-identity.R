@@ -144,6 +144,40 @@ test_that("a leading token that is not an accession is left alone", {
     expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
 })
 
+test_that("an organism only the core registry knows still yields its KEGG code", {
+    # get_kegg_organism() knows six species; get_organism_info() knows those plus
+    # yeast, Arabidopsis, chicken, pig, cow and Giardia. Giardia is in the core
+    # registry precisely because it has a KEGG code and no OrgDb -- the non-model
+    # shape this work is for -- so the join key has to reach the wider registry.
+    skip_if_not(exists("get_organism_info", mode = "function"),
+                "source R/core/11_annotation.R for this test")
+
+    expect_null(get_kegg_organism("Giardia lamblia"))
+    expect_equal(resolve_kegg_org_code("Giardia lamblia"), "gla")
+    expect_equal(resolve_kegg_org_code("yeast"), "sce")
+
+    # And the six the local map already had keep resolving.
+    expect_equal(resolve_kegg_org_code("human"), "hsa")
+
+    # An organism neither registry knows has no code at all, not NA.
+    expect_null(resolve_kegg_org_code("Nonexistent organism"))
+})
+
+test_that("a Giardia-style key normalizes once the wider registry supplies the code", {
+    skip_if_not(exists("get_organism_info", mode = "function"),
+                "source R/core/11_annotation.R for this test")
+
+    kegg_org <- resolve_kegg_org_code("Giardia lamblia")
+
+    expect_equal(
+        normalize_pathway_join_key(
+            c("gla00010", "gla00010 Glycolysis / Gluconeogenesis", "map00010"),
+            kegg_org = kegg_org
+        ),
+        rep("00010", 3)
+    )
+})
+
 test_that("with no KEGG organism, only the species-neutral forms normalize", {
     expect_equal(
         normalize_pathway_join_key(c("map00010", "ko00010", "00010", "hsa00010"),

@@ -1339,7 +1339,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # compound layer keyed on map00010 are two different pathways, and a custom
     # collection keyed on map00010 never meets a gene layer keyed on the readable
     # KEGG description at all.
-    kegg_org <- get_kegg_organism(config$global$organism)
+    kegg_org <- resolve_kegg_org_code(config$global$organism)
 
     all_pathways <- lapply(pathway_tables, function(df) {
         keys <- pathway_join_key(df, kegg_org)
@@ -1466,6 +1466,35 @@ is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
     ids <- as.character(ids)
     pattern <- paste0("^", .kegg_accession_regex(kegg_org), "$")
     !is.na(ids) & grepl(pattern, ids)
+}
+
+
+#' KEGG organism code for the run, from whichever registry knows the organism
+#'
+#' There are two organism registries. \code{get_kegg_organism()} in this file
+#' knows six species and matches the name exactly; \code{get_organism_info()} in
+#' \code{R/core/11_annotation.R} knows those plus yeast, Arabidopsis, chicken,
+#' pig, cow and Giardia, and matches case-insensitively after trimming.
+#'
+#' The join key needs the wider of the two. A run on an organism only the core
+#' registry knows still gets \code{<code>#####} keys out of
+#' \code{fetch_kegg_via_rest()} -- Giardia is in that registry precisely because
+#' it has a KEGG code and no OrgDb -- and without its prefix those keys never
+#' reduce to the bare map number, so they never meet the compound layer.
+#'
+#' \code{get_kegg_organism()} is deliberately left alone: it also gates which
+#' organisms get full KEGG enrichment, and widening that is a different question
+#' from what the join key can recognise.
+#'
+#' @param organism Organism name from \code{config$global$organism}.
+#' @return Three-letter KEGG organism code, or NULL when neither registry has one.
+resolve_kegg_org_code <- function(organism) {
+    code <- get_kegg_organism(organism)
+    if (!is.null(code) && !is.na(code) && nzchar(code)) return(code)
+
+    code <- get_organism_info(organism)$kegg
+    if (is.null(code) || is.na(code) || !nzchar(code)) return(NULL)
+    code
 }
 
 
