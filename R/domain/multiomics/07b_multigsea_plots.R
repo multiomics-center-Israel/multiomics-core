@@ -639,38 +639,35 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             rep(NA_character_, n)
         }
 
-        # Which rows key on their ID, judged the same way pathway_join_key() judges
-        # it -- an ID column present but blank on a row does not make that row an
-        # ID row, there or here.
-        keys_on_id <- if ("ID" %in% colnames(df)) {
-            .multigsea_usable_label(df$ID)
-        } else {
-            rep(FALSE, n)
+        col_or_na <- function(nm) {
+            if (nm %in% colnames(df)) as.character(df[[nm]]) else rep(NA_character_, n)
         }
+        id_v   <- col_or_na("ID")
+        pw_v   <- col_or_na("pathway")
+        desc_v <- col_or_na("Description")
 
-        # The readable column sitting beside an identifier column: the older shape
-        # puts it in `pathway`, clusterProfiler in `Description`. A table with ID
-        # and Description and no `pathway` is a supported shape, and normalizing
-        # its ids means the accession can no longer be recovered downstream -- so
-        # its Description has to be carried here or the label becomes a bare key.
-        beside_id <- if ("pathway" %in% colnames(df)) {
-            as.character(df$pathway)
-        } else {
-            rep(NA_character_, n)
-        }
-        if ("Description" %in% colnames(df)) {
-            desc <- as.character(df$Description)
-            fill <- !.multigsea_usable_label(beside_id)
-            beside_id[fill] <- desc[fill]
-        }
+        # Which column a row took its identity from, resolved exactly as
+        # pathway_join_key() resolves it: ID, then pathway, then Description, each
+        # only when it actually carries a value. A column present but blank on a
+        # row does not claim that row, there or here.
+        keys_on_id      <- .multigsea_usable_label(id_v)
+        keys_on_pathway <- !keys_on_id & .multigsea_usable_label(pw_v)
 
-        # A row that falls through to `pathway` for its identity has whatever
-        # readable text that identifier itself carries.
-        from_identifier <- if ("pathway" %in% colnames(df)) {
-            .multigsea_readable_from_identifier(df$pathway, kegg_org)
-        } else {
-            rep(NA_character_, n)
-        }
+        # A row keyed on its ID has the readable label in a column beside it: the
+        # older shape puts it in `pathway`, clusterProfiler in `Description`.
+        beside_id <- pw_v
+        fill <- !.multigsea_usable_label(beside_id)
+        beside_id[fill] <- desc_v[fill]
+
+        # A row keyed on `pathway` or on `Description` has whatever readable text
+        # that same identifier carries -- "<accession> <name>" has to keep showing
+        # the name, and after normalization the accession is no longer recoverable
+        # from the key.
+        from_identifier <- ifelse(
+            keys_on_pathway,
+            .multigsea_readable_from_identifier(pw_v, kegg_org),
+            .multigsea_readable_from_identifier(desc_v, kegg_org)
+        )
 
         fallback <- ifelse(keys_on_id, beside_id, from_identifier)
         gap <- !.multigsea_usable_label(vals)

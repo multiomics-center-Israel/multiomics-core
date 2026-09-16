@@ -410,6 +410,44 @@ test_that("an ID and Description table contributes its readable Description", {
     expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
 })
 
+test_that("a row keyed on Description reads its readable text from Description", {
+    # pathway_join_key() falls all the way through to Description here, so the
+    # display side has to follow the same row-wise ladder. Choosing the fallback
+    # by "does this row key on ID" alone left this row nameless, and after
+    # normalization the accession is gone from the key too -- the panel would
+    # have shown a bare 00010.
+    df <- data.frame(
+        ID          = NA_character_,
+        pathway     = NA_character_,
+        Description = "gla00010 Glycolysis / Gluconeogenesis",
+        stringsAsFactors = FALSE
+    )
+
+    keys <- .multigsea_term_ids(df, kegg_org = "gla")
+    nms  <- .multigsea_term_names(list(df), kegg_org = "gla")
+
+    expect_identical(keys, "00010")
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("the identity and display ladders agree row by row in one frame", {
+    # One frame, one row per rung of ID -> pathway -> Description.
+    df <- data.frame(
+        ID          = c("hsa00010", NA, NA),
+        pathway     = c("Glycolysis / Gluconeogenesis", "hsa00020 Citrate cycle", NA),
+        Description = c(NA, NA, "hsa00030 Pentose phosphate pathway"),
+        stringsAsFactors = FALSE
+    )
+
+    keys <- .multigsea_term_ids(df, kegg_org = "hsa")
+    nms  <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(keys, c("00010", "00020", "00030"))
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle")
+    expect_identical(unname(nms[["00030"]]), "Pentose phosphate pathway")
+})
+
 test_that("Description fills in per row where pathway is blank", {
     df <- data.frame(
         ID          = c("hsa00010", "hsa00020"),
