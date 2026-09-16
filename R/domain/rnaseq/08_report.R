@@ -7,7 +7,10 @@
 #'
 #' @param run_dir  The results run directory (e.g. outputs/project/Results_.../rna)
 #' @param config   Full pipeline config list
-#' @param config_file Path to the original YAML config file (for embedding)
+#' @param config_file Path to the original YAML config file. Retained for the
+#'   pipeline call sites; the config snapshot is serialized from \code{config}
+#'   rather than copied from this path, so that it matches what the
+#'   \code{execution_info_files} target writes.
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
 render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
@@ -38,18 +41,20 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
 
     # Write execution_info/config_used.yaml (needed by the template), keeping a
     # copy in both parent and rna/ subdirectories. Rewritten on every render
-    # rather than only when absent: the snapshot's whole purpose is to record the
-    # config a run actually used, so a leftover from an earlier run into the same
-    # directory silently outranked the current one and config edits looked inert.
+    # rather than only when absent: the rna/ copy is written by nothing else, so
+    # the old guard left the first run's snapshot in place forever and config
+    # edits appeared to do nothing.
+    #
+    # Always serialized from `config`, never copied from the source YAML. The
+    # parent path is the same file the execution_info_files target owns, and that
+    # target writes it with this same yaml::write_yaml(config, ...). Copying the
+    # raw YAML here would put different content at a tracked path -- load_config()
+    # adds .config_path and .config_mtime, which the source file does not carry --
+    # leaving the target outdated the moment the report finished.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
-        config_used <- file.path(edir, "config_used.yaml")
         dir.create(edir, recursive = TRUE, showWarnings = FALSE)
-        if (!is.null(config_file) && file.exists(config_file)) {
-            file.copy(config_file, config_used, overwrite = TRUE)
-        } else {
-            yaml::write_yaml(config, config_used)
-        }
+        yaml::write_yaml(config, file.path(edir, "config_used.yaml"))
     }
 
     # Render into the parent results directory
