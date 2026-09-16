@@ -60,6 +60,14 @@ render_rnaseq_report <- function(run_dir, config, config_file = NULL) {
     # Render into the parent results directory
     out_html <- file.path(parent_dir, "report_rnaseq.html")
 
+    # Ensure any stale report from a previous run is gone, as the proteomics and
+    # multiomics renderers do. The config snapshot above is now rewritten every
+    # time, so a render that fails afterwards would otherwise leave last run's
+    # HTML sitting beside this run's snapshot, reading as though that report had
+    # been produced from these settings. It also makes the file.exists(out_html)
+    # check below meaningful rather than satisfied by the leftover.
+    if (file.exists(out_html)) try(file.remove(out_html), silent = TRUE)
+
     message("Rendering RNA-seq report to: ", out_html)
 
     tryCatch({
