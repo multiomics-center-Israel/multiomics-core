@@ -19,10 +19,10 @@ write_gmt_file <- function(lines, name) {
 test_that("a single GMT stays one collection named 'custom'", {
     gmt <- write_gmt_file(
         paste(c("PF00089", "Trypsin", paste0("g", 1:4)), collapse = "\t"),
-        "PFAM_spalangia.gmt")
+        "PFAM_example.gmt")
     on.exit(unlink(dirname(gmt), recursive = TRUE), add = TRUE)
 
-    gs <- load_gene_sets(organism = "Spalangia cameroni", gmt_file = gmt)
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = gmt)
 
     expect_equal(names(gs), "custom")
     expect_equal(gs$custom[["PF00089"]], paste0("g", 1:4))
@@ -32,36 +32,36 @@ test_that("several GMTs become one collection each, named after the file", {
     kegg <- write_gmt_file(
         paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
               collapse = "\t"),
-        "KEGG_spalangia.gmt")
+        "KEGG_example.gmt")
     pfam <- write_gmt_file(
         paste(c("PF00089", "Trypsin", paste0("g", 4:9)), collapse = "\t"),
-        "PFAM_spalangia.gmt")
+        "PFAM_example.gmt")
     on.exit(unlink(c(dirname(kegg), dirname(pfam)), recursive = TRUE), add = TRUE)
 
-    gs <- load_gene_sets(organism = "Spalangia cameroni",
+    gs <- load_gene_sets(organism = "Example organism",
                          gmt_file = list(kegg, pfam))
 
-    expect_setequal(names(gs), c("KEGG_spalangia", "PFAM_spalangia"))
-    expect_equal(gs$KEGG_spalangia[["map00500"]], paste0("g", 1:5))
-    expect_equal(gs$PFAM_spalangia[["PF00089"]], paste0("g", 4:9))
+    expect_setequal(names(gs), c("KEGG_example", "PFAM_example"))
+    expect_equal(gs$KEGG_example[["map00500"]], paste0("g", 1:5))
+    expect_equal(gs$PFAM_example[["PF00089"]], paste0("g", 4:9))
 })
 
 test_that("each split collection keeps its own descriptions", {
     kegg <- write_gmt_file(
         paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
               collapse = "\t"),
-        "KEGG_spalangia.gmt")
+        "KEGG_example.gmt")
     ipr <- write_gmt_file(
         paste(c("IPR001254", "Serine proteases, trypsin domain", paste0("g", 2:6)),
               collapse = "\t"),
-        "InterPro_spalangia.gmt")
+        "InterPro_example.gmt")
     on.exit(unlink(c(dirname(kegg), dirname(ipr)), recursive = TRUE), add = TRUE)
 
-    gs <- load_gene_sets(organism = "Spalangia cameroni", gmt_file = c(kegg, ipr))
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = c(kegg, ipr))
 
-    expect_equal(attr(gs$KEGG_spalangia, "descriptions")[["map00500"]],
+    expect_equal(attr(gs$KEGG_example, "descriptions")[["map00500"]],
                  "Starch and sucrose metabolism")
-    expect_equal(attr(gs$InterPro_spalangia, "descriptions")[["IPR001254"]],
+    expect_equal(attr(gs$InterPro_example, "descriptions")[["IPR001254"]],
                  "Serine proteases, trypsin domain")
 })
 
@@ -72,7 +72,7 @@ test_that("same basename in different directories still yields distinct names", 
                         "pathways.gmt")
     on.exit(unlink(c(dirname(a), dirname(b)), recursive = TRUE), add = TRUE)
 
-    gs <- load_gene_sets(organism = "Spalangia cameroni", gmt_file = c(a, b))
+    gs <- load_gene_sets(organism = "Example organism", gmt_file = c(a, b))
 
     expect_length(gs, 2)
     expect_false(anyDuplicated(names(gs)) > 0)
@@ -81,11 +81,11 @@ test_that("same basename in different directories still yields distinct names", 
 
 test_that("a missing path is skipped without dropping the readable ones", {
     ok <- write_gmt_file(paste(c("A", "set a", "g1", "g2"), collapse = "\t"),
-                         "KEGG_spalangia.gmt")
+                         "KEGG_example.gmt")
     on.exit(unlink(dirname(ok), recursive = TRUE), add = TRUE)
 
     expect_warning(
-        gs <- load_gene_sets(organism = "Spalangia cameroni",
+        gs <- load_gene_sets(organism = "Example organism",
                              gmt_file = c(ok, "/nonexistent/PFAM.gmt")),
         "not found")
 
@@ -99,7 +99,7 @@ test_that("add_pathway_names prefers the collection's own GO descriptions", {
     attr(gs, "descriptions") <- c("GO:0000002" = "mitochondrial genome maintenance [BP]")
     df <- data.frame(pathway = "GO:0000002", padj = 0.01)
 
-    out <- add_pathway_names(df, "GO_spalangia", gs)
+    out <- add_pathway_names(df, "GO_example", gs)
 
     expect_equal(out$pathway_name, "mitochondrial genome maintenance [BP]")
 })
