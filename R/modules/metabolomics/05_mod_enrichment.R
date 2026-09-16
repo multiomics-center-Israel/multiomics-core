@@ -1,18 +1,20 @@
 # R/modules/metabolomics/05_mod_enrichment.R
 #
-# Metabolomics enrichment module: runs QEA, ssGSEA, ORA, and GSEA,
-# generates plots, and saves result tables.
+# Metabolomics enrichment module: runs QEA, ssGSEA, ORA, GSEA, and the
+# self-contained limma rotation test, generates plots, and saves result tables.
 #
 # Reuses domain: run_metabolomics_qea, run_metabolomics_ssgsea,
-#   run_metabolomics_ora, run_metabolomics_gsea,
+#   run_metabolomics_ora, run_metabolomics_gsea, run_metabolomics_selfcontained,
 #   plot_enrichment_barplot, plot_ssgsea_boxplots,
-#   plot_gsea_nes_barplot, plot_ora_dotplot
+#   plot_gsea_nes_barplot, plot_ora_dotplot, plot_selfcontained_lollipop
 
 
 #' Metabolomics enrichment module
 #'
-#' Runs up to four enrichment methods (each independently optional):
-#'   QEA (globaltest), ssGSEA (GSVA), ORA (Fisher), GSEA (fgsea).
+#' Runs up to five enrichment methods (each independently optional):
+#'   QEA (globaltest), ssGSEA (GSVA), ORA (Fisher), GSEA (fgsea), and a
+#'   self-contained limma rotation test (fry/mroast, opt-in via
+#'   enrichment.selfcontained.enabled).
 #'
 #' @param pre     List from preprocess_metabolomics().
 #' @param de_res  DE results (needed by ORA and GSEA; NULL if unavailable).
@@ -238,8 +240,9 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     # contrast's two groups — read from inputs$contrasts (Factor + Numerator/
     # Denominator) — and re-run each method on that subset. The global qea/ssgsea
     # are kept for backward compatibility; the per-contrast sets feed the report.
-    qea_by_contrast    <- list()
-    ssgsea_by_contrast <- list()
+    qea_by_contrast          <- list()
+    ssgsea_by_contrast       <- list()
+    selfcontained_by_contrast <- list()
     cond_col <- enr_cfg$condition_column %||%
                 config$modes$metabolomics$de$condition_column %||%
                 config$modes$metabolomics$effects$color %||% "sample_type"
@@ -264,6 +267,17 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
             if (!is.null(q)) { qea_by_contrast[[ct]] <- q; files <- c(files, q$files) }
             s <- .mod_metab_ssgsea_contrast(pre_sub, config, ct, out_enr, out_ds)
             if (!is.null(s)) { ssgsea_by_contrast[[ct]] <- s; files <- c(files, s$files) }
+
+            # Self-contained rotation test — uses the FULL pre (same DE model),
+            # so pass `pre`, not `pre_sub`; the contrast string is the two groups
+            # in "Num - Den" form. No-op unless enrichment.selfcontained.enabled.
+            sc_str <- paste(grp$groups[1], grp$groups[2], sep = " - ")
+            sc <- .mod_metab_selfcontained_contrast(pre, config, sc_str, ct,
+                                                    out_enr, out_ds)
+            if (!is.null(sc)) {
+                selfcontained_by_contrast[[ct]] <- sc
+                files <- c(files, sc$files)
+            }
         }
     }
 
@@ -271,17 +285,31 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
     # the metabolomics DAG when modes.metabolomics.enrichment.mummichog.enabled is
     # true — it is no longer produced here. See mod_mummichog_pinned().
 
+    # First-contrast self-contained result exposed under `selfcontained` for the
+    # report (mirrors ora/gsea); the full set is in selfcontained_by_contrast.
+    selfcontained_res <- NULL
+    if (length(selfcontained_by_contrast) > 0) {
+        first_sc <- selfcontained_by_contrast[[1]]
+        selfcontained_res <- first_sc$res
+        if (!is.null(first_sc$plots$lollipop))
+            plots$selfcontained_lollipop <- first_sc$plots$lollipop
+        if (!is.null(first_sc$plots$barplot))
+            plots$selfcontained_barplot <- first_sc$plots$barplot
+    }
+
     list(
-        qea                = qea_res,
-        ssgsea             = ssgsea_res,
-        ora                = ora_res,
-        gsea               = gsea_res,
-        qea_by_contrast    = qea_by_contrast,
-        ssgsea_by_contrast = ssgsea_by_contrast,
-        ora_by_contrast    = ora_by_contrast,
-        gsea_by_contrast   = gsea_by_contrast,
-        plots              = plots,
-        files              = unique(files)
+        qea                       = qea_res,
+        ssgsea                    = ssgsea_res,
+        ora                       = ora_res,
+        gsea                      = gsea_res,
+        selfcontained             = selfcontained_res,
+        qea_by_contrast           = qea_by_contrast,
+        ssgsea_by_contrast        = ssgsea_by_contrast,
+        ora_by_contrast           = ora_by_contrast,
+        gsea_by_contrast          = gsea_by_contrast,
+        selfcontained_by_contrast = selfcontained_by_contrast,
+        plots                     = plots,
+        files                     = unique(files)
     )
 }
 
@@ -538,6 +566,49 @@ mod_metabolomics_enrichment <- function(pre, de_res = NULL, config, out_dir,
                           title = paste0("QEA — ", contrast))
         ),
         prefix = "enrichment_qea", sfx = sfx, out_enr = out_enr
+    )
+    list(res = res, plots = rendered$plots, files = c(files, rendered$files))
+}
+
+#' Run the self-contained set test for one contrast and render/save its outputs
+#'
+#' Unlike the per-contrast QEA/ssGSEA helpers, this does NOT subset \code{pre}:
+#' the limma rotation test reuses the full DE model (all biological samples,
+#' same design + variance moderation) and extracts the single contrast, exactly
+#' as DE's \code{contrasts.fit} does. \code{contrast_str} is the "Num - Den"
+#' form (levels of the DE condition column).
+#'
+#' @param pre     Full preprocessing object (not subset).
+#' @param config  Full pipeline config.
+#' @param contrast_str   Contrast in "Numerator - Denominator" form.
+#' @param contrast_label Contrast label (a key of \code{de_res$de_tables}).
+#' @param out_enr,out_ds Enrichment / datasets output directories.
+#' @return list(res, plots, files) or NULL when the contrast yields no table.
+.mod_metab_selfcontained_contrast <- function(pre, config, contrast_str,
+                                              contrast_label, out_enr, out_ds) {
+    res <- tryCatch(
+        run_metabolomics_selfcontained(pre, config, contrast_str,
+                                       contrast_label = contrast_label),
+        error = function(e) {
+            warning("metabolomics self-contained failed for '", contrast_label,
+                    "': ", e$message)
+            NULL
+        }
+    )
+    if (is.null(res) || is.null(res$table)) return(NULL)
+
+    sfx   <- .sanitize_contrast(contrast_label)
+    files <- save_tsv(res$table, out_ds,
+                      paste0("enrichment_selfcontained_", sfx, "_results.tsv"))
+    rendered <- .render_enrichment_plots(
+        res$table,
+        specs = list(
+            lollipop = function(t) plot_selfcontained_lollipop(t, top_n = 20,
+                          title = paste0("Self-contained — ", contrast_label)),
+            barplot  = function(t) plot_enrichment_barplot(t, top_n = 20,
+                          title = paste0("Self-contained — ", contrast_label))
+        ),
+        prefix = "enrichment_selfcontained", sfx = sfx, out_enr = out_enr
     )
     list(res = res, plots = rendered$plots, files = c(files, rendered$files))
 }
