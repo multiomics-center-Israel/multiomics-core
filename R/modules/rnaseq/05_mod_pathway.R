@@ -225,6 +225,10 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
     # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
     rna_de_cfg <- rna_cfg$de %||% list()
+    # Same fallback chain build_rnaseq_summary_df() uses
+    # (R/domain/rnaseq/04_de_summary.R:100,148). validate_rna_config() accepts a
+    # config carrying only padj_cutoff, and dropping it here would select the DE
+    # genes at that value but run ORA on a different 0.05 set.
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
@@ -233,7 +237,7 @@ mod_rnaseq_pathway <- function(de_res, pre, config, out_dir, clustering_res = NU
         min_size           = pw_min,
         max_size           = pw_max,
         seed               = config$params$seed %||% 1L,
-        p_cutoff           = rna_de_cfg$p_cutoff %||% 0.05,
+        p_cutoff           = rna_de_cfg$p_cutoff %||% rna_de_cfg$padj_cutoff %||% 0.05,
         lfc_cutoff         = log2(rna_de_cfg$linear_fc_cutoff %||% 1.5)
     )
 

@@ -409,7 +409,12 @@ for (gp in gsea_pngs) {
     display_name <- gsub("_", " ", pair_name)
     cat(sprintf("\n### %s {.unnumbered}\n\n", display_name))
     cat(sprintf("![%s](%s)\n\n", display_name, gp))
-    figure_legend(sprintf("MultiGSEA enrichment correlation plot for %s. Each point is a pathway; both axes are -log10(FDR) for the two omics layers. Points are coloured by average fold enrichment.", display_name))
+    # The loop above drops every "_vs_" file, so what is shown here is the
+    # combined multi-panel figure, not one pairwise scatter. Describe the panels
+    # it actually has, and leave the pairwise colour encoding conditional: the
+    # points carry average fold enrichment only when the results include fold
+    # data, and default fgsea output does not.
+    figure_legend(sprintf("MultiGSEA combined enrichment figure for %s. A grid of up to three pairwise panels plus a summary panel. In each pairwise panel a point is a pathway and both axes are -log10(FDR) for the two omics layers being compared; where the results carry fold-enrichment data the points are also sized and coloured by it, otherwise they are drawn in a single colour. The summary panel is a dot plot of the top co-significant pathways across the omics layers, with colour and size both encoding -log10(adjusted p).", display_name))
     render_commentary(paste0("multigsea_", pair_name))
 }
 ```
