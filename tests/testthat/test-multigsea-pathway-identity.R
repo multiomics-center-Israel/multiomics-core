@@ -217,6 +217,36 @@ test_that("pathway_name missing on only some rows does not blank those rows", {
     expect_identical(unname(nms[["00020"]]), "Citrate cycle (TCA cycle)")
 })
 
+test_that("a frame with ID on some rows only falls back per row", {
+    # pathway_join_key() decides identity row by row, so row 2 keys on `pathway`
+    # and normalizes to 00020. Its readable fallback has to behave like an
+    # identifier-only row too -- a whole-column ID branch would leave the
+    # accession sitting in the label as "hsa00020 Citrate cycle".
+    df <- data.frame(
+        ID      = c("hsa00010", NA),
+        pathway = c("Glycolysis / Gluconeogenesis", "hsa00020 Citrate cycle"),
+        stringsAsFactors = FALSE
+    )
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle")
+})
+
+test_that("a blank ID counts as absent for the readable fallback too", {
+    # Same usable-value rule as pathway_join_key() uses to skip a blank ID.
+    df <- data.frame(
+        ID      = c("hsa00010", "   "),
+        pathway = c("Glycolysis / Gluconeogenesis", "hsa00020 Citrate cycle"),
+        stringsAsFactors = FALSE
+    )
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle")
+})
+
 test_that("an empty pathway_name on one row falls back to that row's identifier", {
     df <- mg_frame(c("hsa00010", "hsa00020"),
                    name = c("   ", "Citrate cycle (TCA cycle)"))

@@ -545,14 +545,21 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             rep(NA_character_, nrow(df))
         }
 
-        fallback <- if ("ID" %in% colnames(df)) {
-            # Older shape: the readable label sits in `pathway`, keyed by `ID`.
-            as.character(df$pathway)
+        # Which rows key on their ID, judged the same way pathway_join_key() judges
+        # it -- an ID column present but blank on a row does not make that row an
+        # ID row, there or here.
+        keys_on_id <- if ("ID" %in% colnames(df)) {
+            .multigsea_usable_label(df$ID)
         } else {
-            # No separate name column. The readable text, if there is any, is
-            # inside the identifier itself.
-            .multigsea_readable_from_identifier(df$pathway, kegg_org)
+            rep(FALSE, nrow(df))
         }
+
+        # A row that keys on its ID has the readable label sitting in `pathway`
+        # (the older clusterProfiler shape). A row that falls through to `pathway`
+        # for its identity has whatever readable text that identifier carries.
+        fallback <- .multigsea_readable_from_identifier(df$pathway, kegg_org)
+        fallback[keys_on_id] <- as.character(df$pathway)[keys_on_id]
+
         gap <- !.multigsea_usable_label(vals)
         vals[gap] <- fallback[gap]
 
