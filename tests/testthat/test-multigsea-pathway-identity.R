@@ -301,15 +301,30 @@ test_that("a whitespace-only label does not lock out a readable one", {
     expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
 })
 
-test_that("a key no layer can name is simply absent from the map", {
-    # resolve_term() and the combined panel both fall back to the id itself, so
-    # an absent key is the right outcome -- not a blank string stored under it.
+test_that("a row with no name column still contributes its own raw identifier", {
+    # This asserted the opposite until the identity object landed, and the old
+    # expectation was the bug: with the key normalized to 00010 there is nothing
+    # left to recover downstream, so the row has to carry its accession here.
     rna <- data.frame(pathway = NA_character_, ID = "hsa00010",
                       stringsAsFactors = FALSE)
 
     nms <- .multigsea_term_names(list(rna), kegg_org = "hsa")
 
-    expect_false("00010" %in% names(nms))
+    expect_identical(unname(nms[["00010"]]), "hsa00010")
+})
+
+test_that("a row with no usable identifier at all contributes nothing", {
+    # The only way a key is absent from the map now: there was no key to begin
+    # with. A blank string is never stored under one.
+    rna <- data.frame(pathway = c(NA_character_, "hsa00010"),
+                      ID = c(NA_character_, NA_character_),
+                      stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(rna), kegg_org = "hsa")
+
+    expect_length(nms, 1L)
+    expect_identical(names(nms), "00010")
+    expect_true(all(.multigsea_usable_label(nms)))
 })
 
 test_that("pathway_name missing on only some rows does not blank those rows", {
