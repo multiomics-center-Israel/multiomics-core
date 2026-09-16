@@ -1464,10 +1464,23 @@ normalize_kegg_pathway_id <- function(ids) {
 #' # TRUE TRUE FALSE
 is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
     ids <- as.character(ids)
+    pattern <- paste0("^", .kegg_accession_regex(kegg_org), "$")
+    !is.na(ids) & grepl(pattern, ids)
+}
+
+
+#' Regex body matching a KEGG pathway accession
+#'
+#' Unanchored on purpose: callers add \code{^...$} to match a bare accession, or
+#' \code{^...[[:space:]]} to find one at the head of a longer key.
+#'
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Single regex string, with no anchors.
+#' @keywords internal
+.kegg_accession_regex <- function(kegg_org = NULL) {
     prefixes <- c("map", "ko", kegg_org)
     prefixes <- prefixes[!is.na(prefixes) & nzchar(prefixes)]
-    pattern <- sprintf("^(%s)?[0-9]{5}$", paste(prefixes, collapse = "|"))
-    !is.na(ids) & grepl(pattern, ids)
+    sprintf("(%s)?[0-9]{5}", paste(prefixes, collapse = "|"))
 }
 
 
@@ -1477,6 +1490,10 @@ is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
 #' ever reaches strings that are genuinely KEGG accessions. Applied blindly it
 #' would turn "GO:0006915" into ":0006915" and strip the letters off every custom
 #' gene-set name, silently merging unrelated terms.
+#'
+#' Two shapes are recognised: a bare accession, and an accession at the head of a
+#' longer key followed by whitespace, which is how \code{fetch_kegg_via_rest()}
+#' names its gene sets.
 #'
 #' Detection and preservation are kept apart. Whether a value is a KEGG
 #' accession is decided on a trimmed copy, so " map00010 " is still recognised,
@@ -1493,8 +1510,22 @@ is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
 normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
     ids <- as.character(ids)
     trimmed <- trimws(ids)
-    is_kegg <- is_kegg_pathway_accession(trimmed, kegg_org)
-    ids[is_kegg] <- normalize_kegg_pathway_id(trimmed[is_kegg])
+    body <- .kegg_accession_regex(kegg_org)
+
+    exact <- is_kegg_pathway_accession(trimmed, kegg_org)
+    ids[exact] <- normalize_kegg_pathway_id(trimmed[exact])
+
+    # A gene set from fetch_kegg_via_rest() is named "<accession> <readable name>"
+    # (R/core/09_enrichment.R), which is the shape the non-model KEGG fallback
+    # produces -- exactly the path this join most needs to work. Take the leading
+    # accession; the rest of the string is a label, and pathway_display_label()
+    # still has the whole of it to show.
+    labelled <- !is.na(trimmed) & !exact &
+        grepl(paste0("^", body, "[[:space:]]"), trimmed)
+    ids[labelled] <- normalize_kegg_pathway_id(
+        sub(paste0("^(", body, ")[[:space:]].*$"), "\\1", trimmed[labelled])
+    )
+
     ids
 }
 
@@ -1614,6 +1645,35 @@ attach_pathway_display_names <- function(meta_results, pathway_tables,
     # Identity stays available, but the readable column reads first.
     meta_results[, c("pathway", setdiff(names(meta_results), "pathway")),
                  drop = FALSE]
+}
+
+
+#' Make display labels unique without losing which pathway each one is
+#'
+#' Rows are keyed on \code{norm_id} but labelled with a readable name, and two
+#' keys can legitimately share a name -- or share the first 50 characters of one,
+#' once a caller has truncated it. A plot that positions rows by label alone then
+#' stacks distinct pathways on one axis slot, and \code{pheatmap} errors outright
+#' on duplicate rownames. Appending the key to just the colliding labels keeps
+#' them apart and still says which pathway each row is.
+#'
+#' @param labels Character vector of display labels.
+#' @param keys Character vector of join keys aligned to \code{labels}, or NULL
+#'   when the caller has none to fall back on.
+#' @return Character vector the same length as \code{labels}, unique, and
+#'   unchanged wherever there was no collision.
+disambiguate_pathway_labels <- function(labels, keys = NULL) {
+    labels <- as.character(labels)
+    if (anyDuplicated(labels) == 0) return(labels)
+
+    if (!is.null(keys)) {
+        dup <- labels %in% labels[duplicated(labels)]
+        labels[dup] <- paste0(labels[dup], " (", as.character(keys)[dup], ")")
+    }
+
+    # Two rows can still collide when they share a key as well as a label; a
+    # numeric suffix is ugly but beats dropping one of them off the figure.
+    make.unique(labels, sep = "_")
 }
 
 
@@ -1754,15 +1814,9 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     pathway_labels <- ifelse(nchar(pathway_labels) > 50,
                              paste0(substr(pathway_labels, 1, 47), "..."),
                              pathway_labels)
-    # Rows are keyed on norm_id, but labelled with a readable name, and two keys
-    # can share a name -- or a truncation of one. pheatmap needs the rownames to
-    # be unique, so disambiguate with the key rather than letting it error.
-    if (anyDuplicated(pathway_labels) > 0 && "norm_id" %in% names(top_pathways)) {
-        dup <- pathway_labels %in% pathway_labels[duplicated(pathway_labels)]
-        pathway_labels[dup] <- paste0(pathway_labels[dup],
-                                      " (", top_pathways$norm_id[dup], ")")
-    }
-    rownames(pval_matrix) <- make.unique(pathway_labels, sep = "_")
+    pathway_labels <- disambiguate_pathway_labels(pathway_labels,
+                                                   top_pathways$norm_id)
+    rownames(pval_matrix) <- pathway_labels
 
     # Transform to -log10(p)
     log_pval_matrix <- -log10(pval_matrix + 1e-300)
@@ -1798,6 +1852,10 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     top <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
+
+    # The axis is built from the label, so two keys sharing a name would land on
+    # one position and hide each other. Same rule as the heatmap.
+    top$pathway <- disambiguate_pathway_labels(top$pathway, top$norm_id)
 
     # Build long-format data
     plot_data <- list()

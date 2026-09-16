@@ -108,6 +108,42 @@ test_that("the join key carries a padded custom value through unaltered", {
                      c("  MY_CUSTOM_SET  ", "00010"))
 })
 
+test_that("a KEGGREST-style key carrying its name still joins on the accession", {
+    # fetch_kegg_via_rest() (R/core/09_enrichment.R) names each gene set
+    # "<accession> <readable name>". That is the non-model KEGG fallback -- the
+    # path this join most needs to work -- and an end-anchored rule would leave
+    # those keys unnormalized and unable to meet map00010.
+    ids <- c("hsa00010 Glycolysis / Gluconeogenesis",
+             "ko00020 Citrate cycle (TCA cycle)",
+             "map00030 Pentose phosphate pathway")
+
+    expect_equal(normalize_pathway_join_key(ids, kegg_org = "hsa"),
+                 c("00010", "00020", "00030"))
+})
+
+test_that("a name-carrying key joins the bare accession form", {
+    tables <- list(
+        rna          = data.frame(pathway = "hsa00010 Glycolysis / Gluconeogenesis",
+                                  pvalue = 0.01, stringsAsFactors = FALSE),
+        metabolomics = data.frame(pathway = "Glycolysis / Gluconeogenesis",
+                                  ID = "map00010", pvalue = 0.02,
+                                  stringsAsFactors = FALSE)
+    )
+
+    merged <- merge_pathway_pvalues(tables, "00010", names(tables),
+                                    kegg_org = "hsa")
+
+    expect_equal(nrow(merged), 1)
+    expect_false(anyNA(merged$pval_rna))
+    expect_false(anyNA(merged$pval_metabolomics))
+})
+
+test_that("a leading token that is not an accession is left alone", {
+    # Only a genuine accession at the head counts; prose stays prose.
+    ids <- c("Glycolysis hsa00010", "HALLMARK_00010 set", "IPR001 domain")
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+})
+
 test_that("with no KEGG organism, only the species-neutral forms normalize", {
     expect_equal(
         normalize_pathway_join_key(c("map00010", "ko00010", "00010", "hsa00010"),
@@ -273,6 +309,28 @@ test_that("a key no layer names falls back to the key itself", {
     out <- attach_pathway_display_names(meta, tables, kegg_org = "hsa")
 
     expect_equal(out$pathway, "99999")
+})
+
+test_that("colliding display labels are separated by their key", {
+    # Both figures position rows by label. Two keys sharing a name would stack on
+    # one axis slot in the dot plot and make pheatmap error on duplicate rownames.
+    out <- disambiguate_pathway_labels(
+        c("Glycolysis", "Glycolysis", "Citrate cycle"),
+        c("00010", "00051", "00020")
+    )
+
+    expect_equal(out, c("Glycolysis (00010)", "Glycolysis (00051)", "Citrate cycle"))
+    expect_false(anyDuplicated(out) > 0)
+})
+
+test_that("labels that do not collide are untouched", {
+    labs <- c("Glycolysis", "Citrate cycle")
+    expect_identical(disambiguate_pathway_labels(labs, c("00010", "00020")), labs)
+})
+
+test_that("labels still collide-proof with no keys to fall back on", {
+    out <- disambiguate_pathway_labels(c("Glycolysis", "Glycolysis"), NULL)
+    expect_false(anyDuplicated(out) > 0)
 })
 
 test_that("competing readable names resolve deterministically without duplicating rows", {
