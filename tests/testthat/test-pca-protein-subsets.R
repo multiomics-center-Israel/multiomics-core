@@ -149,7 +149,23 @@ test_that("min-count filtering counts -Inf as an observation, which is why it is
     expect_true(kept_norm[["f_real"]])
 })
 
-test_that("preprocessing normalises non-finite intensities before it filters", {
+test_that("only Inf, -Inf and NaN are converted, and the count matches", {
+    # !is.finite() is also TRUE for cells that are already NA. Reporting those
+    # as newly converted would overstate what the run found.
+    expr <- matrix(c(1, NA, -Inf, Inf, NaN, 6), nrow = 2, byrow = TRUE,
+                   dimnames = list(c("f1", "f2"), c("S1", "S2", "S3")))
+
+    nonfinite <- is.infinite(expr) | is.nan(expr)
+    expect_equal(sum(nonfinite), 3)             # -Inf, Inf, NaN -- not the NA
+    expect_equal(sum(!is.finite(expr)), 4)      # the over-count being avoided
+
+    expr[nonfinite] <- NA_real_
+    expect_true(all(is.na(expr[c("f1", "f2"), c("S2", "S3")])))
+    expect_equal(unname(expr["f1", "S1"]), 1)
+    expect_equal(unname(expr["f2", "S3"]), 6)
+})
+
+test_that("preprocessing normalises non-finite intensities before it filters or imputes", {
     candidates <- c(
         testthat::test_path("..", "..", "R", "domain", "proteomics", "04_preprocess.R"),
         "R/domain/proteomics/04_preprocess.R"
@@ -157,16 +173,23 @@ test_that("preprocessing normalises non-finite intensities before it filters", {
     f <- candidates[file.exists(candidates)][1]
     skip_if(is.na(f), "04_preprocess.R not found from the test working directory")
 
+    # Match the assignments, not the function names: a name also appears in the
+    # comments that explain the ordering, and an earlier version of this test
+    # matched one of those instead of the call.
     src <- readLines(f, warn = FALSE)
-    norm_line <- grep("expr_raw[!is.finite(expr_raw)] <- NA_real_", src, fixed = TRUE)
-    filt_line <- grep("filter_proteomics_by_min_count(", src, fixed = TRUE)
-    imp_line  <- grep("impute_proteomics(", src, fixed = TRUE)
+    line_of <- function(pattern) {
+        hits <- grep(pattern, src, fixed = TRUE)
+        expect_length(hits, 1)
+        hits
+    }
+    norm_line <- line_of("expr_raw[nonfinite] <- NA_real_")
+    filt_line <- line_of("filt <- filter_proteomics_by_min_count(")
+    imp_line  <- line_of("imp_res <- impute_proteomics(")
 
-    expect_length(norm_line, 1)
     # Order is the point: after this, is.na() means the same thing to the
     # filter, to the imputation flags and to the complete-case selection.
-    expect_lt(norm_line, min(filt_line))
-    expect_lt(norm_line, min(imp_line))
+    expect_lt(norm_line, filt_line)
+    expect_lt(norm_line, imp_line)
 })
 
 

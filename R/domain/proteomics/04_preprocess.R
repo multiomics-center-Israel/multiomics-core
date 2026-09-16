@@ -42,12 +42,16 @@ preprocess_proteomics <- function(inputs, config) {
   # feature, and impute_proteomics() records it as measured rather than imputed.
   # Normalising here, before filtering, is what makes "missing" mean the same
   # thing everywhere downstream.
-  n_nonfinite <- sum(!is.finite(expr_raw))
+  # Inf/-Inf/NaN only: !is.finite() would also be TRUE for cells that are
+  # already NA, and reporting those as newly converted overstates what the run
+  # found. One mask, so the count and the conversion cannot disagree.
+  nonfinite <- is.infinite(expr_raw) | is.nan(expr_raw)
+  n_nonfinite <- sum(nonfinite)
   if (n_nonfinite > 0) {
     message(sprintf(
       "Treating %d non-finite intensities as missing (log2 of a zero or negative value).",
       n_nonfinite))
-    expr_raw[!is.finite(expr_raw)] <- NA_real_
+    expr_raw[nonfinite] <- NA_real_
   }
 
   # Contaminant filtering (e.g. cRAP proteins)
