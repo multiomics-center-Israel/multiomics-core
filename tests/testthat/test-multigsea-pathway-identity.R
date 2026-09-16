@@ -158,6 +158,76 @@ test_that("the first name seen wins across frames, as before", {
 })
 
 
+# ---- a blank label must not reserve a normalized key ----------------------
+#
+# This collision only exists because of normalization: hsa00010 and map00010 did
+# not share a key before, so a layer with no usable name could not block a layer
+# that had one.
+
+test_that("an NA label does not lock out a readable one from another layer", {
+    rna   <- data.frame(pathway = NA_character_, ID = "hsa00010",
+                        stringsAsFactors = FALSE)
+    metab <- mg_frame("map00010", name = "Glycolysis / Gluconeogenesis")
+
+    nms <- .multigsea_term_names(list(rna, metab), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("an empty label does not lock out a readable one from another layer", {
+    rna   <- data.frame(pathway = "", ID = "hsa00010", stringsAsFactors = FALSE)
+    metab <- mg_frame("map00010", name = "Glycolysis / Gluconeogenesis")
+
+    nms <- .multigsea_term_names(list(rna, metab), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("a whitespace-only label does not lock out a readable one", {
+    rna   <- data.frame(pathway = "   \t ", ID = "hsa00010",
+                        stringsAsFactors = FALSE)
+    metab <- mg_frame("map00010", name = "Glycolysis / Gluconeogenesis")
+
+    nms <- .multigsea_term_names(list(rna, metab), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("a key no layer can name is simply absent from the map", {
+    # resolve_term() and the combined panel both fall back to the id itself, so
+    # an absent key is the right outcome -- not a blank string stored under it.
+    rna <- data.frame(pathway = NA_character_, ID = "hsa00010",
+                      stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(rna), kegg_org = "hsa")
+
+    expect_false("00010" %in% names(nms))
+})
+
+test_that("pathway_name missing on only some rows does not blank those rows", {
+    # The column exists, so a whole-column branch would hand back NA for row 1
+    # even though its identifier carries the readable text.
+    df <- mg_frame(c("gla00010 Glycolysis / Gluconeogenesis",
+                     "gla00020 Citrate cycle"),
+                   name = c(NA, "Citrate cycle (TCA cycle)"))
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "gla")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle (TCA cycle)")
+})
+
+test_that("an empty pathway_name on one row falls back to that row's identifier", {
+    df <- mg_frame(c("hsa00010", "hsa00020"),
+                   name = c("   ", "Citrate cycle (TCA cycle)"))
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "hsa00010")
+    expect_identical(unname(nms[["00020"]]), "Citrate cycle (TCA cycle)")
+})
+
+
 # ---- no organism configured ----------------------------------------------
 
 test_that("with no KEGG organism the behaviour is what it is today", {

@@ -488,6 +488,17 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 }
 
 
+#' Does this label actually say anything?
+#'
+#' @param x Character vector of candidate labels.
+#' @return Logical vector; FALSE for NA, empty and whitespace-only labels.
+#' @keywords internal
+.multigsea_usable_label <- function(x) {
+    x <- as.character(x)
+    !is.na(x) & nzchar(trimws(x))
+}
+
+
 #' Readable text of an identifier that carries its own name
 #'
 #' The non-model KEGG fallback names a gene set "<accession> <readable name>"
@@ -524,23 +535,37 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 .multigsea_term_names <- function(dfs, kegg_org = NULL) {
     id_to_name <- character(0)
     for (df in dfs) {
-        if (all(c("pathway", "pathway_name") %in% colnames(df))) {
-            vals <- as.character(df$pathway_name)
-        } else if (all(c("pathway", "ID") %in% colnames(df))) {
+        if (!"pathway" %in% colnames(df)) next
+
+        # Resolved per row: a pathway_name column filled for only some rows must
+        # not leave the rest permanently blank just because the column exists.
+        vals <- if ("pathway_name" %in% colnames(df)) {
+            as.character(df$pathway_name)
+        } else {
+            rep(NA_character_, nrow(df))
+        }
+
+        fallback <- if ("ID" %in% colnames(df)) {
             # Older shape: the readable label sits in `pathway`, keyed by `ID`.
-            vals <- as.character(df$pathway)
-        } else if ("pathway" %in% colnames(df)) {
+            as.character(df$pathway)
+        } else {
             # No separate name column. The readable text, if there is any, is
             # inside the identifier itself.
-            vals <- .multigsea_readable_from_identifier(df$pathway, kegg_org)
-        } else {
-            next
+            .multigsea_readable_from_identifier(df$pathway, kegg_org)
         }
+        gap <- !.multigsea_usable_label(vals)
+        vals[gap] <- fallback[gap]
 
         keys <- .multigsea_term_ids(df, kegg_org)
         if (is.null(keys)) next
 
-        nms <- setNames(vals, keys)
+        # A label with nothing in it must not reserve a key. hsa00010 and
+        # map00010 collapse to one key now, so a blank name in the layer that
+        # happens to be visited first would otherwise lock out a readable name in
+        # the next one, and the panel would fall back to the bare map number.
+        # Dropping the blanks leaves first-wins intact among real names.
+        keep <- .multigsea_usable_label(vals) & !is.na(keys)
+        nms <- setNames(vals[keep], keys[keep])
         nms <- nms[!duplicated(names(nms))]
         id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
     }
