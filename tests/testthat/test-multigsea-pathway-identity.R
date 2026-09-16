@@ -316,13 +316,18 @@ test_that("a row with no name column still contributes its own raw identifier", 
 test_that("a row with no usable identifier at all contributes nothing", {
     # The only way a key is absent from the map now: there was no key to begin
     # with. A blank string is never stored under one.
-    rna <- data.frame(pathway = c(NA_character_, "hsa00010"),
-                      ID = c(NA_character_, NA_character_),
-                      stringsAsFactors = FALSE)
+    unidentifiable <- data.frame(ID = NA_character_, pathway = NA_character_,
+                                 stringsAsFactors = FALSE)
 
-    nms <- .multigsea_term_names(list(rna), kegg_org = "hsa")
+    expect_length(.multigsea_term_names(list(unidentifiable), kegg_org = "hsa"), 0L)
 
-    expect_length(nms, 1L)
+    # And such a row does not disturb an identifiable one beside it.
+    mixed <- data.frame(ID = c(NA_character_, NA_character_),
+                        pathway = c(NA_character_, "hsa00010"),
+                        stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(mixed), kegg_org = "hsa")
+
     expect_identical(names(nms), "00010")
     expect_true(all(.multigsea_usable_label(nms)))
 })
