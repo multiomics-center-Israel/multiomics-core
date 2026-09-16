@@ -574,16 +574,34 @@ if (dir.exists(mora_per_contrast_dir)) {
 ```
 
 ```{r metab-ora-setup, include=FALSE}
-# Compound ORA comes out of run_compound_ora() via two callers: the KEGG/OrgDb
-# multi-ORA branch, and the per-omics cross-enrichment step — the only one that
-# runs for an organism with no OrgDb/KEGG code. Either file is the same
-# analysis, and neither depends on the gene-based multi-ORA having succeeded.
+# Compound ORA comes out of run_compound_ora() via two callers, and neither
+# depends on the gene-based multi-ORA having succeeded — but they handle
+# contrasts differently, so the two files do not read the same way:
+#
+#   compound_ora_results.csv          pools every contrast into a single test,
+#                                     one row per pathway
+#   metabolomics_kegg_enrichment.csv  the only one produced for an organism with
+#                                     no OrgDb/KEGG code; tests each contrast
+#                                     separately and row-binds the results under
+#                                     a `contrast` column, so one pathway can
+#                                     appear once per contrast
+#
+# That column decides how the section below reports: reading a per-contrast file
+# as if it were pooled counts the same pathway several times.
 metab_ora_csv <- file.path(multi_ora_dir, "compound_ora_results.csv")
 if (!file.exists(metab_ora_csv)) {
     metab_ora_csv <- file.path(enrichment_dir, "metabolomics",
                                "metabolomics_kegg_enrichment.csv")
 }
 has_metab_ora <- file.exists(metab_ora_csv)
+metab_df <- if (has_metab_ora) read.csv(metab_ora_csv, stringsAsFactors = FALSE) else NULL
+metab_ora_by_contrast <- !is.null(metab_df) && "contrast" %in% colnames(metab_df)
+# Each ORA call sorts its own results, so a row-bound file arrives in contrast
+# order rather than p-value order. Restore a global ordering before anything
+# below takes a top-N slice of it.
+if (metab_ora_by_contrast && "pvalue" %in% colnames(metab_df)) {
+    metab_df <- metab_df[order(metab_df$pvalue), , drop = FALSE]
+}
 ```
 
 ## Metabolomics Compound Enrichment {.unnumbered}
@@ -593,10 +611,18 @@ cat("*No metabolomics compound ORA results found. Compound enrichment requires m
 ```
 
 ```{r metab-ora-results, eval=has_metab_ora, results='asis'}
-metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
 if (nrow(metab_df) > 0) {
-    cat("\nCompound-based over-representation analysis identified **", nrow(metab_df),
-        "** enriched KEGG pathways from significantly altered metabolites.\n\n")
+    if (metab_ora_by_contrast) {
+        cat(sprintf(paste0("\nCompound-based over-representation analysis identified **%d** ",
+                           "enriched KEGG pathways from significantly altered metabolites, ",
+                           "tested separately within each of **%d** contrasts.\n\n"),
+                    length(unique(metab_df$pathway)),
+                    length(unique(metab_df$contrast))))
+    } else {
+        cat(sprintf(paste0("\nCompound-based over-representation analysis identified **%d** ",
+                           "enriched KEGG pathways from significantly altered metabolites.\n\n"),
+                    nrow(metab_df)))
+    }
 }
 ```
 
@@ -609,13 +635,16 @@ if (file.exists(metab_bp)) {
 ```
 
 ```{r metab-ora-table, eval=has_metab_ora}
-metab_df <- read.csv(metab_ora_csv, stringsAsFactors = FALSE)
-display_cols <- intersect(c("pathway", "ID", "pvalue", "padj", "setSize", "compounds"), colnames(metab_df))
+display_cols <- intersect(c("contrast", "pathway", "ID", "pvalue", "padj", "setSize", "compounds"),
+                          colnames(metab_df))
 metab_show <- metab_df[seq_len(min(30, nrow(metab_df))), display_cols, drop = FALSE]
-col_labels <- c(pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
+col_labels <- c(contrast = "Contrast", pathway = "Pathway", ID = "KEGG ID", pvalue = "P-value",
                 padj = "Adj. P-value", setSize = "Compound Count", compounds = "Compounds")
 colnames(metab_show) <- col_labels[display_cols]
-knitr::kable(metab_show, row.names = FALSE, caption = "Metabolomics compound ORA - enriched KEGG pathways")
+knitr::kable(metab_show, row.names = FALSE,
+             caption = if (metab_ora_by_contrast)
+                 "Metabolomics compound ORA - enriched KEGG pathways, one row per pathway and contrast"
+             else "Metabolomics compound ORA - enriched KEGG pathways")
 ```
 
 ```{r metab-ora-commentary, eval=has_metab_ora, results='asis'}

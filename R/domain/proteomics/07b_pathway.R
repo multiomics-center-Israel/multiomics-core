@@ -54,17 +54,21 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
         # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
         # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
         # the p-value. Take the direction from the unrounded log2FC when it is
-        # available, and treat a genuine zero as +1 rather than discarding it.
-        # Not linearRatio.imputs: the precomputed-input path writes that as
-        # 2^abs(logFC) (R/domain/proteomics/05_de_summary.R), so it is >= 1 for
-        # every feature and would rank downregulated proteins as upregulated.
+        # available. Not linearRatio.imputs: the precomputed-input path writes
+        # that as 2^abs(logFC) (R/domain/proteomics/05_de_summary.R), so it is
+        # >= 1 for every feature and would rank downregulated proteins as
+        # upregulated.
+        #
+        # A feature with no direction to take does not get an invented one: NA
+        # stays NA and run_pathway_analysis() drops it from the ranking, while a
+        # genuine zero ranks neutrally. Forcing either to +1 would seat it in the
+        # upregulated tail on the strength of its p-value alone.
         lfc_col <- paste0("log2FC.imputs.", cn)
         dir_vals <- if (lfc_col %in% colnames(summary_df)) {
             sign(as.numeric(summary_df[[lfc_col]]))
         } else {
             sign(lfc_vals)
         }
-        dir_vals[is.na(dir_vals) | dir_vals == 0] <- 1
         stat_vals <- dir_vals * -log10(pval_vals + 1e-300)
     }
 

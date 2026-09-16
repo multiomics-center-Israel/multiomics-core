@@ -60,6 +60,28 @@ test_that("a fold change that rounds to 1.00 still ranks by its p-value", {
     expect_equal(res$stat[1], -log10(1e-5 + 1e-300), tolerance = 1e-8)
 })
 
+test_that("a protein with no fold-change estimate gets no rank", {
+    # A precomputed DE row can carry a p-value and no fold-change estimate.
+    # Inventing a direction for it would seat it in the upregulated tail on the
+    # strength of that p-value; run_pathway_analysis() drops an NA rank instead.
+    res <- extract_de_table_for_pathway(
+        rank_summary_df(c(2, NA), c(1e-4, 1e-6)), "B_vs_A", rank_config()
+    )
+
+    expect_gt(res$stat[1], 0)
+    expect_true(is.na(res$stat[2]))
+})
+
+test_that("a genuine zero fold change ranks neutrally", {
+    # Not the [0.995, 1.005) rounding case: log2FC.imputs is exactly zero here,
+    # so there is a direction to read and it is neither up nor down.
+    res <- extract_de_table_for_pathway(
+        rank_summary_df(c(0), c(1e-8)), "B_vs_A", rank_config()
+    )
+
+    expect_equal(res$stat[1], 0)
+})
+
 test_that("direction falls back to the rounded linearFC when log2FC is absent", {
     lfc   <- c(2, -2)
     pvals <- c(1e-4, 1e-6)
