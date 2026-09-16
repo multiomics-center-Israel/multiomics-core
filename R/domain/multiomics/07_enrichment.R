@@ -1334,12 +1334,16 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         return(NULL)
     }
 
-    # Find common pathways across omics
+    # Join the layers on a stable identity rather than on whichever column each
+    # of them happens to use. Without this a gene layer keyed on hsa00010 and a
+    # compound layer keyed on map00010 are two different pathways, and a custom
+    # collection keyed on map00010 never meets a gene layer keyed on the readable
+    # KEGG description at all.
+    kegg_org <- resolve_kegg_org_code(config$global$organism)
+
     all_pathways <- lapply(pathway_tables, function(df) {
-        if ("pathway" %in% names(df)) df$pathway
-        else if ("ID" %in% names(df)) df$ID
-        else if ("Description" %in% names(df)) df$Description
-        else rownames(df)
+        keys <- pathway_join_key(df, kegg_org)
+        keys[!is.na(keys)]
     })
 
     # Use union of all pathways (not just intersection) for broader view
@@ -1358,10 +1362,16 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
 
     # Merge pathway p-values for meta-analysis
-    merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics)
+    merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics,
+                                              kegg_org = kegg_org)
 
     # Combine p-values using Stouffer's method (only for pathways with >= 2 p-values)
     meta_results <- stouffer_combined_pvalues(merged_pathways)
+
+    # The key joined the layers; the label is what a reader sees. Both are kept,
+    # so the table can be traced back to the accession that produced a row.
+    meta_results <- attach_pathway_display_names(meta_results, pathway_tables,
+                                                  kegg_org = kegg_org)
 
     # Sort by combined p-value
     meta_results <- meta_results[order(meta_results$combined_pval), ]
@@ -1436,21 +1446,318 @@ normalize_kegg_pathway_id <- function(ids) {
 }
 
 
-#' Merge pathway p-values from multiple omics
-merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
+#' Is this string a KEGG pathway accession?
+#'
+#' Deliberately narrow. The enrichment tables mix KEGG accessions with GO terms,
+#' PFAM and InterPro accessions and bare gene-set names from custom GMTs, and a
+#' shape-only rule such as "three letters then five digits" would quietly rewrite
+#' a custom term that happened to look like one. Only the forms this pipeline can
+#' actually produce are recognised: a bare map number, the species-neutral `map`
+#' and `ko` prefixes, and the organism code of the run itself.
+#'
+#' @param ids Character vector of pathway identifiers.
+#' @param kegg_org Active KEGG organism code for the run (e.g. "hsa"), or NULL
+#'   when the organism has no KEGG code.
+#' @return Logical vector, one per element of \code{ids}; NA input is FALSE.
+#' @examples
+#' is_kegg_pathway_accession(c("00010", "map00010", "GO:0006915"), "hsa")
+#' # TRUE TRUE FALSE
+is_kegg_pathway_accession <- function(ids, kegg_org = NULL) {
+    ids <- as.character(ids)
+    pattern <- paste0("^", .kegg_accession_regex(kegg_org), "$")
+    !is.na(ids) & grepl(pattern, ids)
+}
 
-    merged <- data.frame(pathway = target_pathways, stringsAsFactors = FALSE)
+
+#' KEGG organism code for the run, from whichever registry knows the organism
+#'
+#' There are two organism registries. \code{get_kegg_organism()} in this file
+#' knows six species and matches the name exactly; \code{get_organism_info()} in
+#' \code{R/core/11_annotation.R} knows those plus yeast, Arabidopsis, chicken,
+#' pig, cow and Giardia, and matches case-insensitively after trimming.
+#'
+#' The join key needs the wider of the two. A run on an organism only the core
+#' registry knows still gets \code{<code>#####} keys out of
+#' \code{fetch_kegg_via_rest()} -- Giardia is in that registry precisely because
+#' it has a KEGG code and no OrgDb -- and without its prefix those keys never
+#' reduce to the bare map number, so they never meet the compound layer.
+#'
+#' \code{get_kegg_organism()} is deliberately left alone: it also gates which
+#' organisms get full KEGG enrichment, and widening that is a different question
+#' from what the join key can recognise.
+#'
+#' @param organism Organism name from \code{config$global$organism}.
+#' @return Three-letter KEGG organism code, or NULL when neither registry has one.
+resolve_kegg_org_code <- function(organism) {
+    # Called first so that its error on several organisms still fires -- that is a
+    # config mistake worth reporting rather than quietly resolving to nothing.
+    code <- get_kegg_organism(organism)
+    if (!is.null(code) && !is.na(code) && nzchar(code)) return(code)
+
+    # get_kegg_organism() returns NULL for a missing organism as readily as for an
+    # unknown one, and get_organism_info() cannot be handed a zero-length value:
+    # its `%in%` test yields logical(0) and `if` errors on that. A config with no
+    # organism set is a legitimate non-KEGG run, not a crash.
+    if (length(organism) != 1L) return(NULL)
+    organism <- as.character(organism)
+    if (is.na(organism) || !nzchar(trimws(organism))) return(NULL)
+
+    code <- get_organism_info(organism)$kegg
+    if (is.null(code) || is.na(code) || !nzchar(code)) return(NULL)
+    code
+}
+
+
+#' Regex body matching a KEGG pathway accession
+#'
+#' Unanchored on purpose: callers add \code{^...$} to match a bare accession, or
+#' \code{^...[[:space:]]} to find one at the head of a longer key.
+#'
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Single regex string, with no anchors.
+#' @keywords internal
+.kegg_accession_regex <- function(kegg_org = NULL) {
+    prefixes <- c("map", "ko", kegg_org)
+    prefixes <- prefixes[!is.na(prefixes) & nzchar(prefixes)]
+    sprintf("(%s)?[0-9]{5}", paste(prefixes, collapse = "|"))
+}
+
+
+#' Normalize a pathway identifier for joining, KEGG accessions only
+#'
+#' Wraps \code{normalize_kegg_pathway_id()} so that its prefix stripping only
+#' ever reaches strings that are genuinely KEGG accessions. Applied blindly it
+#' would turn "GO:0006915" into ":0006915" and strip the letters off every custom
+#' gene-set name, silently merging unrelated terms.
+#'
+#' Two shapes are recognised: a bare accession, and an accession at the head of a
+#' longer key followed by whitespace, which is how \code{fetch_kegg_via_rest()}
+#' names its gene sets.
+#'
+#' Detection and preservation are kept apart. Whether a value is a KEGG
+#' accession is decided on a trimmed copy, so " map00010 " is still recognised,
+#' and that trimmed copy is what gets normalized. Everything else is returned
+#' exactly as it arrived, whitespace included: an identifier this function does
+#' not understand is not one to tidy up. Two layers spelling one custom set with
+#' different padding will not join, which is the correct trade -- silently
+#' rewriting identifiers is the failure mode worth avoiding here.
+#'
+#' @param ids Character vector of pathway identifiers.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Character vector the same length as \code{ids}: KEGG accessions
+#'   reduced to their bare map number, everything else byte-identical.
+normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
+    ids <- as.character(ids)
+    trimmed <- trimws(ids)
+    body <- .kegg_accession_regex(kegg_org)
+
+    exact <- is_kegg_pathway_accession(trimmed, kegg_org)
+    ids[exact] <- normalize_kegg_pathway_id(trimmed[exact])
+
+    # A gene set from fetch_kegg_via_rest() is named "<accession> <readable name>"
+    # (R/core/09_enrichment.R), which is the shape the non-model KEGG fallback
+    # produces -- exactly the path this join most needs to work. Take the leading
+    # accession; the rest of the string is a label, and pathway_display_label()
+    # still has the whole of it to show.
+    labelled <- !is.na(trimmed) & !exact &
+        grepl(paste0("^", body, "[[:space:]]"), trimmed)
+    ids[labelled] <- normalize_kegg_pathway_id(
+        sub(paste0("^(", body, ")[[:space:]].*$"), "\\1", trimmed[labelled])
+    )
+
+    ids
+}
+
+
+#' Stable join key for each row of a pathway table
+#'
+#' The tables reaching cross-omics analysis do not agree on where identity
+#' lives. clusterProfiler-derived layers put the readable description in
+#' `pathway` and the accession in `ID`; compound ORA does the same; tables bound
+#' from custom GMT collections carry the gene-set name in `pathway` and often no
+#' `ID` at all. Choosing one column for a whole table therefore joins some layers
+#' on accessions and others on prose, and a table bound from several collections
+#' can have an `ID` column that only some of its rows populate.
+#'
+#' The key is resolved per row instead: the first of `ID`, `pathway`,
+#' `Description` that actually carries a value, normalized only where that value
+#' is a KEGG accession. This is identity, not display -- see
+#' \code{pathway_display_label()} for the readable side.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Character vector of join keys, one per row of \code{df}; NA for a row
+#'   where none of the three columns carries a value.
+pathway_join_key <- function(df, kegg_org = NULL) {
+    key <- rep(NA_character_, nrow(df))
+
+    for (col in c("ID", "pathway", "Description")) {
+        if (!col %in% names(df)) next
+        vals <- as.character(df[[col]])
+        # Trimming decides whether the cell is empty; the value carried forward is
+        # the original, so a custom identifier reaches the key unaltered.
+        fill <- is.na(key) & !is.na(vals) & nzchar(trimws(vals))
+        key[fill] <- vals[fill]
+    }
+
+    normalize_pathway_join_key(key, kegg_org)
+}
+
+
+#' Readable label for each row of a pathway table
+#'
+#' The display counterpart of \code{pathway_join_key()}: same row-wise idea,
+#' opposite preference. `pathway_name` is the column \code{add_pathway_names()}
+#' fills, and where it is absent the readable text is whatever sits in `pathway`
+#' or `Description`.
+#'
+#' Unlike the join key, this one does trim: padding is worth removing from a
+#' label a reader sees, and nothing is matched against it. Keep the two that way
+#' round -- trimming an identifier is a silent edit, trimming a label is not.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @return Character vector of labels, one per row; NA where the row carries no
+#'   readable text at all.
+pathway_display_label <- function(df) {
+    label <- rep(NA_character_, nrow(df))
+
+    for (col in c("pathway_name", "pathway", "Description")) {
+        if (!col %in% names(df)) next
+        vals <- trimws(as.character(df[[col]]))
+        fill <- is.na(label) & !is.na(vals) & nzchar(vals)
+        label[fill] <- vals[fill]
+    }
+
+    label
+}
+
+
+#' Attach readable pathway names to a table keyed on join identity
+#'
+#' The meta-analysis table is keyed on \code{norm_id}, which is an accession and
+#' not something to show a reader. The per-omics tables already carry the names
+#' the layers agreed on, so the label is joined back from them rather than
+#' re-derived from a gene-set collection.
+#'
+#' Where two layers name one key differently, a genuinely readable label wins
+#' over one that is only an accession -- a layer whose gene sets were keyed on
+#' `map00010` should not fix that as the display name when another layer calls it
+#' "Glycolysis / Gluconeogenesis". Beyond that the first label seen wins, so the
+#' result is stable across reruns; the layers are visited in the order given.
+#'
+#' @param meta_results Data frame with a \code{norm_id} column.
+#' @param pathway_tables Named list of per-omics enrichment data frames.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return \code{meta_results} with a \code{pathway} column holding the readable
+#'   label, falling back to \code{norm_id} where no layer names that key.
+attach_pathway_display_names <- function(meta_results, pathway_tables,
+                                          kegg_org = NULL) {
+    if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
+
+    keys <- character(0)
+    labels <- character(0)
+    for (df in pathway_tables) {
+        if (!is.data.frame(df) || nrow(df) == 0) next
+        keys <- c(keys, pathway_join_key(df, kegg_org))
+        labels <- c(labels, pathway_display_label(df))
+    }
+
+    keep <- !is.na(keys) & !is.na(labels) & nzchar(labels)
+    keys <- keys[keep]
+    labels <- labels[keep]
+
+    # Sorting readable labels ahead of bare accessions before dropping duplicates
+    # leaves one label per key, and the readable one wherever a layer offered it.
+    readable <- !is_kegg_pathway_accession(labels, kegg_org)
+    # seq_along breaks ties explicitly rather than leaning on order() being stable.
+    ord <- order(!readable, seq_along(readable))
+    keys <- keys[ord]
+    labels <- labels[ord]
+
+    lookup <- stats::setNames(labels, keys)
+    lookup <- lookup[!duplicated(names(lookup))]
+
+    matched <- unname(lookup[as.character(meta_results$norm_id)])
+    meta_results$pathway <- ifelse(is.na(matched),
+                                   as.character(meta_results$norm_id), matched)
+
+    # Identity stays available, but the readable column reads first.
+    meta_results[, c("pathway", setdiff(names(meta_results), "pathway")),
+                 drop = FALSE]
+}
+
+
+#' Shorten a display label to fit a plot axis
+#'
+#' Pulled out because the order matters and is easy to get wrong: truncate, then
+#' \code{disambiguate_pathway_labels()}. Done the other way round the appended
+#' key is cut straight back off and the collision it was breaking returns.
+#'
+#' @param labels Character vector of display labels.
+#' @param max_chars Longest label to keep whole; longer ones are cut and given an
+#'   ellipsis, ending up \code{max_chars} characters long.
+#' @return Character vector the same length as \code{labels}.
+truncate_pathway_label <- function(labels, max_chars = 50) {
+    labels <- as.character(labels)
+    ifelse(nchar(labels) > max_chars,
+           paste0(substr(labels, 1, max_chars - 3), "..."),
+           labels)
+}
+
+
+#' Make display labels unique without losing which pathway each one is
+#'
+#' Rows are keyed on \code{norm_id} but labelled with a readable name, and two
+#' keys can legitimately share a name -- or share the first 50 characters of one,
+#' once a caller has truncated it. A plot that positions rows by label alone then
+#' stacks distinct pathways on one axis slot, and \code{pheatmap} errors outright
+#' on duplicate rownames. Appending the key to just the colliding labels keeps
+#' them apart and still says which pathway each row is.
+#'
+#' @param labels Character vector of display labels.
+#' @param keys Character vector of join keys aligned to \code{labels}, or NULL
+#'   when the caller has none to fall back on.
+#' @return Character vector the same length as \code{labels}, unique, and
+#'   unchanged wherever there was no collision.
+disambiguate_pathway_labels <- function(labels, keys = NULL) {
+    labels <- as.character(labels)
+    if (anyDuplicated(labels) == 0) return(labels)
+
+    if (!is.null(keys)) {
+        dup <- labels %in% labels[duplicated(labels)]
+        labels[dup] <- paste0(labels[dup], " (", as.character(keys)[dup], ")")
+    }
+
+    # Two rows can still collide when they share a key as well as a label; a
+    # numeric suffix is ugly but beats dropping one of them off the figure.
+    make.unique(labels, sep = "_")
+}
+
+
+#' Merge pathway p-values from multiple omics
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames.
+#' @param target_pathways Character vector of join keys to report on, as produced
+#'   by \code{pathway_join_key()}.
+#' @param omics Character vector naming which layers of \code{pathway_tables} to
+#'   merge, in order.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Data frame with one row per element of \code{target_pathways}: a
+#'   \code{norm_id} column and one \code{pval_<omics>} column per layer.
+merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
+                                   kegg_org = NULL) {
+
+    merged <- data.frame(norm_id = target_pathways, stringsAsFactors = FALSE)
 
     for (om in omics) {
         df <- pathway_tables[[om]]
 
-        # Identify pathway column
-        pathway_col <- if ("pathway" %in% names(df)) "pathway"
-                       else if ("ID" %in% names(df)) "ID"
-                       else if ("Description" %in% names(df)) "Description"
-                       else NULL
+        # Identity is resolved per row, so a table that mixes collections -- some
+        # rows carrying an ID, some only a gene-set name -- keys each row on what
+        # that row actually has.
+        keys <- pathway_join_key(df, kegg_org)
 
-        if (is.null(pathway_col)) {
+        if (all(is.na(keys))) {
             warning("Cannot identify pathway column in ", om, " enrichment table")
             next
         }
@@ -1467,19 +1774,31 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics) {
             next
         }
 
-        # For multiple contrasts, take the minimum p-value per pathway
-        df_agg <- aggregate(
-            stats::as.formula(paste(pval_col, "~", pathway_col)),
-            data = df,
-            FUN = min
-        )
-        colnames(df_agg) <- c("pathway", paste0("pval_", om))
+        # One row per key, as before: contrasts and now also KEGG prefix variants
+        # of one pathway collapse to their best p-value. The result having unique
+        # keys is what keeps the merge below one-to-one, so no layer can multiply
+        # another's rows. Rows with no key or no p-value are dropped first, which
+        # is what the formula form of aggregate() used to do via na.omit.
+        # Converted only when it is not already numeric: as.numeric() on a factor
+        # returns level codes, and round-tripping a double through as.character()
+        # would cost precision the p-values cannot spare.
+        pvals <- df[[pval_col]]
+        if (!is.numeric(pvals)) {
+            pvals <- suppressWarnings(as.numeric(as.character(pvals)))
+        }
+        usable <- !is.na(keys) & !is.na(pvals)
+        if (!any(usable)) next
+
+        df_agg <- aggregate(list(pval = pvals[usable]),
+                            by = list(norm_id = keys[usable]),
+                            FUN = min)
+        colnames(df_agg) <- c("norm_id", paste0("pval_", om))
 
         # Subset to target pathways
-        df_sub <- df_agg[df_agg$pathway %in% target_pathways, , drop = FALSE]
+        df_sub <- df_agg[df_agg$norm_id %in% target_pathways, , drop = FALSE]
 
         # Merge
-        merged <- merge(merged, df_sub, by = "pathway", all.x = TRUE)
+        merged <- merge(merged, df_sub, by = "norm_id", all.x = TRUE)
     }
 
     merged
@@ -1547,11 +1866,10 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
-    # Truncate long pathway names
-    pathway_labels <- top_pathways$pathway
-    pathway_labels <- ifelse(nchar(pathway_labels) > 50,
-                             paste0(substr(pathway_labels, 1, 47), "..."),
-                             pathway_labels)
+    # Truncate first, then disambiguate -- see truncate_pathway_label().
+    pathway_labels <- truncate_pathway_label(top_pathways$pathway, 50)
+    pathway_labels <- disambiguate_pathway_labels(pathway_labels,
+                                                   top_pathways$norm_id)
     rownames(pval_matrix) <- pathway_labels
 
     # Transform to -log10(p)
@@ -1589,6 +1907,14 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
 
+    # The axis is built from the label, so two keys sharing a name would land on
+    # one position and hide each other. Truncate before disambiguating, not after:
+    # the key suffix sits at the end of the string, so truncating second cuts it
+    # straight back off and rebuilds the collision -- and the duplicate then
+    # reaches factor(levels = ) below, which rejects duplicated levels outright.
+    top$pathway <- truncate_pathway_label(top$pathway, 45)
+    top$pathway <- disambiguate_pathway_labels(top$pathway, top$norm_id)
+
     # Build long-format data
     plot_data <- list()
     for (pc in pval_cols) {
@@ -1614,16 +1940,9 @@ plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
     # Cap for display
     plot_df$neg_log10_p <- pmin(plot_df$neg_log10_p, 10)
 
-    # Truncate long names
-    plot_df$pathway <- ifelse(nchar(plot_df$pathway) > 45,
-                              paste0(substr(plot_df$pathway, 1, 42), "..."),
-                              plot_df$pathway)
-
-    # Reverse pathway order for bottom-to-top display
+    # Labels were truncated and made unique before plot_df was built, so the
+    # levels are already the strings on the axis and are guaranteed distinct.
     pathway_order <- rev(unique(top$pathway))
-    pathway_order <- ifelse(nchar(pathway_order) > 45,
-                            paste0(substr(pathway_order, 1, 42), "..."),
-                            pathway_order)
     plot_df$pathway <- factor(plot_df$pathway, levels = pathway_order)
 
     omics_colors <- c(
