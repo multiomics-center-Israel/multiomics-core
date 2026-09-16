@@ -23,6 +23,114 @@ mg_frame <- function(pathway, name = NULL, id = NULL, padj = NULL) {
 }
 
 
+# ---- the identity object ---------------------------------------------------
+#
+# One object carries the key and the decision that produced it. Everything that
+# needs to know where a row's identity came from asks this rather than guessing
+# from the columns, which is what repeatedly put wrong labels on rows.
+
+test_that("the identity object reports source, raw and key for each rung", {
+    df <- data.frame(
+        term        = c("GO:0006915", NA, NA, NA),
+        ID          = c("hsa99999",   "hsa00010", NA, NA),
+        pathway     = c("ignored",    "ignored",  "hsa00020 Citrate cycle", NA),
+        Description = c("ignored",    "ignored",  "ignored", "hsa00030 PPP"),
+        stringsAsFactors = FALSE
+    )
+
+    id <- .multigsea_identity(df, kegg_org = "hsa")
+
+    expect_identical(id$source, c("term", "ID", "pathway", "Description"))
+    expect_identical(id$raw, c("GO:0006915", "hsa00010",
+                               "hsa00020 Citrate cycle", "hsa00030 PPP"))
+    expect_identical(id$key, c("GO:0006915", "00010", "00020", "00030"))
+})
+
+test_that("blank and NA candidates fall through row by row", {
+    df <- data.frame(
+        ID      = c(NA, "   ", ""),
+        pathway = c("hsa00010", "hsa00020", NA),
+        stringsAsFactors = FALSE
+    )
+
+    id <- .multigsea_identity(df, kegg_org = "hsa")
+
+    expect_identical(id$source, c("pathway", "pathway", NA))
+    expect_identical(id$key, c("00010", "00020", NA))
+})
+
+test_that("a table with no candidate column at all yields NULL", {
+    expect_null(.multigsea_identity(data.frame(padj = c(0.1, 0.2))))
+})
+
+test_that("term_ids is exactly the identity object's key", {
+    df <- data.frame(ID = c("hsa00010", NA),
+                     pathway = c("x", "map00020"), stringsAsFactors = FALSE)
+
+    expect_identical(.multigsea_term_ids(df, kegg_org = "hsa"),
+                     .multigsea_identity(df, kegg_org = "hsa")$key)
+})
+
+test_that("without term, the key agrees with pathway_join_key()", {
+    # The shared rungs must not drift from #201's ladder. term is MultiGSEA's own
+    # addition in front of it, so a frame without term has to match exactly.
+    df <- data.frame(
+        ID          = c("hsa00010", NA, NA),
+        pathway     = c("readable", "map00020", NA),
+        Description = c("ignored", "ignored", "ko00030 PPP"),
+        stringsAsFactors = FALSE
+    )
+
+    expect_identical(.multigsea_identity(df, kegg_org = "hsa")$key,
+                     pathway_join_key(df, kegg_org = "hsa"))
+})
+
+test_that("term takes precedence over a conflicting ID", {
+    df <- data.frame(term = "GO:0006915", ID = "hsa00010",
+                     stringsAsFactors = FALSE)
+
+    id <- .multigsea_identity(df, kegg_org = "hsa")
+
+    expect_identical(id$source, "term")
+    expect_identical(id$key, "GO:0006915")
+})
+
+
+# ---- labels follow the source the identity actually used -------------------
+
+test_that("a term carrying its own name keeps that name", {
+    df <- data.frame(term = "gla00010 Glycolysis / Gluconeogenesis",
+                     stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "gla")
+
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("an ID-only row still displays its accession", {
+    # Nothing beside the ID to name it, and normalization has taken the prefix
+    # off the key -- so the raw value is the only thing left that says anything.
+    df <- data.frame(ID = "hsa00010", padj = 0.01, stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["00010"]]), "hsa00010")
+})
+
+test_that("a conflicting term and ID label from term, not from the ID", {
+    # The row keyed on term, so the Description beside the ID describes a
+    # different pathway and must not be attached to it.
+    df <- data.frame(term = "GO:0006915", ID = "hsa00010",
+                     Description = "Glycolysis / Gluconeogenesis",
+                     stringsAsFactors = FALSE)
+
+    nms <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(unname(nms[["GO:0006915"]]), "GO:0006915")
+    expect_false("Glycolysis / Gluconeogenesis" %in% unname(nms))
+})
+
+
 # ---- identity -------------------------------------------------------------
 
 test_that("the KEGG forms collapse to one term id under the run's organism", {
@@ -356,6 +464,36 @@ test_that("pairwise matching does not depend on row order among duplicates", {
     # Row order changes nothing, and the collapsed pathway kept its best p-value.
     expect_equal(forward, reversed)
     expect_equal(forward$x[forward$term == "00010"], -log10(0.001))
+})
+
+
+test_that("a name on a discarded duplicate still reaches the plot label", {
+    skip_if_not_installed("ggplot2")
+
+    # The row that survives the collapse is the most significant one, and here it
+    # is the one with no name. Resolving names after the collapse would lose
+    # "Glycolysis" permanently and label the pathway with its bare key.
+    rows <- data.frame(
+        pathway      = c("hsa00010",   "map00010", "hsa00020", "hsa00030"),
+        pathway_name = c("Glycolysis", NA,         "TCA",      "PPP"),
+        padj         = c(0.20,         0.001,      0.01,       0.02),
+        stringsAsFactors = FALSE
+    )
+
+    out_dir <- withr::local_tempdir()
+    suppressMessages(suppressWarnings(
+        .save_multigsea_pair_plot(rows, rows, "transcriptomics", "metabolomics",
+                                  out_dir = out_dir, kegg_org = "hsa")
+    ))
+    written <- utils::read.csv(
+        file.path(out_dir, "multigsea_transcriptomics_vs_metabolomics.csv"),
+        colClasses = c(term = "character"), stringsAsFactors = FALSE
+    )
+
+    # Scoring kept the most significant row...
+    expect_equal(written$x[written$term == "00010"], -log10(0.001))
+    # ...and display still found the name the discarded duplicate carried.
+    expect_identical(written$label[written$term == "00010"], "Glycolysis")
 })
 
 
