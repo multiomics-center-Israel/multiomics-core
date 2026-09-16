@@ -103,3 +103,51 @@ test_that("add_pathway_names prefers the collection's own GO descriptions", {
 
     expect_equal(out$pathway_name, "mitochondrial genome maintenance [BP]")
 })
+
+
+test_that("a GMT named after a built-in collection does not take its slot", {
+    # The GMTs are loaded before load_gene_sets() fills gene_sets$KEGG, so a file
+    # called KEGG.gmt landing on that name would be silently replaced when KEGG
+    # is requested too. The built-in half needs an OrgDb and is not loaded here;
+    # what this pins is the guarantee that makes the overwrite impossible --
+    # the custom collection is renamed, so the KEGG slot is left free.
+    kegg <- write_gmt_file(
+        paste(c("map00500", "Starch and sucrose metabolism", paste0("g", 1:5)),
+              collapse = "\t"),
+        "KEGG.gmt")
+    pfam <- write_gmt_file(
+        paste(c("PF00089", "Trypsin", paste0("g", 4:9)), collapse = "\t"),
+        "PFAM_custom.gmt")
+    on.exit(unlink(c(dirname(kegg), dirname(pfam)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Nonmodel organism",
+                         pathway_database = "KEGG",
+                         gmt_file = list(kegg, pfam))
+
+    expect_true("KEGG_1" %in% names(gs))
+    expect_false("KEGG" %in% names(gs))            # left free for the built-in
+    expect_equal(gs$KEGG_1[["map00500"]], paste0("g", 1:5))
+
+    # A basename that collides with nothing keeps its own name.
+    expect_true("PFAM_custom" %in% names(gs))
+    expect_equal(gs$PFAM_custom[["PF00089"]], paste0("g", 4:9))
+})
+
+test_that("every reserved collection name is protected, and only on collision", {
+    reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+    paths <- vapply(reserved, function(nm) {
+        write_gmt_file(paste(c(paste0("SET_", nm), nm, "g1", "g2"), collapse = "\t"),
+                       paste0(nm, ".gmt"))
+    }, character(1))
+    other <- write_gmt_file(paste(c("SET_X", "X", "g3", "g4"), collapse = "\t"),
+                            "my_sets.gmt")
+    on.exit(unlink(c(dirname(paths), dirname(other)), recursive = TRUE), add = TRUE)
+
+    gs <- load_gene_sets(organism = "Nonmodel organism",
+                         pathway_database = "KEGG",
+                         gmt_file = as.list(c(unname(paths), other)))
+
+    expect_setequal(names(gs), c(paste0(reserved, "_1"), "my_sets"))
+    expect_equal(gs$KEGG_1[["SET_KEGG"]], c("g1", "g2"))
+    expect_equal(gs$my_sets[["SET_X"]], c("g3", "g4"))
+})

@@ -119,8 +119,17 @@ load_gene_sets <- function(organism,
         if (length(gmt_paths) == 1) {
             collection_names <- "custom"
         } else {
+            # Reserve the names this function gives its own collections further
+            # down. The GMTs are loaded first, so a file called KEGG.gmt would
+            # take the gene_sets$KEGG slot and then be silently overwritten when
+            # KEGG is requested as well -- a collision the pooled "custom" name
+            # could not produce. Seeding make.unique() with the reserved names
+            # renames only a file that actually collides, deterministically, and
+            # leaves every other basename exactly as it is.
+            reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
             collection_names <- make.unique(
-                tools::file_path_sans_ext(basename(gmt_paths)), sep = "_")
+                c(reserved, tools::file_path_sans_ext(basename(gmt_paths))),
+                sep = "_")[-seq_along(reserved)]
         }
 
         for (i in seq_along(gmt_paths)) {
