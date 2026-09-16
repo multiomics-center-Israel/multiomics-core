@@ -99,6 +99,11 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         out[[paste0("sum.pass.", contrast_print)]] <- sum_pass
         out[[paste0("pass.imputs.", contrast_print)]] <- pass_imputs
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linearRatio_imputs
+        # log2 of the consensus linear ratio, not the mean of the per-run logFCs:
+        # this is the exact log2 counterpart of the linearFC reported below, so
+        # readers can move between the two without re-deriving anything. Left
+        # unrounded so that round trip stays exact.
+        out[[paste0("log2FC.imputs.", contrast_print)]] <- log2(linearRatio_imputs)
         out[[paste0("linearFC.imputs.", contrast_print)]] <- signif(linearFC_imputs, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]] <- pvalue_imputs
         out[[paste0("padj.imputs.", contrast_print)]] <- padj_imputs
@@ -204,11 +209,72 @@ add_pass_any_contrast <- function(summary_df, pass_prefix = "^pass\\.imputs\\.",
     summary_df
 }
 
+#' Resolve the blocking factor for a limma proteomics fit
+#'
+#' Reads `de$block_col` from the proteomics config and returns it as a factor
+#' aligned to the sample order of `meta_aligned`, or NULL when no blocking was
+#' requested. Refuses degenerate blockings rather than letting
+#' [limma::duplicateCorrelation()] return a meaningless consensus.
+#'
+#' @param meta_aligned Sample metadata, already ordered to match the expression
+#'   matrix columns.
+#' @param p_cfg The `modes$proteomics` config branch.
+#' @param sample_col Name of the sample identifier column, used in messages.
+#' @return A factor with one entry per sample, or NULL if blocking is disabled.
+resolve_de_block <- function(meta_aligned, p_cfg, sample_col) {
+    block_col <- p_cfg$de$block_col
+    if (is.null(block_col) || !nzchar(block_col)) return(NULL)
+
+    if (!block_col %in% colnames(meta_aligned)) {
+        stop("de$block_col is '", block_col, "' but that column is not in the sample metadata.\n",
+             "  Available columns: ", paste(colnames(meta_aligned), collapse = ", "), "\n",
+             "  Set de$block_col to the column holding the repeated-measures unit ",
+             "(donor, line, subject), or remove it to fit without blocking.")
+    }
+
+    block <- factor(meta_aligned[[block_col]])
+    n_samples <- nrow(meta_aligned)
+
+    if (anyNA(block)) {
+        stop("de$block_col '", block_col, "' has missing values for ", sum(is.na(block)),
+             " of ", n_samples, " samples.\n",
+             "  Every sample needs a block label; fill them in or drop those samples ",
+             "via modes$proteomics$sample_filter.")
+    }
+    if (nlevels(block) < 2) {
+        stop("de$block_col '", block_col, "' has a single level, so there is nothing to block on.\n",
+             "  Remove de$block_col, or point it at a column that varies across ", sample_col, ".")
+    }
+    if (nlevels(block) >= n_samples) {
+        stop("de$block_col '", block_col, "' has ", nlevels(block), " levels for ", n_samples,
+             " samples, so no two samples share a block.\n",
+             "  duplicateCorrelation needs repeated measures within a block; this looks ",
+             "like a sample identifier rather than a blocking variable.")
+    }
+
+    block
+}
+
 #' Run limma differential analysis for proteomics with contrast support
 #'
 #' Fits a limma linear model on an imputed proteomics expression matrix and
 #' returns per-contrast result tables with feature annotations.
 #'
+#' When `de$block_col` names a metadata column, samples sharing a level of that
+#' column are treated as correlated rather than independent: the within-block
+#' correlation is estimated with [limma::duplicateCorrelation()] and passed to
+#' [limma::lmFit()]. This is the right handling for a repeated-measures design
+#' (the same donor, line or subject measured under both conditions). It is
+#' preferred over adding the blocking variable to the design matrix, which
+#' spends one residual degree of freedom per block and leaves little power in
+#' the small-n designs typical of proteomics.
+#'
+#' @param expr_imp Numeric matrix of imputed abundances, features x samples.
+#' @param meta Sample metadata; one row per column of `expr_imp`.
+#' @param contrasts_df Data frame of contrasts with Contrast_name, Factor,
+#'   Numerator and Denominator columns.
+#' @param prot_tbl Feature annotation table keyed by the protein ID column.
+#' @param cfg Full pipeline config (the `modes$proteomics` branch is used).
 #' @return A list with aligned metadata, design matrix, contrasts, fitted model and per-contrast DE tables.
 #' @export
 run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
@@ -246,7 +312,28 @@ run_limma_proteomics <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg) {
     contrast_matrix <- limma::makeContrasts(contrasts = contrast_formulas, levels = design)
     colnames(contrast_matrix) <- names(contrast_formulas)
 
-    fit2 <- limma::eBayes(limma::contrasts.fit(limma::lmFit(expr_imp, design), contrast_matrix))
+    block <- resolve_de_block(meta_aligned, p_cfg, sample_col)
+    if (is.null(block)) {
+        fit <- limma::lmFit(expr_imp, design)
+        block_correlation <- NA_real_
+    } else {
+        dup_cor <- limma::duplicateCorrelation(expr_imp, design, block = block)
+        block_correlation <- dup_cor$consensus
+        if (!is.finite(block_correlation)) {
+            warning("duplicateCorrelation returned a non-finite consensus for block '",
+                    p_cfg$de$block_col, "'; fitting without blocking.")
+            fit <- limma::lmFit(expr_imp, design)
+            block_correlation <- NA_real_
+        } else {
+            message(sprintf(
+                "Blocking on '%s' (%d blocks): consensus within-block correlation = %.3f",
+                p_cfg$de$block_col, nlevels(block), block_correlation))
+            fit <- limma::lmFit(expr_imp, design, block = block,
+                                correlation = block_correlation)
+        }
+    }
+
+    fit2 <- limma::eBayes(limma::contrasts.fit(fit, contrast_matrix))
 
     # Optional fdrtool empirical null correction (matching DEP::test_diff)
     if (isTRUE(p_cfg$de$fdrtool_correction)) {
@@ -703,6 +790,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         out[[paste0("sum.pass.", contrast_print)]]          <- as.integer(!is.na(pass) & pass == 1)
         out[[paste0("pass.imputs.", contrast_print)]]       <- pass
         out[[paste0("linearRatio.imputs.", contrast_print)]] <- linear_ratio
+        out[[paste0("log2FC.imputs.", contrast_print)]]     <- lfc
         out[[paste0("linearFC.imputs.", contrast_print)]]   <- signif(linear_fc, 3)
         out[[paste0("pvalue.imputs.", contrast_print)]]     <- tbl$P.Value[idx]
         out[[paste0("padj.imputs.", contrast_print)]]       <- tbl$adj.P.Val[idx]

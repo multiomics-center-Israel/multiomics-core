@@ -85,8 +85,23 @@ validate_proteomics_config <- function(cfg) {
         if (!is.null(cfg$de$paired)) {
             assert_scalar_bool(cfg$de$paired, "de$paired", allow_null = TRUE)
         }
+        assert_scalar_num(cfg$de$volcano_n_label, "de$volcano_n_label",
+                          allow_null = TRUE, min_val = 0)
         if (!is.null(cfg$de$pairing_col)) {
             assert_scalar_chr(cfg$de$pairing_col, "de$pairing_col", allow_null = TRUE)
+        }
+        if (!is.null(cfg$de$block_col)) {
+            assert_scalar_chr(cfg$de$block_col, "de$block_col", allow_null = TRUE)
+            # Blocking is wired into the limma fit only; the t-test paths use
+            # de$paired/de$pairing_col instead, so silently ignoring it there
+            # would hide a design error.
+            de_method <- cfg$de$method %||% "limma"
+            if (!de_method %in% c("limma", "limma_percontrast")) {
+                stop("de$block_col is set but de$method is '", de_method,
+                     "', which does not support blocking.\n",
+                     "  Use de$method 'limma' for duplicateCorrelation blocking, ",
+                     "or de$paired/de$pairing_col for the paired t-test.")
+            }
         }
     }
 

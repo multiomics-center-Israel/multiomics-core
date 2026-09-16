@@ -162,8 +162,16 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
     
     lfc <- tab$log2FoldChange[idx]
     raw_fc <- ifelse(lfc >= 0, 2^lfc, -1 * (2^-lfc))
-    rounded_fc <- signif(raw_fc, 3) 
-    
+    rounded_fc <- signif(raw_fc, 3)
+
+    # Carry the model's own estimate next to its linear presentation. linearFC
+    # is derived from log2FC and is signed-reciprocal below 1, so on its own it
+    # cannot be checked against the per-sample values. Stored unrounded on
+    # purpose: rounding here would make signif(2^log2FC, 3) disagree with the
+    # linearFC below for the features whose 4th digit matters, and the whole
+    # point of the column is that the two reconcile exactly.
+    summary_df[[paste0("log2FC.", cn)]] <- lfc
+
     fc_col <- paste0("linearFC.", cn)
     summary_df[[fc_col]] <- rounded_fc
     

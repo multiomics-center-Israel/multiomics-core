@@ -14,6 +14,45 @@ normalize_contrast_name <- function(x) {
   gsub(" ", "", x)
 }
 
+#' Read a sample sheet, guarding both ways read.csv() mangles one
+#'
+#' \code{read.csv()} fails on a sample sheet in two independent ways, and a
+#' reader that handles one still falls to the other:
+#'
+#' \enumerate{
+#'   \item \strong{Wrong delimiter.} Sample sheets are frequently tab-separated
+#'     (.txt/.tsv). Read as CSV, every column collapses into one, and a consumer
+#'     then finds none of the columns it expects.
+#'   \item \strong{Ragged rows.} \code{read.csv()} treats column 1 as row names
+#'     whenever a data row has MORE fields than the header. One unquoted comma in
+#'     a free-text column is enough. The failure is silent: the frame keeps the
+#'     right column NAMES while every value sits one column to the left. On a
+#'     real run that put the raw file path into \code{SampleName}, no expression
+#'     column matched a sample id, and the report's explorer rendered empty with
+#'     no error. \code{row.names = NULL} does not fix it -- only a reader that
+#'     respects the header's column count does.
+#' }
+#'
+#' \code{read_table_auto()} already reads with readr, so it does not shift; what
+#' it cannot do is spot a sheet whose extension lies about its delimiter, since
+#' it decides from the extension alone. This wrapper reads the separator off the
+#' header line and hands it down, and returns NULL instead of erroring so a
+#' report chunk can carry on without the sheet. Everything else -- the Latin1
+#' retry, the character sanitization, the data.frame conversion -- is
+#' \code{read_table_auto()}'s and is not duplicated here.
+#'
+#' @param path Path to the sample sheet (CSV or TSV).
+#' @return A data.frame, or \code{NULL} when \code{path} is missing, empty or
+#'   unreadable.
+read_samplesheet <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+
+  l1  <- tryCatch(readLines(path, n = 1, warn = FALSE), error = function(e) character(0))
+  sep <- if (length(l1) > 0 && grepl("\t", l1, fixed = TRUE)) "\t" else ","
+
+  tryCatch(read_table_auto(path, sep = sep), error = function(e) NULL)
+}
+
 #' Load omics input files from config
 #'
 #' Generic loader for any omics mode. Validates required files, loads CSV/TSV
@@ -106,7 +145,17 @@ load_omics_inputs <- function(config, mode = c("proteomics", "rna", "metabolomic
   if (!is.null(inputs$contrasts)) {
     validate_contrasts_content(inputs$contrasts, mode)
   }
-  
+
+  # Warn early about commas in a tab-separated sample sheet — they parse fine
+  # here but break the CSV-assuming report readers at render time.
+  if (!is.null(inputs$metadata) && is.character(files$metadata) && nzchar(files$metadata)) {
+    check_metadata_delimiter_safety(
+      as.data.frame(inputs$metadata),
+      resolve_raw_path(config, files$metadata),
+      mode
+    )
+  }
+
   inputs
 }
 
@@ -211,9 +260,18 @@ sanitize_character_columns <- function(df, source = "input") {
 }
 
 #' Read a table automatically detecting TSV vs CSV by extension
-read_table_auto <- function(path) {
+#'
+#' @param path Path to the file.
+#' @param sep Optional separator, \code{"\t"} or \code{","}. Overrides the
+#'   extension, for callers that have determined the delimiter another way (see
+#'   \code{\link{read_samplesheet}}, which reads it off the header because a
+#'   sample sheet's extension often lies). \code{NULL} keeps the extension rule,
+#'   so existing callers are unaffected.
+#' @return A data.frame.
+read_table_auto <- function(path, sep = NULL) {
   ext <- tolower(tools::file_ext(path))
-  read_fn <- if (ext %in% c("tsv", "txt")) readr::read_tsv else readr::read_csv
+  use_tsv <- if (is.null(sep)) ext %in% c("tsv", "txt") else identical(sep, "\t")
+  read_fn <- if (use_tsv) readr::read_tsv else readr::read_csv
   df <- tryCatch(
     read_fn(path, show_col_types = FALSE),
     error = function(e) {
