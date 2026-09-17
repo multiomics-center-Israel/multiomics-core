@@ -52,6 +52,33 @@ test_that("RNA feature ids map onto the eggNOG query key", {
     )
 })
 
+test_that("a leading Gene: prefix is dropped before the lookup", {
+    # Some GFF-derived counts matrices carry "Gene:" where the proteome, and so
+    # the eggNOG query column, does not.
+    expect_identical(
+        rna_feature_to_eggnog_key(c("Gene:EHI_012345", "Gene:evm.TU.ctg1_np1.1",
+                                    "Gene:BRK_g1")),
+        c("EHI_012345", "evm.model.ctg1_np1.1", "BRK_g1.t1")
+    )
+})
+
+test_that("the KO map keeps the feature id the DE tables join on", {
+    path <- withr::local_tempfile(fileext = ".tsv")
+    writeLines(c(
+        "## emapper-2.1.13",
+        paste("#query", "seed_ortholog", "KEGG_ko", "PFAMs", sep = "\t"),
+        paste("EHI_012345", "9999.XP_1", "ko:K00001", "PF00001", sep = "\t")
+    ), path)
+
+    out <- resolve_features_to_ko("Gene:EHI_012345", rna_feature_to_eggnog_key,
+                                  read_eggnog_ko_map(path), "transcriptomics")
+
+    # The prefix is stripped for the lookup only: the map has to key on the id
+    # the DE table actually carries, or the join finds nothing.
+    expect_identical(out$feature_id, "Gene:EHI_012345")
+    expect_identical(out$KO, "K00001")
+})
+
 test_that("protein groups split into per-member eggNOG keys", {
     expect_identical(
         protein_group_to_eggnog_keys("BRK_g1.t1|Fake_tag"),
@@ -342,6 +369,28 @@ test_that(".de_table_for_contrast matches across the export spellings", {
     )
 })
 
+test_that("two distinct contrasts cannot write one output filename", {
+    # "A-B" is a comparison and "A B" is a group whose name has a space: two
+    # canonical contrasts, and make.names() turns both into "A.B", so one
+    # contrast's maps would have overwritten the other's.
+    k1 <- normalize_contrast_key("A-B")
+    k2 <- normalize_contrast_key("A B")
+
+    expect_false(identical(k1, k2))
+    expect_identical(make.names("A-B"), make.names("A B"))   # the collision
+    expect_false(identical(.contrast_out_key(k1), .contrast_out_key(k2)))
+})
+
+test_that(".contrast_out_key is one-to-one over canonical keys", {
+    # The key alphabet is [a-z0-9.], so replacing the dots cannot merge two.
+    keys <- normalize_contrast_key(c("1.56ppm vs. 0ppm", "15.6ppm vs. 0ppm",
+                                     "A vs. B", "A vs. C", "A-B", "A B"))
+    out <- .contrast_out_key(keys)
+
+    expect_length(unique(out), length(unique(keys)))
+    expect_false(any(grepl("[^a-z0-9_]", out)))
+})
+
 test_that(".de_table_for_contrast treats an ambiguous key as a miss", {
     # Two table names collapsing to one key is not a match to guess at.
     tables <- list("A vs. B" = data.frame(feature_id = "g1", log2fc = 1),
@@ -474,6 +523,36 @@ test_that("clear_multi_ora_pathview_outputs is quiet on a fresh directory", {
     expect_length(clear_multi_ora_pathview_outputs(out), 0L)
 })
 
+test_that("Multi-ORA clears stale maps before deciding it has too few layers", {
+    # The rerun that drops an omics layer produces no Multi-ORA at all, and is
+    # exactly the rerun whose previous maps would otherwise stay on the page.
+    out <- withr::local_tempdir()
+    pv <- file.path(out, "pathview")
+    dir.create(pv)
+    stale <- file.path(pv, "ko00010.multi_ora_avsb.multi.png")
+    writeLines("x", stale)
+    writeLines("x", file.path(out, "multi_ora_pathview_union.pdf"))
+
+    expect_null(suppressMessages(
+        run_multi_ora(list(transcriptomics = list()), NULL, list(), out)
+    ))
+    expect_false(file.exists(stale))
+    expect_false(file.exists(file.path(out, "multi_ora_pathview_union.pdf")))
+})
+
+test_that("the renderer's default top_n matches the config validator's", {
+    # The validator fills enrichment.pathview.top_n with 5 when it is absent, so
+    # a renderer default of anything else means two different answers to one
+    # question depending on which path the config took.
+    validated <- suppressMessages(suppressWarnings(validate_multiomics_config(
+        list(integration = list(methods = "SNF"))
+    )))
+    expect_equal(
+        validated$enrichment$pathview$top_n,
+        eval(formals(generate_per_omic_union_pathview)$top_n)
+    )
+})
+
 
 # ---- the union artifact is not the ">= 2 omics" artifact --------------------
 
@@ -517,6 +596,24 @@ test_that("the renderer is a no-op without a KO map, whatever the organism", {
         expect_null(generate_per_omic_union_pathview(list(), list(), with_code,
                                                      withr::local_tempdir())),
         "no feature-to-KO map configured"
+    )
+})
+
+test_that("run_pathview: false stops the renderer before it reads anything", {
+    skip_if_not_installed("pathview")
+    config <- list(
+        global = list(organism = "Unlisted nonmodel species"),
+        project = list(dir = tempdir()), paths = list(raw = "data"),
+        modes = list(multiomics = list(enrichment = list(
+            pathview = list(run_pathview = FALSE, ko_map = "ko.tsv")
+        )))
+    )
+    # Even with a KO map configured, the switch wins -- and it is read before
+    # the map, so a disabled run does not go looking for files.
+    expect_message(
+        expect_null(generate_per_omic_union_pathview(list(), list(), config,
+                                                     withr::local_tempdir())),
+        "disabled by enrichment.pathview.run_pathview"
     )
 })
 

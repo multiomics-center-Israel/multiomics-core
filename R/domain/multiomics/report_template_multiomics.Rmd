@@ -695,15 +695,22 @@ has_pathview <- file.exists(pathview_pdf)
 # Whether compound nodes actually carry metabolomics values is recorded by the
 # renderer beside its PDF, because the section must not promise a colour that is
 # not on the map. Absent sidecar: assume not, and say less rather than more.
+pathview_union_meta <- if (pathview_is_union) {
+    tryCatch(yaml::read_yaml(file.path(multi_ora_dir,
+                                       "multi_ora_pathview_union.yaml")),
+             error = function(e) list())
+} else {
+    list()
+}
 pathview_has_compounds <- if (pathview_is_union) {
-    isTRUE(tryCatch(
-        yaml::read_yaml(file.path(multi_ora_dir,
-                                  "multi_ora_pathview_union.yaml"))$compound_nodes,
-        error = function(e) FALSE
-    ))
+    isTRUE(pathview_union_meta$compound_nodes)
 } else {
     TRUE
 }
+# Map filenames are keyed on the canonical contrast, which distinguishes two
+# contrasts that make.names() would collide; the readable spelling comes back
+# from here rather than from the filename.
+pathview_contrast_labels <- pathview_union_meta$contrast_labels %||% list()
 ```
 
 ## Multi-Omics Pathway Maps (Pathview) {.unnumbered}
@@ -740,7 +747,11 @@ for (pv_png in pv_pngs) {
     pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora.*$", "", bn))
     contrast_part <- sub("^.*\\.multi_ora_?", "", bn)
     contrast_part <- sub("\\.(multi\\.)?png$", "", contrast_part)
-    contrast_label <- gsub("\\.", " ", contrast_part)
+    contrast_label <- if (!is.null(pathview_contrast_labels[[contrast_part]])) {
+        pathview_contrast_labels[[contrast_part]]
+    } else {
+        gsub("\\.", " ", contrast_part)
+    }
     pw_title <- pathview_map_title(pv_png)
     pw_label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else
         paste0(pw_title, " (", pw_id, ")")

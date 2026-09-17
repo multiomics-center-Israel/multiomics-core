@@ -859,6 +859,24 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 }
 
 
+#' Filename-safe identity for a contrast's rendered maps
+#'
+#' The output filename has to distinguish two contrasts exactly when their
+#' canonical keys do. \code{make.names()} on the readable label does not:
+#' `"A-B"` and `"A B"` are different contrasts -- one is a comparison, the other
+#' a group whose name has a space -- and both become `"A.B"`, so the second
+#' would overwrite the first's maps.
+#'
+#' The canonical key is already lowercase `[a-z0-9.]`, so replacing its dots is
+#' one-to-one: no two keys can produce one suffix.
+#'
+#' @param contrast_key Canonical key from \code{normalize_contrast_key}.
+#' @return Filename-safe string, distinct for distinct keys.
+.contrast_out_key <- function(contrast_key) {
+    gsub("[^a-z0-9]", "_", contrast_key)
+}
+
+
 #' Pick one contrast's DE table out of a per-contrast list
 #'
 #' Matched on \code{normalize_contrast_key()}, so a table named
@@ -951,12 +969,20 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   data used to reach KEGG compound ids).
 #' @param config Full config.
 #' @param out_dir Multi-ORA output directory (maps go under `out_dir/pathview`).
-#' @param top_n Max pathways to render per contrast; overridden by
+#' @param top_n Max pathways to render per contrast. The config validator fills
+#'   `enrichment.pathview.top_n` with 5 when it is absent, so this default only
+#'   applies to a config that never passed through it; overridden by
 #'   `modes$multiomics$enrichment$pathview$top_n` when that is set.
 #' @return Path to the compiled PDF, or NULL when nothing could be rendered.
 generate_per_omic_union_pathview <- function(de_results, harmonization_res,
-                                             config, out_dir, top_n = 25) {
+                                             config, out_dir, top_n = 5) {
     if (!requireNamespace("pathview", quietly = TRUE)) return(NULL)
+
+    pv_cfg_early <- config$modes$multiomics$enrichment$pathview %||% list()
+    if (!isTRUE(pv_cfg_early$run_pathview %||% TRUE)) {
+        message("  Union pathview: disabled by enrichment.pathview.run_pathview")
+        return(NULL)
+    }
 
     ko_map <- load_feature_ko_map(config)
     if (is.null(ko_map) || nrow(ko_map) == 0) {
@@ -967,8 +993,7 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         return(NULL)
     }
 
-    pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
-    top_n <- pv_cfg$top_n %||% top_n
+    top_n <- pv_cfg_early$top_n %||% top_n
 
     # resolve_kegg_org_code(), not get_kegg_organism(): the latter only knows the
     # six exact species names of the older table. This is the identity organism
@@ -1027,6 +1052,7 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     pv_dir <- normalizePath(pv_dir, winslash = "/", mustWork = FALSE)
 
     any_compounds <- FALSE
+    contrast_labels <- list()
     generated <- withr::with_dir(pv_dir, {
         made <- character(0)
         for (ckey in names(hits)) {
@@ -1061,7 +1087,12 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
             }
             if (!is.null(cpd_data) && length(cpd_data) > 0) any_compounds <- TRUE
 
-            out_suffix <- paste0("multi_ora_", make.names(label))
+            # Identity, not display: two contrasts that differ must not write
+            # one filename. The readable label travels to the report in the
+            # sidecar instead.
+            out_key <- .contrast_out_key(ckey)
+            contrast_labels[[out_key]] <- label
+            out_suffix <- paste0("multi_ora_", out_key)
             message("  Union pathview: ", label, " -- ", length(genes),
                     " KO nodes with log2FC")
 
@@ -1103,11 +1134,13 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
                                       file.path(out_dir, "multi_ora_pathview_union.pdf"))
     if (is.null(pdf_path)) return(NULL)
 
-    # Whether compound nodes actually carry data is a property of this run, not
-    # something the report should infer from which files happen to exist, so it
-    # is written down beside the PDF rather than guessed at.
+    # What this run actually produced, written down rather than left for the
+    # report to infer from which files happen to exist: whether any compound
+    # node carries a value, and which readable contrast each filename-safe
+    # output key stands for.
     tryCatch(
-        yaml::write_yaml(list(compound_nodes = any_compounds),
+        yaml::write_yaml(list(compound_nodes = any_compounds,
+                              contrast_labels = contrast_labels),
                          file.path(out_dir, "multi_ora_pathview_union.yaml")),
         error = function(e) NULL
     )

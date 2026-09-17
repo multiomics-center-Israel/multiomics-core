@@ -86,8 +86,16 @@ read_eggnog_ko_map <- function(path) {
 
 #' Map transcriptomics feature ids onto candidate eggNOG query keys
 #'
-#' Two rewrites, both matching how the annotation tools name things rather than
-#' anything project-specific:
+#' The feature id itself is never rewritten -- it stays the key of the KO map,
+#' because that is what the DE tables join on. What is rewritten is the lookup
+#' key used against the annotation.
+#'
+#' A leading `Gene:` is dropped first: some GFF-derived annotations carry that
+#' prefix on the counts-matrix id while the proteome, and so the eggNOG query
+#' column, does not.
+#'
+#' Then two rewrites, both matching how the annotation tools name things rather
+#' than anything project-specific:
 #' \itemize{
 #'   \item EVM/funannotate gene ids (`evm.TU.*`) become the model ids
 #'     (`evm.model.*`) that the proteome, and therefore the annotation, is keyed
@@ -103,7 +111,7 @@ read_eggnog_ko_map <- function(path) {
 #' @param feature_ids Character vector of RNA feature ids.
 #' @return Character vector of candidate eggNOG query keys, same length as input.
 rna_feature_to_eggnog_key <- function(feature_ids) {
-    keys <- feature_ids
+    keys <- sub("^Gene:", "", feature_ids)
     is_evm <- grepl("^evm\\.TU\\.", keys)
     keys[is_evm] <- sub("^evm\\.TU\\.", "evm.model.", keys[is_evm])
     is_brk <- grepl("^BRK_g[0-9]+$", keys)

@@ -1124,18 +1124,22 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
 
-    if (is.null(de_results) || length(de_results) < 2) {
-        message("Multi-ORA requires DE results from at least 2 omics layers")
-        return(NULL)
-    }
-
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     # Both pathview renderers below write into this directory and the report
     # finds their maps by globbing it, so a map this run no longer produces
     # would otherwise linger on the page as a current result. Cleared here,
     # once, rather than by either renderer: neither owns the other's output.
+    #
+    # Before the input check on purpose. A rerun with one omics layer fewer
+    # produces no Multi-ORA at all, and that is exactly the rerun whose stale
+    # maps would otherwise stay on the page looking current.
     clear_multi_ora_pathview_outputs(out_dir)
+
+    if (is.null(de_results) || length(de_results) < 2) {
+        message("Multi-ORA requires DE results from at least 2 omics layers")
+        return(NULL)
+    }
 
     # Track errors/warnings for reporting in HTML
     .ora_issues <- character(0)

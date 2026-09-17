@@ -199,8 +199,12 @@ modes:
         # See utils/build_feature_ko_map.R for one way to build it.
         ko_map: null  # "multiomics/feature_to_ko.tsv"
 
-        # Max pathways to render per contrast; null uses the function default.
-        top_n: null
+        # Set false to skip pathway maps entirely.
+        run_pathview: true
+
+        # Max pathways to render per contrast. The config validator fills this
+        # with 5 when it is absent, so 5 is the value to match here.
+        top_n: 5
 
 # ==============================================================================
 # Global design (used by single-omics DE and multi-omics integration)
