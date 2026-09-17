@@ -187,6 +187,22 @@ modes:
       run_enrichment: true
       # Fisher's method will combine p-values across omics
 
+      # --- KEGG pathway classes to leave out of the report ---
+      # KEGG's reference maps are pan-species, so an organism with no KEGG code
+      # of its own is tested against all of them, and maps of organs it does not
+      # have can score well purely because the orthologs underneath are generic.
+      # Listing a class here removes its pathways from every report section.
+      #
+      # This is a reporting decision, not a statistical one: enrichment runs
+      # over the same pathway universe and the p-values and FDR adjustment are
+      # unchanged, so a pathway that stays carries the value it would have had.
+      #
+      # Both BRITE categories and their subcategories match, e.g.
+      #   - "Human Diseases"          # whole category
+      #   - "Circulatory system"      # one subcategory, keeping the rest
+      # Empty by default: nothing is excluded unless a project asks.
+      exclude_pathway_classes: []
+
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
       # would otherwise produce no pathway maps at all. The maps are KEGG's

@@ -1284,7 +1284,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         sig_genes = pooled_sig_kegg,
         universe = pooled_univ_kegg,
         kegg_org = kegg_org,
-        label = "pooled"
+        label = "pooled",
+        exclude_classes = .excluded_pathway_classes(config)
     )
 
     # --- Run per-omics ORA (with same universe) ---
@@ -1295,7 +1296,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
             sig_genes = per_omics_sig_kegg[[om]],
             universe = pooled_univ_kegg,
             kegg_org = kegg_org,
-            label = om
+            label = om,
+            exclude_classes = .excluded_pathway_classes(config)
         )
     }
 
@@ -1311,7 +1313,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                 de_df <- do.call(rbind, de_tables)
                 de_mapped <- merge(de_df, id_map, by = "feature_id")
                 de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
-                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe)
+                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
+                                 universe = full_universe,
+                                 exclude_classes = .excluded_pathway_classes(config))
             } else NULL
         }, error = function(e) {
             message("  Metabolomics compound ORA failed: ", e$message)
@@ -1456,7 +1460,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     kegg_org = kegg_org,
                     org_db = org_db,
                     out_dir = contrast_out,
-                    metab_de_tables = metab_de_tables
+                    metab_de_tables = metab_de_tables,
+                    exclude_classes = .excluded_pathway_classes(config)
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1488,10 +1493,14 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #' @param org_db Organism annotation database
 #' @param out_dir Output directory for this contrast
 #' @param metab_de_tables Metabolomics DE tables (named list per contrast), or NULL
+#' @param exclude_classes BRITE classes this project excludes from its report,
+#'   passed down so a per-contrast section cannot show a class the run-level
+#'   sections removed.
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
-                                           out_dir, metab_de_tables = NULL) {
+                                           out_dir, metab_de_tables = NULL,
+                                           exclude_classes = NULL) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1534,13 +1543,15 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
     pooled_univ_kegg <- unique(kegg_conv[pooled_universe])
     pooled_univ_kegg <- pooled_univ_kegg[!is.na(pooled_univ_kegg)]
 
-    pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org, "pooled")
+    pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org,
+                                     "pooled", exclude_classes = exclude_classes)
 
     per_omics_ora <- list()
     for (om in names(per_omics_sig)) {
         k <- kegg_conv[per_omics_sig[[om]]]
         k <- unique(k[!is.na(k)])
-        per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om)
+        per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om,
+                                                  exclude_classes = exclude_classes)
     }
 
     # Run per-contrast metabolomics compound ORA if data is available
@@ -1566,7 +1577,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     de_mapped <- merge(de_df, id_map, by = "feature_id")
                     de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
                     run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
-                                     universe = full_universe)
+                                     universe = full_universe,
+                                     exclude_classes = exclude_classes)
                 } else NULL
             }, error = function(e) {
                 message("    Per-contrast compound ORA failed for ", contrast_name,
@@ -1602,9 +1614,15 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #' @param universe All KEGG gene IDs (shared universe)
 #' @param kegg_org KEGG organism code
 #' @param label Label for messages
+#' @param pval_cutoff Adjusted p-value cutoff for the preferred branch.
+#' @param exclude_classes BRITE classes this project leaves out of its report.
+#'   Applied to the finished table on the way out, so everything downstream --
+#'   the summary, the plots, the OrgDb pathview renderers -- inherits an already
+#'   filtered input instead of filtering again.
 #' @return data.frame with ORA results
 run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
-                                label = "pooled", pval_cutoff = 0.1) {
+                                label = "pooled", pval_cutoff = 0.1,
+                                exclude_classes = NULL) {
 
     if (length(sig_genes) < 3) {
         message("    ", label, ": too few significant genes (", length(sig_genes), ")")
@@ -1638,14 +1656,22 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
                 geneID = df$geneID,
                 stringsAsFactors = FALSE
             )
-            # Filter: prefer padj, fall back to pvalue < 0.05
+            # Filter: prefer padj, fall back to pvalue < 0.05.
+            # Which branch is taken is decided on the unfiltered results, so a
+            # project's class exclusion cannot move the run from adjusted hits
+            # to the raw-p fallback. Exclusion applies to whichever table this
+            # chose, on its way out.
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
-            if (nrow(padj_hits) > 0) return(padj_hits)
+            if (nrow(padj_hits) > 0) {
+                return(.exclude_kegg_classes(padj_hits, exclude_classes,
+                                             kegg_org, label))
+            }
             pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
             if (nrow(pval_hits) > 0) {
                 message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                         nrow(pval_hits), " pathways)")
-                return(pval_hits)
+                return(.exclude_kegg_classes(pval_hits, exclude_classes,
+                                             kegg_org, label))
             }
         }
         NULL
@@ -1660,7 +1686,44 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
     }
 
     # Fallback: Fisher's exact test
-    run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff)
+    .exclude_kegg_classes(
+        run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff),
+        exclude_classes, kegg_org, label)
+}
+
+
+#' Drop excluded KEGG classes from a finished gene-ORA table
+#'
+#' The one place the gene-based multi-ORA applies the exclusion, so every return
+#' path of \code{run_multi_ora_kegg()} filters identically and the tables that
+#' feed the summary, the plots and the OrgDb pathview renderers arrive already
+#' filtered -- rather than each of those growing a filter of its own.
+#'
+#' Applied to completed results: the tested universe, the p-values and the
+#' adjustment behind them are exactly what they were.
+#'
+#' @param df Finished ORA table, or NULL.
+#' @param exclude_classes BRITE classes to drop; NULL or empty is a no-op.
+#' @param kegg_org Active KEGG organism code, for accession recognition.
+#' @param label Short context word for the message naming what was dropped.
+#' @param classification Resolved class table, defaulted lazily to the fetch so
+#'   a call with nothing to exclude never reaches the network, and so a test can
+#'   supply one without depending on whether a machine has any.
+#' @return \code{df} with the excluded rows removed, or NULL when nothing is
+#'   left -- the same "no pathways" shape every other path here returns.
+#' @keywords internal
+.exclude_kegg_classes <- function(df, exclude_classes = NULL, kegg_org = NULL,
+                                  label = "pathways",
+                                  classification = kegg_pathway_categories()) {
+    if (is.null(df) || nrow(df) == 0) return(df)
+    if (length(unlist(exclude_classes)) == 0) return(df)
+
+    ids <- if ("ID" %in% names(df)) df$ID else df$pathway
+    df <- df[keep_kegg_pathways(ids, exclude = exclude_classes,
+                                kegg_org = kegg_org, label = label,
+                                classification = classification), ,
+             drop = FALSE]
+    if (nrow(df) == 0) NULL else df
 }
 
 

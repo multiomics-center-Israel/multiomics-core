@@ -1119,6 +1119,24 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     #    map -- drawn with current fold changes. No historical filesystem state
     #    participates in the selection now.
     hits <- .kegg_hits_by_contrast(per_omics_enrichment, id_org)
+
+    # The same reporting exclusion the cross-omics tables get, applied to the
+    # selection rather than inside it: ranking and scores are already settled,
+    # and a class this project does not report should not spend a render either.
+    # Per contrast, because that is the shape selection has after #204.
+    excl <- .excluded_pathway_classes(config)
+    if (length(excl) > 0 && length(hits) > 0) {
+        for (ckey in names(hits)) {
+            keep <- keep_kegg_pathways(hits[[ckey]]$pathways, exclude = excl,
+                                       kegg_org = id_org,
+                                       label = "pathview maps")
+            hits[[ckey]]$pathways <- hits[[ckey]]$pathways[keep]
+            hits[[ckey]]$scores <- hits[[ckey]]$scores[keep]
+        }
+        # A contrast whose pathways were all excluded has nothing left to draw.
+        hits <- hits[vapply(hits, function(h) length(h$pathways) > 0, logical(1))]
+    }
+
     if (length(hits) == 0) {
         message("  Union pathview: no enriched KEGG pathways.")
         return(NULL)
