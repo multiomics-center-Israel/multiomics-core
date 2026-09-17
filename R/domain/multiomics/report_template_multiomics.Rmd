@@ -916,6 +916,25 @@ if (file.exists(p)) {
 }
 ```
 
+```{r enrichment-ora-heatmap, eval=has_enrichment, results='asis'}
+p <- file.path(enrichment_dir, "cross_omics_ora_heatmap.png")
+if (file.exists(p)) {
+    cat("\n### Cross-Omics ORA Evidence {.unnumbered}\n\n")
+    cat(knitr::knit_child(text = sprintf(
+        '```{r enrich-ora-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+        p
+    ), quiet = TRUE))
+}
+```
+
+```{r enrichment-ora-heatmap-legend, eval=has_enrichment, results='asis'}
+p <- file.path(enrichment_dir, "cross_omics_ora_heatmap.png")
+if (file.exists(p)) {
+    figure_legend("Over-representation analysis is the one test every omics layer runs, so this figure can place metabolomics alongside the gene layers. Each cell shows -log10 of the adjusted p-value that the layer's own ORA already reported for that pathway; nothing is re-adjusted here, and no gene set enrichment (GSEA) result contributes. Where several contrast-level ORA results for the same pathway are available within a layer, the cell shows the smallest adjusted p-value among them -- the strongest evidence available in that layer, which is a display choice and not an error rate controlled across contrasts. Adjusted p-values below 1e-10 all render at the top of the scale. Read the colour down a column: the layers differ in gene-set universe, coverage and upstream filtering, so a darker cell in one layer is not stronger biology than a lighter cell in another. A grey cell means no adjusted ORA p-value for that pathway and layer reached the table behind this figure -- the pathway may never have been testable there, or may have been tested and not carried into that layer's results, and this figure cannot tell those apart. The top 30 pathways are shown, ordered by how many layers contribute an adjusted ORA p-value and then by the smallest of them.")
+    render_commentary("cross_omics_ora_heatmap")
+}
+```
+
 ```{r enrichment-table, eval=has_enrichment}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
@@ -968,6 +987,18 @@ if (dir.exists(enrich_per_contrast_dir)) {
             cat(knitr::knit_child(text = sprintf(
                 '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                 chunk_id, c_heatmap
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+
+        # ORA evidence heatmap for this contrast
+        c_ora <- file.path(cdir, "cross_omics_ora_heatmap.png")
+        if (file.exists(c_ora)) {
+            cat("\n#### Cross-Omics ORA Evidence {.unnumbered}\n\n")
+            chunk_id <- paste0("enr-pc-ora-", gsub("[^a-zA-Z0-9]", "", cname))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, c_ora
             ), quiet = TRUE))
             cat("\n\n")
         }
