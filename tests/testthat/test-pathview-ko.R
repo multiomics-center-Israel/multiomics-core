@@ -584,28 +584,38 @@ test_that(".compile_pathview_pdf writes the file when every page reads", {
 
 # ---- one run's maps are not another's ---------------------------------------
 
-test_that("clear_multi_ora_pathview_outputs removes only what Multi-ORA owns", {
+test_that("clear_multi_ora_pathview_outputs removes every renderer's results", {
     out <- withr::local_tempdir()
     pv <- file.path(out, "pathview")
     dir.create(pv)
 
-    mine <- c(file.path(pv, "ko00010.multi_ora_A.vs.B.multi.png"),
-              file.path(pv, "ko00020.multi_ora_A.vs.B.png"),
-              file.path(out, "multi_ora_pathview_supported.pdf"),
-              file.path(out, "multi_ora_pathview_union.pdf"),
-              file.path(out, "multi_ora_pathview_union.yaml"))
-    # Another renderer's overlays, and the download cache: the blank template
-    # and the KGML the report reads pathway titles from.
-    theirs <- c(file.path(pv, "ko00010.metab_top.png"),
-                file.path(pv, "ko00030.prot_top.png"),
-                file.path(pv, "ko00010.png"),
-                file.path(pv, "ko00010.xml"))
-    for (f in c(mine, theirs)) writeLines("x", f)
+    # run_multi_ora() gates all three renderers on one switch, so it owns all
+    # three renderers' output. A per-omics map whose pathway drops out of the
+    # current top-N is as stale as a cross-omics one, and the report -- which
+    # finds both by globbing -- cannot tell either from a fresh result.
+    results <- c(file.path(pv, "ko00010.multi_ora_A.vs.B.multi.png"),
+                 file.path(pv, "ko00020.multi_ora_A.vs.B.png"),
+                 file.path(pv, "ko00010.metab_top.png"),
+                 file.path(pv, "ko00030.prot_top.png"),
+                 file.path(out, "multi_ora_pathview_supported.pdf"),
+                 file.path(out, "multi_ora_pathview_union.pdf"),
+                 file.path(out, "multi_ora_pathview_union.yaml"),
+                 file.path(out, "pathview_top_metabolomics_pathways.pdf"),
+                 file.path(out, "pathview_top_proteomics_pathways.pdf"))
+    # The KEGG download cache is not a result: deleting it would re-fetch every
+    # map and lose the pathway titles the report reads out of the XML. Nor is
+    # anything else in the directory that no Multi-ORA renderer wrote.
+    cache <- c(file.path(pv, "ko00010.png"),
+               file.path(pv, "ko00010.xml"),
+               file.path(pv, "ko00030.xml"),
+               file.path(pv, "notes.txt"),
+               file.path(out, "multi_ora_summary.csv"))
+    for (f in c(results, cache)) writeLines("x", f)
 
     expect_message(clear_multi_ora_pathview_outputs(out), "cleared")
 
-    expect_false(any(file.exists(mine)))
-    expect_true(all(file.exists(theirs)))
+    expect_false(any(file.exists(results)))
+    expect_true(all(file.exists(cache)))
 })
 
 test_that("clear_multi_ora_pathview_outputs is quiet on a fresh directory", {

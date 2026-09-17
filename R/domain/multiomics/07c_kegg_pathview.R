@@ -766,11 +766,17 @@ pick_key_position <- function(template_png, frac = 0.28) {
 #' contrast that went away, a smaller `top_n` -- would otherwise stay on the page
 #' as if it were a current result.
 #'
-#' Scoped to what Multi-ORA owns: the `.multi_ora*` overlays and the two compiled
-#' PDFs. The per-omics overlays (`.metab_top*`, `.prot_top*`) belong to another
-#' renderer, and the blank KEGG templates and their KGML are a download cache
-#' worth keeping -- deleting those would re-fetch every map and lose the titles
-#' the report reads.
+#' Ownership follows the `run_pathview` switch: \code{run_multi_ora()} decides
+#' for all three of its pathview renderers at once, so this clears the artifacts
+#' of all three -- the cross-omics `.multi_ora*` overlays, the per-omics
+#' `.metab_top*` and `.prot_top*` overlays, and every compiled PDF they produce.
+#' A per-omics map is as stale as a cross-omics one when its pathway drops out
+#' of the current top-N, and the report cannot tell either from a fresh one.
+#'
+#' What survives is the KEGG download cache: the blank template PNGs and their
+#' KGML. Those are not results -- deleting them would re-fetch every map and
+#' lose the pathway titles the report reads out of the XML -- and so is anything
+#' else in the directory that no Multi-ORA renderer wrote.
 #'
 #' @param out_dir Multi-ORA output directory.
 #' @return Character vector of the removed paths, invisibly.
@@ -778,12 +784,19 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
     pv_dir <- file.path(out_dir, "pathview")
     stale <- character(0)
     if (dir.exists(pv_dir)) {
-        stale <- list.files(pv_dir, pattern = "\\.multi_ora[^/]*\\.png$",
-                            full.names = TRUE)
+        # Each renderer's overlays carry its own out.suffix; the blank template
+        # ("ko00010.png") carries none, which is what keeps the cache out of
+        # this list.
+        stale <- list.files(
+            pv_dir,
+            pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
+            full.names = TRUE)
     }
     pdfs <- file.path(out_dir, c("multi_ora_pathview_supported.pdf",
                                  "multi_ora_pathview_union.pdf",
-                                 "multi_ora_pathview_union.yaml"))
+                                 "multi_ora_pathview_union.yaml",
+                                 "pathview_top_metabolomics_pathways.pdf",
+                                 "pathview_top_proteomics_pathways.pdf"))
     stale <- c(stale, pdfs[file.exists(pdfs)])
     if (length(stale) > 0) {
         unlink(stale)
