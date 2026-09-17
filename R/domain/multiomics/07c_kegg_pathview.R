@@ -828,8 +828,17 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   other contrast's fold changes is the bug this structure exists to prevent.
 .kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL, alpha = 0.05) {
     hits <- list()
-    for (nm in names(ora_tables)) {
-        d <- ora_tables[[nm]]
+    # Indices, not names: the production input is named per omics, but iterating
+    # over names() means an unnamed list runs the loop zero times and selects
+    # nothing at all, silently. The name is only wanted for the message below.
+    nms <- names(ora_tables)
+    for (i in seq_along(ora_tables)) {
+        d <- ora_tables[[i]]
+        nm <- if (!is.null(nms) && !is.na(nms[i]) && nzchar(nms[i])) {
+            nms[i]
+        } else {
+            paste0("enrichment input ", i)
+        }
         if (is.null(d) || !is.data.frame(d) || nrow(d) == 0) next
         if (!all(c("pathway", "contrast") %in% names(d))) next
 

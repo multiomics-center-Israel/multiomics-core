@@ -366,6 +366,20 @@ test_that("a frame that cannot be confirmed as ORA is skipped, not guessed at", 
         expect_length(.kegg_hits_by_contrast(list(transcriptomics = no_method), "hsa"), 0L),
         "no method column"
     )
+    # Unnamed too: the message needs a name, the selection does not.
+    expect_message(
+        expect_length(.kegg_hits_by_contrast(list(no_method), "hsa"), 0L),
+        "enrichment input 1"
+    )
+})
+
+test_that("an unnamed list of frames still selects pathways", {
+    # Iterating over names() rather than indices made an unnamed list run the
+    # loop zero times and select nothing, without saying so.
+    frames <- list(ora_rows("A vs. B", "hsa00010", 0.001))
+
+    expect_identical(.kegg_hits_by_contrast(frames, "hsa")[["avsb"]]$pathways,
+                     "00010")
 })
 
 test_that(".kegg_hits_by_contrast drops rows it cannot attribute to a contrast", {
