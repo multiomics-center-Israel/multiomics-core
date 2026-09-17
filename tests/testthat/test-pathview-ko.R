@@ -358,6 +358,27 @@ test_that("selection is driven by the supplied frames, and by ORA rows only", {
     expect_false("00030" %in% hits[["avsb"]]$pathways)
 })
 
+test_that("the accession is found wherever the frame's schema keeps it", {
+    # run_ora_kegg() builds the clusterProfiler schema: the readable Description
+    # in `pathway`, the accession in `ID`. Reading `pathway` alone rejected every
+    # one of its rows, and the fallback then reported no enriched pathways at
+    # all. pathway_join_key() resolves ID -> pathway -> Description per row.
+    clusterprofiler <- data.frame(
+        pathway  = "Glycolysis / Gluconeogenesis",
+        ID       = "hsa00010",
+        pvalue   = 0.001,
+        contrast = "A vs. B",
+        method   = "ora",
+        stringsAsFactors = FALSE
+    )
+    # ...and the other shape, where the accession is the pathway name itself.
+    bare <- ora_rows("A vs. B", "map00020", 0.001)
+
+    hits <- .kegg_hits_by_contrast(list(a = clusterprofiler, b = bare), "hsa")
+
+    expect_setequal(hits[["avsb"]]$pathways, c("00010", "00020"))
+})
+
 test_that("a frame that cannot be confirmed as ORA is skipped, not guessed at", {
     no_method <- data.frame(pathway = "hsa00010", pvalue = 0.001,
                             contrast = "A vs. B", stringsAsFactors = FALSE)

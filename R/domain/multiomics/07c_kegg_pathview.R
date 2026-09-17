@@ -840,7 +840,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
             paste0("enrichment input ", i)
         }
         if (is.null(d) || !is.data.frame(d) || nrow(d) == 0) next
-        if (!all(c("pathway", "contrast") %in% names(d))) next
+        if (!"contrast" %in% names(d)) next
 
         # ORA rows only, as the disk-scanning predecessor selected by reading
         # just "*_ora_up/down.csv". A frame that cannot be established as ORA is
@@ -855,14 +855,16 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         is_ora <- !is.na(d$method) & tolower(as.character(d$method)) == "ora"
         if (!any(is_ora)) next
 
-        # The gene-set name reaching this column can be a bare accession, a
-        # prefixed one, or the "<accession> <readable name>" form that
-        # fetch_kegg_via_rest() gives its sets. normalize_pathway_join_key()
-        # reduces all three to the bare map number and leaves everything else
-        # byte-identical, so testing the normalized value is what decides
-        # whether the row names a KEGG pathway at all -- and another organism's
-        # prefix, which normalization does not touch, is still rejected.
-        keys <- normalize_pathway_join_key(d$pathway, kegg_org)
+        # Identity is resolved by #201's row-wise helper, not by assuming the
+        # accession is in `pathway`: run_ora_kegg() builds the clusterProfiler
+        # schema, where `pathway` holds the readable Description and `ID` holds
+        # the accession, and reading `pathway` alone would reject every one of
+        # its rows. pathway_join_key() walks ID -> pathway -> Description per
+        # row and normalizes only where the value is genuinely a KEGG
+        # accession, so the bare, prefixed and "<accession> <readable name>"
+        # spellings all reduce to the map number while another organism's
+        # prefix is left alone, and therefore still rejected below.
+        keys <- pathway_join_key(d, kegg_org)
         keep <- is_ora & is_kegg_pathway_accession(keys, kegg_org)
 
         pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
