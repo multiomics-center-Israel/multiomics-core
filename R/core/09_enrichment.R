@@ -622,6 +622,129 @@ lookup_go_term_names <- function(go_ids) {
     term_names
 }
 
+# =============================================================================
+# KEGG pathway classification
+# =============================================================================
+
+#' Fetch and cache KEGG's BRITE classification of pathway maps
+#'
+#' KEGG's reference maps are pan-species. An organism with no KEGG code of its
+#' own is therefore tested against the whole map universe, and vertebrate organ
+#' or human-disease maps can score well purely because the orthologs underneath
+#' them are generic -- kinases, ion channels, cytoskeleton -- that KEGG happens
+#' to file under a human organ. Knowing each map's class lets a project exclude
+#' those from its report rather than read them as findings.
+#'
+#' Fail-open by contract: every failure path -- no network, timeout, an
+#' unexpected BRITE layout, an empty parse, an unreadable cache -- returns NULL,
+#' which \code{keep_kegg_pathways()} treats as "classification unavailable, keep
+#' everything". It never returns an empty table, because a caller cannot tell
+#' that apart from "nothing is classified" and would exclude the lot.
+#'
+#' @param cache_dir Directory for the cached RDS. Defaults to a `kegg_cache`
+#'   folder under \code{tempdir()}, matching \code{fetch_kegg_via_rest()}. That
+#'   spares repeated downloads within one R session; it does not persist across
+#'   sessions, and is not meant to.
+#' @param cache_days Refetch once the cached copy is older than this.
+#' @param timeout_sec Bound on the download, so a hanging endpoint cannot stall
+#'   a pipeline run.
+#' @return Data frame with columns `pathway_id` (the bare five-digit map
+#'   number), `category`, `subcategory`, `pathway_name`; or NULL when the
+#'   classification could not be obtained.
+kegg_pathway_categories <- function(cache_dir = NULL, cache_days = 7,
+                                    timeout_sec = 30) {
+    if (is.null(cache_dir)) cache_dir <- file.path(tempdir(), "kegg_cache")
+    cache_file <- file.path(cache_dir, "kegg_pathway_categories.rds")
+
+    if (file.exists(cache_file)) {
+        cache_age <- difftime(Sys.time(), file.mtime(cache_file), units = "days")
+        cached <- if (as.numeric(cache_age) < cache_days) {
+            tryCatch(readRDS(cache_file), error = function(e) NULL)
+        } else NULL
+        # A cache that is stale, unreadable or not the shape we wrote is simply
+        # not a cache: fall through and fetch again.
+        if (.is_kegg_category_table(cached)) return(cached)
+    }
+
+    lines <- tryCatch(
+        withr::with_options(list(timeout = timeout_sec), {
+            con <- url("https://rest.kegg.jp/get/br:br08901", open = "r")
+            on.exit(close(con), add = TRUE)
+            readLines(con, warn = FALSE)
+        }),
+        error = function(e) {
+            message("  KEGG pathway classification unavailable (",
+                    conditionMessage(e), ")")
+            NULL
+        }
+    )
+    res <- parse_kegg_brite_pathways(lines)
+    if (is.null(res)) return(NULL)
+
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    tryCatch(saveRDS(res, cache_file), error = function(e) NULL)
+    res
+}
+
+
+#' Is this the classification table we wrote?
+#'
+#' @param x Object read back from the cache.
+#' @return TRUE when \code{x} is a non-empty table with the expected columns.
+#' @keywords internal
+.is_kegg_category_table <- function(x) {
+    is.data.frame(x) && nrow(x) > 0 &&
+        all(c("pathway_id", "category", "subcategory", "pathway_name") %in% names(x))
+}
+
+
+#' Parse KEGG's br08901 hierarchy into one row per pathway map
+#'
+#' The flat file nests `A` categories over `B` subcategories over `C` pathway
+#' lines; anything else in it (headers, markup, blank lines) is not a pathway
+#' and is skipped. Kept separate from the download so the parse can be tested
+#' against a fixture without a network call.
+#'
+#' @param lines Character vector of the BRITE flat file's lines, or NULL.
+#' @return Data frame of `pathway_id`, `category`, `subcategory`,
+#'   `pathway_name`, or NULL when nothing parsed -- never an empty table, since
+#'   "no pathway is classified" and "exclude everything" must not look alike.
+parse_kegg_brite_pathways <- function(lines) {
+    if (is.null(lines) || length(lines) == 0) return(NULL)
+
+    # KEGG has shipped this hierarchy with and without bold markup around the
+    # heading text, so headings are read with it stripped either way.
+    heading <- function(x) trimws(gsub("<[^>]*>", "", x))
+
+    category <- NA_character_
+    subcategory <- NA_character_
+    ids <- character(0); cats <- character(0)
+    subs <- character(0); names_ <- character(0)
+
+    for (ln in lines) {
+        if (grepl("^A", ln)) {
+            category <- heading(sub("^A", "", ln))
+            subcategory <- NA_character_
+        } else if (grepl("^B", ln)) {
+            subcategory <- heading(sub("^B", "", ln))
+        } else if (grepl("^C\\s+[0-9]{5}\\s", ln)) {
+            ids <- c(ids, sub("^C\\s+([0-9]{5})\\s+.*$", "\\1", ln))
+            cats <- c(cats, category)
+            subs <- c(subs, subcategory)
+            names_ <- c(names_, heading(sub("^C\\s+[0-9]{5}\\s+", "", ln)))
+        }
+    }
+    if (length(ids) == 0) {
+        message("  KEGG pathway classification: no pathway lines found, ",
+                "so the hierarchy could not be read")
+        return(NULL)
+    }
+
+    data.frame(pathway_id = ids, category = cats, subcategory = subs,
+               pathway_name = names_, stringsAsFactors = FALSE)
+}
+
+
 #' Add pathway names to fGSEA/ORA results
 #'
 #' @param pathway_df Data frame with pathway analysis results (has 'pathway' column)

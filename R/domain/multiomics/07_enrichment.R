@@ -287,7 +287,8 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
                 # Use ALL measured KEGG-mapped metabolites as universe (not just DE table)
                 full_universe <- unique(id_map$KEGG_ID[!is.na(id_map$KEGG_ID)])
                 run_compound_ora(de_mapped, out_dir, use_min_gs, max_gs, pval_cutoff,
-                                 universe = full_universe)
+                                 universe = full_universe,
+                                 exclude_classes = .excluded_pathway_classes(config))
             } else if (use_method == "gsea") {
                 run_gsea_kegg(de_mapped, kegg_org, use_min_gs, max_gs, pval_cutoff)
             } else {
@@ -927,7 +928,7 @@ get_kegg_compound_pathways <- function(cache_dir = NULL) {
 #' @param pval_cutoff P-value cutoff
 #' @return data.frame with enrichment results, or NULL
 run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
-                              universe = NULL) {
+                              universe = NULL, exclude_classes = NULL) {
 
     # Get compound-pathway associations
     cpd_pathways <- get_kegg_compound_pathways(cache_dir)
@@ -1024,6 +1025,20 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
     }
 
     df <- df[order(df$pvalue), ]
+
+    # Class exclusion is applied here, to the finished table: the tested
+    # universe above and the BH adjustment over it are untouched, so every
+    # pathway a project keeps carries the p-value it would have had anyway.
+    if (length(unlist(exclude_classes)) > 0) {
+        df <- df[keep_kegg_pathways(df$ID, exclude = exclude_classes,
+                                    cache_dir = cache_dir,
+                                    label = "compound pathways"), , drop = FALSE]
+        if (nrow(df) == 0) {
+            message("    No compound pathways left after KEGG class exclusion")
+            return(NULL)
+        }
+    }
+
     message("    Found ", nrow(df), " enriched compound pathways")
     df
 }
@@ -1361,6 +1376,27 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # Use union for the heatmap (show all enriched), common for meta-analysis
     use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
 
+    # KEGG's reference maps are pan-species, so an organism with no KEGG code of
+    # its own can score well on maps of organs it does not have. Excluding those
+    # classes is a reporting decision, applied to finished results: the p-values
+    # and the adjustment behind them are untouched, and nothing is excluded
+    # unless the config asks. The per-omics tables get the same treatment --
+    # they drive the per-layer barplots and CSVs, and filtering only the merged
+    # selection would leave the excluded classes visible one section away.
+    excl <- .excluded_pathway_classes(config)
+    if (length(excl) > 0) {
+        use_pathways <- use_pathways[
+            keep_kegg_pathways(use_pathways, exclude = excl, kegg_org = kegg_org,
+                               label = "cross-omics pathways")]
+        pathway_tables <- lapply(pathway_tables, function(df) {
+            col <- if ("ID" %in% names(df)) "ID"
+                   else if ("pathway" %in% names(df)) "pathway" else NULL
+            if (is.null(col) || nrow(df) == 0) return(df)
+            df[keep_kegg_pathways(df[[col]], exclude = excl, kegg_org = kegg_org,
+                                  label = "per-omics pathways"), , drop = FALSE]
+        })
+    }
+
     # Merge pathway p-values for meta-analysis
     merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics,
                                               kegg_org = kegg_org)
@@ -1601,6 +1637,94 @@ normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
     )
 
     ids
+}
+
+
+#' Drop KEGG pathways whose BRITE class a project has excluded
+#'
+#' A biological and reporting exclusion, not a statistical one: it is applied to
+#' finished results, so the tested universe, the p-values and the BH adjustment
+#' behind them are exactly what they were. Excluding a class before testing
+#' would move only that layer's BH denominator while the gene-based layers had
+#' already been corrected over their full family.
+#'
+#' Identity comes from the existing contract rather than a second KEGG rule of
+#' its own: \code{normalize_pathway_join_key()} reduces every spelling this
+#' pipeline produces to the bare map number, and
+#' \code{is_kegg_pathway_accession()} decides which values are KEGG accessions
+#' at all. Anything that is not one -- a GO term, a custom gene-set name, a
+#' novel id -- has no class and is therefore kept. So is any accession the
+#' hierarchy does not list.
+#'
+#' Kept in this file, beside those two helpers, rather than in the core
+#' enrichment utilities: core is loaded before domain, so a core function
+#' calling these would invert the layer order.
+#'
+#' @param pathway_ids Character vector of pathway identifiers.
+#' @param exclude Character vector of BRITE categories or subcategories to drop.
+#'   NULL or empty keeps everything, which is the default for every project.
+#' @param kegg_org Active KEGG organism code, or NULL. Lets an organism-prefixed
+#'   accession be recognised as this run's own.
+#' @param cache_dir Passed to \code{kegg_pathway_categories()}.
+#' @param label Short context word for the message naming what was dropped.
+#' @return Logical vector, TRUE for the pathways to keep, one per element of
+#'   \code{pathway_ids}.
+#' @examples
+#' keep_kegg_pathways(c("map00010", "GO:0006915"), exclude = "Human Diseases")
+keep_kegg_pathways <- function(pathway_ids, exclude = NULL, kegg_org = NULL,
+                               cache_dir = NULL, label = "pathways") {
+    keep <- rep(TRUE, length(pathway_ids))
+    exclude <- unlist(exclude, use.names = FALSE)
+    if (length(pathway_ids) == 0 || is.null(exclude) || length(exclude) == 0) {
+        return(keep)
+    }
+
+    cls <- kegg_pathway_categories(cache_dir = cache_dir)
+    if (is.null(cls)) {
+        # Fail open, and say so: a silent empty result reads as "nothing was
+        # enriched" rather than "the classification could not be reached".
+        message("  KEGG classification unavailable; keeping all ", label)
+        return(keep)
+    }
+
+    ids <- as.character(pathway_ids)
+    normalized <- normalize_pathway_join_key(ids, kegg_org)
+    classifiable <- is_kegg_pathway_accession(normalized, kegg_org)
+
+    idx <- rep(NA_integer_, length(ids))
+    idx[classifiable] <- match(normalized[classifiable], cls$pathway_id)
+    hit_cat <- cls$category[idx]
+    hit_sub <- cls$subcategory[idx]
+
+    drop <- (!is.na(hit_cat) & hit_cat %in% exclude) |
+            (!is.na(hit_sub) & hit_sub %in% exclude)
+    keep <- !drop
+
+    if (any(drop)) {
+        by_class <- ifelse(!is.na(hit_cat[drop]) & hit_cat[drop] %in% exclude,
+                           hit_cat[drop], hit_sub[drop])
+        counts <- table(by_class)
+        message("  Excluded ", sum(drop), " of ", length(ids), " ", label,
+                " by KEGG class (",
+                paste(sprintf("%s: %d", names(counts), as.integer(counts)),
+                      collapse = "; "), ")")
+    }
+    keep
+}
+
+
+#' Classes this run excludes, from the config
+#'
+#' One reader for the key, so that every section filters on the same list and a
+#' class removed from one report section cannot reappear in the next.
+#'
+#' @param config Full config object.
+#' @return Character vector of excluded classes, empty when the key is absent.
+#' @keywords internal
+.excluded_pathway_classes <- function(config) {
+    excl <- config$modes$multiomics$enrichment$exclude_pathway_classes
+    excl <- unlist(excl, use.names = FALSE)
+    if (is.null(excl)) character(0) else as.character(excl)
 }
 
 
@@ -2127,6 +2251,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$diablo <- tryCatch(
             run_diablo_loadings_enrichment(
+                exclude_classes = .excluded_pathway_classes(config),
                 diablo_results = integration_res$diablo_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -2150,6 +2275,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 
         results$mofa <- tryCatch(
             run_mofa_weights_enrichment(
+                exclude_classes = .excluded_pathway_classes(config),
                 mofa_results = integration_res$mofa_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -2173,7 +2299,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 #' Run enrichment on DIABLO top loadings per component
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
-                                            out_dir, top_n = 50) {
+                                            out_dir, top_n = 50, exclude_classes = NULL) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -2198,7 +2324,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "DIABLO"
@@ -2276,7 +2403,7 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 #' Run enrichment on MOFA2 top weights per factor
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
-                                         out_dir, top_n = 50) {
+                                         out_dir, top_n = 50, exclude_classes = NULL) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -2298,7 +2425,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 message("  ", label, ": ", length(top_feat_ids), " features")
 
                 metab_enrich <- run_metabolite_loadings_ora(
-                    top_feat_ids, harmonization_res, out_dir, label
+                    top_feat_ids, harmonization_res, out_dir, label,
+                    exclude_classes = exclude_classes
                 )
                 if (!is.null(metab_enrich) && nrow(metab_enrich) > 0) {
                     metab_enrich$method <- "MOFA2"
@@ -2370,7 +2498,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
 #' @param out_dir Output directory for CSVs and plots
 #' @param label Label prefix for output files
 #' @return data.frame of enriched pathways, or NULL
-run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label) {
+run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir, label,
+                                        exclude_classes = NULL) {
     # Build a pseudo-DE table: treat all top features as significant
     de_tbl <- data.frame(
         feature_id = feature_ids,
@@ -2409,7 +2538,8 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
     full_universe <- unique(id_map$KEGG_CPD[!is.na(id_map$KEGG_CPD)])
 
     enrich_df <- tryCatch(
-        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe),
+        run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe,
+                         exclude_classes = exclude_classes),
         error = function(e) {
             message("    Compound ORA failed: ", e$message)
             NULL

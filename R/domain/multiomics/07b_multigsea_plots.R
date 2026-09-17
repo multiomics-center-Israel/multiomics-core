@@ -1311,7 +1311,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                 de_df <- do.call(rbind, de_tables)
                 de_mapped <- merge(de_df, id_map, by = "feature_id")
                 de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
-                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe)
+                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
+                                 universe = full_universe,
+                                 exclude_classes = .excluded_pathway_classes(config))
             } else NULL
         }, error = function(e) {
             message("  Metabolomics compound ORA failed: ", e$message)
@@ -1456,7 +1458,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     kegg_org = kegg_org,
                     org_db = org_db,
                     out_dir = contrast_out,
-                    metab_de_tables = metab_de_tables
+                    metab_de_tables = metab_de_tables,
+                    exclude_classes = .excluded_pathway_classes(config)
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1488,10 +1491,14 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #' @param org_db Organism annotation database
 #' @param out_dir Output directory for this contrast
 #' @param metab_de_tables Metabolomics DE tables (named list per contrast), or NULL
+#' @param exclude_classes BRITE classes this project excludes from its report,
+#'   passed down so a per-contrast section cannot show a class the run-level
+#'   sections removed.
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
-                                           out_dir, metab_de_tables = NULL) {
+                                           out_dir, metab_de_tables = NULL,
+                                           exclude_classes = NULL) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1566,7 +1573,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     de_mapped <- merge(de_df, id_map, by = "feature_id")
                     de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
                     run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
-                                     universe = full_universe)
+                                     universe = full_universe,
+                                     exclude_classes = exclude_classes)
                 } else NULL
             }, error = function(e) {
                 message("    Per-contrast compound ORA failed for ", contrast_name,
