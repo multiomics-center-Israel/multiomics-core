@@ -1226,6 +1226,35 @@ if (!is.null(de_contrasts)) {
       cat("\n\n")
     }
 
+    # -- Pathway overlay: color one significant GSEA/QEA pathway's metabolites --
+    if (requireNamespace("plotly", quietly = TRUE) && !is.null(enrichment_res)) {
+      cat("### Pathway overlay\n\n")
+      ov_members <- enrichment_res$pathway_members$members %||% list()
+      ov_pathways <- select_overlay_pathways(
+        gsea_tbl   = enrichment_res$gsea_by_contrast[[ctr_label]]$res$table,
+        qea_tbl    = enrichment_res$qea_by_contrast[[ctr_label]]$res$table,
+        members    = ov_members,
+        fdr_cutoff = 0.05
+      )
+      ov_plot <- plot_volcano_pathway_overlay(
+        ctr_tbl, ov_pathways, ov_members,
+        feature_compound = enrichment_res$pathway_members$feature_compound,
+        p_col = pcol_de, p_cutoff = padj_cut_de, lfc_cutoff = log2_lfc_de,
+        fdr_cutoff = 0.05
+      )
+      if (!is.null(ov_plot)) {
+        print(htmltools::tagList(ov_plot))
+        figure_legend(paste0(
+          "Volcano plot for ", ctr, " with the metabolites of one enriched pathway in red. ",
+          "The selector lists GSEA pathways with FDR < 0.05, ordered by |NES| (highest first), ",
+          "then QEA pathways with FDR < 0.05, ordered by FDR. Red points are measured metabolites ",
+          "whose compound ID belongs to the pathway; for GSEA, hover shows leading-edge membership. ",
+          "When no pathway has FDR < 0.05, the selector has no pathway to choose."
+        ))
+      }
+      cat("\n\n")
+    }
+
     } # end show_de_volcano
 
     # ================================================================
