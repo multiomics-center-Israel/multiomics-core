@@ -45,7 +45,11 @@ make_fc_fixture <- function(transform = "glog10", n_feat = 40, seed = 11) {
 }
 
 metab_pre <- function(f) {
+    # `lin` is already sample-normalised, so the transform-only matrix IS the
+    # normalised, pre-scaling matrix here -- declare it as such rather than
+    # letting DE fall back to expr_log with a warning.
     list(expr_raw = f$raw, expr_filt = f$raw, expr_log = f$expr_log,
+         expr_pre_scale = f$expr_log,
          expr_work = f$expr_work, meta = f$meta, row_data = NULL,
          info = list(normalization = list(sample_norm = "none",
                                           transform = f$transform,

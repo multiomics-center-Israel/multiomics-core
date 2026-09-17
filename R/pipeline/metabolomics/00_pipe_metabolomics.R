@@ -310,6 +310,10 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
           expr_raw         = met_raw$expr_raw,
           expr_filt        = met_filtered$mat,
           expr_log         = met_log$mat,
+          # Normalised but NOT variance-scaled -- what the DE tests run on.
+          # expr_log above is the TRANSFORM only (no sample normalisation), so
+          # it is not a substitute; see mod_met_corrected().
+          expr_pre_scale   = met_corrected$mat_pre_scale,
           expr_work        = met_corrected$mat,
           meta             = met_corrected$meta,
           row_data         = met_corrected$row_data,

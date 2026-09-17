@@ -241,14 +241,37 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
 
     mat  <- pre$expr_work
     # When variance-scaling (auto/pareto/range) is applied, DE tests must use
-    # the pre-scaling matrix (expr_log) because scaling distorts within-group
-    # variance and inflates p-values.  But when scaling is "none" or "center",
-    # expr_work should be used — it contains the chosen normalization (e.g.
-    # EigenMS) which is essential for the test.
+    # the pre-scaling matrix, because scaling distorts within-group variance:
+    # auto/range/pareto flatten every feature's residual variance, which limma's
+    # eBayes then borrows across features, and they leave the fold change in SD
+    # units rather than log-abundance units.  But when scaling is "none" or
+    # "center", expr_work should be used — it contains the chosen normalization
+    # (e.g. EigenMS) which is essential for the test.
+    #
+    # That pre-scaling matrix is expr_pre_scale, NOT expr_log. expr_log is
+    # transform_metab() of the filtered matrix — the TRANSFORM ALONE. norm_pqn /
+    # norm_total_sum / the median shift run on parallel targets that feed
+    # expr_work, so testing expr_log tested data that no sample normalisation
+    # had ever touched, and that no post-normalisation sample filter or drift
+    # correction had reached either. Measured on the one shipped lane running
+    # this branch (Yossi Tam A03: PQN + glog10 + auto): its own expr_tested.tsv
+    # is bit-identical (max|diff| = 0) to the un-normalised matrix, and 164 of
+    # 505 metabolites called significant there do not survive PQN.
     scaling_used <- pre$info$normalization$scaling %||% "none"
     if (scaling_used %in% c("auto", "pareto", "range")) {
-        mat_for_test <- pre$expr_log %||% mat
-        message("metabolomics DE: using pre-scaling matrix (expr_log) because scaling = '", scaling_used, "'")
+        mat_for_test <- pre$expr_pre_scale
+        if (is.null(mat_for_test)) {
+            # A pre-contract built outside pipe_metabolomics(). expr_log is the
+            # only pre-scaling matrix on offer, and it may be un-normalised —
+            # say so rather than quietly testing it.
+            mat_for_test <- pre$expr_log %||% mat
+            warning("metabolomics DE: pre$expr_pre_scale is missing; falling back to ",
+                    "expr_log, which carries the transform but NOT the sample ",
+                    "normalisation. p-values may be computed on un-normalised data.")
+        } else {
+            message("metabolomics DE: using the normalised, pre-scaling matrix ",
+                    "(expr_pre_scale) because scaling = '", scaling_used, "'")
+        }
     } else {
         mat_for_test <- mat
     }

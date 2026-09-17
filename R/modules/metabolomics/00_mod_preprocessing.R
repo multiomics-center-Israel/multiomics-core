@@ -369,7 +369,9 @@ mod_met_norm_comparison <- function(norm_tss, norm_median, norm_pqn,
 #' @param meta        data.frame of sample metadata.
 #' @param out_dir     Mode output directory.
 #' @param config      Full pipeline config list.
-#' @return list with: \code{mat}, \code{meta}, \code{row_data}, \code{info}.
+#' @return list with: \code{mat} (normalised + scaled -- expr_work),
+#'   \code{mat_pre_scale} (normalised, NOT variance-scaled -- the matrix DE
+#'   tests), \code{meta}, \code{row_data}, \code{info}.
 #'
 mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                               logged, meta, out_dir, config,
@@ -399,6 +401,18 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
                                     "Valid options: none, tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
   )
   
+  # Two matrices come out of here, not one:
+  #   chosen_mat  -- chosen normalisation + variance scaling  -> expr_work,
+  #                  the matrix for PCA / PLS-DA / RF.
+  #   unscaled_mat -- chosen normalisation, NO variance scaling -> the matrix
+  #                  the DE tests run on (see R/domain/metabolomics/03_differential.R).
+  # Keeping them side by side is what lipidomics already does: it runs
+  # apply_lipid_normalization() twice, once with scaling forced to "none"
+  # (R/domain/lipidomics/02_preprocess.R, `pre_scale_result`). Metabolomics had
+  # no such matrix, so DE reached for met_log$mat -- the TRANSFORM alone, with
+  # no sample normalisation at all.
+  unscaled_mat <- chosen_mat
+
   # Apply scaling if configured
   scaling_method <- tolower(norm_cfg$scaling %||% "none")
   if (scaling_method != "none") {
@@ -420,7 +434,8 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
           "mod_met_corrected: post-normalization filter removed %d sample(s): %s",
           length(removed), paste(removed, collapse = ", ")
         ))
-        chosen_mat <- chosen_mat[, keep_ids, drop = FALSE]
+        chosen_mat   <- chosen_mat[, keep_ids, drop = FALSE]
+        unscaled_mat <- unscaled_mat[, keep_ids, drop = FALSE]
         meta <- meta[meta[[sample_col]] %in% keep_ids, , drop = FALSE]
       }
     }
@@ -428,6 +443,16 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   
   drift_result <- apply_drift_correction(chosen_mat, meta, cfg_mode)
   final_mat    <- drift_result$mat
+
+  # The pre-scaling matrix goes through the SAME post-normalisation sample
+  # filter (above) and the SAME drift correction, so its columns always match
+  # `meta`. When no scaling was configured the two matrices are the same data,
+  # so nothing is recomputed and the result is `final_mat` itself.
+  pre_scale_mat <- if (scaling_method == "none") {
+    final_mat
+  } else {
+    apply_drift_correction(unscaled_mat, meta, cfg_mode)$mat
+  }
   
   if (drift_result$applied) {
     diag_dir <- file.path(out_dir, "diagnostic_plots")
@@ -462,6 +487,7 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   
   list(
     mat      = final_mat,
+    mat_pre_scale = pre_scale_mat,
     meta     = meta,
     row_data = logged$row_data,
     info     = list(
