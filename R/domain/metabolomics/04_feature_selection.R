@@ -47,9 +47,15 @@ run_metabolomics_rf <- function(pre, config) {
     meta <- pre$meta
     assert_numeric_matrix(mat, "metab_expr_work")
 
-    # Align and build response
+    # Align and build response. Pools, QC and blanks are not a class to
+    # separate, so drop them the way DE does.
     meta <- meta[match(colnames(mat), meta[[sample_col]]), , drop = FALSE]
-    condition <- factor(meta[[condition_col]])
+    bio  <- filter_to_biological(mat, meta, condition_col, sample_col,
+                                 label = "metabolomics RF",
+                                 qc_flag_column = cfg$qc$qc_flag_column)
+    mat  <- bio$mat
+    meta <- bio$meta
+    condition <- bio$condition
 
     # Prepare X: samples (rows) x features (cols)
     X <- t(mat)
@@ -176,9 +182,15 @@ run_metabolomics_plsda <- function(pre, config) {
     meta <- pre$meta
     assert_numeric_matrix(mat, "metab_expr_work")
 
-    # Align and build response
+    # Align and build response. Pools, QC and blanks are not a class to
+    # separate, so drop them the way DE does.
     meta <- meta[match(colnames(mat), meta[[sample_col]]), , drop = FALSE]
-    condition <- factor(meta[[condition_col]])
+    bio  <- filter_to_biological(mat, meta, condition_col, sample_col,
+                                 label = "metabolomics PLS-DA",
+                                 qc_flag_column = cfg$qc$qc_flag_column)
+    mat  <- bio$mat
+    meta <- bio$meta
+    condition <- bio$condition
 
     # Prepare X: samples (rows) x features (cols)
     X <- t(mat)
