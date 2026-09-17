@@ -388,6 +388,24 @@ test_that("a frame with no usable padj falls back to the raw p-value", {
                      "00010")
 })
 
+test_that("a frame with no significance evidence at all yields nothing", {
+    # Neither branch can score these rows, and an unscored row must not survive
+    # into the union on the strength of having a KEGG accession alone.
+    no_columns <- data.frame(pathway = "hsa00010", contrast = "A vs. B",
+                             method = "ora", stringsAsFactors = FALSE)
+    expect_message(
+        expect_length(.kegg_hits_by_contrast(list(rna = no_columns), "hsa"), 0L),
+        "no usable padj or pvalue"
+    )
+
+    # Both columns present but empty is the same thing.
+    both_na <- ora_rows("A vs. B", "hsa00010", NA_real_, padj = NA_real_)
+    expect_message(
+        expect_length(.kegg_hits_by_contrast(list(rna = both_na), "hsa"), 0L),
+        "no usable padj or pvalue"
+    )
+})
+
 test_that("adjusted values that all fail do not relax back to the raw p-value", {
     # Deliberately stricter than run_ora_kegg()'s own "no adjusted hits -> raw
     # p-value" fallback: the frame has valid adjusted values, and none pass.

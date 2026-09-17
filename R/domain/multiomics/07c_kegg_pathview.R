@@ -831,7 +831,10 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #' with no usable `padj` at all falls back to `pvalue` -- but a frame where
 #' adjusted values exist and none of them pass yields nothing, rather than
 #' quietly relaxing to the raw p-value the way \code{run_ora_kegg()} does for
-#' its own table.
+#' its own table. The two branches are symmetric -- each needs at least one
+#' usable value of its own kind -- and a frame with neither is skipped: no
+#' significance evidence means nothing in it can be called enriched, so nothing
+#' in it gets a map.
 #'
 #' Pathways are then ranked by that same score, best first, so that `top_n`
 #' keeps the most significant rather than whichever layer or direction happened
@@ -900,14 +903,19 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         # Adjusted significance decides eligibility wherever this frame has it.
         # "Usable" is judged over the ORA rows themselves: a frame whose ORA
         # rows all carry NA padj has none, whatever its other rows hold.
-        score <- rep(Inf, nrow(d))
         if ("padj" %in% names(d) && any(is_ora & !is.na(d$padj))) {
             score <- suppressWarnings(as.numeric(d$padj))
-            keep <- keep & !is.na(score) & score < alpha
-        } else if ("pvalue" %in% names(d)) {
+        } else if ("pvalue" %in% names(d) && any(is_ora & !is.na(d$pvalue))) {
             score <- suppressWarnings(as.numeric(d$pvalue))
-            keep <- keep & !is.na(score) & score < alpha
+        } else {
+            # No significance evidence of either kind. Nothing here can be
+            # called enriched, so nothing here gets a map -- the branches are
+            # symmetric, and neither one lets a row through unscored.
+            message("  Union pathview: ", nm, " enrichment has no usable padj ",
+                    "or pvalue on its ORA rows; skipping it")
+            next
         }
+        keep <- keep & !is.na(score) & score < alpha
 
         raw <- as.character(d$contrast)
         keep <- keep & !is.na(raw) & nzchar(trimws(raw))
