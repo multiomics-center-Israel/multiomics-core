@@ -2049,10 +2049,17 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 #' and they fill every slot. The pathways several layers support -- the point of
 #' the figure -- rank below them and never appear.
 #'
-#' Rows are therefore ordered by how many layers supplied a p-value first, and
-#' by the combined p-value within that. This is selection for display only. The
-#' meta-analysis table keeps its own combined_pval ordering, and no p-value,
-#' adjustment or membership is touched.
+#' Rows are therefore ordered by how many layers contributed an enrichment
+#' p-value for the pathway first, and by the combined p-value within that. Note
+#' what that count is and is not: `n_omics` counts the layers whose enrichment
+#' table carried a p-value for this pathway. Some of those tables reach here
+#' already filtered, so a missing p-value can mean the pathway was never
+#' testable in that layer, or that it was tested and did not survive into the
+#' layer's result table. Nothing downstream can tell those apart.
+#'
+#' This is selection for display only. The meta-analysis table keeps its own
+#' combined_pval ordering, and no p-value, adjustment or membership is
+#' touched.
 #'
 #' @param meta_results Meta-analysis table, as
 #'   \code{stouffer_combined_pvalues()} returns it.
@@ -2069,7 +2076,7 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30) {
         as.numeric(meta_results$n_omics)
     } else {
         # Nothing to rank on: leave the caller's order alone rather than invent
-        # a preference between rows that carry no support count.
+        # a preference between rows that carry no contributing-layer count.
         rep(1, nrow(meta_results))
     }
     combined <- if ("combined_pval" %in% names(meta_results)) {
@@ -2103,14 +2110,14 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # Transform to -log10(p)
     log_pval_matrix <- -log10(pval_matrix + 1e-300)
     # Cap at 10 for display. The NA test is not decoration: a logical subscript
-    # carrying NA is an error in `[<-`, and every untested cell is NA now that
-    # the candidate universe is the union of the layers.
+    # carrying NA is an error in `[<-`, and a missing layer p-value is NA -- the
+    # normal case now that the candidate universe is the union of the layers.
     capped <- !is.na(log_pval_matrix) & log_pval_matrix > 10
     log_pval_matrix[capped] <- 10
     colnames(log_pval_matrix) <- gsub("^pval_", "", colnames(log_pval_matrix))
 
-    # NA stays NA. A layer that never tested a pathway is not a layer that
-    # tested it and found nothing, and flattening the two to 0 rendered them the
+    # NA stays NA. "No enrichment p-value for this pathway in this layer" is
+    # not "a p-value close to 1", and flattening the two to 0 rendered them the
     # same white -- which also left na_col below as dead configuration.
 
     # Heatmap

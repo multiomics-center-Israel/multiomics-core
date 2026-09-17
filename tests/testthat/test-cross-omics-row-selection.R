@@ -1,5 +1,11 @@
 # Which rows a cross-omics figure shows, and what a blank cell means.
 #
+# n_omics counts the layers whose enrichment table carried a p-value for a
+# pathway. Some of those tables arrive already filtered, so a missing p-value
+# can mean the pathway was never testable in that layer or that it was tested
+# and did not survive into the layer's result table; nothing here can tell
+# those apart, and the wording below is careful not to claim otherwise.
+#
 # The figures exist to show where the layers agree. Ordering by combined p-value
 # alone does not do that: the layer with the largest gene-set collection
 # contributes many single-layer pathways with very small p-values and fills every
@@ -26,9 +32,9 @@ meta_fixture <- function(norm_id, n_omics, combined_pval,
 
 # ---- what leads the figure -------------------------------------------------
 
-test_that("a two-layer pathway outranks a stronger single-layer one", {
-    # The single-layer row has a combined p-value four orders of magnitude
-    # smaller, which is exactly the situation that filled every slot.
+test_that("a pathway with two contributing layers outranks a stronger single-layer one", {
+    # The row with one contributing layer has a combined p-value four orders of
+    # magnitude smaller, which is exactly the situation that filled every slot.
     meta <- meta_fixture(
         norm_id      = c("00010", "00020"),
         n_omics      = c(1L, 2L),
@@ -37,11 +43,11 @@ test_that("a two-layer pathway outranks a stronger single-layer one", {
 
     expect_identical(select_multi_omics_pathways(meta, top_n = 2)$norm_id,
                      c("00020", "00010"))
-    # And with room for one row, the supported pathway is the one shown.
+    # And with room for one row, the better-supported pathway is the one shown.
     expect_identical(select_multi_omics_pathways(meta, top_n = 1)$norm_id, "00020")
 })
 
-test_that("within the same support level, the combined p-value decides", {
+test_that("among pathways with the same number of contributing layers, the combined p-value decides", {
     meta <- meta_fixture(
         norm_id       = c("00030", "00010", "00020"),
         n_omics       = c(2L, 2L, 2L),
@@ -95,11 +101,11 @@ test_that("selection reads the meta table without reordering it", {
 
 # ---- what a blank cell means ------------------------------------------------
 
-test_that("an untested layer stays NA through the heatmap preparation", {
+test_that("a missing layer p-value stays NA through the heatmap preparation", {
     skip_if_not_installed("pheatmap")
 
-    # 00020 was never tested by proteomics. Flattening that to 0 rendered it the
-    # same white as a pathway the layer did test and found nothing in, and left
+    # No proteomics enrichment p-value reached the table for 00020. Flattening
+    # that to 0 rendered it the same white as a p-value close to 1, and left
     # pheatmap's na_col as dead configuration.
     meta <- meta_fixture(
         norm_id       = c("00010", "00020"),
@@ -114,8 +120,9 @@ test_that("an untested layer stays NA through the heatmap preparation", {
     on.exit(grDevices::dev.off(), add = TRUE)
 
     # The cap step assigns through a logical subscript, and a logical subscript
-    # carrying NA is an error in `[<-`. With the union candidate universe every
-    # untested cell is NA, so this is the path a real run now takes.
+    # carrying NA is an error in `[<-`. With the union candidate universe a
+    # missing layer p-value is the normal case, so this is the path a real run
+    # now takes.
     expect_no_error(plot_cross_omics_pathway_heatmap(meta, c("transcriptomics",
                                                              "proteomics")))
 })
