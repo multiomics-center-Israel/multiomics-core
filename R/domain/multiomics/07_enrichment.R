@@ -1209,6 +1209,11 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
                 padj = df$p.adjust,
                 GeneRatio = df$GeneRatio,
                 setSize = df$Count,
+                # Stamped here, where the frame is built, and not after the
+                # tryCatch() below: both filtered subsets inherit it, and both
+                # leave this function from inside the tryCatch expression. See
+                # the note above that call for why nothing after it is reached.
+                method = "ora",
                 stringsAsFactors = FALSE
             )
             # Filter: prefer padj, fall back to pvalue < 0.05
@@ -1227,14 +1232,15 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
         NULL
     })
 
-    if (!is.null(ora_res)) {
-        # Say what this is. Only the producer knows for certain -- run_gsea_kegg()
-        # calls this function as its own fallback, so a table reaching a consumer
-        # from that direction is ORA despite the name of the function that asked
-        # for it. Metadata only: no row, p-value or adjustment is touched.
-        ora_res$method <- "ora"
-        return(ora_res)
-    }
+    # Nothing here sees a successful clusterProfiler result. `return()` inside a
+    # tryCatch() expression leaves the ENCLOSING function, because the expression
+    # is a promise evaluated in this frame -- so both hit branches above exit
+    # run_ora_kegg() outright and ora_res is only ever NULL. That is why the
+    # method stamp lives in the frame construction and not on ora_res: put here,
+    # it would be dead code that reads as though it were doing the job.
+    # The guard stays, so that a future edit which stops returning early still
+    # behaves, and run_gsea_kegg() has the same shape for the same reason.
+    if (!is.null(ora_res)) return(ora_res)
 
     # Fallback: Fisher's exact test with KEGG REST pathway-gene links; it stamps
     # its own result the same way.

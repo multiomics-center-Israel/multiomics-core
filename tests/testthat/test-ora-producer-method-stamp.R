@@ -91,6 +91,23 @@ test_that("a stamped producer frame reaches the ORA figure and an unstamped one 
 
 # ---- run_ora_kegg() and run_ora_kegg_fisher() ------------------------------
 
+test_that("return() inside tryCatch() leaves the enclosing function", {
+    # The reason the stamp in run_ora_kegg() must sit in the frame construction
+    # and not after the tryCatch(): the expression is a promise evaluated in the
+    # caller's frame, so a return() inside it exits that frame, not just the
+    # tryCatch. A stamp placed after the call is unreachable -- and reads as
+    # though it were working, which is exactly how it got there.
+    f <- function() {
+        got <- tryCatch({
+            return("left from inside")
+            "never evaluated"
+        }, error = function(e) "handler")
+        "after the tryCatch"
+    }
+
+    expect_identical(f(), "left from inside")
+})
+
 test_that("the KEGG gene ORA producers stamp every result they return", {
     # Not reachable behaviourally here: every non-NULL path through these two
     # goes out to KEGG REST or through clusterProfiler, and this suite does not
@@ -98,8 +115,15 @@ test_that("the KEGG gene ORA producers stamp every result they return", {
     ora_kegg_src <- paste(deparse(body(run_ora_kegg)), collapse = " ")
     fisher_src   <- paste(deparse(body(run_ora_kegg_fisher)), collapse = " ")
 
-    expect_true(grepl('ora_res$method <- "ora"', ora_kegg_src, fixed = TRUE))
+    # In the frame the clusterProfiler branch builds, so that both filtered
+    # subsets carry it out through their own return().
+    expect_true(grepl('method = "ora"', ora_kegg_src, fixed = TRUE))
     expect_true(grepl('df$method <- "ora"', fisher_src, fixed = TRUE))
+
+    # And NOT after the tryCatch, where it cannot run. This is the assertion the
+    # previous version of this test lacked: it checked only that a stamp existed
+    # somewhere, which a dead one satisfies.
+    expect_false(grepl('ora_res$method <- "ora"', ora_kegg_src, fixed = TRUE))
 
     # run_ora_kegg() has exactly two ways out: its own clusterProfiler branch,
     # stamped above, and run_ora_kegg_fisher(), which stamps its own.

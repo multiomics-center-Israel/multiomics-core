@@ -601,3 +601,45 @@ test_that("skipping the figure leaves the rest of the run's output alone", {
     expect_true(file.exists(bystander))
     expect_null(res$plots$ora_heatmap)
 })
+
+
+# ---- the drawing path pheatmap hides ----------------------------------------
+
+# Which heatmap branch runs depends on whether pheatmap is installed, so the
+# tests above exercise the fallback only on a machine without it -- which is not
+# the machine CI runs on. These call it directly, so the shapes it exists for
+# are covered either way.
+
+test_that("the small-matrix path draws every shape heatmap() refuses", {
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    cols <- grDevices::colorRampPalette(c("white", "red"))(50)
+    one_cell <- matrix(3, nrow = 1, dimnames = list("00010", "metabolomics"))
+    one_row  <- matrix(c(3, 4), nrow = 1,
+                       dimnames = list("00010", c("transcriptomics", "proteomics")))
+    one_col  <- matrix(c(3, 4), ncol = 1,
+                       dimnames = list(c("00010", "00020"), "transcriptomics"))
+
+    for (m in list(one_cell, one_row, one_col)) {
+        expect_no_error(.draw_small_heatmap(m, main = "t", col = cols,
+                                            zlim = .nondegenerate_range(m)))
+    }
+})
+
+test_that("the small-matrix path keeps a missing cell missing", {
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    # Nothing is filled in to make the shape drawable; the cell stays NA and the
+    # grey device background shows through it, as in the two-dimensional path.
+    m <- matrix(c(3, NA), nrow = 1,
+                dimnames = list("00010", c("transcriptomics", "proteomics")))
+    cols <- grDevices::colorRampPalette(c("white", "red"))(50)
+
+    expect_no_error(.draw_small_heatmap(m, main = "t", col = cols,
+                                        zlim = .nondegenerate_range(m)))
+    expect_true(is.na(m["00010", "proteomics"]))
+})
