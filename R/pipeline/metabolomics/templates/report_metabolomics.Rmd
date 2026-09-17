@@ -709,6 +709,9 @@ if (!is.null(qc_res$plots)) {
         safe_print_plot(p13_lab)
       }
     }
+    # Blank line so the next tab's "####" heading starts its own block
+    # instead of joining the image paragraph.
+    cat("\n\n")
   }
 }
 ```
