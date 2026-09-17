@@ -824,6 +824,21 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #' proteomics DE tables say `"1.56ppm vs. 0ppm"`. The first raw spelling seen
 #' for a key is kept as its label, for headings and filenames.
 #'
+#' Eligibility is decided on the adjusted p-value wherever a frame has usable
+#' ones, because `run_ora()` returns every tested pathway with both columns and
+#' filters neither: preferring the raw p-value there would have drawn a map for
+#' `pvalue = 0.01, padj = 0.40` and let the report call it enriched. A frame
+#' with no usable `padj` at all falls back to `pvalue` -- but a frame where
+#' adjusted values exist and none of them pass yields nothing, rather than
+#' quietly relaxing to the raw p-value the way \code{run_ora_kegg()} does for
+#' its own table.
+#'
+#' Pathways are then ranked by that same score, best first, so that `top_n`
+#' keeps the most significant rather than whichever layer or direction happened
+#' to be read first. Where a pathway appears in more than one layer or
+#' direction it is one entry, carrying the best score seen for it, and the
+#' pathway id breaks ties so the order is reproducible.
+#'
 #' Pure: it reads no files and draws nothing, which is what makes the selection
 #' testable without invoking pathview.
 #'
@@ -832,13 +847,15 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #' @param kegg_org Organism code for pathway identity, or NULL for a run with no
 #'   KEGG code of its own. This is the identity organism; the gene space these
 #'   maps are drawn in is always KO.
-#' @param alpha Significance cutoff applied to `pvalue`, or to `padj` when no
-#'   `pvalue` column is present.
+#' @param alpha Significance cutoff, applied to `padj` where a frame has usable
+#'   adjusted values and to `pvalue` only where it has none.
 #' @return Named list keyed by canonical contrast key, each element a list of
-#'   `label` (the first raw spelling seen) and `pathways` (normalized KEGG ids).
-#'   Contrasts with no KEGG hit are absent, and so are rows that carry no
-#'   contrast: they cannot be attributed to one, and rendering them against some
-#'   other contrast's fold changes is the bug this structure exists to prevent.
+#'   `label` (the first raw spelling seen), `pathways` (normalized KEGG ids,
+#'   ranked best score first) and `scores` (the score behind that ranking, named
+#'   by pathway id). Contrasts with no KEGG hit are absent, and so are rows that
+#'   carry no contrast: they cannot be attributed to one, and rendering them
+#'   against some other contrast's fold changes is the bug this structure exists
+#'   to prevent.
 .kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL, alpha = 0.05) {
     hits <- list()
     # Indices, not names: the production input is named per omics, but iterating
@@ -880,8 +897,17 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         keys <- pathway_join_key(d, kegg_org)
         keep <- is_ora & is_kegg_pathway_accession(keys, kegg_org)
 
-        pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
-        if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < alpha
+        # Adjusted significance decides eligibility wherever this frame has it.
+        # "Usable" is judged over the ORA rows themselves: a frame whose ORA
+        # rows all carry NA padj has none, whatever its other rows hold.
+        score <- rep(Inf, nrow(d))
+        if ("padj" %in% names(d) && any(is_ora & !is.na(d$padj))) {
+            score <- suppressWarnings(as.numeric(d$padj))
+            keep <- keep & !is.na(score) & score < alpha
+        } else if ("pvalue" %in% names(d)) {
+            score <- suppressWarnings(as.numeric(d$pvalue))
+            keep <- keep & !is.na(score) & score < alpha
+        }
 
         raw <- as.character(d$contrast)
         keep <- keep & !is.na(raw) & nzchar(trimws(raw))
@@ -891,10 +917,27 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         for (k in unique(ckey[keep])) {
             rows <- keep & ckey == k
             if (is.null(hits[[k]])) {
-                hits[[k]] <- list(label = raw[rows][1], pathways = character(0))
+                hits[[k]] <- list(label = raw[rows][1], scores = numeric(0))
             }
-            hits[[k]]$pathways <- unique(c(hits[[k]]$pathways, keys[rows]))
+            # One entry per pathway, carrying the best score seen for it --
+            # across directions within this frame, and across layers as later
+            # frames arrive.
+            best <- tapply(score[rows], keys[rows], min)
+            s <- hits[[k]]$scores
+            ids <- names(best)
+            prev <- s[ids]
+            s[ids] <- pmin(as.numeric(best), ifelse(is.na(prev), Inf, prev))
+            hits[[k]]$scores <- s
         }
+    }
+
+    # Rank once, after every frame has had its say: a pathway's best score is
+    # not known until the last layer that carries it has been read.
+    for (k in names(hits)) {
+        s <- hits[[k]]$scores
+        ord <- order(s, names(s))
+        hits[[k]]$scores <- s[ord]
+        hits[[k]]$pathways <- names(s)[ord]
     }
     hits
 }

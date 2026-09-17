@@ -277,9 +277,11 @@ test_that("drawing in KO space does not make the run's own accessions foreign", 
 # key the cross-omics module already uses, and the DE table is looked up by that
 # same key -- the spellings differ between exports.
 
-ora_rows <- function(contrast, pathway, pvalue, method = "ora") {
-    data.frame(pathway = pathway, pvalue = pvalue, contrast = contrast,
-               method = method, stringsAsFactors = FALSE)
+ora_rows <- function(contrast, pathway, pvalue, method = "ora", padj = NULL) {
+    df <- data.frame(pathway = pathway, pvalue = pvalue, contrast = contrast,
+                     method = method, stringsAsFactors = FALSE)
+    if (!is.null(padj)) df$padj <- padj
+    df
 }
 
 test_that("one biological contrast gets one key, however it is spelled", {
@@ -357,6 +359,83 @@ test_that("selection is driven by the supplied frames, and by ORA rows only", {
     expect_false("00020" %in% hits[["avsb"]]$pathways)
     expect_false("00030" %in% hits[["avsb"]]$pathways)
 })
+
+# ---- adjusted significance decides eligibility ------------------------------
+#
+# run_ora() returns every tested pathway with both pvalue and padj and filters
+# neither, so reading the raw p-value drew maps for pathways the adjustment had
+# already rejected, and the report called them enriched.
+
+test_that("a pathway the adjustment rejects does not get a map", {
+    frame <- ora_rows("A vs. B", c("hsa00010", "hsa00020"),
+                      pvalue = c(0.01, 0.01), padj = c(0.40, 0.02))
+
+    hits <- .kegg_hits_by_contrast(list(rna = frame), "hsa")
+
+    expect_identical(hits[["avsb"]]$pathways, "00020")
+    expect_false("00010" %in% hits[["avsb"]]$pathways)
+})
+
+test_that("a frame with no usable padj falls back to the raw p-value", {
+    # The column absent entirely...
+    no_col <- ora_rows("A vs. B", "hsa00010", 0.01)
+    expect_identical(.kegg_hits_by_contrast(list(rna = no_col), "hsa")[["avsb"]]$pathways,
+                     "00010")
+
+    # ...and present but empty, which is the same thing for these rows.
+    all_na <- ora_rows("A vs. B", "hsa00010", 0.01, padj = NA_real_)
+    expect_identical(.kegg_hits_by_contrast(list(rna = all_na), "hsa")[["avsb"]]$pathways,
+                     "00010")
+})
+
+test_that("adjusted values that all fail do not relax back to the raw p-value", {
+    # Deliberately stricter than run_ora_kegg()'s own "no adjusted hits -> raw
+    # p-value" fallback: the frame has valid adjusted values, and none pass.
+    frame <- ora_rows("A vs. B", c("hsa00010", "hsa00020"),
+                      pvalue = c(0.01, 0.02), padj = c(0.40, 0.60))
+
+    expect_length(.kegg_hits_by_contrast(list(rna = frame), "hsa"), 0L)
+})
+
+
+# ---- the union is ranked before top_n takes from it -------------------------
+
+test_that("pathways rank by significance, not by the order frames arrive in", {
+    # The weaker pathway is read first, and from the layer listed first.
+    frames <- list(
+        transcriptomics = ora_rows("A vs. B", c("hsa00010", "hsa00020"),
+                                   pvalue = c(0.04, 0.03), padj = c(0.04, 0.03)),
+        proteomics      = ora_rows("A vs. B", "hsa00030",
+                                   pvalue = 0.0001, padj = 0.0001)
+    )
+
+    hits <- .kegg_hits_by_contrast(frames, "hsa")
+
+    expect_identical(hits[["avsb"]]$pathways, c("00030", "00020", "00010"))
+    # So a top_n of one keeps the most significant pathway, not the first read.
+    expect_identical(utils::head(hits[["avsb"]]$pathways, 1L), "00030")
+})
+
+test_that("one pathway across two layers is one entry, at its best score", {
+    frames <- list(
+        transcriptomics = ora_rows("A vs. B", "hsa00010", 0.04, padj = 0.04),
+        proteomics      = ora_rows("A vs. B", "map00010", 0.001, padj = 0.001)
+    )
+
+    hits <- .kegg_hits_by_contrast(frames, "hsa")
+
+    expect_identical(hits[["avsb"]]$pathways, "00010")
+    expect_equal(unname(hits[["avsb"]]$scores[["00010"]]), 0.001)
+})
+
+test_that("equally significant pathways order reproducibly", {
+    frame <- ora_rows("A vs. B", c("hsa00030", "hsa00010", "hsa00020"),
+                      pvalue = rep(0.001, 3), padj = rep(0.001, 3))
+
+    expect_identical(.kegg_hits_by_contrast(list(rna = frame), "hsa")[["avsb"]]$pathways,
+                     c("00010", "00020", "00030"))
+})
+
 
 test_that("the accession is found wherever the frame's schema keeps it", {
     # run_ora_kegg() builds the clusterProfiler schema: the readable Description
