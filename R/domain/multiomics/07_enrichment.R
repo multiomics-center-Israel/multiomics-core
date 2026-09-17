@@ -1361,7 +1361,6 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         keys[!is.na(keys)]
     })
 
-    # Use union of all pathways (not just intersection) for broader view
     union_pathways <- unique(unlist(all_pathways))
     common_pathways <- Reduce(intersect, all_pathways)
 
@@ -1373,8 +1372,25 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     message(sprintf("  Found %d total pathways (%d in common) across %d omics layers",
                     length(union_pathways), length(common_pathways), length(omics)))
 
-    # Use union for the heatmap (show all enriched), common for meta-analysis
-    use_pathways <- if (length(common_pathways) >= 5) common_pathways else union_pathways
+    # The candidate universe is the union of what the layers enriched, always.
+    #
+    # This is not a display choice: use_pathways is what merge_pathway_pvalues()
+    # assembles and what stouffer_combined_pvalues() then scores, so it decides
+    # which pathways reach the cross-omics meta-analysis at all. It used to
+    # collapse to the intersection whenever five or more pathways were shared,
+    # which let the narrowest layer decide eligibility for every other: a layer
+    # contributing a handful of rows could cut the candidate set to what it
+    # happened to have in common with the rest.
+    #
+    # How much multi-omics evidence a pathway has is the meta-analysis's to
+    # record: stouffer_combined_pvalues() counts the layers that supplied a
+    # p-value for each pathway and carries that as n_omics, so a reader, a
+    # ranking or a filter downstream can require two. Collapsing upstream
+    # removed the rows before that count could be taken at all.
+    #
+    # common_pathways is still reported, and is still in the returned result;
+    # it is a description of the overlap, not a gate on it.
+    use_pathways <- union_pathways
 
     # KEGG's reference maps are pan-species, so an organism with no KEGG code of
     # its own can score well on maps of organs it does not have. Excluding those
