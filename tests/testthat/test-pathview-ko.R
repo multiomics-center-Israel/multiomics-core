@@ -475,6 +475,32 @@ test_that(".compile_pathview_pdf leaves no partial file behind on failure", {
     expect_identical(grDevices::dev.cur(), before)
 })
 
+test_that(".compile_pathview_pdf captions pages and ignores a mismatched set", {
+    skip_if_not_installed("png")
+
+    out <- withr::local_tempdir()
+    good <- file.path(out, "ok.png")
+    png::writePNG(matrix(1, 8, 8), good)
+
+    # One pathway enriched in two contrasts renders two similar maps, and a
+    # downloaded PDF has no filename to tell them apart, so each page is
+    # captioned with its contrast.
+    labelled <- file.path(out, "labelled.pdf")
+    expect_identical(
+        .compile_pathview_pdf(c(good, good), labelled, c("A vs. B", "A vs. C")),
+        labelled
+    )
+    expect_gt(file.size(labelled), 0)
+
+    # A label set that does not line up with the pages is dropped rather than
+    # recycled onto the wrong maps.
+    unlabelled <- file.path(out, "unlabelled.pdf")
+    expect_identical(
+        .compile_pathview_pdf(c(good, good), unlabelled, "only one label"),
+        unlabelled
+    )
+})
+
 test_that(".compile_pathview_pdf writes the file when every page reads", {
     skip_if_not_installed("png")
 

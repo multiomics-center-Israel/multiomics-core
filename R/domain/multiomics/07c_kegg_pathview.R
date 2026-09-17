@@ -902,20 +902,30 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #' removed and NULL is returned if anything fails on the way -- opening the
 #' device, reading a PNG, or writing a page.
 #'
+#' Each page is captioned, because the same pathway enriched in two contrasts
+#' renders as two visually similar maps, and a downloaded PDF has no filename to
+#' fall back on the way the HTML report does.
+#'
 #' @param png_files Character vector of rendered PNG paths, in page order.
 #' @param pdf_path Path of the PDF to write.
+#' @param labels Optional character vector, one caption per page.
 #' @return \code{pdf_path} on success, otherwise NULL.
-.compile_pathview_pdf <- function(png_files, pdf_path) {
+.compile_pathview_pdf <- function(png_files, pdf_path, labels = NULL) {
     if (length(png_files) == 0) return(NULL)
+    if (!is.null(labels) && length(labels) != length(png_files)) labels <- NULL
     # Remember which device was current so that a failure in pdf() itself, which
     # opens nothing, cannot make us close a device somebody else owns.
     before <- grDevices::dev.cur()
     ok <- tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
-        for (png_file in png_files) {
-            img <- png::readPNG(png_file)
+        for (i in seq_along(png_files)) {
+            img <- png::readPNG(png_files[i])
             grid::grid.newpage()
             grid::grid.raster(img, y = 0.48, height = 0.92)
+            if (!is.null(labels)) {
+                grid::grid.text(labels[i], y = 0.98,
+                                gp = grid::gpar(fontsize = 11, fontface = "bold"))
+            }
         }
         TRUE
     }, error = function(e) {
@@ -1053,6 +1063,7 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
 
     any_compounds <- FALSE
     contrast_labels <- list()
+    page_labels <- character(0)
     generated <- withr::with_dir(pv_dir, {
         made <- character(0)
         for (ckey in names(hits)) {
@@ -1115,6 +1126,10 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
                     f <- f[file.exists(f)]
                     if (length(f) > 0) {
                         made <- c(made, file.path(pv_dir, f[1]))
+                        # The PDF has no filename to read a contrast off, and
+                        # one pathway enriched in two contrasts renders twice.
+                        page_labels <- c(page_labels,
+                                         paste0(label, "  |  ko", clean_pid))
                         message("    Union pathview: ko", clean_pid)
                     }
                 }, error = function(e) {
@@ -1130,8 +1145,8 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     #    generate_multi_ora_pathview() writes: that file means "enriched in two
     #    or more omics layers", and a union of single-layer hits is not that.
     #    The report reads whichever of the two exists and says which it is.
-    pdf_path <- .compile_pathview_pdf(generated,
-                                      file.path(out_dir, "multi_ora_pathview_union.pdf"))
+    pdf_path <- .compile_pathview_pdf(
+        generated, file.path(out_dir, "multi_ora_pathview_union.pdf"), page_labels)
     if (is.null(pdf_path)) return(NULL)
 
     # What this run actually produced, written down rather than left for the
