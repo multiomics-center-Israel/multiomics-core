@@ -114,6 +114,44 @@ test_that("a layer with no adjusted p-value column never falls back to the raw o
     expect_true(is.na(m["00010", "proteomics"]))
 })
 
+test_that("the adjusted p-value is resolved per row, not per table", {
+    # extract_enrichment_df() binds a layer's sub-results with bind_rows(), which
+    # NA-fills, so one table can carry fgsea rows keyed on padj beside ORA rows
+    # carrying only clusterProfiler's p.adjust. Picking one column for the whole
+    # table reads NA for every row that used the other -- silently, because the
+    # column check passed.
+    bound <- data.frame(
+        pathway  = c("Glycolysis", "Citrate cycle"),
+        ID       = c("map00010", "map00020"),
+        pvalue   = c(1e-5, 1e-6),
+        padj     = c(1e-4, NA_real_),
+        p.adjust = c(NA_real_, 1e-3),
+        method   = c("fgsea", "ora"),
+        stringsAsFactors = FALSE
+    )
+
+    vals <- .ora_adjusted_p_values(bound)
+    expect_equal(vals, c(1e-4, 1e-3))
+
+    # And end to end: the ORA row's value reaches the matrix, the fgsea row's
+    # does not, and the layer is not written off as having nothing.
+    m <- build_ora_adjusted_p_matrix(list(transcriptomics = bound),
+                                     c("00010", "00020"), "transcriptomics")
+    expect_true(is.na(m["00010", "transcriptomics"]))
+    expect_equal(unname(m["00020", "transcriptomics"]), 1e-3)
+})
+
+test_that("resolving per row prefers padj and never invents a value", {
+    both <- data.frame(padj = 0.01, p.adjust = 0.99, stringsAsFactors = FALSE)
+    expect_equal(.ora_adjusted_p_values(both), 0.01)
+
+    neither <- data.frame(pvalue = 1e-9, qvalue = 1e-9, stringsAsFactors = FALSE)
+    expect_true(is.na(.ora_adjusted_p_values(neither)))
+
+    empty_row <- data.frame(padj = NA_real_, p.adjust = NA_real_)
+    expect_true(is.na(.ora_adjusted_p_values(empty_row)))
+})
+
 test_that("clusterProfiler's p.adjust is read, and qvalue is not", {
     cp <- ora_rows("map00010", padj = 1e-4)
     names(cp)[names(cp) == "padj"] <- "p.adjust"
@@ -371,6 +409,85 @@ test_that("very small adjusted p-values are capped rather than erroring on the N
     expect_true(is.na(drawn["00010", "proteomics"]))
 })
 
+test_that("a matrix with a single row draws instead of failing", {
+    # heatmap() refuses fewer than two rows or columns even with both dendrograms
+    # off, and one surviving pathway is ordinary in a per-contrast view. Drawn
+    # through either branch, this must produce a figure rather than the outer
+    # tryCatch's "failed" placeholder.
+    m <- matrix(c(1e-3, 1e-4), nrow = 1,
+                dimnames = list("00010", c("transcriptomics", "proteomics")))
+
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    drawn <- NULL
+    expect_no_error(drawn <- plot_cross_omics_ora_heatmap(m))
+    expect_identical(rownames(drawn), "00010")
+})
+
+test_that("a single cell of evidence draws instead of failing", {
+    # One row and one column at once, and a zero-width value range with it.
+    m <- matrix(1e-3, nrow = 1, dimnames = list("00010", "metabolomics"))
+
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    expect_no_error(plot_cross_omics_ora_heatmap(m))
+})
+
+test_that("a matrix whose values all agree draws instead of failing", {
+    # pheatmap derives its breaks from the minimum and maximum; identical values
+    # make every break the same and cut() refuses them.
+    m <- matrix(1e-3, nrow = 2, ncol = 2,
+                dimnames = list(c("00010", "00020"),
+                                c("transcriptomics", "proteomics")))
+
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    expect_no_error(plot_cross_omics_ora_heatmap(m))
+})
+
+test_that("the meta-analysis heatmap survives the same two shapes", {
+    # The same defects were in plot_cross_omics_pathway_heatmap(), which sits one
+    # section away in the report. Swept with this change rather than left.
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+
+    one_row <- data.frame(pathway = "Glycolysis", norm_id = "00010",
+                          pval_transcriptomics = 1e-3, pval_proteomics = 1e-4,
+                          n_omics = 2L, combined_pval = 1e-4,
+                          stringsAsFactors = FALSE)
+    expect_no_error(plot_cross_omics_pathway_heatmap(
+        one_row, c("transcriptomics", "proteomics")))
+
+    all_equal <- data.frame(
+        pathway = c("Glycolysis", "Citrate cycle"),
+        norm_id = c("00010", "00020"),
+        pval_transcriptomics = c(1e-3, 1e-3),
+        pval_proteomics = c(1e-3, 1e-3),
+        n_omics = c(2L, 2L), combined_pval = c(1e-3, 1e-3),
+        stringsAsFactors = FALSE
+    )
+    expect_no_error(plot_cross_omics_pathway_heatmap(
+        all_equal, c("transcriptomics", "proteomics")))
+})
+
+test_that("a widened range is only ever used where the real one has no width", {
+    expect_equal(.nondegenerate_range(matrix(c(2, 5))), c(2, 5))
+    expect_equal(.nondegenerate_range(matrix(c(3, NA, 3))), c(2.5, 3.5))
+    expect_equal(.nondegenerate_range(matrix(c(4, NA))), c(3.5, 4.5))
+    # Nothing finite to draw from: a usable range rather than c(Inf, -Inf).
+    expect_equal(.nondegenerate_range(matrix(NA_real_)), c(0, 1))
+    # Whatever it returns, the two ends differ -- that is the whole contract.
+    expect_true(.nondegenerate_range(matrix(NA_real_))[1] <
+                .nondegenerate_range(matrix(NA_real_))[2])
+})
+
 test_that("the base fallback keeps the NA handling the primary path has", {
     # Not reachable behaviourally: which of the two branches draws depends on
     # whether pheatmap is installed on the machine running the tests, so the
@@ -421,4 +538,66 @@ test_that("a background set for the fallback does not leak into the next plot", 
     })
 
     expect_identical(graphics::par("bg"), before)
+})
+
+
+# ---- the figure a run declines to draw --------------------------------------
+
+.ora_run_tables <- function(method = "ora") {
+    layer <- function(p1, p2) {
+        df <- data.frame(
+            pathway = c("Glycolysis", "Citrate cycle"),
+            ID      = c("map00010", "map00020"),
+            pvalue  = c(p1, p2) / 10,
+            padj    = c(p1, p2),
+            stringsAsFactors = FALSE
+        )
+        if (!is.null(method)) df$method <- method
+        df
+    }
+    list(transcriptomics = layer(1e-2, 1e-3),
+         proteomics      = layer(1e-4, 1e-5))
+}
+
+.ora_run_config <- list(
+    global = list(organism = "Homo sapiens"),
+    modes  = list(multiomics = list(enrichment = list()))
+)
+
+test_that("a run that can draw the ORA figure writes it", {
+    out_dir <- withr::local_tempdir()
+
+    suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        .ora_run_tables("ora"), .ora_run_config, out_dir = out_dir)))
+
+    expect_true(file.exists(file.path(out_dir, "cross_omics_ora_heatmap.png")))
+})
+
+test_that("a run that skips the ORA figure deletes the previous run's copy", {
+    # targets reuses an output directory, and the report includes this figure on
+    # file.exists() alone. Left in place, last run's ORA evidence would be read
+    # as this run's -- the one figure here that can go stale, because it is the
+    # one a run can decline to produce.
+    out_dir <- withr::local_tempdir()
+    stale <- file.path(out_dir, "cross_omics_ora_heatmap.png")
+    writeLines("left over from an earlier run", stale)
+
+    # No method column anywhere, so no layer can be confirmed as ORA.
+    suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        .ora_run_tables(NULL), .ora_run_config, out_dir = out_dir)))
+
+    expect_false(file.exists(stale))
+})
+
+test_that("skipping the figure leaves the rest of the run's output alone", {
+    out_dir <- withr::local_tempdir()
+    bystander <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
+
+    res <- suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        .ora_run_tables(NULL), .ora_run_config, out_dir = out_dir)))
+
+    # Only the ORA figure is removed; the meta-analysis heatmap is written on
+    # every run and is still here, and the result carries no ORA figure path.
+    expect_true(file.exists(bystander))
+    expect_null(res$plots$ora_heatmap)
 })

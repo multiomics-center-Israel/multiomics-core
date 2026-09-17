@@ -1483,9 +1483,10 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         # this needs -- leaves no figure behind for the report to show.
         ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, use_pathways,
                                                  omics, kegg_org = kegg_org)
+        ora_png <- file.path(out_dir, "cross_omics_ora_heatmap.png")
         if (any(!is.na(ora_padj))) {
-            plots$ora_heatmap <- file.path(out_dir, "cross_omics_ora_heatmap.png")
-            png(plots$ora_heatmap, width = 1200, height = 900, res = 120)
+            plots$ora_heatmap <- ora_png
+            png(ora_png, width = 1200, height = 900, res = 120)
             tryCatch({
                 plot_cross_omics_ora_heatmap(ora_padj, pathway_tables,
                                              kegg_org = kegg_org)
@@ -1495,6 +1496,14 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
             })
             dev.off()
         } else {
+            # Delete rather than merely skip. Every other figure here is written
+            # on every run and so overwrites itself; this is the only one a run
+            # can decline to produce, and the report includes it on file.exists()
+            # alone. Left behind, the previous run's ORA evidence would be read
+            # as this one's -- a wrong figure being worse than no figure. The
+            # per-contrast directories get the same treatment because this whole
+            # function runs again for each contrast, with out_dir pointing there.
+            if (file.exists(ora_png)) unlink(ora_png)
             message("  No adjusted ORA p-values across layers; ",
                     "skipping the cross-omics ORA heatmap")
         }
@@ -2101,8 +2110,7 @@ build_ora_adjusted_p_matrix <- function(pathway_tables, target_pathways, omics,
         if (!"method" %in% names(df)) {
             missing_cols <- c(missing_cols, "method (ORA membership)")
         }
-        padj_col <- .ora_adjusted_p_column(df)
-        if (is.null(padj_col)) {
+        if (!any(.ORA_ADJUSTED_P_COLUMNS %in% names(df))) {
             missing_cols <- c(missing_cols, "adjusted p-value (padj)")
         }
         if (length(missing_cols) > 0) {
@@ -2123,13 +2131,7 @@ build_ora_adjusted_p_matrix <- function(pathway_tables, target_pathways, omics,
         # row on what that row actually carries.
         keys <- pathway_join_key(df, kegg_org)
 
-        # Converted only when it is not already numeric: as.numeric() on a factor
-        # returns level codes, and a round trip through as.character() would cost
-        # precision these p-values cannot spare.
-        padj <- df[[padj_col]]
-        if (!is.numeric(padj)) {
-            padj <- suppressWarnings(as.numeric(as.character(padj)))
-        }
+        padj <- .ora_adjusted_p_values(df)
 
         usable <- !is.na(keys) & !is.na(padj)
         if (!any(usable)) next
@@ -2142,22 +2144,52 @@ build_ora_adjusted_p_matrix <- function(pathway_tables, target_pathways, omics,
 }
 
 
-#' Which column holds this table's adjusted ORA p-value
+#' Column names this pipeline uses for an adjusted ORA p-value, best first
 #'
 #' A short list on purpose. `padj` is what every ORA producer here writes --
 #' \code{run_ora()}, \code{run_ora_kegg()}, \code{run_ora_kegg_fisher()} and
 #' \code{run_compound_ora()} -- and `p.adjust` is clusterProfiler's own name for
 #' the same quantity, which reaches this layer wherever an enrichResult was
-#' handed over without being renamed. Nothing else is accepted: `qvalue` is a
+#' handed over without being renamed. Nothing else belongs here: `qvalue` is a
 #' different adjustment, and `pvalue` is not an adjusted one at all.
+#' @keywords internal
+.ORA_ADJUSTED_P_COLUMNS <- c("padj", "p.adjust")
+
+
+#' The adjusted ORA p-value for each row, whichever column carries it
+#'
+#' Resolved per row, not per table, for the same reason
+#' \code{pathway_join_key()} resolves identity per row: the tables arriving here
+#' are bound from heterogeneous sub-results. \code{extract_enrichment_df()} uses
+#' \code{dplyr::bind_rows()}, which NA-fills, so one layer can hold fgsea rows
+#' carrying `padj` beside clusterProfiler ORA rows carrying only `p.adjust`.
+#' Both columns then exist, and picking one for the whole table reads NA for
+#' every row that used the other -- silently, because the column check passed.
+#'
+#' Both names mean the same quantity, so this is choosing where to read it, not
+#' choosing between statistics.
 #'
 #' @param df Enrichment data frame for one omics layer.
-#' @return Name of the column to read, or NULL when the table carries none.
-.ora_adjusted_p_column <- function(df) {
-    for (col in c("padj", "p.adjust")) {
-        if (col %in% names(df)) return(col)
+#' @return Numeric vector, one per row of \code{df}; NA where no accepted column
+#'   carries a value for that row.
+#' @examples
+#' mixed <- data.frame(padj = c(0.01, NA), p.adjust = c(NA, 0.02))
+#' .ora_adjusted_p_values(mixed)   # 0.01 0.02
+.ora_adjusted_p_values <- function(df) {
+    vals <- rep(NA_real_, nrow(df))
+
+    for (col in .ORA_ADJUSTED_P_COLUMNS) {
+        if (!col %in% names(df)) next
+        # Converted only when it is not already numeric: as.numeric() on a factor
+        # returns level codes, and a round trip through as.character() would cost
+        # precision these p-values cannot spare.
+        v <- df[[col]]
+        if (!is.numeric(v)) v <- suppressWarnings(as.numeric(as.character(v)))
+        fill <- is.na(vals) & !is.na(v)
+        vals[fill] <- v[fill]
     }
-    NULL
+
+    vals
 }
 
 
@@ -2212,6 +2244,67 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # =============================================================================
 # Plotting functions
 # =============================================================================
+
+#' A colour range that will not collapse on a degenerate matrix
+#'
+#' Both heatmap paths cut a value range into one interval per colour, and both
+#' break when that range has zero width: \code{pheatmap} derives its breaks from
+#' the minimum and maximum, so an identical pair yields duplicate breaks and
+#' \code{cut()} refuses them, and \code{image()} wants a \code{zlim} whose ends
+#' differ. Zero width is not exotic here -- one cell with evidence, or several
+#' cells that happen to agree, is an ordinary sparse result, especially in a
+#' per-contrast view. The figures' tryCatch would then paint a "failed"
+#' placeholder over a perfectly drawable result.
+#'
+#' Widening a degenerate range is a display accommodation: the value shown is
+#' unchanged, it simply lands mid-scale instead of at an end, which is honest
+#' for a matrix that carries no contrast to show.
+#'
+#' @param m Numeric matrix, possibly holding NA.
+#' @return Numeric pair, low then high, with the low strictly below the high.
+.nondegenerate_range <- function(m) {
+    rng <- suppressWarnings(range(m, na.rm = TRUE))
+    # All NA gives c(Inf, -Inf); nothing is drawn from it, but it must not reach
+    # a breaks calculation either.
+    if (!all(is.finite(rng))) return(c(0, 1))
+    if (rng[1] == rng[2]) return(rng + c(-0.5, 0.5))
+    rng
+}
+
+
+#' Draw a heatmap too small for stats::heatmap()
+#'
+#' \code{heatmap()} rejects fewer than two rows or two columns even with both
+#' dendrograms disabled, and one surviving pathway is a normal outcome in a
+#' per-contrast view. It draws through \code{image()} anyway, so the degenerate
+#' case goes straight there rather than padding the matrix -- a fabricated row
+#' would put a pathway on the figure that the data does not have.
+#'
+#' @param m Numeric matrix to draw, with dimnames for the axes.
+#' @param main Plot title.
+#' @param col Colour vector.
+#' @param zlim Value range, from \code{.nondegenerate_range()}.
+#' @return Invisibly NULL; called for the plot it draws.
+.draw_small_heatmap <- function(m, main, col, zlim) {
+    # image() takes z indexed [x, y] -- columns then rows -- so the matrix is
+    # transposed and the row labels follow it.
+    #
+    # Cell edges, not cell centres. Given centres, image() infers the edges from
+    # the spacing between them, which needs at least two: a length-one x or y is
+    # rejected with "dimensions of z are not length(x)(-1) times length(y)(-1)".
+    # That is precisely the shape this function exists for, so the edges are
+    # given outright and every size from 1x1 upward draws.
+    graphics::image(x = seq(0.5, ncol(m) + 0.5, by = 1),
+                    y = seq(0.5, nrow(m) + 0.5, by = 1), z = t(m),
+                    col = col, zlim = zlim, axes = FALSE,
+                    xlab = "", ylab = "", main = main)
+    graphics::axis(1, at = seq_len(ncol(m)), labels = colnames(m),
+                   las = 2, tick = FALSE)
+    graphics::axis(2, at = seq_len(nrow(m)), labels = rownames(m),
+                   las = 1, tick = FALSE)
+    invisible(NULL)
+}
+
 
 #' Choose the rows a cross-omics figure shows
 #'
@@ -2305,6 +2398,11 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # not "a p-value close to 1", and flattening the two to 0 rendered them the
     # same white -- which also left na_col below as dead configuration.
 
+    # Breaks are passed rather than left to pheatmap, which derives them from the
+    # minimum and maximum and so produces duplicates when every value agrees --
+    # see .nondegenerate_range(). One interval per colour, hence 50 + 1.
+    zl <- .nondegenerate_range(log_pval_matrix)
+
     # Heatmap
     if (requireNamespace("pheatmap", quietly = TRUE)) {
         pheatmap::pheatmap(log_pval_matrix,
@@ -2312,6 +2410,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
                            cluster_cols = FALSE,
                            main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
                            color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
+                           breaks = seq(zl[1], zl[2], length.out = 51),
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -2329,9 +2428,17 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
         # for a missing p-value, so the background is grey while this draws.
         # The value stays NA; only what shows behind it changes.
         withr::with_par(list(bg = "grey90"), {
-            heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
-                    main = "Cross-Omics Pathway Enrichment",
-                    col = colorRampPalette(c("white", "orange", "red"))(50))
+            base_cols <- colorRampPalette(c("white", "orange", "red"))(50)
+            if (nrow(log_pval_matrix) >= 2 && ncol(log_pval_matrix) >= 2) {
+                heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
+                        main = "Cross-Omics Pathway Enrichment",
+                        col = base_cols, zlim = zl)
+            } else {
+                # heatmap() refuses this shape outright; see .draw_small_heatmap().
+                .draw_small_heatmap(log_pval_matrix,
+                                    main = "Cross-Omics Pathway Enrichment",
+                                    col = base_cols, zlim = zl)
+            }
         })
     }
 }
@@ -2426,12 +2533,18 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
     # are scored on different quantities.
     ora_palette <- c("#fff7f3", "#fcc5c0", "#f768a1", "#ae017e", "#7a0177")
 
+    # A sparse result is the common case for this figure -- one layer, one
+    # pathway, one cell -- and a zero-width range breaks both drawing paths.
+    # See .nondegenerate_range(); one interval per colour, hence 50 + 1.
+    zl <- .nondegenerate_range(log_padj_matrix)
+
     if (requireNamespace("pheatmap", quietly = TRUE)) {
         pheatmap::pheatmap(log_padj_matrix,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
                            main = "Cross-Omics ORA Evidence (-log10 adjusted p-value)",
                            color = colorRampPalette(ora_palette)(50),
+                           breaks = seq(zl[1], zl[2], length.out = 51),
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -2445,9 +2558,17 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
         # all, so the device background shows through it; on white that is the
         # same white as the low end of the scale, and the legend promises grey.
         withr::with_par(list(bg = "grey90"), {
-            heatmap(log_padj_matrix, scale = "none", Rowv = NA, Colv = NA,
-                    main = "Cross-Omics ORA Evidence",
-                    col = colorRampPalette(ora_palette)(50))
+            base_cols <- colorRampPalette(ora_palette)(50)
+            if (nrow(log_padj_matrix) >= 2 && ncol(log_padj_matrix) >= 2) {
+                heatmap(log_padj_matrix, scale = "none", Rowv = NA, Colv = NA,
+                        main = "Cross-Omics ORA Evidence",
+                        col = base_cols, zlim = zl)
+            } else {
+                # heatmap() refuses this shape outright; see .draw_small_heatmap().
+                .draw_small_heatmap(log_padj_matrix,
+                                    main = "Cross-Omics ORA Evidence",
+                                    col = base_cols, zlim = zl)
+            }
         })
     }
 
