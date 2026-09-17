@@ -107,12 +107,15 @@ test_that("a missing layer p-value stays NA through the heatmap preparation", {
     # No proteomics enrichment p-value reached the table for 00020. Flattening
     # that to 0 rendered it the same white as a p-value close to 1, and left
     # pheatmap's na_col as dead configuration.
+    # Complementary missingness on purpose: the two rows share no observed
+    # layer, which is the shape that breaks row clustering and the one a union
+    # candidate universe makes easy to produce.
     meta <- meta_fixture(
         norm_id       = c("00010", "00020"),
-        n_omics       = c(2L, 1L),
+        n_omics       = c(1L, 1L),
         combined_pval = c(1e-5, 1e-3),
-        pval_a        = c(1e-5, 1e-3),
-        pval_b        = c(1e-4, NA_real_)
+        pval_a        = c(1e-5, NA_real_),
+        pval_b        = c(NA_real_, 1e-3)
     )
 
     out <- withr::local_tempfile(fileext = ".png")
@@ -125,6 +128,38 @@ test_that("a missing layer p-value stays NA through the heatmap preparation", {
     # now takes.
     expect_no_error(plot_cross_omics_pathway_heatmap(meta, c("transcriptomics",
                                                              "proteomics")))
+})
+
+test_that("the base fallback disables both dendrograms, as the primary path does", {
+    # The pheatmap branch sets cluster_rows = FALSE and cluster_cols = FALSE.
+    # The fallback disabled columns only, which was both a mismatch and a
+    # failure waiting for the right input -- see the next test.
+    body_src <- paste(deparse(body(plot_cross_omics_pathway_heatmap)),
+                      collapse = " ")
+
+    expect_true(grepl("Rowv = NA", body_src, fixed = TRUE))
+    expect_true(grepl("Colv = NA", body_src, fixed = TRUE))
+})
+
+test_that("row clustering cannot survive complementary missingness", {
+    # Two rows whose present values do not overlap share no observed cell, so
+    # the distance between them is NA and hclust() stops on it. This is why the
+    # fallback must not cluster rows; it pins the reason rather than the call.
+    m <- matrix(c(2, NA,
+                  NA, 3), nrow = 2, byrow = TRUE,
+                dimnames = list(c("00010", "00020"),
+                                c("transcriptomics", "proteomics")))
+
+    expect_true(any(is.na(stats::dist(m))))
+    expect_error(stats::hclust(stats::dist(m)))
+
+    # With both dendrograms off, the same matrix draws.
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    expect_no_error(
+        stats::heatmap(m, scale = "none", Rowv = NA, Colv = NA,
+                       col = grDevices::colorRampPalette(c("white", "red"))(5)))
 })
 
 test_that("the heatmap no longer flattens missing values to zero", {

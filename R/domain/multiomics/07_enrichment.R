@@ -2132,7 +2132,13 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
                            na_col = "grey90",
                            border_color = "grey80")
     } else {
-        heatmap(log_pval_matrix, scale = "none", Colv = NA,
+        # Rowv = NA as well as Colv = NA, to match the pheatmap path above,
+        # which disables both dendrograms. Leaving row clustering on was also a
+        # failure waiting for the right input: two rows whose missing layer
+        # p-values do not overlap share no observed cell, so dist() returns NA
+        # between them and hclust() stops on it. Missing values stay missing --
+        # nothing here fills them to make clustering possible.
+        heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
                 main = "Cross-Omics Pathway Enrichment",
                 col = colorRampPalette(c("white", "orange", "red"))(50))
     }
