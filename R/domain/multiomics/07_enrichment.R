@@ -1417,7 +1417,10 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics,
                                               kegg_org = kegg_org)
 
-    # Combine p-values using Stouffer's method (only for pathways with >= 2 p-values)
+    # Combine p-values using Stouffer's method. Every candidate pathway gets a
+    # row: the ones a single layer enriched are kept and carry n_omics = 1,
+    # rather than being dropped here. Requiring two layers is a question for
+    # whoever reads or ranks the table, and n_omics is what lets them ask it.
     meta_results <- stouffer_combined_pvalues(merged_pathways)
 
     # The key joined the layers; the label is what a reader sees. Both are kept,

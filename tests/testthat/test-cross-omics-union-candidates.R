@@ -36,7 +36,9 @@ test_that("a pathway only one layer enriched still reaches the meta-analysis", {
     res <- suppressMessages(
         analyze_cross_omics_enrichment(two_layers(), minimal_config(), out_dir = NULL))
 
-    skip_if(is.null(res) || is.null(res$meta_analysis), "no meta-analysis produced")
+    # These fixtures are expected to produce a cross-omics result. An absent one
+    # is the regression, not a reason to skip.
+    expect_false(is.null(res$meta_analysis))
     ids <- res$meta_analysis$norm_id
 
     # The five shared pathways would have been the whole candidate set under the
@@ -50,7 +52,6 @@ test_that("a pathway only one layer enriched still reaches the meta-analysis", {
 test_that("the meta-analysis, not the candidate set, decides multi-omics evidence", {
     res <- suppressMessages(
         analyze_cross_omics_enrichment(two_layers(), minimal_config(), out_dir = NULL))
-    skip_if(is.null(res) || is.null(res$meta_analysis), "no meta-analysis produced")
     meta <- res$meta_analysis
 
     # Union-only rows arrive with one layer's p-value and are counted as such,
@@ -65,7 +66,6 @@ test_that("the shared pathways behave exactly as they did before", {
     layers <- two_layers()
     res <- suppressMessages(
         analyze_cross_omics_enrichment(layers, minimal_config(), out_dir = NULL))
-    skip_if(is.null(res) || is.null(res$meta_analysis), "no meta-analysis produced")
     meta <- res$meta_analysis
 
     # Widening the candidate set must not disturb the rows that were already in
@@ -82,7 +82,6 @@ test_that("the shared pathways behave exactly as they did before", {
 test_that("the overlap is still reported, as a description rather than a gate", {
     res <- suppressMessages(
         analyze_cross_omics_enrichment(two_layers(), minimal_config(), out_dir = NULL))
-    skip_if(is.null(res), "no result produced")
 
     expect_setequal(res$common_pathways, shared_ids)
     expect_setequal(res$union_pathways, c(shared_ids, "00099", "00088"))
@@ -98,7 +97,6 @@ test_that("fewer than five shared pathways behaves the same way it always did", 
     )
     res <- suppressMessages(
         analyze_cross_omics_enrichment(layers, minimal_config(), out_dir = NULL))
-    skip_if(is.null(res) || is.null(res$meta_analysis), "no meta-analysis produced")
 
     expect_setequal(res$meta_analysis$norm_id, c("00010", "00099", "00088"))
 })
