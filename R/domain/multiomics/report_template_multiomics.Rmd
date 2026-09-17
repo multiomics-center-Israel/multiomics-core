@@ -680,7 +680,15 @@ render_commentary("compound_ora")
 ```
 
 ```{r pathview-setup, include=FALSE}
-pathview_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_supported.pdf")
+# Two renderers can fill this section, on mutually exclusive branches of
+# run_multi_ora(), and they do not make the same claim: "supported" means the
+# pathway was enriched in two or more omics layers, while the no-OrgDb fallback
+# unions the hits of either gene layer, so a map there can rest on one layer
+# alone. The section says which of the two it is showing.
+pathview_supported_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_supported.pdf")
+pathview_union_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_union.pdf")
+pathview_is_union <- !file.exists(pathview_supported_pdf) && file.exists(pathview_union_pdf)
+pathview_pdf <- if (pathview_is_union) pathview_union_pdf else pathview_supported_pdf
 pathview_dir <- file.path(multi_ora_dir, "pathview")
 has_pathview <- file.exists(pathview_pdf)
 ```
@@ -688,13 +696,21 @@ has_pathview <- file.exists(pathview_pdf)
 ## Multi-Omics Pathway Maps (Pathview) {.unnumbered}
 
 ```{r pathview-note, eval=!has_pathview, results='asis'}
-cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layers.*\n")
+cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layers,",
+    "or, for an organism with no annotation database, a configured feature-to-KO map.*\n")
 ```
 
 ```{r pathview-plots, eval=has_pathview, results='asis'}
 pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$", full.names = TRUE))
-cat("KEGG pathway maps for pathways enriched in >= 2 omics layers, shown **per contrast**. ",
-    "Gene nodes are colored by logFC (transcriptomics and/or proteomics); ",
+cat(if (pathview_is_union) {
+        paste("KEGG pathway maps for pathways enriched in **at least one**",
+              "gene-based omics layer, shown **per contrast**. A map here can",
+              "rest on transcriptomics or proteomics alone.")
+    } else {
+        paste("KEGG pathway maps for pathways enriched in **>= 2 omics layers**,",
+              "shown **per contrast**.")
+    },
+    " Gene nodes are colored by logFC (transcriptomics and/or proteomics); ",
     "compound nodes are colored by metabolomics logFC.\n\n")
 cat(sprintf("[Download compiled PDF](%s)\n\n", pathview_pdf))
 

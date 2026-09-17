@@ -2398,10 +2398,10 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     }
 
     # --- Compile into a single PDF with contrast labels ---
-    # generate_per_omic_union_pathview() writes this same filename, deliberately:
-    # the report has one pathway-maps section and one download link, and the two
-    # writers sit on mutually exclusive branches of run_multi_ora() -- this one
-    # runs only when an OrgDb resolved, that one only when it did not.
+    # "supported" is a claim: these pathways are enriched in two or more omics
+    # layers. generate_per_omic_union_pathview(), the no-OrgDb fallback, unions
+    # single-layer hits and so writes its own file -- sharing this name would
+    # have presented one layer's evidence under this one's promise.
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)

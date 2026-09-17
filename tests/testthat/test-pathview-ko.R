@@ -211,6 +211,22 @@ test_that("a run with no KEGG code accepts only the species-neutral prefixes", {
     expect_identical(keep, c(TRUE, TRUE, TRUE, FALSE))
 })
 
+test_that("the render space reads the same organism registry as pathway identity", {
+    # get_kegg_organism() knows six exact species names; the pathway identity
+    # helpers resolve through get_organism_info() as well. Resolving the render
+    # space with the narrow one pushed an organism KEGG does cover into KO mode,
+    # where it then needed a ko_map to draw anything.
+    expect_null(get_kegg_organism("Saccharomyces cerevisiae"))
+    expect_identical(resolve_kegg_org_code("Saccharomyces cerevisiae"), "sce")
+
+    expect_null(get_kegg_organism("Arabidopsis thaliana"))
+    expect_identical(resolve_kegg_org_code("Arabidopsis thaliana"), "ath")
+
+    # And an organism neither knows still resolves to nothing, which is what
+    # puts a genuinely code-less run into KO mode.
+    expect_null(resolve_kegg_org_code("Unlisted nonmodel species"))
+})
+
 test_that("forcing KO rendering does not make the run's own accessions foreign", {
     # Rendering space and identity space are separate questions: species = "ko"
     # says draw the reference artwork, not "this run has no organism". Dropping
@@ -222,6 +238,85 @@ test_that("forcing KO rendering does not make the run's own accessions foreign",
         normalize_pathway_join_key(labelled, "hsa"), "hsa"))
     expect_false(is_kegg_pathway_accession(
         normalize_pathway_join_key(labelled, NULL), NULL))
+})
+
+
+# ---- one contrast's pathways, one contrast's fold changes -------------------
+#
+# The ORA inputs span every contrast, so selecting pathways globally and then
+# reading log2FC from whichever DE table happened to come first rendered a
+# pathway found in one contrast using another contrast's values. Selection is
+# keyed on the `contrast` column the ORA rows already carry, and the DE table is
+# then looked up by that name.
+
+ora_rows <- function(contrast, pathway, pvalue) {
+    data.frame(pathway = pathway, pvalue = pvalue, contrast = contrast,
+               stringsAsFactors = FALSE)
+}
+
+test_that(".kegg_hits_by_contrast keeps each contrast's pathways to itself", {
+    tables <- list(
+        ora_rows("A", c("hsa00010", "hsa00020"), c(0.001, 0.30)),
+        ora_rows("B", "hsa00030", 0.002)
+    )
+
+    hits <- .kegg_hits_by_contrast(tables, "hsa")
+
+    expect_setequal(names(hits), c("A", "B"))
+    # 00020 is above the cutoff, so A keeps only 00010.
+    expect_identical(hits[["A"]], "00010")
+    expect_identical(hits[["B"]], "00030")
+    # The pathway only B found must not appear under A.
+    expect_false("00030" %in% hits[["A"]])
+})
+
+test_that(".kegg_hits_by_contrast drops rows it cannot attribute to a contrast", {
+    no_contrast <- data.frame(pathway = "hsa00010", pvalue = 0.001,
+                              stringsAsFactors = FALSE)
+    blank <- ora_rows("", "hsa00020", 0.001)
+
+    expect_length(.kegg_hits_by_contrast(list(no_contrast), "hsa"), 0L)
+    expect_length(.kegg_hits_by_contrast(list(blank), "hsa"), 0L)
+})
+
+test_that(".de_table_for_contrast never falls back to the first table", {
+    tables <- list(A = data.frame(feature_id = "g1", log2fc = 1),
+                   B = data.frame(feature_id = "g1", log2fc = -5))
+
+    # The value that identifies the table is the one under that contrast's name.
+    expect_equal(.de_table_for_contrast(tables, "B")$log2fc, -5)
+    # A contrast with no DE table means the layer is absent for it, which is a
+    # skipped layer -- not a licence to reach for tables[[1]].
+    expect_null(.de_table_for_contrast(tables, "C"))
+    expect_null(.de_table_for_contrast(NULL, "A"))
+    expect_null(.de_table_for_contrast(list(data.frame(x = 1)), "A"))
+})
+
+test_that("a pathway from one contrast cannot pick up another's log2FC", {
+    # End to end over the two pure pieces the renderer composes: B's pathway
+    # resolves to B's table, and the value it would carry is B's.
+    tables <- list(
+        ora_rows("A", "hsa00010", 0.001),
+        ora_rows("B", "hsa00030", 0.001)
+    )
+    de <- list("A" = data.frame(feature_id = "g1", log2fc = 2,
+                                stringsAsFactors = FALSE),
+               "B" = data.frame(feature_id = "g1", log2fc = -7,
+                                stringsAsFactors = FALSE))
+
+    hits <- .kegg_hits_by_contrast(tables, "hsa")
+    owner <- names(hits)[vapply(hits, function(k) "00030" %in% k, logical(1))]
+
+    expect_identical(owner, "B")
+    expect_equal(.de_table_for_contrast(de, owner)$log2fc, -7)
+})
+
+test_that("contrast names that differ only syntactically still match", {
+    # extract_de_tables() and the ORA rows are named from the same contrast
+    # strings, but one of them having been through make.names() must not read as
+    # a different contrast.
+    tables <- list("cond A vs B" = data.frame(feature_id = "g1", log2fc = 3))
+    expect_equal(.de_table_for_contrast(tables, "cond.A.vs.B")$log2fc, 3)
 })
 
 
@@ -250,6 +345,23 @@ test_that("pick_key_position falls back to the default corner", {
     bad <- withr::local_tempfile(fileext = ".png")
     writeLines("not a png", bad)
     expect_identical(pick_key_position(bad), "topright")
+})
+
+
+# ---- the union artifact is not the ">= 2 omics" artifact --------------------
+
+test_that("the union renderer writes its own PDF, not the supported one", {
+    # "supported" is a claim the report repeats: enriched in two or more omics
+    # layers. This renderer unions single-layer hits on purpose, so sharing that
+    # filename presented one layer's evidence under the other's promise. The
+    # separation is the fix, and this is what stops it being undone.
+    union_body <- paste(deparse(body(generate_per_omic_union_pathview)), collapse = " ")
+    supported_body <- paste(deparse(body(generate_multi_ora_pathview)), collapse = " ")
+
+    expect_true(grepl("multi_ora_pathview_union.pdf", union_body, fixed = TRUE))
+    expect_false(grepl("multi_ora_pathview_supported.pdf", union_body, fixed = TRUE))
+    expect_true(grepl("multi_ora_pathview_supported.pdf", supported_body, fixed = TRUE))
+    expect_false(grepl("multi_ora_pathview_union.pdf", supported_body, fixed = TRUE))
 })
 
 

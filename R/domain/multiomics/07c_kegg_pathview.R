@@ -759,34 +759,116 @@ pick_key_position <- function(template_png, frac = 0.28) {
 }
 
 
+
+
+#' Collect the KEGG pathways each contrast called enriched
+#'
+#' The ORA tables carry their own `contrast` column (written by the enrichment
+#' step alongside `database`, `method` and `direction`), so a pathway can be
+#' attributed to the contrast that produced it without reverse-engineering it
+#' from the filename, whose prefix spells the contrast and the gene-set database
+#' in whatever way the project configured them.
+#'
+#' Pure: it reads no files and draws nothing, which is what makes the selection
+#' testable without invoking pathview.
+#'
+#' @param ora_tables List of ORA data frames, as read from the per-omic
+#'   `*_ora_up/down.csv` exports.
+#' @param kegg_org Organism code for pathway identity, or NULL for a run with no
+#'   KEGG code of its own. This is the identity organism, never the render
+#'   species -- see \code{generate_per_omic_union_pathview}.
+#' @param alpha Significance cutoff applied to `pvalue`, or to `padj` when no
+#'   `pvalue` column is present.
+#' @return Named list, one element per contrast, each a character vector of
+#'   normalized KEGG pathway ids. Contrasts with no KEGG hit are absent, and so
+#'   are rows that carry no contrast: they cannot be attributed to one, and
+#'   rendering them against some other contrast's fold changes is the bug this
+#'   whole structure exists to prevent.
+.kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL, alpha = 0.05) {
+    hits <- list()
+    for (d in ora_tables) {
+        if (is.null(d) || !is.data.frame(d) || nrow(d) == 0) next
+        if (!all(c("pathway", "contrast") %in% names(d))) next
+
+        # The gene-set name reaching this column can be a bare accession, a
+        # prefixed one, or the "<accession> <readable name>" form that
+        # fetch_kegg_via_rest() gives its sets. normalize_pathway_join_key()
+        # reduces all three to the bare map number and leaves everything else
+        # byte-identical, so testing the normalized value is what decides
+        # whether the row names a KEGG pathway at all -- and another organism's
+        # prefix, which normalization does not touch, is still rejected.
+        keys <- normalize_pathway_join_key(d$pathway, kegg_org)
+        keep <- is_kegg_pathway_accession(keys, kegg_org)
+
+        pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
+        if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < alpha
+
+        keep <- keep & !is.na(d$contrast) & nzchar(trimws(as.character(d$contrast)))
+        if (!any(keep)) next
+
+        for (cn in unique(as.character(d$contrast[keep]))) {
+            hits[[cn]] <- unique(c(hits[[cn]], keys[keep & d$contrast == cn]))
+        }
+    }
+    hits
+}
+
+
+#' Pick one contrast's DE table out of a per-contrast list
+#'
+#' Exact name first. The ORA tables and the DE tables are named from the same
+#' contrast strings, but a caller that has passed one of them through
+#' \code{make.names()} would otherwise silently lose the match, so an equal
+#' syntactic name counts as the same contrast. Anything else is a miss, and a
+#' miss means the layer is absent for that contrast -- never the first table.
+#'
+#' @param tables Named list of DE tables, as \code{extract_de_tables} returns.
+#' @param contrast Contrast name to look for.
+#' @return The matching data frame, or NULL.
+.de_table_for_contrast <- function(tables, contrast) {
+    if (is.null(tables) || length(tables) == 0 || is.null(names(tables))) return(NULL)
+    if (contrast %in% names(tables)) return(tables[[contrast]])
+    same <- make.names(names(tables)) == make.names(contrast)
+    if (sum(same) == 1L) return(tables[[which(same)]])
+    NULL
+}
+
+
 #' Render KEGG maps for the union of pathways enriched in either gene omic
 #'
 #' Reads the per-omic ORA tables written by the RNA / proteomics enrichment
-#' steps, takes the union of the KEGG pathways they call enriched, and renders
-#' one map per pathway with the RNA and protein log2FC overlaid as two states.
+#' steps and, for each contrast separately, renders one map per KEGG pathway
+#' that contrast called enriched, with its RNA and protein log2FC overlaid as
+#' two states.
+#'
+#' Union, not intersection: a pathway enriched in only one gene layer is
+#' deliberately eligible here, because this is the fallback for runs that get no
+#' maps at all otherwise. That is why the output is a separate PDF from
+#' \code{generate_multi_ora_pathview}'s, whose pathways really are supported in
+#' two or more layers -- the report distinguishes the two.
 #'
 #' Runs in one of two ID spaces:
 #' \itemize{
 #'   \item organism space -- the species has a KEGG code, so native
 #'     `<org>#####` maps are drawn and feature ids double as KEGG gene ids
 #'     (proteins are bridged through the gene-protein mapping).
-#'   \item KO space -- the species has no KEGG code at all (non-model organism).
-#'     The KEGG reference `map#####` artwork is drawn instead, and features are
+#'   \item KO space -- the species has no KEGG code, or `pathview.species` is
+#'     `"ko"`. The KEGG reference `map#####` artwork is drawn and features are
 #'     translated to KEGG Orthology ids through `enrichment.pathview.ko_map`.
 #'     Metabolite log2FC is passed as `cpd.data` here, so one map carries all
 #'     three layers -- which is the only reason the KO detour is worth taking.
 #' }
 #'
-#' Called from \code{run_multi_ora()}'s no-OrgDb branch, so it never runs in the
-#' same pass as \code{generate_multi_ora_pathview()}; see the note beside the
-#' shared PDF name below.
+#' Render space and identity space are separate: forcing `"ko"` changes what the
+#' maps are drawn on, not which accessions the run may legitimately spell its
+#' own pathways with.
 #'
 #' @param de_results Named list of DE results per omics.
 #' @param harmonization_res Harmonization result (supplies the gene-protein map
 #'   and the metabolomics row data).
 #' @param config Full config.
 #' @param out_dir Multi-ORA output directory (maps go under `out_dir/pathview`).
-#' @param top_n Max pathways to render; overridden by
+#' @param top_n Max pathways to render per contrast; overridden by
 #'   `modes$multiomics$enrichment$pathview$top_n` when that is set.
 #' @return Path to the compiled PDF, or NULL when nothing could be rendered.
 generate_per_omic_union_pathview <- function(de_results, harmonization_res,
@@ -796,6 +878,7 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     # resolve_kegg_org_code(), not get_kegg_organism(): the latter only knows the
     # six exact species names of the older table, so an organism KEGG does cover
     # would be pushed into KO mode and then need a ko_map to render anything.
+    # The pathway identity helpers read the same registry through this resolver.
     kegg_org <- resolve_kegg_org_code(organism)
 
     pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
@@ -811,69 +894,64 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
                 "ignoring '", species_cfg, "' and using global.organism")
         species_cfg <- ""
     }
-    ko_mode <- identical(tolower(species_cfg), "ko") ||
-        is.null(kegg_org) || !nzchar(kegg_org)
+    ko_mode <- identical(tolower(species_cfg), "ko") || is.null(kegg_org)
 
     ko_map <- if (ko_mode) load_feature_ko_map(config) else NULL
     if (ko_mode && (is.null(ko_map) || nrow(ko_map) == 0)) {
-        # No KEGG code for this organism and no KO map: nothing can be drawn.
+        # Nothing can be placed onto a reference map without a KO translation.
         return(NULL)
     }
-    # Rendering space and identity space are not the same question. "ko" is what
-    # pathview draws in; the run's own organism code is what its ORA tables are
-    # allowed to be spelled with, and forcing KO rendering does not make the
-    # run's own accessions foreign. When no code resolved, kegg_org is NULL and
-    # only the species-neutral prefixes are accepted, which is what a run with no
-    # organism code of its own should accept.
+
+    # Render species is what pathview draws on; the identity organism is which
+    # accessions this run may spell its own pathways with. Forcing KO changes
+    # the first and not the second, so an hsa run with species = "ko" still
+    # normalizes hsa00010 to 00010 and then draws it on the reference map. Only
+    # a genuinely code-less organism carries NULL here.
     pv_species <- if (ko_mode) "ko" else kegg_org
     id_org <- kegg_org
 
-    # 1. Union of KEGG pathways enriched (p < 0.05) in RNA OR protein, read from
-    #    the per-omic ORA tables written by the RNA/proteomics enrichment steps.
-    #    Locate them by walking up from out_dir to the run root.
+    # 1. KEGG pathways each contrast called enriched, read from the per-omic ORA
+    #    tables. Locate them by walking up from out_dir to the run root.
     run_root <- out_dir
     for (i in seq_len(8)) {
         if (dir.exists(file.path(run_root, "rna", "Enrichment")) ||
             dir.exists(file.path(run_root, "proteomics", "Enrichment"))) break
         parent <- dirname(run_root); if (identical(parent, run_root)) break; run_root <- parent
     }
-    # The ORA filename prefix carries the contrast and gene-set database, both
-    # project-specific, so only the "_ora_up/down.csv" tail is fixed.
+    # The ORA filename prefix carries the contrast and the gene-set database,
+    # both project-specific, so only the "_ora_up/down.csv" tail is fixed. The
+    # contrast is then read from the rows, not from the name.
     ora_files <- c(list.files(file.path(run_root, "rna", "Enrichment"),
                               "_ora_(up|down)\\.csv$", full.names = TRUE),
                    list.files(file.path(run_root, "proteomics", "Enrichment"),
                               "_ora_(up|down)\\.csv$", full.names = TRUE))
-    pathways <- unique(unlist(lapply(ora_files, function(f) {
-        d <- tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
-        if (is.null(d) || !"pathway" %in% names(d)) return(character(0))
-        pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
-        # The gene-set name reaching this column can be a bare accession, a
-        # prefixed one, or the "<accession> <readable name>" form that
-        # fetch_kegg_via_rest() gives its sets. normalize_pathway_join_key()
-        # reduces all three to the bare map number and leaves everything else
-        # byte-identical, so testing the normalized value is what decides
-        # whether the row names a KEGG pathway at all -- and another organism's
-        # prefix, which normalization does not touch, is still rejected.
-        keys <- normalize_pathway_join_key(d$pathway, id_org)
-        keep <- is_kegg_pathway_accession(keys, id_org)
-        if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < 0.05
-        unique(keys[keep])
-    })))
-    if (length(pathways) == 0) {
+    ora_tables <- lapply(ora_files, function(f) {
+        tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
+    })
+    hits <- .kegg_hits_by_contrast(ora_tables, id_org)
+    if (length(hits) == 0) {
         message("  Union pathview: no enriched ", pv_species, " KEGG pathways.")
         return(NULL)
     }
-    pathways <- utils::head(pathways, top_n)
 
-    # 2. Gene data in the ID space pathview expects: native KEGG gene ids in
-    #    organism mode, KO ids in KO mode.
+    # 2. DE tables per layer, kept keyed by contrast so that step 3 can take the
+    #    one belonging to the contrast it is rendering.
+    tables_for <- function(om) {
+        if (!om %in% names(de_results)) return(NULL)
+        tryCatch(extract_de_tables(de_results[[om]], om, harmonization_res),
+                 error = function(e) NULL)
+    }
+    rna_tables   <- tables_for("transcriptomics")
+    prot_tables  <- tables_for("proteomics")
+    metab_tables <- if (ko_mode) tables_for("metabolomics") else NULL
+    metab_map <- if (!is.null(metab_tables)) {
+        tryCatch(map_metabolite_ids_to_kegg(metab_tables, harmonization_res),
+                 error = function(e) NULL)
+    } else NULL
+
     gpm <- harmonization_res$gene_protein_mapping
-    layer_fc <- function(om) {
-        tbls <- tryCatch(extract_de_tables(de_results[[om]], om, harmonization_res),
-                         error = function(e) NULL)
-        if (is.null(tbls) || length(tbls) == 0) return(NULL)
-        df <- tbls[[1]]
-        if (!all(c("feature_id", "log2fc") %in% names(df))) return(NULL)
+    layer_fc <- function(df, om) {
+        if (is.null(df) || !all(c("feature_id", "log2fc") %in% names(df))) return(NULL)
         if (ko_mode) return(aggregate_log2fc_by_ko(df, ko_map, om))
         ids <- df$feature_id
         if (identical(om, "proteomics") && !is.null(gpm)) {
@@ -885,39 +963,8 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         # so average rather than let an arbitrary one win.
         tapply(df$log2fc[ok], ids[ok], mean, na.rm = TRUE)
     }
-    rna_fc  <- layer_fc("transcriptomics")
-    prot_fc <- layer_fc("proteomics")
-    if (is.null(rna_fc) && is.null(prot_fc)) return(NULL)
-    genes <- unique(c(names(rna_fc), names(prot_fc)))
-    gene_data <- matrix(NA_real_, length(genes), 2,
-                        dimnames = list(genes, c("RNA", "Protein")))
-    if (!is.null(rna_fc))  gene_data[names(rna_fc), 1]  <- rna_fc
-    if (!is.null(prot_fc)) gene_data[names(prot_fc), 2] <- prot_fc
-    message("  Union pathview: ", length(genes), " ",
-            if (ko_mode) "KO" else "gene", " nodes with log2FC")
 
-    # 3. Compound data, so metabolites colour the compound nodes. Only in KO
-    #    mode: organism mode keeps the two-layer view the caller already had.
-    cpd_data <- NULL
-    if (ko_mode && "metabolomics" %in% names(de_results)) {
-        cpd_data <- tryCatch({
-            metab_tbls <- extract_de_tables(de_results$metabolomics, "metabolomics",
-                                            harmonization_res)
-            metab_map <- map_metabolite_ids_to_kegg(metab_tbls, harmonization_res)
-            if (is.null(metab_map) || nrow(metab_map) == 0 || length(metab_tbls) == 0) {
-                NULL
-            } else {
-                md <- merge(metab_tbls[[1]], metab_map, by = "feature_id")
-                fc <- tapply(md$log2fc, md$KEGG_CPD, mean, na.rm = TRUE)
-                stats::setNames(as.numeric(fc), names(fc))
-            }
-        }, error = function(e) NULL)
-        if (!is.null(cpd_data)) {
-            message("  Union pathview: ", length(cpd_data), " compound nodes with log2FC")
-        }
-    }
-
-    # 4. Render one map per pathway (both gene layers overlaid).
+    # 3. One render pass per contrast, on that contrast's own fold changes.
     # pathview needs its 'bods' dataset in the global env when called via ::.
     if (!exists("bods", envir = globalenv())) {
         utils::data("bods", package = "pathview", envir = globalenv())
@@ -928,43 +975,80 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
     # with_dir(); the absolute path keeps kegg.dir pointing at the same place
     # from inside it.
     pv_dir <- normalizePath(pv_dir, winslash = "/", mustWork = FALSE)
+
     generated <- withr::with_dir(pv_dir, {
         made <- character(0)
-        for (clean_pid in pathways) {
-            # Place the colour key in whichever corner the map itself leaves
-            # empty. The template is cached by an earlier pathview call, so this
-            # is free on a re-run and falls back to the default on a first one.
-            key_pos <- pick_key_position(
-                file.path(pv_dir, paste0(pv_species, clean_pid, ".png")))
-            tryCatch({
-                pathview::pathview(gene.data = gene_data, cpd.data = cpd_data,
-                                   pathway.id = clean_pid,
-                                   species = pv_species, gene.idtype = "KEGG",
-                                   out.suffix = "multi_ora", kegg.dir = pv_dir,
-                                   key.pos = key_pos,
-                                   multi.state = TRUE, same.layer = FALSE)
-                f <- c(paste0(pv_species, clean_pid, ".multi_ora.multi.png"),
-                       paste0(pv_species, clean_pid, ".multi_ora.png"))
-                f <- f[file.exists(f)]
-                if (length(f) > 0) {
-                    made <- c(made, file.path(pv_dir, f[1]))
-                    message("    Union pathview: ", pv_species, clean_pid)
-                }
-            }, error = function(e) {
-                message("    Union pathview failed for ", clean_pid, ": ", e$message)
-            })
+        for (contrast in names(hits)) {
+            rna_df  <- .de_table_for_contrast(rna_tables, contrast)
+            prot_df <- .de_table_for_contrast(prot_tables, contrast)
+            rna_fc  <- layer_fc(rna_df, "transcriptomics")
+            prot_fc <- layer_fc(prot_df, "proteomics")
+            if (is.null(rna_fc) && is.null(prot_fc)) {
+                # A contrast whose pathways came from an ORA table we have no DE
+                # table for. Borrowing another contrast's values is exactly the
+                # cross-wiring this loop exists to prevent, so it is skipped.
+                message("  Union pathview: no DE table for contrast ", contrast,
+                        "; skipping it")
+                next
+            }
+            genes <- unique(c(names(rna_fc), names(prot_fc)))
+            gene_data <- matrix(NA_real_, length(genes), 2,
+                                dimnames = list(genes, c("RNA", "Protein")))
+            if (!is.null(rna_fc))  gene_data[names(rna_fc), 1]  <- rna_fc
+            if (!is.null(prot_fc)) gene_data[names(prot_fc), 2] <- prot_fc
+
+            # Compounds colour the compound nodes, from the same contrast. Only
+            # in KO mode: organism mode keeps the two-layer view.
+            cpd_data <- NULL
+            metab_df <- .de_table_for_contrast(metab_tables, contrast)
+            if (!is.null(metab_df) && !is.null(metab_map) && nrow(metab_map) > 0) {
+                cpd_data <- tryCatch({
+                    md <- merge(metab_df, metab_map, by = "feature_id")
+                    fc <- tapply(md$log2fc, md$KEGG_CPD, mean, na.rm = TRUE)
+                    stats::setNames(as.numeric(fc), names(fc))
+                }, error = function(e) NULL)
+            }
+
+            safe_contrast <- make.names(contrast)
+            out_suffix <- paste0("multi_ora_", safe_contrast)
+            message("  Union pathview: ", contrast, " -- ", length(genes), " ",
+                    if (ko_mode) "KO" else "gene", " nodes with log2FC")
+
+            for (clean_pid in utils::head(hits[[contrast]], top_n)) {
+                # Place the colour key in whichever corner the map itself leaves
+                # empty. The template is cached by an earlier pathview call, so
+                # this is free on a re-run and falls back to the default corner
+                # on a first one.
+                key_pos <- pick_key_position(
+                    file.path(pv_dir, paste0(pv_species, clean_pid, ".png")))
+                tryCatch({
+                    pathview::pathview(gene.data = gene_data, cpd.data = cpd_data,
+                                       pathway.id = clean_pid,
+                                       species = pv_species, gene.idtype = "KEGG",
+                                       out.suffix = out_suffix, kegg.dir = pv_dir,
+                                       key.pos = key_pos,
+                                       multi.state = TRUE, same.layer = FALSE)
+                    f <- c(paste0(pv_species, clean_pid, ".", out_suffix, ".multi.png"),
+                           paste0(pv_species, clean_pid, ".", out_suffix, ".png"))
+                    f <- f[file.exists(f)]
+                    if (length(f) > 0) {
+                        made <- c(made, file.path(pv_dir, f[1]))
+                        message("    Union pathview: ", pv_species, clean_pid)
+                    }
+                }, error = function(e) {
+                    message("    Union pathview failed for ", clean_pid, ": ", e$message)
+                })
+            }
         }
         made
     })
     if (length(generated) == 0) return(NULL)
 
-    # 5. Compile into the PDF the report uses as the has_pathview gate.
-    #    Same filename as generate_multi_ora_pathview() writes, deliberately:
-    #    the report has one pathway-maps section and one download link, and the
-    #    two writers are on mutually exclusive branches of run_multi_ora() --
-    #    that one runs only when an OrgDb resolved, this one only when it did
-    #    not. Renaming either would leave one of the two paths with no section.
-    pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
+    # 4. Compile into this renderer's own PDF. Deliberately NOT the name
+    #    generate_multi_ora_pathview() writes: that file means "enriched in two
+    #    or more omics layers", and a union of single-layer hits is not that.
+    #    The report reads whichever of the two exists and says which it is.
+    pdf_path <- file.path(out_dir, "multi_ora_pathview_union.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
         for (png_file in generated) {
