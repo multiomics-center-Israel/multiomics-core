@@ -1435,6 +1435,31 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 # Helper functions
 # =============================================================================
 
+#' Canonical key for a contrast name
+#'
+#' Different omics spell the same contrast differently -- `"1.56ppm_vs_0ppm"`
+#' from RNA, `"1.56ppm vs. 0ppm"` from proteomics, `"1.56ppm - 0ppm"` from
+#' metabolomics, and the ORA exports drop the spaces again. All of those name
+#' one biological comparison and must reduce to one key, or per-contrast work
+#' silently splits a contrast in two, or pairs the wrong halves.
+#'
+#' This is identity, not display: keep the original string for headings and
+#' filenames, and use the key only to decide what belongs with what.
+#'
+#' @param x Character vector of contrast names.
+#' @return Character vector of canonical keys, same length as \code{x}.
+#' @examples
+#' normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b"))   # all "avsb"
+normalize_contrast_key <- function(x) {
+    x <- tolower(trimws(x))
+    # Treat " - " / "-" between groups as an alias for "vs"
+    x <- gsub("\\s*-\\s*", "vs", x)
+    x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
+    x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
+    x
+}
+
+
 #' Normalize KEGG pathway IDs to bare numeric form
 #'
 #' Strips organism prefixes (hsa, mmu, cel, map, etc.) to allow

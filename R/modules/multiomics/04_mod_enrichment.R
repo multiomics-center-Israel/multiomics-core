@@ -83,18 +83,9 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
 
     # Normalize contrast names across omics so they aggregate correctly.
-    # Different omics may encode the same contrast differently (e.g.,
-    # "1.56ppm_vs_0ppm" from RNA, "1.56ppm vs. 0ppm" from proteomics,
-    # or "1.56ppm - 0ppm" from metabolomics). All of these refer to the
-    # same contrast and must map to the same canonical key.
-    .normalize_contrast_key <- function(x) {
-        x <- tolower(trimws(x))
-        # Treat " - " / "-" between groups as an alias for "vs"
-        x <- gsub("\\s*-\\s*", "vs", x)
-        x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
-        x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
-        x
-    }
+    # normalize_contrast_key() lives in R/domain/multiomics/07_enrichment.R,
+    # so the pathview renderer keys contrasts exactly the same way.
+    .normalize_contrast_key <- normalize_contrast_key
 
     # Collect all contrast names and build a canonical mapping
     all_raw_contrasts <- unique(unlist(lapply(per_omics, function(df) {

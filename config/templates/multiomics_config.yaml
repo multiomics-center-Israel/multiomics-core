@@ -187,24 +187,19 @@ modes:
       run_enrichment: true
       # Fisher's method will combine p-values across omics
 
-      # --- KEGG pathway maps (pathview) ---
+      # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
-      # would otherwise produce no maps at all.
+      # would otherwise produce no pathway maps at all. The maps are KEGG's
+      # organism-independent reference maps, whose gene boxes are KEGG Orthology
+      # groups, so every feature reaches them through the KO map below.
       pathview:
         # Feature -> KEGG Orthology map, TSV with columns: omics, feature_id, KO.
-        # Required to draw maps for an organism with no KEGG code of its own;
-        # its features have no other route onto a KEGG map.
+        # Required: without it there is no way to place this run's features on a
+        # KEGG map, and no maps are drawn.
         # See utils/build_feature_ko_map.R for one way to build it.
         ko_map: null  # "multiomics/feature_to_ko.tsv"
 
-        # null = auto: an organism with a KEGG code renders in its own space,
-        # one without renders the KEGG reference maps in KO space.
-        # "ko" = force reference-map rendering even when a code exists.
-        # This is a mode switch only -- global.organism stays the single source
-        # of truth for which organism the run is, and any other value is ignored.
-        species: null
-
-        # Max pathways to render; null uses the function default.
+        # Max pathways to render per contrast; null uses the function default.
         top_n: null
 
 # ==============================================================================

@@ -691,6 +691,19 @@ pathview_is_union <- !file.exists(pathview_supported_pdf) && file.exists(pathvie
 pathview_pdf <- if (pathview_is_union) pathview_union_pdf else pathview_supported_pdf
 pathview_dir <- file.path(multi_ora_dir, "pathview")
 has_pathview <- file.exists(pathview_pdf)
+
+# Whether compound nodes actually carry metabolomics values is recorded by the
+# renderer beside its PDF, because the section must not promise a colour that is
+# not on the map. Absent sidecar: assume not, and say less rather than more.
+pathview_has_compounds <- if (pathview_is_union) {
+    isTRUE(tryCatch(
+        yaml::read_yaml(file.path(multi_ora_dir,
+                                  "multi_ora_pathview_union.yaml"))$compound_nodes,
+        error = function(e) FALSE
+    ))
+} else {
+    TRUE
+}
 ```
 
 ## Multi-Omics Pathway Maps (Pathview) {.unnumbered}
@@ -703,15 +716,20 @@ cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layer
 ```{r pathview-plots, eval=has_pathview, results='asis'}
 pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$", full.names = TRUE))
 cat(if (pathview_is_union) {
-        paste("KEGG pathway maps for pathways enriched in **at least one**",
-              "gene-based omics layer, shown **per contrast**. A map here can",
-              "rest on transcriptomics or proteomics alone.")
+        paste("KEGG reference maps, in KO space, for pathways enriched in",
+              "**at least one** gene-based omics layer, shown **per contrast**.",
+              "A map here can rest on transcriptomics or proteomics alone.")
     } else {
         paste("KEGG pathway maps for pathways enriched in **>= 2 omics layers**,",
               "shown **per contrast**.")
     },
-    " Gene nodes are colored by logFC (transcriptomics and/or proteomics); ",
-    "compound nodes are colored by metabolomics logFC.\n\n")
+    " Gene nodes are colored by logFC (transcriptomics and/or proteomics)",
+    if (pathview_has_compounds) {
+        "; compound nodes are colored by metabolomics logFC.\n\n"
+    } else {
+        paste(". No metabolomics compound values were available for these maps,",
+              "so compound nodes are uncolored.\n\n")
+    })
 cat(sprintf("[Download compiled PDF](%s)\n\n", pathview_pdf))
 
 # Group PNGs by contrast (extracted from filename suffix)
@@ -734,7 +752,10 @@ for (pv_png in pv_pngs) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", label))
     cat(sprintf("![%s](%s)\n\n", label, pv_png))
 }
-figure_legend("KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. Compound nodes show metabolomics logFC. Red = upregulated, green/blue = downregulated.")
+figure_legend(paste0(
+    "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
+    if (pathview_has_compounds) "Compound nodes show metabolomics logFC. " else "",
+    "Red = upregulated, green/blue = downregulated."))
 render_commentary("multi_ora_pathview")
 ```
 

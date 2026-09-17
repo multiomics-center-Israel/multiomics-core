@@ -1131,6 +1131,12 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # Both pathview renderers below write into this directory and the report
+    # finds their maps by globbing it, so a map this run no longer produces
+    # would otherwise linger on the page as a current result. Cleared here,
+    # once, rather than by either renderer: neither owns the other's output.
+    clear_multi_ora_pathview_outputs(out_dir)
+
     # Track errors/warnings for reporting in HTML
     .ora_issues <- character(0)
 
@@ -1146,9 +1152,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             message("Multi-ORA: organism annotation not available for ", organism,
                     " and no usable per-omic GMT gene sets")
         }
-        # Without an OrgDb, pathway maps are still reachable: an organism with a
-        # KEGG code renders natively, and one with no code at all renders the
-        # KEGG reference maps in KO space when a ko_map is configured.
+        # Without an OrgDb, pathway maps are still reachable: KEGG's reference
+        # maps are organism-independent, so a configured feature-to-KO map puts
+        # this run's features onto them in KO space.
         tryCatch(
             generate_per_omic_union_pathview(de_results, harmonization_res, config, out_dir),
             error = function(e) message("  Union pathview failed: ", conditionMessage(e))

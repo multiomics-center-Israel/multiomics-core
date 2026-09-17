@@ -158,7 +158,7 @@ test_that("load_feature_ko_map reads the configured TSV and drops blank KOs", {
         project = list(dir = raw_dir),
         paths = list(raw = "data"),
         modes = list(multiomics = list(enrichment = list(
-            pathview = list(species = "ko", ko_map = "ko.tsv")
+            pathview = list(ko_map = "ko.tsv")
         )))
     )
 
@@ -184,8 +184,8 @@ test_that("load_feature_ko_map is a no-op without the config key or file", {
 # The selector normalizes first and tests the normalized value, so every
 # spelling of one pathway number selects it once, while an identifier that
 # normalization does not recognise -- including another organism's accession --
-# is still rejected. These pin that contract; the renderer composes the same two
-# #201 helpers inline.
+# is still rejected. These pin that contract. Identity is organism-aware even
+# though the maps are always drawn in KO space -- the two are separate questions.
 
 test_that("every KEGG spelling of one pathway selects it, foreign prefixes do not", {
     pathways <- c("00010", "map00010", "ko00010", "hsa00010",
@@ -211,11 +211,11 @@ test_that("a run with no KEGG code accepts only the species-neutral prefixes", {
     expect_identical(keep, c(TRUE, TRUE, TRUE, FALSE))
 })
 
-test_that("the render space reads the same organism registry as pathway identity", {
+test_that("pathway identity reads the full organism registry", {
     # get_kegg_organism() knows six exact species names; the pathway identity
-    # helpers resolve through get_organism_info() as well. Resolving the render
-    # space with the narrow one pushed an organism KEGG does cover into KO mode,
-    # where it then needed a ko_map to draw anything.
+    # helpers resolve through get_organism_info() as well. Resolving with the
+    # narrow one left an organism KEGG does cover unable to recognise its own
+    # pathway accessions.
     expect_null(get_kegg_organism("Saccharomyces cerevisiae"))
     expect_identical(resolve_kegg_org_code("Saccharomyces cerevisiae"), "sce")
 
@@ -223,15 +223,15 @@ test_that("the render space reads the same organism registry as pathway identity
     expect_identical(resolve_kegg_org_code("Arabidopsis thaliana"), "ath")
 
     # And an organism neither knows still resolves to nothing, which is what
-    # puts a genuinely code-less run into KO mode.
+    # leaves a genuinely code-less run accepting only map/ko prefixes.
     expect_null(resolve_kegg_org_code("Unlisted nonmodel species"))
 })
 
-test_that("forcing KO rendering does not make the run's own accessions foreign", {
-    # Rendering space and identity space are separate questions: species = "ko"
-    # says draw the reference artwork, not "this run has no organism". Dropping
-    # the code here would reject the "<accession> <name>" form the run's own
-    # gene sets carry, and the forced mode would select nothing.
+test_that("drawing in KO space does not make the run's own accessions foreign", {
+    # The maps are always KEGG reference maps, but an organism that has a code
+    # still spells its own pathways with it. Dropping the code from identity
+    # would reject the "<accession> <name>" form its gene sets carry, and the
+    # run would select nothing to draw.
     labelled <- "hsa00010 Glycolysis / Gluconeogenesis"
 
     expect_true(is_kegg_pathway_accession(
@@ -246,28 +246,63 @@ test_that("forcing KO rendering does not make the run's own accessions foreign",
 # The ORA inputs span every contrast, so selecting pathways globally and then
 # reading log2FC from whichever DE table happened to come first rendered a
 # pathway found in one contrast using another contrast's values. Selection is
-# keyed on the `contrast` column the ORA rows already carry, and the DE table is
-# then looked up by that name.
+# keyed on the `contrast` column the ORA rows carry, grouped by the canonical
+# key the cross-omics module already uses, and the DE table is looked up by that
+# same key -- the spellings differ between exports.
 
 ora_rows <- function(contrast, pathway, pvalue) {
     data.frame(pathway = pathway, pvalue = pvalue, contrast = contrast,
                stringsAsFactors = FALSE)
 }
 
+test_that("one biological contrast gets one key, however it is spelled", {
+    # The documented case: a proteomics ORA export drops the spaces its DE
+    # tables keep, and make.names() alone leaves those as two contrasts.
+    expect_identical(normalize_contrast_key("1.56ppmvs.0ppm"),
+                     normalize_contrast_key("1.56ppm vs. 0ppm"))
+    expect_false(identical(make.names("1.56ppmvs.0ppm"),
+                           make.names("1.56ppm vs. 0ppm")))
+
+    # The other spellings this pipeline produces agree too.
+    expect_identical(normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b", "A vs B")),
+                     rep("avsb", 4L))
+
+    # Two genuinely different contrasts stay apart.
+    expect_false(identical(normalize_contrast_key("A vs. B"),
+                           normalize_contrast_key("A vs. C")))
+    expect_false(identical(normalize_contrast_key("1.56ppm vs. 0ppm"),
+                           normalize_contrast_key("15.6ppm vs. 0ppm")))
+})
+
 test_that(".kegg_hits_by_contrast keeps each contrast's pathways to itself", {
     tables <- list(
-        ora_rows("A", c("hsa00010", "hsa00020"), c(0.001, 0.30)),
-        ora_rows("B", "hsa00030", 0.002)
+        ora_rows("A vs. B", c("hsa00010", "hsa00020"), c(0.001, 0.30)),
+        ora_rows("A vs. C", "hsa00030", 0.002)
     )
 
     hits <- .kegg_hits_by_contrast(tables, "hsa")
 
-    expect_setequal(names(hits), c("A", "B"))
-    # 00020 is above the cutoff, so A keeps only 00010.
-    expect_identical(hits[["A"]], "00010")
-    expect_identical(hits[["B"]], "00030")
-    # The pathway only B found must not appear under A.
-    expect_false("00030" %in% hits[["A"]])
+    expect_setequal(names(hits), c("avsb", "avsc"))
+    # 00020 is above the cutoff, so the first contrast keeps only 00010.
+    expect_identical(hits[["avsb"]]$pathways, "00010")
+    expect_identical(hits[["avsc"]]$pathways, "00030")
+    # The pathway only the second contrast found must not appear under the first.
+    expect_false("00030" %in% hits[["avsb"]]$pathways)
+    # The readable spelling survives for headings and filenames.
+    expect_identical(hits[["avsb"]]$label, "A vs. B")
+})
+
+test_that(".kegg_hits_by_contrast merges the spellings of one contrast", {
+    # The same contrast arriving from two exports is one entry, not two.
+    tables <- list(
+        ora_rows("1.56ppm vs. 0ppm", "hsa00010", 0.001),
+        ora_rows("1.56ppmvs.0ppm", "hsa00020", 0.001)
+    )
+
+    hits <- .kegg_hits_by_contrast(tables, "hsa")
+
+    expect_length(hits, 1L)
+    expect_setequal(hits[[1]]$pathways, c("00010", "00020"))
 })
 
 test_that(".kegg_hits_by_contrast drops rows it cannot attribute to a contrast", {
@@ -280,43 +315,53 @@ test_that(".kegg_hits_by_contrast drops rows it cannot attribute to a contrast",
 })
 
 test_that(".de_table_for_contrast never falls back to the first table", {
-    tables <- list(A = data.frame(feature_id = "g1", log2fc = 1),
-                   B = data.frame(feature_id = "g1", log2fc = -5))
+    tables <- list("A vs. B" = data.frame(feature_id = "g1", log2fc = 1),
+                   "A vs. C" = data.frame(feature_id = "g1", log2fc = -5))
 
-    # The value that identifies the table is the one under that contrast's name.
-    expect_equal(.de_table_for_contrast(tables, "B")$log2fc, -5)
+    expect_equal(.de_table_for_contrast(tables, "avsc")$log2fc, -5)
     # A contrast with no DE table means the layer is absent for it, which is a
     # skipped layer -- not a licence to reach for tables[[1]].
-    expect_null(.de_table_for_contrast(tables, "C"))
-    expect_null(.de_table_for_contrast(NULL, "A"))
-    expect_null(.de_table_for_contrast(list(data.frame(x = 1)), "A"))
+    expect_null(.de_table_for_contrast(tables, "avsd"))
+    expect_null(.de_table_for_contrast(NULL, "avsb"))
+    expect_null(.de_table_for_contrast(list(data.frame(x = 1)), "avsb"))
+})
+
+test_that(".de_table_for_contrast matches across the export spellings", {
+    # The DE tables keep the spaces the ORA export drops.
+    tables <- list("1.56ppm vs. 0ppm" = data.frame(feature_id = "g1", log2fc = 3))
+    expect_equal(
+        .de_table_for_contrast(tables, normalize_contrast_key("1.56ppmvs.0ppm"))$log2fc,
+        3
+    )
+})
+
+test_that(".de_table_for_contrast treats an ambiguous key as a miss", {
+    # Two table names collapsing to one key is not a match to guess at.
+    tables <- list("A vs. B" = data.frame(feature_id = "g1", log2fc = 1),
+                   "A_vs_B"  = data.frame(feature_id = "g1", log2fc = 9))
+    expect_null(.de_table_for_contrast(tables, "avsb"))
 })
 
 test_that("a pathway from one contrast cannot pick up another's log2FC", {
-    # End to end over the two pure pieces the renderer composes: B's pathway
-    # resolves to B's table, and the value it would carry is B's.
+    # End to end over the two pure pieces the renderer composes, with the two
+    # sides spelled as the real exports spell them.
     tables <- list(
-        ora_rows("A", "hsa00010", 0.001),
-        ora_rows("B", "hsa00030", 0.001)
+        ora_rows("1.56ppmvs.0ppm", "hsa00010", 0.001),
+        ora_rows("15.6ppmvs.0ppm", "hsa00030", 0.001)
     )
-    de <- list("A" = data.frame(feature_id = "g1", log2fc = 2,
-                                stringsAsFactors = FALSE),
-               "B" = data.frame(feature_id = "g1", log2fc = -7,
-                                stringsAsFactors = FALSE))
+    de <- list("1.56ppm vs. 0ppm" = data.frame(feature_id = "g1", log2fc = 2,
+                                               stringsAsFactors = FALSE),
+               "15.6ppm vs. 0ppm" = data.frame(feature_id = "g1", log2fc = -7,
+                                               stringsAsFactors = FALSE))
 
     hits <- .kegg_hits_by_contrast(tables, "hsa")
-    owner <- names(hits)[vapply(hits, function(k) "00030" %in% k, logical(1))]
+    owner <- names(hits)[vapply(hits, function(h) "00030" %in% h$pathways, logical(1))]
 
-    expect_identical(owner, "B")
+    expect_length(owner, 1L)
     expect_equal(.de_table_for_contrast(de, owner)$log2fc, -7)
-})
-
-test_that("contrast names that differ only syntactically still match", {
-    # extract_de_tables() and the ORA rows are named from the same contrast
-    # strings, but one of them having been through make.names() must not read as
-    # a different contrast.
-    tables <- list("cond A vs B" = data.frame(feature_id = "g1", log2fc = 3))
-    expect_equal(.de_table_for_contrast(tables, "cond.A.vs.B")$log2fc, 3)
+    # And the other contrast still resolves to its own value, not this one.
+    other <- names(hits)[vapply(hits, function(h) "00010" %in% h$pathways, logical(1))]
+    expect_equal(.de_table_for_contrast(de, other)$log2fc, 2)
 })
 
 
@@ -348,6 +393,81 @@ test_that("pick_key_position falls back to the default corner", {
 })
 
 
+# ---- a PDF is written whole or not at all -----------------------------------
+
+test_that(".compile_pathview_pdf leaves no partial file behind on failure", {
+    skip_if_not_installed("png")
+
+    out <- withr::local_tempdir()
+    pdf_path <- file.path(out, "multi_ora_pathview_union.pdf")
+
+    good <- file.path(out, "ok.png")
+    png::writePNG(matrix(1, 8, 8), good)
+    bad <- file.path(out, "broken.png")
+    writeLines("not a png", bad)
+
+    before <- grDevices::dev.cur()
+    # The report links this PDF as a download and cannot tell a truncated one
+    # from a whole one, so a failure part-way through must leave nothing --
+    # here the first page renders and the second does not.
+    expect_message(
+        expect_null(.compile_pathview_pdf(c(good, bad), pdf_path)),
+        "PDF compilation failed"
+    )
+    expect_false(file.exists(pdf_path))
+    # And the device it opened must not be left behind for the next plot.
+    expect_identical(grDevices::dev.cur(), before)
+})
+
+test_that(".compile_pathview_pdf writes the file when every page reads", {
+    skip_if_not_installed("png")
+
+    out <- withr::local_tempdir()
+    pdf_path <- file.path(out, "multi_ora_pathview_union.pdf")
+    good <- file.path(out, "ok.png")
+    png::writePNG(matrix(1, 8, 8), good)
+
+    expect_identical(.compile_pathview_pdf(good, pdf_path), pdf_path)
+    expect_true(file.exists(pdf_path))
+    expect_gt(file.size(pdf_path), 0)
+
+    # Nothing to compile is not a failure to report, just nothing.
+    expect_null(.compile_pathview_pdf(character(0), pdf_path))
+})
+
+
+# ---- one run's maps are not another's ---------------------------------------
+
+test_that("clear_multi_ora_pathview_outputs removes only what Multi-ORA owns", {
+    out <- withr::local_tempdir()
+    pv <- file.path(out, "pathview")
+    dir.create(pv)
+
+    mine <- c(file.path(pv, "ko00010.multi_ora_A.vs.B.multi.png"),
+              file.path(pv, "ko00020.multi_ora_A.vs.B.png"),
+              file.path(out, "multi_ora_pathview_supported.pdf"),
+              file.path(out, "multi_ora_pathview_union.pdf"),
+              file.path(out, "multi_ora_pathview_union.yaml"))
+    # Another renderer's overlays, and the download cache: the blank template
+    # and the KGML the report reads pathway titles from.
+    theirs <- c(file.path(pv, "ko00010.metab_top.png"),
+                file.path(pv, "ko00030.prot_top.png"),
+                file.path(pv, "ko00010.png"),
+                file.path(pv, "ko00010.xml"))
+    for (f in c(mine, theirs)) writeLines("x", f)
+
+    expect_message(clear_multi_ora_pathview_outputs(out), "cleared")
+
+    expect_false(any(file.exists(mine)))
+    expect_true(all(file.exists(theirs)))
+})
+
+test_that("clear_multi_ora_pathview_outputs is quiet on a fresh directory", {
+    out <- withr::local_tempdir()
+    expect_length(clear_multi_ora_pathview_outputs(out), 0L)
+})
+
+
 # ---- the union artifact is not the ">= 2 omics" artifact --------------------
 
 test_that("the union renderer writes its own PDF, not the supported one", {
@@ -367,35 +487,41 @@ test_that("the union renderer writes its own PDF, not the supported one", {
 
 # ---- the renderer's guard rails ---------------------------------------------
 
-test_that("generate_per_omic_union_pathview is a no-op without a KO map", {
+test_that("the renderer is a no-op without a KO map, whatever the organism", {
     skip_if_not_installed("pathview")
-    config <- list(
-        # An organism neither KEGG registry resolves to a code.
+    no_code <- list(
         global = list(organism = "Unlisted nonmodel species"),
-        project = list(dir = tempdir()),
-        paths = list(raw = "data")
+        project = list(dir = tempdir()), paths = list(raw = "data")
     )
-    # No KEGG code for the organism and no ko_map configured: nothing to draw,
-    # and in particular no KEGG request is made.
-    expect_null(generate_per_omic_union_pathview(list(), list(), config,
-                                                 withr::local_tempdir()))
+    # A KO map is the only route onto a reference map, so without one there is
+    # nothing to draw -- and in particular no KEGG request is made.
+    expect_message(
+        expect_null(generate_per_omic_union_pathview(list(), list(), no_code,
+                                                     withr::local_tempdir())),
+        "no feature-to-KO map configured"
+    )
+
+    # Having a KEGG code does not provide that route: this renderer never draws
+    # in an organism's native gene space, because project feature ids are not
+    # KEGG gene ids.
+    with_code <- no_code
+    with_code$global$organism <- "human"
+    expect_message(
+        expect_null(generate_per_omic_union_pathview(list(), list(), with_code,
+                                                     withr::local_tempdir())),
+        "no feature-to-KO map configured"
+    )
 })
 
-test_that("enrichment.pathview.species accepts only 'ko'", {
-    skip_if_not_installed("pathview")
-    config <- list(
-        global = list(organism = "Unlisted nonmodel species"),
-        project = list(dir = tempdir()),
-        paths = list(raw = "data"),
-        modes = list(multiomics = list(enrichment = list(
-            # global.organism is the only place an organism is named, so a code
-            # here is ignored rather than quietly overriding it.
-            pathview = list(species = "hsa")
-        )))
-    )
-    expect_message(
-        expect_null(generate_per_omic_union_pathview(list(), list(), config,
-                                                     withr::local_tempdir())),
-        "accepts only 'ko'"
-    )
+test_that("the renderer draws only in KO space", {
+    # The native-gene branch passed project feature ids to pathview as
+    # gene.idtype = "KEGG", which they are not. It is gone, and this is what
+    # stops it coming back by accident.
+    body_src <- paste(deparse(body(generate_per_omic_union_pathview)), collapse = " ")
+
+    expect_true(grepl('species = "ko"', body_src, fixed = TRUE))
+    # No organism code reaches pathview, and the gene-protein bridge that only
+    # the native path needed is no longer consulted.
+    expect_false(grepl("species = pv_species", body_src, fixed = TRUE))
+    expect_false(grepl("gene_protein_mapping", body_src, fixed = TRUE))
 })
