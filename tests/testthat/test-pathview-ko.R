@@ -200,15 +200,28 @@ test_that("every KEGG spelling of one pathway selects it, foreign prefixes do no
     expect_identical(unique(keys[keep]), "00010")
 })
 
-test_that("in KO space only the species-neutral prefixes are accepted", {
+test_that("a run with no KEGG code accepts only the species-neutral prefixes", {
     pathways <- c("map00010", "ko00010", "00010", "hsa00010")
 
     keys <- normalize_pathway_join_key(pathways, NULL)
     keep <- is_kegg_pathway_accession(keys, NULL)
 
-    # A run with no KEGG code of its own has no organism whose accessions it
-    # could legitimately claim, so hsa00010 in the table is foreign here too.
+    # Such a run has no organism whose accessions it could legitimately claim,
+    # so hsa00010 in its table is foreign.
     expect_identical(keep, c(TRUE, TRUE, TRUE, FALSE))
+})
+
+test_that("forcing KO rendering does not make the run's own accessions foreign", {
+    # Rendering space and identity space are separate questions: species = "ko"
+    # says draw the reference artwork, not "this run has no organism". Dropping
+    # the code here would reject the "<accession> <name>" form the run's own
+    # gene sets carry, and the forced mode would select nothing.
+    labelled <- "hsa00010 Glycolysis / Gluconeogenesis"
+
+    expect_true(is_kegg_pathway_accession(
+        normalize_pathway_join_key(labelled, "hsa"), "hsa"))
+    expect_false(is_kegg_pathway_accession(
+        normalize_pathway_join_key(labelled, NULL), NULL))
 })
 
 
@@ -245,7 +258,7 @@ test_that("pick_key_position falls back to the default corner", {
 test_that("generate_per_omic_union_pathview is a no-op without a KO map", {
     skip_if_not_installed("pathview")
     config <- list(
-        # An organism get_kegg_organism() cannot resolve to a KEGG code.
+        # An organism neither KEGG registry resolves to a code.
         global = list(organism = "Unlisted nonmodel species"),
         project = list(dir = tempdir()),
         paths = list(raw = "data")

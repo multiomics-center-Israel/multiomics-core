@@ -793,7 +793,10 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
                                              config, out_dir, top_n = 25) {
     if (!requireNamespace("pathview", quietly = TRUE)) return(NULL)
     organism <- config$global$organism %||% ""
-    kegg_org <- get_kegg_organism(organism)
+    # resolve_kegg_org_code(), not get_kegg_organism(): the latter only knows the
+    # six exact species names of the older table, so an organism KEGG does cover
+    # would be pushed into KO mode and then need a ko_map to render anything.
+    kegg_org <- resolve_kegg_org_code(organism)
 
     pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
     top_n <- pv_cfg$top_n %||% top_n
@@ -816,11 +819,14 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         # No KEGG code for this organism and no KO map: nothing can be drawn.
         return(NULL)
     }
+    # Rendering space and identity space are not the same question. "ko" is what
+    # pathview draws in; the run's own organism code is what its ORA tables are
+    # allowed to be spelled with, and forcing KO rendering does not make the
+    # run's own accessions foreign. When no code resolved, kegg_org is NULL and
+    # only the species-neutral prefixes are accepted, which is what a run with no
+    # organism code of its own should accept.
     pv_species <- if (ko_mode) "ko" else kegg_org
-    # In KO mode the run has no organism code of its own, so only the
-    # species-neutral prefixes are legitimate; passing NULL keeps a foreign
-    # organism's accession out of the KEGG identity contract below.
-    id_org <- if (ko_mode) NULL else kegg_org
+    id_org <- kegg_org
 
     # 1. Union of KEGG pathways enriched (p < 0.05) in RNA OR protein, read from
     #    the per-omic ORA tables written by the RNA/proteomics enrichment steps.
