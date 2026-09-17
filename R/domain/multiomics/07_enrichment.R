@@ -1039,6 +1039,12 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
         }
     }
 
+    # Compound ORA is over-representation and nothing else, so the producer says
+    # so rather than leaving a consumer to infer it from column shape. Metadata
+    # only: the universe, the p-values, the BH adjustment, the filtering and the
+    # row order above are all untouched.
+    df$method <- "ora"
+
     message("    Found ", nrow(df), " enriched compound pathways")
     df
 }
@@ -1203,6 +1209,11 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
                 padj = df$p.adjust,
                 GeneRatio = df$GeneRatio,
                 setSize = df$Count,
+                # Stamped here, where the frame is built, and not after the
+                # tryCatch() below: both filtered subsets inherit it, and both
+                # leave this function from inside the tryCatch expression. See
+                # the note above that call for why nothing after it is reached.
+                method = "ora",
                 stringsAsFactors = FALSE
             )
             # Filter: prefer padj, fall back to pvalue < 0.05
@@ -1221,9 +1232,18 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
         NULL
     })
 
+    # Nothing here sees a successful clusterProfiler result. `return()` inside a
+    # tryCatch() expression leaves the ENCLOSING function, because the expression
+    # is a promise evaluated in this frame -- so both hit branches above exit
+    # run_ora_kegg() outright and ora_res is only ever NULL. That is why the
+    # method stamp lives in the frame construction and not on ora_res: put here,
+    # it would be dead code that reads as though it were doing the job.
+    # The guard stays, so that a future edit which stops returning early still
+    # behaves, and run_gsea_kegg() has the same shape for the same reason.
     if (!is.null(ora_res)) return(ora_res)
 
-    # Fallback: Fisher's exact test with KEGG REST pathway-gene links
+    # Fallback: Fisher's exact test with KEGG REST pathway-gene links; it stamps
+    # its own result the same way.
     run_ora_kegg_fisher(sig_genes, all_genes, kegg_org, min_gs, max_gs, pval_cutoff)
 }
 
@@ -1303,6 +1323,11 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
     if (nrow(df) == 0) return(NULL)
 
     df <- df[order(df$pvalue), ]
+
+    # This function tests one way and only one way, so it can say so. Metadata
+    # only: nothing above it is re-run, re-filtered or re-ordered.
+    df$method <- "ora"
+
     message("    Found ", nrow(df), " enriched gene pathways (Fisher's test)")
     df
 }
@@ -1458,7 +1483,38 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         })
         dev.off()
 
-        # 3. Per-omics enrichment bar plots
+        # 3. ORA evidence per layer, on each layer's own adjusted p-value.
+        # Built before the device is opened so that a run with no adjusted ORA
+        # p-value at all -- every layer GSEA, or every layer missing the columns
+        # this needs -- leaves no figure behind for the report to show.
+        ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, use_pathways,
+                                                 omics, kegg_org = kegg_org)
+        ora_png <- file.path(out_dir, "cross_omics_ora_heatmap.png")
+        if (any(!is.na(ora_padj))) {
+            plots$ora_heatmap <- ora_png
+            png(ora_png, width = 1200, height = 900, res = 120)
+            tryCatch({
+                plot_cross_omics_ora_heatmap(ora_padj, pathway_tables,
+                                             kegg_org = kegg_org)
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+        } else {
+            # Delete rather than merely skip. Every other figure here is written
+            # on every run and so overwrites itself; this is the only one a run
+            # can decline to produce, and the report includes it on file.exists()
+            # alone. Left behind, the previous run's ORA evidence would be read
+            # as this one's -- a wrong figure being worse than no figure. The
+            # per-contrast directories get the same treatment because this whole
+            # function runs again for each contrast, with out_dir pointing there.
+            if (file.exists(ora_png)) unlink(ora_png)
+            message("  No adjusted ORA p-values across layers; ",
+                    "skipping the cross-omics ORA heatmap")
+        }
+
+        # 4. Per-omics enrichment bar plots
         for (om in names(pathway_tables)) {
             pt <- pathway_tables[[om]]
             plot_path <- file.path(out_dir, paste0(om, "_top_pathways.png"))
@@ -1989,6 +2045,160 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
 }
 
 
+#' Adjusted ORA p-value per pathway and omics layer
+#'
+#' Assembles what the ORA figure shows, and nothing else. Deliberately separate
+#' from \code{merge_pathway_pvalues()}: that one feeds
+#' \code{stouffer_combined_pvalues()} and so must stay a raw-p merger with one
+#' contract, while this reads each layer's own adjusted value for display. The
+#' mechanics overlap; the meanings do not, and one function serving both would
+#' put the meta-analysis one default away from combining adjusted p-values.
+#'
+#' What lands in a cell is the adjusted p-value the layer's own ORA already
+#' reported. Nothing is re-adjusted here, and no cutoff is re-applied.
+#'
+#' Two ways a layer is refused outright, both fail-closed:
+#'
+#' \itemize{
+#'   \item No `method` column. ORA membership cannot be confirmed, and a GSEA
+#'     row in an ORA figure is exactly what this filter exists to prevent -- so
+#'     the layer contributes nothing rather than being guessed at. This is the
+#'     same rule \code{.kegg_hits_by_contrast()} applies for the same reason.
+#'   \item No adjusted p-value column. The figure is captioned as adjusted
+#'     p-values, so falling back to `pvalue` would silently show a different
+#'     statistic under that caption. \code{run_ora_kegg()} does relax to the raw
+#'     p-value, but it does so as the producer, with the cutoff in view; a
+#'     display has no standing to repeat that decision.
+#' }
+#'
+#' Both refusals warn, naming the layer and what was missing, because they mean
+#' a column the pipeline should be producing is absent. A layer that clears both
+#' and simply has no ORA row for these pathways is not an error and says
+#' nothing: its column is all NA, quietly.
+#'
+#' Where a layer holds several contrast-level ORA results for one pathway, the
+#' smallest adjusted p-value among them is taken. That is a display reduction --
+#' the strongest evidence available in that layer -- and not a combined FDR:
+#' nothing here controls error across contrasts.
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames.
+#' @param target_pathways Character vector of join keys to report on, as
+#'   produced by \code{pathway_join_key()}.
+#' @param omics Character vector naming which layers to read, in column order.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Numeric matrix, one row per element of \code{target_pathways} and one
+#'   column per element of \code{omics}, holding adjusted ORA p-values. NA means
+#'   no adjusted ORA p-value for that pathway and layer reached the table behind
+#'   the figure -- not that the pathway was untested there.
+#' @examples
+#' tabs <- list(transcriptomics = data.frame(
+#'     ID = c("map00010", "map00020"), pvalue = c(1e-4, 1e-3),
+#'     padj = c(1e-3, 1e-2), method = "ora", stringsAsFactors = FALSE))
+#' build_ora_adjusted_p_matrix(tabs, c("00010", "00020"), "transcriptomics")
+build_ora_adjusted_p_matrix <- function(pathway_tables, target_pathways, omics,
+                                         kegg_org = NULL) {
+
+    target_pathways <- as.character(target_pathways)
+
+    out <- matrix(NA_real_,
+                  nrow = length(target_pathways), ncol = length(omics),
+                  dimnames = list(target_pathways, omics))
+
+    if (length(target_pathways) == 0 || length(omics) == 0) return(out)
+
+    for (om in omics) {
+        df <- pathway_tables[[om]]
+        # A layer that produced no table at all is absent, not malformed; the
+        # caller already warned about that where it mattered.
+        if (!is.data.frame(df) || nrow(df) == 0) next
+
+        missing_cols <- character(0)
+        if (!"method" %in% names(df)) {
+            missing_cols <- c(missing_cols, "method (ORA membership)")
+        }
+        if (!any(.ORA_ADJUSTED_P_COLUMNS %in% names(df))) {
+            missing_cols <- c(missing_cols, "adjusted p-value (padj)")
+        }
+        if (length(missing_cols) > 0) {
+            warning("Skipping ", om, " in the cross-omics ORA figure: no ",
+                    paste(missing_cols, collapse = " and no "), " column")
+            next
+        }
+
+        # NA-safe and case-insensitive, matching .kegg_hits_by_contrast(): a row
+        # whose method is unknown is not an ORA row. bind_rows() NA-fills this
+        # column when a layer stacks tables that do not all carry it, so the NA
+        # test is load-bearing rather than defensive.
+        is_ora <- !is.na(df$method) & tolower(as.character(df$method)) == "ora"
+        if (!any(is_ora)) next
+        df <- df[is_ora, , drop = FALSE]
+
+        # Identity is resolved per row, so a table mixing collections keys each
+        # row on what that row actually carries.
+        keys <- pathway_join_key(df, kegg_org)
+
+        padj <- .ora_adjusted_p_values(df)
+
+        usable <- !is.na(keys) & !is.na(padj)
+        if (!any(usable)) next
+
+        best <- tapply(padj[usable], keys[usable], min)
+        out[, om] <- unname(best[target_pathways])
+    }
+
+    out
+}
+
+
+#' Column names this pipeline uses for an adjusted ORA p-value, best first
+#'
+#' A short list on purpose. `padj` is what every ORA producer here writes --
+#' \code{run_ora()}, \code{run_ora_kegg()}, \code{run_ora_kegg_fisher()} and
+#' \code{run_compound_ora()} -- and `p.adjust` is clusterProfiler's own name for
+#' the same quantity, which reaches this layer wherever an enrichResult was
+#' handed over without being renamed. Nothing else belongs here: `qvalue` is a
+#' different adjustment, and `pvalue` is not an adjusted one at all.
+#' @keywords internal
+.ORA_ADJUSTED_P_COLUMNS <- c("padj", "p.adjust")
+
+
+#' The adjusted ORA p-value for each row, whichever column carries it
+#'
+#' Resolved per row, not per table, for the same reason
+#' \code{pathway_join_key()} resolves identity per row: the tables arriving here
+#' are bound from heterogeneous sub-results. \code{extract_enrichment_df()} uses
+#' \code{dplyr::bind_rows()}, which NA-fills, so one layer can hold fgsea rows
+#' carrying `padj` beside clusterProfiler ORA rows carrying only `p.adjust`.
+#' Both columns then exist, and picking one for the whole table reads NA for
+#' every row that used the other -- silently, because the column check passed.
+#'
+#' Both names mean the same quantity, so this is choosing where to read it, not
+#' choosing between statistics.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @return Numeric vector, one per row of \code{df}; NA where no accepted column
+#'   carries a value for that row.
+#' @examples
+#' mixed <- data.frame(padj = c(0.01, NA), p.adjust = c(NA, 0.02))
+#' .ora_adjusted_p_values(mixed)   # 0.01 0.02
+.ora_adjusted_p_values <- function(df) {
+    vals <- rep(NA_real_, nrow(df))
+
+    for (col in .ORA_ADJUSTED_P_COLUMNS) {
+        if (!col %in% names(df)) next
+        # Converted only when it is not already numeric: as.numeric() on a factor
+        # returns level codes, and a round trip through as.character() would cost
+        # precision these p-values cannot spare.
+        v <- df[[col]]
+        if (!is.numeric(v)) v <- suppressWarnings(as.numeric(as.character(v)))
+        fill <- is.na(vals) & !is.na(v)
+        vals[fill] <- v[fill]
+    }
+
+    vals
+}
+
+
 #' Combine p-values across omics using Stouffer's method
 #'
 #' Stouffer's Z, not Fisher's — the two give different combined p-values and
@@ -2041,6 +2251,67 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # Plotting functions
 # =============================================================================
 
+#' A colour range that will not collapse on a degenerate matrix
+#'
+#' Both heatmap paths cut a value range into one interval per colour, and both
+#' break when that range has zero width: \code{pheatmap} derives its breaks from
+#' the minimum and maximum, so an identical pair yields duplicate breaks and
+#' \code{cut()} refuses them, and \code{image()} wants a \code{zlim} whose ends
+#' differ. Zero width is not exotic here -- one cell with evidence, or several
+#' cells that happen to agree, is an ordinary sparse result, especially in a
+#' per-contrast view. The figures' tryCatch would then paint a "failed"
+#' placeholder over a perfectly drawable result.
+#'
+#' Widening a degenerate range is a display accommodation: the value shown is
+#' unchanged, it simply lands mid-scale instead of at an end, which is honest
+#' for a matrix that carries no contrast to show.
+#'
+#' @param m Numeric matrix, possibly holding NA.
+#' @return Numeric pair, low then high, with the low strictly below the high.
+.nondegenerate_range <- function(m) {
+    rng <- suppressWarnings(range(m, na.rm = TRUE))
+    # All NA gives c(Inf, -Inf); nothing is drawn from it, but it must not reach
+    # a breaks calculation either.
+    if (!all(is.finite(rng))) return(c(0, 1))
+    if (rng[1] == rng[2]) return(rng + c(-0.5, 0.5))
+    rng
+}
+
+
+#' Draw a heatmap too small for stats::heatmap()
+#'
+#' \code{heatmap()} rejects fewer than two rows or two columns even with both
+#' dendrograms disabled, and one surviving pathway is a normal outcome in a
+#' per-contrast view. It draws through \code{image()} anyway, so the degenerate
+#' case goes straight there rather than padding the matrix -- a fabricated row
+#' would put a pathway on the figure that the data does not have.
+#'
+#' @param m Numeric matrix to draw, with dimnames for the axes.
+#' @param main Plot title.
+#' @param col Colour vector.
+#' @param zlim Value range, from \code{.nondegenerate_range()}.
+#' @return Invisibly NULL; called for the plot it draws.
+.draw_small_heatmap <- function(m, main, col, zlim) {
+    # image() takes z indexed [x, y] -- columns then rows -- so the matrix is
+    # transposed and the row labels follow it.
+    #
+    # Cell edges, not cell centres. Given centres, image() infers the edges from
+    # the spacing between them, which needs at least two: a length-one x or y is
+    # rejected with "dimensions of z are not length(x)(-1) times length(y)(-1)".
+    # That is precisely the shape this function exists for, so the edges are
+    # given outright and every size from 1x1 upward draws.
+    graphics::image(x = seq(0.5, ncol(m) + 0.5, by = 1),
+                    y = seq(0.5, nrow(m) + 0.5, by = 1), z = t(m),
+                    col = col, zlim = zlim, axes = FALSE,
+                    xlab = "", ylab = "", main = main)
+    graphics::axis(1, at = seq_len(ncol(m)), labels = colnames(m),
+                   las = 2, tick = FALSE)
+    graphics::axis(2, at = seq_len(nrow(m)), labels = rownames(m),
+                   las = 1, tick = FALSE)
+    invisible(NULL)
+}
+
+
 #' Choose the rows a cross-omics figure shows
 #'
 #' The figures exist to show where the layers agree, and ordering by combined
@@ -2061,33 +2332,46 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 #' combined_pval ordering, and no p-value, adjustment or membership is
 #' touched.
 #'
+#' The two ranking columns are named rather than fixed, because the ordering is
+#' the reusable part and the quantities are not. The defaults are the
+#' meta-analysis pair and every existing caller keeps them. The ORA figure,
+#' whose evidence is a different table with different missingness, passes its
+#' own pair: it must not be ranked on raw-p meta-analysis columns.
+#'
 #' @param meta_results Meta-analysis table, as
-#'   \code{stouffer_combined_pvalues()} returns it.
+#'   \code{stouffer_combined_pvalues()} returns it, or any table carrying
+#'   \code{count_col} and \code{score_col}.
 #' @param top_n Number of rows to keep.
+#' @param count_col Column holding the number of contributing layers; more is
+#'   better. Absent, every row counts as one and the order is left alone.
+#' @param score_col Column holding the score that breaks ties within a count;
+#'   smaller is better. Absent, nothing breaks them but the incoming order.
 #' @return The selected rows of \code{meta_results}, in display order.
 #' @examples
 #' meta <- data.frame(norm_id = c("00010", "00020"),
 #'                    n_omics = c(1L, 2L), combined_pval = c(1e-9, 1e-3))
 #' select_multi_omics_pathways(meta, top_n = 2)$norm_id   # "00020" first
-select_multi_omics_pathways <- function(meta_results, top_n = 30) {
+select_multi_omics_pathways <- function(meta_results, top_n = 30,
+                                         count_col = "n_omics",
+                                         score_col = "combined_pval") {
     if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
 
-    n_omics <- if ("n_omics" %in% names(meta_results)) {
-        as.numeric(meta_results$n_omics)
+    counts <- if (count_col %in% names(meta_results)) {
+        as.numeric(meta_results[[count_col]])
     } else {
         # Nothing to rank on: leave the caller's order alone rather than invent
         # a preference between rows that carry no contributing-layer count.
         rep(1, nrow(meta_results))
     }
-    combined <- if ("combined_pval" %in% names(meta_results)) {
-        as.numeric(meta_results$combined_pval)
+    scores <- if (score_col %in% names(meta_results)) {
+        as.numeric(meta_results[[score_col]])
     } else {
         rep(NA_real_, nrow(meta_results))
     }
 
     # Ties on both keys fall back to the incoming order, which is itself sorted
     # by combined p-value, so the selection is reproducible run to run.
-    ord <- order(-n_omics, combined, seq_len(nrow(meta_results)), na.last = TRUE)
+    ord <- order(-counts, scores, seq_len(nrow(meta_results)), na.last = TRUE)
     meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
 }
 
@@ -2120,6 +2404,11 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
     # not "a p-value close to 1", and flattening the two to 0 rendered them the
     # same white -- which also left na_col below as dead configuration.
 
+    # Breaks are passed rather than left to pheatmap, which derives them from the
+    # minimum and maximum and so produces duplicates when every value agrees --
+    # see .nondegenerate_range(). One interval per colour, hence 50 + 1.
+    zl <- .nondegenerate_range(log_pval_matrix)
+
     # Heatmap
     if (requireNamespace("pheatmap", quietly = TRUE)) {
         pheatmap::pheatmap(log_pval_matrix,
@@ -2127,6 +2416,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
                            cluster_cols = FALSE,
                            main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
                            color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
+                           breaks = seq(zl[1], zl[2], length.out = 51),
                            fontsize_row = 7, fontsize_col = 10,
                            angle_col = 45,
                            na_col = "grey90",
@@ -2144,11 +2434,151 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
         # for a missing p-value, so the background is grey while this draws.
         # The value stays NA; only what shows behind it changes.
         withr::with_par(list(bg = "grey90"), {
-            heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
-                    main = "Cross-Omics Pathway Enrichment",
-                    col = colorRampPalette(c("white", "orange", "red"))(50))
+            base_cols <- colorRampPalette(c("white", "orange", "red"))(50)
+            if (nrow(log_pval_matrix) >= 2 && ncol(log_pval_matrix) >= 2) {
+                heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
+                        main = "Cross-Omics Pathway Enrichment",
+                        col = base_cols, zlim = zl)
+            } else {
+                # heatmap() refuses this shape outright; see .draw_small_heatmap().
+                .draw_small_heatmap(log_pval_matrix,
+                                    main = "Cross-Omics Pathway Enrichment",
+                                    col = base_cols, zlim = zl)
+            }
         })
     }
+}
+
+
+#' Plot the ORA evidence each omics layer holds for a pathway
+#'
+#' ORA is the one test all the layers run, so this is the figure that can show
+#' metabolomics alongside the gene layers. Each cell is -log10 of the adjusted
+#' p-value that layer's own ORA reported, as
+#' \code{build_ora_adjusted_p_matrix()} assembled it.
+#'
+#' Read it down a column. Across columns the layers differ in gene-set universe,
+#' coverage and upstream filtering, so a darker cell in one is not stronger
+#' biology than a lighter cell in another; the figure shows what evidence each
+#' layer holds, not a comparison of magnitudes between them.
+#'
+#' Rows with no adjusted ORA p-value anywhere are dropped before selection --
+#' they would otherwise take slots from rows that have something to show. What
+#' remains is ordered by how many layers contribute a value and then by the
+#' smallest of them, the same shape the meta-analysis figures use, but computed
+#' from this matrix rather than from the raw-p meta-analysis columns.
+#'
+#' @param padj_matrix Adjusted ORA p-values, as
+#'   \code{build_ora_adjusted_p_matrix()} returns them.
+#' @param pathway_tables Named list of per-omics enrichment data frames, used
+#'   only to label rows with the names the layers agreed on. NULL labels rows
+#'   with their join keys.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @param top_n Number of pathways to show.
+#' @return Invisibly, the -log10 matrix that was drawn, in display order and
+#'   with display labels for row names -- or NULL when there was nothing to
+#'   draw. Returned so that which rows the figure leads with can be checked
+#'   without reading pixels, or guessing which of the two drawing branches a
+#'   machine took.
+plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
+                                          kegg_org = NULL, top_n = 30) {
+
+    informative <- rowSums(!is.na(padj_matrix)) > 0
+    padj_matrix <- padj_matrix[informative, , drop = FALSE]
+
+    if (nrow(padj_matrix) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No adjusted ORA p-values available")
+        return(invisible(NULL))
+    }
+
+    # Ranked on this figure's own evidence. n_ora_layers counts the layers that
+    # contributed an adjusted ORA p-value for the pathway, which is not the same
+    # as the layers that could have tested it: some tables arrive already
+    # filtered, and nothing here can tell a pathway that was never testable in a
+    # layer from one that was tested and did not survive into its table.
+    # unname() both: a named vector would hand data.frame() its row names, and
+    # two layers can legitimately label one key the same way.
+    # Every remaining row has at least one value, so min(na.rm = TRUE) is never
+    # asked for the minimum of nothing.
+    ranking <- data.frame(
+        row           = seq_len(nrow(padj_matrix)),
+        n_ora_layers  = unname(rowSums(!is.na(padj_matrix))),
+        best_ora_padj = unname(apply(padj_matrix, 1, min, na.rm = TRUE)),
+        stringsAsFactors = FALSE
+    )
+    selected <- select_multi_omics_pathways(ranking, top_n,
+                                            count_col = "n_ora_layers",
+                                            score_col = "best_ora_padj")
+    padj_matrix <- padj_matrix[selected$row, , drop = FALSE]
+
+    # Truncate first, then disambiguate -- see truncate_pathway_label().
+    keys <- rownames(padj_matrix)
+    labels <- keys
+    if (!is.null(pathway_tables)) {
+        labelled <- attach_pathway_display_names(
+            data.frame(norm_id = keys, stringsAsFactors = FALSE),
+            pathway_tables, kegg_org = kegg_org)
+        labels <- labelled$pathway
+    }
+    labels <- truncate_pathway_label(labels, 50)
+    rownames(padj_matrix) <- disambiguate_pathway_labels(labels, keys)
+
+    log_padj_matrix <- -log10(padj_matrix + 1e-300)
+    # Cap at 10 for display. The NA test is not decoration: a logical subscript
+    # carrying NA is an error in `[<-`, and a layer holding no adjusted ORA
+    # p-value for a pathway is the normal case here.
+    capped <- !is.na(log_padj_matrix) & log_padj_matrix > 10
+    log_padj_matrix[capped] <- 10
+
+    # NA stays NA, as in plot_cross_omics_pathway_heatmap(): "no adjusted ORA
+    # p-value reached this table" is not "an adjusted p-value close to 1".
+
+    # Pink through magenta, deliberately unlike the white-gold-orange-red of the
+    # meta-analysis heatmap: the two figures sit close together in the report and
+    # are scored on different quantities.
+    ora_palette <- c("#fff7f3", "#fcc5c0", "#f768a1", "#ae017e", "#7a0177")
+
+    # A sparse result is the common case for this figure -- one layer, one
+    # pathway, one cell -- and a zero-width range breaks both drawing paths.
+    # See .nondegenerate_range(); one interval per colour, hence 50 + 1.
+    zl <- .nondegenerate_range(log_padj_matrix)
+
+    if (requireNamespace("pheatmap", quietly = TRUE)) {
+        pheatmap::pheatmap(log_padj_matrix,
+                           cluster_rows = FALSE,
+                           cluster_cols = FALSE,
+                           main = "Cross-Omics ORA Evidence (-log10 adjusted p-value)",
+                           color = colorRampPalette(ora_palette)(50),
+                           breaks = seq(zl[1], zl[2], length.out = 51),
+                           fontsize_row = 7, fontsize_col = 10,
+                           angle_col = 45,
+                           na_col = "grey90",
+                           border_color = "grey80")
+    } else {
+        # Both dendrograms off, matching the pheatmap path: two rows whose
+        # missing layers do not overlap share no observed cell, so dist()
+        # returns NA between them and hclust() stops on it. Nothing is filled in
+        # to make clustering possible.
+        # image(), which heatmap() draws through, does not paint an NA cell at
+        # all, so the device background shows through it; on white that is the
+        # same white as the low end of the scale, and the legend promises grey.
+        withr::with_par(list(bg = "grey90"), {
+            base_cols <- colorRampPalette(ora_palette)(50)
+            if (nrow(log_padj_matrix) >= 2 && ncol(log_padj_matrix) >= 2) {
+                heatmap(log_padj_matrix, scale = "none", Rowv = NA, Colv = NA,
+                        main = "Cross-Omics ORA Evidence",
+                        col = base_cols, zlim = zl)
+            } else {
+                # heatmap() refuses this shape outright; see .draw_small_heatmap().
+                .draw_small_heatmap(log_padj_matrix,
+                                    main = "Cross-Omics ORA Evidence",
+                                    col = base_cols, zlim = zl)
+            }
+        })
+    }
+
+    invisible(log_padj_matrix)
 }
 
 
