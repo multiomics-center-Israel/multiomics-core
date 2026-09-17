@@ -277,9 +277,9 @@ test_that("drawing in KO space does not make the run's own accessions foreign", 
 # key the cross-omics module already uses, and the DE table is looked up by that
 # same key -- the spellings differ between exports.
 
-ora_rows <- function(contrast, pathway, pvalue) {
+ora_rows <- function(contrast, pathway, pvalue, method = "ora") {
     data.frame(pathway = pathway, pvalue = pvalue, contrast = contrast,
-               stringsAsFactors = FALSE)
+               method = method, stringsAsFactors = FALSE)
 }
 
 test_that("one biological contrast gets one key, however it is spelled", {
@@ -337,6 +337,35 @@ test_that(".kegg_hits_by_contrast merges the spellings of one contrast", {
 
     expect_length(hits, 1L)
     expect_setequal(hits[[1]]$pathways, c("00010", "00020"))
+})
+
+test_that("selection is driven by the supplied frames, and by ORA rows only", {
+    # The predecessor scanned "*_ora_up/down.csv" off disk, so GSEA never
+    # reached it. Reading in-memory enrichment means both methods arrive in one
+    # frame, and a GSEA hit must not earn a map.
+    frames <- list(
+        transcriptomics = rbind(
+            ora_rows("A vs. B", "hsa00010", 0.001),
+            ora_rows("A vs. B", "hsa00020", 0.001, method = "fgsea")
+        ),
+        proteomics = ora_rows("A vs. B", "hsa00030", 0.001, method = "fgsea")
+    )
+
+    hits <- .kegg_hits_by_contrast(frames, "hsa")
+
+    expect_identical(hits[["avsb"]]$pathways, "00010")
+    expect_false("00020" %in% hits[["avsb"]]$pathways)
+    expect_false("00030" %in% hits[["avsb"]]$pathways)
+})
+
+test_that("a frame that cannot be confirmed as ORA is skipped, not guessed at", {
+    no_method <- data.frame(pathway = "hsa00010", pvalue = 0.001,
+                            contrast = "A vs. B", stringsAsFactors = FALSE)
+
+    expect_message(
+        expect_length(.kegg_hits_by_contrast(list(transcriptomics = no_method), "hsa"), 0L),
+        "no method column"
+    )
 })
 
 test_that(".kegg_hits_by_contrast drops rows it cannot attribute to a contrast", {
@@ -566,6 +595,39 @@ test_that("Multi-ORA clears stale maps before deciding it has too few layers", {
     expect_false(file.exists(file.path(out, "multi_ora_pathview_union.pdf")))
 })
 
+test_that("run_pathview: false gates every Multi-ORA renderer, cleanup aside", {
+    # The switch is one contract: no pathview rendering. It used to stop only
+    # the no-OrgDb fallback, so a model-organism run still drew maps.
+    src <- paste(deparse(body(run_multi_ora)), collapse = " ")
+
+    expect_true(grepl("run_pathview", src, fixed = TRUE))
+    # All three renderers sit behind it...
+    for (fn in c("generate_per_omic_union_pathview", "generate_multi_ora_pathview",
+                 "generate_per_omics_pathview")) {
+        expect_true(grepl(fn, src, fixed = TRUE))
+    }
+    # ...and the renderer no longer keeps its own copy of the switch.
+    union_src <- paste(deparse(body(generate_per_omic_union_pathview)), collapse = " ")
+    expect_false(grepl("run_pathview", union_src, fixed = TRUE))
+})
+
+test_that("disabling pathview still clears the previous run's maps", {
+    out <- withr::local_tempdir()
+    pv <- file.path(out, "pathview")
+    dir.create(pv)
+    stale <- file.path(pv, "ko00010.multi_ora_avsb.multi.png")
+    writeLines("x", stale)
+
+    cfg <- list(modes = list(multiomics = list(enrichment = list(
+        pathview = list(run_pathview = FALSE)
+    ))))
+    # Only one layer, so this returns early -- but cleanup precedes both the
+    # gate and the input check, or turning maps off would leave the old ones up.
+    suppressMessages(run_multi_ora(list(transcriptomics = list()), NULL, cfg, out))
+
+    expect_false(file.exists(stale))
+})
+
 test_that("the renderer's default top_n matches the config validator's", {
     # The validator fills enrichment.pathview.top_n with 5 when it is absent, so
     # a renderer default of anything else means two different answers to one
@@ -607,9 +669,11 @@ test_that("the renderer is a no-op without a KO map, whatever the organism", {
     )
     # A KO map is the only route onto a reference map, so without one there is
     # nothing to draw -- and in particular no KEGG request is made.
+    enrich <- list(transcriptomics = ora_rows("A vs. B", "hsa00010", 0.001))
     expect_message(
-        expect_null(generate_per_omic_union_pathview(list(), list(), no_code,
-                                                     withr::local_tempdir())),
+        expect_null(generate_per_omic_union_pathview(
+            list(), list(), no_code, withr::local_tempdir(),
+            per_omics_enrichment = enrich)),
         "no feature-to-KO map configured"
     )
 
@@ -619,28 +683,39 @@ test_that("the renderer is a no-op without a KO map, whatever the organism", {
     with_code <- no_code
     with_code$global$organism <- "human"
     expect_message(
-        expect_null(generate_per_omic_union_pathview(list(), list(), with_code,
-                                                     withr::local_tempdir())),
+        expect_null(generate_per_omic_union_pathview(
+            list(), list(), with_code, withr::local_tempdir(),
+            per_omics_enrichment = enrich)),
         "no feature-to-KO map configured"
     )
 })
 
-test_that("run_pathview: false stops the renderer before it reads anything", {
+test_that("the renderer selects nothing without this run's enrichment", {
     skip_if_not_installed("pathview")
     config <- list(
         global = list(organism = "Unlisted nonmodel species"),
-        project = list(dir = tempdir()), paths = list(raw = "data"),
-        modes = list(multiomics = list(enrichment = list(
-            pathview = list(run_pathview = FALSE, ko_map = "ko.tsv")
-        )))
+        project = list(dir = tempdir()), paths = list(raw = "data")
     )
-    # Even with a KO map configured, the switch wins -- and it is read before
-    # the map, so a disabled run does not go looking for files.
+    # Pathway selection is driven by what is handed in. Nothing handed in means
+    # nothing selected -- it must not go looking on disk for a previous run's
+    # enrichment exports.
     expect_message(
         expect_null(generate_per_omic_union_pathview(list(), list(), config,
                                                      withr::local_tempdir())),
-        "disabled by enrichment.pathview.run_pathview"
+        "no per-omics enrichment from this run"
     )
+})
+
+test_that("the renderer no longer scans the filesystem for enrichment", {
+    body_src <- paste(deparse(body(generate_per_omic_union_pathview)), collapse = " ")
+
+    # save_pathway_results() never removes a file, so a pathway that fell out of
+    # significance kept its CSV and kept its map. Selection reads the in-memory
+    # frames only.
+    expect_false(grepl("list.files", body_src, fixed = TRUE))
+    expect_false(grepl("read.csv", body_src, fixed = TRUE))
+    expect_false(grepl("run_root", body_src, fixed = TRUE))
+    expect_true(grepl("per_omics_enrichment", body_src, fixed = TRUE))
 })
 
 test_that("the renderer draws only in KO space", {

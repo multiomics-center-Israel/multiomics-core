@@ -796,11 +796,14 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 
 #' Collect the KEGG pathways each contrast called enriched
 #'
-#' The ORA tables carry their own `contrast` column (written by the enrichment
-#' step alongside `database`, `method` and `direction`), so a pathway can be
-#' attributed to the contrast that produced it without reverse-engineering it
-#' from the filename, whose prefix spells the contrast and the gene-set database
-#' in whatever way the project configured them.
+#' The enrichment frames carry their own `contrast` column (written by the
+#' enrichment step alongside `database`, `method` and `direction`), so a pathway
+#' is attributed to the contrast that produced it.
+#'
+#' Only rows whose `method` is `"ora"` are considered, which is what the
+#' predecessor selected by reading just the `*_ora_up/down.csv` exports. A frame
+#' with no `method` column cannot be confirmed as ORA and is skipped with a
+#' message rather than guessed at.
 #'
 #' Contrasts are grouped by \code{normalize_contrast_key()}, the same canonical
 #' key the cross-omics enrichment module uses, because the spellings genuinely
@@ -811,8 +814,8 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #' Pure: it reads no files and draws nothing, which is what makes the selection
 #' testable without invoking pathview.
 #'
-#' @param ora_tables List of ORA data frames, as read from the per-omic
-#'   `*_ora_up/down.csv` exports.
+#' @param ora_tables Named list of per-omics enrichment data frames from the
+#'   current run (`multiomics_cross_enrichment$per_omics`).
 #' @param kegg_org Organism code for pathway identity, or NULL for a run with no
 #'   KEGG code of its own. This is the identity organism; the gene space these
 #'   maps are drawn in is always KO.
@@ -825,9 +828,23 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   other contrast's fold changes is the bug this structure exists to prevent.
 .kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL, alpha = 0.05) {
     hits <- list()
-    for (d in ora_tables) {
+    for (nm in names(ora_tables)) {
+        d <- ora_tables[[nm]]
         if (is.null(d) || !is.data.frame(d) || nrow(d) == 0) next
         if (!all(c("pathway", "contrast") %in% names(d))) next
+
+        # ORA rows only, as the disk-scanning predecessor selected by reading
+        # just "*_ora_up/down.csv". A frame that cannot be established as ORA is
+        # skipped rather than guessed at: a GSEA table has its own p-value
+        # columns and its own idea of what "enriched" means, and letting its
+        # rows into the union would quietly widen what gets a map.
+        if (!"method" %in% names(d)) {
+            message("  Union pathview: ", nm, " enrichment has no method column, ",
+                    "so its rows cannot be confirmed as ORA; skipping it")
+            next
+        }
+        is_ora <- !is.na(d$method) & tolower(as.character(d$method)) == "ora"
+        if (!any(is_ora)) next
 
         # The gene-set name reaching this column can be a bare accession, a
         # prefixed one, or the "<accession> <readable name>" form that
@@ -837,7 +854,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
         # whether the row names a KEGG pathway at all -- and another organism's
         # prefix, which normalization does not touch, is still rejected.
         keys <- normalize_pathway_join_key(d$pathway, kegg_org)
-        keep <- is_kegg_pathway_accession(keys, kegg_org)
+        keep <- is_ora & is_kegg_pathway_accession(keys, kegg_org)
 
         pcol <- if ("pvalue" %in% names(d)) "pvalue" else if ("padj" %in% names(d)) "padj" else NA
         if (!is.na(pcol)) keep <- keep & !is.na(d[[pcol]]) & d[[pcol]] < alpha
@@ -979,18 +996,26 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   data used to reach KEGG compound ids).
 #' @param config Full config.
 #' @param out_dir Multi-ORA output directory (maps go under `out_dir/pathview`).
+#' @param per_omics_enrichment Named list of this run's per-omics enrichment
+#'   frames (`multiomics_cross_enrichment$per_omics`). Pathways are selected
+#'   from these and from nothing else -- see the note in the body on why the
+#'   persistent Enrichment directories are not scanned.
 #' @param top_n Max pathways to render per contrast. The config validator fills
 #'   `enrichment.pathview.top_n` with 5 when it is absent, so this default only
 #'   applies to a config that never passed through it; overridden by
 #'   `modes$multiomics$enrichment$pathview$top_n` when that is set.
 #' @return Path to the compiled PDF, or NULL when nothing could be rendered.
 generate_per_omic_union_pathview <- function(de_results, harmonization_res,
-                                             config, out_dir, top_n = 5) {
+                                             config, out_dir,
+                                             per_omics_enrichment = NULL,
+                                             top_n = 5) {
     if (!requireNamespace("pathview", quietly = TRUE)) return(NULL)
 
-    pv_cfg_early <- config$modes$multiomics$enrichment$pathview %||% list()
-    if (!isTRUE(pv_cfg_early$run_pathview %||% TRUE)) {
-        message("  Union pathview: disabled by enrichment.pathview.run_pathview")
+    # run_multi_ora() owns the enrichment.pathview.run_pathview switch for all
+    # three renderers; this one is not called from anywhere else.
+    if (is.null(per_omics_enrichment) || length(per_omics_enrichment) == 0) {
+        message("  Union pathview: no per-omics enrichment from this run, ",
+                "so there is nothing to select pathways from.")
         return(NULL)
     }
 
@@ -1003,32 +1028,22 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         return(NULL)
     }
 
-    top_n <- pv_cfg_early$top_n %||% top_n
+    pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
+    top_n <- pv_cfg$top_n %||% top_n
 
     # resolve_kegg_org_code(), not get_kegg_organism(): the latter only knows the
     # six exact species names of the older table. This is the identity organism
     # and nothing else -- the gene space below is always KO.
     id_org <- resolve_kegg_org_code(config$global$organism %||% "")
 
-    # 1. KEGG pathways each contrast called enriched, read from the per-omic ORA
-    #    tables. Locate them by walking up from out_dir to the run root.
-    run_root <- out_dir
-    for (i in seq_len(8)) {
-        if (dir.exists(file.path(run_root, "rna", "Enrichment")) ||
-            dir.exists(file.path(run_root, "proteomics", "Enrichment"))) break
-        parent <- dirname(run_root); if (identical(parent, run_root)) break; run_root <- parent
-    }
-    # The ORA filename prefix carries the contrast and the gene-set database,
-    # both project-specific, so only the "_ora_up/down.csv" tail is fixed. The
-    # contrast is then read from the rows, not from the name.
-    ora_files <- c(list.files(file.path(run_root, "rna", "Enrichment"),
-                              "_ora_(up|down)\\.csv$", full.names = TRUE),
-                   list.files(file.path(run_root, "proteomics", "Enrichment"),
-                              "_ora_(up|down)\\.csv$", full.names = TRUE))
-    ora_tables <- lapply(ora_files, function(f) {
-        tryCatch(read.csv(f, stringsAsFactors = FALSE), error = function(e) NULL)
-    })
-    hits <- .kegg_hits_by_contrast(ora_tables, id_org)
+    # 1. KEGG pathways each contrast called enriched, taken from this run's own
+    #    enrichment state. It used to scan the per-omic Enrichment directories
+    #    instead, which is persistent: save_pathway_results() writes only
+    #    non-empty current results and never removes a file, so a pathway that
+    #    had fallen out of significance still had a CSV on disk and still got a
+    #    map -- drawn with current fold changes. No historical filesystem state
+    #    participates in the selection now.
+    hits <- .kegg_hits_by_contrast(per_omics_enrichment, id_org)
     if (length(hits) == 0) {
         message("  Union pathview: no enriched KEGG pathways.")
         return(NULL)
