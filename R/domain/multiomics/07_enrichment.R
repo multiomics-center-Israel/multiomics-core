@@ -2138,9 +2138,16 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
         # p-values do not overlap share no observed cell, so dist() returns NA
         # between them and hclust() stops on it. Missing values stay missing --
         # nothing here fills them to make clustering possible.
-        heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
-                main = "Cross-Omics Pathway Enrichment",
-                col = colorRampPalette(c("white", "orange", "red"))(50))
+        # image(), which heatmap() draws through, simply does not paint an NA
+        # cell -- so the device background shows through, and on white that is
+        # the same white as the low end of the scale. The legend promises grey
+        # for a missing p-value, so the background is grey while this draws.
+        # The value stays NA; only what shows behind it changes.
+        withr::with_par(list(bg = "grey90"), {
+            heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
+                    main = "Cross-Omics Pathway Enrichment",
+                    col = colorRampPalette(c("white", "orange", "red"))(50))
+        })
     }
 }
 

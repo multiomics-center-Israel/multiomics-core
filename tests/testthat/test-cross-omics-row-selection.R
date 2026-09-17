@@ -141,6 +141,39 @@ test_that("the base fallback disables both dendrograms, as the primary path does
     expect_true(grepl("Colv = NA", body_src, fixed = TRUE))
 })
 
+test_that("the base fallback gives a missing cell something grey to show", {
+    # image(), which heatmap() draws through, does not paint an NA cell at all,
+    # so the device background shows through it. On white that is the same white
+    # as the low end of the scale, which is the ambiguity this whole change
+    # removes -- and the report legend promises grey.
+    body_src <- paste(deparse(body(plot_cross_omics_pathway_heatmap)),
+                      collapse = " ")
+
+    expect_true(grepl("with_par", body_src, fixed = TRUE))
+    expect_true(grepl('bg = "grey90"', body_src, fixed = TRUE))
+    # Still no filling of the value itself.
+    expect_false(grepl("is.na(log_pval_matrix)] <- ", body_src, fixed = TRUE))
+})
+
+test_that("the fallback leaves the graphics state as it found it", {
+    out <- withr::local_tempfile(fileext = ".png")
+    grDevices::png(out)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    before <- graphics::par("bg")
+
+    m <- matrix(c(2, NA, NA, 3), nrow = 2, byrow = TRUE,
+                dimnames = list(c("00010", "00020"),
+                                c("transcriptomics", "proteomics")))
+    withr::with_par(list(bg = "grey90"), {
+        stats::heatmap(m, scale = "none", Rowv = NA, Colv = NA,
+                       col = grDevices::colorRampPalette(c("white", "red"))(5))
+    })
+
+    # A background set for one figure must not leak into the next plot the
+    # caller draws on the same device.
+    expect_identical(graphics::par("bg"), before)
+})
+
 test_that("row clustering cannot survive complementary missingness", {
     # Two rows whose present values do not overlap share no observed cell, so
     # the distance between them is NA and hclust() stops on it. This is why the
