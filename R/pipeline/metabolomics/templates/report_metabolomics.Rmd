@@ -1992,21 +1992,6 @@ if (!is.null(plsda_res$vip_df)) {
 
 ## QEA {.tabset}
 
-### Lollipop Plot
-
-```{r qea-lollipop, fig.width=12, fig.height=8, results='asis'}
-qeabc <- enrichment_res$qea_by_contrast
-if (is.null(qeabc) || length(qeabc) == 0) {
-  if (!is.null(enrichment_res$plots$qea_lollipop)) safe_print_plot(enrichment_res$plots$qea_lollipop)
-} else {
-  for (ct in names(qeabc)) {
-    p <- qeabc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("Quantitative Enrichment Analysis (QEA) lollipop plots, one per contrast (two-group comparison each). Bar length represents statistical significance.")
-```
-
 ### Barplot
 
 ```{r qea-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -2019,7 +2004,7 @@ if (is.null(qeabc) || length(qeabc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("QEA barplots, one per contrast, ranked by significance.")
+figure_legend("QEA barplots, one per contrast, ranked by significance. Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Results Table
@@ -2046,21 +2031,6 @@ if (!is.null(qea_tbl)) {
 
 ## ssGSEA {.tabset}
 
-### Lollipop Plot
-
-```{r ssgsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-ssbc <- enrichment_res$ssgsea_by_contrast
-if (is.null(ssbc) || length(ssbc) == 0) {
-  if (!is.null(enrichment_res$plots$ssgsea_lollipop)) safe_print_plot(enrichment_res$plots$ssgsea_lollipop)
-} else {
-  for (ct in names(ssbc)) {
-    p <- ssbc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("ssGSEA lollipop plots, one per contrast (two-group comparison each), based on single-sample GSEA scores.")
-```
-
 ### Barplot
 
 ```{r ssgsea-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -2073,7 +2043,7 @@ if (is.null(ssbc) || length(ssbc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("ssGSEA barplots, one per contrast, ranked by significance.")
+figure_legend("ssGSEA barplots, one per contrast, ranked by significance. Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Boxplots (static)
@@ -2228,19 +2198,19 @@ if (!is.null(ssgsea_tbl_all)) {
 
 ## ORA {.tabset}
 
-### Lollipop Plot
+### Barplot
 
-```{r ora-lollipop, fig.width=12, fig.height=8, results='asis'}
+```{r ora-barplot, fig.width=12, fig.height=8, results='asis'}
 orabc <- enrichment_res$ora_by_contrast
 if (is.null(orabc) || length(orabc) == 0) {
-  if (!is.null(enrichment_res$plots$ora_lollipop)) safe_print_plot(enrichment_res$plots$ora_lollipop)
+  if (!is.null(enrichment_res$plots$ora_barplot)) safe_print_plot(enrichment_res$plots$ora_barplot)
 } else {
   for (ct in names(orabc)) {
-    p <- orabc[[ct]]$plots$lollipop
+    p <- orabc[[ct]]$plots$barplot
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("Over-Representation Analysis (ORA) lollipop plots, one per contrast: pathways significantly enriched among DE metabolites (Fisher's exact test).")
+figure_legend("Over-Representation Analysis (ORA) barplots, one per contrast: pathways enriched among DE metabolites (Fisher's exact test). Bars show -log10(FDR); the dashed red line marks FDR = 0.05.")
 ```
 
 ### Dot Plot
@@ -2282,21 +2252,6 @@ if (!is.null(ora_tbl)) {
 
 ## GSEA {.tabset}
 
-### Lollipop Plot
-
-```{r gsea-lollipop, fig.width=12, fig.height=8, results='asis'}
-gsbc <- enrichment_res$gsea_by_contrast
-if (is.null(gsbc) || length(gsbc) == 0) {
-  if (!is.null(enrichment_res$plots$gsea_lollipop)) safe_print_plot(enrichment_res$plots$gsea_lollipop)
-} else {
-  for (ct in names(gsbc)) {
-    p <- gsbc[[ct]]$plots$lollipop
-    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
-  }
-}
-figure_legend("GSEA lollipop plots, one per contrast: pathways ranked by Normalized Enrichment Score (NES). Positive NES = up-regulation, negative = down-regulation.")
-```
-
 ### NES Barplot
 
 ```{r gsea-nes-barplot, fig.width=12, fig.height=8, results='asis'}
@@ -2309,7 +2264,7 @@ if (is.null(gsbc) || length(gsbc) == 0) {
     if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
   }
 }
-figure_legend("GSEA Normalized Enrichment Score (NES) barplots, one per contrast. Metabolites were pre-ranked by log2 fold change.")
+figure_legend("GSEA Normalized Enrichment Score (NES) barplots, one per contrast. Metabolites were pre-ranked by log2 fold change. Dashed red lines mark NES = -2 and 2; the axis spans -3 to 3, or the largest |NES| plus 0.5 when that is wider.")
 ```
 
 ### Results Table

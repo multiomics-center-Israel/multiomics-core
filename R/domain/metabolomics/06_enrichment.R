@@ -1160,6 +1160,24 @@ run_metabolomics_gsea <- function(pre, de_res, config, contrast = NULL) {
 
 # ==== ENRICHMENT PLOTS ========================================================
 
+#' Symmetric NES axis half-width for GSEA plots
+#'
+#' NES plots use a symmetric axis so up and down pathways read on the same
+#' scale. The axis spans -3..3 unless a pathway lies closer than 0.5 to that
+#' edge; then it widens to the largest |NES| plus 0.5.
+#'
+#' @param nes   Numeric vector of NES values (NA ignored).
+#' @param floor Smallest half-width (default 3).
+#' @param pad   Space kept beyond the largest |NES| (default 0.5).
+#' @return Numeric scalar L; plot the axis over c(-L, L).
+nes_axis_limit <- function(nes, floor = 3, pad = 0.5) {
+    nes <- abs(as.numeric(nes))
+    nes <- nes[is.finite(nes)]
+    if (length(nes) == 0) return(floor)
+    max(floor, max(nes) + pad)
+}
+
+
 #' Enrichment barplot (for QEA or ssGSEA results)
 #'
 #' Plots the top pathways as horizontal bars of -log10(FDR). When a "library"
@@ -1210,7 +1228,7 @@ plot_enrichment_barplot <- function(enrich_df, top_n = 20,
     p +
         ggplot2::coord_flip() +
         ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed",
-                             color = "grey40") +
+                             color = "red") +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways"),
                        x = NULL, y = "-log10(FDR)") +
@@ -1282,7 +1300,8 @@ plot_ssgsea_boxplots <- function(scores, conditions, results_df,
 #' GSEA NES barplot
 #'
 #' Horizontal barplot of Normalized Enrichment Scores (NES) for top pathways,
-#' colored by direction (up/down) with FDR < 0.05 threshold marking.
+#' colored by direction (up/down). Dashed red lines mark NES = -2 and 2; the
+#' axis is symmetric, see \code{nes_axis_limit()}.
 #'
 #' @param gsea_df  data.frame from run_metabolomics_gsea() with pathway, NES, FDR.
 #' @param top_n    Number of top pathways to display (by FDR).
@@ -1301,6 +1320,7 @@ plot_gsea_nes_barplot <- function(gsea_df, top_n = 20,
     top_df$pathway_short <- factor(top_df$pathway_short,
                                     levels = rev(top_df$pathway_short))
     top_df$direction <- ifelse(top_df$NES > 0, "Up", "Down")
+    nes_lim <- nes_axis_limit(top_df$NES)
 
     ggplot2::ggplot(top_df, ggplot2::aes(x = pathway_short, y = NES,
                                           fill = direction)) +
@@ -1309,6 +1329,9 @@ plot_gsea_nes_barplot <- function(gsea_df, top_n = 20,
         ggplot2::scale_fill_manual(values = c(Up = "firebrick", Down = "steelblue"),
                                     name = "Direction") +
         ggplot2::geom_hline(yintercept = 0, color = "grey30") +
+        ggplot2::geom_hline(yintercept = c(-2, 2), linetype = "dashed",
+                             color = "red") +
+        ggplot2::scale_y_continuous(limits = c(-nes_lim, nes_lim)) +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df),
                                          " pathways by FDR"),
@@ -1398,7 +1421,7 @@ plot_ora_lollipop <- function(ora_df, top_n = 20,
                                        name = "Fold Enrichment") +
         ggplot2::scale_size_continuous(name = "Overlap", range = c(2, 7)) +
         ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
-                             color = "grey40") +
+                             color = "red") +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
                        x = "-log10(FDR)", y = NULL) +
@@ -1413,7 +1436,8 @@ plot_ora_lollipop <- function(ora_df, top_n = 20,
 #' GSEA lollipop plot
 #'
 #' Lollipop plot of NES per pathway, colored by direction and sized by
-#' −log10(FDR).
+#' −log10(FDR). Dashed red lines mark NES = -2 and 2; the axis is symmetric,
+#' see \code{nes_axis_limit()}.
 #'
 #' @param gsea_df  data.frame from run_metabolomics_gsea().
 #' @param top_n    Number of top pathways to display.
@@ -1433,6 +1457,7 @@ plot_gsea_lollipop <- function(gsea_df, top_n = 20,
     top_df$pathway_short <- factor(top_df$pathway_short,
                                     levels = rev(top_df$pathway_short))
     top_df$direction <- ifelse(top_df$NES > 0, "Up", "Down")
+    nes_lim <- nes_axis_limit(top_df$NES)
 
     ggplot2::ggplot(top_df, ggplot2::aes(x = NES, y = pathway_short)) +
         ggplot2::geom_segment(ggplot2::aes(x = 0, xend = NES,
@@ -1445,6 +1470,9 @@ plot_gsea_lollipop <- function(gsea_df, top_n = 20,
                                      name = "Direction") +
         ggplot2::scale_size_continuous(name = "-log10(FDR)", range = c(2, 7)) +
         ggplot2::geom_vline(xintercept = 0, color = "grey30") +
+        ggplot2::geom_vline(xintercept = c(-2, 2), linetype = "dashed",
+                             color = "red") +
+        ggplot2::scale_x_continuous(limits = c(-nes_lim, nes_lim)) +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
                        x = "NES", y = NULL) +
@@ -1501,7 +1529,7 @@ plot_qea_lollipop <- function(qea_df, top_n = 20,
     p +
         ggplot2::scale_size_continuous(name = "Hits", range = c(2, 7)) +
         ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
-                             color = "grey40") +
+                             color = "red") +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
                        x = "-log10(FDR)", y = NULL) +
@@ -1558,7 +1586,7 @@ plot_ssgsea_lollipop <- function(ssgsea_df, top_n = 20,
                                      name = "Direction") +
         ggplot2::scale_size_continuous(name = "|Score Diff|", range = c(2, 7)) +
         ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed",
-                             color = "grey40") +
+                             color = "red") +
         ggplot2::labs(title = title,
                        subtitle = paste0("Top ", nrow(top_df), " pathways by FDR"),
                        x = "-log10(FDR)", y = NULL) +
