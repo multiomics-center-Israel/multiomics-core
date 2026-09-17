@@ -2041,11 +2041,62 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 # Plotting functions
 # =============================================================================
 
+#' Choose the rows a cross-omics figure shows
+#'
+#' The figures exist to show where the layers agree, and ordering by combined
+#' p-value alone does not do that: the layer with the largest gene-set
+#' collection contributes many single-layer pathways with very small p-values,
+#' and they fill every slot. The pathways several layers support -- the point of
+#' the figure -- rank below them and never appear.
+#'
+#' Rows are therefore ordered by how many layers contributed an enrichment
+#' p-value for the pathway first, and by the combined p-value within that. Note
+#' what that count is and is not: `n_omics` counts the layers whose enrichment
+#' table carried a p-value for this pathway. Some of those tables reach here
+#' already filtered, so a missing p-value can mean the pathway was never
+#' testable in that layer, or that it was tested and did not survive into the
+#' layer's result table. Nothing downstream can tell those apart.
+#'
+#' This is selection for display only. The meta-analysis table keeps its own
+#' combined_pval ordering, and no p-value, adjustment or membership is
+#' touched.
+#'
+#' @param meta_results Meta-analysis table, as
+#'   \code{stouffer_combined_pvalues()} returns it.
+#' @param top_n Number of rows to keep.
+#' @return The selected rows of \code{meta_results}, in display order.
+#' @examples
+#' meta <- data.frame(norm_id = c("00010", "00020"),
+#'                    n_omics = c(1L, 2L), combined_pval = c(1e-9, 1e-3))
+#' select_multi_omics_pathways(meta, top_n = 2)$norm_id   # "00020" first
+select_multi_omics_pathways <- function(meta_results, top_n = 30) {
+    if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
+
+    n_omics <- if ("n_omics" %in% names(meta_results)) {
+        as.numeric(meta_results$n_omics)
+    } else {
+        # Nothing to rank on: leave the caller's order alone rather than invent
+        # a preference between rows that carry no contributing-layer count.
+        rep(1, nrow(meta_results))
+    }
+    combined <- if ("combined_pval" %in% names(meta_results)) {
+        as.numeric(meta_results$combined_pval)
+    } else {
+        rep(NA_real_, nrow(meta_results))
+    }
+
+    # Ties on both keys fall back to the incoming order, which is itself sorted
+    # by combined p-value, so the selection is reproducible run to run.
+    ord <- order(-n_omics, combined, seq_len(nrow(meta_results)), na.last = TRUE)
+    meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
+}
+
+
 #' Plot cross-omics pathway heatmap
 plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 
-    # Select top N pathways by combined p-value
-    top_pathways <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
+    # Rows that several layers support lead; see select_multi_omics_pathways().
+    top_pathways <- select_multi_omics_pathways(meta_results, top_n)
 
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
@@ -2058,12 +2109,16 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 
     # Transform to -log10(p)
     log_pval_matrix <- -log10(pval_matrix + 1e-300)
-    # Cap at 10 for display
-    log_pval_matrix[log_pval_matrix > 10] <- 10
+    # Cap at 10 for display. The NA test is not decoration: a logical subscript
+    # carrying NA is an error in `[<-`, and a missing layer p-value is NA -- the
+    # normal case now that the candidate universe is the union of the layers.
+    capped <- !is.na(log_pval_matrix) & log_pval_matrix > 10
+    log_pval_matrix[capped] <- 10
     colnames(log_pval_matrix) <- gsub("^pval_", "", colnames(log_pval_matrix))
 
-    # Replace NA with 0
-    log_pval_matrix[is.na(log_pval_matrix)] <- 0
+    # NA stays NA. "No enrichment p-value for this pathway in this layer" is
+    # not "a p-value close to 1", and flattening the two to 0 rendered them the
+    # same white -- which also left na_col below as dead configuration.
 
     # Heatmap
     if (requireNamespace("pheatmap", quietly = TRUE)) {
@@ -2077,9 +2132,22 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
                            na_col = "grey90",
                            border_color = "grey80")
     } else {
-        heatmap(log_pval_matrix, scale = "none", Colv = NA,
-                main = "Cross-Omics Pathway Enrichment",
-                col = colorRampPalette(c("white", "orange", "red"))(50))
+        # Rowv = NA as well as Colv = NA, to match the pheatmap path above,
+        # which disables both dendrograms. Leaving row clustering on was also a
+        # failure waiting for the right input: two rows whose missing layer
+        # p-values do not overlap share no observed cell, so dist() returns NA
+        # between them and hclust() stops on it. Missing values stay missing --
+        # nothing here fills them to make clustering possible.
+        # image(), which heatmap() draws through, simply does not paint an NA
+        # cell -- so the device background shows through, and on white that is
+        # the same white as the low end of the scale. The legend promises grey
+        # for a missing p-value, so the background is grey while this draws.
+        # The value stays NA; only what shows behind it changes.
+        withr::with_par(list(bg = "grey90"), {
+            heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
+                    main = "Cross-Omics Pathway Enrichment",
+                    col = colorRampPalette(c("white", "orange", "red"))(50))
+        })
     }
 }
 
@@ -2087,7 +2155,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 #' Plot enrichment dot plot
 plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
-    top <- meta_results[seq_len(min(top_n, nrow(meta_results))), ]
+    top <- select_multi_omics_pathways(meta_results, top_n)
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
 
