@@ -99,6 +99,11 @@ run_foundational_analysis <- function(mae, de_results = NULL,
 }
 
 #' Get foundational analysis configuration with defaults
+#'
+#' \code{seed} (foundational$seed, else params$seed, else 42) seeds the
+#' permutation test and k-means in the sample-concordance step, so reruns give
+#' the same p-values and clusters.
+#'
 #' @param config Full config object
 #' @return List of foundational config parameters
 get_foundational_config <- function(config) {
@@ -113,7 +118,8 @@ get_foundational_config <- function(config) {
         fdr_threshold = fc$fdr_threshold %||% 0.05,
         module_detection = fc$module_detection %||% TRUE,
         min_common_features = fc$min_common_features %||% 50,
-        top_variable_features = fc$top_variable_features %||% 2000
+        top_variable_features = fc$top_variable_features %||% 2000,
+        seed = fc$seed %||% config$params$seed %||% 42
     )
 }
 
@@ -731,10 +737,10 @@ compute_sample_rank_correlations <- function(harmonized, common_samples, fc) {
 
         # Permutation test for significance
         n_s <- ncol(mat1)
-        perm_r <- vapply(seq_len(n_perm), function(i) {
+        perm_r <- withr::with_seed(fc$seed %||% 42, vapply(seq_len(n_perm), function(i) {
             idx <- sample(n_s)
             cor(as.vector(dist1), as.vector(dist2[idx, idx]), method = fc$correlation_method)
-        }, numeric(1))
+        }, numeric(1)))
         p_value <- (sum(perm_r >= obs_r) + 1) / (n_perm + 1)
 
         list(
@@ -793,7 +799,8 @@ compute_clustering_consistency <- function(harmonized, common_samples, metadata,
         k <- min(k, floor(length(common_samples) / 2))
         k <- max(k, 2)
 
-        km <- kmeans(pca$x[, 1:min(5, ncol(pca$x))], centers = k, nstart = 25)
+        km <- withr::with_seed(fc$seed %||% 42,
+                               kmeans(pca$x[, 1:min(5, ncol(pca$x))], centers = k, nstart = 25))
 
         list(
             clusters = km$cluster,
