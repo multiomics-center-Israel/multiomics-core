@@ -263,13 +263,20 @@ test_that("one biological contrast gets one key, however it is spelled", {
     expect_false(identical(make.names("1.56ppmvs.0ppm"),
                            make.names("1.56ppm vs. 0ppm")))
 
-    # The other spellings this pipeline produces agree too.
+    # The other spellings this pipeline produces agree too: RNA's underscores,
+    # metabolomics' dash, and the bare "vs".
     expect_identical(normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b", "A vs B")),
                      rep("avsb", 4L))
+    expect_length(unique(normalize_contrast_key(
+        c("1.56ppm vs. 0ppm", "1.56ppm_vs_0ppm", "1.56ppm - 0ppm", "1.56ppmvs.0ppm")
+    )), 1L)
 
     # Two genuinely different contrasts stay apart.
     expect_false(identical(normalize_contrast_key("A vs. B"),
                            normalize_contrast_key("A vs. C")))
+    # Style is what gets dropped, not content: stripping every non-alphanumeric
+    # character made these two doses one key, which is how a contrast would
+    # have been rendered under another's fold changes.
     expect_false(identical(normalize_contrast_key("1.56ppm vs. 0ppm"),
                            normalize_contrast_key("15.6ppm vs. 0ppm")))
 })

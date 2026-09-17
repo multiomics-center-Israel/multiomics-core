@@ -1446,16 +1446,26 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 #' This is identity, not display: keep the original string for headings and
 #' filenames, and use the key only to decide what belongs with what.
 #'
+#' Style is what gets dropped, not content. A decimal point survives, because
+#' stripping every non-alphanumeric character made `"1.56ppm vs 0ppm"` and
+#' `"15.6ppm vs 0ppm"` the same key -- two different doses merged into one, or,
+#' where the key picks a table, one contrast's fold changes rendered under the
+#' other's name.
+#'
 #' @param x Character vector of contrast names.
 #' @return Character vector of canonical keys, same length as \code{x}.
 #' @examples
 #' normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b"))   # all "avsb"
+#' normalize_contrast_key(c("1.56ppm vs 0ppm", "15.6ppm vs 0ppm"))  # stay apart
 normalize_contrast_key <- function(x) {
     x <- tolower(trimws(x))
     # Treat " - " / "-" between groups as an alias for "vs"
     x <- gsub("\\s*-\\s*", "vs", x)
     x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
-    x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
+    x <- gsub("[^a-z0-9.]", "", x)        # strip separators, dots decided below
+    # A dot is only content when it sits between digits; everywhere else it is
+    # punctuation ("vs.", a trailing stop, make.names padding) and goes.
+    x <- gsub("(?<![0-9])\\.|\\.(?![0-9])", "", x, perl = TRUE)
     x
 }
 
