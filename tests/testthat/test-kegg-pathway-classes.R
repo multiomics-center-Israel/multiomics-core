@@ -201,6 +201,79 @@ test_that(".excluded_pathway_classes reads the key, and copes without it", {
 })
 
 
+# ---- the gene-based multi-ORA boundary --------------------------------------
+#
+# The gene-based path runs its own KEGG ORA and its tables feed the multi-ORA
+# summary, the pooled/dot/support plots and the OrgDb pathview renderers. It
+# used to bypass the exclusion entirely, so a class could vanish from the
+# cross-omics tables and reappear here one section away. Filtered once, at the
+# boundary, rather than in each renderer downstream.
+
+gene_ora_table <- function() {
+    data.frame(
+        pathway = c("Glycolysis / Gluconeogenesis", "Cardiac muscle contraction"),
+        ID      = c("00010", "04260"),
+        pvalue  = c(0.001, 0.002),
+        padj    = c(0.01, 0.02),
+        Count   = c(5L, 4L),
+        stringsAsFactors = FALSE
+    )
+}
+
+test_that(".exclude_kegg_classes drops the class and changes nothing else", {
+    cache <- with_fixture_cache()
+    df <- gene_ora_table()
+
+    out <- .exclude_kegg_classes(df, "Organismal Systems", kegg_org = "hsa",
+                                 classification = kegg_pathway_categories(cache))
+
+    expect_identical(out$ID, "00010")
+    # The row that stays carries exactly the values it arrived with: the tested
+    # universe and the adjustment behind them were never touched.
+    expect_equal(out$pvalue, df$pvalue[df$ID == "00010"])
+    expect_equal(out$padj, df$padj[df$ID == "00010"])
+    # Column shape survives, since the summary and plots consume this frame.
+    expect_named(out, names(df))
+})
+
+test_that(".exclude_kegg_classes is a no-op without an exclusion list", {
+    df <- gene_ora_table()
+
+    expect_identical(.exclude_kegg_classes(df, NULL), df)
+    expect_identical(.exclude_kegg_classes(df, character(0)), df)
+    expect_identical(.exclude_kegg_classes(df, list()), df)
+    expect_null(.exclude_kegg_classes(NULL, "Metabolism"))
+})
+
+test_that(".exclude_kegg_classes reports nothing left as no pathways", {
+    cache <- with_fixture_cache()
+
+    # Emptying the table must look like every other "no pathways" path here,
+    # or a zero-row frame reaches plotting code that expects rows or NULL.
+    expect_null(.exclude_kegg_classes(
+        gene_ora_table()[2, , drop = FALSE], "Organismal Systems",
+        kegg_org = "hsa", classification = kegg_pathway_categories(cache)))
+})
+
+test_that("both gene-ORA wiring paths accept an exclusion list", {
+    # The run-level and per-contrast callers reach run_multi_ora_kegg() through
+    # different argument styles; neither may drop the exclusion on the floor.
+    expect_true("exclude_classes" %in% names(formals(run_multi_ora_kegg)))
+
+    run_src <- paste(deparse(body(run_multi_ora)), collapse = " ")
+    grp_src <- paste(deparse(body(.run_multi_ora_contrast_group)), collapse = " ")
+
+    # Run level: pooled and per-omics both read the config through one helper.
+    expect_equal(
+        lengths(regmatches(run_src, gregexpr("run_multi_ora_kegg", run_src)))[[1]], 2L)
+    expect_true(grepl(".excluded_pathway_classes", run_src, fixed = TRUE))
+    # Per contrast: both calls pass the list handed down to the helper.
+    expect_equal(
+        lengths(regmatches(grp_src, gregexpr("run_multi_ora_kegg", grp_src)))[[1]], 2L)
+    expect_true(grepl("exclude_classes = exclude_classes", grp_src, fixed = TRUE))
+})
+
+
 # ---- the exclusion does not touch the statistics ----------------------------
 
 test_that("excluding a class leaves the retained rows' p-values untouched", {
