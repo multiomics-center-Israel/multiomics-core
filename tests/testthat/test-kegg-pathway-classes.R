@@ -14,17 +14,24 @@ brite_fixture <- function() {
         "+D\tPathway",
         "#<h2>KEGG Pathway Maps</h2>",
         "!",
-        "A<b>Metabolism</b>",
-        "B  Carbohydrate metabolism",
+        # Headings carry their own BRITE hierarchy code before the readable
+        # name, which the config never spells.
+        "A<b>09100 Metabolism</b>",
+        "B  09101 Carbohydrate metabolism",
         "C    00010  Glycolysis / Gluconeogenesis [PATH:map00010]",
         "C    00020  Citrate cycle (TCA cycle) [PATH:map00020]",
-        "B  Energy metabolism",
+        "B  09102 Energy metabolism",
         "C    00190  Oxidative phosphorylation [PATH:map00190]",
-        "A<b>Organismal Systems</b>",
-        "B  Circulatory system",
+        "A<b>09150 Organismal Systems</b>",
+        "B  09153 Circulatory system",
         "C    04260  Cardiac muscle contraction [PATH:map04260]",
-        "B  Immune system",
+        "B  09151 Immune system",
         "C    04620  Toll-like receptor signaling pathway [PATH:map04620]",
+        # ...and a heading with no code at all, since KEGG has shipped this
+        # hierarchy in more than one shape.
+        "A<b>Uncoded Category</b>",
+        "B  Uncoded Subcategory",
+        "C    09999  Placeholder pathway [PATH:map09999]",
         "!",
         "#Last updated"
     )
@@ -37,14 +44,34 @@ test_that("parse_kegg_brite_pathways reads A/B/C and ignores the rest", {
     cls <- parse_kegg_brite_pathways(brite_fixture())
 
     expect_named(cls, c("pathway_id", "category", "subcategory", "pathway_name"))
-    expect_equal(nrow(cls), 5L)
-    # Headings carry markup in some copies of the file; it is stripped either way.
-    expect_setequal(unique(cls$category), c("Metabolism", "Organismal Systems"))
-    expect_identical(cls$subcategory[cls$pathway_id == "04260"], "Circulatory system")
+    expect_equal(nrow(cls), 6L)
     expect_identical(cls$pathway_name[cls$pathway_id == "00010"],
                      "Glycolysis / Gluconeogenesis [PATH:map00010]")
     # The "+D", "#" and "!" lines are not pathways.
     expect_false(any(grepl("^[+#!]", cls$pathway_id)))
+})
+
+test_that("headings expose the readable name, not its hierarchy code", {
+    # The config says "Organismal Systems"; the file says
+    # "A<b>09150 Organismal Systems</b>". If the code survived into the parsed
+    # value, every exclusion a project writes would silently match nothing.
+    cls <- parse_kegg_brite_pathways(brite_fixture())
+
+    expect_identical(cls$category[cls$pathway_id == "00010"], "Metabolism")
+    expect_identical(cls$subcategory[cls$pathway_id == "00010"],
+                     "Carbohydrate metabolism")
+    expect_identical(cls$category[cls$pathway_id == "04620"], "Organismal Systems")
+    expect_identical(cls$subcategory[cls$pathway_id == "04620"], "Immune system")
+
+    # Nothing parsed still carries a leading code.
+    expect_false(any(grepl("^[0-9]{5}\\s", c(cls$category, cls$subcategory))))
+})
+
+test_that("a heading with no hierarchy code is kept as it is", {
+    cls <- parse_kegg_brite_pathways(brite_fixture())
+
+    expect_identical(cls$category[cls$pathway_id == "09999"], "Uncoded Category")
+    expect_identical(cls$subcategory[cls$pathway_id == "09999"], "Uncoded Subcategory")
 })
 
 test_that("parse_kegg_brite_pathways returns NULL rather than an empty table", {
@@ -72,7 +99,7 @@ test_that("kegg_pathway_categories reads a valid cache without fetching", {
 
     cls <- kegg_pathway_categories(cache_dir = cache_dir)
 
-    expect_equal(nrow(cls), 5L)
+    expect_equal(nrow(cls), 6L)
 })
 
 
@@ -133,7 +160,7 @@ test_that("identifiers that are not KEGG accessions are never excluded", {
 test_that("an unclassified accession is kept", {
     cache <- with_fixture_cache()
     # Not in the hierarchy: a newer map, or one the fixture does not list.
-    expect_true(keep_kegg_pathways("map09999", exclude = "Metabolism",
+    expect_true(keep_kegg_pathways("map08888", exclude = "Metabolism",
                                    cache_dir = cache))
 })
 
@@ -147,14 +174,14 @@ test_that("no exclusion list means nothing is excluded", {
 })
 
 test_that("an unavailable classification keeps everything and says so", {
-    # Fail open. An empty cache directory and no network reachable from the test
-    # run must not empty the report; the message is what makes it visible.
-    empty_cache <- withr::local_tempdir()
+    # Fail open. The classification is passed in as absent rather than left to a
+    # fetch, so this asserts the contract on every machine instead of only on
+    # one with no network.
     ids <- c("map00010", "map04260")
 
     expect_message(
         keep <- keep_kegg_pathways(ids, exclude = "Metabolism",
-                                   cache_dir = empty_cache),
+                                   classification = NULL),
         "keeping all"
     )
     expect_true(all(keep))

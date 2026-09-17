@@ -714,7 +714,14 @@ parse_kegg_brite_pathways <- function(lines) {
 
     # KEGG has shipped this hierarchy with and without bold markup around the
     # heading text, so headings are read with it stripped either way.
-    heading <- function(x) trimws(gsub("<[^>]*>", "", x))
+    strip_markup <- function(x) trimws(gsub("<[^>]*>", "", x))
+
+    # A and B headings carry their own BRITE hierarchy code before the readable
+    # name ("09150 Organismal Systems"). The config matches on the name, so the
+    # code comes off; a heading that carries none is left as it is. Applied to
+    # headings only -- a pathway's name has already had its map number removed,
+    # and one that happened to begin with digits must keep them.
+    heading <- function(x) sub("^[0-9]{5}[[:space:]]+", "", strip_markup(x))
 
     category <- NA_character_
     subcategory <- NA_character_
@@ -731,7 +738,7 @@ parse_kegg_brite_pathways <- function(lines) {
             ids <- c(ids, sub("^C\\s+([0-9]{5})\\s+.*$", "\\1", ln))
             cats <- c(cats, category)
             subs <- c(subs, subcategory)
-            names_ <- c(names_, heading(sub("^C\\s+[0-9]{5}\\s+", "", ln)))
+            names_ <- c(names_, strip_markup(sub("^C\\s+[0-9]{5}\\s+", "", ln)))
         }
     }
     if (length(ids) == 0) {

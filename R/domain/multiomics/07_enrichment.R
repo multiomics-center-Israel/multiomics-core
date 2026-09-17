@@ -1667,19 +1667,25 @@ normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
 #'   accession be recognised as this run's own.
 #' @param cache_dir Passed to \code{kegg_pathway_categories()}.
 #' @param label Short context word for the message naming what was dropped.
+#' @param classification The resolved class table. Defaults to fetching it, and
+#'   the default is lazy, so a call with nothing to exclude never reaches the
+#'   network. Passing it explicitly -- including as NULL -- lets the fail-open
+#'   path be exercised without depending on whether a machine has network.
 #' @return Logical vector, TRUE for the pathways to keep, one per element of
 #'   \code{pathway_ids}.
 #' @examples
 #' keep_kegg_pathways(c("map00010", "GO:0006915"), exclude = "Human Diseases")
 keep_kegg_pathways <- function(pathway_ids, exclude = NULL, kegg_org = NULL,
-                               cache_dir = NULL, label = "pathways") {
+                               cache_dir = NULL, label = "pathways",
+                               classification = kegg_pathway_categories(
+                                   cache_dir = cache_dir)) {
     keep <- rep(TRUE, length(pathway_ids))
     exclude <- unlist(exclude, use.names = FALSE)
     if (length(pathway_ids) == 0 || is.null(exclude) || length(exclude) == 0) {
         return(keep)
     }
 
-    cls <- kegg_pathway_categories(cache_dir = cache_dir)
+    cls <- classification
     if (is.null(cls)) {
         # Fail open, and say so: a silent empty result reads as "nothing was
         # enriched" rather than "the classification could not be reached".
