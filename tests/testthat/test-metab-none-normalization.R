@@ -8,8 +8,13 @@
 # disabled in the config so the selected matrix is compared verbatim.
 
 # --- fixture: a norm-stage list as produced by the mod_met_normalize_* wrappers
+# `transform` is part of that contract: every stage declares the transform its
+# own `mat` carries, so mod_met_corrected() can record what was APPLIED rather
+# than the configured value (see test-metab-transform-recorded-as-applied.R).
+# The config below configures log2 and these fixtures stand in for log2 stages.
 make_stage <- function(mat, meta) {
-  list(mat = mat, meta = meta, row_data = data.frame(feature_id = rownames(mat)))
+  list(mat = mat, meta = meta, row_data = data.frame(feature_id = rownames(mat)),
+       transform = "log2")
 }
 
 # --- fixture: minimal metabolomics config with drift correction turned off

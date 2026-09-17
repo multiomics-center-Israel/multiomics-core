@@ -284,7 +284,8 @@ mod_met_filtered <- function(raw, config) {
 #'
 #' @param filtered List returned by \code{mod_met_filtered()}.
 #' @param config  Full pipeline config list.
-#' @return list with: \code{mat}, \code{meta}, \code{row_data}.
+#' @return list with: \code{mat}, \code{meta}, \code{row_data},
+#'   \code{transform} (the transform actually applied to \code{mat}).
 #'
 mod_met_log <- function(filtered, config) {
   norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
@@ -295,9 +296,14 @@ mod_met_log <- function(filtered, config) {
                              pseudocount = pseudocount)
   
   list(
-    mat      = mat_log,
-    meta     = filtered$meta,
-    row_data = filtered$row_data
+    mat       = mat_log,
+    meta      = filtered$meta,
+    row_data  = filtered$row_data,
+    # Every normalisation target declares the transform its own `mat` carries,
+    # so mod_met_corrected() can record what was APPLIED instead of re-reading
+    # the configured value. Here they coincide; on the linear/EigenMS targets
+    # they do not. See mod_met_corrected().
+    transform = method
   )
 }
 
@@ -384,22 +390,29 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
   
   chosen_norm <- tolower(pre_cfg$chosen_norm)
   
-  chosen_mat <- switch(chosen_norm,
+  # Take the whole normalisation target, not just its matrix: each one declares
+  # the transform it actually applied (see transform_applied below).
+  chosen_obj <- switch(chosen_norm,
                        # "none": table is already normalized upstream — skip
-                       # sample normalization and use the transform-only matrix.
+                       # sample normalization and use the transform-only target.
                        # transform/scaling still apply via preprocessing.transform
                        # and preprocessing.scaling (set transform: "none" too if
-                       # the table also arrives log-scaled).
-                       none           = logged$mat,
-                       tss            = norm_tss$mat,
-                       median         = norm_median$mat,
-                       pqn            = norm_pqn$mat,
-                       eigenms        = if (!is.null(norm_eigenms)) norm_eigenms$mat else stop("EigenMS target not available"),
-                       eigenms_forced = if (!is.null(norm_eigenms_forced)) norm_eigenms_forced$mat else stop("EigenMS_forced target not available"),
-                       bio_factor     = if (!is.null(norm_bio_factor)) norm_bio_factor$mat else stop("mod_met_corrected: chosen_norm = 'bio_factor' but the normalization returned NULL. Set preprocessing.biological_factor_col to a per-sample metadata column (e.g. total protein)."),
+                       # the table also arrives log-scaled). mod_met_log() is the
+                       # one target whose applied transform IS the configured one,
+                       # so this lane declares the configured value and means it.
+                       none           = logged,
+                       tss            = norm_tss,
+                       median         = norm_median,
+                       pqn            = norm_pqn,
+                       eigenms        = if (!is.null(norm_eigenms)) norm_eigenms else stop("EigenMS target not available"),
+                       eigenms_forced = if (!is.null(norm_eigenms_forced)) norm_eigenms_forced else stop("EigenMS_forced target not available"),
+                       # bio_factor normalises on the LINEAR matrix and log2s it
+                       # itself, like tss/pqn, so it declares transform = "log2".
+                       bio_factor     = if (!is.null(norm_bio_factor)) norm_bio_factor else stop("mod_met_corrected: chosen_norm = 'bio_factor' but the normalization returned NULL. Set preprocessing.biological_factor_col to a per-sample metadata column (e.g. total protein)."),
                        stop(sprintf("mod_met_corrected: unknown chosen_norm '%s'. ",
                                     "Valid options: none, tss, median, pqn, eigenms, eigenms_forced, bio_factor.", chosen_norm))
   )
+  chosen_mat <- chosen_obj$mat
   
   # Two matrices come out of here, not one:
   #   chosen_mat  -- chosen normalisation + variance scaling  -> expr_work,
@@ -477,12 +490,45 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
     }
   }
   
+  # `transform` records the transform ACTUALLY APPLIED to chosen_mat, which is
+  # not always the configured one. mod_met_normalize_linear() (tss/pqn) and both
+  # EigenMS targets normalise on the linear matrix and then call
+  # transform_metab(method = "log2") themselves, ignoring
+  # preprocessing$transform; only the median path runs on mod_met_log()'s output
+  # and so carries the configured transform. Reporting the configured value here
+  # mislabelled a log2 matrix as e.g. glog10 on every TSS/PQN/EigenMS lane --
+  # and the fold-change unit conversion in
+  # R/domain/metabolomics/03_differential.R believes this label, so a glog10
+  # config inflated every reported log2FC by log2(10) = 3.32x.
+  #
+  # The value is read off the chosen target rather than re-derived from a list
+  # of normalisation names here, so a normalisation added later cannot be
+  # mislabelled by forgetting to update a second list; one that declares nothing
+  # falls back to the configured value loudly rather than silently.
+  transform_configured <- norm_cfg$transform %||% "log2"
+  transform_applied    <- chosen_obj$transform
+  if (is.null(transform_applied)) {
+    warning(sprintf(paste0(
+      "mod_met_corrected: normalisation target '%s' does not declare the ",
+      "transform it applied; falling back to the configured '%s'. If that ",
+      "target log2-transforms internally, every fold change on this lane is ",
+      "converted with the wrong unit."), chosen_norm, transform_configured))
+    transform_applied <- transform_configured
+  }
+  if (!identical(tolower(transform_applied), tolower(transform_configured))) {
+    message(sprintf(paste0(
+      "mod_met_corrected: '%s' normalisation applies its own '%s' transform; ",
+      "the configured transform '%s' is recorded as transform_configured."),
+      chosen_norm, transform_applied, transform_configured))
+  }
+
   norm_info <- list(
-    sample_norm   = chosen_norm,
-    transform     = norm_cfg$transform %||% "log2",
-    scaling       = scaling_method,
-    chosen_norm   = chosen_norm,
-    drift_applied = drift_result$applied
+    sample_norm          = chosen_norm,
+    transform            = transform_applied,
+    transform_configured = transform_configured,
+    scaling              = scaling_method,
+    chosen_norm          = chosen_norm,
+    drift_applied        = drift_result$applied
   )
   
   list(
@@ -509,7 +555,10 @@ mod_met_corrected <- function(norm_tss, norm_median, norm_pqn,
 #' @param data   List returned by \code{mod_met_filtered()} (Linear scale).
 #' @param method Character: \code{"tss"} or \code{"pqn"}.
 #' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data},
+#'   \code{transform} = \code{"log2"} -- this path normalises on the LINEAR
+#'   matrix and then log2-transforms it itself, whatever
+#'   \code{preprocessing$transform} says.
 #'
 mod_met_normalize_linear <- function(data, method, config) {
   method      <- tolower(method)
@@ -585,9 +634,10 @@ mod_met_normalize_linear <- function(data, method, config) {
   mat_log <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
   
   list(
-    mat      = mat_log,
-    meta     = data$meta,
-    row_data = data$row_data
+    mat       = mat_log,
+    meta      = data$meta,
+    row_data  = data$row_data,
+    transform = "log2"   # hardcoded on the line above, not norm_cfg$transform
   )
 }
 
@@ -603,7 +653,8 @@ mod_met_normalize_linear <- function(data, method, config) {
 #'
 #' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
 #' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data},
+#'   \code{transform} = \code{"log2"} (applied here, not configured).
 mod_met_normalize_eigenms <- function(data, config) {
   norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
@@ -626,7 +677,8 @@ mod_met_normalize_eigenms <- function(data, config) {
     mat          = mat_log,
     meta         = data$meta,
     row_data     = data$row_data,
-    eigenms_info = eigenms_info
+    eigenms_info = eigenms_info,
+    transform    = "log2"   # hardcoded above, not norm_cfg$transform
   )
 }
 
@@ -642,7 +694,8 @@ mod_met_normalize_eigenms <- function(data, config) {
 #'
 #' @param data   List returned by \code{mod_met_imputed()} (Linear scale).
 #' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data},
+#'   \code{transform} = \code{"log2"} (applied here, not configured).
 mod_met_normalize_eigenms_forced <- function(data, config) {
   norm_cfg    <- config$modes$metabolomics$preprocessing %||% list()
   pseudocount <- norm_cfg$pseudocount %||% 1
@@ -672,7 +725,8 @@ mod_met_normalize_eigenms_forced <- function(data, config) {
     mat          = mat_norm,
     meta         = data$meta,
     row_data     = data$row_data,
-    eigenms_info = eigenms_info
+    eigenms_info = eigenms_info,
+    transform    = "log2"   # hardcoded above, not norm_cfg$transform
   )
 }
 
@@ -683,13 +737,19 @@ mod_met_normalize_eigenms_forced <- function(data, config) {
 
 #' Apply median normalization as a log-shift on a Log2-scale matrix
 #'
-#' @param data   List returned by \code{mod_met_log()} (Log2 scale).
+#' @param data   List returned by \code{mod_met_log()} (already transformed).
 #' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale after shift), \code{meta},
-#'   \code{row_data}.
+#' @return list with: \code{mat} (same scale as \code{data$mat}, median-shifted),
+#'   \code{meta}, \code{row_data}, \code{transform}.
+#'
+#' A median shift is a subtraction; it does not change the scale. So this target
+#' carries whatever transform \code{mod_met_log()} applied -- the CONFIGURED one,
+#' which is the only path on which configured and applied coincide.
 #'
 mod_met_normalize_log <- function(data, config) {
   mat_log     <- data$mat
+  transform_in <- data$transform %||%
+    (config$modes$metabolomics$preprocessing$transform %||% "log2")
   col_medians <- apply(mat_log, 2, stats::median, na.rm = TRUE)
   
   valid <- is.finite(col_medians) & col_medians != 0
@@ -698,7 +758,8 @@ mod_met_normalize_log <- function(data, config) {
       "mod_met_normalize_log: no samples have finite/non-zero log2-medians; ",
       "returning matrix unchanged."
     )
-    return(list(mat = mat_log, meta = data$meta, row_data = data$row_data))
+    return(list(mat = mat_log, meta = data$meta, row_data = data$row_data,
+                transform = transform_in))
   }
   if (!all(valid)) {
     warning(sprintf(
@@ -713,9 +774,10 @@ mod_met_normalize_log <- function(data, config) {
   mat_shifted        <- sweep(mat_log, 2, shifts, FUN = "-")
   
   list(
-    mat      = mat_shifted,
-    meta     = data$meta,
-    row_data = data$row_data
+    mat       = mat_shifted,
+    meta      = data$meta,
+    row_data  = data$row_data,
+    transform = transform_in
   )
 }
 
@@ -739,8 +801,11 @@ mod_met_normalize_log <- function(data, config) {
 #' @param data   List returned by \code{mod_met_imputed()} (Linear scale); must
 #'   carry a \code{meta} table containing \code{biological_factor_col}.
 #' @param config Full pipeline config list.
-#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data}, or
-#'   \code{NULL} when \code{biological_factor_col} is unconfigured.
+#' @return list with: \code{mat} (Log2 scale), \code{meta}, \code{row_data},
+#'   \code{transform} = \code{"log2"} -- this path normalises on the LINEAR
+#'   matrix and then log2-transforms it itself, whatever
+#'   \code{preprocessing$transform} says -- or \code{NULL} when
+#'   \code{biological_factor_col} is unconfigured.
 mod_met_normalize_bio_factor <- function(data, config) {
   cfg_mode    <- config$modes$metabolomics
   norm_cfg    <- cfg_mode$preprocessing %||% list()
@@ -766,8 +831,9 @@ mod_met_normalize_bio_factor <- function(data, config) {
   mat_log  <- transform_metab(mat_norm, method = "log2", pseudocount = pseudocount)
 
   list(
-    mat      = mat_log,
-    meta     = data$meta,
-    row_data = data$row_data
+    mat       = mat_log,
+    meta      = data$meta,
+    row_data  = data$row_data,
+    transform = "log2"   # hardcoded on the line above, not norm_cfg$transform
   )
 }
