@@ -1119,17 +1119,41 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param harmonization_res Harmonization result with MAE and pre-processing data
 #' @param config Full config object
 #' @param out_dir Output directory for results and plots
+#' @param per_omics_enrichment This run's per-omics enrichment frames
+#'   (`multiomics_cross_enrichment$per_omics`), used by the no-OrgDb pathview
+#'   fallback to select pathways from the current run rather than from whatever
+#'   enrichment CSVs an earlier run left on disk.
 #' @return List with: results (data.frame), plots (list of paths)
-run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
+run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
+                          per_omics_enrichment = NULL) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
+
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # Both pathview renderers below write into this directory and the report
+    # finds their maps by globbing it, so a map this run no longer produces
+    # would otherwise linger on the page as a current result. Cleared here,
+    # once, rather than by either renderer: neither owns the other's output.
+    #
+    # Before the input check on purpose. A rerun with one omics layer fewer
+    # produces no Multi-ORA at all, and that is exactly the rerun whose stale
+    # maps would otherwise stay on the page looking current.
+    clear_multi_ora_pathview_outputs(out_dir)
+
+    # One gate for every pathview renderer below, resolved once. The cleanup
+    # above deliberately precedes it: turning the maps off has to remove the
+    # previous run's, or the report keeps showing maps nobody asked for.
+    run_pathview <- isTRUE(
+        (config$modes$multiomics$enrichment$pathview$run_pathview %||% TRUE))
+    if (!run_pathview) {
+        message("Multi-ORA: pathway maps disabled by enrichment.pathview.run_pathview")
+    }
 
     if (is.null(de_results) || length(de_results) < 2) {
         message("Multi-ORA requires DE results from at least 2 omics layers")
         return(NULL)
     }
-
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     # Track errors/warnings for reporting in HTML
     .ora_issues <- character(0)
@@ -1145,6 +1169,17 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         if (is.null(gmt_res)) {
             message("Multi-ORA: organism annotation not available for ", organism,
                     " and no usable per-omic GMT gene sets")
+        }
+        # Without an OrgDb, pathway maps are still reachable: KEGG's reference
+        # maps are organism-independent, so a configured feature-to-KO map puts
+        # this run's features onto them in KO space.
+        if (run_pathview) {
+            tryCatch(
+                generate_per_omic_union_pathview(de_results, harmonization_res,
+                                                 config, out_dir,
+                                                 per_omics_enrichment = per_omics_enrichment),
+                error = function(e) message("  Union pathview failed: ", conditionMessage(e))
+            )
         }
         return(gmt_res)
     }
@@ -1353,7 +1388,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     })
 
     # 4. Pathview maps for pathways supported by >= 2 omics
-    plots$pathview_pdf <- tryCatch({
+    plots$pathview_pdf <- if (!run_pathview) NULL else tryCatch({
         generate_multi_ora_pathview(
             combined = combined,
             de_results = de_results,
@@ -1369,7 +1404,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     # 5. Per-omics pathview: top metabolomics pathways + proteomics overlay,
     #    and top proteomics pathways + metabolomics overlay
-    per_omics_pv <- tryCatch({
+    per_omics_pv <- if (!run_pathview) NULL else tryCatch({
         generate_per_omics_pathview(
             per_omics_ora = per_omics_ora,
             metab_ora = metab_ora,
@@ -2391,6 +2426,10 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     }
 
     # --- Compile into a single PDF with contrast labels ---
+    # "supported" is a claim: these pathways are enriched in two or more omics
+    # layers. generate_per_omic_union_pathview(), the no-OrgDb fallback, unions
+    # single-layer hits and so writes its own file -- sharing this name would
+    # have presented one layer's evidence under this one's promise.
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)

@@ -218,7 +218,11 @@ pipe_multiomics <- function() {
                         de_results = multiomics_de_results,
                         harmonization_res = multiomics_harmonization,
                         config = config,
-                        out_dir = file.path(mg_dir, "multi_ora")
+                        out_dir = file.path(mg_dir, "multi_ora"),
+                        # This run's own enrichment state, so the no-OrgDb
+                        # pathview fallback selects pathways from it rather
+                        # than from enrichment CSVs an earlier run left behind.
+                        per_omics_enrichment = multiomics_cross_enrichment$per_omics
                     )
                 }, error = function(e) {
                     warning("Multi-ORA failed: ", e$message)
