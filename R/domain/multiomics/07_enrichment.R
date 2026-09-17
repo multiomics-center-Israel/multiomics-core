@@ -1039,6 +1039,12 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
         }
     }
 
+    # Compound ORA is over-representation and nothing else, so the producer says
+    # so rather than leaving a consumer to infer it from column shape. Metadata
+    # only: the universe, the p-values, the BH adjustment, the filtering and the
+    # row order above are all untouched.
+    df$method <- "ora"
+
     message("    Found ", nrow(df), " enriched compound pathways")
     df
 }
@@ -1221,9 +1227,17 @@ run_ora_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
         NULL
     })
 
-    if (!is.null(ora_res)) return(ora_res)
+    if (!is.null(ora_res)) {
+        # Say what this is. Only the producer knows for certain -- run_gsea_kegg()
+        # calls this function as its own fallback, so a table reaching a consumer
+        # from that direction is ORA despite the name of the function that asked
+        # for it. Metadata only: no row, p-value or adjustment is touched.
+        ora_res$method <- "ora"
+        return(ora_res)
+    }
 
-    # Fallback: Fisher's exact test with KEGG REST pathway-gene links
+    # Fallback: Fisher's exact test with KEGG REST pathway-gene links; it stamps
+    # its own result the same way.
     run_ora_kegg_fisher(sig_genes, all_genes, kegg_org, min_gs, max_gs, pval_cutoff)
 }
 
@@ -1303,6 +1317,11 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
     if (nrow(df) == 0) return(NULL)
 
     df <- df[order(df$pvalue), ]
+
+    # This function tests one way and only one way, so it can say so. Metadata
+    # only: nothing above it is re-run, re-filtered or re-ordered.
+    df$method <- "ora"
+
     message("    Found ", nrow(df), " enriched gene pathways (Fisher's test)")
     df
 }
