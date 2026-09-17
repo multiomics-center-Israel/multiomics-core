@@ -1146,6 +1146,13 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             message("Multi-ORA: organism annotation not available for ", organism,
                     " and no usable per-omic GMT gene sets")
         }
+        # Without an OrgDb, pathway maps are still reachable: an organism with a
+        # KEGG code renders natively, and one with no code at all renders the
+        # KEGG reference maps in KO space when a ko_map is configured.
+        tryCatch(
+            generate_per_omic_union_pathview(de_results, harmonization_res, config, out_dir),
+            error = function(e) message("  Union pathview failed: ", conditionMessage(e))
+        )
         return(gmt_res)
     }
 
@@ -2391,6 +2398,10 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     }
 
     # --- Compile into a single PDF with contrast labels ---
+    # generate_per_omic_union_pathview() writes this same filename, deliberately:
+    # the report has one pathway-maps section and one download link, and the two
+    # writers sit on mutually exclusive branches of run_multi_ora() -- this one
+    # runs only when an OrgDb resolved, that one only when it did not.
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
