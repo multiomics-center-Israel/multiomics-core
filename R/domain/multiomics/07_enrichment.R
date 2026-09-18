@@ -1117,8 +1117,13 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 #'
 #' Duplicates are collapsed here rather than upstream. Several metabolites can
 #' annotate to one KEGG compound, and fgsea would otherwise score that compound
-#' more than once. The strongest absolute rank wins; exact ties are broken on
-#' the compound id, so the result never depends on the DE table's row order.
+#' more than once. The strongest absolute rank wins. Two rows of one compound
+#' can still tie on magnitude while differing in sign -- +2 against -2 -- and
+#' the compound id cannot separate them, so the more positive rank is taken.
+#' That last rule is arbitrary and deliberately so: it is there to make the
+#' outcome independent of the DE table's row order, not to express a preference
+#' about direction. Without it the first row to arrive won.
+#'
 #' This is GSEA's own rule -- the ORA path keeps its own upstream
 #' de-duplication, which this does not touch.
 #'
@@ -1154,7 +1159,12 @@ rank_compounds_for_gsea <- function(de_mapped) {
     ranks <- ranks[keep]
     if (length(ranks) == 0) return(numeric(0))
 
-    ranks <- ranks[order(-abs(ranks), names(ranks))]
+    # Three keys, and the third is load-bearing: magnitude, then the compound
+    # id, then the signed rank. Without the last one, two rows of one compound
+    # at +x and -x tie on both earlier keys and order() falls back to the
+    # arrival index, which is precisely the row-order dependence this collapse
+    # exists to remove.
+    ranks <- ranks[order(-abs(ranks), names(ranks), -ranks)]
     ranks <- ranks[!duplicated(names(ranks))]
 
     # Ordered explicitly rather than through sort(), so that two compounds with
@@ -1395,6 +1405,37 @@ run_compound_gsea_for_contrasts <- function(de_results, harmonization_res,
     if (is.null(combined) || nrow(combined) == 0) return(NULL)
     rownames(combined) <- NULL
     combined
+}
+
+
+#' Write the compound GSEA export, and only for the run that produced it
+#'
+#' The report includes this file on \code{file.exists()} alone, and a run can
+#' legitimately produce no GSEA at all -- no metabolomics DE, no compound
+#' mapping, a cold cache, nothing scorable. Writing conditionally but never
+#' clearing would leave the previous run's result in place for the report to
+#' present as this run's.
+#'
+#' So the file is removed before the decision, not instead of it: after this
+#' returns, the export exists if and only if this invocation produced rows. The
+#' same invariant the cross-omics ORA figure was given.
+#'
+#' @param compound_gsea Result of \code{run_compound_gsea_for_contrasts()}, or
+#'   NULL.
+#' @param out_dir Cross-enrichment output directory.
+#' @return Invisibly, the path when one was written, otherwise NULL.
+write_compound_gsea_export <- function(compound_gsea, out_dir) {
+    path <- file.path(out_dir, "metabolomics_compound_gsea.csv")
+
+    if (file.exists(path)) unlink(path)
+
+    if (is.null(compound_gsea) || !is.data.frame(compound_gsea) ||
+        nrow(compound_gsea) == 0) {
+        return(invisible(NULL))
+    }
+
+    write.csv(compound_gsea, path, row.names = FALSE)
+    invisible(path)
 }
 
 

@@ -100,10 +100,9 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             NULL
         }
     )
-    if (!is.null(compound_gsea) && nrow(compound_gsea) > 0) {
-        write.csv(compound_gsea,
-                  file.path(out_dir, "metabolomics_compound_gsea.csv"),
-                  row.names = FALSE)
+    # Clears any earlier copy before deciding, so the export exists only for a
+    # run that produced it -- the report reads it on file.exists() alone.
+    if (!is.null(write_compound_gsea_export(compound_gsea, out_dir))) {
         message("  Compound GSEA: ", nrow(compound_gsea),
                 " scored pathway-contrast rows written")
     }

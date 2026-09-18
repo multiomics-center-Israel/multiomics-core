@@ -200,6 +200,27 @@ test_that("the collapse does not depend on the row order it arrives in", {
     expect_identical(forwards, backwards)
 })
 
+test_that("two rows of ONE compound tying on magnitude resolve the same either way", {
+    # The case the id cannot separate: same compound, same absolute rank,
+    # opposite signs. Magnitude and name are both tied, so without a third key
+    # order() falls back to the arrival index and the answer flips with the
+    # input. Which sign wins is arbitrary; that it does not depend on row order
+    # is the point.
+    de <- data.frame(
+        KEGG_ID   = c("C00001", "C00001"),
+        statistic = c(2, -2),
+        log2fc    = c(1, -1),
+        pvalue    = c(0.01, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    forwards  <- rank_compounds_for_gsea(de)
+    backwards <- rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE])
+
+    expect_length(forwards, 1L)
+    expect_identical(forwards, backwards)
+})
+
 test_that("compounds tying on absolute rank resolve deterministically", {
     de <- data.frame(
         KEGG_ID   = c("C00002", "C00001"),
@@ -427,4 +448,56 @@ test_that("the orchestrator gives NULL when metabolomics has no DE results", {
         harmonization_res = NULL,
         config = list(),
         out_dir = withr::local_tempdir()))
+})
+
+
+# ---- the export belongs to the run that produced it -------------------------
+
+test_that("a run with GSEA results writes the export", {
+    dir <- withr::local_tempdir()
+    res <- data.frame(ID = "map00010", pathway = "Glycolysis", NES = 1.5,
+                      pvalue = 0.01, padj = 0.03, method = "fgsea",
+                      stringsAsFactors = FALSE)
+
+    path <- write_compound_gsea_export(res, dir)
+
+    expect_false(is.null(path))
+    expect_true(file.exists(file.path(dir, "metabolomics_compound_gsea.csv")))
+    expect_equal(nrow(read.csv(path, stringsAsFactors = FALSE)), 1L)
+})
+
+test_that("a run with no GSEA results removes the previous run's export", {
+    # The report includes this file on file.exists() alone, so a leftover would
+    # be read as this run's evidence. A run can legitimately score nothing --
+    # no metabolomics DE, no mapping, a cold cache -- and that must leave no
+    # file behind rather than the last run's.
+    dir <- withr::local_tempdir()
+    stale <- file.path(dir, "metabolomics_compound_gsea.csv")
+    writeLines("left over from an earlier run", stale)
+
+    expect_null(write_compound_gsea_export(NULL, dir))
+    expect_false(file.exists(stale))
+})
+
+test_that("an empty result also clears rather than keeps", {
+    dir <- withr::local_tempdir()
+    stale <- file.path(dir, "metabolomics_compound_gsea.csv")
+    writeLines("left over", stale)
+
+    expect_null(write_compound_gsea_export(
+        data.frame(ID = character(0), stringsAsFactors = FALSE), dir))
+    expect_false(file.exists(stale))
+})
+
+test_that("writing replaces an earlier export rather than appending to it", {
+    dir <- withr::local_tempdir()
+    first  <- data.frame(ID = c("map00010", "map00020"), NES = c(1, -1),
+                         stringsAsFactors = FALSE)
+    second <- data.frame(ID = "map00030", NES = 2, stringsAsFactors = FALSE)
+
+    write_compound_gsea_export(first, dir)
+    path <- write_compound_gsea_export(second, dir)
+
+    got <- read.csv(path, stringsAsFactors = FALSE)
+    expect_identical(got$ID, "map00030")
 })
