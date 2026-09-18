@@ -36,9 +36,57 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
         out_dir = out_dir
     )
 
+    # --- Compound GSEA (metabolomics) ---
+    # Scored before the per_omics guard below, and kept out of per_omics
+    # entirely. Two separate reasons, both deliberate:
+    #
+    # Out of per_omics, because everything there becomes pathway_tables and
+    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
+    # and no method filter -- a GSEA row there would quietly become the
+    # metabolomics p-value feeding Stouffer.
+    #
+    # Before the guard, because GSEA does not depend on any ORA table. A run
+    # where no layer produced an enriched table is precisely a run where ranked
+    # evidence may still be informative, and returning early would have thrown
+    # it away. It also means the export is cleared on every path, so a run that
+    # scores nothing cannot leave the previous run's file behind.
+    #
+    # It reads the compound-pathway cache the ORA step fills and never fetches
+    # one of its own, so it runs after build_per_omics_enrichment().
+    compound_gsea <- tryCatch(
+        run_compound_gsea_for_contrasts(
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir
+        ),
+        error = function(e) {
+            message("  Compound GSEA failed: ", e$message)
+            NULL
+        }
+    )
+    if (!is.null(write_compound_gsea_export(compound_gsea, out_dir))) {
+        message("  Compound GSEA: ", nrow(compound_gsea),
+                " scored pathway-contrast rows written")
+    }
+
     if (is.null(per_omics) || length(per_omics) == 0) {
         message("  No omics layers produced enrichment results")
-        return(NULL)
+
+        if (is.null(compound_gsea) || nrow(compound_gsea) == 0) return(NULL)
+
+        # Compound GSEA alone. Reported as what it is -- no ORA tables, no
+        # cross-omics analysis, no figures -- rather than dressed up as a
+        # partial enrichment result. run_multigsea_plots() reads per_omics and
+        # stops on fewer than two layers, so an empty list is the honest shape
+        # and the one its own guard already handles.
+        message("  Compound GSEA produced results; returning those alone")
+        return(list(
+            per_omics = list(),
+            cross_omics = NULL,
+            compound_gsea = compound_gsea,
+            plots = list()
+        ))
     }
 
     # Generate per-omics enrichment barplots (always, even with 1 omics)
@@ -76,35 +124,6 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     } else {
         message("  Only ", length(per_omics), " omics with enrichment results; ",
                 "skipping cross-omics comparison (need >= 2)")
-    }
-
-    # --- Compound GSEA (metabolomics) ---
-    # Scored here rather than inside build_per_omics_enrichment(), and kept out
-    # of per_omics entirely: everything in per_omics becomes pathway_tables and
-    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
-    # and no method filter -- a GSEA row there would quietly become the
-    # metabolomics p-value feeding Stouffer. Its own slot, its own file, its own
-    # report section, and the ORA path above untouched.
-    #
-    # After the ORA path, because it reads the compound-pathway cache that
-    # run_compound_ora() fills and will not fetch one of its own.
-    compound_gsea <- tryCatch(
-        run_compound_gsea_for_contrasts(
-            de_results = de_results,
-            harmonization_res = harmonization_res,
-            config = config,
-            out_dir = out_dir
-        ),
-        error = function(e) {
-            message("  Compound GSEA failed: ", e$message)
-            NULL
-        }
-    )
-    # Clears any earlier copy before deciding, so the export exists only for a
-    # run that produced it -- the report reads it on file.exists() alone.
-    if (!is.null(write_compound_gsea_export(compound_gsea, out_dir))) {
-        message("  Compound GSEA: ", nrow(compound_gsea),
-                " scored pathway-contrast rows written")
     }
 
     # --- Per-contrast enrichment output ---

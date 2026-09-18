@@ -1098,6 +1098,38 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 }
 
 
+#' The cached KEGG BRITE classification, and only the cache
+#'
+#' The companion to \code{.cached_compound_pathways()}, for the other KEGG
+#' resource this path can reach. \code{keep_kegg_pathways()} defaults its
+#' \code{classification} argument to \code{kegg_pathway_categories()}, which
+#' downloads br08901 whenever its own cache is cold or a week old -- so leaving
+#' that default in place would have made the compound GSEA path fetch after all,
+#' indirectly, the moment a project configured \code{exclude_pathway_classes}.
+#'
+#' Reading the cache and stopping there keeps the guarantee literal.
+#' \code{keep_kegg_pathways()} already fails open on a NULL classification, and
+#' says so, which is the right outcome: a class exclusion that cannot be
+#' resolved keeps every pathway rather than silently dropping some.
+#'
+#' @param cache_dir Directory \code{kegg_pathway_categories()} caches into;
+#'   NULL falls back to the same default that function uses.
+#' @return The cached classification table, or NULL when there is no usable one.
+.cached_pathway_categories <- function(cache_dir = NULL) {
+    if (is.null(cache_dir) || !nzchar(cache_dir)) {
+        cache_dir <- file.path(tempdir(), "kegg_cache")
+    }
+    # Same filename kegg_pathway_categories() writes.
+    f <- file.path(cache_dir, "kegg_pathway_categories.rds")
+    if (!file.exists(f)) return(NULL)
+
+    cls <- tryCatch(readRDS(f), error = function(e) NULL)
+    # Validated with the producer's own check, not a second opinion about shape.
+    if (!.is_kegg_category_table(cls)) return(NULL)
+    cls
+}
+
+
 #' Rank mapped metabolites for compound GSEA
 #'
 #' Two statistics, in order, and no third: the moderated statistic where the DE
@@ -1300,9 +1332,16 @@ run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
     )
 
     if (length(unlist(exclude_classes)) > 0) {
+        # classification passed explicitly: the default would resolve through
+        # kegg_pathway_categories(), which downloads br08901 on a cold cache.
+        # See .cached_pathway_categories(). A NULL here fails open, keeping
+        # every pathway and saying so, which is the safe direction for an
+        # exclusion that cannot be resolved.
         out <- out[keep_kegg_pathways(out$ID, exclude = exclude_classes,
                                       cache_dir = cache_dir,
-                                      label = "compound GSEA pathways"), ,
+                                      label = "compound GSEA pathways",
+                                      classification =
+                                          .cached_pathway_categories(cache_dir)), ,
                    drop = FALSE]
         if (nrow(out) == 0) {
             message("    No compound GSEA pathways left after KEGG class exclusion")
@@ -1351,7 +1390,15 @@ run_compound_gsea_for_contrasts <- function(de_results, harmonization_res,
     cache_dir <- file.path(out_dir, "metabolomics")
     cpd_pathways <- .cached_compound_pathways(cache_dir)
     if (is.null(cpd_pathways)) {
-        message("  No cached KEGG compound-pathway table; skipping compound GSEA")
+        # Named precisely, because the cause is not obvious from the symptom:
+        # this table is written by the compound ORA step, and a run where that
+        # step never executed -- metabolomics enrichment supplied pre-computed,
+        # for instance -- leaves no cache for GSEA to read. Deliberately not
+        # fetched here; a display-side analysis is not the right place to start
+        # a KEGG download.
+        message("  Compound GSEA skipped: no cached KEGG compound-pathway ",
+                "table at ", cache_dir, ". It is written by the compound ORA ",
+                "step, which has not run for this output directory.")
         return(NULL)
     }
 

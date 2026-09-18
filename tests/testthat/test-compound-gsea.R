@@ -501,3 +501,177 @@ test_that("writing replaces an earlier export rather than appending to it", {
     got <- read.csv(path, stringsAsFactors = FALSE)
     expect_identical(got$ID, "map00030")
 })
+
+
+# ---- class exclusion must not reach the network -----------------------------
+
+brite_fixture <- function() {
+    data.frame(
+        pathway_id   = c("00010", "00020", "00030"),
+        category     = c("Metabolism", "Metabolism", "Human Diseases"),
+        subcategory  = c("Carbohydrate metabolism", "Carbohydrate metabolism",
+                         "Cancer"),
+        pathway_name = c("Glycolysis", "Citrate cycle", "Pentose phosphate"),
+        stringsAsFactors = FALSE
+    )
+}
+
+test_that("the BRITE classification is read from cache and never fetched", {
+    dir <- withr::local_tempdir()
+    expect_null(.cached_pathway_categories(dir))
+
+    saveRDS(brite_fixture(), file.path(dir, "kegg_pathway_categories.rds"))
+    got <- .cached_pathway_categories(dir)
+
+    expect_true(is.data.frame(got))
+    expect_true(all(c("pathway_id", "category", "subcategory") %in% names(got)))
+})
+
+test_that("an unusable BRITE cache is refused rather than half-read", {
+    dir <- withr::local_tempdir()
+    saveRDS(data.frame(nonsense = 1), file.path(dir, "kegg_pathway_categories.rds"))
+
+    # Validated with the producer's own shape check, so a file that is not the
+    # classification table reads as absent and the caller fails open.
+    expect_null(.cached_pathway_categories(dir))
+})
+
+test_that("compound GSEA passes a cached classification rather than the fetching default", {
+    # keep_kegg_pathways() defaults `classification` to kegg_pathway_categories(),
+    # which downloads br08901 on a cold cache. Leaving that default in place
+    # would make this path fetch indirectly whenever exclude_pathway_classes is
+    # set -- the one hole in the cache-only guarantee.
+    src <- paste(deparse(body(run_compound_gsea)), collapse = " ")
+
+    expect_true(grepl("classification = .cached_pathway_categories(", src,
+                      fixed = TRUE))
+})
+
+test_that("class exclusion works from cache alone, and fails open without one", {
+    skip_if_not_installed("fgsea")
+
+    cache <- withr::local_tempdir()
+    saveRDS(brite_fixture(), file.path(cache, "kegg_pathway_categories.rds"))
+
+    excluded <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = cache, min_gs = 2, max_gs = 500,
+        exclude_classes = "Human Diseases", cpd_pathways = cpd_fixture()))
+
+    # map00030 is the Human Diseases row of the fixture.
+    expect_false("map00030" %in% excluded$ID)
+    expect_true("map00010" %in% excluded$ID)
+
+    # With no classification available, nothing is dropped: an exclusion that
+    # cannot be resolved must not silently remove pathways.
+    empty <- withr::local_tempdir()
+    kept <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = empty, min_gs = 2, max_gs = 500,
+        exclude_classes = "Human Diseases", cpd_pathways = cpd_fixture()))
+
+    expect_true("map00030" %in% kept$ID)
+})
+
+
+# ---- GSEA survives a run where no ORA table was produced --------------------
+
+test_that("compound GSEA still runs, returns and exports when per_omics is empty", {
+    skip_if_not_installed("fgsea")
+
+    tmp <- withr::local_tempdir()
+    out_dir <- file.path(tmp, "cross_enrichment")
+    dir.create(file.path(out_dir, "metabolomics"), recursive = TRUE)
+
+    # The compound-pathway table the ORA step would have cached.
+    saveRDS(cpd_fixture(),
+            file.path(out_dir, "metabolomics", "kegg_compound_pathways.rds"))
+
+    # HMDB -> KEGG mapping, seeded through the env var load_hmdb_to_kegg_map()
+    # already honours, so nothing reaches for the repo's real data file.
+    hmdb <- sprintf("HMDB%07d", 1:15)
+    dir.create(file.path(tmp, "data"))
+    writeLines(c("HMDB\tKEGG", paste0(hmdb, "\t", sprintf("C%05d", 1:15))),
+               file.path(tmp, "data", "HMDB2kegg_cpd.Jan2026.v2.txt"))
+    withr::local_envvar(c(PIPELINE_ROOT = tmp))
+
+    harmonization_res <- list(inputs = list(metabolomics = list(
+        row_data = data.frame(feature_id = hmdb, HMDB = hmdb,
+                              stringsAsFactors = FALSE))))
+
+    de_results <- list(metabolomics = list(de_tables = list(
+        B_vs_A = data.frame(
+            feature_id = hmdb,
+            logFC      = seq(2, -2, length.out = 15),
+            P.Value    = seq(0.001, 0.5, length.out = 15),
+            adj.P.Val  = seq(0.01, 0.9, length.out = 15),
+            statistic  = seq(5, -5, length.out = 15),
+            stringsAsFactors = FALSE
+        ))))
+
+    # No omics layer is enriched: omics_present is empty, so
+    # build_per_omics_enrichment() has nothing to loop over and per_omics comes
+    # back empty. An organism with no KEGG code keeps the gene-side conversion
+    # cache -- and its network calls -- out of the picture entirely.
+    config <- list(
+        global = list(organism = "not a known organism",
+                      omics_present = character(0)),
+        modes = list(multiomics = list(enrichment = list(run_enrichment = TRUE)))
+    )
+
+    res <- suppressWarnings(suppressMessages(mod_multiomics_enrichment(
+        enrichment_results = NULL,
+        de_results = de_results,
+        harmonization_res = harmonization_res,
+        config = config,
+        out_dir = out_dir)))
+
+    # Returned rather than thrown away with the empty ORA result.
+    expect_false(is.null(res))
+    expect_true(is.data.frame(res$compound_gsea))
+    expect_gt(nrow(res$compound_gsea), 0)
+    expect_identical(unique(res$compound_gsea$method), "fgsea")
+
+    # Reported as what it is: no ORA tables, no cross-omics analysis, no figures.
+    expect_identical(res$per_omics, list())
+    expect_null(res$cross_omics)
+    expect_identical(res$plots, list())
+
+    # And exported.
+    expect_true(file.exists(file.path(out_dir, "metabolomics_compound_gsea.csv")))
+})
+
+test_that("a run with neither ORA nor GSEA still returns NULL", {
+    tmp <- withr::local_tempdir()
+    out_dir <- file.path(tmp, "cross_enrichment")
+    dir.create(out_dir, recursive = TRUE)
+
+    # No compound-pathway cache, so GSEA cannot score; no layers either.
+    config <- list(
+        global = list(organism = "not a known organism",
+                      omics_present = character(0)),
+        modes = list(multiomics = list(enrichment = list(run_enrichment = TRUE)))
+    )
+
+    res <- suppressWarnings(suppressMessages(mod_multiomics_enrichment(
+        enrichment_results = NULL,
+        de_results = list(),
+        harmonization_res = NULL,
+        config = config,
+        out_dir = out_dir)))
+
+    # Unchanged from before this PR: nothing to report is still NULL.
+    expect_null(res)
+})
+
+test_that("the GSEA call precedes the empty-per_omics guard", {
+    # Ordering is the whole fix: scored after the guard, it would be unreachable
+    # in exactly the case the test above covers. Pinned because the two are far
+    # apart in the function and easy to separate again.
+    src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
+    gsea_at  <- regexpr("run_compound_gsea_for_contrasts(", src, fixed = TRUE)
+    guard_at <- regexpr("No omics layers produced enrichment results", src,
+                        fixed = TRUE)
+
+    expect_gt(gsea_at, 0)
+    expect_gt(guard_at, 0)
+    expect_lt(gsea_at, guard_at)
+})
