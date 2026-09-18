@@ -611,10 +611,19 @@ test_that("compound GSEA still runs, returns and exports when per_omics is empty
     # build_per_omics_enrichment() has nothing to loop over and per_omics comes
     # back empty. An organism with no KEGG code keeps the gene-side conversion
     # cache -- and its network calls -- out of the picture entirely.
+    # min_set_size is set explicitly, and that is worth a word. The orchestrator
+    # defaults it to 10, which is a gene-set scale: compound pathways carry far
+    # fewer measured members, which is why run_compound_ora() clamps its own
+    # floor down to 3 rather than up. This test is about the GSEA-only return
+    # path, not about what the default should be, so it configures a floor the
+    # fixture can meet and leaves that question where it belongs.
     config <- list(
         global = list(organism = "not a known organism",
                       omics_present = character(0)),
-        modes = list(multiomics = list(enrichment = list(run_enrichment = TRUE)))
+        modes = list(multiomics = list(enrichment = list(
+            run_enrichment = TRUE,
+            min_set_size = 2
+        )))
     )
 
     res <- suppressWarnings(suppressMessages(mod_multiomics_enrichment(
