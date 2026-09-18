@@ -21,6 +21,14 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # Cleared here, before any return can be taken -- including the disabled
+    # guard immediately below. The report includes this export on file.exists()
+    # alone, so a rerun that switches enrichment off would otherwise keep
+    # presenting the previous run's scores as current. The invariant is that
+    # the file exists only if THIS invocation produced rows, and a guard that
+    # returns before the cleanup is exactly how such an invariant is lost.
+    write_compound_gsea_export(NULL, out_dir)
+
     # Check if enrichment is enabled
     if (!isTRUE(config$modes$multiomics$enrichment$run_enrichment)) {
         message("  Cross-omics enrichment disabled in config")

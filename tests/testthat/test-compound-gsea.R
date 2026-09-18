@@ -40,19 +40,24 @@ de_fixture <- function(n = 15, statistic = TRUE) {
 
 # ---- the standardiser carries the moderated statistic ----------------------
 
-test_that("the metabolomics statistic survives extract_de_tables() unchanged", {
-    de_data <- list(de_tables = list(
-        B_vs_A = data.frame(
-            feature_id = c("M1", "M2", "M3"),
-            logFC      = c(1.5, -0.8, 0.2),
-            P.Value    = c(0.001, 0.02, 0.5),
-            adj.P.Val  = c(0.01, 0.08, 0.6),
-            statistic  = c(4.2, -2.1, 0.4),
-            stringsAsFactors = FALSE
-        )
-    ))
+metab_de_data <- function(method = "limma", statistic = c(4.2, -2.1, 0.4),
+                          stat_col = "statistic") {
+    tbl <- data.frame(
+        feature_id = c("M1", "M2", "M3"),
+        logFC      = c(1.5, -0.8, 0.2),
+        P.Value    = c(0.001, 0.02, 0.5),
+        adj.P.Val  = c(0.01, 0.08, 0.6),
+        stringsAsFactors = FALSE
+    )
+    if (!is.null(statistic)) tbl[[stat_col]] <- statistic
+    out <- list(de_tables = list(B_vs_A = tbl))
+    if (!is.null(method)) out$method <- method
+    out
+}
 
-    std <- extract_de_tables(de_data, "metabolomics", harmonization_res = NULL)
+test_that("a signed statistic survives extract_de_tables() unchanged", {
+    std <- extract_de_tables(metab_de_data("limma"), "metabolomics",
+                             harmonization_res = NULL)
 
     expect_true("statistic" %in% names(std$B_vs_A))
     expect_equal(std$B_vs_A$statistic, c(4.2, -2.1, 0.4))
@@ -64,19 +69,69 @@ test_that("the metabolomics statistic survives extract_de_tables() unchanged", {
     expect_equal(std$B_vs_A$padj, c(0.01, 0.08, 0.6))
 })
 
-test_that("a table carrying t is accepted, and one carrying neither gives NA", {
-    with_t <- list(de_tables = list(C1 = data.frame(
-        feature_id = "M1", logFC = 1, P.Value = 0.01, adj.P.Val = 0.05,
-        t = 3.3, stringsAsFactors = FALSE)))
-    expect_equal(
-        extract_de_tables(with_t, "metabolomics", NULL)$C1$statistic, 3.3)
+test_that("every t-based method carries its statistic through", {
+    for (m in c("limma", "t_test", "t_test_equal")) {
+        std <- extract_de_tables(metab_de_data(m), "metabolomics", NULL)
+        expect_equal(std$B_vs_A$statistic, c(4.2, -2.1, 0.4),
+                     info = paste("method:", m))
+    }
+})
 
-    without <- list(de_tables = list(C1 = data.frame(
-        feature_id = "M1", logFC = 1, P.Value = 0.01, adj.P.Val = 0.05,
-        stringsAsFactors = FALSE)))
-    got <- extract_de_tables(without, "metabolomics", NULL)$C1
+test_that("a Wilcoxon result never exposes W as the statistic", {
+    # wilcox.test() stores W in the same column the t-based methods use for a
+    # signed t. W is non-negative and centred at n1*n2/2, so ranking on it would
+    # give fgsea a list with no low end at all -- decreased metabolites weighted
+    # slightly positive instead of strongly negative. It is not converted here,
+    # it is withheld, and the ranker's signed fallback takes over.
+    w_stats <- c(30, 2, 18)   # plausible rank sums: all non-negative
+    std <- extract_de_tables(metab_de_data("wilcoxon", statistic = w_stats),
+                             "metabolomics", NULL)
+
+    expect_true("statistic" %in% names(std$B_vs_A))
+    expect_true(all(is.na(std$B_vs_A$statistic)))
+    # The rest of the row is untouched -- only the statistic is withheld.
+    expect_equal(std$B_vs_A$log2fc, c(1.5, -0.8, 0.2))
+    expect_equal(std$B_vs_A$pvalue, c(0.001, 0.02, 0.5))
+})
+
+test_that("a Wilcoxon DE result ranks on the signed fallback", {
+    std <- extract_de_tables(
+        metab_de_data("wilcoxon", statistic = c(30, 2, 18)), "metabolomics", NULL)
+    de_mapped <- std$B_vs_A
+    de_mapped$KEGG_ID <- c("C00001", "C00002", "C00003")
+
+    ranks <- rank_compounds_for_gsea(de_mapped)
+
+    # Signed by the fold change, not ordered by W: M2 fell, so its compound must
+    # rank negative even though its W is the smallest of the three.
+    expect_lt(ranks[["C00002"]], 0)
+    expect_gt(ranks[["C00001"]], 0)
+    expect_gt(ranks[["C00003"]], 0)
+    # And the ordering is the fallback's, not W's ascending order.
+    expect_equal(unname(ranks),
+                 unname(sort(sign(c(1.5, -0.8, 0.2)) *
+                             -log10(c(0.001, 0.02, 0.5) + 1e-300),
+                             decreasing = TRUE)))
+})
+
+test_that("an unknown, missing or precomputed method withholds the statistic", {
+    for (m in list("precomputed", "something_new", NULL)) {
+        std <- extract_de_tables(metab_de_data(m), "metabolomics", NULL)
+        expect_true(all(is.na(std$B_vs_A$statistic)),
+                    info = paste("method:", m %||% "<missing>"))
+    }
+})
+
+test_that("a table carrying t is accepted, and one carrying neither gives NA", {
+    with_t <- metab_de_data("limma", statistic = c(3.3, -1.1, 0.2),
+                            stat_col = "t")
+    expect_equal(extract_de_tables(with_t, "metabolomics", NULL)$B_vs_A$statistic,
+                 c(3.3, -1.1, 0.2))
+
+    without <- metab_de_data("limma", statistic = NULL)
+    got <- extract_de_tables(without, "metabolomics", NULL)$B_vs_A
     expect_true("statistic" %in% names(got))
-    expect_true(is.na(got$statistic))
+    expect_true(all(is.na(got$statistic)))
 })
 
 
@@ -419,9 +474,54 @@ test_that("no finite ranking value anywhere gives NULL", {
 })
 
 test_that("no pathway inside the size bounds gives NULL", {
+    # Exercised through the sets rather than through min_gs: the floor is
+    # clamped to at most 3 for compound pathways (see below), so a large
+    # configured min_gs no longer excludes anything. One measured compound per
+    # pathway is under the floor whatever the configuration says.
+    thin <- data.frame(
+        pathway  = c("map00010", "map00020"),
+        compound = c("C00001", "C00002"),
+        name     = c("Glycolysis", "Citrate cycle"),
+        stringsAsFactors = FALSE
+    )
+
     expect_message(
         res <- run_compound_gsea(de_fixture(), cache_dir = NULL,
-                                 min_gs = 50, max_gs = 500,
+                                 min_gs = 2, max_gs = 500,
+                                 cpd_pathways = thin),
+        "measured compounds"
+    )
+    expect_null(res)
+})
+
+test_that("a configured gene-set-scale floor does not disqualify compound pathways", {
+    skip_if_not_installed("fgsea")
+
+    # min_set_size ships at 10, which is modest for a gene set and far above
+    # what a KEGG compound pathway carries in measured members. Clamping up to
+    # it would leave compound GSEA testing nothing while reporting no error, so
+    # the floor is clamped down to 3, exactly as run_compound_ora() does.
+    three <- data.frame(
+        pathway  = rep(c("map00010", "map00020"), each = 3),
+        compound = c("C00001", "C00002", "C00003",
+                     "C00004", "C00005", "C00006"),
+        name     = rep(c("Glycolysis", "Citrate cycle"), each = 3),
+        stringsAsFactors = FALSE
+    )
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 10, max_gs = 500,
+        cpd_pathways = three))
+
+    expect_true(is.data.frame(res))
+    expect_setequal(res$ID, c("map00010", "map00020"))
+})
+
+test_that("the configured maximum is still honoured as given", {
+    # Only the floor is compound-specific; max_gs is used as configured.
+    expect_message(
+        res <- run_compound_gsea(de_fixture(), cache_dir = NULL,
+                                 min_gs = 2, max_gs = 3,
                                  cpd_pathways = cpd_fixture()),
         "measured compounds"
     )
@@ -611,19 +711,13 @@ test_that("compound GSEA still runs, returns and exports when per_omics is empty
     # build_per_omics_enrichment() has nothing to loop over and per_omics comes
     # back empty. An organism with no KEGG code keeps the gene-side conversion
     # cache -- and its network calls -- out of the picture entirely.
-    # min_set_size is set explicitly, and that is worth a word. The orchestrator
-    # defaults it to 10, which is a gene-set scale: compound pathways carry far
-    # fewer measured members, which is why run_compound_ora() clamps its own
-    # floor down to 3 rather than up. This test is about the GSEA-only return
-    # path, not about what the default should be, so it configures a floor the
-    # fixture can meet and leaves that question where it belongs.
+    # Deliberately no min_set_size: this runs on the shipped default of 10, so
+    # it also stands as the end-to-end check that a gene-set-scale floor does
+    # not silence compound GSEA in a default configuration.
     config <- list(
         global = list(organism = "not a known organism",
                       omics_present = character(0)),
-        modes = list(multiomics = list(enrichment = list(
-            run_enrichment = TRUE,
-            min_set_size = 2
-        )))
+        modes = list(multiomics = list(enrichment = list(run_enrichment = TRUE)))
     )
 
     res <- suppressWarnings(suppressMessages(mod_multiomics_enrichment(
@@ -683,4 +777,42 @@ test_that("the GSEA call precedes the empty-per_omics guard", {
     expect_gt(gsea_at, 0)
     expect_gt(guard_at, 0)
     expect_lt(gsea_at, guard_at)
+})
+
+
+test_that("disabling enrichment clears a previous run's GSEA export", {
+    # The disabled guard returns before any of the enrichment work, so a rerun
+    # with enrichment switched off would have left the earlier export for the
+    # report to show as current. Cleared ahead of every return, not just the
+    # ones that reach the scoring.
+    tmp <- withr::local_tempdir()
+    out_dir <- file.path(tmp, "cross_enrichment")
+    dir.create(out_dir, recursive = TRUE)
+    stale <- file.path(out_dir, "metabolomics_compound_gsea.csv")
+    writeLines("left over from an earlier run", stale)
+
+    config <- list(
+        global = list(organism = "not a known organism",
+                      omics_present = character(0)),
+        modes = list(multiomics = list(enrichment = list(run_enrichment = FALSE)))
+    )
+
+    res <- suppressMessages(mod_multiomics_enrichment(
+        enrichment_results = NULL, de_results = list(),
+        harmonization_res = NULL, config = config, out_dir = out_dir))
+
+    expect_null(res)
+    expect_false(file.exists(stale))
+})
+
+test_that("the export cleanup precedes the disabled-enrichment guard", {
+    # Ordering is the fix; the two sit close together and are easy to swap back.
+    src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
+    clear_at <- regexpr("write_compound_gsea_export(NULL", src, fixed = TRUE)
+    guard_at <- regexpr("Cross-omics enrichment disabled in config", src,
+                        fixed = TRUE)
+
+    expect_gt(clear_at, 0)
+    expect_gt(guard_at, 0)
+    expect_lt(clear_at, guard_at)
 })

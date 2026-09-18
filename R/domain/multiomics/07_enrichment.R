@@ -354,6 +354,22 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
         tables <- extract_proteomics_de_tables(de_data, harmonization_res)
 
     } else if (omics_type == "metabolomics") {
+        # Which test produced `statistic` decides whether it can be carried at
+        # all. limma and the two t-tests store a signed, zero-centred t; the
+        # supported `wilcoxon` method stores wilcox.test()'s W, which is
+        # non-negative and centred at n1*n2/2. Handing W to a ranker that treats
+        # its input as a signed score gives fgsea a list with no low end, so
+        # decreased metabolites get small positive weights instead of strong
+        # negative ranks -- and the duplicate collapse then prefers the largest
+        # W rather than the strongest change. W is not converted into something
+        # signed here: it is simply not carried, and the ranker falls back to
+        # sign(log2fc) * -log10(p), which is correct for any method.
+        #
+        # `precomputed`, a missing method and anything unrecognised are treated
+        # the same way, because none of them tells us what the column holds.
+        signed_statistic <- tolower(as.character(de_data$method %||% "")) %in%
+            c("limma", "t_test", "t_test_equal")
+
         # Metabolomics: de_tables named list
         if (!is.null(de_data$de_tables)) {
             for (nm in names(de_data$de_tables)) {
@@ -373,7 +389,9 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
                     # not at all: sign(log2fc) and a p-value cannot reconstruct a
                     # moderated t, so a ranker downstream would have no way to
                     # prefer it and would silently always take the fallback.
-                    statistic = if ("statistic" %in% names(df)) df$statistic
+                    # Gated on the method, per signed_statistic above.
+                    statistic = if (!signed_statistic) NA_real_
+                                else if ("statistic" %in% names(df)) df$statistic
                                 else if ("t" %in% names(df)) df$t
                                 else NA_real_,
                     stringsAsFactors = FALSE
@@ -1264,7 +1282,15 @@ run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
     pathway_sets <- split(cpd_pathways$compound, cpd_pathways$pathway)
     pathway_sets <- lapply(pathway_sets,
                            function(cpds) unique(intersect(cpds, names(ranks))))
-    use_min_gs <- max(2, min_gs)
+
+    # The same compound-specific floor run_compound_ora() applies, and for the
+    # same reason: min_set_size is configured on a gene-set scale, where 10 is
+    # modest, but a KEGG compound pathway rarely has ten MEASURED members in one
+    # experiment. Clamping up to the configured value rather than down would
+    # leave compound GSEA testing almost nothing under the shipped default --
+    # working, reporting no error, and finding nothing. The configured maximum
+    # is honoured as given.
+    use_min_gs <- max(2, min(min_gs, 3))
     set_sizes <- lengths(pathway_sets)
     testable <- set_sizes >= use_min_gs & set_sizes <= max_gs
 
