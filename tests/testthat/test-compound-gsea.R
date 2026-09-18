@@ -1,0 +1,430 @@
+# Compound GSEA for metabolomics: what it ranks on, what it scores, and what it
+# is deliberately kept away from.
+#
+# GSEA runs beside compound ORA, not instead of it, and its rows never enter
+# `pathway_tables`. That separation is structural rather than a filter:
+# merge_pathway_pvalues() aggregates a layer with FUN = min and no method
+# filter, so a GSEA row sitting beside an ORA row would silently become the
+# metabolomics p-value feeding the cross-omics meta-analysis.
+#
+# Nothing here touches the network. The compound-pathway table is injected, and
+# the one function that reads it from disk reads a cache and never fetches.
+#
+# All fixtures are synthetic.
+
+cpd_fixture <- function() {
+    data.frame(
+        pathway = c(rep("map00010", 6), rep("map00020", 5), rep("map00030", 4)),
+        compound = c(sprintf("C%05d", 1:6),
+                     sprintf("C%05d", 7:11),
+                     sprintf("C%05d", 12:15)),
+        name = c(rep("Glycolysis", 6), rep("Citrate cycle", 5),
+                 rep("Pentose phosphate", 4)),
+        stringsAsFactors = FALSE
+    )
+}
+
+# Fifteen compounds, ranked so that map00010's members sit at the top: enough
+# structure for fgsea to score, small enough to stay fast.
+de_fixture <- function(n = 15, statistic = TRUE) {
+    df <- data.frame(
+        KEGG_ID = sprintf("C%05d", seq_len(n)),
+        log2fc  = seq(2, -2, length.out = n),
+        pvalue  = seq(0.001, 0.5, length.out = n),
+        stringsAsFactors = FALSE
+    )
+    if (statistic) df$statistic <- seq(5, -5, length.out = n)
+    df
+}
+
+
+# ---- the standardiser carries the moderated statistic ----------------------
+
+test_that("the metabolomics statistic survives extract_de_tables() unchanged", {
+    de_data <- list(de_tables = list(
+        B_vs_A = data.frame(
+            feature_id = c("M1", "M2", "M3"),
+            logFC      = c(1.5, -0.8, 0.2),
+            P.Value    = c(0.001, 0.02, 0.5),
+            adj.P.Val  = c(0.01, 0.08, 0.6),
+            statistic  = c(4.2, -2.1, 0.4),
+            stringsAsFactors = FALSE
+        )
+    ))
+
+    std <- extract_de_tables(de_data, "metabolomics", harmonization_res = NULL)
+
+    expect_true("statistic" %in% names(std$B_vs_A))
+    expect_equal(std$B_vs_A$statistic, c(4.2, -2.1, 0.4))
+
+    # Additive: what the standardiser produced before is untouched.
+    expect_equal(std$B_vs_A$feature_id, c("M1", "M2", "M3"))
+    expect_equal(std$B_vs_A$log2fc, c(1.5, -0.8, 0.2))
+    expect_equal(std$B_vs_A$pvalue, c(0.001, 0.02, 0.5))
+    expect_equal(std$B_vs_A$padj, c(0.01, 0.08, 0.6))
+})
+
+test_that("a table carrying t is accepted, and one carrying neither gives NA", {
+    with_t <- list(de_tables = list(C1 = data.frame(
+        feature_id = "M1", logFC = 1, P.Value = 0.01, adj.P.Val = 0.05,
+        t = 3.3, stringsAsFactors = FALSE)))
+    expect_equal(
+        extract_de_tables(with_t, "metabolomics", NULL)$C1$statistic, 3.3)
+
+    without <- list(de_tables = list(C1 = data.frame(
+        feature_id = "M1", logFC = 1, P.Value = 0.01, adj.P.Val = 0.05,
+        stringsAsFactors = FALSE)))
+    got <- extract_de_tables(without, "metabolomics", NULL)$C1
+    expect_true("statistic" %in% names(got))
+    expect_true(is.na(got$statistic))
+})
+
+
+# ---- what the ranking is built from ----------------------------------------
+
+test_that("the moderated statistic is preferred when it carries usable values", {
+    # Statistic and fallback disagree on sign for every row, so the ranking can
+    # only match one of them.
+    de <- data.frame(
+        KEGG_ID   = c("C00001", "C00002"),
+        statistic = c(3, -3),
+        log2fc    = c(-1, 1),
+        pvalue    = c(0.001, 0.001),
+        stringsAsFactors = FALSE
+    )
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_identical(names(ranks), c("C00001", "C00002"))
+    expect_equal(unname(ranks), c(3, -3))
+})
+
+test_that("the fallback is used when the statistic column has no finite values", {
+    # The column is present and full of NA, which is exactly what the
+    # standardiser produces for a DE export that never had one. Testing the
+    # column rather than its values would take this all-NA vector.
+    de <- data.frame(
+        KEGG_ID   = c("C00001", "C00002"),
+        statistic = c(NA_real_, NA_real_),
+        log2fc    = c(1, -1),
+        pvalue    = c(0.01, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_equal(unname(ranks), c(2, -2))
+})
+
+test_that("the fallback is used when there is no statistic column at all", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00002"),
+                     log2fc = c(1, -1), pvalue = c(0.01, 0.01),
+                     stringsAsFactors = FALSE)
+
+    expect_equal(unname(rank_compounds_for_gsea(de)), c(2, -2))
+})
+
+test_that("a p-value that underflowed to zero ranks high rather than infinite", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00002"),
+                     log2fc = c(1, 1), pvalue = c(0, 0.01),
+                     stringsAsFactors = FALSE)
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_true(all(is.finite(ranks)))
+    expect_gt(ranks[["C00001"]], ranks[["C00002"]])
+})
+
+test_that("a zero fold change ranks neutrally instead of being dropped", {
+    de <- data.frame(KEGG_ID = c("C00001", "C00002", "C00003"),
+                     log2fc = c(1, 0, -1), pvalue = c(0.01, 0.01, 0.01),
+                     stringsAsFactors = FALSE)
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_length(ranks, 3)
+    expect_equal(unname(ranks[["C00002"]]), 0)
+})
+
+test_that("non-finite ranks and unusable ids are dropped", {
+    de <- data.frame(
+        KEGG_ID = c("C00001", NA, "", "C00004"),
+        log2fc  = c(1, 1, 1, NA),
+        pvalue  = c(0.01, 0.01, 0.01, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    expect_identical(names(rank_compounds_for_gsea(de)), "C00001")
+})
+
+test_that("nothing rankable gives an empty vector rather than an error", {
+    expect_length(rank_compounds_for_gsea(data.frame()), 0L)
+    expect_length(rank_compounds_for_gsea(NULL), 0L)
+    expect_length(rank_compounds_for_gsea(
+        data.frame(log2fc = 1, pvalue = 0.01)), 0L)   # no KEGG_ID
+})
+
+
+# ---- duplicate compounds ---------------------------------------------------
+
+test_that("one compound appears once, carrying its strongest rank", {
+    # Three metabolites annotate to two compounds. fgsea would score C00001
+    # twice without this.
+    de <- data.frame(
+        KEGG_ID   = c("C00001", "C00001", "C00002"),
+        statistic = c(1.5, -4.0, 2.0),
+        log2fc    = c(1, -1, 1),
+        pvalue    = c(0.05, 0.001, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    ranks <- rank_compounds_for_gsea(de)
+
+    expect_length(ranks, 2L)
+    # -4.0 beats 1.5 on absolute rank, and keeps its sign.
+    expect_equal(unname(ranks[["C00001"]]), -4)
+})
+
+test_that("the collapse does not depend on the row order it arrives in", {
+    de <- data.frame(
+        KEGG_ID   = c("C00001", "C00001", "C00002"),
+        statistic = c(1.5, -4.0, 2.0),
+        log2fc    = c(1, -1, 1),
+        pvalue    = c(0.05, 0.001, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    forwards  <- rank_compounds_for_gsea(de)
+    backwards <- rank_compounds_for_gsea(de[rev(seq_len(nrow(de))), , drop = FALSE])
+
+    expect_identical(forwards, backwards)
+})
+
+test_that("compounds tying on absolute rank resolve deterministically", {
+    de <- data.frame(
+        KEGG_ID   = c("C00002", "C00001"),
+        statistic = c(2, -2),
+        log2fc    = c(1, -1),
+        pvalue    = c(0.01, 0.01),
+        stringsAsFactors = FALSE
+    )
+
+    expect_identical(rank_compounds_for_gsea(de),
+                     rank_compounds_for_gsea(de[c(2, 1), , drop = FALSE]))
+})
+
+
+# ---- reading the cache, never fetching -------------------------------------
+
+test_that("an absent or unusable cache yields NULL rather than a download", {
+    empty <- withr::local_tempdir()
+    expect_null(.cached_compound_pathways(empty))
+    expect_null(.cached_compound_pathways(NULL))
+
+    # Present but not the expected object.
+    saveRDS(list(a = 1), file.path(empty, "kegg_compound_pathways.rds"))
+    expect_null(.cached_compound_pathways(empty))
+})
+
+test_that("a populated cache is read back", {
+    dir <- withr::local_tempdir()
+    saveRDS(cpd_fixture(), file.path(dir, "kegg_compound_pathways.rds"))
+
+    got <- .cached_compound_pathways(dir)
+
+    expect_true(is.data.frame(got))
+    expect_true(all(c("compound", "pathway") %in% names(got)))
+})
+
+test_that("compound GSEA declines to run without a compound-pathway table", {
+    dir <- withr::local_tempdir()   # deliberately empty
+
+    expect_message(
+        res <- run_compound_gsea(de_fixture(), cache_dir = dir,
+                                 min_gs = 2, max_gs = 500),
+        "compound-pathway"
+    )
+    expect_null(res)
+})
+
+test_that("the orchestrator reaches for the cache and never the downloader", {
+    # The guarantee is structural, not conditional: there is no branch in this
+    # path that could call get_kegg_compound_pathways(), whose own cold-cache
+    # behaviour is to fetch from KEGG.
+    src <- paste(deparse(body(run_compound_gsea_for_contrasts)), collapse = " ")
+
+    expect_true(grepl(".cached_compound_pathways(", src, fixed = TRUE))
+    expect_false(grepl("get_kegg_compound_pathways(", src, fixed = TRUE))
+})
+
+
+# ---- scoring ---------------------------------------------------------------
+
+test_that("a scored table carries the agreed schema and names its method", {
+    skip_if_not_installed("fgsea")
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500,
+        cpd_pathways = cpd_fixture()))
+
+    expect_true(is.data.frame(res))
+    expect_true(all(c("pathway", "ID", "pvalue", "padj", "NES", "ES",
+                      "setSize", "leadingEdge", "database", "method")
+                    %in% names(res)))
+    expect_identical(unique(res$method), "fgsea")
+    expect_identical(unique(res$database), "KEGG")
+    # Accession in ID, readable name in pathway -- the way pathway_join_key()
+    # and pathway_display_label() each read first.
+    expect_true(all(grepl("^map[0-9]{5}$", res$ID)))
+    expect_false(any(grepl("^map[0-9]{5}$", res$pathway)))
+})
+
+test_that("no significance cutoff is applied inside the producer", {
+    skip_if_not_installed("fgsea")
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500,
+        cpd_pathways = cpd_fixture()))
+
+    # Every pathway large enough to score comes back, whatever its p-value --
+    # which is the whole claim. Asserting that some row is non-significant would
+    # be asserting a property of the fixture's numbers instead.
+    expect_setequal(res$ID, c("map00010", "map00020", "map00030"))
+})
+
+test_that("the same seed gives the same scores", {
+    skip_if_not_installed("fgsea")
+
+    once  <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500, seed = 42,
+        cpd_pathways = cpd_fixture()))
+    twice <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500, seed = 42,
+        cpd_pathways = cpd_fixture()))
+
+    expect_equal(once$pvalue, twice$pvalue)
+    expect_equal(once$NES, twice$NES)
+    expect_identical(once$ID, twice$ID)
+})
+
+test_that("pathway membership comes from the supplied compound mapping", {
+    skip_if_not_installed("fgsea")
+
+    # One pathway removed from the mapping cannot be scored, and nothing else
+    # changes: membership is not re-derived from the ranked list.
+    partial <- cpd_fixture()
+    partial <- partial[partial$pathway != "map00030", , drop = FALSE]
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500,
+        cpd_pathways = partial))
+
+    expect_false("map00030" %in% res$ID)
+    expect_true(all(c("map00010", "map00020") %in% res$ID))
+})
+
+test_that("GSEA rows are refused by the ORA figure's membership rule", {
+    skip_if_not_installed("fgsea")
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500,
+        cpd_pathways = cpd_fixture()))
+
+    m <- build_ora_adjusted_p_matrix(list(metabolomics = res), "00010",
+                                     "metabolomics")
+
+    # #208's figure shows ORA evidence; an fgsea row must not supply a cell.
+    expect_true(is.na(m["00010", "metabolomics"]))
+})
+
+
+# ---- compound ORA is untouched ---------------------------------------------
+
+test_that("scoring GSEA leaves the compound ORA result identical", {
+    skip_if_not_installed("fgsea")
+
+    cache <- withr::local_tempdir()
+    saveRDS(cpd_fixture(), file.path(cache, "kegg_compound_pathways.rds"))
+
+    universe <- sprintf("C%05d", 1:15)
+    de_mapped <- data.frame(
+        KEGG_ID = universe,
+        pvalue  = c(rep(1e-4, 4), rep(0.5, 11)),
+        padj    = c(rep(0.01, 4), rep(0.9, 11)),
+        log2fc  = seq(2, -2, length.out = 15),
+        statistic = seq(5, -5, length.out = 15),
+        stringsAsFactors = FALSE
+    )
+
+    before <- suppressMessages(run_compound_ora(
+        de_mapped, cache_dir = cache, min_gs = 2, max_gs = 500,
+        pval_cutoff = 1, universe = universe))
+
+    suppressMessages(run_compound_gsea(de_mapped, cache_dir = cache,
+                                       min_gs = 2, max_gs = 500,
+                                       cpd_pathways = cpd_fixture()))
+
+    after <- suppressMessages(run_compound_ora(
+        de_mapped, cache_dir = cache, min_gs = 2, max_gs = 500,
+        pval_cutoff = 1, universe = universe))
+
+    expect_identical(before, after)
+})
+
+
+# ---- degenerate inputs -----------------------------------------------------
+
+test_that("too few rankable compounds gives NULL", {
+    expect_message(
+        res <- run_compound_gsea(de_fixture(n = 2), cache_dir = NULL,
+                                 min_gs = 2, max_gs = 500,
+                                 cpd_pathways = cpd_fixture()),
+        "Too few"
+    )
+    expect_null(res)
+})
+
+test_that("no finite ranking value anywhere gives NULL", {
+    de <- data.frame(KEGG_ID = sprintf("C%05d", 1:5),
+                     statistic = NA_real_, log2fc = NA_real_,
+                     pvalue = NA_real_, stringsAsFactors = FALSE)
+
+    expect_message(
+        res <- run_compound_gsea(de, cache_dir = NULL, min_gs = 2, max_gs = 500,
+                                 cpd_pathways = cpd_fixture()),
+        "Too few"
+    )
+    expect_null(res)
+})
+
+test_that("no pathway inside the size bounds gives NULL", {
+    expect_message(
+        res <- run_compound_gsea(de_fixture(), cache_dir = NULL,
+                                 min_gs = 50, max_gs = 500,
+                                 cpd_pathways = cpd_fixture()),
+        "measured compounds"
+    )
+    expect_null(res)
+})
+
+test_that("a single scorable pathway is not treated as a failure", {
+    skip_if_not_installed("fgsea")
+
+    only_one <- cpd_fixture()
+    only_one <- only_one[only_one$pathway == "map00010", , drop = FALSE]
+
+    res <- suppressMessages(run_compound_gsea(
+        de_fixture(), cache_dir = NULL, min_gs = 2, max_gs = 500,
+        cpd_pathways = only_one))
+
+    expect_equal(nrow(res), 1L)
+    expect_identical(res$ID, "map00010")
+})
+
+test_that("the orchestrator gives NULL when metabolomics has no DE results", {
+    expect_null(run_compound_gsea_for_contrasts(
+        de_results = list(transcriptomics = list()),
+        harmonization_res = NULL,
+        config = list(),
+        out_dir = withr::local_tempdir()))
+})

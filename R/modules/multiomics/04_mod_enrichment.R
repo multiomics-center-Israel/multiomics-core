@@ -78,6 +78,36 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
                 "skipping cross-omics comparison (need >= 2)")
     }
 
+    # --- Compound GSEA (metabolomics) ---
+    # Scored here rather than inside build_per_omics_enrichment(), and kept out
+    # of per_omics entirely: everything in per_omics becomes pathway_tables and
+    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
+    # and no method filter -- a GSEA row there would quietly become the
+    # metabolomics p-value feeding Stouffer. Its own slot, its own file, its own
+    # report section, and the ORA path above untouched.
+    #
+    # After the ORA path, because it reads the compound-pathway cache that
+    # run_compound_ora() fills and will not fetch one of its own.
+    compound_gsea <- tryCatch(
+        run_compound_gsea_for_contrasts(
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir
+        ),
+        error = function(e) {
+            message("  Compound GSEA failed: ", e$message)
+            NULL
+        }
+    )
+    if (!is.null(compound_gsea) && nrow(compound_gsea) > 0) {
+        write.csv(compound_gsea,
+                  file.path(out_dir, "metabolomics_compound_gsea.csv"),
+                  row.names = FALSE)
+        message("  Compound GSEA: ", nrow(compound_gsea),
+                " scored pathway-contrast rows written")
+    }
+
     # --- Per-contrast enrichment output ---
     # Save per-contrast barplots, tables, and cross-omics comparison in
     # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
@@ -188,6 +218,8 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     list(
         per_omics = per_omics,
         cross_omics = cross_omics_enrich,
+        # Its own slot, beside per_omics rather than inside it.
+        compound_gsea = compound_gsea,
         plots = c(per_omics_plots, if (!is.null(cross_omics_enrich)) cross_omics_enrich$plots else list())
     )
 }
