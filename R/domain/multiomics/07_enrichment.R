@@ -354,6 +354,22 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
         tables <- extract_proteomics_de_tables(de_data, harmonization_res)
 
     } else if (omics_type == "metabolomics") {
+        # Which test produced `statistic` decides whether it can be carried at
+        # all. limma and the two t-tests store a signed, zero-centred t; the
+        # supported `wilcoxon` method stores wilcox.test()'s W, which is
+        # non-negative and centred at n1*n2/2. Handing W to a ranker that treats
+        # its input as a signed score gives fgsea a list with no low end, so
+        # decreased metabolites get small positive weights instead of strong
+        # negative ranks -- and the duplicate collapse then prefers the largest
+        # W rather than the strongest change. W is not converted into something
+        # signed here: it is simply not carried, and the ranker falls back to
+        # sign(log2fc) * -log10(p), which is correct for any method.
+        #
+        # `precomputed`, a missing method and anything unrecognised are treated
+        # the same way, because none of them tells us what the column holds.
+        signed_statistic <- tolower(as.character(de_data$method %||% "")) %in%
+            c("limma", "t_test", "t_test_equal")
+
         # Metabolomics: de_tables named list
         if (!is.null(de_data$de_tables)) {
             for (nm in names(de_data$de_tables)) {
@@ -365,6 +381,19 @@ extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
                     log2fc = if ("logFC" %in% names(df)) df$logFC else NA,
                     pvalue = if ("P.Value" %in% names(df)) df$P.Value else NA,
                     padj = if ("adj.P.Val" %in% names(df)) df$adj.P.Val else NA,
+                    # Carried for compound GSEA, which ranks on the moderated
+                    # statistic where there is one. Both metabolomics DE paths
+                    # name it `statistic` -- the limma path renames topTable()'s
+                    # `t` to that on the way out -- and `t` is accepted only for
+                    # a table handed in from elsewhere. It has to survive here or
+                    # not at all: sign(log2fc) and a p-value cannot reconstruct a
+                    # moderated t, so a ranker downstream would have no way to
+                    # prefer it and would silently always take the fallback.
+                    # Gated on the method, per signed_statistic above.
+                    statistic = if (!signed_statistic) NA_real_
+                                else if ("statistic" %in% names(df)) df$statistic
+                                else if ("t" %in% names(df)) df$t
+                                else NA_real_,
                     stringsAsFactors = FALSE
                 )
                 std <- std[!is.na(std$pvalue), ]
@@ -1047,6 +1076,439 @@ run_compound_ora <- function(de_mapped, cache_dir, min_gs, max_gs, pval_cutoff,
 
     message("    Found ", nrow(df), " enriched compound pathways")
     df
+}
+
+
+# =============================================================================
+# Compound GSEA (metabolomics)
+# =============================================================================
+#
+# Deliberately outside the ORA path. Compound GSEA is never added to
+# `pathway_tables`, because merge_pathway_pvalues() aggregates a layer's rows
+# with FUN = min and applies no method filter: a GSEA row sitting beside an ORA
+# row would make the metabolomics p-value entering Stouffer the smaller of the
+# two, silently changing the cross-omics meta-analysis. It therefore has its own
+# orchestrator, its own CSV and its own report section, and run_compound_ora()
+# and run_kegg_enrichment_for_omics() are untouched.
+
+#' The cached KEGG compound-pathway table, and only the cache
+#'
+#' \code{get_kegg_compound_pathways()} falls back to the KEGG REST API when its
+#' cache is cold. Compound GSEA runs after compound ORA has already populated
+#' that cache, and must never be the call that goes out to the network -- so it
+#' reads the cache file directly and gives up when it is not there. Structural
+#' rather than conditional: there is no branch here that could fetch.
+#'
+#' @param cache_dir Directory \code{get_kegg_compound_pathways()} caches into,
+#'   or NULL.
+#' @return The cached data frame of compound-pathway associations, or NULL when
+#'   no usable cache exists.
+.cached_compound_pathways <- function(cache_dir) {
+    if (is.null(cache_dir) || !nzchar(cache_dir)) return(NULL)
+    # Same filename get_kegg_compound_pathways() writes.
+    f <- file.path(cache_dir, "kegg_compound_pathways.rds")
+    if (!file.exists(f)) return(NULL)
+
+    cpd <- tryCatch(readRDS(f), error = function(e) NULL)
+    if (!is.data.frame(cpd) || nrow(cpd) == 0) return(NULL)
+    if (!all(c("compound", "pathway") %in% names(cpd))) return(NULL)
+    cpd
+}
+
+
+#' The cached KEGG BRITE classification, and only the cache
+#'
+#' The companion to \code{.cached_compound_pathways()}, for the other KEGG
+#' resource this path can reach. \code{keep_kegg_pathways()} defaults its
+#' \code{classification} argument to \code{kegg_pathway_categories()}, which
+#' downloads br08901 whenever its own cache is cold or a week old -- so leaving
+#' that default in place would have made the compound GSEA path fetch after all,
+#' indirectly, the moment a project configured \code{exclude_pathway_classes}.
+#'
+#' Reading the cache and stopping there keeps the guarantee literal.
+#' \code{keep_kegg_pathways()} already fails open on a NULL classification, and
+#' says so, which is the right outcome: a class exclusion that cannot be
+#' resolved keeps every pathway rather than silently dropping some.
+#'
+#' @param cache_dir Directory \code{kegg_pathway_categories()} caches into;
+#'   NULL falls back to the same default that function uses.
+#' @return The cached classification table, or NULL when there is no usable one.
+.cached_pathway_categories <- function(cache_dir = NULL) {
+    if (is.null(cache_dir) || !nzchar(cache_dir)) {
+        cache_dir <- file.path(tempdir(), "kegg_cache")
+    }
+    # Same filename kegg_pathway_categories() writes.
+    f <- file.path(cache_dir, "kegg_pathway_categories.rds")
+    if (!file.exists(f)) return(NULL)
+
+    cls <- tryCatch(readRDS(f), error = function(e) NULL)
+    # Validated with the producer's own check, not a second opinion about shape.
+    if (!.is_kegg_category_table(cls)) return(NULL)
+    cls
+}
+
+
+#' Rank mapped metabolites for compound GSEA
+#'
+#' Two statistics, in order, and no third: the moderated statistic where the DE
+#' table carries usable values, and \code{sign(log2fc) * -log10(pvalue)}
+#' otherwise.
+#'
+#' The choice is made on the VALUES, not on the column. The standardised
+#' metabolomics DE table always carries a `statistic` column and fills it with
+#' NA where the source had none, so testing for the column would pick an all-NA
+#' vector, and fgsea would then report no gene-set overlap -- sending the reader
+#' after an ID-mapping bug that is not there.
+#'
+#' The p-value gets the same 1e-300 floor used elsewhere in this file, so a
+#' p-value that underflowed to zero ranks very high rather than infinite. A zero
+#' log2 fold change ranks at zero and is kept: no change is evidence of no
+#' change, not missing evidence.
+#'
+#' Duplicates are collapsed here rather than upstream. Several metabolites can
+#' annotate to one KEGG compound, and fgsea would otherwise score that compound
+#' more than once. The strongest absolute rank wins. Two rows of one compound
+#' can still tie on magnitude while differing in sign -- +2 against -2 -- and
+#' the compound id cannot separate them, so the more positive rank is taken.
+#' That last rule is arbitrary and deliberately so: it is there to make the
+#' outcome independent of the DE table's row order, not to express a preference
+#' about direction. Without it the first row to arrive won.
+#'
+#' This is GSEA's own rule -- the ORA path keeps its own upstream
+#' de-duplication, which this does not touch.
+#'
+#' @param de_mapped DE table merged with KEGG compound ids: `KEGG_ID`,
+#'   `log2fc`, `pvalue`, and optionally `statistic`.
+#' @return Named numeric vector of ranks, names being KEGG compound ids, sorted
+#'   decreasing and unique; \code{numeric(0)} when nothing is rankable.
+#' @examples
+#' de <- data.frame(KEGG_ID = c("C00031", "C00022"), statistic = c(3.1, -2.4),
+#'                  log2fc = c(1, -1), pvalue = c(0.01, 0.02))
+#' rank_compounds_for_gsea(de)
+rank_compounds_for_gsea <- function(de_mapped) {
+    if (!is.data.frame(de_mapped) || nrow(de_mapped) == 0) return(numeric(0))
+    if (!"KEGG_ID" %in% names(de_mapped)) return(numeric(0))
+
+    stat <- if ("statistic" %in% names(de_mapped)) {
+        suppressWarnings(as.numeric(de_mapped$statistic))
+    } else {
+        NULL
+    }
+
+    if (!is.null(stat) && any(is.finite(stat))) {
+        ranks <- stat
+    } else {
+        if (!all(c("log2fc", "pvalue") %in% names(de_mapped))) return(numeric(0))
+        lfc  <- suppressWarnings(as.numeric(de_mapped$log2fc))
+        pval <- suppressWarnings(as.numeric(de_mapped$pvalue))
+        ranks <- sign(lfc) * -log10(pval + 1e-300)
+    }
+
+    names(ranks) <- as.character(de_mapped$KEGG_ID)
+    keep <- is.finite(ranks) & !is.na(names(ranks)) & nzchar(names(ranks))
+    ranks <- ranks[keep]
+    if (length(ranks) == 0) return(numeric(0))
+
+    # Three keys, and the third is load-bearing: magnitude, then the compound
+    # id, then the signed rank. Without the last one, two rows of one compound
+    # at +x and -x tie on both earlier keys and order() falls back to the
+    # arrival index, which is precisely the row-order dependence this collapse
+    # exists to remove.
+    ranks <- ranks[order(-abs(ranks), names(ranks), -ranks)]
+    ranks <- ranks[!duplicated(names(ranks))]
+
+    # Ordered explicitly rather than through sort(), so that two compounds with
+    # the same rank land in one fixed order instead of relying on sort stability.
+    ranks[order(-ranks, names(ranks))]
+}
+
+
+#' Run GSEA over KEGG compound pathways
+#'
+#' The companion to \code{run_compound_ora()}, not a replacement: ORA asks which
+#' pathways are crowded with significantly changed metabolites, this asks
+#' whether a pathway's metabolites sit systematically high or low in the ranked
+#' list, and reports a direction with it.
+#'
+#' \code{fgsea::fgseaMultilevel()} is called by name rather than through
+#' \code{fgsea::fgsea()}, which dispatches to it only while no argument says
+#' otherwise. Which statistical procedure runs should not depend on dispatch
+#' behaviour that a future version could change underneath the pipeline. It is
+#' stochastic either way, so the call is seeded -- the same
+#' \code{withr::with_seed()} treatment \code{run_pathway_analysis()} gives its
+#' own fgsea call, for the same reason: unseeded, pathways near the cutoff cross
+#' it between otherwise identical runs.
+#'
+#' Nothing is filtered on significance. fgsea's `padj` is a BH family over the
+#' pathways it scored, and the complete scored table is what reaches the export;
+#' choosing what to show is the report's business. Class exclusion is applied
+#' after scoring, so a project's reporting choice cannot move that family --
+#' the rule \code{run_compound_ora()} follows.
+#'
+#' @param de_mapped DE table merged with KEGG compound ids; see
+#'   \code{rank_compounds_for_gsea()} for the columns used.
+#' @param cache_dir Directory holding the cached compound-pathway table.
+#' @param min_gs,max_gs Pathway size bounds, counted on measured compounds.
+#' @param seed Seed for the stochastic scoring.
+#' @param exclude_classes KEGG BRITE classes to drop after scoring, or NULL.
+#' @param cpd_pathways Compound-pathway associations. Defaults to the cache and
+#'   never to a download; passing it explicitly lets a caller score many
+#'   contrasts from one read, and lets a test supply its own.
+#' @return Data frame of every pathway fgsea scored, or NULL.
+run_compound_gsea <- function(de_mapped, cache_dir, min_gs, max_gs, seed = 1L,
+                               exclude_classes = NULL,
+                               cpd_pathways = .cached_compound_pathways(cache_dir)) {
+
+    if (is.null(cpd_pathways)) {
+        message("    No cached KEGG compound-pathway associations; ",
+                "skipping compound GSEA")
+        return(NULL)
+    }
+
+    ranks <- rank_compounds_for_gsea(de_mapped)
+    if (length(ranks) < 3) {
+        message("    Too few rankable compounds for GSEA (", length(ranks), ")")
+        return(NULL)
+    }
+
+    pathway_names <- stats::setNames(
+        if ("name" %in% names(cpd_pathways)) cpd_pathways$name else cpd_pathways$pathway,
+        cpd_pathways$pathway)
+    pathway_names <- pathway_names[!duplicated(names(pathway_names))]
+
+    # Sets are restricted to what was measured, so a size is a count of
+    # compounds that could actually contribute -- the same basis
+    # run_compound_ora() sizes on.
+    pathway_sets <- split(cpd_pathways$compound, cpd_pathways$pathway)
+    pathway_sets <- lapply(pathway_sets,
+                           function(cpds) unique(intersect(cpds, names(ranks))))
+
+    # The same compound-specific floor run_compound_ora() applies, and for the
+    # same reason: min_set_size is configured on a gene-set scale, where 10 is
+    # modest, but a KEGG compound pathway rarely has ten MEASURED members in one
+    # experiment. Clamping up to the configured value rather than down would
+    # leave compound GSEA testing almost nothing under the shipped default --
+    # working, reporting no error, and finding nothing. The configured maximum
+    # is honoured as given.
+    use_min_gs <- max(2, min(min_gs, 3))
+    set_sizes <- lengths(pathway_sets)
+    testable <- set_sizes >= use_min_gs & set_sizes <= max_gs
+
+    if (!any(testable)) {
+        message("    No compound pathway carries between ", use_min_gs, " and ",
+                max_gs, " measured compounds; skipping compound GSEA")
+        return(NULL)
+    }
+    pathway_sets <- pathway_sets[testable]
+
+    # Checked here rather than on entry, so that a run without the package still
+    # reports which of the inputs was the problem instead of blaming fgsea for
+    # an empty ranking or a mapping that matched nothing.
+    if (!requireNamespace("fgsea", quietly = TRUE)) {
+        message("    fgsea not available; skipping compound GSEA")
+        return(NULL)
+    }
+
+    fgsea_res <- tryCatch(
+        withr::with_seed(seed, fgsea::fgseaMultilevel(
+            pathways = pathway_sets,
+            stats = ranks,
+            minSize = use_min_gs,
+            maxSize = max_gs,
+            nPermSimple = 10000
+        )),
+        error = function(e) {
+            warning("Compound GSEA failed: ", e$message)
+            NULL
+        }
+    )
+
+    if (is.null(fgsea_res)) return(NULL)
+    df <- as.data.frame(fgsea_res)
+    if (nrow(df) == 0) {
+        message("    Compound GSEA scored no pathways")
+        return(NULL)
+    }
+
+    pw_ids <- as.character(df$pathway)
+    labels <- unname(pathway_names[pw_ids])
+    unnamed <- is.na(labels) | !nzchar(labels)
+    labels[unnamed] <- pw_ids[unnamed]
+
+    # `ID` carries the accession and `pathway` the readable name, which is what
+    # pathway_join_key() and pathway_display_label() each read first.
+    out <- data.frame(
+        pathway     = labels,
+        ID          = pw_ids,
+        pvalue      = df$pval,
+        padj        = df$padj,
+        NES         = df$NES,
+        ES          = df$ES,
+        setSize     = df$size,
+        leadingEdge = if ("leadingEdge" %in% names(df)) {
+            vapply(df$leadingEdge, paste, character(1), collapse = ",")
+        } else {
+            NA_character_
+        },
+        database    = "KEGG",
+        # Said outright, so no consumer has to infer the method from which
+        # columns happen to be present.
+        method      = "fgsea",
+        stringsAsFactors = FALSE
+    )
+
+    if (length(unlist(exclude_classes)) > 0) {
+        # classification passed explicitly: the default would resolve through
+        # kegg_pathway_categories(), which downloads br08901 on a cold cache.
+        # See .cached_pathway_categories(). A NULL here fails open, keeping
+        # every pathway and saying so, which is the safe direction for an
+        # exclusion that cannot be resolved.
+        out <- out[keep_kegg_pathways(out$ID, exclude = exclude_classes,
+                                      cache_dir = cache_dir,
+                                      label = "compound GSEA pathways",
+                                      classification =
+                                          .cached_pathway_categories(cache_dir)), ,
+                   drop = FALSE]
+        if (nrow(out) == 0) {
+            message("    No compound GSEA pathways left after KEGG class exclusion")
+            return(NULL)
+        }
+    }
+
+    out <- out[order(out$pvalue, out$ID), , drop = FALSE]
+    rownames(out) <- NULL
+    message("    Compound GSEA scored ", nrow(out), " pathways")
+    out
+}
+
+
+#' Run compound GSEA for every metabolomics contrast
+#'
+#' The one caller of \code{run_compound_gsea()} in the pipeline, kept separate
+#' from \code{run_kegg_enrichment_for_omics()} on purpose: that function's
+#' return becomes `pathway_tables`, and everything in `pathway_tables` reaches
+#' the cross-omics meta-analysis. Scoring here instead is what keeps the ORA and
+#' Stouffer paths unable to see a GSEA row at all.
+#'
+#' The compound-pathway table is read once, from the cache the ORA path filled,
+#' and shared by every contrast. A cold cache means no GSEA rather than a
+#' download.
+#'
+#' @param de_results Named list of per-omics DE results.
+#' @param harmonization_res Harmonization result, for the ID mapping.
+#' @param config Full config object.
+#' @param out_dir The cross-enrichment output directory, whose `metabolomics`
+#'   subdirectory holds the cache \code{run_compound_ora()} writes.
+#' @return One data frame for all contrasts, carrying `contrast` and `omics`
+#'   columns, or NULL when nothing could be scored.
+run_compound_gsea_for_contrasts <- function(de_results, harmonization_res,
+                                             config, out_dir) {
+
+    de_data <- de_results[["metabolomics"]]
+    if (is.null(de_data)) return(NULL)
+
+    de_tables <- extract_de_tables(de_data, "metabolomics", harmonization_res)
+    if (length(de_tables) == 0) {
+        message("  No metabolomics DE tables for compound GSEA")
+        return(NULL)
+    }
+
+    cache_dir <- file.path(out_dir, "metabolomics")
+    cpd_pathways <- .cached_compound_pathways(cache_dir)
+    if (is.null(cpd_pathways)) {
+        # Named precisely, because the cause is not obvious from the symptom:
+        # this table is written by the compound ORA step, and a run where that
+        # step never executed -- metabolomics enrichment supplied pre-computed,
+        # for instance -- leaves no cache for GSEA to read. Deliberately not
+        # fetched here; a display-side analysis is not the right place to start
+        # a KEGG download.
+        message("  Compound GSEA skipped: no cached KEGG compound-pathway ",
+                "table at ", cache_dir, ". It is written by the compound ORA ",
+                "step, which has not run for this output directory.")
+        return(NULL)
+    }
+
+    id_map <- tryCatch(
+        map_metabolite_ids_to_kegg(de_tables, harmonization_res),
+        error = function(e) {
+            message("  Metabolite ID mapping failed: ", e$message)
+            NULL
+        }
+    )
+    if (is.null(id_map) || nrow(id_map) == 0) {
+        message("  Could not map metabolite IDs to KEGG compounds for GSEA")
+        return(NULL)
+    }
+    id_map$KEGG_ID <- id_map$KEGG_CPD
+
+    enrich_cfg <- config$modes$multiomics$enrichment
+    min_gs <- enrich_cfg$min_set_size %||% 10
+    max_gs <- enrich_cfg$max_set_size %||% 500
+    seed   <- config$params$seed %||% 1L
+    excl   <- .excluded_pathway_classes(config)
+
+    results <- list()
+    for (cname in names(de_tables)) {
+        de_mapped <- merge(de_tables[[cname]], id_map, by = "feature_id")
+        de_mapped <- de_mapped[!is.na(de_mapped$KEGG_ID), , drop = FALSE]
+
+        # Not de-duplicated here: rank_compounds_for_gsea() collapses compounds
+        # on the strongest rank, which is a better rule than first-row-wins and
+        # is the one GSEA should use.
+        if (nrow(de_mapped) < 3) {
+            message("    ", cname, ": too few mapped metabolites for GSEA (",
+                    nrow(de_mapped), ")")
+            next
+        }
+
+        res <- run_compound_gsea(de_mapped, cache_dir = cache_dir,
+                                 min_gs = min_gs, max_gs = max_gs, seed = seed,
+                                 exclude_classes = excl,
+                                 cpd_pathways = cpd_pathways)
+        if (is.null(res) || nrow(res) == 0) next
+
+        res$contrast <- cname
+        res$omics <- "metabolomics"
+        results[[cname]] <- res
+    }
+
+    if (length(results) == 0) return(NULL)
+
+    combined <- .rbind_fill(results)
+    if (is.null(combined) || nrow(combined) == 0) return(NULL)
+    rownames(combined) <- NULL
+    combined
+}
+
+
+#' Write the compound GSEA export, and only for the run that produced it
+#'
+#' The report includes this file on \code{file.exists()} alone, and a run can
+#' legitimately produce no GSEA at all -- no metabolomics DE, no compound
+#' mapping, a cold cache, nothing scorable. Writing conditionally but never
+#' clearing would leave the previous run's result in place for the report to
+#' present as this run's.
+#'
+#' So the file is removed before the decision, not instead of it: after this
+#' returns, the export exists if and only if this invocation produced rows. The
+#' same invariant the cross-omics ORA figure was given.
+#'
+#' @param compound_gsea Result of \code{run_compound_gsea_for_contrasts()}, or
+#'   NULL.
+#' @param out_dir Cross-enrichment output directory.
+#' @return Invisibly, the path when one was written, otherwise NULL.
+write_compound_gsea_export <- function(compound_gsea, out_dir) {
+    path <- file.path(out_dir, "metabolomics_compound_gsea.csv")
+
+    if (file.exists(path)) unlink(path)
+
+    if (is.null(compound_gsea) || !is.data.frame(compound_gsea) ||
+        nrow(compound_gsea) == 0) {
+        return(invisible(NULL))
+    }
+
+    write.csv(compound_gsea, path, row.names = FALSE)
+    invisible(path)
 }
 
 

@@ -679,6 +679,53 @@ knitr::kable(metab_show, row.names = FALSE,
 render_commentary("compound_ora")
 ```
 
+```{r metab-gsea-setup, include=FALSE}
+# Compound GSEA is written by its own orchestrator, not by the compound ORA
+# path, and it is deliberately not part of the cross-omics tables: its p-values
+# never reach the meta-analysis. One row per pathway per contrast, and every
+# pathway fgsea scored -- the producer applies no significance cutoff, so the
+# subset shown below is a reading convenience and the CSV is the whole result.
+metab_gsea_csv <- file.path(enrichment_dir, "metabolomics_compound_gsea.csv")
+has_metab_gsea <- file.exists(metab_gsea_csv)
+metab_gsea_df <- if (has_metab_gsea) {
+    read.csv(metab_gsea_csv, stringsAsFactors = FALSE)
+} else {
+    NULL
+}
+has_metab_gsea <- !is.null(metab_gsea_df) && nrow(metab_gsea_df) > 0
+```
+
+## Metabolomics Compound GSEA {.unnumbered}
+
+```{r metab-gsea-note, eval=!has_metab_gsea, results='asis'}
+cat("*No metabolomics compound GSEA results found. Compound GSEA needs metabolomics DE results, KEGG compound ID mappings, and the compound-pathway table the compound ORA step caches.*\n")
+```
+
+```{r metab-gsea-table, eval=has_metab_gsea}
+# Ordered on the adjusted p-value for display only; the exported file keeps
+# every scored pathway. pathway_display_label() resolves the readable name per
+# row, so a row whose name did not resolve falls back to its own accession
+# rather than rendering blank.
+gsea_show <- metab_gsea_df[order(metab_gsea_df$padj, metab_gsea_df$ID), , drop = FALSE]
+gsea_show <- gsea_show[seq_len(min(30, nrow(gsea_show))), , drop = FALSE]
+gsea_show$pathway <- pathway_display_label(gsea_show)
+
+gsea_cols <- intersect(c("contrast", "pathway", "ID", "NES", "pvalue", "padj", "setSize"),
+                       colnames(gsea_show))
+gsea_show <- gsea_show[, gsea_cols, drop = FALSE]
+gsea_labels <- c(contrast = "Contrast", pathway = "Pathway", ID = "KEGG ID",
+                 NES = "NES", pvalue = "P-value", padj = "Adj. P-value",
+                 setSize = "Compound Count")
+colnames(gsea_show) <- gsea_labels[gsea_cols]
+knitr::kable(gsea_show, row.names = FALSE,
+             caption = "Metabolomics compound GSEA - top pathways by adjusted p-value")
+```
+
+```{r metab-gsea-legend, eval=has_metab_gsea, results='asis'}
+figure_legend("Compound-level gene set enrichment analysis over KEGG metabolic pathways, run alongside the compound ORA above rather than in place of it. The two answer different questions: ORA asks whether a pathway is crowded with significantly changed metabolites, GSEA asks whether a pathway's metabolites sit systematically high or low in the ranked list, and reports a direction with it. NES is that directional score -- positive where the pathway's metabolites concentrate at the top of the ranking for the contrast, negative at the bottom. Metabolites are ranked on the moderated statistic where the differential abundance table carries usable values, and on sign(log2FC) x -log10(p-value) otherwise. The adjusted p-value is a Benjamini-Hochberg family over the pathways this analysis scored, and is therefore not comparable with the adjusted p-value in the compound ORA table above, which has its own family. Only the strongest 30 rows are shown; the complete scored table, with no significance cutoff applied, is in metabolomics_compound_gsea.csv.")
+render_commentary("compound_gsea")
+```
+
 ```{r pathview-setup, include=FALSE}
 # Two renderers can fill this section, on mutually exclusive branches of
 # run_multi_ora(), and they do not make the same claim: "supported" means the
