@@ -308,7 +308,13 @@ run_kegg_enrichment_for_omics <- function(de_data, omics_type, harmonization_res
 
     if (length(all_results) == 0) return(NULL)
 
-    combined <- do.call(rbind, all_results)
+    # .rbind_fill() rather than rbind(): use_method is chosen per contrast on the
+    # mapped-feature count above, so one layer's contrasts can straddle the
+    # threshold and return different schemas -- ORA carries Fold_enrichment and
+    # Count, GSEA carries NES and core_enrichment. rbind() aborts on that, and
+    # since the caller catches the error and warns, the whole layer would come
+    # back NULL and read as "no enriched pathways" rather than as a failure.
+    combined <- .rbind_fill(all_results)
     rownames(combined) <- NULL
 
     # Save per-omics results
