@@ -510,7 +510,7 @@ pooled_bp <- file.path(multi_ora_dir, "multi_ora_pooled_barplot.png")
 if (file.exists(pooled_bp)) {
     cat("\n#### Pooled Multi-ORA {.unnumbered}\n\n")
     cat(sprintf("![Pooled Multi-ORA](%s)\n\n", pooled_bp))
-    figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation in KEGG pathways using Fisher's exact test. Red dashed line marks padj = 0.05.")
+    figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation using Fisher's exact test, against KEGG pathways or, for organisms without KEGG support, the gene sets supplied as GMT files. Bar length and the red dashed threshold line both show the adjusted p-value where the pooled result carries usable ones and the raw p-value otherwise; the axis label states which. Where the gene sets come from several collections, terms are drawn in turn from each collection so that the largest collection cannot fill every slot on set count alone, and each bar is tagged and coloured with the collection it came from; the bars are still ordered strongest-first.")
 }
 
 # Dot plot

@@ -1937,7 +1937,17 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
         plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
         png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
         tryCatch(
-            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)"),
+            # The one figure in this file whose table really mixes namespaces:
+            # comb_t2g above row-binds each omic's GMTs, so GO, KEGG and Pfam
+            # sets land in one pool and the largest collection takes every slot
+            # on set count alone. resolve_kegg_org_code() is NULL for an
+            # organism KEGG does not know -- the usual case on this fallback --
+            # and then only the map/ko/bare spellings count as KEGG, which is
+            # the identity contract answering honestly rather than a gap.
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)",
+                                   by_collection = TRUE,
+                                   kegg_org = resolve_kegg_org_code(
+                                       config$global$organism)),
             error = function(e) { plot.new(); text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2) }
         )
         dev.off()
@@ -2065,23 +2075,296 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 }
 
 
+#' Bar colour for each gene-set collection
+#'
+#' Fixed by name rather than assigned in the order collections happen to appear,
+#' so a collection keeps its colour between runs and between contrasts. KEGG
+#' keeps the purple every one of these bar plots used before there were
+#' collections, so the KEGG-only figures look as they did.
+#'
+#' @keywords internal
+.ORA_COLLECTION_COLOURS <- c(KEGG     = "#7B2D8E",
+                             GO       = "#2C7FB8",
+                             Pfam     = "#41AB5D",
+                             InterPro = "#D95F0E",
+                             Other    = "#9E9E9E")
+
+
+#' Which significance column a pathway figure should show
+#'
+#' One choice for the whole table, never row by row: a figure whose bars are
+#' part adjusted and part raw p-values has no readable axis and no honest
+#' caption. Adjusted p is preferred wherever the table actually carries usable
+#' values -- \code{any(is.finite())} rather than column presence, since an
+#' all-NA `padj` column is common and would otherwise silence every bar.
+#'
+#' @param df Enrichment table, expected to carry `padj` and/or `pvalue`.
+#' @return A list with `column` (the column name to read, or NA_character_ when
+#'   the table carries neither), `values` (that column as numeric, or all NA),
+#'   and `adjusted` (TRUE when the choice fell on an adjusted p-value).
+#' @keywords internal
+.ora_display_score <- function(df) {
+    as_num <- function(col) suppressWarnings(as.numeric(df[[col]]))
+
+    if ("padj" %in% names(df)) {
+        padj <- as_num("padj")
+        if (any(is.finite(padj))) {
+            return(list(column = "padj", values = padj, adjusted = TRUE))
+        }
+    }
+    if ("pvalue" %in% names(df)) {
+        return(list(column = "pvalue", values = as_num("pvalue"),
+                    adjusted = FALSE))
+    }
+    list(column = NA_character_, values = rep(NA_real_, nrow(df)),
+         adjusted = FALSE)
+}
+
+
+#' Order pathway rows strongest-first, deterministically
+#'
+#' Every key is derived from the data: the significance score, then the
+#' normalized pathway identity, then the readable label. Arrival index is
+#' deliberately not a key -- a figure whose contents depend on the order rows
+#' happened to be bound in is not reproducible, and the tables reaching here are
+#' assembled from several sources. Rows still equal on all three are
+#' indistinguishable on every field this function can see, so their relative
+#' order carries no meaning.
+#'
+#' @param df Enrichment table.
+#' @param score Numeric score for each row, smaller is better, from
+#'   \code{.ora_display_score()}.
+#' @param kegg_org Active KEGG organism code, or NULL.
+#' @return Integer permutation of \code{seq_len(nrow(df))}.
+#' @keywords internal
+.order_ora_rows <- function(df, score, kegg_org = NULL) {
+    order(score,
+          pathway_join_key(df, kegg_org),
+          pathway_display_label(df),
+          na.last = TRUE)
+}
+
+
+#' Classify pathway identifiers by the gene-set collection they come from
+#'
+#' A pooled ORA over several GMTs mixes namespaces that nothing downstream can
+#' tell apart once the tables are row-bound, so the collection has to be read
+#' back off the identifier.
+#'
+#' KEGG is decided by the identity contract and nothing else:
+#' \code{pathway_join_key()} resolves identity per row and normalizes the
+#' spellings this pipeline produces, and \code{is_kegg_pathway_accession()}
+#' decides which of those are KEGG accessions. A shape-only rule such as "two to
+#' four letters then five digits" would claim a custom gene set named
+#' `abcd12345`, which is exactly the silent misclassification the contract
+#' exists to prevent.
+#'
+#' The other three patterns are fully anchored for the same reason: an
+#' unanchored `^GO:?[0-9]+` claims `GO12345_signalling`, a custom set name that
+#' has nothing to do with the Gene Ontology.
+#'
+#' Nothing is dropped and nothing is rewritten. A row whose identity is missing
+#' entirely is `Other`, not an error and not a gap.
+#'
+#' @param df Enrichment table.
+#' @param kegg_org Active KEGG organism code for the run, or NULL when the
+#'   organism has no KEGG code.
+#' @param keys Pre-computed join keys, defaulting to deriving them. The default
+#'   is lazy, so a caller that already has them -- as
+#'   \code{select_top_ora_per_collection()} does -- does not pay for them twice.
+#' @return Character vector, one collection name per row of \code{df}: one of
+#'   "KEGG", "GO", "Pfam", "InterPro" or "Other".
+#' @examples
+#' df <- data.frame(ID = c("hsa04110", "GO:0006915", "PF00069", "myset"))
+#' classify_pathway_collection(df, kegg_org = "hsa")
+#' # "KEGG" "GO" "Pfam" "Other"
+classify_pathway_collection <- function(df, kegg_org = NULL,
+                                        keys = pathway_join_key(df, kegg_org)) {
+    out <- rep("Other", length(keys))
+
+    # KEGG first and by contract. The remaining patterns are only ever offered
+    # keys KEGG has already declined, so no identifier can match two rules.
+    is_kegg <- is_kegg_pathway_accession(keys, kegg_org)
+    out[is_kegg] <- "KEGG"
+
+    rest <- !is_kegg & !is.na(keys)
+    out[rest & grepl("^GO:[0-9]{7}$", keys)]  <- "GO"
+    out[rest & grepl("^PF[0-9]{5}$", keys)]   <- "Pfam"
+    out[rest & grepl("^IPR[0-9]{6}$", keys)]  <- "InterPro"
+
+    out
+}
+
+
+#' Pick top ORA terms while keeping every collection represented
+#'
+#' A pooled ORA over GO + KEGG + Pfam is dominated by GO on set count alone --
+#' thousands of GO terms against a few hundred KEGG maps -- so a plain top-n
+#' leaves a figure that looks like a GO-only analysis however much evidence the
+#' other collections hold.
+#'
+#' Terms are therefore drawn round-robin: collections enter the rotation
+#' best-first, and each contributes its next-best term per pass until the figure
+#' is full. No quota is computed, which is the point -- a collection with fewer
+#' terms than the others simply stops appearing in later passes and the
+#' remaining slots go to whoever still has terms, so there is nothing to
+#' redistribute and no allocation to get wrong.
+#'
+#' Round-robin decides *membership* only. The rows come back in global evidence
+#' order, so the figure still reads strongest-first and a reader is never told
+#' that the second bar outranks the third when it does not.
+#'
+#' With a single collection this is exactly the plain top-n. With fewer slots
+#' than collections the strongest collections are still the ones shown.
+#'
+#' Selection runs on whatever table it is handed: the KEGG class exclusion has
+#' already been applied to these results by \code{run_multi_ora_kegg()} on the
+#' way out, and nothing here reclassifies or re-filters a pathway.
+#'
+#' @param ora_df ORA table carrying `pvalue` and/or `padj`, plus the identity
+#'   columns \code{pathway_join_key()} reads.
+#' @param top_n Maximum number of rows to keep.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return A subset of \code{ora_df}, in global evidence order.
+#' @examples
+#' ora <- data.frame(ID = c("GO:0000001", "GO:0000002", "hsa04110"),
+#'                   pathway = c("a", "b", "c"), padj = c(0.001, 0.002, 0.04))
+#' select_top_ora_per_collection(ora, top_n = 2, kegg_org = "hsa")$ID
+#' # "GO:0000001" "hsa04110"  -- KEGG is not displaced by the second GO term
+select_top_ora_per_collection <- function(ora_df, top_n = 20, kegg_org = NULL) {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(ora_df)
+
+    score <- .ora_display_score(ora_df)$values
+    keys  <- pathway_join_key(ora_df, kegg_org)
+
+    ord   <- .order_ora_rows(ora_df, score, kegg_org)
+    df    <- ora_df[ord, , drop = FALSE]
+    score <- score[ord]
+    keys  <- keys[ord]
+
+    # Nothing to balance: every row is shown, so the collections cannot crowd
+    # each other out and the round-robin below would only reorder them.
+    if (nrow(df) <= top_n) return(df)
+
+    coll <- classify_pathway_collection(df, kegg_org, keys = keys)
+    by_coll <- split(seq_len(nrow(df)), coll)
+
+    # Best-first, so fewer slots than collections still shows the strongest
+    # ones. The collection name breaks a tie on the best score, because
+    # split() names the groups and nothing else here distinguishes them.
+    best <- vapply(by_coll, function(i) score[i[1]], numeric(1))
+    by_coll <- by_coll[order(best, names(by_coll), na.last = TRUE)]
+
+    keep <- integer(0)
+    rank <- 1L
+    while (length(keep) < top_n && any(lengths(by_coll) >= rank)) {
+        for (idx in by_coll) {
+            if (length(keep) >= top_n) break
+            if (length(idx) >= rank) keep <- c(keep, idx[rank])
+        }
+        rank <- rank + 1L
+    }
+
+    # sort() restores global evidence order: df is already in it, so the row
+    # numbers carry it.
+    df[sort(keep), , drop = FALSE]
+}
+
+
 #' Plot multi-ORA pooled barplot
-plot_multi_ora_barplot <- function(ora_df, title, top_n = 20) {
-    df <- ora_df[order(ora_df$pvalue), ]
-    df <- df[seq_len(min(top_n, nrow(df))), ]
+#'
+#' Horizontal bar plot of the strongest enriched terms.
+#'
+#' Bars show the adjusted p-value wherever the table carries usable ones and the
+#' raw p-value otherwise, and that one choice drives the ranking, the bar
+#' length, the threshold line and the axis label together. It was previously
+#' ranked and drawn on raw p while the report legend described a padj threshold,
+#' so the figure and its caption disagreed about which statistic was on screen.
+#'
+#' Collection-aware selection is opt-in, because only the pooled GMT figure
+#' actually mixes namespaces -- the KEGG bar plots hold KEGG maps alone, where
+#' round-robin would be an elaborate way of writing plain top-n. Where it is on,
+#' each bar is tagged and coloured by its collection so GO terms, KEGG maps and
+#' Pfam domains are never pooled into one anonymous ranking.
+#'
+#' @param ora_df ORA table carrying `pvalue` and/or `padj`.
+#' @param title Plot title.
+#' @param top_n Maximum number of bars.
+#' @param by_collection Draw terms round-robin across gene-set collections
+#'   rather than by plain top-n, tagging and colouring each bar with its
+#'   collection. FALSE by default: the caller opts in.
+#' @param kegg_org Active KEGG organism code, or NULL. Read only when
+#'   \code{by_collection} is TRUE, which is the only branch that classifies.
+#' @return Invisibly, a data frame describing the bars drawn -- `key`, `label`,
+#'   `collection` (NA where nothing was classified), `score` -- in the order
+#'   they were selected, so which terms a figure leads with can be checked
+#'   without reading pixels. NULL when there was nothing to draw.
+plot_multi_ora_barplot <- function(ora_df, title, top_n = 20,
+                                    by_collection = FALSE, kegg_org = NULL) {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(invisible(NULL))
 
-    df$label <- ifelse(nchar(df$pathway) > 50,
-                        paste0(substr(df$pathway, 1, 47), "..."),
-                        df$pathway)
-    neg_log_p <- -log10(df$pvalue + 1e-300)
-    neg_log_p <- pmin(neg_log_p, 15)
+    # Resolved on the whole table, then read from the selected rows. Choosing
+    # again on the subset could land on a different column than the ranking
+    # used, which is how a figure ends up ordered by one statistic and drawn
+    # with another.
+    score_col <- .ora_display_score(ora_df)
+    if (is.na(score_col$column)) return(invisible(NULL))
 
-    par(mar = c(5, 17, 3, 2))
-    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
-            las = 1, cex.names = 0.65, col = "#7B2D8E",
-            xlab = "-log10(p-value)",
-            main = title)
-    abline(v = -log10(0.05), col = "red", lty = 2)
+    if (isTRUE(by_collection)) {
+        df <- select_top_ora_per_collection(ora_df, top_n, kegg_org)
+        collection <- classify_pathway_collection(df, kegg_org)
+    } else {
+        ord <- .order_ora_rows(ora_df, score_col$values, kegg_org)
+        df <- ora_df[ord[seq_len(min(top_n, nrow(ora_df)))], , drop = FALSE]
+        collection <- rep(NA_character_, nrow(df))
+    }
+
+    keys <- pathway_join_key(df, kegg_org)
+    label <- pathway_display_label(df)
+    # A row with no readable text still gets a bar; the key is a poorer label
+    # than a name but a better one than "NA".
+    label[is.na(label)] <- keys[is.na(label)]
+    label[is.na(label)] <- "(unnamed pathway)"
+    label <- ifelse(nchar(label) > 50, paste0(substr(label, 1, 47), "..."),
+                    label)
+
+    mixed <- by_collection && length(unique(collection)) > 1
+    if (mixed) label <- paste0("[", collection, "] ", label)
+
+    score <- suppressWarnings(as.numeric(df[[score_col$column]]))
+    neg_log_p <- pmin(-log10(score + 1e-300), 15)
+
+    # Coloured by collection whenever anything was classified, not only when
+    # several were found: a GMT run that happens to yield GO terms alone should
+    # not be drawn in the colour this file reserves for KEGG. The tag and the
+    # legend are what a single collection does not need, since there is nothing
+    # to tell apart.
+    bar_col <- if (isTRUE(by_collection)) {
+        unname(.ORA_COLLECTION_COLOURS[collection])
+    } else {
+        .ORA_COLLECTION_COLOURS[["KEGG"]]
+    }
+
+    p_label <- if (score_col$adjusted) "adjusted p-value" else "p-value"
+
+    # with_par rather than a bare par(): these are called straight from tests
+    # and from renderers that draw more than one figure to a device, and a
+    # 17-line left margin left behind is not this function's to leave.
+    withr::with_par(list(mar = c(5, 17, 3, 2)), {
+        barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(label),
+                las = 1, cex.names = 0.65, col = rev(bar_col),
+                xlab = paste0("-log10(", p_label, ")"),
+                main = title)
+        abline(v = -log10(0.05), col = "red", lty = 2)
+        if (mixed) {
+            drawn <- unique(collection)
+            legend("bottomright", legend = drawn, bty = "n", cex = 0.7,
+                   fill = unname(.ORA_COLLECTION_COLOURS[drawn]))
+        }
+    })
+
+    invisible(data.frame(key = keys, label = label, collection = collection,
+                         score = score, stringsAsFactors = FALSE))
 }
 
 
