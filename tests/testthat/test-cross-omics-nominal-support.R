@@ -22,14 +22,19 @@
 # All fixtures synthetic.
 
 nominal_meta_fixture <- function(norm_id, combined_pval,
-                         pval_transcriptomics = NA_real_,
-                         pval_proteomics = NA_real_) {
+                                 pval_transcriptomics = NA_real_,
+                                 pval_proteomics = NA_real_) {
+    # length.out on every column, so a zero-row fixture is expressible.
+    # paste() recycles a zero-length argument to "" rather than propagating the
+    # emptiness -- paste("Pathway", character(0)) is "Pathway ", length one --
+    # which would otherwise make the pathway column longer than the rest.
+    n <- length(norm_id)
     data.frame(
-        norm_id = norm_id,
-        pathway = paste("Pathway", norm_id),
-        pval_transcriptomics = pval_transcriptomics,
-        pval_proteomics = pval_proteomics,
-        combined_pval = combined_pval,
+        norm_id              = norm_id,
+        pathway              = rep(paste("Pathway", norm_id), length.out = n),
+        pval_transcriptomics = rep(pval_transcriptomics, length.out = n),
+        pval_proteomics      = rep(pval_proteomics, length.out = n),
+        combined_pval        = rep(combined_pval, length.out = n),
         stringsAsFactors = FALSE
     )
 }
