@@ -817,6 +817,52 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_df
 }
 
+#' Build the ranked gene vector fgsea scores one contrast on
+#'
+#' The ranking source is chosen for the whole table, on usable values rather
+#' than on column presence. \code{load_precomputed_rna_de()} always emits a
+#' `stat` column and fills it with NA when the source export carries no Wald or
+#' t statistic, so testing presence alone selected a column of NAs, dropped
+#' every rank, handed fgsea an empty vector, and reported "no gene set overlap"
+#' for every collection -- with the fallback below never firing and nothing in
+#' the log saying the ranking had failed rather than the biology.
+#'
+#' One source per table. A row the chosen source cannot rank is dropped, never
+#' filled from the other one: two ranking scales mixed into one vector is not a
+#' ranking, and the reader has no way to tell which rows came from which.
+#'
+#' \code{is.numeric()} states the requirement the gate actually has, rather than
+#' leaning on \code{is.finite()} to reject a non-numeric column as a side
+#' effect -- a factor is an integer vector underneath. A `stat` that is not a
+#' usable numeric ranking source takes the fallback instead of erroring. No
+#' coercion is attempted: every producer in this pipeline already emits numeric.
+#'
+#' @param res One contrast's DE table. Needs `FeatureID`, and either a usable
+#'   `stat` column or `log2FoldChange` and `pvalue`.
+#' @return Named numeric vector of finite ranks, sorted decreasing. Empty when
+#'   neither source yields a finite value.
+#' @keywords internal
+.build_fgsea_ranks <- function(res) {
+    stat_usable <- "stat" %in% colnames(res) &&
+        is.numeric(res$stat) &&
+        any(is.finite(res$stat))
+
+    ranks <- if (stat_usable) {
+        setNames(res$stat, res$FeatureID)
+    } else {
+        setNames(
+            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
+            res$FeatureID
+        )
+    }
+
+    # is.finite() rather than !is.na(): Inf and -Inf survive an NA test, and
+    # fgsea does not reject them, it ranks on them.
+    ranks <- ranks[is.finite(ranks)]
+    sort(ranks, decreasing = TRUE)
+}
+
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
@@ -865,19 +911,10 @@ run_pathway_analysis <- function(de_tables,
                 # ---- fGSEA ----
                 if (method %in% c("fgsea", "both")) {
 
-                    # Build ranked gene list from DE table
-                    # Prefer stat column (Wald statistic); fallback to sign(lfc)*-log10(p)
-                    if ("stat" %in% colnames(res)) {
-                        ranks <- setNames(res$stat, res$FeatureID)
-                    } else {
-                        ranks <- setNames(
-                            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
-                            res$FeatureID
-                        )
-                    }
-
-                    ranks <- ranks[!is.na(ranks)]
-                    ranks <- sort(ranks, decreasing = TRUE)
+                    # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
+                    # see .build_fgsea_ranks() for why the choice is made on
+                    # values rather than on the column being present.
+                    ranks <- .build_fgsea_ranks(res)
 
                     # fgseaMultilevel is stochastic: without a seed, terms near
                     # the padj threshold flip between otherwise identical runs.
