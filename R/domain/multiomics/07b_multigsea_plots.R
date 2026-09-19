@@ -2187,10 +2187,23 @@ classify_pathway_collection <- function(df, kegg_org = NULL,
     is_kegg <- is_kegg_pathway_accession(keys, kegg_org)
     out[is_kegg] <- "KEGG"
 
+    # Each accepts the bare accession and the "<id>~<name>" form GMT files use,
+    # which is a real shape here: .multigsea_readable_from_identifier() strips
+    # exactly that prefix for display, and normalize_pathway_join_key() leaves
+    # it on the key because only KEGG's own "<accession> <name>" spelling is
+    # normalized. Treating a labelled GO term as Other would pool it with the
+    # custom collections and let it crowd them out inside that bucket -- the
+    # very thing the round-robin exists to stop.
+    #
+    # The digit counts stay exact and the tail stays anchored, so this is not
+    # the unanchored prefix match that claims GO12345_signalling. Seven digits
+    # rather than the display stripper's [0-9]+ because a GO accession is
+    # seven, zero-padded: a loose strip costs a slightly wrong label, a loose
+    # classification misfiles the term.
     rest <- !is_kegg & !is.na(keys)
-    out[rest & grepl("^GO:[0-9]{7}$", keys)]  <- "GO"
-    out[rest & grepl("^PF[0-9]{5}$", keys)]   <- "Pfam"
-    out[rest & grepl("^IPR[0-9]{6}$", keys)]  <- "InterPro"
+    out[rest & grepl("^GO:[0-9]{7}(~|$)", keys)]  <- "GO"
+    out[rest & grepl("^PF[0-9]{5}(~|$)", keys)]   <- "Pfam"
+    out[rest & grepl("^IPR[0-9]{6}(~|$)", keys)]  <- "InterPro"
 
     out
 }

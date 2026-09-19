@@ -82,6 +82,41 @@ test_that("GO, Pfam and InterPro are distinguishable from each other and from KE
                      c("GO", "Pfam", "InterPro", "KEGG", "Other"))
 })
 
+test_that("the labelled <id>~<name> form GMT files use is still recognised", {
+    # .multigsea_readable_from_identifier() strips exactly this GO prefix for
+    # display, so the shape reaches these tables; normalize_pathway_join_key()
+    # leaves it on the key because only KEGG's "<accession> <name>" spelling is
+    # normalized. Classifying it as Other would pool GO with the custom sets.
+    df <- ora_fixture(c("GO:0006915~Apoptosis", "PF00069~Protein kinase domain",
+                        "IPR000719~Protein kinase domain"))
+
+    expect_identical(classify_pathway_collection(df, kegg_org = "hsa"),
+                     c("GO", "Pfam", "InterPro"))
+})
+
+test_that("accepting the labelled form does not loosen the digit counts", {
+    # The tail is anchored to "~" or end-of-string, so a longer run of digits
+    # is not a GO term and the colon is still required.
+    df <- ora_fixture(c("GO:00069151", "GO:0006915x", "GO0006915~Apoptosis",
+                        "PF000691~Something", "IPR0007191~Something"))
+
+    expect_identical(classify_pathway_collection(df, kegg_org = "hsa"),
+                     rep("Other", 5))
+})
+
+test_that("labelled GO terms do not hide in Other and crowd out a custom collection", {
+    # The consequence of getting the shape wrong: three labelled GO terms and
+    # one genuinely custom set. Pooled into Other they are one collection, and
+    # the custom set loses its slot to the second GO term.
+    df <- ora_fixture(c("GO:0000001~Alpha", "GO:0000002~Beta", "GO:0000003~Gamma",
+                        "my curated set"),
+                      padj = c(0.001, 0.002, 0.003, 0.010))
+
+    got <- select_top_ora_per_collection(df, top_n = 2)
+
+    expect_identical(got$ID, c("GO:0000001~Alpha", "my curated set"))
+})
+
 test_that("identity follows the contract's ladder, not the ID column alone", {
     # No ID at all: pathway_join_key() falls through to `pathway`, so a GMT
     # table that names its sets in the readable column still classifies.
