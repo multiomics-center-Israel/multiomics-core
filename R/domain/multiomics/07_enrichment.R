@@ -2780,6 +2780,43 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 }
 
 
+#' Count the layers that nominally support each pathway
+#'
+#' Nominal support is how many layers gave the pathway a raw p-value below
+#' \code{alpha}. It is a display-ranking quantity and nothing else: it defines
+#' no significance threshold, belongs to no tested family, and never reaches a
+#' p-value, an adjustment or the exported table.
+#'
+#' The rule is exactly \code{p < alpha}, so a p-value sitting on the threshold
+#' is not support. A layer with no p-value for the pathway contributes zero:
+#' absent evidence is not evidence, and the table cannot distinguish a pathway
+#' that was untestable in a layer from one tested and dropped before it got
+#' here.
+#'
+#' Counted from the same `pval_*` columns the figures then display, so the
+#' ranking and the picture are derived from one thing.
+#'
+#' @param meta_results Meta-analysis table carrying `pval_<layer>` columns.
+#' @param alpha Raw-p threshold for nominal support. Local to display ranking
+#'   and deliberately not configurable.
+#' @return Integer vector, one count per row; all zero when the table carries
+#'   no `pval_*` columns.
+#' @keywords internal
+.nominal_support <- function(meta_results, alpha = 0.05) {
+    pval_cols <- grep("^pval_", names(meta_results), value = TRUE)
+    support <- integer(nrow(meta_results))
+
+    for (col in pval_cols) {
+        p <- suppressWarnings(as.numeric(meta_results[[col]]))
+        # Written out rather than leaning on na.rm: "NA contributes zero" is
+        # the contract, and it should be visible in the line that implements it.
+        support <- support + as.integer(!is.na(p) & p < alpha)
+    }
+
+    support
+}
+
+
 #' Choose the rows a cross-omics figure shows
 #'
 #' The figures exist to show where the layers agree, and ordering by combined
@@ -2788,40 +2825,57 @@ stouffer_combined_pvalues <- function(merged_pathways) {
 #' and they fill every slot. The pathways several layers support -- the point of
 #' the figure -- rank below them and never appear.
 #'
-#' Rows are therefore ordered by how many layers contributed an enrichment
-#' p-value for the pathway first, and by the combined p-value within that. Note
-#' what that count is and is not: `n_omics` counts the layers whose enrichment
-#' table carried a p-value for this pathway. Some of those tables reach here
-#' already filtered, so a missing p-value can mean the pathway was never
-#' testable in that layer, or that it was tested and did not survive into the
-#' layer's result table. Nothing downstream can tell those apart.
+#' Counting the layers that merely *held* a p-value does not fix it either. A
+#' pathway every layer measured and none found anything in outranks one
+#' genuinely significant in two, because the count rewards coverage rather than
+#' agreement. The meta figures therefore rank on **nominal support** -- the
+#' layers whose raw p-value for the pathway is below 0.05, per
+#' \code{.nominal_support()} -- and break ties on the combined p-value, then on
+#' a deterministic identity.
+#'
+#' Nominal support is a display-ranking definition, not a significance
+#' threshold: it is counted on the raw per-layer p-values the figure itself
+#' shows, so what puts a row at the top is what the reader can see in it.
 #'
 #' This is selection for display only. The meta-analysis table keeps its own
 #' combined_pval ordering, and no p-value, adjustment or membership is
-#' touched.
+#' touched -- nor is the caller's table, which is copied on assignment rather
+#' than edited in place.
 #'
-#' The two ranking columns are named rather than fixed, because the ordering is
-#' the reusable part and the quantities are not. The defaults are the
-#' meta-analysis pair and every existing caller keeps them. The ORA figure,
-#' whose evidence is a different table with different missingness, passes its
-#' own pair: it must not be ranked on raw-p meta-analysis columns.
+#' The ranking columns are named rather than fixed, because the ordering is
+#' the reusable part and the quantities are not. The ORA figure, whose evidence
+#' is a different table with different missingness, passes its own pair: it
+#' must not be ranked on raw-p meta-analysis columns, and it does not supply an
+#' identity, so it keeps the incoming-order tie-break it has always had.
 #'
 #' @param meta_results Meta-analysis table, as
 #'   \code{stouffer_combined_pvalues()} returns it, or any table carrying
 #'   \code{count_col} and \code{score_col}.
 #' @param top_n Number of rows to keep.
-#' @param count_col Column holding the number of contributing layers; more is
-#'   better. Absent, every row counts as one and the order is left alone.
+#' @param count_col Column holding the support count; more is better. Absent,
+#'   every row counts as one and the order is left alone.
 #' @param score_col Column holding the score that breaks ties within a count;
 #'   smaller is better. Absent, nothing breaks them but the incoming order.
+#' @param id_col Column holding a stable identity, breaking ties the first two
+#'   keys leave. NULL, or naming a column the table does not carry, falls back
+#'   to the incoming order -- which is what every caller predating this
+#'   argument relies on.
 #' @return The selected rows of \code{meta_results}, in display order.
 #' @examples
+#' # Two layers nominally support 00020; 00010 has a far smaller combined p but
+#' # only one layer under 0.05, so it does not lead the figure.
 #' meta <- data.frame(norm_id = c("00010", "00020"),
-#'                    n_omics = c(1L, 2L), combined_pval = c(1e-9, 1e-3))
-#' select_multi_omics_pathways(meta, top_n = 2)$norm_id   # "00020" first
+#'                    pval_transcriptomics = c(1e-9, 0.01),
+#'                    pval_proteomics = c(0.9, 0.02),
+#'                    combined_pval = c(1e-9, 1e-3))
+#' meta$n_nominal_support <- .nominal_support(meta)
+#' select_multi_omics_pathways(meta, top_n = 2,
+#'                             count_col = "n_nominal_support",
+#'                             id_col = "norm_id")$norm_id   # "00020" first
 select_multi_omics_pathways <- function(meta_results, top_n = 30,
                                          count_col = "n_omics",
-                                         score_col = "combined_pval") {
+                                         score_col = "combined_pval",
+                                         id_col = NULL) {
     if (is.null(meta_results) || nrow(meta_results) == 0) return(meta_results)
 
     counts <- if (count_col %in% names(meta_results)) {
@@ -2837,9 +2891,18 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
         rep(NA_real_, nrow(meta_results))
     }
 
-    # Ties on both keys fall back to the incoming order, which is itself sorted
-    # by combined p-value, so the selection is reproducible run to run.
-    ord <- order(-counts, scores, seq_len(nrow(meta_results)), na.last = TRUE)
+    # An identity breaks what the first two keys leave, so the figure does not
+    # depend on the order rows happened to be bound in. Without one -- the ORA
+    # caller supplies none -- the incoming order decides, as it always has;
+    # that order is itself sorted by combined p-value, so it is reproducible
+    # run to run.
+    last_key <- if (!is.null(id_col) && id_col %in% names(meta_results)) {
+        as.character(meta_results[[id_col]])
+    } else {
+        seq_len(nrow(meta_results))
+    }
+
+    ord <- order(-counts, scores, last_key, na.last = TRUE)
     meta_results[utils::head(ord, min(top_n, nrow(meta_results))), , drop = FALSE]
 }
 
@@ -2847,8 +2910,14 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
 #' Plot cross-omics pathway heatmap
 plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 
-    # Rows that several layers support lead; see select_multi_omics_pathways().
-    top_pathways <- select_multi_omics_pathways(meta_results, top_n)
+    # Rows that several layers nominally support lead. The count comes off the
+    # full table's pval_* columns, before selection -- the matrix below is built
+    # from the rows already chosen, so it cannot be what chooses them.
+    meta_results$n_nominal_support <- .nominal_support(meta_results)
+    top_pathways <- select_multi_omics_pathways(
+        meta_results, top_n,
+        count_col = "n_nominal_support",
+        id_col = "norm_id")
 
     pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
@@ -3053,7 +3122,13 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
 #' Plot enrichment dot plot
 plot_enrichment_dotplot <- function(meta_results, omics, top_n = 20) {
 
-    top <- select_multi_omics_pathways(meta_results, top_n)
+    # Same ranking as the heatmap: nominal support counted on the full table's
+    # pval_* columns before any row is dropped. See .nominal_support().
+    meta_results$n_nominal_support <- .nominal_support(meta_results)
+    top <- select_multi_omics_pathways(
+        meta_results, top_n,
+        count_col = "n_nominal_support",
+        id_col = "norm_id")
 
     pval_cols <- grep("^pval_", names(top), value = TRUE)
 
