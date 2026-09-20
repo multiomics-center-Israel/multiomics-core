@@ -378,40 +378,89 @@ compute_mae_concordance <- function(mae, om1, om2, config, out_dir = NULL) {
 }
 
 
+#' Join RNA and protein DE tables through the gene-protein mapping
+#'
+#' The single implementation of the RNA-protein pairing. Two code paths used to
+#' do this join independently -- this file and
+#' \code{06b_rna_protein_correlation.R} -- and disagreed on how many pairs
+#' exist, so the number a reader got depended on which table they happened to
+#' open. The difference was every gene whose \code{Protein.Group} is a
+#' semicolon-separated group of several accessions: the other path matched
+#' feature ids through a long-form mapping keyed on \code{gene_symbol} and lost
+#' them, while this one merged on the mapping directly and kept them. No pair
+#' present in both tables ever disagreed on a value.
+#'
+#' One gene legitimately pairs with several protein groups (isoform-level
+#' groups), so the result can carry repeated \code{gene_id}s. That is kept, not
+#' deduplicated: collapsing it would silently pick one protein per gene.
+#'
+#' @param rna_de RNA DE table with feature_id plus a log2FC-like column.
+#' @param prot_de Protein DE table with feature_id plus a log2FC-like column.
+#' @param mapping Data frame with gene_id and protein_id (optionally
+#'   mapping_source), in the original ID space of both DE tables.
+#' @return Data frame with gene_id, protein_id, mapping_source and gene_symbol
+#'   (each when the mapping supplies it), logFC_rna, logFC_prot, padj_rna,
+#'   padj_prot. Zero rows when nothing joins.
+build_rna_protein_pairs <- function(rna_de, prot_de, mapping) {
+    if (is.null(mapping) || nrow(mapping) == 0) return(data.frame())
+    if (!"feature_id" %in% names(rna_de)) rna_de$feature_id <- rownames(rna_de)
+    if (!"feature_id" %in% names(prot_de)) prot_de$feature_id <- rownames(prot_de)
+
+    # Only the identity columns are carried into the merge. Anything else the
+    # mapping happens to hold would collide with the DE tables' own columns and
+    # take the _rna / _prot suffixes meant for the fold changes. gene_symbol is
+    # among them because analyze_rna_protein_concordance() exports it when the
+    # mapping file supplies one, and dropping it here would silently narrow a
+    # table projects already read.
+    keep <- intersect(c("gene_id", "protein_id", "mapping_source", "gene_symbol"),
+                      names(mapping))
+    rna_mapped <- merge(mapping[, keep, drop = FALSE], rna_de,
+                        by.x = "gene_id", by.y = "feature_id", all = FALSE)
+    merged <- merge(rna_mapped, prot_de, by.x = "protein_id", by.y = "feature_id",
+                    suffixes = c("_rna", "_prot"))
+    if (nrow(merged) == 0) return(data.frame())
+
+    pick <- function(pattern, fallback = NA_real_) {
+        hit <- grep(pattern, names(merged), value = TRUE)[1]
+        if (is.na(hit)) rep(fallback, nrow(merged)) else merged[[hit]]
+    }
+    out <- data.frame(
+        gene_id    = merged$gene_id,
+        protein_id = merged$protein_id,
+        stringsAsFactors = FALSE
+    )
+    if ("mapping_source" %in% names(merged)) out$mapping_source <- merged$mapping_source
+    # Suffixed forms too: a DE table carrying its own gene_symbol pushes the
+    # mapping's copy to gene_symbol_rna rather than leaving it where it was.
+    for (nm in c("gene_symbol", "gene_symbol_rna")) {
+        if (nm %in% names(merged)) {
+            out$gene_symbol <- merged[[nm]]
+            break
+        }
+    }
+    out$logFC_rna  <- pick("^log.*FC.*_rna$|^logFC_rna$")
+    out$logFC_prot <- pick("^log.*FC.*_prot$|^logFC_prot$")
+    out$padj_rna   <- pick("padj_rna")
+    out$padj_prot  <- pick("padj_prot")
+
+    if (all(is.na(out$logFC_rna)) || all(is.na(out$logFC_prot))) {
+        stop("Cannot find logFC columns in merged DE results")
+    }
+    out
+}
+
+
 #' Analyze RNA-protein concordance using gene-protein mapping
 analyze_rna_protein_concordance <- function(rna_de, prot_de, mapping, config, out_dir = NULL) {
 
     message("  Analyzing RNA-protein concordance...")
 
-    # Ensure feature_id column
-    if (!"feature_id" %in% names(rna_de)) rna_de$feature_id <- rownames(rna_de)
-    if (!"feature_id" %in% names(prot_de)) prot_de$feature_id <- rownames(prot_de)
-
-    # Merge DE results via mapping
-    rna_mapped <- merge(mapping, rna_de, by.x = "gene_id", by.y = "feature_id", all = FALSE)
-    merged <- merge(rna_mapped, prot_de, by.x = "protein_id", by.y = "feature_id",
-                    suffixes = c("_rna", "_prot"))
+    merged <- build_rna_protein_pairs(rna_de, prot_de, mapping)
 
     if (nrow(merged) == 0) {
         message("  No overlapping features found between RNA and protein DE results via mapping")
         return(list(concordance_table = data.frame(), stats = NULL))
     }
-
-    # Standardize column names
-    logfc_rna_col <- grep("^log.*FC.*_rna$|^logFC_rna$", names(merged), value = TRUE)[1]
-    logfc_prot_col <- grep("^log.*FC.*_prot$|^logFC_prot$", names(merged), value = TRUE)[1]
-    padj_rna_col <- grep("padj_rna", names(merged), value = TRUE)[1]
-    padj_prot_col <- grep("padj_prot", names(merged), value = TRUE)[1]
-
-    if (is.na(logfc_rna_col) || is.na(logfc_prot_col)) {
-        stop("Cannot find logFC columns in merged DE results")
-    }
-
-    # Extract logFC values
-    merged$logFC_rna <- merged[[logfc_rna_col]]
-    merged$logFC_prot <- merged[[logfc_prot_col]]
-    merged$padj_rna <- if (!is.na(padj_rna_col)) merged[[padj_rna_col]] else NA
-    merged$padj_prot <- if (!is.na(padj_prot_col)) merged[[padj_prot_col]] else NA
 
     # Classify concordance
     p_cutoff <- 0.05

@@ -152,6 +152,16 @@ modes:
     # Require 1:1 gene-protein mapping (removes ambiguous mappings)
     require_one_to_one_mapping: false
 
+    # --- Report sections ---
+    # Optional per-section switches, for dropping a section a project cannot
+    # interpret without editing the shared template. Every section is ON unless
+    # listed here as false; omitting this whole block (as every existing config
+    # does) renders the report exactly as before.
+    report:
+      sections:
+        # translation_efficiency: false  # protein log2FC - RNA log2FC panels
+        # group_distance: false          # per-sample within vs cross-group distance
+
     # --- Feature selection for integration ---
     feature_selection:
       method: "variance"  # "de", "variance", "combined"
