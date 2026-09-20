@@ -1773,10 +1773,18 @@ gmt_to_term2gene <- function(gmt_file) {
 #' @param kegg_org Active KEGG organism code, for accession recognition. Only
 #'   rows \code{is_kegg_pathway_accession()} recognises can be excluded, so GO,
 #'   Pfam, InterPro and custom sets in the same GMT are untouched.
+#' @param classification The resolved BRITE class table, defaulted lazily to the
+#'   fetch exactly as \code{.exclude_kegg_classes()} does, so a call with nothing
+#'   to exclude still never reaches the network. A caller running several
+#'   producers over one GMT should resolve it once and pass it here:
+#'   \code{kegg_pathway_categories()} caches a successful fetch but not a failed
+#'   one, so leaving each producer to its own default makes an unreachable
+#'   endpoint cost one timeout per producer before the run fails open.
 #' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, Count, geneID), or NULL.
 run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = NULL,
                                    label = "pooled", pval_cutoff = 0.1,
-                                   exclude_classes = NULL, kegg_org = NULL) {
+                                   exclude_classes = NULL, kegg_org = NULL,
+                                   classification = kegg_pathway_categories()) {
 
     if (length(sig_genes) < 3) {
         message("    ", label, ": too few significant genes (", length(sig_genes), ")")
@@ -1817,14 +1825,16 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
             if (nrow(padj_hits) > 0) {
                 return(.exclude_kegg_classes(padj_hits, exclude_classes,
-                                             kegg_org, label))
+                                             kegg_org, label,
+                                             classification = classification))
             }
             pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
             if (nrow(pval_hits) > 0) {
                 message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                         nrow(pval_hits), " pathways)")
                 return(.exclude_kegg_classes(pval_hits, exclude_classes,
-                                             kegg_org, label))
+                                             kegg_org, label,
+                                             classification = classification))
             }
         }
         NULL
@@ -1945,10 +1955,26 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     exclude_classes <- .excluded_pathway_classes(config)
     kegg_org <- resolve_kegg_org_code(config$global$organism)
 
+    # Resolved here rather than left to each producer's lazy default.
+    # kegg_pathway_categories() caches a successful fetch but returns NULL
+    # without writing anything when the endpoint cannot be reached, so a cold
+    # cache on an offline machine would otherwise cost one full timeout for the
+    # pooled table and one more for every omics layer -- and this path needs at
+    # least two layers -- before the run fails open and keeps everything.
+    #
+    # The `if` keeps the no-exclusion case as lazy as it was: a project that
+    # configures nothing still never touches the network, here or downstream.
+    pathway_classes <- if (length(exclude_classes) > 0) {
+        kegg_pathway_categories()
+    } else {
+        NULL
+    }
+
     message("  Running pooled GMT ORA...")
     pooled_ora <- run_multi_ora_enricher(pooled_sig, pooled_univ, comb_t2g, comb_t2n,
                                          "pooled", exclude_classes = exclude_classes,
-                                         kegg_org = kegg_org)
+                                         kegg_org = kegg_org,
+                                         classification = pathway_classes)
 
     per_omics_ora <- list()
     for (om in names(per_omics_sig)) {
@@ -1956,7 +1982,8 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
         per_omics_ora[[om]] <- run_multi_ora_enricher(
             per_omics_sig[[om]], per_omics_univ[[om]],
             per_omics_t2g[[om]], per_omics_t2n[[om]], om,
-            exclude_classes = exclude_classes, kegg_org = kegg_org)
+            exclude_classes = exclude_classes, kegg_org = kegg_org,
+            classification = pathway_classes)
     }
 
     combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, NULL)

@@ -266,6 +266,30 @@ test_that("no exclusion list means the classification is never consulted", {
     expect_identical(run_gmt_ora(exclude_classes = list()), unfiltered)
 })
 
+test_that("a classification handed in is used as it is, and nothing is fetched", {
+    skip_if_not_installed("clusterProfiler")
+    fetches <- 0L
+    local_gmt_stubs(list(kegg_pathway_categories = function(...) {
+        fetches <<- fetches + 1L
+        brite_classes()
+    }))
+
+    supplied <- suppressMessages(run_multi_ora_enricher(
+        gmt_sig(), gmt_universe(), gmt_term2gene(), gmt_term2name(),
+        label = "pooled", exclude_classes = "Organismal Systems",
+        kegg_org = "hsa", classification = brite_classes()))
+
+    expect_equal(fetches, 0L)
+    expect_false("hsa04260" %in% supplied$ID)
+
+    # ...and the lazy default is still the default: a caller that passes
+    # nothing resolves it itself, exactly once for that call.
+    defaulted <- run_gmt_ora(exclude_classes = "Organismal Systems")
+
+    expect_equal(fetches, 1L)
+    expect_identical(defaulted, supplied)
+})
+
 test_that("an unavailable classification keeps everything and says so", {
     skip_if_not_installed("clusterProfiler")
     local_gmt_stubs(list(kegg_pathway_categories = function(...) NULL))
@@ -310,6 +334,105 @@ test_that("the summary consumes what it is given and applies no exclusion of its
                      "hsa00010")
 })
 
+# ---- one classification, resolved once for the whole run --------------------
+#
+# kegg_pathway_categories() caches a successful fetch and nothing else: a
+# failed lookup returns NULL without writing, so it is paid again every time it
+# is asked for. Letting each producer fall through to .exclude_kegg_classes()'s
+# lazy default therefore cost one endpoint timeout for the pooled table and one
+# more per omics layer -- and this path refuses to run with fewer than two --
+# before the run gave up and kept everything. Resolved once in
+# run_multi_ora_gmt() and handed to every producer instead.
+
+# A GMT in the shape read_gmt() wants: term, description, then members.
+write_gmt_fixture <- function(terms, env = parent.frame()) {
+    path <- withr::local_tempfile(fileext = ".gmt", .local_envir = env)
+    writeLines(vapply(names(terms),
+                      function(t) paste(c(t, t, terms[[t]]), collapse = "\t"),
+                      character(1)),
+               path)
+    path
+}
+
+# Only the keys run_multi_ora_gmt() reads. Absolute temp paths pass through
+# resolve_input_path() untouched, so no project layout is needed.
+gmt_run_config <- function(rna_gmt, prot_gmt, exclude) {
+    list(
+        global = list(organism = "human"),
+        modes = list(
+            rna        = list(pathway = list(gmt_file = rna_gmt)),
+            proteomics = list(pathway = list(gmt_file = prot_gmt)),
+            multiomics = list(enrichment =
+                                  list(exclude_pathway_classes = exclude))
+        )
+    )
+}
+
+# Drives a two-layer GMT run and reports what the producers were handed.
+# extract_de_tables() and run_multi_ora_enricher() are both stubbed: what is
+# under test is how many times the classification is resolved and which object
+# each producer receives, not DE extraction or enrichment. With every producer
+# returning NULL the run stops at the empty summary, so nothing is written.
+capture_gmt_producers <- function(exclude, env = parent.frame()) {
+    state <- new.env(parent = emptyenv())
+    state$fetches <- 0L
+    state$seen <- list()
+
+    local_gmt_stubs(list(
+        kegg_pathway_categories = function(...) {
+            state$fetches <- state$fetches + 1L
+            brite_classes()
+        },
+        extract_de_tables = function(de_data, omics_type,
+                                     harmonization_res = NULL) {
+            list(contrast = data.frame(
+                feature_id = sprintf("g%03d", 1:6),
+                pvalue     = rep(0.001, 6),
+                padj       = rep(0.001, 6),
+                stringsAsFactors = FALSE))
+        },
+        run_multi_ora_enricher = function(..., classification = NULL) {
+            state$seen <- c(state$seen, list(classification))
+            NULL
+        }
+    ), env = env)
+
+    config <- gmt_run_config(
+        write_gmt_fixture(list(hsa00010 = sprintf("g%03d", 1:6)), env = env),
+        write_gmt_fixture(list(hsa04260 = sprintf("g%03d", 1:6)), env = env),
+        exclude)
+
+    suppressMessages(run_multi_ora_gmt(
+        de_results = list(transcriptomics = list(), proteomics = list()),
+        harmonization_res = NULL, config = config,
+        out_dir = withr::local_tempdir(.local_envir = env)))
+
+    list(fetches = state$fetches, seen = state$seen)
+}
+
+test_that("one GMT run resolves the classification once for all its producers", {
+    got <- capture_gmt_producers("Organismal Systems")
+
+    # Pooled plus one per omics layer -- three producers, one resolution.
+    expect_equal(length(got$seen), 3L)
+    expect_equal(got$fetches, 1L)
+
+    # And all three were handed the same table, so the pooled and per-omics
+    # results cannot be filtered against different hierarchies.
+    expect_identical(got$seen[[1]], got$seen[[2]])
+    expect_identical(got$seen[[2]], got$seen[[3]])
+    expect_identical(got$seen[[1]], brite_classes())
+})
+
+test_that("a run with nothing to exclude resolves no classification at all", {
+    got <- capture_gmt_producers(character(0))
+
+    expect_equal(length(got$seen), 3L)
+    expect_equal(got$fetches, 0L)
+    # Every producer is told there is nothing, rather than left to find out.
+    expect_true(all(vapply(got$seen, is.null, logical(1))))
+})
+
 test_that("run_multi_ora_gmt resolves the exclusion once and passes it to every producer", {
     src <- paste(deparse(body(run_multi_ora_gmt)), collapse = " ")
 
@@ -328,7 +451,8 @@ test_that("run_multi_ora_gmt resolves the exclusion once and passes it to every 
     }
     expect_equal(count_in_src("run_multi_ora_enricher"), 2L)
     expect_equal(count_in_src("exclude_classes = exclude_classes"), 2L)
+    expect_equal(count_in_src("classification = pathway_classes"), 2L)
 
-    expect_true(all(c("exclude_classes", "kegg_org") %in%
+    expect_true(all(c("exclude_classes", "kegg_org", "classification") %in%
                     names(formals(run_multi_ora_enricher))))
 })
