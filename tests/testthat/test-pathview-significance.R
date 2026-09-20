@@ -154,15 +154,40 @@ test_that("the pathway selector and the caption read the same cutoff", {
 
 # ---- both renderers, one caption --------------------------------------------
 
-test_that("the caption does not claim an FDR where the selector fell back to raw p", {
-    # .kegg_hits_by_contrast() scores on padj where a layer's table carries
-    # usable ones and on pvalue only where it carries none. A caption promising
-    # an FDR throughout would overstate the evidence on exactly the runs the
-    # fallback exists for.
+test_that("the caption does not claim an FDR where a selector fell back to raw p", {
+    # Two different selectors put pathways on these maps and neither guarantees
+    # an FDR: .kegg_hits_by_contrast() scores on padj where a layer's table
+    # carries usable ones and on pvalue where it does not, while the supported
+    # renderer's tiers drop to raw p when the adjusted ones select nothing --
+    # even though usable adjusted values are present. A caption promising an
+    # FDR throughout would overstate the evidence on exactly those runs.
     cap <- pathview_significance_caption()
 
-    expect_true(grepl("adjusted p-value", cap, fixed = TRUE))
-    expect_true(grepl("raw p-value only", cap, fixed = TRUE))
+    expect_true(grepl("adjusted p-values", cap, fixed = TRUE))
+    expect_true(grepl("raw p-values", cap, fixed = TRUE))
+    expect_true(grepl("floor rather than an FDR", cap, fixed = TRUE))
+})
+
+test_that("the caption does not name a selector that only one renderer uses", {
+    # It previously attributed its fallback rule to .kegg_hits_by_contrast(),
+    # which the supported-space renderer never calls -- so the caption
+    # described a rule that did not produce the figure the report prefers.
+    # The claim has to hold for whichever renderer wrote the PDF.
+    expect_false(grepl(".kegg_hits_by_contrast",
+                       pathview_significance_caption(), fixed = TRUE))
+})
+
+test_that("the supported renderer records whether compounds reached the map", {
+    # Before the node rule, "metabolomics was in the run" was close enough to
+    # "a compound node carries a value" for the report to assume it. It is not
+    # any more: every metabolite can fail the rule while the gene layers still
+    # produce a figure, and the report would then promise a colour the map does
+    # not have. Pinned at the source -- reaching it needs a pathview call.
+    body_src <- paste(deparse(body(generate_multi_ora_pathview)), collapse = " ")
+
+    expect_true(grepl("any_compounds <- TRUE", body_src, fixed = TRUE))
+    expect_true(grepl("multi_ora_pathview_supported.yaml", body_src,
+                      fixed = TRUE))
 })
 
 test_that("both pathview renderers apply the node rule the caption states", {

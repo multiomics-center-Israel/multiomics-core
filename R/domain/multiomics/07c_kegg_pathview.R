@@ -801,10 +801,10 @@ pathview_significance_caption <- function(thresholds = .PATHVIEW_THRESHOLDS) {
     fmt <- function(x) format(x, trim = TRUE, scientific = FALSE)
     paste0(
         "Pathways are drawn where at least one omics layer scored them below ",
-        fmt(thresholds$fdr_alpha), " -- on that layer's adjusted p-value where ",
-        "its enrichment table carries usable ones, and on its raw p-value only ",
-        "where it carries none, which is the fallback .kegg_hits_by_contrast() ",
-        "applies per layer. Within a map, a node is ",
+        fmt(thresholds$fdr_alpha), " -- on adjusted p-values where those ",
+        "supported a selection, and on raw p-values where they did not, so ",
+        "which of the two a given map rests on is not fixed and the ",
+        "pathway-level evidence is a floor rather than an FDR. Within a map, a node is ",
         "coloured only by features that both changed by more than ",
         fmt(thresholds$node_fc), "-fold (|log2FC| > ",
         format(round(log2(thresholds$node_fc), 2), nsmall = 2),

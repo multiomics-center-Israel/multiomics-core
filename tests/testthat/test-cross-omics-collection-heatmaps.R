@@ -194,6 +194,25 @@ test_that("a run that declines to analyse still clears the previous run's figure
     expect_false(any(file.exists(stale)))
 })
 
+test_that("the production caller clears before its own two-layer guard", {
+    # Clearing inside analyze_cross_omics_enrichment() is not enough on its
+    # own: the module guards both calls on having at least two enriched layers,
+    # so a rerun that drops to one never enters that function and the earlier
+    # run's figures survive to be shown beside the one-layer results. The
+    # run-level clear must therefore sit above the guard, not inside it.
+    src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
+
+    expect_true(grepl(".clear_collection_heatmaps(out_dir)", src, fixed = TRUE))
+    expect_true(grepl(".clear_collection_heatmaps(contrast_out)", src,
+                      fixed = TRUE))
+
+    guard <- regexpr("length(per_omics) >= 2", src, fixed = TRUE)
+    clear <- regexpr(".clear_collection_heatmaps(out_dir)", src, fixed = TRUE)
+    expect_gt(guard, 0)
+    expect_gt(clear, 0)
+    expect_lt(clear, guard)
+})
+
 test_that("clearing tolerates an out_dir that does not exist yet", {
     dir <- withr::local_tempdir()
 

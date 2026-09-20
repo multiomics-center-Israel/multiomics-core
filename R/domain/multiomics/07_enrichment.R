@@ -2013,9 +2013,9 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
             ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, cl_pathways,
                                                     omics, kegg_org = kegg_org)
             # The builder returns a column per requested layer, all-NA for a
-            # layer with no annotation in this collection. Dropping those keeps
-            # the figure consistent with its legend: a layer is absent, not
-            # shown empty.
+            # layer that contributed nothing to this collection. Dropping those
+            # keeps the figure consistent with its legend: a layer is absent,
+            # not shown empty.
             informative_cols <- colSums(!is.na(ora_padj)) > 0
             ora_padj <- ora_padj[, informative_cols, drop = FALSE]
             if (ncol(ora_padj) == 0 || !any(!is.na(ora_padj))) next
@@ -2984,8 +2984,14 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
 #'
 #' A per-collection figure shows only the layers that carry a p-value in that
 #' collection. Drawing an all-empty column instead would invite the reader to
-#' read "no annotation in this collection" as "tested here and found nothing",
-#' which is the one inference these figures must not support.
+#' read it as "tested here and found nothing", which is the one inference these
+#' figures must not support.
+#'
+#' Note what this can and cannot distinguish: a layer drops out both when it
+#' has no annotation in the collection and when it was scored there but no
+#' result was retained into these tables. The producers keep only their own
+#' hits, so absence here cannot establish absence of annotation -- the figure
+#' legends say so rather than claiming the stronger reading.
 #'
 #' @param meta_slice Meta-analysis rows for one collection.
 #' @param omics Character vector of layer names, in display order.

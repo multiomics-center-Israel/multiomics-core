@@ -2752,6 +2752,12 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     on.exit(setwd(cwd), add = TRUE)
 
     all_generated_pngs <- list()
+    # Now that the node rule can empty a layer, "metabolomics was present" no
+    # longer implies "a compound node carries a value". The report must not
+    # promise a colour that is not on the map, so what this run actually
+    # supplied is recorded rather than inferred -- as the union renderer
+    # already does beside its own PDF.
+    any_compounds <- FALSE
 
     for (ci in seq_along(contrast_names)) {
         contrast <- contrast_names[ci]
@@ -2805,6 +2811,7 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
                 names(cpd_data) <- names(cpd_fc)
             }
         }
+        if (!is.null(cpd_data) && length(cpd_data) > 0) any_compounds <- TRUE
 
         if (is.null(gene_data) && is.null(cpd_data)) next
 
@@ -2883,6 +2890,13 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
             }
         }
         grDevices::dev.off()
+        # Written only once the PDF exists, so the sidecar cannot outlive the
+        # figure it describes.
+        tryCatch(
+            yaml::write_yaml(list(compound_nodes = any_compounds),
+                             file.path(out_dir, "multi_ora_pathview_supported.yaml")),
+            error = function(e) NULL
+        )
         total <- sum(lengths(all_generated_pngs))
         message("  Compiled ", total, " pathview maps (",
                 length(all_generated_pngs), " contrasts) into: ", basename(pdf_path))
