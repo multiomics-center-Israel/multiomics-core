@@ -406,45 +406,79 @@ build_rna_protein_pairs <- function(rna_de, prot_de, mapping) {
     if (!"feature_id" %in% names(rna_de)) rna_de$feature_id <- rownames(rna_de)
     if (!"feature_id" %in% names(prot_de)) prot_de$feature_id <- rownames(prot_de)
 
-    # Only the identity columns are carried into the merge. Anything else the
-    # mapping happens to hold would collide with the DE tables' own columns and
-    # take the _rna / _prot suffixes meant for the fold changes. gene_symbol is
-    # among them because analyze_rna_protein_concordance() exports it when the
-    # mapping file supplies one, and dropping it here would silently narrow a
-    # table projects already read.
+    # Each side is reduced to the columns this join needs, under names that
+    # appear on exactly one input. merge() suffixes only the columns the two
+    # frames have in common, so leaving the full tables in place made the
+    # resulting name depend on what the OTHER table happened to carry: a DE
+    # table with its own gene_symbol pushed the mapping's copy to gene_symbol.x
+    # while the other side's stayed bare, and a padj alias present on only one
+    # side never picked up a _rna / _prot suffix at all. Renaming up front
+    # removes the whole class rather than guessing at the shapes afterwards.
     keep <- intersect(c("gene_id", "protein_id", "mapping_source", "gene_symbol"),
                       names(mapping))
-    rna_mapped <- merge(mapping[, keep, drop = FALSE], rna_de,
+    map_slim <- mapping[, keep, drop = FALSE]
+    names(map_slim) <- sub("^gene_symbol$", ".map_gene_symbol", names(map_slim))
+    names(map_slim) <- sub("^mapping_source$", ".map_mapping_source",
+                           names(map_slim))
+
+    rna_mapped <- merge(map_slim, .de_side_columns(rna_de, "rna"),
                         by.x = "gene_id", by.y = "feature_id", all = FALSE)
-    merged <- merge(rna_mapped, prot_de, by.x = "protein_id", by.y = "feature_id",
-                    suffixes = c("_rna", "_prot"))
+    merged <- merge(rna_mapped, .de_side_columns(prot_de, "prot"),
+                    by.x = "protein_id", by.y = "feature_id", all = FALSE)
     if (nrow(merged) == 0) return(data.frame())
 
-    pick <- function(pattern, fallback = NA_real_) {
-        hit <- grep(pattern, names(merged), value = TRUE)[1]
-        if (is.na(hit)) rep(fallback, nrow(merged)) else merged[[hit]]
-    }
     out <- data.frame(
         gene_id    = merged$gene_id,
         protein_id = merged$protein_id,
         stringsAsFactors = FALSE
     )
-    if ("mapping_source" %in% names(merged)) out$mapping_source <- merged$mapping_source
-    # Suffixed forms too: a DE table carrying its own gene_symbol pushes the
-    # mapping's copy to gene_symbol_rna rather than leaving it where it was.
-    for (nm in c("gene_symbol", "gene_symbol_rna")) {
-        if (nm %in% names(merged)) {
-            out$gene_symbol <- merged[[nm]]
-            break
-        }
+    if (".map_mapping_source" %in% names(merged)) {
+        out$mapping_source <- merged$.map_mapping_source
     }
-    out$logFC_rna  <- pick("^log.*FC.*_rna$|^logFC_rna$")
-    out$logFC_prot <- pick("^log.*FC.*_prot$|^logFC_prot$")
-    out$padj_rna   <- pick("padj_rna")
-    out$padj_prot  <- pick("padj_prot")
+    if (".map_gene_symbol" %in% names(merged)) {
+        out$gene_symbol <- merged$.map_gene_symbol
+    }
+    out$logFC_rna  <- merged$logFC_rna
+    out$logFC_prot <- merged$logFC_prot
+    out$padj_rna   <- merged$padj_rna
+    out$padj_prot  <- merged$padj_prot
 
     if (all(is.na(out$logFC_rna)) || all(is.na(out$logFC_prot))) {
         stop("Cannot find logFC columns in merged DE results")
+    }
+    out
+}
+
+
+#' One side of the RNA-protein join, under names that cannot collide
+#'
+#' Reduces a DE table to the feature id plus the fold change and adjusted
+#' p-value, already labelled for its side. The aliases are the ones this
+#' pipeline's producers emit: DESeq2-style \code{log2FoldChange}, limma-style
+#' \code{logFC} and \code{adj.P.Val}, edgeR's \code{FDR}, and the standardised
+#' \code{log2FC} / \code{padj}. Dropping an alias here does not fail loudly --
+#' it marks every feature non-significant -- so all three adjusted-p spellings
+#' are resolved rather than only the standardised one.
+#'
+#' @param df DE table carrying feature_id.
+#' @param side "rna" or "prot", used to suffix the returned statistic columns.
+#' @return Data frame with feature_id, logFC_<side>, padj_<side>.
+#' @keywords internal
+.de_side_columns <- function(df, side) {
+    fc_col   <- intersect(c("log2FC", "logFC", "log2FoldChange"), names(df))[1]
+    padj_col <- intersect(c("padj", "adj.P.Val", "FDR"), names(df))[1]
+
+    out <- data.frame(feature_id = as.character(df$feature_id),
+                      stringsAsFactors = FALSE)
+    out[[paste0("logFC_", side)]] <- if (is.na(fc_col)) {
+        rep(NA_real_, nrow(df))
+    } else {
+        df[[fc_col]]
+    }
+    out[[paste0("padj_", side)]] <- if (is.na(padj_col)) {
+        rep(NA_real_, nrow(df))
+    } else {
+        df[[padj_col]]
     }
     out
 }

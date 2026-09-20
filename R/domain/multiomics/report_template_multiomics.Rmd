@@ -439,8 +439,15 @@ pairs_csv <- file.path(rna_prot_dir, "tables", "rna_protein_log2FC_pairs.csv")
 tb_ok <- file.exists(pairs_csv)
 if (tb_ok) {
     pr <- read.csv(pairs_csv, stringsAsFactors = FALSE)
+    # Only the file and its columns are checked here. Whether there are enough
+    # pairs to draw is decided per contrast below, since that is the unit each
+    # panel is built from: a pooled total says nothing about whether any single
+    # contrast can fill a panel, in either direction.
+    tb_ok <- all(c("contrast", "rna_log2FC", "protein_log2FC") %in% names(pr))
+}
+if (tb_ok) {
     pr <- pr[is.finite(pr$rna_log2FC) & is.finite(pr$protein_log2FC), , drop = FALSE]
-    tb_ok <- nrow(pr) >= 2 * TOPN
+    tb_ok <- nrow(pr) > 0
 }
 
 if (!tb_ok) {
@@ -457,17 +464,32 @@ if (!tb_ok) {
     panels <- list()
     for (cn in unique(pr$contrast)) {
         d <- pr[pr$contrast == cn, , drop = FALSE]
-        n <- min(TOPN, floor(nrow(d) / 2))
-        if (n < 10) next
         N <- nrow(d)
 
         for (dir in c("up", "down")) {
-            sel <- if (dir == "up") {
-                d[order(-d$protein_log2FC), ][seq_len(n), ]
+            # Restricted to proteins that actually moved that way BEFORE the
+            # tail is taken. Sorting alone fills a short tail with proteins
+            # moving the other way -- in an all-positive contrast the "down"
+            # panel would hold positive protein fold changes, and `agree` would
+            # then count a falling transcript as agreeing with a rising
+            # protein and feed that into the p-value.
+            d_dir <- if (dir == "up") {
+                d[d$protein_log2FC > 0, , drop = FALSE]
             } else {
-                d[order(d$protein_log2FC), ][seq_len(n), ]
+                d[d$protein_log2FC < 0, , drop = FALSE]
+            }
+            n <- min(TOPN, nrow(d_dir))
+            if (n < 10) next
+
+            sel <- if (dir == "up") {
+                d_dir[order(-d_dir$protein_log2FC), ][seq_len(n), ]
+            } else {
+                d_dir[order(d_dir$protein_log2FC), ][seq_len(n), ]
             }
             agree <- if (dir == "up") sel$rna_log2FC >= fc_thr else sel$rna_log2FC <= -fc_thr
+            # The background stays every mapped pair in the contrast: the
+            # question is whether the strongest movers agree more often than
+            # the layer does at large.
             K <- if (dir == "up") sum(d$rna_log2FC >= fc_thr) else sum(d$rna_log2FC <= -fc_thr)
             k <- sum(agree)
             p <- enrich_p(k, K, n, N)

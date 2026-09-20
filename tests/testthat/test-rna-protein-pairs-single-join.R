@@ -168,6 +168,78 @@ test_that("the concordance path still emits the legacy column names", {
 })
 
 
+test_that("the mapping's own symbol wins over one a DE table happens to carry", {
+    # merge() suffixes only the columns both frames share, so a DE table with
+    # its own gene_symbol used to push the mapping's copy to gene_symbol.x
+    # while leaving the other side's under the bare name -- and the bare one
+    # was what got exported. Which side's symbol survives must not depend on
+    # what the other side happens to hold.
+    fx <- pair_fixture()
+    fx$mapping$gene_symbol <- paste0("MAP", seq_len(nrow(fx$mapping)))
+    fx$rna_de$gene_symbol  <- paste0("RNA", seq_len(nrow(fx$rna_de)))
+    fx$prot_de$gene_symbol <- paste0("PROT", seq_len(nrow(fx$prot_de)))
+
+    pairs <- build_rna_protein_pairs(fx$rna_de, fx$prot_de, fx$mapping)
+
+    expect_true(all(grepl("^MAP", pairs$gene_symbol)))
+    expect_identical(pairs$gene_symbol[pairs$gene_id == "EHI_001"], "MAP1")
+})
+
+test_that("limma and edgeR adjusted-p spellings reach the join", {
+    # compute_de_concordance() accepted padj, adj.P.Val and FDR. Losing an
+    # alias does not fail -- it marks every feature non-significant and
+    # computes the significant-union result from the wrong set.
+    fx <- pair_fixture()
+    limma_rna <- fx$rna_de
+    names(limma_rna)[names(limma_rna) == "padj"] <- "adj.P.Val"
+    limma_rna$adj.P.Val <- 0.001
+    edger_prot <- fx$prot_de
+    names(edger_prot)[names(edger_prot) == "padj"] <- "FDR"
+    edger_prot$FDR <- 0.002
+
+    pairs <- build_rna_protein_pairs(limma_rna, edger_prot, fx$mapping)
+
+    expect_false(any(is.na(pairs$padj_rna)))
+    expect_false(any(is.na(pairs$padj_prot)))
+    expect_true(all(pairs$padj_rna == 0.001))
+    expect_true(all(pairs$padj_prot == 0.002))
+})
+
+test_that("an alias present on only one side still lands on that side", {
+    # The hazard is asymmetric input: with padj on one table and adj.P.Val on
+    # the other, neither column is shared, so neither used to pick up a side
+    # suffix and both went missing.
+    fx <- pair_fixture()
+    limma_rna <- fx$rna_de
+    names(limma_rna)[names(limma_rna) == "padj"] <- "adj.P.Val"
+    limma_rna$adj.P.Val <- 0.01
+
+    pairs <- build_rna_protein_pairs(limma_rna, fx$prot_de, fx$mapping)
+
+    expect_true(all(pairs$padj_rna == 0.01))
+    expect_true(all(pairs$padj_prot == 0.2))
+})
+
+test_that("a DESeq2-style fold-change column is found too", {
+    fx <- pair_fixture()
+    deseq_rna <- fx$rna_de
+    names(deseq_rna)[names(deseq_rna) == "logFC"] <- "log2FoldChange"
+
+    pairs <- build_rna_protein_pairs(deseq_rna, fx$prot_de, fx$mapping)
+
+    expect_false(any(is.na(pairs$logFC_rna)))
+    expect_equal(pairs$logFC_rna[pairs$gene_id == "EHI_001"], -1.5)
+})
+
+test_that("no usable fold change on a side is an error, not silent NAs", {
+    fx <- pair_fixture()
+    no_fc <- fx$rna_de[, c("feature_id", "padj")]
+
+    expect_error(build_rna_protein_pairs(no_fc, fx$prot_de, fx$mapping),
+                 "logFC")
+})
+
+
 # ---- the signed linear fold change ------------------------------------------
 
 test_that("a negative linear fold change becomes a negative log2, not NaN", {
