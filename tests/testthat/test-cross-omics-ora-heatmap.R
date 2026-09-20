@@ -565,41 +565,46 @@ test_that("a background set for the fallback does not leak into the next plot", 
 )
 
 test_that("a run that can draw the ORA figure writes it", {
+    # One file per gene-set collection. These fixtures are KEGG map accessions
+    # throughout, so KEGG is the only collection with anything to draw.
     out_dir <- withr::local_tempdir()
 
     suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
         .ora_run_tables("ora"), .ora_run_config, out_dir = out_dir)))
 
-    expect_true(file.exists(file.path(out_dir, "cross_omics_ora_heatmap.png")))
+    expect_true(file.exists(file.path(out_dir,
+                                      "cross_omics_ora_heatmap_KEGG.png")))
 })
 
 test_that("a run that skips the ORA figure deletes the previous run's copy", {
-    # targets reuses an output directory, and the report includes this figure on
-    # file.exists() alone. Left in place, last run's ORA evidence would be read
-    # as this run's -- the one figure here that can go stale, because it is the
-    # one a run can decline to produce.
+    # targets reuses an output directory, and the report finds these figures by
+    # name. Left in place, last run's ORA evidence would be read as this run's.
+    # Both spellings must go: the fixed name these figures used before they were
+    # split per collection, and a collection this run does not produce.
     out_dir <- withr::local_tempdir()
-    stale <- file.path(out_dir, "cross_omics_ora_heatmap.png")
-    writeLines("left over from an earlier run", stale)
+    stale <- c(file.path(out_dir, "cross_omics_ora_heatmap.png"),
+               file.path(out_dir, "cross_omics_ora_heatmap_KEGG.png"))
+    for (f in stale) writeLines("left over from an earlier run", f)
 
     # No method column anywhere, so no layer can be confirmed as ORA.
     suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
         .ora_run_tables(NULL), .ora_run_config, out_dir = out_dir)))
 
-    expect_false(file.exists(stale))
+    expect_false(any(file.exists(stale)))
 })
 
 test_that("skipping the figure leaves the rest of the run's output alone", {
     out_dir <- withr::local_tempdir()
-    bystander <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
+    bystander <- file.path(out_dir, "cross_omics_pathway_heatmap_KEGG.png")
 
     res <- suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
         .ora_run_tables(NULL), .ora_run_config, out_dir = out_dir)))
 
-    # Only the ORA figure is removed; the meta-analysis heatmap is written on
-    # every run and is still here, and the result carries no ORA figure path.
+    # Only the ORA figures are absent; the meta-analysis heatmap is written on
+    # every run and is still here, and the result carries no ORA figure path
+    # under any collection.
     expect_true(file.exists(bystander))
-    expect_null(res$plots$ora_heatmap)
+    expect_length(grep("^ora_heatmap", names(res$plots), value = TRUE), 0L)
 })
 
 

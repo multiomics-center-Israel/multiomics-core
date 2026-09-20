@@ -95,12 +95,14 @@ test_that("empty and absent tables pass through untouched", {
 })
 
 test_that("the thresholds can be overridden as a whole", {
-    de <- data.frame(feature_id = c("a", "b"), log2fc = c(1, 1),
+    # log2fc 0.3 is about a 1.23-fold change: under the default 1.5-fold bar,
+    # over a 1.1-fold one.
+    de <- data.frame(feature_id = c("a", "b"), log2fc = c(0.3, 0.3),
                      pvalue = c(0.02, 0.2), stringsAsFactors = FALSE)
 
-    # 1-fold change at p 0.02 clears a 1.5-fold bar for neither feature...
     expect_equal(nrow(suppressMessages(filter_changed_features(de))), 0L)
-    # ...but does clear a looser one, and only for the supported feature.
+    # Loosening the fold-change bar admits only the supported feature; the
+    # p-value rule still applies.
     loose <- list(fdr_alpha = 0.05, node_fc = 1.1, node_p = 0.05)
     expect_equal(suppressMessages(filter_changed_features(de, loose))$feature_id,
                  "a")
