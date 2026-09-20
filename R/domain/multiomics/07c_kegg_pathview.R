@@ -800,8 +800,11 @@ filter_changed_features <- function(de_table, thresholds = .PATHVIEW_THRESHOLDS)
 pathview_significance_caption <- function(thresholds = .PATHVIEW_THRESHOLDS) {
     fmt <- function(x) format(x, trim = TRUE, scientific = FALSE)
     paste0(
-        "Pathways are drawn where at least one omics layer reached FDR < ",
-        fmt(thresholds$fdr_alpha), " for them. Within a map, a node is ",
+        "Pathways are drawn where at least one omics layer scored them below ",
+        fmt(thresholds$fdr_alpha), " -- on that layer's adjusted p-value where ",
+        "its enrichment table carries usable ones, and on its raw p-value only ",
+        "where it carries none, which is the fallback .kegg_hits_by_contrast() ",
+        "applies per layer. Within a map, a node is ",
         "coloured only by features that both changed by more than ",
         fmt(thresholds$node_fc), "-fold (|log2FC| > ",
         format(round(log2(thresholds$node_fc), 2), nsmall = 2),

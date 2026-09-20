@@ -114,7 +114,7 @@ test_that("the thresholds can be overridden as a whole", {
 test_that("the caption states the thresholds it was given", {
     cap <- pathview_significance_caption()
 
-    expect_true(grepl("FDR < 0.05", cap, fixed = TRUE))
+    expect_true(grepl("scored them below 0.05", cap, fixed = TRUE))
     expect_true(grepl("1.5-fold", cap, fixed = TRUE))
     expect_true(grepl("0.58", cap, fixed = TRUE))
     expect_true(grepl("raw p < 0.05", cap, fixed = TRUE))
@@ -124,7 +124,7 @@ test_that("the caption follows the thresholds rather than repeating constants", 
     cap <- pathview_significance_caption(
         list(fdr_alpha = 0.1, node_fc = 2, node_p = 0.01))
 
-    expect_true(grepl("FDR < 0.1", cap, fixed = TRUE))
+    expect_true(grepl("scored them below 0.1", cap, fixed = TRUE))
     expect_true(grepl("2-fold", cap, fixed = TRUE))
     expect_true(grepl("raw p < 0.01", cap, fixed = TRUE))
     expect_false(grepl("1.5-fold", cap, fixed = TRUE))
@@ -146,6 +146,31 @@ test_that("the pathway selector and the caption read the same cutoff", {
     # figure whose legend describes a rule it did not apply.
     expect_identical(deparse(formals(.kegg_hits_by_contrast)$alpha),
                      ".PATHVIEW_THRESHOLDS$fdr_alpha")
-    expect_true(grepl(paste0("FDR < ", .PATHVIEW_THRESHOLDS$fdr_alpha),
+    expect_true(grepl(paste0("scored them below ",
+                             .PATHVIEW_THRESHOLDS$fdr_alpha),
                       pathview_significance_caption(), fixed = TRUE))
+})
+
+
+# ---- both renderers, one caption --------------------------------------------
+
+test_that("the caption does not claim an FDR where the selector fell back to raw p", {
+    # .kegg_hits_by_contrast() scores on padj where a layer's table carries
+    # usable ones and on pvalue only where it carries none. A caption promising
+    # an FDR throughout would overstate the evidence on exactly the runs the
+    # fallback exists for.
+    cap <- pathview_significance_caption()
+
+    expect_true(grepl("adjusted p-value", cap, fixed = TRUE))
+    expect_true(grepl("raw p-value only", cap, fixed = TRUE))
+})
+
+test_that("both pathview renderers apply the node rule the caption states", {
+    # The report attaches one caption to whichever PDF exists, and prefers the
+    # supported-space one. Filtering only the KO-space renderer would leave that
+    # figure colouring unchanged features under a caption saying otherwise.
+    for (fn in list(generate_per_omic_union_pathview, generate_multi_ora_pathview)) {
+        body_src <- paste(deparse(body(fn)), collapse = " ")
+        expect_true(grepl("filter_changed_features", body_src, fixed = TRUE))
+    }
 })

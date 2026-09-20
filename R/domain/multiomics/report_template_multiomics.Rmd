@@ -1243,7 +1243,7 @@ if (dir.exists(enrich_per_contrast_dir)) {
             pngs <- sort(list.files(
                 cdir, pattern = paste0("^", prefix, "_.*\\.png$"),
                 full.names = TRUE))
-            if (length(pngs) == 0) return(invisible(NULL))
+            if (length(pngs) == 0) return(FALSE)
             cat(sprintf("\n#### %s {.unnumbered}\n\n", heading))
             for (pg in pngs) {
                 coll <- sub(paste0("^", prefix, "_"), "",
@@ -1258,11 +1258,12 @@ if (dir.exists(enrich_per_contrast_dir)) {
                 ), quiet = TRUE))
                 cat("\n\n")
             }
+            TRUE
         }
-        show_collection_pngs("cross_omics_pathway_heatmap",
-                             "Cross-Omics Heatmap", "enr-pc-hm-")
-        show_collection_pngs("cross_omics_ora_heatmap",
-                             "Cross-Omics ORA Evidence", "enr-pc-ora-")
+        drew_heatmap <- show_collection_pngs("cross_omics_pathway_heatmap",
+                                             "Cross-Omics Heatmap", "enr-pc-hm-")
+        drew_ora <- show_collection_pngs("cross_omics_ora_heatmap",
+                                         "Cross-Omics ORA Evidence", "enr-pc-ora-")
 
         # Meta-analysis table for this contrast
         c_meta <- file.path(cdir, "cross_omics_pathways_meta_analysis.csv")
@@ -1272,7 +1273,7 @@ if (dir.exists(enrich_per_contrast_dir)) {
                         gsub("_", " ", cname), nrow(c_meta_df)))
         }
 
-        if (length(c_barplots) == 0 && !file.exists(c_heatmap)) {
+        if (length(c_barplots) == 0 && !drew_heatmap && !drew_ora) {
             cat("*No enrichment results for this contrast.*\n\n")
         }
     }

@@ -1813,6 +1813,20 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
 #' @return List with: combined_pathways, meta_analysis, plots
 analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir = NULL) {
 
+    # Cleared before anything can return, not beside the code that writes the
+    # figures. These two are now written one per gene-set collection, and which
+    # collections exist depends on the run -- so a previous run's files, under
+    # either the old combined names or a collection this run does not produce,
+    # would otherwise survive every path that declines to draw: too few layers,
+    # no pathway keys, nothing left after filtering. The report finds these by
+    # glob, so a survivor is shown as this run's evidence.
+    #
+    # Scoped to these two figure families and to this out_dir, which covers the
+    # per-contrast directories too because this function runs again for each.
+    if (!is.null(out_dir) && dir.exists(out_dir)) {
+        .clear_collection_heatmaps(out_dir)
+    }
+
     if (length(enrichment_results) < 2) {
         message("Cross-omics enrichment requires >= 2 omics layers with enrichment results")
         return(NULL)
@@ -1929,15 +1943,6 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     if (!is.null(out_dir) && nrow(meta_results) > 0) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-        # The two heatmaps below are written one per gene-set collection, and
-        # which collections exist depends on the run. Anything a previous run
-        # left here under either the old combined names or a collection this run
-        # does not have would still be discovered by the report, so it is
-        # cleared first rather than merely overwritten. Scoped to these two
-        # figures and to this out_dir, which covers the per-contrast
-        # directories too because this function is called again for each.
-        .clear_collection_heatmaps(out_dir)
-
         # 1. Cross-omics heatmaps, one per gene-set collection.
         #
         # The collections cover neither the same layers nor the same identifier
@@ -2007,7 +2012,13 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 
             ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, cl_pathways,
                                                     omics, kegg_org = kegg_org)
-            if (!any(!is.na(ora_padj))) next
+            # The builder returns a column per requested layer, all-NA for a
+            # layer with no annotation in this collection. Dropping those keeps
+            # the figure consistent with its legend: a layer is absent, not
+            # shown empty.
+            informative_cols <- colSums(!is.na(ora_padj)) > 0
+            ora_padj <- ora_padj[, informative_cols, drop = FALSE]
+            if (ncol(ora_padj) == 0 || !any(!is.na(ora_padj))) next
 
             any_ora <- TRUE
             slug <- .collection_slug(cl)
@@ -2954,7 +2965,6 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
 }
 
 
-#' Plot cross-omics pathway heatmap
 #' Filename-safe slug for a gene-set collection
 #'
 #' Must be injective over the collection names \code{classify_pathway_collection()}
@@ -3019,6 +3029,18 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
 }
 
 
+#' Plot cross-omics pathway heatmap
+#'
+#' @param meta_results Meta-analysis rows to draw, already restricted to one
+#'   gene-set collection where the caller drew per collection.
+#' @param omics Character vector of layer names, in display order. Only these
+#'   layers become columns, so a caller passing the layers that scored
+#'   something keeps empty columns out of the figure.
+#' @param top_n Number of pathways to show.
+#' @param collection Collection name to name in the title, or NULL for a figure
+#'   drawn across collections.
+#' @return Whatever the drawing call returned; called for the figure it puts on
+#'   the active device, not for its value.
 plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
                                              collection = NULL) {
 
@@ -3037,7 +3059,15 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
         count_col = "n_nominal_support",
         id_col = "norm_id")
 
-    pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
+    # Restricted to the layers the caller named. A per-collection figure passes
+    # only the layers that scored something in that collection, and taking every
+    # pval_* column instead would put back the all-empty column whose absence is
+    # the whole point -- an empty column reads as "tested here and found
+    # nothing", which is what these figures must not imply.
+    pval_cols <- intersect(paste0("pval_", omics), names(top_pathways))
+    if (length(pval_cols) == 0) {
+        pval_cols <- grep("^pval_", names(top_pathways), value = TRUE)
+    }
     pval_matrix <- as.matrix(top_pathways[, pval_cols, drop = FALSE])
 
     # Truncate first, then disambiguate -- see truncate_pathway_label().
@@ -3130,6 +3160,8 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
 #'   with their join keys.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @param top_n Number of pathways to show.
+#' @param collection Collection name to name in the title, or NULL for a figure
+#'   drawn across collections.
 #' @return Invisibly, the -log10 matrix that was drawn, in display order and
 #'   with display labels for row names -- or NULL when there was nothing to
 #'   draw. Returned so that which rows the figure leads with can be checked

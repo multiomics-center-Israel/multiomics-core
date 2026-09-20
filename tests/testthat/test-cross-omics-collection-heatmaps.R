@@ -164,3 +164,65 @@ test_that("clearing an empty or absent directory is silent and harmless", {
     expect_length(.clear_collection_heatmaps(dir), 0L)
     expect_length(.clear_collection_heatmaps(file.path(dir, "no_such_dir")), 0L)
 })
+
+
+# ---- the paths that never reach the drawing code ----------------------------
+
+test_that("a run that declines to analyse still clears the previous run's figures", {
+    # The cleanup cannot live beside the code that draws: this function returns
+    # early on several paths -- fewer than two layers, no pathway keys, nothing
+    # left after filtering -- and each of those used to leave the earlier run's
+    # collection figures in place for the report's glob to find.
+    out_dir <- withr::local_tempdir()
+    stale <- file.path(out_dir, c("cross_omics_pathway_heatmap_KEGG.png",
+                                  "cross_omics_ora_heatmap_KEGG.png",
+                                  "cross_omics_pathway_heatmap.png"))
+    for (f in stale) writeLines("left over from an earlier run", f)
+
+    # One layer: below the two this analysis needs, so it returns before any
+    # figure is considered.
+    res <- suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        list(transcriptomics = data.frame(pathway = "Glycolysis", ID = "map00010",
+                                          pvalue = 1e-3, padj = 1e-2,
+                                          method = "ora", contrast = "A_vs_B",
+                                          stringsAsFactors = FALSE)),
+        list(global = list(organism = "Homo sapiens"),
+             modes = list(multiomics = list(enrichment = list()))),
+        out_dir = out_dir)))
+
+    expect_null(res)
+    expect_false(any(file.exists(stale)))
+})
+
+test_that("clearing tolerates an out_dir that does not exist yet", {
+    dir <- withr::local_tempdir()
+
+    expect_no_error(suppressWarnings(suppressMessages(
+        analyze_cross_omics_enrichment(
+            list(), list(global = list(organism = "Homo sapiens"),
+                         modes = list(multiomics = list(enrichment = list()))),
+            out_dir = file.path(dir, "not_created_yet")))))
+})
+
+
+# ---- a figure shows only the layers it claims to -----------------------------
+
+test_that("the heatmap matrix follows the layers it was handed", {
+    # keep_omics is computed per collection and passed in. If the matrix were
+    # still built from every pval_* column, the all-empty layer would come back
+    # and the figure would contradict its own legend. Pinned at the source: the
+    # matrix is not observable from outside the drawing call.
+    body_src <- paste(deparse(body(plot_cross_omics_pathway_heatmap)),
+                      collapse = " ")
+
+    expect_true(grepl('intersect(paste0("pval_", omics)', body_src, fixed = TRUE))
+})
+
+test_that("an all-empty layer is dropped from the ORA matrix before drawing", {
+    body_src <- paste(deparse(body(analyze_cross_omics_enrichment)),
+                      collapse = " ")
+
+    # build_ora_adjusted_p_matrix() returns a column per requested layer, all-NA
+    # for one with no annotation in this collection.
+    expect_true(grepl("colSums(!is.na(ora_padj)) > 0", body_src, fixed = TRUE))
+})
