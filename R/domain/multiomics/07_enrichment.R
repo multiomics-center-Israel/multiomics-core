@@ -1929,16 +1929,54 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     if (!is.null(out_dir) && nrow(meta_results) > 0) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-        # 1. Cross-omics heatmap
-        plots$pathway_heatmap <- file.path(out_dir, "cross_omics_pathway_heatmap.png")
-        png(plots$pathway_heatmap, width = 1200, height = 900, res = 120)
-        tryCatch({
-            plot_cross_omics_pathway_heatmap(meta_results, omics)
-        }, error = function(e) {
-            plot.new()
-            text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
-        })
-        dev.off()
+        # The two heatmaps below are written one per gene-set collection, and
+        # which collections exist depends on the run. Anything a previous run
+        # left here under either the old combined names or a collection this run
+        # does not have would still be discovered by the report, so it is
+        # cleared first rather than merely overwritten. Scoped to these two
+        # figures and to this out_dir, which covers the per-contrast
+        # directories too because this function is called again for each.
+        .clear_collection_heatmaps(out_dir)
+
+        # 1. Cross-omics heatmaps, one per gene-set collection.
+        #
+        # The collections cover neither the same layers nor the same identifier
+        # space -- GO is annotated for the gene layers only, while the KEGG map
+        # space is the one every layer can share -- and they differ by an order
+        # of magnitude in size. A single combined figure therefore gave its rows
+        # to whichever collection was largest, and read as an analysis of that
+        # collection alone.
+        #
+        # Each figure keeps only the layers that scored something in its
+        # collection, so an absent column means "this layer carries no
+        # annotation here", not "this layer found nothing".
+        # Keyed on norm_id, passed explicitly. The classifier's default would
+        # take pathway_join_key(), which prefers `pathway` here -- and by this
+        # point attach_pathway_display_names() has made that a readable label,
+        # so every row would classify as "Other". norm_id is the accession this
+        # table is actually keyed on.
+        collections <- classify_pathway_collection(
+            meta_results, kegg_org, keys = as.character(meta_results$norm_id))
+        for (cl in sort(unique(collections[!is.na(collections)]))) {
+            sub <- meta_results[collections == cl, , drop = FALSE]
+            if (nrow(sub) == 0) next
+
+            keep_omics <- .layers_with_values(sub, omics)
+            if (length(keep_omics) == 0) next
+
+            slug <- .collection_slug(cl)
+            key <- paste0("pathway_heatmap_", slug)
+            plots[[key]] <- file.path(
+                out_dir, paste0("cross_omics_pathway_heatmap_", slug, ".png"))
+            png(plots[[key]], width = 1200, height = 900, res = 120)
+            tryCatch({
+                plot_cross_omics_pathway_heatmap(sub, keep_omics, collection = cl)
+            }, error = function(e) {
+                plot.new()
+                text(0.5, 0.5, paste("Heatmap failed:", e$message), cex = 1.2)
+            })
+            dev.off()
+        }
 
         # 2. Dot plot of top pathways per omics
         plots$dot_plot <- file.path(out_dir, "cross_omics_enrichment_dotplot.png")
@@ -1951,35 +1989,44 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         })
         dev.off()
 
-        # 3. ORA evidence per layer, on each layer's own adjusted p-value.
-        # Built before the device is opened so that a run with no adjusted ORA
-        # p-value at all -- every layer GSEA, or every layer missing the columns
-        # this needs -- leaves no figure behind for the report to show.
-        ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, use_pathways,
-                                                 omics, kegg_org = kegg_org)
-        ora_png <- file.path(out_dir, "cross_omics_ora_heatmap.png")
-        if (any(!is.na(ora_padj))) {
-            plots$ora_heatmap <- ora_png
-            png(ora_png, width = 1200, height = 900, res = 120)
+        # 3. ORA evidence per layer, on each layer's own adjusted p-value, and
+        # likewise one figure per collection.
+        #
+        # The matrix is rebuilt from the collection's own pathways rather than
+        # subset afterwards: this figure ranks on its own ORA evidence, so a
+        # matrix built over every pathway would rank against rows the figure
+        # does not show. Built before each device is opened so that a
+        # collection with no adjusted ORA p-value at all leaves no figure
+        # behind for the report to find.
+        any_ora <- FALSE
+        for (cl in sort(unique(collections[!is.na(collections)]))) {
+            sub <- meta_results[collections == cl, , drop = FALSE]
+            if (nrow(sub) == 0) next
+            cl_pathways <- intersect(use_pathways, sub$norm_id)
+            if (length(cl_pathways) == 0) next
+
+            ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, cl_pathways,
+                                                    omics, kegg_org = kegg_org)
+            if (!any(!is.na(ora_padj))) next
+
+            any_ora <- TRUE
+            slug <- .collection_slug(cl)
+            key <- paste0("ora_heatmap_", slug)
+            plots[[key]] <- file.path(
+                out_dir, paste0("cross_omics_ora_heatmap_", slug, ".png"))
+            png(plots[[key]], width = 1200, height = 900, res = 120)
             tryCatch({
                 plot_cross_omics_ora_heatmap(ora_padj, pathway_tables,
-                                             kegg_org = kegg_org)
+                                             kegg_org = kegg_org, collection = cl)
             }, error = function(e) {
                 plot.new()
                 text(0.5, 0.5, paste("ORA heatmap failed:", e$message), cex = 1.2)
             })
             dev.off()
-        } else {
-            # Delete rather than merely skip. Every other figure here is written
-            # on every run and so overwrites itself; this is the only one a run
-            # can decline to produce, and the report includes it on file.exists()
-            # alone. Left behind, the previous run's ORA evidence would be read
-            # as this one's -- a wrong figure being worse than no figure. The
-            # per-contrast directories get the same treatment because this whole
-            # function runs again for each contrast, with out_dir pointing there.
-            if (file.exists(ora_png)) unlink(ora_png)
+        }
+        if (!any_ora) {
             message("  No adjusted ORA p-values across layers; ",
-                    "skipping the cross-omics ORA heatmap")
+                    "skipping the cross-omics ORA heatmaps")
         }
 
         # 4. Per-omics enrichment bar plots
@@ -2908,7 +2955,78 @@ select_multi_omics_pathways <- function(meta_results, top_n = 30,
 
 
 #' Plot cross-omics pathway heatmap
-plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
+#' Filename-safe slug for a gene-set collection
+#'
+#' Must be injective over the collection names \code{classify_pathway_collection()}
+#' returns, or two collections would write one file and the second would be read
+#' as the first. Those names are drawn from a fixed vocabulary of alphanumeric
+#' words, so collapsing runs of non-alphanumerics is one-to-one over them.
+#'
+#' @param collection Collection name.
+#' @return Filename-safe string.
+#' @keywords internal
+.collection_slug <- function(collection) {
+    gsub("^_+|_+$", "", gsub("[^A-Za-z0-9]+", "_", collection))
+}
+
+
+#' Which layers scored anything in this slice of the meta table
+#'
+#' A per-collection figure shows only the layers that carry a p-value in that
+#' collection. Drawing an all-empty column instead would invite the reader to
+#' read "no annotation in this collection" as "tested here and found nothing",
+#' which is the one inference these figures must not support.
+#'
+#' @param meta_slice Meta-analysis rows for one collection.
+#' @param omics Character vector of layer names, in display order.
+#' @return The subset of \code{omics} with at least one non-NA p-value here.
+#' @keywords internal
+.layers_with_values <- function(meta_slice, omics) {
+    omics[vapply(omics, function(om) {
+        cn <- paste0("pval_", om)
+        cn %in% names(meta_slice) && any(!is.na(meta_slice[[cn]]))
+    }, logical(1))]
+}
+
+
+#' Remove cross-omics heatmaps a previous run left in this directory
+#'
+#' These two figures used to be written once each under a fixed name, so every
+#' run overwrote its predecessor. They are now written once per gene-set
+#' collection, and which collections a run produces depends on its data -- so a
+#' collection that has since disappeared, or the pre-existing combined figure,
+#' would survive and still be discovered by the report's glob and shown as this
+#' run's evidence.
+#'
+#' Deliberately narrow: only these two families, only in the directory given.
+#' The wider question of output lifecycle across this module is tracked
+#' separately and is not settled here.
+#'
+#' @param out_dir Directory the current run is about to write into.
+#' @return Invisibly, the paths removed.
+#' @keywords internal
+.clear_collection_heatmaps <- function(out_dir) {
+    stale <- c(
+        file.path(out_dir, c("cross_omics_pathway_heatmap.png",
+                             "cross_omics_ora_heatmap.png")),
+        list.files(out_dir,
+                   pattern = "^cross_omics_(pathway|ora)_heatmap_.*\\.png$",
+                   full.names = TRUE)
+    )
+    stale <- unique(stale[file.exists(stale)])
+    if (length(stale) > 0) unlink(stale)
+    invisible(stale)
+}
+
+
+plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30,
+                                             collection = NULL) {
+
+    # Named in the title where the caller drew one collection, so a reader
+    # holding two of these figures can tell which gene sets each one scored.
+    main_title <- function(base) {
+        if (is.null(collection)) base else paste0(collection, " gene sets\n", base)
+    }
 
     # Rows that several layers nominally support lead. The count comes off the
     # full table's pval_* columns, before selection -- the matrix below is built
@@ -2951,7 +3069,7 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
         pheatmap::pheatmap(log_pval_matrix,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
-                           main = "Cross-Omics Pathway Enrichment (-log10 p-value)",
+                           main = main_title("Cross-Omics Pathway Enrichment (-log10 p-value)"),
                            color = colorRampPalette(c("white", "gold", "orange", "red"))(50),
                            breaks = seq(zl[1], zl[2], length.out = 51),
                            fontsize_row = 7, fontsize_col = 10,
@@ -2974,12 +3092,12 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
             base_cols <- colorRampPalette(c("white", "orange", "red"))(50)
             if (nrow(log_pval_matrix) >= 2 && ncol(log_pval_matrix) >= 2) {
                 heatmap(log_pval_matrix, scale = "none", Rowv = NA, Colv = NA,
-                        main = "Cross-Omics Pathway Enrichment",
+                        main = main_title("Cross-Omics Pathway Enrichment"),
                         col = base_cols, zlim = zl)
             } else {
                 # heatmap() refuses this shape outright; see .draw_small_heatmap().
                 .draw_small_heatmap(log_pval_matrix,
-                                    main = "Cross-Omics Pathway Enrichment",
+                                    main = main_title("Cross-Omics Pathway Enrichment"),
                                     col = base_cols, zlim = zl)
             }
         })
@@ -3018,7 +3136,12 @@ plot_cross_omics_pathway_heatmap <- function(meta_results, omics, top_n = 30) {
 #'   without reading pixels, or guessing which of the two drawing branches a
 #'   machine took.
 plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
-                                          kegg_org = NULL, top_n = 30) {
+                                          kegg_org = NULL, top_n = 30,
+                                          collection = NULL) {
+
+    main_title <- function(base) {
+        if (is.null(collection)) base else paste0(collection, " gene sets\n", base)
+    }
 
     informative <- rowSums(!is.na(padj_matrix)) > 0
     padj_matrix <- padj_matrix[informative, , drop = FALSE]
@@ -3085,7 +3208,7 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
         pheatmap::pheatmap(log_padj_matrix,
                            cluster_rows = FALSE,
                            cluster_cols = FALSE,
-                           main = "Cross-Omics ORA Evidence (-log10 adjusted p-value)",
+                           main = main_title("Cross-Omics ORA Evidence (-log10 adjusted p-value)"),
                            color = colorRampPalette(ora_palette)(50),
                            breaks = seq(zl[1], zl[2], length.out = 51),
                            fontsize_row = 7, fontsize_col = 10,
@@ -3104,12 +3227,12 @@ plot_cross_omics_ora_heatmap <- function(padj_matrix, pathway_tables = NULL,
             base_cols <- colorRampPalette(ora_palette)(50)
             if (nrow(log_padj_matrix) >= 2 && ncol(log_padj_matrix) >= 2) {
                 heatmap(log_padj_matrix, scale = "none", Rowv = NA, Colv = NA,
-                        main = "Cross-Omics ORA Evidence",
+                        main = main_title("Cross-Omics ORA Evidence"),
                         col = base_cols, zlim = zl)
             } else {
                 # heatmap() refuses this shape outright; see .draw_small_heatmap().
                 .draw_small_heatmap(log_padj_matrix,
-                                    main = "Cross-Omics ORA Evidence",
+                                    main = main_title("Cross-Omics ORA Evidence"),
                                     col = base_cols, zlim = zl)
             }
         })

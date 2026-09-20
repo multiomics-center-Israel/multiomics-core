@@ -1002,7 +1002,10 @@ for (pv_png in pv_pngs) {
 figure_legend(paste0(
     "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
     if (pathview_has_compounds) "Compound nodes show metabolomics logFC. " else "",
-    "Red = upregulated, green/blue = downregulated."))
+    "Red = upregulated, green/blue = downregulated. ",
+    # Taken from the same constants the selection and the node filter
+    # read, so the caption cannot describe a rule the figure did not apply.
+    pathview_significance_caption()))
 render_commentary("multi_ora_pathview")
 ```
 
@@ -1134,39 +1137,56 @@ for (cf in csv_files) {
 ```
 
 ```{r enrichment-heatmap, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
-if (file.exists(p)) {
+# One figure per gene-set collection. The collections cover neither the same
+# layers nor the same identifier space, and differ by an order of magnitude in
+# size, so a single combined figure gave its rows to whichever was largest.
+# Discovered by glob rather than by a fixed name: which collections a run
+# produces depends on the gene sets it was given.
+nes_pngs <- sort(list.files(
+    enrichment_dir, pattern = "^cross_omics_pathway_heatmap_.*\\.png$",
+    full.names = TRUE))
+if (length(nes_pngs) > 0) {
     cat("\n### Cross-Omics Pathway Comparison {.unnumbered}\n\n")
-    cat(knitr::knit_child(text = sprintf(
-        '```{r enrich-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
+    for (p in nes_pngs) {
+        coll <- sub("^cross_omics_pathway_heatmap_", "",
+                    sub("\\.png$", "", basename(p)))
+        cat(sprintf("\n#### %s gene sets {.unnumbered}\n\n", gsub("_", " ", coll)))
+        cat(knitr::knit_child(text = sprintf(
+            '```{r enrich-heatmap-img-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            gsub("[^a-zA-Z0-9]", "", coll), p
+        ), quiet = TRUE))
+    }
 }
 ```
 
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_pathway_heatmap.png")
-if (file.exists(p)) {
-    figure_legend("Cross-omics pathway enrichment heatmap (all contrasts combined). Showing the top 30 pathways, ordered first by nominal support -- the number of omics layers whose own p-value for the pathway is below 0.05 -- and then by Stouffer combined p-value, so that pathways several layers actually support are not displaced by single-layer ones from the largest gene-set collection, nor by pathways every layer measured and none found anything in. Nominal support orders the display only; it is not a significance threshold and no p-value or adjustment depends on it. the complete list, ordered by combined p-value, is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers, and a grey cell means no enrichment p-value is available for that pathway in that layer -- which is not the same as a p-value close to 1, and does not by itself say whether the pathway was untestable there or simply did not reach that layer's enrichment table. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
+if (length(list.files(enrichment_dir, pattern = "^cross_omics_pathway_heatmap_.*\\.png$")) > 0) {
+    figure_legend("Cross-omics pathway enrichment heatmap, one figure per gene-set collection, all contrasts combined. The collections are shown apart because they cover neither the same omics layers nor the same identifier space -- GO is annotated for the gene layers only, while the KEGG map space is the one every layer can share -- and because they differ by an order of magnitude in size, so a single combined figure gave its rows to whichever collection was largest and read as an analysis of that one alone. A layer absent from a figure carries no annotation in that collection at all; it is not a layer that was scored and found nothing. Showing the top 30 pathways, ordered first by nominal support -- the number of omics layers whose own p-value for the pathway is below 0.05 -- and then by Stouffer combined p-value, so that pathways several layers actually support are not displaced by single-layer ones from the largest gene-set collection, nor by pathways every layer measured and none found anything in. Nominal support orders the display only; it is not a significance threshold and no p-value or adjustment depends on it. the complete list, ordered by combined p-value, is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers, and a grey cell means no enrichment p-value is available for that pathway in that layer -- which is not the same as a p-value close to 1, and does not by itself say whether the pathway was untestable there or simply did not reach that layer's enrichment table. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
 
 ```{r enrichment-ora-heatmap, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_ora_heatmap.png")
-if (file.exists(p)) {
+ora_pngs <- sort(list.files(
+    enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.png$",
+    full.names = TRUE))
+if (length(ora_pngs) > 0) {
     cat("\n### Cross-Omics ORA Evidence {.unnumbered}\n\n")
-    cat(knitr::knit_child(text = sprintf(
-        '```{r enrich-ora-heatmap-img, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-        p
-    ), quiet = TRUE))
+    for (p in ora_pngs) {
+        coll <- sub("^cross_omics_ora_heatmap_", "",
+                    sub("\\.png$", "", basename(p)))
+        cat(sprintf("\n#### %s gene sets {.unnumbered}\n\n", gsub("_", " ", coll)))
+        cat(knitr::knit_child(text = sprintf(
+            '```{r enrich-ora-heatmap-img-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            gsub("[^a-zA-Z0-9]", "", coll), p
+        ), quiet = TRUE))
+    }
 }
 ```
 
 ```{r enrichment-ora-heatmap-legend, eval=has_enrichment, results='asis'}
-p <- file.path(enrichment_dir, "cross_omics_ora_heatmap.png")
-if (file.exists(p)) {
-    figure_legend("Over-representation analysis is the one test every omics layer runs, so this figure can place metabolomics alongside the gene layers. Each cell shows -log10 of the adjusted p-value that the layer's own ORA already reported for that pathway; nothing is re-adjusted here, and no gene set enrichment (GSEA) result contributes. Where several contrast-level ORA results for the same pathway are available within a layer, the cell shows the smallest adjusted p-value among them -- the strongest evidence available in that layer, which is a display choice and not an error rate controlled across contrasts. Adjusted p-values below 1e-10 all render at the top of the scale. Read the colour down a column: the layers differ in gene-set universe, coverage and upstream filtering, so a darker cell in one layer is not stronger biology than a lighter cell in another. A grey cell means no adjusted ORA p-value for that pathway and layer reached the table behind this figure -- the pathway may never have been testable there, or may have been tested and not carried into that layer's results, and this figure cannot tell those apart. The top 30 pathways are shown, ordered by how many layers contribute an adjusted ORA p-value and then by the smallest of them.")
+if (length(list.files(enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.png$")) > 0) {
+    figure_legend("One figure per gene-set collection; a layer absent from a figure carries no annotation in that collection, rather than having been scored there without result. Over-representation analysis is the one test every omics layer runs, so this figure can place metabolomics alongside the gene layers. Each cell shows -log10 of the adjusted p-value that the layer's own ORA already reported for that pathway; nothing is re-adjusted here, and no gene set enrichment (GSEA) result contributes. Where several contrast-level ORA results for the same pathway are available within a layer, the cell shows the smallest adjusted p-value among them -- the strongest evidence available in that layer, which is a display choice and not an error rate controlled across contrasts. Adjusted p-values below 1e-10 all render at the top of the scale. Read the colour down a column: the layers differ in gene-set universe, coverage and upstream filtering, so a darker cell in one layer is not stronger biology than a lighter cell in another. A grey cell means no adjusted ORA p-value for that pathway and layer reached the table behind this figure -- the pathway may never have been testable there, or may have been tested and not carried into that layer's results, and this figure cannot tell those apart. The top 30 pathways are shown, ordered by how many layers contribute an adjusted ORA p-value and then by the smallest of them.")
     render_commentary("cross_omics_ora_heatmap")
 }
 ```
@@ -1215,29 +1235,34 @@ if (dir.exists(enrich_per_contrast_dir)) {
             cat("\n\n")
         }
 
-        # Cross-omics heatmap for this contrast
-        c_heatmap <- file.path(cdir, "cross_omics_pathway_heatmap.png")
-        if (file.exists(c_heatmap)) {
-            cat("\n#### Cross-Omics Heatmap {.unnumbered}\n\n")
-            chunk_id <- paste0("enr-pc-hm-", gsub("[^a-zA-Z0-9]", "", cname))
-            cat(knitr::knit_child(text = sprintf(
-                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                chunk_id, c_heatmap
-            ), quiet = TRUE))
-            cat("\n\n")
+        # Cross-omics heatmaps for this contrast, one per gene-set collection.
+        # Same contract as the run-level figures above: the analysis function
+        # is called again per contrast with out_dir pointing here, so these
+        # directories carry the same per-collection filenames.
+        show_collection_pngs <- function(prefix, heading, id_stem) {
+            pngs <- sort(list.files(
+                cdir, pattern = paste0("^", prefix, "_.*\\.png$"),
+                full.names = TRUE))
+            if (length(pngs) == 0) return(invisible(NULL))
+            cat(sprintf("\n#### %s {.unnumbered}\n\n", heading))
+            for (pg in pngs) {
+                coll <- sub(paste0("^", prefix, "_"), "",
+                            sub("\\.png$", "", basename(pg)))
+                cat(sprintf("\n##### %s gene sets {.unnumbered}\n\n",
+                            gsub("_", " ", coll)))
+                chunk_id <- paste0(id_stem, gsub("[^a-zA-Z0-9]", "", cname), "-",
+                                   gsub("[^a-zA-Z0-9]", "", coll))
+                cat(knitr::knit_child(text = sprintf(
+                    '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                    chunk_id, pg
+                ), quiet = TRUE))
+                cat("\n\n")
+            }
         }
-
-        # ORA evidence heatmap for this contrast
-        c_ora <- file.path(cdir, "cross_omics_ora_heatmap.png")
-        if (file.exists(c_ora)) {
-            cat("\n#### Cross-Omics ORA Evidence {.unnumbered}\n\n")
-            chunk_id <- paste0("enr-pc-ora-", gsub("[^a-zA-Z0-9]", "", cname))
-            cat(knitr::knit_child(text = sprintf(
-                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                chunk_id, c_ora
-            ), quiet = TRUE))
-            cat("\n\n")
-        }
+        show_collection_pngs("cross_omics_pathway_heatmap",
+                             "Cross-Omics Heatmap", "enr-pc-hm-")
+        show_collection_pngs("cross_omics_ora_heatmap",
+                             "Cross-Omics ORA Evidence", "enr-pc-ora-")
 
         # Meta-analysis table for this contrast
         c_meta <- file.path(cdir, "cross_omics_pathways_meta_analysis.csv")
