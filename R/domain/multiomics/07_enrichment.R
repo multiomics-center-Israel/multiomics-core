@@ -3479,6 +3479,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         results$diablo <- tryCatch(
             run_diablo_loadings_enrichment(
                 exclude_classes = .excluded_pathway_classes(config),
+                config = config,
                 diablo_results = integration_res$diablo_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -3503,6 +3504,7 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         results$mofa <- tryCatch(
             run_mofa_weights_enrichment(
                 exclude_classes = .excluded_pathway_classes(config),
+                config = config,
                 mofa_results = integration_res$mofa_results,
                 harmonization_res = harmonization_res,
                 organism = organism,
@@ -3526,7 +3528,8 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
 #' Run enrichment on DIABLO top loadings per component
 run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                                             organism, kegg_org, org_db,
-                                            out_dir, top_n = 50, exclude_classes = NULL) {
+                                            out_dir, top_n = 50, exclude_classes = NULL,
+                                            config = NULL) {
 
     top_features <- diablo_results$top_features
     if (is.null(top_features) || length(top_features) == 0) return(NULL)
@@ -3579,7 +3582,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -3630,7 +3634,8 @@ run_diablo_loadings_enrichment <- function(diablo_results, harmonization_res,
 #' Run enrichment on MOFA2 top weights per factor
 run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                                          organism, kegg_org, org_db,
-                                         out_dir, top_n = 50, exclude_classes = NULL) {
+                                         out_dir, top_n = 50, exclude_classes = NULL,
+                                         config = NULL) {
 
     weights <- mofa_results$weights
     if (is.null(weights) || length(weights) == 0) return(NULL)
@@ -3682,7 +3687,8 @@ run_mofa_weights_enrichment <- function(mofa_results, harmonization_res,
                 harmonization_res = harmonization_res,
                 organism = organism,
                 kegg_org = kegg_org,
-                org_db = org_db
+                org_db = org_db,
+                config = config
             )
 
             if (!is.null(enrich_df) && nrow(enrich_df) > 0) {
@@ -3796,12 +3802,19 @@ run_metabolite_loadings_ora <- function(feature_ids, harmonization_res, out_dir,
 #' Handles GENE_N synthetic IDs from the harmonized MAE by translating
 #' them to WBGene IDs via the gene_protein_mapping table.
 enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
-                                 organism, kegg_org, org_db) {
-
-    if (is.null(kegg_org) || is.null(org_db)) return(NULL)
+                                 organism, kegg_org, org_db, config = NULL) {
 
     # Resolve IDs using the actual omics type
     resolved_ids <- resolve_gene_n_ids(feature_ids, harmonization_res, omics_type)
+
+    # No KEGG code or OrgDb -- true of every non-model organism. The per-omic
+    # GMTs are the same gene sets the DE-driven enrichment already uses, so fall
+    # back to those rather than skipping the view entirely. With no config there
+    # is nothing to fall back to and this returns NULL, as it always did.
+    if (is.null(kegg_org) || is.null(org_db)) {
+        return(enrich_feature_list_gmt(resolved_ids, omics_type,
+                                       harmonization_res, config))
+    }
 
     # Map ALL features to ENTREZ (needed for both query and universe)
     # Then filter to only the query features for the enrichment test
@@ -3890,17 +3903,122 @@ enrich_feature_list <- function(feature_ids, omics_type, harmonization_res,
 }
 
 
+#' Loadings enrichment against the per-omic custom GMTs
+#'
+#' The fallback for \code{enrich_feature_list()} when the organism has no KEGG
+#' code or OrgDb, which is the case for every non-model organism. Those runs
+#' produced loadings enrichment for metabolomics only: the gene views returned
+#' NULL and the section simply had nothing in it, with no indication that the
+#' gene sets to test against were configured and sitting unused.
+#'
+#' Runs the same over-representation test the DE-driven enrichment runs, on the
+#' same gene sets, through \code{gmt_to_term2gene()} and
+#' \code{run_multi_ora_enricher()} -- no enrichment logic of its own.
+#'
+#' @param resolved_ids Top-loading feature IDs of one view, already through
+#'   \code{resolve_gene_n_ids()}.
+#' @param omics_type One of "transcriptomics" / "proteomics"; anything else
+#'   returns NULL, since only those two carry a configured GMT.
+#' @param harmonization_res Harmonization result, for the background feature set.
+#' @param config Full pipeline config, or NULL to decline.
+#' @return Data frame in the same column shape as the KEGG branch above, so
+#'   \code{.rbind_fill()} can stack gene-view and compound-view results into one
+#'   loadings table; NULL when there is nothing to test against.
+enrich_feature_list_gmt <- function(resolved_ids, omics_type,
+                                    harmonization_res, config) {
+    if (is.null(config)) return(NULL)
+
+    cfg_key <- c(transcriptomics = "rna", proteomics = "proteomics")[omics_type]
+    if (is.na(cfg_key)) return(NULL)
+
+    # gmt_file may be a single path or a YAML list (GO + KEGG + Pfam);
+    # resolve_input_path() vectorises and leaves absolute paths alone, and
+    # read_gmt() (via gmt_to_term2gene) merges several files into one collection.
+    gmt_path <- unlist(config$modes[[cfg_key]]$pathway$gmt_file, use.names = FALSE)
+    if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) return(NULL)
+    gmt_abs <- resolve_input_path(config, gmt_path)
+    if (any(!file.exists(gmt_abs))) {
+        message("    Loadings ORA (GMT): ", omics_type, " gmt_file not found: ",
+                paste(gmt_abs[!file.exists(gmt_abs)], collapse = ", "))
+        return(NULL)
+    }
+
+    gs <- gmt_to_term2gene(gmt_abs)
+    if (is.null(gs) || nrow(gs$t2g) == 0) return(NULL)
+
+    # Background = every feature of this view that survived preprocessing, put
+    # through the same resolution as the query so the two share a namespace.
+    universe <- NULL
+    pre_data <- harmonization_res$inputs[[omics_type]]
+    if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
+        universe <- unique(resolve_gene_n_ids(rownames(pre_data$expr_work),
+                                              harmonization_res, omics_type))
+    }
+
+    # Fail closed. Handing run_multi_ora_enricher() a NULL universe is not a
+    # degraded run, it is a different test: enricher() then takes its background
+    # from TERM2GENE, so the universe becomes the union of the gene sets rather
+    # than what this view measured, and every p-value comes out inflated. The
+    # result would look like an ordinary enrichment table. One guard covers all
+    # the ways the background can come up empty -- no preprocessed data for the
+    # view, no expr_work, unnamed rows, or nothing left after resolution.
+    if (length(universe) == 0) {
+        message("    Loadings ORA (GMT): ", omics_type,
+                " has no usable background feature set ",
+                "(harmonization_res$inputs[[\"", omics_type,
+                "\"]]$expr_work), skipping rather than testing against the ",
+                "gene sets themselves")
+        return(NULL)
+    }
+
+    sig_genes <- unique(resolved_ids[!is.na(resolved_ids)])
+    message("    Loadings ORA (GMT) ", omics_type, ": ", length(sig_genes),
+            " query / ", length(universe), " background features, ",
+            length(unique(gs$t2g$term)), " gene sets")
+
+    ora <- run_multi_ora_enricher(
+        sig_genes = sig_genes,
+        universe  = universe,
+        term2gene = gs$t2g,
+        term2name = gs$t2n,
+        label     = paste0(omics_type, " loadings")
+    )
+    if (is.null(ora) || nrow(ora) == 0) return(NULL)
+
+    data.frame(
+        pathway   = ora$pathway,
+        ID        = ora$ID,
+        pvalue    = ora$pvalue,
+        padj      = ora$padj,
+        GeneRatio = ora$GeneRatio,
+        setSize   = ora$Count,
+        stringsAsFactors = FALSE
+    )
+}
+
+
 #' Resolve GENE_N synthetic IDs to original feature IDs
 #'
 #' The harmonized MAE uses GENE_N IDs (where N = row in gene_protein_mapping).
-#' This function translates them back to WBGene (for transcriptomics) or
-#' protein IDs (for proteomics).
+#' This function translates them back to the native gene ID (transcriptomics) or
+#' protein ID (proteomics). MOFA2 requires feature names to be unique across
+#' views and appends the view name to any it finds in more than one, so
+#' "GENE_12" and "GENE_12_transcriptomics" both have to resolve; matching only
+#' the bare form left a large share of the MOFA weights unresolved and the
+#' enrichment that follows working from a partial feature list.
+#'
+#' @param feature_ids Character vector of feature IDs, GENE_N or native.
+#' @param harmonization_res Harmonization result carrying
+#'   \code{gene_protein_mapping}.
+#' @param omics_type One of "transcriptomics" / "proteomics"; anything else is
+#'   returned untouched (metabolomics uses feature_N, not GENE_N).
+#' @return Character vector of resolved IDs; entries with no mapping are dropped.
 resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
     gpm <- harmonization_res$gene_protein_mapping
     if (is.null(gpm)) return(feature_ids)
 
-    # Check if IDs look like GENE_N
-    is_gene_n <- grepl("^GENE_\\d+$", feature_ids)
+    # Check if IDs look like GENE_N, with or without a MOFA view suffix
+    is_gene_n <- grepl("^GENE_\\d+(_.+)?$", feature_ids)
     if (!any(is_gene_n)) return(feature_ids)
 
     # Build lookup: GENE_N -> original ID
@@ -3913,12 +4031,15 @@ resolve_gene_n_ids <- function(feature_ids, harmonization_res, omics_type) {
     }
 
     lookup <- setNames(gpm[[id_col]], paste0("GENE_", seq_len(nrow(gpm))))
+    # Strip any view suffix before the lookup; the mapping is keyed on the bare
+    # GENE_N, which is what the harmonized MAE assigned.
+    keys <- sub("^(GENE_\\d+)(_.+)?$", "\\1", feature_ids[is_gene_n])
 
     resolved <- feature_ids
-    resolved[is_gene_n] <- lookup[feature_ids[is_gene_n]]
+    resolved[is_gene_n] <- lookup[keys]
     resolved <- resolved[!is.na(resolved)]
 
-    n_mapped <- sum(is_gene_n) - sum(is.na(lookup[feature_ids[is_gene_n]]))
+    n_mapped <- sum(!is.na(lookup[keys]))
     message("    Resolved ", n_mapped, "/", sum(is_gene_n),
             " GENE_N IDs to ", id_col, " (", omics_type, ")")
 
