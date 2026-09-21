@@ -78,6 +78,37 @@ test_that("an exact contrast match is preferred over a lone column under an earl
         "log2FC.A_vs_B")
 })
 
+test_that("a lone column under one prefix is not a lone contrast in the table", {
+    # Three contrasts are represented here, spread across two prefixes. Deciding
+    # prefix by prefix, "logFC" holds exactly one column and would be taken as
+    # the single-contrast case -- returning OTHER's statistics under a label
+    # that is not OTHER. The count has to be over every prefix.
+    cn <- c("Gene", "logFC.OTHER", "log2FC.A_vs_B", "log2FC.C_vs_D")
+
+    expect_error(
+        resolve_de_summary_col(cn, bare = "log2FoldChange",
+                               prefixes = c("logFC", "log2FC"),
+                               contrast_label = "E_vs_F"),
+        "OTHER")
+    expect_true(is.na(
+        resolve_de_summary_col(cn, bare = "log2FoldChange",
+                               prefixes = c("logFC", "log2FC"))))
+})
+
+test_that("an overlapping prefix does not make one contrast look like two", {
+    # "pvalue" is a prefix of "pvalue.imputs", so a single proteomics column can
+    # be read twice -- as contrast S_vs_NS under the longer prefix and as
+    # "imputs.S_vs_NS" under the shorter. That would count two contrasts where
+    # the table holds one, and abort on a table that resolves perfectly well.
+    cn <- c("Protein.Group", "pvalue.imputs.S_vs_NS", "padj.imputs.S_vs_NS")
+
+    expect_identical(
+        resolve_de_summary_col(cn, bare = "P.Value",
+                               prefixes = c("pvalue.imputs", "P.Value", "pvalue"),
+                               contrast_label = "some_other_label"),
+        "pvalue.imputs.S_vs_NS")
+})
+
 test_that("several contrasts and no matching label aborts, naming what it found", {
     # Guessing here would attach one contrast's statistics to another's label.
     cn <- c("Gene", "log2FC.A_vs_B", "log2FC.C_vs_D")

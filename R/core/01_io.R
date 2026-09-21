@@ -313,15 +313,16 @@ read_table_auto <- function(path, sep = NULL) {
 #'
 #' Matching order: an exact bare name first, then an exact
 #' \code{<prefix>.<contrast_label>} across every candidate prefix, and only then
-#' the single-column fallback. The exact sweep comes first deliberately: checked
-#' prefix by prefix, a table whose first prefix happened to carry one column
-#' would take it and never see the exact match waiting under the second.
+#' the single-contrast fallback. Both later steps look at every prefix before
+#' deciding, because either one taken prefix-at-a-time guesses: an early prefix
+#' carrying one column would be taken while the exact match sat under the next,
+#' or while other prefixes held other contrasts entirely.
 #'
-#' The single-column fallback exists because a file holding one contrast should
-#' resolve regardless of its short code -- that is what lets a single-omics
-#' export serve a multiomics run whose contrast is labelled differently. A file
-#' holding several requires a matching label and otherwise aborts naming what it
-#' found, rather than guessing.
+#' The fallback exists because a file holding one contrast should resolve
+#' regardless of its short code -- that is what lets a single-omics export serve
+#' a multiomics run whose contrast is labelled differently. "One contrast" is
+#' counted across all the prefixes, not within one. A file holding several
+#' requires a matching label and otherwise aborts naming what it found.
 #'
 #' @param cn Character vector of column names in the table.
 #' @param bare Candidate bare column names, in the caller's preference order.
@@ -345,17 +346,44 @@ resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
         }
     }
 
+    # Assign each suffixed column to the FIRST prefix, in the caller's
+    # preference order, that claims it -- then decide on the whole set.
+    #
+    # Both halves matter. Deciding prefix by prefix would return a lone column
+    # under an early prefix while later prefixes held other contrasts, which is
+    # guessing: "logFC.OTHER" alongside "log2FC.A_vs_B" and "log2FC.C_vs_D" is a
+    # table of three contrasts, not a table of one. And claiming each column
+    # once keeps overlapping prefixes such as "pvalue.imputs" and "pvalue" from
+    # reading a single column twice -- as contrast "S_vs_NS" under the first and
+    # "imputs.S_vs_NS" under the second -- which would make one contrast look
+    # like two.
+    cand_col <- character(0)
+    cand_contrast <- character(0)
     for (stem in stems) {
-        suffixed <- cn[startsWith(cn, stem)]
-        if (length(suffixed) == 0) next
-        if (length(suffixed) == 1) return(suffixed[1])
-        if (!is.null(contrast_label)) {
-            stop("Cannot resolve column '", sub("\\.$", "", stem),
-                 "' for contrast '", contrast_label,
-                 "': the table holds several contrasts (",
-                 paste(substring(suffixed, nchar(stem) + 1L), collapse = ", "),
-                 "). Rename the contrast or split the table.")
+        for (col in cn[startsWith(cn, stem)]) {
+            if (col %in% cand_col) next
+            cand_col <- c(cand_col, col)
+            cand_contrast <- c(cand_contrast, substring(col, nchar(stem) + 1L))
         }
+    }
+    if (length(cand_col) == 0) return(NA_character_)
+
+    contrasts <- unique(cand_contrast)
+    if (length(contrasts) == 1) {
+        # Genuinely one contrast across every candidate prefix. Its short code
+        # need not match the label: that is what lets a single-omics export
+        # serve a multiomics run whose contrast is named differently. cand_col
+        # is built in prefix-preference order, so its first entry is preferred.
+        return(cand_col[1])
+    }
+
+    if (!is.null(contrast_label)) {
+        stop("Cannot resolve a column for contrast '", contrast_label,
+             "': the table holds several contrasts (",
+             paste(contrasts, collapse = ", "), ") and none is named '",
+             contrast_label, "'. Columns examined: ",
+             paste(cand_col, collapse = ", "),
+             ". Rename the contrast or split the table.")
     }
     NA_character_
 }

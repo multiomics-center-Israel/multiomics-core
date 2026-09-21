@@ -8,12 +8,9 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
     # the previous results.
     #
     # Deliberately not a second opinion about which files are required: this
-    # collects the configured scalar paths and load_omics_inputs() remains the
-    # one place that decides what RNA actually needs, which differs by input
-    # route (counts / txi / preprocessed_counts). The filters below mirror the
-    # ones that loader applies when it walks config$modes$rna$files, so this
-    # target tracks exactly the files that get read -- no more, and nothing the
-    # loader would reject.
+    # collects the configured paths and load_omics_inputs() remains the one
+    # place that decides what RNA actually needs, which differs by input route
+    # (counts / txi / preprocessed_counts).
     tar_target(
       rna_input_files,
       {
@@ -21,8 +18,9 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
         paths <- character(0)
         for (nm in names(files)) {
           rel <- files[[nm]]
-          # Scalar character entries only: skips flags (is_logtransformed) and
-          # multi-value keys (de_table: [...]), as load_omics_inputs() does.
+          # Scalar character entries, as load_omics_inputs() takes them: skips
+          # flags (is_logtransformed) and multi-value keys, which are picked up
+          # separately below where they are read separately too.
           if (is.null(rel) || !is.character(rel) || length(rel) != 1 ||
               !nzchar(rel)) {
             next
@@ -31,6 +29,19 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           if (dir.exists(abs)) next   # directory entries (e.g. data_dir)
           paths <- c(paths, abs)
         }
+
+        # de_table does not come through load_omics_inputs() at all -- that
+        # loader skips multi-value keys -- and load_precomputed_rna_de() reads
+        # it directly and supports a list of tables, one per contrast. Left out,
+        # editing one of a set of pre-computed DE tables would leave this branch
+        # looking up to date, which is the staleness this target exists to stop.
+        de_tables <- files$de_table
+        if (is.list(de_tables)) de_tables <- unlist(de_tables)
+        for (rel in de_tables) {
+          if (!is.character(rel) || !nzchar(rel)) next
+          paths <- c(paths, resolve_raw_path(config, rel))
+        }
+
         unique(paths)
       },
       format = "file"
