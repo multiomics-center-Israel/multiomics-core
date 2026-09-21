@@ -410,6 +410,7 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
         character(0)
     }
 
+    labels_from_file <- FALSE
     if (length(req_labels) == length(de_files)) {
         contrast_labels <- req_labels
         file_of <- seq_along(de_files)
@@ -423,6 +424,7 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
             sub("^de_", "", bn)
         }, character(1), USE.NAMES = FALSE)
         file_of <- seq_along(de_files)
+        labels_from_file <- TRUE
     }
 
     tables <- list()
@@ -444,6 +446,25 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
 
         cn <- colnames(raw)
         label <- contrast_labels[i]
+
+        # A wide summary names its contrasts only in its column suffixes, and
+        # the pre-computed branch of mod_rnaseq_de() returns before the
+        # auto_generate_contrasts() fallback -- so with no contrasts file there
+        # is nothing here that could say which of them was wanted. The filename
+        # is not an answer: it names the export, not a contrast. Refused
+        # explicitly, because the alternative error further down blames the
+        # contrast naming and sends the reader to fix the wrong thing.
+        if (labels_from_file) {
+            held <- unique(.de_summary_candidates(
+                cn, c("log2FC", "log2FoldChange", "logFC"))$contrast)
+            if (length(held) > 1) {
+                stop("Pre-computed RNA DE table holds several contrasts (",
+                     paste(held, collapse = ", "), "): ", abs_path,
+                     "\n  Point modes.rna.files.contrasts at a contrasts table ",
+                     "naming the ones to load. They cannot be inferred from the ",
+                     "file name, and this branch does not auto-generate them.")
+            }
+        }
 
         # Feature IDs: try named columns first, then unnamed first column.
         # "Gene" is what our own Datasets/deseq2_summary_p0.05.tsv export uses.

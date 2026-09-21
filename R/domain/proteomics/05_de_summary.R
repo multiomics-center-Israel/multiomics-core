@@ -701,6 +701,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         character(0)
     }
 
+    labels_from_file <- FALSE
     if (length(req_labels) == length(de_files)) {
         contrast_labels <- req_labels
         file_of <- seq_along(de_files)
@@ -713,6 +714,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
             sub("^de_", "", bn)
         }, character(1), USE.NAMES = FALSE)
         file_of <- seq_along(de_files)
+        labels_from_file <- TRUE
     }
 
     # Load per-contrast tables
@@ -735,6 +737,25 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
 
         cn <- colnames(raw)
         label <- contrast_labels[i]
+
+        # Same contract as the RNA loader: mod_proteomics_de() returns into the
+        # pre-computed branch before its auto_generate_contrasts() fallback, so
+        # with no contrasts file nothing here can say which of a wide summary's
+        # contrasts was wanted. Both fold-change spellings are counted, since
+        # this export may carry log2FC.imputs, linearFC.imputs or both.
+        if (labels_from_file) {
+            held <- unique(.de_summary_candidates(
+                cn, c("log2FC.imputs", "logFC", "log2FC", "log2FoldChange",
+                      "linearFC.imputs", "linearFC"))$contrast)
+            if (length(held) > 1) {
+                stop("Pre-computed proteomics DE table holds several contrasts (",
+                     paste(held, collapse = ", "), "): ", abs_path,
+                     "\n  Point modes.proteomics.files.contrasts at a contrasts ",
+                     "table naming the ones to load. They cannot be inferred ",
+                     "from the file name, and this branch does not ",
+                     "auto-generate them.")
+            }
+        }
 
         # Feature IDs
         prot_id_col <- cfg$id_columns$protein_id %||% "Protein.Group"

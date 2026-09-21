@@ -270,6 +270,46 @@ test_that("the proteomics loader splits a wide limma_multimp summary", {
     expect_equal(tabs[["C_vs_D"]]$adj.P.Val, c(0.06, 0.7))
 })
 
+test_that("a wide summary with no contrasts table is refused, not guessed at", {
+    # mod_rnaseq_de() returns into the pre-computed branch before the
+    # auto_generate_contrasts() fallback, and files$contrasts is documented
+    # optional -- so contrasts_df can genuinely be NULL here. A wide file names
+    # its contrasts only in column suffixes, so nothing is left to say which
+    # was wanted. The error has to name the remedy: the one raised further down
+    # blames the contrast naming and sends the reader to fix the wrong thing.
+    dir <- withr::local_tempdir()
+    write_tsv_fixture(
+        data.frame(Gene = c("g1", "g2"),
+                   log2FC.A_vs_B = c(1.5, -2),
+                   pvalue.A_vs_B = c(0.01, 0.2),
+                   log2FC.C_vs_D = c(0.5, -0.25),
+                   pvalue.C_vs_D = c(0.04, 0.5)),
+        dir, "deseq2_summary_p0.05.tsv")
+
+    expect_error(
+        suppressMessages(load_precomputed_rna_de(
+            rna_cfg(dir, "deseq2_summary_p0.05.tsv"), contrasts_df = NULL)),
+        "modes\\.rna\\.files\\.contrasts")
+})
+
+test_that("a wide summary holding one contrast still loads without a contrasts table", {
+    # The refusal is about ambiguity, not about wide files. One contrast leaves
+    # nothing to choose between, and that case resolved before this check
+    # existed -- it must keep doing so.
+    dir <- withr::local_tempdir()
+    write_tsv_fixture(
+        data.frame(Gene = c("g1", "g2"),
+                   log2FC.S_vs_NS = c(1.5, -2),
+                   pvalue.S_vs_NS = c(0.01, 0.2)),
+        dir, "deseq2_summary_p0.05.tsv")
+
+    res <- suppressMessages(load_precomputed_rna_de(
+        rna_cfg(dir, "deseq2_summary_p0.05.tsv"), contrasts_df = NULL))
+
+    expect_length(res$tables, 1L)
+    expect_equal(res$tables[[1]]$log2FoldChange, c(1.5, -2))
+})
+
 test_that("one file per contrast still pairs by position", {
     # The other supported shape, unchanged: two files, two contrasts, paired in
     # order rather than split out of one table.

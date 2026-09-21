@@ -301,6 +301,36 @@ read_table_auto <- function(path, sep = NULL) {
 # Pre-computed DE summary tables
 # =============================================================================
 
+#' Suffixed statistic columns a summary table holds, and the contrast each names
+#'
+#' Assigns each column to the FIRST prefix, in the caller's preference order,
+#' that claims it. Claiming once is what keeps overlapping prefixes such as
+#' \code{pvalue.imputs} and \code{pvalue} from reading a single column twice --
+#' as contrast \code{S_vs_NS} under the first and \code{imputs.S_vs_NS} under
+#' the second -- which would make one contrast look like two.
+#'
+#' Shared so that deciding which column to use and asking how many contrasts a
+#' file holds cannot drift apart.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param prefixes Candidate prefixes, in preference order.
+#' @return List with \code{col} (claimed columns, in prefix-preference order)
+#'   and \code{contrast} (the contrast each one names), positionally aligned.
+#' @keywords internal
+.de_summary_candidates <- function(cn, prefixes) {
+    cand_col <- character(0)
+    cand_contrast <- character(0)
+    for (stem in paste0(prefixes, ".")) {
+        for (col in cn[startsWith(cn, stem)]) {
+            if (col %in% cand_col) next
+            cand_col <- c(cand_col, col)
+            cand_contrast <- c(cand_contrast, substring(col, nchar(stem) + 1L))
+        }
+    }
+    list(col = cand_col, contrast = cand_contrast)
+}
+
+
 #' Resolve a column in a per-contrast DE summary table
 #'
 #' Our own \code{Datasets/*_summary_p0.05.tsv} exports hold every contrast in one
@@ -346,29 +376,11 @@ resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
         }
     }
 
-    # Assign each suffixed column to the FIRST prefix, in the caller's
-    # preference order, that claims it -- then decide on the whole set.
-    #
-    # Both halves matter. Deciding prefix by prefix would return a lone column
-    # under an early prefix while later prefixes held other contrasts, which is
-    # guessing: "logFC.OTHER" alongside "log2FC.A_vs_B" and "log2FC.C_vs_D" is a
-    # table of three contrasts, not a table of one. And claiming each column
-    # once keeps overlapping prefixes such as "pvalue.imputs" and "pvalue" from
-    # reading a single column twice -- as contrast "S_vs_NS" under the first and
-    # "imputs.S_vs_NS" under the second -- which would make one contrast look
-    # like two.
-    cand_col <- character(0)
-    cand_contrast <- character(0)
-    for (stem in stems) {
-        for (col in cn[startsWith(cn, stem)]) {
-            if (col %in% cand_col) next
-            cand_col <- c(cand_col, col)
-            cand_contrast <- c(cand_contrast, substring(col, nchar(stem) + 1L))
-        }
-    }
+    cand <- .de_summary_candidates(cn, prefixes)
+    cand_col <- cand$col
     if (length(cand_col) == 0) return(NA_character_)
 
-    contrasts <- unique(cand_contrast)
+    contrasts <- unique(cand$contrast)
     if (length(contrasts) == 1) {
         # Genuinely one contrast across every candidate prefix. Its short code
         # need not match the label: that is what lets a single-omics export
