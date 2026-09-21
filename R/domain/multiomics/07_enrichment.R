@@ -3948,13 +3948,27 @@ enrich_feature_list_gmt <- function(resolved_ids, omics_type,
 
     # Background = every feature of this view that survived preprocessing, put
     # through the same resolution as the query so the two share a namespace.
-    # Without it enricher() falls back to the gene sets themselves as the
-    # universe, which inflates every p-value.
     universe <- NULL
     pre_data <- harmonization_res$inputs[[omics_type]]
     if (!is.null(pre_data) && !is.null(pre_data$expr_work)) {
         universe <- unique(resolve_gene_n_ids(rownames(pre_data$expr_work),
                                               harmonization_res, omics_type))
+    }
+
+    # Fail closed. Handing run_multi_ora_enricher() a NULL universe is not a
+    # degraded run, it is a different test: enricher() then takes its background
+    # from TERM2GENE, so the universe becomes the union of the gene sets rather
+    # than what this view measured, and every p-value comes out inflated. The
+    # result would look like an ordinary enrichment table. One guard covers all
+    # the ways the background can come up empty -- no preprocessed data for the
+    # view, no expr_work, unnamed rows, or nothing left after resolution.
+    if (length(universe) == 0) {
+        message("    Loadings ORA (GMT): ", omics_type,
+                " has no usable background feature set ",
+                "(harmonization_res$inputs[[\"", omics_type,
+                "\"]]$expr_work), skipping rather than testing against the ",
+                "gene sets themselves")
+        return(NULL)
     }
 
     sig_genes <- unique(resolved_ids[!is.na(resolved_ids)])

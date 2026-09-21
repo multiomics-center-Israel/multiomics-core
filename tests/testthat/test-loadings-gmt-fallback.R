@@ -226,6 +226,48 @@ test_that("the background is the view's own features, not the gene sets", {
     expect_setequal(captured$sig_genes, c("WBGene00001", "WBGene00002"))
 })
 
+test_that("no usable background declines instead of testing against the gene sets", {
+    # The failure this guards is silent: with universe = NULL, enricher() takes
+    # its background from TERM2GENE, so the universe becomes the union of the
+    # gene sets rather than what the view measured, every p-value inflates, and
+    # the result looks like an ordinary enrichment table. The enricher must not
+    # be reached at all.
+    dir <- withr::local_tempdir()
+    write_gmt_fixture(dir)
+    called <- FALSE
+
+    local_stubs(list(run_multi_ora_enricher = function(...) {
+        called <<- TRUE
+        NULL
+    }))
+
+    harm <- harm_fixture()
+
+    # No preprocessed data for this view at all.
+    no_inputs <- harm
+    no_inputs$inputs <- list()
+    expect_message(
+        res <- enrich_feature_list_gmt("WBGene00001", "transcriptomics",
+                                       no_inputs, gmt_cfg(dir)),
+        "no usable background")
+    expect_null(res)
+
+    # Present, but carrying no expr_work.
+    no_expr <- harm
+    no_expr$inputs$transcriptomics <- list()
+    expect_null(suppressMessages(enrich_feature_list_gmt(
+        "WBGene00001", "transcriptomics", no_expr, gmt_cfg(dir))))
+
+    # Present with expr_work, but its rows are unnamed -- resolution yields
+    # nothing, which reaches run_multi_ora_enricher() as NULL just the same.
+    unnamed <- harm
+    unnamed$inputs$transcriptomics$expr_work <- matrix(0, nrow = 2, ncol = 2)
+    expect_null(suppressMessages(enrich_feature_list_gmt(
+        "WBGene00001", "transcriptomics", unnamed, gmt_cfg(dir))))
+
+    expect_false(called)
+})
+
 test_that("an enricher that finds nothing yields NULL, not an empty frame", {
     dir <- withr::local_tempdir()
     write_gmt_fixture(dir)
