@@ -683,26 +683,56 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
     de_table_cfg <- cfg$de_table %||% list()
     id_col <- de_table_cfg$id_col %||% "FeatureID"
 
-    # Use contrast names from contrasts_df when available (must match file count)
-    if (!is.null(contrasts_df) && "Contrast_name" %in% colnames(contrasts_df) &&
-        nrow(contrasts_df) == length(de_files)) {
-        contrast_labels <- as.character(contrasts_df$Contrast_name)
+    # Which contrast each output table is for, and which file it comes from.
+    # Two input shapes are supported, and they need different pairings:
+    #
+    #   one file per contrast -- one label per file, paired by position;
+    #   one wide summary file -- our own limma_multimp_summary export, holding
+    #     every contrast in one table with the statistics suffixed by contrast
+    #     name. There the labels come from the contrasts, not from the file,
+    #     and the file is read once and split.
+    #
+    # Pairing the wide shape by position used to fall through to the filename,
+    # which then matched no contrast in the table at all.
+    req_labels <- if (!is.null(contrasts_df) &&
+                      "Contrast_name" %in% colnames(contrasts_df)) {
+        as.character(contrasts_df$Contrast_name)
+    } else {
+        character(0)
+    }
+
+    if (length(req_labels) == length(de_files)) {
+        contrast_labels <- req_labels
+        file_of <- seq_along(de_files)
+    } else if (length(de_files) == 1L && length(req_labels) > 1L) {
+        contrast_labels <- req_labels
+        file_of <- rep(1L, length(req_labels))
     } else {
         contrast_labels <- vapply(de_files, function(f) {
             bn <- tools::file_path_sans_ext(basename(f))
             sub("^de_", "", bn)
         }, character(1), USE.NAMES = FALSE)
+        file_of <- seq_along(de_files)
     }
 
     # Load per-contrast tables
     per_contrast <- list()
-    for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
-        if (!file.exists(abs_path)) {
-            stop("Pre-computed proteomics DE table not found: ", abs_path)
+    raw <- NULL
+    abs_path <- NA_character_
+    last_fi <- NA_integer_
+    for (i in seq_along(contrast_labels)) {
+        fi <- file_of[i]
+        # Read each file once: the wide shape asks for several contrasts out of
+        # the same table.
+        if (!identical(fi, last_fi)) {
+            abs_path <- resolve_raw_path(config, de_files[fi])
+            if (!file.exists(abs_path)) {
+                stop("Pre-computed proteomics DE table not found: ", abs_path)
+            }
+            raw <- read_table_auto(abs_path)
+            last_fi <- fi
         }
 
-        raw <- read_table_auto(abs_path)
         cn <- colnames(raw)
         label <- contrast_labels[i]
 
@@ -722,7 +752,10 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         lfc_col <- resolve_de_summary_col(
             cn,
             bare = c("logFC", "log2FoldChange", "log2FC", "log2(FC)", "log2.FC."),
-            prefixes = c("logFC", "log2FC", "log2FoldChange"),
+            # log2FC.imputs is what the wide limma_multimp_summary actually
+            # writes, and it leads: linearFC beside it is signif()-rounded, so
+            # resolving that instead would lose precision the file already has.
+            prefixes = c("log2FC.imputs", "logFC", "log2FC", "log2FoldChange"),
             contrast_label = label
         )
         if (!is.na(lfc_col)) {
@@ -790,7 +823,9 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
         }
 
         per_contrast[[contrast_labels[i]]] <- tbl
-        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
+        # de_files[fi], not de_files[i]: in the wide shape several contrasts
+        # share one file and i runs past the end of de_files.
+        message("  Loaded ", nrow(tbl), " features from ", basename(de_files[fi]),
                 " (label: ", contrast_labels[i], ")")
     }
 

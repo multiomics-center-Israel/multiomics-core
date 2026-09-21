@@ -205,6 +205,97 @@ test_that("the proteomics loader converts a linearFC-only summary", {
     expect_false(any(is.nan(tab$logFC)))
 })
 
+# ---- one wide file holding several contrasts --------------------------------
+
+test_that("the RNA loader splits one wide summary into a table per contrast", {
+    # The shape our own export actually has. Pairing labels to files by
+    # position fell through to the filename here -- one file, several contrasts
+    # -- and the filename matches no contrast in the table, so the loader
+    # aborted on precisely the round-trip it was taught to do.
+    dir <- withr::local_tempdir()
+    write_tsv_fixture(
+        data.frame(Gene = c("g1", "g2"),
+                   log2FC.A_vs_B = c(1.5, -2),
+                   pvalue.A_vs_B = c(0.01, 0.2),
+                   padj.A_vs_B   = c(0.03, 0.4),
+                   log2FC.C_vs_D = c(0.5, -0.25),
+                   pvalue.C_vs_D = c(0.04, 0.5),
+                   padj.C_vs_D   = c(0.06, 0.7)),
+        dir, "deseq2_summary_p0.05.tsv")
+
+    res <- suppressMessages(load_precomputed_rna_de(
+        rna_cfg(dir, "deseq2_summary_p0.05.tsv"),
+        contrasts_df = data.frame(Contrast_name = c("A_vs_B", "C_vs_D"),
+                                  stringsAsFactors = FALSE)))
+
+    expect_named(res$tables, c("A_vs_B", "C_vs_D"))
+    # Each table carries its own contrast's statistics, not the other's.
+    expect_equal(res$tables[["A_vs_B"]]$log2FoldChange, c(1.5, -2))
+    expect_equal(res$tables[["C_vs_D"]]$log2FoldChange, c(0.5, -0.25))
+    expect_equal(res$tables[["A_vs_B"]]$padj, c(0.03, 0.4))
+    expect_equal(res$tables[["C_vs_D"]]$padj, c(0.06, 0.7))
+    expect_identical(as.character(res$tables[["A_vs_B"]]$FeatureID),
+                     c("g1", "g2"))
+})
+
+test_that("the proteomics loader splits a wide limma_multimp summary", {
+    # log2FC.imputs is what that export writes. It was missing from the
+    # fold-change prefixes, so the log2FC. stem claimed the column and read its
+    # contrast as "imputs.A_vs_B" -- survivable for one contrast, an abort for
+    # two, and it preferred the signif()-rounded linearFC beside it.
+    dir <- withr::local_tempdir()
+    write_tsv_fixture(
+        data.frame(FeatureID = c("p1", "p2"),
+                   log2FC.imputs.A_vs_B   = c(2, -2),
+                   pvalue.imputs.A_vs_B   = c(0.01, 0.2),
+                   padj.imputs.A_vs_B     = c(0.03, 0.4),
+                   log2FC.imputs.C_vs_D   = c(0.5, -0.25),
+                   pvalue.imputs.C_vs_D   = c(0.04, 0.5),
+                   padj.imputs.C_vs_D     = c(0.06, 0.7)),
+        dir, "limma_multimp_summary.tsv")
+
+    cfg <- list(project = list(dir = dir), paths = list(raw = "."),
+                modes = list(proteomics = list(
+                    files = list(de_table = "limma_multimp_summary.tsv"))))
+
+    res <- suppressMessages(load_precomputed_proteomics_de(
+        cfg, contrasts_df = data.frame(Contrast_name = c("A_vs_B", "C_vs_D"),
+                                       stringsAsFactors = FALSE)))
+    tabs <- res$runs_de_tables[[1]]
+
+    expect_named(tabs, c("A_vs_B", "C_vs_D"))
+    expect_equal(tabs[["A_vs_B"]]$logFC, c(2, -2))
+    expect_equal(tabs[["C_vs_D"]]$logFC, c(0.5, -0.25))
+    expect_equal(tabs[["A_vs_B"]]$adj.P.Val, c(0.03, 0.4))
+    expect_equal(tabs[["C_vs_D"]]$adj.P.Val, c(0.06, 0.7))
+})
+
+test_that("one file per contrast still pairs by position", {
+    # The other supported shape, unchanged: two files, two contrasts, paired in
+    # order rather than split out of one table.
+    dir <- withr::local_tempdir()
+    write_tsv_fixture(data.frame(Gene = c("g1", "g2"),
+                                 log2FoldChange = c(1.5, -2),
+                                 pvalue = c(0.01, 0.2)),
+                      dir, "de_A_vs_B.tsv")
+    write_tsv_fixture(data.frame(Gene = c("g1", "g2"),
+                                 log2FoldChange = c(0.5, -0.25),
+                                 pvalue = c(0.04, 0.5)),
+                      dir, "de_C_vs_D.tsv")
+
+    cfg <- list(project = list(dir = dir), paths = list(raw = "."),
+                modes = list(rna = list(files = list(
+                    de_table = list("de_A_vs_B.tsv", "de_C_vs_D.tsv")))))
+
+    res <- suppressMessages(load_precomputed_rna_de(
+        cfg, contrasts_df = data.frame(Contrast_name = c("A_vs_B", "C_vs_D"),
+                                       stringsAsFactors = FALSE)))
+
+    expect_named(res$tables, c("A_vs_B", "C_vs_D"))
+    expect_equal(res$tables[["A_vs_B"]]$log2FoldChange, c(1.5, -2))
+    expect_equal(res$tables[["C_vs_D"]]$log2FoldChange, c(0.5, -0.25))
+})
+
 test_that("the proteomics loader aborts when no fold change can be resolved", {
     dir <- withr::local_tempdir()
     write_tsv_fixture(data.frame(Protein.Group = c("p1", "p2"),
