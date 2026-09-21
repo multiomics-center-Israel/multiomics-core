@@ -297,6 +297,70 @@ read_table_auto <- function(path, sep = NULL) {
 }
 
 
+# =============================================================================
+# Pre-computed DE summary tables
+# =============================================================================
+
+#' Resolve a column in a per-contrast DE summary table
+#'
+#' Our own \code{Datasets/*_summary_p0.05.tsv} exports hold every contrast in one
+#' table and suffix the statistic columns with the contrast name, e.g.
+#' \code{log2FC.S_vs_NS} or \code{padj.imputs.SP_vs_NSP}. The pre-computed DE
+#' loaders matched bare names only, so pointing one at an export this pipeline
+#' itself wrote loaded "successfully", logged a plausible feature count, and
+#' returned every statistic as NA -- indistinguishable downstream from a run with
+#' nothing differentially expressed. This resolves both shapes.
+#'
+#' Matching order: an exact bare name first, then an exact
+#' \code{<prefix>.<contrast_label>} across every candidate prefix, and only then
+#' the single-column fallback. The exact sweep comes first deliberately: checked
+#' prefix by prefix, a table whose first prefix happened to carry one column
+#' would take it and never see the exact match waiting under the second.
+#'
+#' The single-column fallback exists because a file holding one contrast should
+#' resolve regardless of its short code -- that is what lets a single-omics
+#' export serve a multiomics run whose contrast is labelled differently. A file
+#' holding several requires a matching label and otherwise aborts naming what it
+#' found, rather than guessing.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param bare Candidate bare column names, in the caller's preference order.
+#' @param prefixes Candidate prefixes for the suffixed form (e.g. "log2FC",
+#'   "linearFC.imputs"), in the caller's preference order.
+#' @param contrast_label Contrast name to prefer when the table holds several.
+#' @return The resolved column name, or NA_character_ when nothing matches.
+resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
+    # Subset `bare`, not `cn`: the preference order that decides this is the
+    # caller's, and `cn[cn %in% bare]` would instead have returned whichever
+    # candidate the table happened to list first.
+    hit <- bare[bare %in% cn]
+    if (length(hit) > 0) return(hit[1])
+
+    stems <- paste0(prefixes, ".")
+
+    if (!is.null(contrast_label)) {
+        for (stem in stems) {
+            exact <- paste0(stem, contrast_label)
+            if (exact %in% cn) return(exact)
+        }
+    }
+
+    for (stem in stems) {
+        suffixed <- cn[startsWith(cn, stem)]
+        if (length(suffixed) == 0) next
+        if (length(suffixed) == 1) return(suffixed[1])
+        if (!is.null(contrast_label)) {
+            stop("Cannot resolve column '", sub("\\.$", "", stem),
+                 "' for contrast '", contrast_label,
+                 "': the table holds several contrasts (",
+                 paste(substring(suffixed, nchar(stem) + 1L), collapse = ", "),
+                 "). Rename the contrast or split the table.")
+        }
+    }
+    NA_character_
+}
+
+
 #' Convert a signed linear fold change to log2
 #'
 #' Proteomics summaries store linearFC as a signed linear ratio: 2^log2FC when

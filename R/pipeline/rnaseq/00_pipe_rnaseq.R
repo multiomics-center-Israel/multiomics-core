@@ -1,10 +1,68 @@
 pipe_rnaseq <- function(skip_outputs = FALSE) {
   # ---- Core targets — always needed (multiomics depends on these) ----
   targets <- list(
-    tar_target(rna_inputs, load_rna_inputs(config)),
-    # Optional annotation inputs (NULL if not configured)
-    tar_target(rna_annot, load_and_process_annotation(config)),
-    tar_target(rna_trinotate_main, load_and_process_trinotate(config)),
+    # ---- declare input files as file targets (so changes retrigger) ----
+    # Mirrors prot_input_files / metab_input_files. Without this the RNA counts,
+    # metadata, contrasts and annotation were untracked, so editing any of them
+    # left the pipeline believing it was up to date and the run silently kept
+    # the previous results.
+    #
+    # Deliberately not a second opinion about which files are required: this
+    # collects the configured scalar paths and load_omics_inputs() remains the
+    # one place that decides what RNA actually needs, which differs by input
+    # route (counts / txi / preprocessed_counts). The filters below mirror the
+    # ones that loader applies when it walks config$modes$rna$files, so this
+    # target tracks exactly the files that get read -- no more, and nothing the
+    # loader would reject.
+    tar_target(
+      rna_input_files,
+      {
+        files <- config$modes$rna$files
+        paths <- character(0)
+        for (nm in names(files)) {
+          rel <- files[[nm]]
+          # Scalar character entries only: skips flags (is_logtransformed) and
+          # multi-value keys (de_table: [...]), as load_omics_inputs() does.
+          if (is.null(rel) || !is.character(rel) || length(rel) != 1 ||
+              !nzchar(rel)) {
+            next
+          }
+          abs <- resolve_raw_path(config, rel)
+          if (dir.exists(abs)) next   # directory entries (e.g. data_dir)
+          paths <- c(paths, abs)
+        }
+        unique(paths)
+      },
+      format = "file"
+    ),
+
+    # ---- load inputs (forced dependency on rna_input_files) ----
+    tar_target(
+      rna_inputs,
+      {
+        rna_input_files
+        load_rna_inputs(config)
+      }
+    ),
+    # Optional annotation inputs (NULL if not configured).
+    # These read config$modes$rna$files directly rather than going through
+    # rna_inputs, so they need the file dependency of their own -- otherwise
+    # editing the annotation or trinotate file rebuilds rna_inputs while these
+    # two keep serving the cached objects built from the old file.
+    tar_target(
+      rna_annot,
+      {
+        rna_input_files
+        load_and_process_annotation(config)
+      }
+    ),
+    tar_target(
+      rna_trinotate_main,
+      {
+        rna_input_files
+        load_and_process_trinotate(config)
+      }
+    ),
     tar_target(rna_pre, preprocess_rna(rna_inputs, config, gene_lengths = NULL, verbose = TRUE)),
     tar_target(rna_out_dir, get_mode_out_dir(run_dir, "rna")),
     tar_target(rna_de_res, mod_rnaseq_de(rna_pre, rna_inputs, config, verbose = TRUE))

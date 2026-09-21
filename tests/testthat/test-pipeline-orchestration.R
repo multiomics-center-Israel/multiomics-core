@@ -42,6 +42,7 @@ test_that("pipe_rnaseq returns a valid target list", {
 test_that("pipe_rnaseq contains expected target names", {
     result <- pipe_rnaseq()
     names <- get_target_names(result)
+    expect_true("rna_input_files" %in% names)
     expect_true("rna_inputs" %in% names)
     expect_true("rna_pre" %in% names)
     expect_true("rna_de_res" %in% names)
@@ -51,6 +52,35 @@ test_that("pipe_rnaseq contains expected target names", {
 test_that("pipe_rnaseq returns expected number of targets", {
     result <- pipe_rnaseq()
     expect_gte(length(result), 15)
+})
+
+test_that("everything that reads an RNA input file depends on rna_input_files", {
+    # rna_input_files is format = "file", so editing a tracked file invalidates
+    # whatever depends on it. rna_annot and rna_trinotate_main read
+    # config$modes$rna$files themselves rather than going through rna_inputs --
+    # so wiring only rna_inputs would leave an edited annotation file rebuilding
+    # the inputs while these two kept serving objects built from the old file.
+    result <- pipe_rnaseq()
+    by_name <- setNames(result, get_target_names(result))
+
+    expect_identical(by_name$rna_input_files$settings$format, "file")
+
+    # $command$deps is what targets builds the DAG from, but it is internal;
+    # falling back to the symbols in the command expression keeps this asserting
+    # something real rather than passing vacuously if that field ever moves.
+    target_deps <- function(tgt) {
+        deps <- tgt$command$deps
+        if (length(deps) > 0) return(deps)
+        unlist(lapply(as.list(tgt$command$expr), all.vars))
+    }
+
+    for (nm in c("rna_inputs", "rna_annot", "rna_trinotate_main")) {
+        deps <- target_deps(by_name[[nm]])
+        expect_true(length(deps) > 0,
+                    info = sprintf("%s reports no dependencies at all", nm))
+        expect_true("rna_input_files" %in% deps,
+                    info = sprintf("%s does not depend on rna_input_files", nm))
+    }
 })
 
 
