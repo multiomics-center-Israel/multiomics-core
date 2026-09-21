@@ -721,6 +721,102 @@ aggregate_log2fc_by_ko <- function(de_table, ko_map, omics) {
 }
 
 
+#' Thresholds the pathway maps are drawn at
+#'
+#' One source of truth for three things that must agree: which pathways are
+#' selected, which features are allowed to colour a node, and what the caption
+#' under the figure claims. They were separate numbers before, so a caption
+#' could describe a rule the filter was not applying.
+#'
+#' \code{fdr_alpha} is the adjusted-p cutoff \code{.kegg_hits_by_contrast()}
+#' selects pathways at; \code{node_fc} is the linear fold change a feature must
+#' exceed and \code{node_p} the p-value it must reach before it may colour a
+#' node. Not config keys: these describe what the figure means, and a project
+#' that moved them would be reading a different figure under the same caption.
+#'
+#' @keywords internal
+.PATHVIEW_THRESHOLDS <- list(fdr_alpha = 0.05, node_fc = 1.5, node_p = 0.05)
+
+
+#' Keep only the features whose change is both large and supported
+#'
+#' Colouring every measured feature makes a map look saturated regardless of
+#' evidence, so it shows coverage rather than signal. The rule is AND, not OR:
+#' a big but unsupported change is usually a noisy low-abundance feature, and a
+#' confident but tiny one is not what a pathway map exists to highlight.
+#'
+#' A feature with no usable fold change is dropped rather than coloured on its
+#' p-value alone -- NaN is what \code{log2()} of a signed linear fold change
+#' leaves behind, and such a node must stay uncoloured.
+#'
+#' The p-value is the raw one where the table has it, falling back to an
+#' adjusted column only where it does not. That is deliberately the same
+#' per-feature evidence rule the figure has always implied; it is not an
+#' adjusted-p gate, and it decides nothing about which pathways are drawn.
+#'
+#' @param de_table Standardized DE table with `feature_id` and `log2fc`.
+#' @param thresholds Threshold list; defaults to \code{.PATHVIEW_THRESHOLDS}.
+#' @return \code{de_table} with only the qualifying rows, or NULL for NULL input.
+filter_changed_features <- function(de_table, thresholds = .PATHVIEW_THRESHOLDS) {
+    if (is.null(de_table)) return(NULL)
+    if (!is.data.frame(de_table) || nrow(de_table) == 0) return(de_table)
+
+    fc_col <- intersect(c("log2fc", "log2FC", "logFC", "log2FoldChange"),
+                        names(de_table))[1]
+    if (is.na(fc_col)) {
+        message("    Pathview: DE table has no fold-change column; ",
+                "no feature can colour a node")
+        return(de_table[0, , drop = FALSE])
+    }
+    p_col <- intersect(c("pvalue", "p_value", "P.Value", "padj", "adj.P.Val",
+                         "FDR"), names(de_table))[1]
+    if (is.na(p_col)) {
+        message("    Pathview: DE table has no p-value column; ",
+                "no feature can colour a node")
+        return(de_table[0, , drop = FALSE])
+    }
+    if (!p_col %in% c("pvalue", "p_value", "P.Value")) {
+        message("    Pathview: no raw p-value column; using ", p_col)
+    }
+
+    fc <- suppressWarnings(as.numeric(de_table[[fc_col]]))
+    p  <- suppressWarnings(as.numeric(de_table[[p_col]]))
+    # is.finite(), not !is.na(): NaN and Inf must not colour a node either.
+    keep <- is.finite(fc) & abs(fc) > log2(thresholds$node_fc) &
+        is.finite(p) & p < thresholds$node_p
+    de_table[keep, , drop = FALSE]
+}
+
+
+#' The caption for a rendered pathway map, from the thresholds it was drawn at
+#'
+#' Built from the same list the filters read, so the legend cannot drift from
+#' the rules. It also states what an uncoloured node does NOT mean: pathview
+#' draws "measured but unchanged" and "never measured" identically, and a
+#' caption that implied otherwise would invite the reader to infer absence.
+#'
+#' @param thresholds Threshold list; defaults to \code{.PATHVIEW_THRESHOLDS}.
+#' @return Single caption string.
+pathview_significance_caption <- function(thresholds = .PATHVIEW_THRESHOLDS) {
+    fmt <- function(x) format(x, trim = TRUE, scientific = FALSE)
+    paste0(
+        "Pathways are drawn where at least one omics layer scored them below ",
+        fmt(thresholds$fdr_alpha), " -- on adjusted p-values where those ",
+        "supported a selection, and on raw p-values where they did not, so ",
+        "which of the two a given map rests on is not fixed and the ",
+        "pathway-level evidence is a floor rather than an FDR. Within a map, a node is ",
+        "coloured only by features that both changed by more than ",
+        fmt(thresholds$node_fc), "-fold (|log2FC| > ",
+        format(round(log2(thresholds$node_fc), 2), nsmall = 2),
+        ") and reached raw p < ", fmt(thresholds$node_p),
+        "; a feature failing either condition does not contribute to the ",
+        "node's mean. An uncoloured node therefore means no measured feature ",
+        "on it passed both rules, or that nothing there was measured at all -- ",
+        "the map does not separate the two."
+    )
+}
+
+
 #' Choose the emptiest corner of a KEGG map for pathview's colour key
 #'
 #' pathview draws its colour key at a fixed corner (default "topright"), which on
@@ -851,7 +947,10 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   KEGG code of its own. This is the identity organism; the gene space these
 #'   maps are drawn in is always KO.
 #' @param alpha Significance cutoff, applied to `padj` where a frame has usable
-#'   adjusted values and to `pvalue` only where it has none.
+#'   adjusted values and to `pvalue` only where it has none. Defaults to the
+#'   shared \code{.PATHVIEW_THRESHOLDS}, which is also what
+#'   \code{pathview_significance_caption()} states, so the figure's caption
+#'   cannot claim a cutoff the selection did not use.
 #' @return Named list keyed by canonical contrast key, each element a list of
 #'   `label` (the first raw spelling seen), `pathways` (normalized KEGG ids,
 #'   ranked best score first) and `scores` (the score behind that ranking, named
@@ -859,7 +958,8 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
 #'   carry no contrast: they cannot be attributed to one, and rendering them
 #'   against some other contrast's fold changes is the bug this structure exists
 #'   to prevent.
-.kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL, alpha = 0.05) {
+.kegg_hits_by_contrast <- function(ora_tables, kegg_org = NULL,
+                                   alpha = .PATHVIEW_THRESHOLDS$fdr_alpha) {
     hits <- list()
     # Indices, not names: the production input is named per omics, but iterating
     # over names() means an unnamed list runs the loop zero times and selects
@@ -1176,16 +1276,24 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
         made <- character(0)
         for (ckey in names(hits)) {
             label <- hits[[ckey]]$label
+            # Filtered BEFORE the KO aggregation, not after: a node carries the
+            # mean of the features on it, so a feature that did not move, or
+            # moved without support, would otherwise pull that mean towards
+            # zero and colour the box on evidence it does not have.
             rna_fc  <- aggregate_log2fc_by_ko(
-                .de_table_for_contrast(rna_tables, ckey), ko_map, "transcriptomics")
+                filter_changed_features(.de_table_for_contrast(rna_tables, ckey)),
+                ko_map, "transcriptomics")
             prot_fc <- aggregate_log2fc_by_ko(
-                .de_table_for_contrast(prot_tables, ckey), ko_map, "proteomics")
+                filter_changed_features(.de_table_for_contrast(prot_tables, ckey)),
+                ko_map, "proteomics")
             if (is.null(rna_fc) && is.null(prot_fc)) {
-                # A contrast whose pathways came from an ORA table we have no DE
-                # table for. Borrowing another contrast's values is exactly the
-                # cross-wiring this loop exists to prevent, so it is skipped.
-                message("  Union pathview: no KO-mapped DE table for contrast ",
-                        label, "; skipping it")
+                # Either a contrast whose pathways came from an ORA table we
+                # have no DE table for -- borrowing another contrast's values is
+                # exactly the cross-wiring this loop exists to prevent -- or one
+                # where nothing cleared the node thresholds. Both leave every
+                # gene node uncoloured, which is a map not worth rendering.
+                message("  Union pathview: no KO-mapped feature passed the node ",
+                        "thresholds for contrast ", label, "; skipping it")
                 next
             }
             genes <- unique(c(names(rna_fc), names(prot_fc)))
@@ -1196,11 +1304,16 @@ generate_per_omic_union_pathview <- function(de_results, harmonization_res,
 
             # Compounds colour the compound nodes, from the same contrast.
             cpd_data <- NULL
-            metab_df <- .de_table_for_contrast(metab_tables, ckey)
-            if (!is.null(metab_df) && !is.null(metab_map) && nrow(metab_map) > 0) {
+            # Same rule as the gene nodes, and for the same reason: a compound
+            # box means one thing across the whole map or it means nothing.
+            metab_df <- filter_changed_features(
+                .de_table_for_contrast(metab_tables, ckey))
+            if (!is.null(metab_df) && nrow(metab_df) > 0 &&
+                !is.null(metab_map) && nrow(metab_map) > 0) {
                 cpd_data <- tryCatch({
                     md <- merge(metab_df, metab_map, by = "feature_id")
-                    fc <- tapply(md$log2fc, md$KEGG_CPD, mean, na.rm = TRUE)
+                    ok <- is.finite(md$log2fc)
+                    fc <- tapply(md$log2fc[ok], md$KEGG_CPD[ok], mean, na.rm = TRUE)
                     stats::setNames(as.numeric(fc), names(fc))
                 }, error = function(e) NULL)
             }

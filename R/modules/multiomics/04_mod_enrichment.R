@@ -119,6 +119,13 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     }
 
     # Cross-omics comparison requires >= 2 omics
+    #
+    # Cleared here and not only inside the analysis: this guard means a rerun
+    # that drops to one enriched layer never enters that function at all, and
+    # the report finds the earlier run's per-collection figures by glob and
+    # shows them beside the one-layer results as though they were current.
+    .clear_collection_heatmaps(out_dir)
+
     cross_omics_enrich <- NULL
     if (length(per_omics) >= 2) {
         cross_omics_enrich <- analyze_cross_omics_enrichment(
@@ -189,6 +196,10 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
             contrast_out <- file.path(per_contrast_dir, safe_dir)
             dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
+            # Same reason as the run-level clear above: the per-contrast call
+            # is guarded on >= 2 layers too, so a contrast that drops below it
+            # on a rerun would keep showing the previous run's figures.
+            .clear_collection_heatmaps(contrast_out)
 
             per_omics_contrast <- list()
             for (om in names(per_omics)) {

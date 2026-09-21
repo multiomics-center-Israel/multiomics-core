@@ -2752,6 +2752,12 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     on.exit(setwd(cwd), add = TRUE)
 
     all_generated_pngs <- list()
+    # Now that the node rule can empty a layer, "metabolomics was present" no
+    # longer implies "a compound node carries a value". The report must not
+    # promise a colour that is not on the map, so what this run actually
+    # supplied is recorded rather than inferred -- as the union renderer
+    # already does beside its own PDF.
+    any_compounds <- FALSE
 
     for (ci in seq_along(contrast_names)) {
         contrast <- contrast_names[ci]
@@ -2763,7 +2769,11 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         for (om in names(gene_de_tables)) {
             de_tbl <- gene_de_tables[[om]]
             idx <- min(ci, length(de_tbl))
-            df <- de_tbl[[idx]]
+            # Same node-evidence rule as the KO-space renderer. Both figures
+            # carry one caption, and it states both thresholds -- so a feature
+            # that did not clear them must not colour a node here either.
+            df <- filter_changed_features(de_tbl[[idx]])
+            if (is.null(df) || nrow(df) == 0) next
             df_mapped <- merge(df, gene_id_maps[[om]], by = "feature_id")
             fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID, mean, na.rm = TRUE)
             fc_vec <- as.numeric(fc_arr)
@@ -2789,12 +2799,19 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         if (!is.null(metab_id_map) && nrow(metab_id_map) > 0 &&
             !is.null(metab_de_tables) && length(metab_de_tables) > 0) {
             idx <- min(ci, length(metab_de_tables))
-            df <- metab_de_tables[[idx]]
-            df_mapped <- merge(df, metab_id_map, by = "feature_id")
-            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD, mean, na.rm = TRUE)
-            cpd_data <- as.numeric(cpd_fc)
-            names(cpd_data) <- names(cpd_fc)
+            # Filtered before mapping and before the mean, so a compound node
+            # is the average of the features that cleared the rule, not of
+            # every feature that happened to map to it.
+            df <- filter_changed_features(metab_de_tables[[idx]])
+            if (!is.null(df) && nrow(df) > 0) {
+                df_mapped <- merge(df, metab_id_map, by = "feature_id")
+                cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD,
+                                 mean, na.rm = TRUE)
+                cpd_data <- as.numeric(cpd_fc)
+                names(cpd_data) <- names(cpd_fc)
+            }
         }
+        if (!is.null(cpd_data) && length(cpd_data) > 0) any_compounds <- TRUE
 
         if (is.null(gene_data) && is.null(cpd_data)) next
 
@@ -2873,6 +2890,13 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
             }
         }
         grDevices::dev.off()
+        # Written only once the PDF exists, so the sidecar cannot outlive the
+        # figure it describes.
+        tryCatch(
+            yaml::write_yaml(list(compound_nodes = any_compounds),
+                             file.path(out_dir, "multi_ora_pathview_supported.yaml")),
+            error = function(e) NULL
+        )
         total <- sum(lengths(all_generated_pngs))
         message("  Compiled ", total, " pathview maps (",
                 length(all_generated_pngs), " contrasts) into: ", basename(pdf_path))
