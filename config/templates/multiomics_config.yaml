@@ -213,6 +213,16 @@ modes:
       # Empty by default: nothing is excluded unless a project asks.
       exclude_pathway_classes: []
 
+      # --- Top pathways of one layer, looked up in another ---
+      # For every pair of layers, both directions: the source layer's top
+      # pathways by its own raw p-value (its GSEA result where it has one,
+      # otherwise ORA), significant or not, beside what the other layer shows
+      # for the same pathways. Written as cross_lookup_<from>_to_<to>.tsv/.png.
+      # Descriptive: nominal p-values, nothing re-tested.
+      cross_lookup:
+        enabled: true
+        top_n: 15
+
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
       # would otherwise produce no pathway maps at all. The maps are KEGG's

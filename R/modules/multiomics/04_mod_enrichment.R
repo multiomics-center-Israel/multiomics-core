@@ -126,6 +126,7 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # the report finds the earlier run's per-collection figures by glob and
     # shows them beside the one-layer results as though they were current.
     .clear_collection_heatmaps(out_dir)
+    .clear_cross_lookup_outputs(out_dir)
 
     # Compound GSEA joins the meta-analysis as the metabolomics layer's
     # rank-based evidence. A metabolomics layer whose ORA found nothing still
@@ -213,6 +214,7 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             # is guarded on >= 2 layers too, so a contrast that drops below it
             # on a rerun would keep showing the previous run's figures.
             .clear_collection_heatmaps(contrast_out)
+            .clear_cross_lookup_outputs(contrast_out)
 
             per_omics_contrast <- list()
             for (om in names(per_omics)) {
