@@ -462,15 +462,14 @@ build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
         per_run <- matrix(per_run, nrow = n_feat, ncol = n_runs)
 
         # Whether the runs are genuinely separate draws is asked of the numbers,
-        # not of the config. Only perseus_like actually varies per run today:
-        # impute_proteomics_qrilc() and impute_proteomics_dep2() call set.seed()
-        # with a fixed configured seed INSIDE each call, overwriting the per-run
-        # seed make_imputations_proteomics() sets, and none/minval/MinDet are
-        # deterministic by design. All of those produce N identical matrices, so
-        # the pooling is the identity and every column of this sheet would agree
-        # by construction -- which reads as agreement between independent draws
-        # when there were none. Asking the coefficients keeps this correct if a
-        # method's seeding is ever fixed or a new one is added.
+        # not of the config. none, minval and dep2 MinDet are deterministic by
+        # design, so they produce N identical matrices: the pooling is then the
+        # identity and every column of this sheet would agree by construction,
+        # which reads as agreement between independent draws when there were
+        # none. Asking the estimates rather than the method list is what kept
+        # this correct when #229 fixed the seeding for qrilc and dep2 MinProb --
+        # those now vary per run and the sheet started appearing for them with
+        # no change here.
         #
         # identical(), not `!=`: any comparison against NA yields NA, and
         # dropping those with na.rm = TRUE reported genuinely different runs as
