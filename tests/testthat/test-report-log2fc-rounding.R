@@ -162,6 +162,26 @@ test_that("the report template uses the core helper instead of its own copy", {
                      integer(0))
 })
 
+test_that("these tests exercise the sourced helpers, not a copy of their own", {
+    # This file used to define its own signed_fc_to_log2() and resolve_log2fc()
+    # above the fixtures, so every assertion below described a duplicate that
+    # happened to sit next to the production code rather than the production
+    # code itself -- the call sites could drift and nothing here would notice.
+    f <- repo_file("R", "core", "02_validation.R")
+    skip_if(is.na(f), "core validation file not found from the test working directory")
+
+    src <- readLines(f, warn = FALSE)
+    expect_true(any(grepl("resolve_log2fc <- function", src, fixed = TRUE)))
+    expect_true(any(grepl("signed_fc_to_log2 <- function", src, fixed = TRUE)))
+
+    # And this file no longer carries its own, so the assertions above run
+    # against what the pipeline sources.
+    own <- readLines(repo_file("tests", "testthat", "test-report-log2fc-rounding.R"),
+                     warn = FALSE)
+    expect_identical(grep("^resolve_log2fc <- function", own), integer(0))
+    expect_identical(grep("^signed_fc_to_log2 <- function", own), integer(0))
+})
+
 test_that("pptx, summary, volcano and pathway code read log2FC through the helper", {
     rel_paths <- c(
         file.path("R", "domain", "proteomics", "11_powerpoint.R"),

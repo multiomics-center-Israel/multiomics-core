@@ -245,15 +245,25 @@ test_that("no usable fold change on a side is an error, not silent NAs", {
 test_that("a negative linear fold change becomes a negative log2, not NaN", {
     # linearFC stores -1/2^x for a decrease. log2() of that is NaN, which took
     # every down-regulated protein out of the join without a word.
-    expect_equal(signed_linear_fc_to_log2(c(4, -4)), c(2, -2))
-    expect_equal(signed_linear_fc_to_log2(c(1, -1)), c(0, 0))
-    expect_false(any(is.nan(signed_linear_fc_to_log2(c(-2, -8, -1.5)))))
+    expect_equal(signed_fc_to_log2(c(4, -4)), c(2, -2))
+    expect_equal(signed_fc_to_log2(c(1, -1)), c(0, 0))
+    expect_false(any(is.nan(signed_fc_to_log2(c(-2, -8, -1.5)))))
 })
 
 test_that("values with no log2 are NA rather than an error or a warning", {
-    expect_true(all(is.na(signed_linear_fc_to_log2(c(0, NA_real_)))))
-    expect_silent(signed_linear_fc_to_log2(c(-3, 0, NA_real_, 3)))
-    expect_equal(length(signed_linear_fc_to_log2(numeric(0))), 0L)
+    expect_true(all(is.na(signed_fc_to_log2(c(0, NA_real_)))))
+    expect_silent(signed_fc_to_log2(c(-3, 0, NA_real_, 3)))
+    # numeric(0), not logical(0): a zero-row table must not put a logical column
+    # into the results frame where every other run puts a numeric one.
+    expect_identical(signed_fc_to_log2(numeric(0)), numeric(0))
+})
+
+test_that("one conversion serves this convention, not two", {
+    # A second copy of this transform lived in R/core/01_io.R and was reachable
+    # from the same call sites. Two functions with the same semantics drift:
+    # a fix to one leaves the other wrong, and the call site picks whichever
+    # name it happened to be written with.
+    expect_false(exists("signed_linear_fc_to_log2"))
 })
 
 

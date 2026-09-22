@@ -305,10 +305,21 @@ assert_scalar_num <- function(x, name, allow_null = FALSE, min_val = -Inf, max_v
 #'
 #' Proteomics linear FC convention: positive values = up, negative = down
 #' (e.g. 2 = 2x up, -1.5 = 1.5x down). Converts to log2 space preserving sign.
+#' A plain \code{log2()} would return NaN for every down-regulated feature,
+#' silently dropping about half the table wherever the value is reused.
+#'
+#' The single conversion for this convention: the multiomics concordance join
+#' and the pre-computed proteomics DE loader call this rather than keeping their
+#' own copy.
+#'
 #' @param fc Numeric vector of signed linear fold changes
-#' @return Numeric vector of log2 fold changes
+#' @return Numeric vector of log2 fold changes; NA where \code{fc} is NA or zero
 signed_fc_to_log2 <- function(fc) {
     fc <- as.numeric(fc)
+    # Guarded rather than left to ifelse(): ifelse() returns the shape of its
+    # test, so on a zero-length input it yields logical(0), which would put a
+    # logical column into a zero-row results frame instead of a numeric one.
+    if (length(fc) == 0) return(numeric(0))
     ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
 }
 
