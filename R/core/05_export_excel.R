@@ -232,6 +232,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 "Mean.raw.<group>",
                 "N.observed.<group>",
                 "log2FC_from_raw.<contrast>",
+                "linearFC_from_raw.<contrast>",
                 "<sample>.norm",
                 "Mean.<group>",
                 "CV.<group>",
@@ -246,15 +247,16 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
                 "Arithmetic mean of the measured <sample> values in that group, ignoring blanks. Pre-imputation.",
                 "How many of that group's samples were actually measured. Read Mean.raw. and log2FC_from_raw against this: a mean over 2 of 5 replicates is not the same evidence as one over 5 of 5.",
                 "Mean.raw.<numerator> minus Mean.raw.<denominator>. The fold change from measured values only, with no imputation and no model. Where nothing was imputed it equals log2FC.imputs exactly.",
+                "The same measured-only fold change on the linear scale, under the signed rule described for linearFC.imputs below. It is derived from log2FC_from_raw in this same row, so the two always agree. Blank wherever log2FC_from_raw is blank, which is any contrast with an arm that was never measured.",
                 if (multi_imp) {
-                    "The same matrix after imputation, from the first of the imputation runs -- the run limma was fitted on first, not a separate preprocessing draw."
+                    "The same matrix after imputation: this is where the blanks in <sample> have been filled in, so a value here may be measured or generated. It is the first of the imputation runs -- the run limma was fitted on first, not a separate preprocessing draw. Compare against <sample> to see which cells were filled."
                 } else {
-                    "The same matrix after imputation. This is the exact matrix limma was fitted on, not a separate draw."
+                    "The same matrix after imputation: this is where the blanks in <sample> have been filled in, so a value here may be measured or generated. It is the exact matrix limma was fitted on, not a separate draw. Compare against <sample> to see which cells were filled."
                 },
                 if (multi_imp) {
-                    "Arithmetic mean of the .norm log2 values across the replicates of that group, over the first imputation run. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs exactly for a fully measured feature; see note 3 for partially measured ones."
+                    "Arithmetic mean of the .norm values in this row across the replicates of that group -- a summary of the exported .norm block, so it includes imputed values. Computed over the first imputation run. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs exactly for a fully measured feature; see note 3 for partially measured ones."
                 } else {
-                    "Arithmetic mean of the .norm log2 values across the replicates of that group. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs."
+                    "Arithmetic mean of the .norm values in this row across the replicates of that group -- a summary of the exported .norm block, so it includes imputed values. Mean.<numerator> minus Mean.<denominator> reproduces log2FC.imputs."
                 },
                 "Coefficient of variation (%) within the group, on linear intensities back-transformed from the unimputed values, so measured values only.",
                 "log2 of the mean linear ratio across the imputation runs: log2( mean of 2^logFC over runs ).",
@@ -291,7 +293,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
             } else {
                 "3. With imputation$multi_imputation: false the pipeline draws once, so log2FC.imputs is that draw's coefficient and step 1 reproduces it exactly. There is no separate log2FC_from_means column: it would repeat what log2FC.imputs already says."
             },
-            "log2FC_from_raw is the same arithmetic on the MEASURED values only, ignoring blanks. Where a feature was fully measured the two agree exactly.",
+            "log2FC_from_raw is the same arithmetic on the MEASURED values only, ignoring blanks. Where a feature was fully measured the two agree exactly. linearFC_from_raw is that column under the linearFC rule above, so the measured-only pair reads the same way as the modelled pair.",
             "Where a feature was not fully measured, log2FC_from_raw and log2FC.imputs differ for two reasons: the imputed values are included in one and not the other, and the raw means may rest on unequal numbers of replicates per group. N.observed says how many values each raw mean rests on, and should be read alongside it.",
             "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect."
         )
@@ -486,7 +488,12 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         }
 
         # ---- Detect DE stat columns and group by contrast ----
-        de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC|pvalue|padj|upDown)\\."
+        # Every DE stat name must appear in the alternation explicitly: the
+        # pattern requires a "." straight after it, so a name absent from the
+        # list is not matched by a shorter one that happens to prefix it
+        # ("linearFC" cannot claim "linearFC_from_raw.", which has "_" there).
+        # Anything unmatched is treated as an annotation column.
+        de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
         if (length(de_col_indices) > 0) {
@@ -731,7 +738,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         mean_cols_present <- setdiff(grep("^Mean\\.", names(de_df), value = TRUE),
                                      raw_summary_cols)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
-        de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
+        # Same alternation as de_col_pattern above, and each name has to be
+        # listed there for the same reason. Anything not matched here is
+        # treated as an annotation column and lands next to the ID instead of
+        # with the DE stats.
+        de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
               "Binary_Pattern", "Binary_Corr"),
@@ -827,10 +838,15 @@ get_contrast_cols <- function(contrast, mode = "proteomics") {
         # log2fc_means keeps the real column name. Whether that column is
         # emitted is decided by build_final_results_proteomics() from
         # imputation$multi_imputation -- see the comment there.
+        # linearfc_raw is deliberately proteomics-only: it is the signed linear
+        # presentation of log2FC_from_raw, and proteomics is the only mode that
+        # supplies raw_log2fc at all. Adding it to the other branches would
+        # widen their naming contract for a column they never emit.
         list(
             log2fc = paste0("log2FC.imputs.", contrast),
             log2fc_means = paste0("log2FC_from_means.", contrast),
             log2fc_raw = paste0("log2FC_from_raw.", contrast),
+            linearfc_raw = paste0("linearFC_from_raw.", contrast),
             log2fc_check = paste0("log2FC_from_raw.", contrast),
             fc     = paste0("linearFC.imputs.", contrast),
             p      = paste0("pvalue.imputs.", contrast),
@@ -1116,7 +1132,9 @@ compute_naive_log2fc_columns <- function(mean_cols, contrasts_df,
 #' \code{stat_fn} to that sub-matrix. Backs both
 #' \code{\link{compute_group_cv_columns}} and
 #' \code{\link{compute_group_mean_columns}} so the two can never disagree about
-#' which samples make up a group.
+#' which samples make up a group. Callers needing a statistic those wrappers do
+#' not provide call this directly with their own \code{stat_fn} — the
+#' proteomics pre-imputation means do, for their empty-group handling.
 #'
 #' @param expr Numeric matrix (features x samples). Column names must match
 #'   \code{sample_meta[[sample_id_col]]}.
@@ -1220,6 +1238,17 @@ compute_group_stat_columns <- function(expr, sample_meta, sample_id_col,
 #'   \code{\link{compute_naive_log2fc_columns}}) holding the model-free log2
 #'   fold change from the group means. Written next to the model's
 #'   \code{log2FC}, so the two estimates can be compared per feature.
+#' @param raw_log2fc Optional feature-indexed data.frame with one column per
+#'   contrast holding the log2 fold change from the MEASURED values only (e.g.
+#'   from \code{\link{compute_naive_log2fc_columns}} over \code{Mean.raw.}
+#'   columns). Emitted as \code{log2FC_from_raw.<contrast>}, plus its signed
+#'   linear presentation \code{linearFC_from_raw.<contrast>} derived from the
+#'   same values. Only modes whose \code{\link{get_contrast_cols}} entry names
+#'   those columns emit them; today that is proteomics.
+#' @param naive_after_fc Logical; place \code{log2FC_from_means} after the
+#'   \code{linearFC} column rather than before it. Proteomics keeps
+#'   \code{log2FC.imputs} adjacent to \code{linearFC.imputs} (a pinned
+#'   contract) and groups the model-free estimates after the pair.
 #'
 #' @return data.frame with ID, annotations, expression, [normalized expression],
 #'   [Mean.<group>], [CV.<group>], DE stats, pass_any_contrast
@@ -1509,8 +1538,28 @@ build_final_results_generic <- function(
         # "log2FC_from_raw.AvsB" and silently found nothing.
         if (!is.null(raw_log2fc) && !is.null(cols$log2fc_raw) &&
             cn %in% colnames(raw_log2fc)) {
-            base[[cols$log2fc_raw]] <-
-                raw_log2fc[[cn]][match(base[[feature_id_col]], rownames(raw_log2fc))]
+            raw_vals <- raw_log2fc[[cn]][match(base[[feature_id_col]], rownames(raw_log2fc))]
+            base[[cols$log2fc_raw]] <- raw_vals
+
+            # The signed linear presentation of the column just written, taken
+            # from the same vector rather than recomputed from the Mean.raw
+            # cells, so the pair cannot drift. Same rule as linearFC (see
+            # fc_rule in build_provenance_notes): 2^x above zero, -1/2^x below,
+            # which is -(2^|x|). Written unrounded -- rounding the linear column
+            # while the log2 one stayed exact is what put features on the wrong
+            # side of the 1.5-fold cutoff in #193.
+            #
+            # Preallocated rather than written as a bare ifelse(): ifelse()
+            # returns the shape AND type of its test, so an all-NA or empty
+            # contrast would come back as a logical column instead of a
+            # numeric one.
+            if (!is.null(cols$linearfc_raw)) {
+                lin_raw <- rep(NA_real_, length(raw_vals))
+                ok <- !is.na(raw_vals)
+                lin_raw[ok] <- ifelse(raw_vals[ok] >= 0,
+                                      2^raw_vals[ok], -(2^abs(raw_vals[ok])))
+                base[[cols$linearfc_raw]] <- lin_raw
+            }
         }
         base[[cols$p]] <- summary_df[[cols$p]][m]
         base[[cols$padj]] <- summary_df[[cols$padj]][m]

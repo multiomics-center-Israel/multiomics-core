@@ -92,11 +92,59 @@ test_that("a mismatched prefix yields no columns rather than wrong ones", {
     expect_null(fc)
 })
 
-test_that("a group whose values are all missing gives NaN, not a wrong mean", {
+test_that("the shared mean helper still returns NaN for an all-missing group", {
+    # This is the GENERIC helper's behaviour and it is unchanged: rowMeans(na.rm
+    # = TRUE) over nothing is NaN. The proteomics measured-only path converts
+    # that case to NA at its own call site (see the NA test below); this test
+    # pins that the shared helper itself was not changed to do so.
     e <- mk_expr(list(c(1, 1), c(1, 2), c(1, 3)))
     out <- compute_group_mean_columns(e, mk_meta(), "SampleID",
                                       mk_contrasts(), prefix = "Mean.raw.")
     expect_true(is.nan(out[["Mean.raw.trt"]][1]))
     n <- compute_group_observed_columns(e, mk_meta(), "SampleID", mk_contrasts())
     expect_equal(n[["N.observed.trt"]][1], 0)
+})
+
+
+# =============================================================================
+# The proteomics raw path: NA for an unmeasured arm, and the signed linear
+# presentation of log2FC_from_raw.
+# =============================================================================
+
+mk_raw_cfg <- function() {
+    list(modes = list(proteomics = list(excel = list(group_cv = TRUE))))
+}
+
+mk_pre <- function(expr) {
+    list(expr_filt = expr, meta = mk_meta())
+}
+
+test_that("the proteomics raw means give NA for a group with nothing measured", {
+    # NaN reads as a failed calculation; NA reads as "never measured", which is
+    # what actually happened. Excel renders the two differently too.
+    e <- mk_expr(list(c(1, 1), c(1, 2), c(1, 3)))   # all three trt samples of F1
+    out <- build_group_raw_stats_proteomics(mk_pre(e), mk_contrasts(), mk_raw_cfg())
+
+    expect_true(is.na(out$means[["Mean.raw.trt"]][1]))
+    expect_false(is.nan(out$means[["Mean.raw.trt"]][1]))
+    # The measured arm is untouched, and so is the fully measured feature.
+    expect_equal(out$means[["Mean.raw.ctl"]][1], 8)
+    expect_equal(out$means[["Mean.raw.trt"]][2], 20)
+})
+
+test_that("the proteomics raw means still ignore NAs where something was measured", {
+    e <- mk_expr(list(c(1, 1)))   # F1 loses one of three trt samples
+    out <- build_group_raw_stats_proteomics(mk_pre(e), mk_contrasts(), mk_raw_cfg())
+    # The mean of the two observed values, not a value dragged towards zero by
+    # counting the blank as a measurement.
+    expect_equal(out$means[["Mean.raw.trt"]][1], 10)
+})
+
+test_that("an unmeasured arm propagates NA into log2FC_from_raw", {
+    e <- mk_expr(list(c(1, 1), c(1, 2), c(1, 3)))
+    out <- build_group_raw_stats_proteomics(mk_pre(e), mk_contrasts(), mk_raw_cfg())
+    fc <- compute_naive_log2fc_columns(out$means, mk_contrasts(), scale = "log2",
+                                       prefix = "Mean.raw.")
+    expect_true(is.na(fc[["trt_vs_ctl"]][1]))
+    expect_equal(fc[["trt_vs_ctl"]][2], 0)
 })
