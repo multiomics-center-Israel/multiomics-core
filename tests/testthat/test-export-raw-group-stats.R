@@ -94,9 +94,9 @@ test_that("a mismatched prefix yields no columns rather than wrong ones", {
 
 test_that("the shared mean helper still returns NaN for an all-missing group", {
     # This is the GENERIC helper's behaviour and it is unchanged: rowMeans(na.rm
-    # = TRUE) over nothing is NaN. The proteomics raw path deliberately
-    # overrides it (see the NA test below); no other mode can reach this case,
-    # because their Mean. columns are taken on a complete matrix.
+    # = TRUE) over nothing is NaN. The proteomics measured-only path converts
+    # that case to NA at its own call site (see the NA test below); this test
+    # pins that the shared helper itself was not changed to do so.
     e <- mk_expr(list(c(1, 1), c(1, 2), c(1, 3)))
     out <- compute_group_mean_columns(e, mk_meta(), "SampleID",
                                       mk_contrasts(), prefix = "Mean.raw.")

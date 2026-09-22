@@ -251,10 +251,10 @@ build_group_raw_stats_proteomics <- function(pre, contrasts_df, config = NULL) {
     # compute_group_mean_columns(), for the empty-group case only.
     # rowMeans(na.rm = TRUE) over a group with nothing measured returns NaN,
     # which Excel shows as an error value and which reads in a table as a
-    # failed calculation rather than as "this group was never measured". Only
-    # this path can produce it -- the other modes' Mean. columns are taken on a
-    # complete matrix -- so the NA is applied here and the shared helper's
-    # behaviour is left alone.
+    # failed calculation rather than as "this group was never measured". This
+    # block is computed on the matrix that still carries its NAs, so the
+    # conversion belongs here rather than in the shared helper, whose
+    # behaviour is deliberately left alone.
     mean_measured_only <- function(m) {
         mu <- rowMeans(m, na.rm = TRUE)
         mu[rowSums(!is.na(m)) == 0L] <- NA_real_

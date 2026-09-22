@@ -488,8 +488,11 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         }
 
         # ---- Detect DE stat columns and group by contrast ----
-        # The longer names come first so a prefix never wins over the full
-        # name: "linearFC" would otherwise claim "linearFC_from_raw.".
+        # Every DE stat name must appear in the alternation explicitly: the
+        # pattern requires a "." straight after it, so a name absent from the
+        # list is not matched by a shorter one that happens to prefix it
+        # ("linearFC" cannot claim "linearFC_from_raw.", which has "_" there).
+        # Anything unmatched is treated as an annotation column.
         de_col_pattern <- "^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\."
         de_col_indices <- grep(de_col_pattern, colnames(df_out))
         contrast_groups <- list()
@@ -735,9 +738,10 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
         mean_cols_present <- setdiff(grep("^Mean\\.", names(de_df), value = TRUE),
                                      raw_summary_cols)
         cv_cols_present <- grep("^CV\\.", names(de_df), value = TRUE)
-        # Same alternation as de_col_pattern above, and for the same reason:
-        # anything not matched here is treated as an annotation column and
-        # lands next to the ID instead of with the DE stats.
+        # Same alternation as de_col_pattern above, and each name has to be
+        # listed there for the same reason. Anything not matched here is
+        # treated as an annotation column and lands next to the ID instead of
+        # with the DE stats.
         de_stat_cols <- grep("^(log2FC_from_means|log2FC_from_raw|log2FC|linearFC_from_raw|linearFC|pvalue|padj|upDown)\\.", names(de_df), value = TRUE)
         clustering_cols <- intersect(
             c("Hierarchical_Order", "Partition_Cluster_ID", "Partition_Order",
