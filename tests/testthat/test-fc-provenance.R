@@ -447,6 +447,130 @@ test_that("P7 single imputation omits log2FC_from_means, multi keeps it", {
 })
 
 
+# -----------------------------------------------------------------------------
+# P7 — linearFC_from_raw: the measured-only estimate on the linear scale
+# -----------------------------------------------------------------------------
+
+# The P7 final-results fixture, with two knobs. `unmeasured_arm` blanks the
+# whole numerator group for p2, so the contrast has an arm that was never
+# measured rather than merely one missing replicate. `observed` replaces the
+# measured matrix outright, for cases that need particular group means.
+raw_fc_fixture <- function(unmeasured_arm = FALSE, observed = NULL) {
+    meta <- prov_meta()
+    if (is.null(observed)) {
+        observed <- matrix(c(10, 10, 12, 12,
+                             8, NA, 9, 9),
+                           nrow = 2, byrow = TRUE,
+                           dimnames = list(c("p1", "p2"), meta$SampleID))
+    }
+    if (unmeasured_arm) observed["p2", c("S_1", "S_2")] <- NA
+    imputed <- observed
+    imputed["p2", "S_2"] <- 7.5
+    if (unmeasured_arm) imputed["p2", "S_1"] <- 7.9
+
+    sdf <- summarize_limma_mult_imputation(prot_runs(), prot_config())
+    sdf <- sdf[match(c("p1", "p2"), sdf$FeatureID), , drop = FALSE]
+
+    build_final_results_proteomics(
+        pre = list(expr_filt = observed, expr_imp_single = imputed,
+                   meta = meta, row_data = NULL),
+        summary_df = sdf, contrasts_df = prov_contrasts(),
+        feature_id_col = "FeatureID", config = prot_config()
+    )
+}
+
+test_that("P7 linearFC_from_raw is the signed linear form of log2FC_from_raw", {
+    fr <- raw_fc_fixture()
+    expect_true("linearFC_from_raw.S_vs_NS" %in% names(fr))
+
+    lfc <- fr$log2FC_from_raw.S_vs_NS
+    # Hand-computed from the fixture, and written a second way (exp/log rather
+    # than 2^ and ifelse) so the production formula cannot make this agree with
+    # itself by construction.
+    expected <- ifelse(lfc < 0, -exp(log(2) * abs(lfc)), exp(log(2) * lfc))
+    expect_equal(fr$linearFC_from_raw.S_vs_NS, expected)
+
+    # p1: S mean 10, NS mean 12 -> log2FC -2, i.e. 4-fold DOWN. The signed
+    # convention writes that as -4, never as 0.25.
+    expect_equal(lfc[1], -2)
+    expect_equal(fr$linearFC_from_raw.S_vs_NS[1], -4)
+})
+
+test_that("P7 linearFC_from_raw is unrounded, unlike the modelled linearFC", {
+    # linearFC.imputs goes through signif(x, 3); that rounding is what put
+    # borderline features on the wrong side of the 1.5-fold cutoff (see
+    # test-report-log2fc-rounding.R). The measured-only pair must not repeat it,
+    # so p1 is given group means whose ratio does NOT survive 3 significant
+    # figures: 2^0.1234 is 1.0893..., which would be stored as 1.09.
+    meta <- prov_meta()
+    awkward <- matrix(c(10.1234, 10.1234, 10, 10,
+                        8, NA, 9, 9),
+                      nrow = 2, byrow = TRUE,
+                      dimnames = list(c("p1", "p2"), meta$SampleID))
+    lin <- raw_fc_fixture(observed = awkward)$linearFC_from_raw.S_vs_NS[1]
+
+    expect_false(isTRUE(all.equal(lin, signif(lin, 3))))
+    expect_true(abs(lin - 1.09) > 1e-4)
+})
+
+test_that("P7 linearFC_from_raw sits immediately after log2FC_from_raw", {
+    nm <- names(raw_fc_fixture())
+    expect_equal(nm[which(nm == "log2FC_from_raw.S_vs_NS") + 1L],
+                 "linearFC_from_raw.S_vs_NS")
+})
+
+test_that("P7 an arm with nothing measured is NA in both raw columns", {
+    fr <- raw_fc_fixture(unmeasured_arm = TRUE)
+    p2 <- fr[fr$FeatureID == "p2", ]
+
+    expect_true(is.na(p2$log2FC_from_raw.S_vs_NS))
+    expect_true(is.na(p2$linearFC_from_raw.S_vs_NS))
+    # NA, not NaN: the group was never measured, the arithmetic did not fail.
+    expect_false(is.nan(p2$log2FC_from_raw.S_vs_NS))
+    # The modelled estimate is unaffected — it ran on the imputed matrix.
+    expect_false(is.na(p2$log2FC.imputs.S_vs_NS))
+    # And the fully measured feature still carries a number.
+    expect_false(is.na(fr$linearFC_from_raw.S_vs_NS[fr$FeatureID == "p1"]))
+})
+
+test_that("P7 linearFC_from_raw is classified and ordered as a DE statistic", {
+    skip_if_not_installed("openxlsx")
+    # Columns the writer does not recognise as DE stats are treated as
+    # annotations and land next to the ID at the front of the sheet. Two
+    # observable consequences are pinned here: the DE header row carries the
+    # SHORT stat name (only matched columns are rewritten that way), and the
+    # column keeps its place beside log2FC_from_raw after the reorder.
+    fr <- raw_fc_fixture()
+    meta <- prov_meta()
+    expr_de <- matrix(c(10, 10, 12, 12, 8, 7.5, 9, 9),
+                      nrow = 2, byrow = TRUE,
+                      dimnames = list(c("p1", "p2"), meta$SampleID))
+
+    out_dir <- withr::local_tempdir()
+    files <- write_final_results_excels_legacy_generic(
+        final_results = fr, config = prot_config(), out_dir = out_dir,
+        mode = "proteomics", id_col = "FeatureID", expr_for_de = expr_de,
+        with_cutoffs = FALSE
+    )
+    f_de <- files[length(files)]
+    skip_if(is.na(f_de) || !file.exists(f_de), "DE workbook was not written")
+
+    # No annotation rows are requested, so the header sits just below the merged
+    # contrast row. Locate it by its first cell rather than assuming a row
+    # number, so a change to the banner rows does not silently read the wrong
+    # line and pass.
+    top <- openxlsx::readWorkbook(f_de, sheet = "Results", colNames = FALSE,
+                                  rows = 1:3, skipEmptyRows = FALSE)
+    hdr_row <- which(apply(top, 1, function(r) identical(as.character(r[[1]]), "FeatureID")))
+    expect_length(hdr_row, 1L)
+    hdr <- unlist(top[hdr_row, ], use.names = FALSE)
+
+    expect_true("linearFC_from_raw" %in% hdr)
+    expect_false(any(grepl("^linearFC_from_raw\\.", hdr)))
+    expect_equal(hdr[which(hdr == "log2FC_from_raw") + 1L], "linearFC_from_raw")
+})
+
+
 # =============================================================================
 # P8 — linearFC vs log2FC, each derived independently of the production code
 #      These deliberately do NOT reuse the pipeline's own expression. The
@@ -809,8 +933,14 @@ test_that("P6 provenance notes cover every column family the mode emits", {
     prot <- build_provenance_notes("proteomics")
     expect_true(all(c("<sample>", "<sample>.norm", "Mean.<group>", "CV.<group>",
                       "log2FC.imputs.<contrast>", "log2FC_from_raw.<contrast>",
+                      "linearFC_from_raw.<contrast>",
                       "Mean.raw.<group>", "N.observed.<group>",
                       "linearFC.imputs.<contrast>") %in% prot$glossary$Column))
+    # Under single imputation too: the measured-only pair does not depend on how
+    # many times the pipeline imputed.
+    expect_true("linearFC_from_raw.<contrast>" %in%
+                    build_provenance_notes("proteomics",
+                                           multi_imputation = FALSE)$glossary$Column)
 
     # The glossary must describe the workbook it is bound into, and the two
     # imputation modes produce different workbooks.
@@ -838,6 +968,38 @@ test_that("P6 provenance notes cover every column family the mode emits", {
 
     # Unknown modes still get a usable glossary rather than an error
     expect_s3_class(build_provenance_notes("something_else")$glossary, "data.frame")
+})
+
+test_that("P6 the proteomics glossary separates measured from model-input values", {
+    mean_of <- function(notes, col) notes$glossary$Meaning[notes$glossary$Column == col]
+
+    for (mi in c(TRUE, FALSE)) {
+        p <- build_provenance_notes("proteomics", multi_imputation = mi)
+        label <- paste("multi_imputation =", mi)
+
+        # <sample> is what was measured, and a blank means not observed.
+        expect_match(mean_of(p, "<sample>"), "before imputation", label = label)
+        expect_match(mean_of(p, "<sample>"), "not measured", label = label)
+
+        # .norm is the model input, and must say plainly that a value there may
+        # have been generated rather than measured. Reading it as a second
+        # measured block is the misreading this wording exists to prevent.
+        expect_match(mean_of(p, "<sample>.norm"), "filled in", label = label)
+        expect_match(mean_of(p, "<sample>.norm"), "measured or generated", label = label)
+
+        # Mean.<group> summarises the exported .norm block, not the measured one.
+        expect_match(mean_of(p, "Mean.<group>"), "\\.norm", label = label)
+        expect_match(mean_of(p, "Mean.<group>"), "includes imputed values", label = label)
+
+        # Mean.raw./N.observed. are the measured-only counterparts.
+        expect_match(mean_of(p, "Mean.raw.<group>"), "Pre-imputation", label = label)
+        expect_match(mean_of(p, "N.observed.<group>"), "actually measured", label = label)
+
+        # And the measured-only fold change names its source column, so the
+        # linear and log2 forms cannot be read as independent estimates.
+        expect_match(mean_of(p, "linearFC_from_raw.<contrast>"), "log2FC_from_raw",
+                     label = label)
+    }
 })
 
 # ---------------------------------------------------------------------------

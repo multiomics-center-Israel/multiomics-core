@@ -225,6 +225,9 @@ build_final_results_proteomics <- function(pre, summary_df, contrasts_df, row_da
 #' computes \code{CV.<group>} from \code{expr_filt}, so a \code{CV.raw.}
 #' column would duplicate it exactly.
 #'
+#' A group with nothing measured yields \code{NA}, not \code{NaN}: see the
+#' comment on \code{mean_measured_only} below.
+#'
 #' @param pre Proteomics preprocessing results (uses \code{expr_filt},
 #'   \code{meta}).
 #' @param contrasts_df Contrasts table (Factor, Numerator, Denominator).
@@ -244,9 +247,24 @@ build_group_raw_stats_proteomics <- function(pre, contrasts_df, config = NULL) {
 
     raw_log2 <- as.matrix(pre$expr_filt)
 
-    means <- compute_group_mean_columns(
+    # compute_group_stat_columns() directly, rather than
+    # compute_group_mean_columns(), for the empty-group case only.
+    # rowMeans(na.rm = TRUE) over a group with nothing measured returns NaN,
+    # which Excel shows as an error value and which reads in a table as a
+    # failed calculation rather than as "this group was never measured". Only
+    # this path can produce it -- the other modes' Mean. columns are taken on a
+    # complete matrix -- so the NA is applied here and the shared helper's
+    # behaviour is left alone.
+    mean_measured_only <- function(m) {
+        mu <- rowMeans(m, na.rm = TRUE)
+        mu[rowSums(!is.na(m)) == 0L] <- NA_real_
+        mu
+    }
+
+    means <- compute_group_stat_columns(
         expr = raw_log2, sample_meta = pre$meta, sample_id_col = sample_id_col,
-        contrasts_df = contrasts_df, prefix = "Mean.raw.")
+        contrasts_df = contrasts_df, stat_fn = mean_measured_only,
+        prefix = "Mean.raw.")
 
     n_obs <- compute_group_observed_columns(
         expr = raw_log2, sample_meta = pre$meta, sample_id_col = sample_id_col,
