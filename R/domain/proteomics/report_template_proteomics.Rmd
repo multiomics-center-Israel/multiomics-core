@@ -2281,7 +2281,12 @@ function renderMultiBoxplot() {
                     gSamples.push(samples[i]);
                 }
             }
+            // Pin the box to its group's own slot rather than letting Plotly
+            // hand out positions to whichever traces happen to draw. Without
+            // this, a group with nothing measured takes no slot at all and the
+            // groups after it shift left into the gap.
             traces.push({
+                x: gValues.map(function() { return gi; }),
                 y: gValues, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: gSamples,
@@ -2294,16 +2299,21 @@ function renderMultiBoxplot() {
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            // Seed the axis with every group in first-appearance order. A group
-            // with nothing measured has no plottable point either way -- an
-            // empty trace now, a trace of unplottable placeholders before -- so
-            // it contributes no category of its own and drops off the axis
-            // entirely unless the categories are stated here.
+            // Label the axis from the group list, not from the data. A category
+            // axis only knows the categories its traces supply, so a group with
+            // nothing measured never creates one -- categoryarray orders the
+            // categories that exist, it does not bring a missing one into
+            // being. Ticks have no such dependency: tickmode "array" draws
+            // exactly the ticks listed here, so every group keeps a labelled
+            // slot whether or not anything was measured in it. The range is
+            // stated for the same reason, so an empty group at either end is
+            // not autoranged away.
             xaxis: {
                 title: bpGroupLabel,
-                type: "category",
-                categoryorder: "array",
-                categoryarray: uniqueGroups
+                tickmode: "array",
+                tickvals: uniqueGroups.map(function(g, i) { return i; }),
+                ticktext: uniqueGroups,
+                range: [-0.5, uniqueGroups.length - 0.5]
             },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },

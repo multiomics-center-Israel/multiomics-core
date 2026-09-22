@@ -13,7 +13,10 @@
 #    sample in the group, missing ones included, so it carried only "NA"
 #    placeholders. Plotly does not plot non-numeric values, and a box trace with
 #    no plottable point contributes no category, so the group left the x axis
-#    instead of being shown as unmeasured.
+#    instead of being shown as unmeasured. Note that stating categoryarray is
+#    not a fix: it orders the categories the traces created, and an empty group
+#    creates none. The axis is labelled from an explicit tick array instead,
+#    which does not consult the data at all.
 #
 # 2. ORA section headings stripped `_up`/`_down` along with the file suffix, so
 #    a database with both files produced two sections headed identically.
@@ -101,15 +104,32 @@ test_that("the peptide explorer keeps the guard this fix was modelled on", {
 # 2. A group with nothing measured stays visible
 # =============================================================================
 
-test_that("every group keeps its place on the axis", {
+test_that("every group keeps a labelled slot on the axis", {
     src <- report_src()
 
-    # A group with nothing measured has no plottable point either way, so it
-    # contributes no category of its own. The axis is seeded from the group list
-    # itself -- in first-appearance order, which is the order uniqueGroups is
-    # built in and the order the plot has always used.
-    expect_match(src, "categoryorder: \"array\"", fixed = TRUE)
-    expect_match(src, "categoryarray: uniqueGroups", fixed = TRUE)
+    # Ticks, not categories. A category axis only knows the categories its own
+    # traces supply, so a group with nothing measured never creates one --
+    # categoryarray orders the categories that exist, it does not bring a
+    # missing one into being, which a rendered report established the hard way.
+    # tickmode "array" draws exactly the ticks listed, with no dependency on
+    # what the data happens to contain.
+    expect_match(src, "tickmode: \"array\"", fixed = TRUE)
+    expect_match(src, "ticktext: uniqueGroups", fixed = TRUE)
+    # Stated for the same reason: an empty group at either end must not be
+    # autoranged off the plot.
+    expect_match(src, "range: [-0.5, uniqueGroups.length - 0.5]", fixed = TRUE)
+    # The mechanism that did not work must not creep back as the one that does.
+    expect_false(grepl("categoryarray: uniqueGroups", src, fixed = TRUE))
+})
+
+test_that("each box sits in its own group's slot", {
+    src <- report_src()
+
+    # The slot is the group's index in uniqueGroups, which is both what keeps
+    # the order and what stops the groups after an unmeasured one from shifting
+    # left into the gap it leaves.
+    expect_match(src, "x: gValues.map(function() { return gi; })", fixed = TRUE)
+    expect_match(src, "tickvals: uniqueGroups.map(function(g, i) { return i; })", fixed = TRUE)
 })
 
 test_that("a group with nothing measured is named rather than left blank", {
