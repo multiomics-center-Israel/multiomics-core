@@ -1,0 +1,106 @@
+# ==============================================================================
+# DE-integration config template
+#
+# Compares finished DE tables across layers -- proteomics or RNA-seq, from this
+# pipeline or elsewhere -- without the sample-level matrices the multiomics mode
+# needs. No sample pairing is used anywhere, so layers from different sample
+# sets (for example cells and conditioned media of the same cultures) can be
+# compared.
+#
+# Run:  Rscript run.R --config config/<your_project>.yaml
+# Output: <paths.out>/Results_<name>_<round>/de_integration/
+# ==============================================================================
+
+project:
+  dir: "/path/to/multiomics-core"
+  name: "My_DE_Integration"
+  analysis_round: "D01"
+  analyst: "Your Name"
+
+paths:
+  raw: "data"          # relative layer paths resolve against <project.dir>/<paths.raw>
+  out: "outputs"
+
+params:
+  seed: 1
+
+global:
+  organism: "Homo sapiens"
+
+modes:
+  de_integration:
+    # --- Layers: one finished DE table each (at least two) -------------------
+    # name        one lower-case word; becomes a column prefix
+    # omics_type  proteomics | rnaseq
+    # format      proteomics_summary  Datasets/limma_multimp_summary_p<cutoff>.tsv
+    #             proteomics_final    Datasets/final_results.tsv
+    #             rnaseq_summary      Datasets/deseq2_summary_p<cutoff>.tsv
+    #             rnaseq_final        Datasets/final_results.tsv
+    #             generic             any CSV/TSV, described by `columns`
+    # path        absolute, or relative to paths.raw
+    layers:
+      - name: "cells"
+        label: "Cells"
+        omics_type: "proteomics"
+        format: "proteomics_summary"
+        path: "/path/to/Results_cells/proteomics/Datasets/limma_multimp_summary_p0.05.tsv"
+        # Optional: count observed (non-imputed) values per group, to flag fold
+        # changes that rest on imputation. Not needed for *_final tables, which
+        # carry N.observed.<group> columns.
+        # observed:
+        #   matrix: "/path/to/Results_cells/proteomics/Datasets/protein_log2_filtered_unimputed.tsv"
+        #   samplesheet: "/path/to/cells_metadata.csv"
+        #   sample_col: "SampleName"
+        #   contrasts_file: "/path/to/cells_contrasts.csv"   # Contrast_name, Factor, Numerator, Denominator
+
+      - name: "media"
+        label: "Media"
+        omics_type: "proteomics"
+        format: "proteomics_final"
+        path: "/path/to/Results_media/proteomics/Datasets/final_results.tsv"
+
+      # An RNA-seq layer. Its exports carry gene ids only: give the run's
+      # Enrichment/gene_annotation.csv (gene_id, symbol) to match on symbols;
+      # without it the gene id itself is the matching key.
+      # - name: "rna"
+      #   omics_type: "rnaseq"
+      #   format: "rnaseq_summary"
+      #   path: "/path/to/Results_rna/rnaseq/Datasets/deseq2_summary_p0.05.tsv"
+      #   annotation_file: "/path/to/Results_rna/rnaseq/Enrichment/gene_annotation.csv"
+
+      # A table from elsewhere. One contrast per table; `contrast` labels it.
+      # - name: "external"
+      #   omics_type: "proteomics"
+      #   format: "generic"
+      #   path: "/path/to/external_de.csv"
+      #   contrast: "Treated_vs_Control"
+      #   columns:
+      #     id: "protein"
+      #     log2fc: "logFC"          # or linear_fc: a signed linear fold change
+      #     pvalue: "P.Value"
+      #     padj: "adj.P.Val"        # optional; BH of pvalue when absent
+      #     hit: "significant"       # optional; 1/TRUE/yes marks a hit
+      #     symbol: "gene"           # optional
+      #     gene_id: "gene_id"       # optional; the key when there is no symbol
+
+    # --- Comparisons: which contrast of each layer goes together -------------
+    # Optional. Without it, contrasts are paired by name across layers
+    # ("A_vs_B", "A vs. B" and "A - B" count as one); two single-contrast
+    # tables are paired even when named differently.
+    # comparisons:
+    #   - name: "treated_vs_control"
+    #     members: {cells: "Treated_vs_Control", media: "Treated_vs_Control"}
+    #     flip: []                   # layers whose contrast runs the other way
+
+    # --- Hits ----------------------------------------------------------------
+    # The table's own per-contrast flag is used when it has one (for the
+    # proteomics export that is the multi-imputation vote). Otherwise:
+    # (adjusted) p <= p_cutoff and |log2FC| >= log2(linear_fc_cutoff).
+    hits:
+      use_table_flag: true
+      p_cutoff: 0.05
+      use_adjusted: true
+      linear_fc_cutoff: 1.5
+
+    concordance:
+      well_observed_min: 2           # observed values per group for a "well observed" fold change
