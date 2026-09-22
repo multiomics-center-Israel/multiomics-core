@@ -2028,7 +2028,22 @@ if (length(heatmap_files) > 0) {
 ```{r protein-explorer-heading, eval=show_protein_explorer, results='asis'}
 cat("## Protein Expression Explorer\n\n")
 cat("The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.\n\n")
-cat("These are **measured** values: the filtered, normalised intensities with missing measurements left missing. A protein not detected in a sample contributes nothing here, rather than an imputed stand-in, so a group with no detections is shown as an empty slot and the reported mean and sample count cover only what was measured. The differential abundance statistics elsewhere in this report are computed on a complete matrix in which missing values have been imputed, which is why a fold change there need not equal the difference of the means shown here.\n\n")
+cat("These are **measured** values: the filtered, normalised intensities with missing measurements left missing. A protein not detected in a sample contributes nothing here, rather than a stand-in value, so a group with no detections is shown as an empty slot and the reported mean and sample count cover only what was measured.\n\n")
+
+# The reconciliation a reader needs, without claiming more than the config
+# supports. The first sentence holds in every mode: a fold change is a model
+# estimate, never a difference of the means drawn above. Only the second
+# depends on how this project is configured, and imputation.method = "none"
+# leaves the missing values in place for the model too -- so asserting an
+# imputed modelling matrix unconditionally would be false for those projects.
+# Deliberately silent about which matrix produced the numbers: with an
+# externally precomputed DE table the pipeline did not build one.
+cat("A fold change reported elsewhere in this report is a model estimate, not the difference of the two means drawn here, so the two are not required to agree.")
+.imp_method_exp <- tolower(as.character(prot_cfg$imputation$method %||% "none"))
+if (!identical(.imp_method_exp, "none")) {
+    cat(sprintf(" This project also imputes missing values (`%s`) before its own modelling step, so the matrix that step sees is complete where this view is not.", .imp_method_exp))
+}
+cat("\n\n")
 ```
 
 ```{r protein-explorer-data, eval=show_protein_explorer, include=FALSE}

@@ -139,7 +139,27 @@ test_that("the heading states that these are measured values", {
 
     expect_match(txt, "measured", fixed = TRUE)
     expect_match(txt, "missing measurements left missing", fixed = TRUE)
-    # The reconciliation a reader needs: these means and the DE fold changes are
-    # computed on different matrices, so they are not required to agree.
-    expect_match(txt, "imputed", fixed = TRUE)
+    # The reconciliation a reader needs, and the half of it that holds in every
+    # mode: a fold change is a model estimate, not a difference of these means.
+    expect_match(txt, "not the difference of the two means drawn here", fixed = TRUE)
+})
+
+test_that("the imputation claim is conditional on the configured method", {
+    # imputation.method = "none" returns the matrix with its NAs intact and the
+    # model fits that, so a report that unconditionally told the reader their
+    # statistics came from an imputed matrix would be wrong for those projects.
+    body <- explorer_chunk("protein-explorer-heading")
+    txt <- paste(body, collapse = "\n")
+
+    expect_match(txt, 'prot_cfg$imputation$method %||% "none"', fixed = TRUE)
+    expect_match(txt, 'if (!identical(.imp_method_exp, "none")) {', fixed = TRUE)
+    # The method is named rather than assumed.
+    expect_match(txt, "imputes missing values (`%s`)", fixed = TRUE)
+
+    # The unconditional half must say nothing about which matrix produced the
+    # statistics: with an externally precomputed DE table, none of the
+    # pipeline's own matrices did.
+    unconditional <- body[!grepl("^\\s*#", body)]
+    unconditional <- unconditional[seq_len(grep("^.imp_method_exp <-", unconditional)[1])]
+    expect_false(any(grepl("computed on a complete matrix", unconditional, fixed = TRUE)))
 })
