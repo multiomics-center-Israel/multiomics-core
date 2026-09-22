@@ -163,6 +163,65 @@ test_that("the multi-protein hover still names the protein", {
     expect_false(grepl("hovertemplate: \"%{x}<br>Sample: %{text}", src, fixed = TRUE))
 })
 
+test_that("all R chunks in the proteomics report parse", {
+    # The durable guard behind the apostrophe scanner below. CI can otherwise
+    # pass on a template whose R does not parse, because nothing in this suite
+    # renders it -- which is exactly how two heads on this branch went green
+    # while the report could not have knitted.
+    #
+    # Deliberately not knitr::purl(): tangling resolves the `purl`, `eval` and
+    # `child` chunk options, and a chunk whose option cannot be determined is
+    # assigned purl = FALSE and dropped from the tangled script. The explorer
+    # chunks here are guarded by `eval=show_protein_explorer && explorer_ready`,
+    # so the very chunks worth checking are the ones that would be omitted, and
+    # a broken template could tangle to something that parses cleanly. Reading
+    # the fences directly evaluates nothing at all.
+    f <- repo_file("R", "domain", "proteomics", "report_template_proteomics.Rmd")
+    skip_if(is.na(f) || !file.exists(f), "proteomics report template not found")
+
+    lines <- readLines(f, warn = FALSE)
+    i <- 1L
+    n_chunks <- 0L
+
+    while (i <= length(lines)) {
+        if (!grepl("^```\\{r(?:[ ,}]|$)", lines[i], perl = TRUE)) {
+            i <- i + 1L
+            next
+        }
+
+        n_chunks <- n_chunks + 1L
+        start <- i
+
+        rest <- if (start < length(lines)) {
+            lines[(start + 1L):length(lines)]
+        } else {
+            character(0)
+        }
+        rel_end <- which(grepl("^```\\s*$", rest, perl = TRUE))[1L]
+
+        if (is.na(rel_end)) {
+            fail(sprintf("Unclosed R chunk at line %d: %s", start, lines[start]))
+            break
+        }
+
+        end <- start + rel_end
+        body <- if (end > start + 1L) lines[(start + 1L):(end - 1L)] else character(0)
+
+        err <- tryCatch({ parse(text = body); NULL }, error = function(e) e)
+        if (!is.null(err)) {
+            fail(sprintf("R chunk starting at line %d does not parse (%s): %s",
+                         start, lines[start], conditionMessage(err)))
+        }
+
+        i <- end + 1L
+    }
+
+    # An order-of-magnitude floor, not an exact count: a walker that stopped
+    # after the first few chunks would otherwise pass by checking almost
+    # nothing, while adding or removing a chunk should not fail the suite.
+    expect_gt(n_chunks, 100L)
+})
+
 test_that("the explorer script blocks carry no unescaped apostrophe", {
     # Every one of these JS blocks is emitted from inside cat('...'), a
     # single-quoted R string, so one bare apostrophe in the JavaScript closes
