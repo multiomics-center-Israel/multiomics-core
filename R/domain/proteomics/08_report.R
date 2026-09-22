@@ -7,7 +7,10 @@
 #'
 #' @param run_dir  The results run directory (e.g. outputs/project/Results_...)
 #' @param config   Full pipeline config list
-#' @param config_file Path to the original YAML config file (for embedding)
+#' @param config_file Path to the original YAML config file. Retained for the
+#'   pipeline call sites; the config snapshot is serialized from \code{config}
+#'   rather than copied from this path, so that it matches what the
+#'   \code{execution_info_files} target writes.
 #' @param report_type Type of report: "detailed" (default) or "short"
 #' @return Path to the rendered HTML file (character, format = "file")
 #' @export
@@ -50,20 +53,23 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
     dest_rmd <- file.path(parent_dir, "report_proteomics.Rmd")
     file.copy(template_path, dest_rmd, overwrite = TRUE)
 
-    # Ensure execution_info/config_used.yaml exists (needed by the template).
-    # The template looks for it relative to its own location, so keep a copy
-    # in the parent results dir as well as the proteomics/ subdir.
+    # Write execution_info/config_used.yaml (needed by the template). The template
+    # looks for it relative to its own location, so keep a copy in the parent
+    # results dir as well as the proteomics/ subdir. Rewritten on every render
+    # rather than only when absent: the proteomics/ copy is written by nothing
+    # else, so the old guard left the first run's snapshot in place forever and
+    # config edits appeared to do nothing.
+    #
+    # Always serialized from `config`, never copied from the source YAML. The
+    # parent path is the same file the execution_info_files target owns, and that
+    # target writes it with this same yaml::write_yaml(config, ...). Copying the
+    # raw YAML here would put different content at a tracked path -- load_config()
+    # adds .config_path and .config_mtime, which the source file does not carry --
+    # leaving the target outdated the moment the report finished.
     for (edir in unique(c(file.path(parent_dir, "execution_info"),
                           file.path(run_dir, "execution_info")))) {
-        config_used <- file.path(edir, "config_used.yaml")
-        if (!file.exists(config_used)) {
-            dir.create(edir, recursive = TRUE, showWarnings = FALSE)
-            if (!is.null(config_file) && file.exists(config_file)) {
-                file.copy(config_file, config_used, overwrite = TRUE)
-            } else {
-                yaml::write_yaml(config, config_used)
-            }
-        }
+        dir.create(edir, recursive = TRUE, showWarnings = FALSE)
+        yaml::write_yaml(config, file.path(edir, "config_used.yaml"))
     }
 
     # Render into the parent results directory
@@ -198,4 +204,56 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
     }
 
     out_html
+}
+
+#' PCA feature-set panels for the report's protein-subset dropdown
+#'
+#' Lists the panel images the QC module wrote, in the order the dropdown shows
+#' them: all proteins, the top-variable sets from largest to smallest, then the
+#' complete-case set. Kept out of the template so the order and labels are
+#' tested against the code the report actually runs.
+#'
+#' @param diag_dir Directory holding the proteomics diagnostic plots.
+#' @return Data frame with columns \code{key} (dropdown value), \code{path} and
+#'   \code{label}, one row per panel whose image exists; zero rows if none do.
+list_pca_feature_panels <- function(diag_dir) {
+    panels <- data.frame(key = character(0), path = character(0),
+                         label = character(0), stringsAsFactors = FALSE)
+    add <- function(panels, key, path, label) {
+        if (!file.exists(path)) return(panels)
+        rbind(panels, data.frame(key = key, path = path, label = label,
+                                 stringsAsFactors = FALSE))
+    }
+
+    # All proteins is the main PC1-vs-PC2 plot, not a panel of its own: it is
+    # already the PCA of the full matrix, so the QC module writes it once and
+    # this maps it to the dropdown's "all" entry.
+    panels <- add(panels, "all", file.path(diag_dir, "PCA_PC1.vs.PC2.png"), "All proteins")
+
+    top_files <- list.files(diag_dir, pattern = "^PCA_top[0-9]+\\.png$", full.names = TRUE)
+    n_top <- as.numeric(sub("^PCA_top([0-9]+)\\.png$", "\\1", basename(top_files)))
+    for (i in order(n_top, decreasing = TRUE)) {
+        panels <- add(panels, sprintf("top%d", n_top[i]), top_files[i],
+                      sprintf("Top %s variable proteins", format(n_top[i], big.mark = ",")))
+    }
+
+    # Says what the selection is, not what it is free of: the panel shares the
+    # matrix and the preprocessing of the others, batch correction included.
+    add(panels, "robust", file.path(diag_dir, "PCA_robust.png"),
+        "Proteins observed in every sample")
+}
+
+#' Sample-subset PCA panels for the report's Subsets section
+#'
+#' Only files named \code{PCA_subset_<name>.png} count, so the dropdown's
+#' feature-set panels (all, top-N, complete-case) and the PC1/PC3 plots are
+#' never listed as sample subsets.
+#'
+#' @param diag_dir Directory holding the proteomics diagnostic plots.
+#' @return Data frame with columns \code{name} (the subset name taken from the
+#'   filename) and \code{path}, sorted by name; zero rows if there are none.
+list_pca_subset_panels <- function(diag_dir) {
+    paths <- sort(list.files(diag_dir, pattern = "^PCA_subset_.+\\.png$", full.names = TRUE))
+    data.frame(name = sub("^PCA_subset_(.+)\\.png$", "\\1", basename(paths)),
+               path = paths, stringsAsFactors = FALSE)
 }

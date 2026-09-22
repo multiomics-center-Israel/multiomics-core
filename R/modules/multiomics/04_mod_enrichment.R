@@ -21,6 +21,14 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # Cleared here, before any return can be taken -- including the disabled
+    # guard immediately below. The report includes this export on file.exists()
+    # alone, so a rerun that switches enrichment off would otherwise keep
+    # presenting the previous run's scores as current. The invariant is that
+    # the file exists only if THIS invocation produced rows, and a guard that
+    # returns before the cleanup is exactly how such an invariant is lost.
+    write_compound_gsea_export(NULL, out_dir)
+
     # Check if enrichment is enabled
     if (!isTRUE(config$modes$multiomics$enrichment$run_enrichment)) {
         message("  Cross-omics enrichment disabled in config")
@@ -36,9 +44,57 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
         out_dir = out_dir
     )
 
+    # --- Compound GSEA (metabolomics) ---
+    # Scored before the per_omics guard below, and kept out of per_omics
+    # entirely. Two separate reasons, both deliberate:
+    #
+    # Out of per_omics, because everything there becomes pathway_tables and
+    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
+    # and no method filter -- a GSEA row there would quietly become the
+    # metabolomics p-value feeding Stouffer.
+    #
+    # Before the guard, because GSEA does not depend on any ORA table. A run
+    # where no layer produced an enriched table is precisely a run where ranked
+    # evidence may still be informative, and returning early would have thrown
+    # it away. It also means the export is cleared on every path, so a run that
+    # scores nothing cannot leave the previous run's file behind.
+    #
+    # It reads the compound-pathway cache the ORA step fills and never fetches
+    # one of its own, so it runs after build_per_omics_enrichment().
+    compound_gsea <- tryCatch(
+        run_compound_gsea_for_contrasts(
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir
+        ),
+        error = function(e) {
+            message("  Compound GSEA failed: ", e$message)
+            NULL
+        }
+    )
+    if (!is.null(write_compound_gsea_export(compound_gsea, out_dir))) {
+        message("  Compound GSEA: ", nrow(compound_gsea),
+                " scored pathway-contrast rows written")
+    }
+
     if (is.null(per_omics) || length(per_omics) == 0) {
         message("  No omics layers produced enrichment results")
-        return(NULL)
+
+        if (is.null(compound_gsea) || nrow(compound_gsea) == 0) return(NULL)
+
+        # Compound GSEA alone. Reported as what it is -- no ORA tables, no
+        # cross-omics analysis, no figures -- rather than dressed up as a
+        # partial enrichment result. run_multigsea_plots() reads per_omics and
+        # stops on fewer than two layers, so an empty list is the honest shape
+        # and the one its own guard already handles.
+        message("  Compound GSEA produced results; returning those alone")
+        return(list(
+            per_omics = list(),
+            cross_omics = NULL,
+            compound_gsea = compound_gsea,
+            plots = list()
+        ))
     }
 
     # Generate per-omics enrichment barplots (always, even with 1 omics)
@@ -63,6 +119,13 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     }
 
     # Cross-omics comparison requires >= 2 omics
+    #
+    # Cleared here and not only inside the analysis: this guard means a rerun
+    # that drops to one enriched layer never enters that function at all, and
+    # the report finds the earlier run's per-collection figures by glob and
+    # shows them beside the one-layer results as though they were current.
+    .clear_collection_heatmaps(out_dir)
+
     cross_omics_enrich <- NULL
     if (length(per_omics) >= 2) {
         cross_omics_enrich <- analyze_cross_omics_enrichment(
@@ -83,18 +146,9 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
 
     # Normalize contrast names across omics so they aggregate correctly.
-    # Different omics may encode the same contrast differently (e.g.,
-    # "1.56ppm_vs_0ppm" from RNA, "1.56ppm vs. 0ppm" from proteomics,
-    # or "1.56ppm - 0ppm" from metabolomics). All of these refer to the
-    # same contrast and must map to the same canonical key.
-    .normalize_contrast_key <- function(x) {
-        x <- tolower(trimws(x))
-        # Treat " - " / "-" between groups as an alias for "vs"
-        x <- gsub("\\s*-\\s*", "vs", x)
-        x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
-        x <- gsub("[^a-z0-9vs]", "", x)         # strip non-alphanumeric
-        x
-    }
+    # normalize_contrast_key() lives in R/domain/multiomics/07_enrichment.R,
+    # so the pathview renderer keys contrasts exactly the same way.
+    .normalize_contrast_key <- normalize_contrast_key
 
     # Collect all contrast names and build a canonical mapping
     all_raw_contrasts <- unique(unlist(lapply(per_omics, function(df) {
@@ -142,6 +196,10 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             safe_dir <- gsub("[^a-zA-Z0-9._-]", "_", cname)
             contrast_out <- file.path(per_contrast_dir, safe_dir)
             dir.create(contrast_out, recursive = TRUE, showWarnings = FALSE)
+            # Same reason as the run-level clear above: the per-contrast call
+            # is guarded on >= 2 layers too, so a contrast that drops below it
+            # on a rerun would keep showing the previous run's figures.
+            .clear_collection_heatmaps(contrast_out)
 
             per_omics_contrast <- list()
             for (om in names(per_omics)) {
@@ -197,6 +255,8 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     list(
         per_omics = per_omics,
         cross_omics = cross_omics_enrich,
+        # Its own slot, beside per_omics rather than inside it.
+        compound_gsea = compound_gsea,
         plots = c(per_omics_plots, if (!is.null(cross_omics_enrich)) cross_omics_enrich$plots else list())
     )
 }

@@ -142,6 +142,7 @@ If you think one of these is needed, *propose* it in chat and wait for an explic
 We work with biological data. Some of it may be unpublished, patient-associated, or regulated.
 
 - **Never copy data file contents into commit messages, PR descriptions, comments, issue threads, or any text you produce.** This includes sample IDs that could re-identify a subject, raw expression values, sequencing reads, anything from `data/` or `data-raw/`.
+- **Numbers measured on a real run count as data too.** Consider this sentence, whose figures are invented for the purpose: *"Verified on a 12-sample run: 5,000 features agree, the other 1,000 differ by a median of 0.5."* It reads like evidence, but its shape discloses the cohort size, the assay depth and an effect size of an unpublished dataset — into a commit message, which is permanent. The same goes for DE gene counts, numbers of significant pathways, and how many features a filter kept. Say *what* you verified and *how*, not the figures it produced: *"verified that the two columns agree to floating-point precision on fully observed features, and differ on partially observed ones by the imputation's spread."* If a concrete number genuinely helps a reader, invent one as above and say so. **When in doubt, leave it out** — a reviewer can rerun the check; they cannot un-publish a number.
 - **In examples and docstrings, use synthetic data only.** Don't paste real values from the user's files. If you need to illustrate behavior, generate something like `data.frame(sample = c("S1", "S2"), counts = c(100, 200))`.
 - **Don't `cat()` / `print()` / `head()` data into the chat to "understand its structure."** Use `str()`, `glimpse()`, `colnames()`, `dim()` — they describe shape without exposing values. If you really need to see values, ask the user to share a redacted excerpt.
 - **Don't read large raw files** (FASTQ, BAM, large H5) "to understand the format." Read 5 lines, or read the docs of the package that parses them.
@@ -235,6 +236,24 @@ This protects the user from autopilot mistakes while not blocking them when they
 
 ---
 
+## A PR is not ready until Codex comes back clean
+
+Your own reading of a diff is not the bar. A PR is ready to merge when **CI is green and Codex returns with no findings, both on the head you last pushed** — not before.
+
+This is the same reasoning as *Running R — you don't, we do*: it is a check you cannot perform on yourself, so hand it over and wait for the answer.
+
+**Read the review threads, not the summary.** Codex posts a summary comment *and* inline threads. The summary has said "Didn't find any major issues" on a commit that carried three inline P2 findings. When they disagree, the threads are the review.
+
+**A verdict belongs to one commit.** Check the SHA in the review and in the CI run against the current head. A clean pass on a head you have since pushed over says nothing about the head you have now. Every push restarts the gate.
+
+**Expect a fixed finding to open new ground.** A fix changes what the rest of the code sees, and the next review often finds something real in what you just wrote — sometimes a regression the fix introduced. That is not noise and it is not a reason to stop early. Keep going until a review of an *unchanged* head is clean.
+
+**Fix the class, not the instance.** When a finding names one place, sweep the surrounding block for the same mistake before replying. Say what you swept.
+
+**When you disagree, say so with evidence and leave it to the user.** Cite the code that supports you, do not resolve the thread yourself, and do not quietly change the code to make a finding go away when you believe it is wrong.
+
+---
+
 ## Before you tell the user you're done
 
 Mentally walk through:
@@ -247,6 +266,7 @@ Mentally walk through:
 - [ ] If you added a function, did you also add a `roxygen2` docstring and a test?
 - [ ] If anything is stochastic, is it seeded?
 - [ ] Is the diff small and focused on one thing?
+- [ ] Are CI and Codex both clean **on the current head**, with the inline threads read and not just the summary?
 
 ---
 
@@ -273,6 +293,7 @@ Closes #<issue number>
 - [ ] No Shiny app changes
 - [ ] New functions have docstrings + tests
 - [ ] Random components are seeded
+- [ ] CI green and Codex clean on the current head
 ```
 
 ---

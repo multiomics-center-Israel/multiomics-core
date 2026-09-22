@@ -75,7 +75,10 @@ read_gmt <- function(gmt_file) {
 #'
 #' @param organism Organism name (used for OrgDb/KEGG lookups)
 #' @param pathway_database Character vector of databases to use (e.g. "GO", "KEGG")
-#' @param gmt_file Optional custom GMT file path
+#' @param gmt_file Optional custom GMT path, or a vector/list of paths. A single
+#'   path becomes one collection named "custom"; several paths stay separate,
+#'   one collection per file named after its basename, so each source is scored
+#'   and FDR-corrected on its own.
 #' @param annotation Gene annotation data frame (with gene_id and entrez_id columns)
 #' @return Named list of gene set collections (each a named list of character vectors)
 #' @export
@@ -108,9 +111,56 @@ load_gene_sets <- function(organism,
     }
     gmt_paths <- requested_gmt_paths[file.exists(requested_gmt_paths)]
     if (length(gmt_paths) > 0) {
-        gene_sets$custom <- read_gmt(gmt_paths)
-        message("Loaded custom gene sets from: ",
-                paste(gmt_paths, collapse = ", "))
+        # One GMT keeps the historical "custom" collection name. Several GMTs
+        # stay separate, one collection per file, so that each source gets its
+        # own result table and its own multiple-testing correction — merging
+        # them would pool unrelated (and often redundant) sets into a single
+        # FDR family.
+        if (length(gmt_paths) == 1) {
+            collection_names <- "custom"
+        } else {
+            # Uniqueness has to be established on the name the output will
+            # actually carry. save_pathway_results() writes each collection
+            # through gsub("[^a-zA-Z0-9_-]", "_", ...), so GO.v1.gmt and
+            # GO_v1.gmt are two collections that land on one filename and the
+            # second overwrites the first. Normalise first, then make unique.
+            #
+            # The reserved names are those this function gives its own
+            # collections further down. The GMTs are loaded first, so a file
+            # called KEGG.gmt would take the gene_sets$KEGG slot and then be
+            # silently overwritten when KEGG is requested as well -- a collision
+            # the pooled "custom" name could not produce. Seeding make.unique()
+            # with them renames only a file that actually collides,
+            # deterministically, and leaves every other name exactly as it is.
+            # Uniqueness is decided on the lower-cased name, because the files
+            # these become collide on a case-insensitive filesystem: kegg.gmt
+            # beside the built-in KEGG writes pathway_<contrast>_kegg_fgsea.csv
+            # and pathway_<contrast>_KEGG_fgsea.csv, which are one file on macOS
+            # and Windows. The file's own capitalisation is put back afterwards,
+            # so a name that did not collide is untouched and one that did keeps
+            # its case with the suffix appended.
+            reserved <- c("GO", "GO_BP", "GO_CC", "GO_MF", "KEGG", "Reactome")
+            output_safe <- gsub("[^a-zA-Z0-9_-]", "_",
+                                tools::file_path_sans_ext(basename(gmt_paths)))
+            keys <- make.unique(
+                c(tolower(reserved), tolower(output_safe)),
+                sep = "_")[-seq_along(reserved)]
+            collection_names <- vapply(seq_along(output_safe), function(i) {
+                lower <- tolower(output_safe[i])
+                if (identical(keys[i], lower)) {
+                    output_safe[i]
+                } else {
+                    # make.unique() only ever appends to the string it was given
+                    paste0(output_safe[i], substring(keys[i], nchar(lower) + 1L))
+                }
+            }, character(1))
+        }
+
+        for (i in seq_along(gmt_paths)) {
+            gene_sets[[collection_names[i]]] <- read_gmt(gmt_paths[i])
+            message("Loaded gene set collection '", collection_names[i],
+                    "' from: ", gmt_paths[i])
+        }
 
         # Validate GMT coverage against annotation features if available
         if (!is.null(annotation) && "gene_id" %in% colnames(annotation)) {
@@ -122,17 +172,20 @@ load_gene_sets <- function(organism,
         }
 
         if (!is.null(feature_ids) && length(feature_ids) > 0) {
-            gmt_val <- tryCatch(
-                validate_gmt(gene_sets$custom, feature_ids, verbose = TRUE),
-                error = function(e) {
-                    warning("GMT validation failed: ", e$message)
-                    NULL
+            for (nm in collection_names) {
+                gmt_val <- tryCatch(
+                    validate_gmt(gene_sets[[nm]], feature_ids, verbose = TRUE),
+                    error = function(e) {
+                        warning("GMT validation failed for '", nm, "': ", e$message)
+                        NULL
+                    }
+                )
+                if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
+                    gene_sets[[nm]] <- gmt_val$filtered_pathways
+                    message("GMT '", nm, "' filtered to ",
+                            length(gmt_val$filtered_pathways),
+                            " pathways with coverage in data")
                 }
-            )
-            if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
-                gene_sets$custom <- gmt_val$filtered_pathways
-                message("GMT filtered to ", length(gmt_val$filtered_pathways),
-                        " pathways with coverage in data")
             }
         }
     }
@@ -422,13 +475,19 @@ load_gene_sets <- function(organism,
 #' @export
 run_ora <- function(sig_genes, gene_sets, background, min_size = 10, max_size = 500) {
 
-    gs_sizes <- lengths(gene_sets)
-    gs_filtered <- gene_sets[gs_sizes >= min_size & gs_sizes <= max_size]
+    # Size-filter on the members actually measured, not on raw GMT size. A set
+    # with 300 GMT members but 3 in the background carries no information yet
+    # still consumed a slot in the BH denominator, and could surface as a
+    # "significant" term backed by a handful of features. This also makes ORA
+    # test the same collection fgsea() does, which filters the same way.
+    gs_measured <- lapply(gene_sets, intersect, y = background)
+    gs_sizes <- lengths(gs_measured)
+    gs_filtered <- gs_measured[gs_sizes >= min_size & gs_sizes <= max_size]
 
     if (length(gs_filtered) == 0) return(data.frame())
 
     results <- lapply(names(gs_filtered), function(gs_name) {
-        gs_genes <- intersect(gs_filtered[[gs_name]], background)
+        gs_genes <- gs_filtered[[gs_name]]
         sig_in_gs <- length(intersect(sig_genes, gs_genes))
         sig_not_gs <- length(sig_genes) - sig_in_gs
         gs_not_sig <- length(gs_genes) - sig_in_gs
@@ -563,6 +622,136 @@ lookup_go_term_names <- function(go_ids) {
     term_names
 }
 
+# =============================================================================
+# KEGG pathway classification
+# =============================================================================
+
+#' Fetch and cache KEGG's BRITE classification of pathway maps
+#'
+#' KEGG's reference maps are pan-species. An organism with no KEGG code of its
+#' own is therefore tested against the whole map universe, and vertebrate organ
+#' or human-disease maps can score well purely because the orthologs underneath
+#' them are generic -- kinases, ion channels, cytoskeleton -- that KEGG happens
+#' to file under a human organ. Knowing each map's class lets a project exclude
+#' those from its report rather than read them as findings.
+#'
+#' Fail-open by contract: every failure path -- no network, timeout, an
+#' unexpected BRITE layout, an empty parse, an unreadable cache -- returns NULL,
+#' which \code{keep_kegg_pathways()} treats as "classification unavailable, keep
+#' everything". It never returns an empty table, because a caller cannot tell
+#' that apart from "nothing is classified" and would exclude the lot.
+#'
+#' @param cache_dir Directory for the cached RDS. Defaults to a `kegg_cache`
+#'   folder under \code{tempdir()}, matching \code{fetch_kegg_via_rest()}. That
+#'   spares repeated downloads within one R session; it does not persist across
+#'   sessions, and is not meant to.
+#' @param cache_days Refetch once the cached copy is older than this.
+#' @param timeout_sec Bound on the download, so a hanging endpoint cannot stall
+#'   a pipeline run.
+#' @return Data frame with columns `pathway_id` (the bare five-digit map
+#'   number), `category`, `subcategory`, `pathway_name`; or NULL when the
+#'   classification could not be obtained.
+kegg_pathway_categories <- function(cache_dir = NULL, cache_days = 7,
+                                    timeout_sec = 30) {
+    if (is.null(cache_dir)) cache_dir <- file.path(tempdir(), "kegg_cache")
+    cache_file <- file.path(cache_dir, "kegg_pathway_categories.rds")
+
+    if (file.exists(cache_file)) {
+        cache_age <- difftime(Sys.time(), file.mtime(cache_file), units = "days")
+        cached <- if (as.numeric(cache_age) < cache_days) {
+            tryCatch(readRDS(cache_file), error = function(e) NULL)
+        } else NULL
+        # A cache that is stale, unreadable or not the shape we wrote is simply
+        # not a cache: fall through and fetch again.
+        if (.is_kegg_category_table(cached)) return(cached)
+    }
+
+    lines <- tryCatch(
+        withr::with_options(list(timeout = timeout_sec), {
+            con <- url("https://rest.kegg.jp/get/br:br08901", open = "r")
+            on.exit(close(con), add = TRUE)
+            readLines(con, warn = FALSE)
+        }),
+        error = function(e) {
+            message("  KEGG pathway classification unavailable (",
+                    conditionMessage(e), ")")
+            NULL
+        }
+    )
+    res <- parse_kegg_brite_pathways(lines)
+    if (is.null(res)) return(NULL)
+
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    tryCatch(saveRDS(res, cache_file), error = function(e) NULL)
+    res
+}
+
+
+#' Is this the classification table we wrote?
+#'
+#' @param x Object read back from the cache.
+#' @return TRUE when \code{x} is a non-empty table with the expected columns.
+#' @keywords internal
+.is_kegg_category_table <- function(x) {
+    is.data.frame(x) && nrow(x) > 0 &&
+        all(c("pathway_id", "category", "subcategory", "pathway_name") %in% names(x))
+}
+
+
+#' Parse KEGG's br08901 hierarchy into one row per pathway map
+#'
+#' The flat file nests `A` categories over `B` subcategories over `C` pathway
+#' lines; anything else in it (headers, markup, blank lines) is not a pathway
+#' and is skipped. Kept separate from the download so the parse can be tested
+#' against a fixture without a network call.
+#'
+#' @param lines Character vector of the BRITE flat file's lines, or NULL.
+#' @return Data frame of `pathway_id`, `category`, `subcategory`,
+#'   `pathway_name`, or NULL when nothing parsed -- never an empty table, since
+#'   "no pathway is classified" and "exclude everything" must not look alike.
+parse_kegg_brite_pathways <- function(lines) {
+    if (is.null(lines) || length(lines) == 0) return(NULL)
+
+    # KEGG has shipped this hierarchy with and without bold markup around the
+    # heading text, so headings are read with it stripped either way.
+    strip_markup <- function(x) trimws(gsub("<[^>]*>", "", x))
+
+    # A and B headings carry their own BRITE hierarchy code before the readable
+    # name ("09150 Organismal Systems"). The config matches on the name, so the
+    # code comes off; a heading that carries none is left as it is. Applied to
+    # headings only -- a pathway's name has already had its map number removed,
+    # and one that happened to begin with digits must keep them.
+    heading <- function(x) sub("^[0-9]{5}[[:space:]]+", "", strip_markup(x))
+
+    category <- NA_character_
+    subcategory <- NA_character_
+    ids <- character(0); cats <- character(0)
+    subs <- character(0); names_ <- character(0)
+
+    for (ln in lines) {
+        if (grepl("^A", ln)) {
+            category <- heading(sub("^A", "", ln))
+            subcategory <- NA_character_
+        } else if (grepl("^B", ln)) {
+            subcategory <- heading(sub("^B", "", ln))
+        } else if (grepl("^C\\s+[0-9]{5}\\s", ln)) {
+            ids <- c(ids, sub("^C\\s+([0-9]{5})\\s+.*$", "\\1", ln))
+            cats <- c(cats, category)
+            subs <- c(subs, subcategory)
+            names_ <- c(names_, strip_markup(sub("^C\\s+[0-9]{5}\\s+", "", ln)))
+        }
+    }
+    if (length(ids) == 0) {
+        message("  KEGG pathway classification: no pathway lines found, ",
+                "so the hierarchy could not be read")
+        return(NULL)
+    }
+
+    data.frame(pathway_id = ids, category = cats, subcategory = subs,
+               pathway_name = names_, stringsAsFactors = FALSE)
+}
+
+
 #' Add pathway names to fGSEA/ORA results
 #'
 #' @param pathway_df Data frame with pathway analysis results (has 'pathway' column)
@@ -575,9 +764,18 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_ids <- pathway_df$pathway
 
     if (database == "GO" || grepl("^GO", database, ignore.case = TRUE)) {
-        # Look up GO term names
-        names_vec <- lookup_go_term_names(pathway_ids)
-        pathway_df$pathway_name <- unname(names_vec[pathway_ids])
+        # Prefer the names the collection already carries — a custom GO GMT
+        # names its own terms, and the biomaRt-generated sets attach the same
+        # GO term names — then fill any gap from GO.db.
+        descriptions <- if (!is.null(gene_sets)) attr(gene_sets, "descriptions") else NULL
+        names_vec <- if (!is.null(descriptions)) unname(descriptions[pathway_ids]) else
+            rep(NA_character_, length(pathway_ids))
+        unnamed <- is.na(names_vec) | !nzchar(names_vec)
+        if (any(unnamed)) {
+            looked_up <- lookup_go_term_names(pathway_ids[unnamed])
+            names_vec[unnamed] <- unname(looked_up[pathway_ids[unnamed]])
+        }
+        pathway_df$pathway_name <- names_vec
     } else if (database == "KEGG" || grepl("KEGG", database, ignore.case = TRUE)) {
         # Use the ID -> name lookup attached by load_gene_sets(); fall back to the
         # bare ID for any pathway without a resolved name (e.g. KEGGREST fallback
@@ -619,6 +817,52 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
     pathway_df
 }
 
+#' Build the ranked gene vector fgsea scores one contrast on
+#'
+#' The ranking source is chosen for the whole table, on usable values rather
+#' than on column presence. \code{load_precomputed_rna_de()} always emits a
+#' `stat` column and fills it with NA when the source export carries no Wald or
+#' t statistic, so testing presence alone selected a column of NAs, dropped
+#' every rank, handed fgsea an empty vector, and reported "no gene set overlap"
+#' for every collection -- with the fallback below never firing and nothing in
+#' the log saying the ranking had failed rather than the biology.
+#'
+#' One source per table. A row the chosen source cannot rank is dropped, never
+#' filled from the other one: two ranking scales mixed into one vector is not a
+#' ranking, and the reader has no way to tell which rows came from which.
+#'
+#' \code{is.numeric()} states the requirement the gate actually has, rather than
+#' leaning on \code{is.finite()} to reject a non-numeric column as a side
+#' effect -- a factor is an integer vector underneath. A `stat` that is not a
+#' usable numeric ranking source takes the fallback instead of erroring. No
+#' coercion is attempted: every producer in this pipeline already emits numeric.
+#'
+#' @param res One contrast's DE table. Needs `FeatureID`, and either a usable
+#'   `stat` column or `log2FoldChange` and `pvalue`.
+#' @return Named numeric vector of finite ranks, sorted decreasing. Empty when
+#'   neither source yields a finite value.
+#' @keywords internal
+.build_fgsea_ranks <- function(res) {
+    stat_usable <- "stat" %in% colnames(res) &&
+        is.numeric(res$stat) &&
+        any(is.finite(res$stat))
+
+    ranks <- if (stat_usable) {
+        setNames(res$stat, res$FeatureID)
+    } else {
+        setNames(
+            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
+            res$FeatureID
+        )
+    }
+
+    # is.finite() rather than !is.na(): Inf and -Inf survive an NA test, and
+    # fgsea does not reject them, it ranks on them.
+    ranks <- ranks[is.finite(ranks)]
+    sort(ranks, decreasing = TRUE)
+}
+
+
 #' Run pathway analysis on DE results
 #'
 #' @param de_tables Named list of DE result data frames (from run_deseq2_de()$tables).
@@ -628,6 +872,9 @@ add_pathway_names <- function(pathway_df, database, gene_sets = NULL) {
 #' @param method "fgsea", "ora", or "both"
 #' @param min_size Minimum gene set size for fGSEA
 #' @param max_size Maximum gene set size for fGSEA
+#' @param seed Integer seed for fgsea's stochastic multilevel step.
+#' @param p_cutoff Adjusted-p cutoff defining a significant feature for ORA.
+#' @param lfc_cutoff Absolute log2 fold-change cutoff for ORA.
 #' @return Named list (by contrast) of named lists (by db+method) of result data frames
 #' @export
 run_pathway_analysis <- function(de_tables,
@@ -635,7 +882,10 @@ run_pathway_analysis <- function(de_tables,
                                   annotation = NULL,
                                   method = "fgsea",
                                   min_size = 10,
-                                  max_size = 500) {
+                                  max_size = 500,
+                                  seed = 1L,
+                                  p_cutoff = 0.05,
+                                  lfc_cutoff = log2(1.5)) {
 
     if (length(gene_sets) == 0) {
         message("No gene sets available. Skipping pathway analysis.")
@@ -661,27 +911,20 @@ run_pathway_analysis <- function(de_tables,
                 # ---- fGSEA ----
                 if (method %in% c("fgsea", "both")) {
 
-                    # Build ranked gene list from DE table
-                    # Prefer stat column (Wald statistic); fallback to sign(lfc)*-log10(p)
-                    if ("stat" %in% colnames(res)) {
-                        ranks <- setNames(res$stat, res$FeatureID)
-                    } else {
-                        ranks <- setNames(
-                            sign(res$log2FoldChange) * -log10(res$pvalue + 1e-300),
-                            res$FeatureID
-                        )
-                    }
+                    # Prefer the Wald statistic, fall back to sign(lfc)*-log10(p);
+                    # see .build_fgsea_ranks() for why the choice is made on
+                    # values rather than on the column being present.
+                    ranks <- .build_fgsea_ranks(res)
 
-                    ranks <- ranks[!is.na(ranks)]
-                    ranks <- sort(ranks, decreasing = TRUE)
-
-                    fgsea_res <- fgsea::fgsea(
+                    # fgseaMultilevel is stochastic: without a seed, terms near
+                    # the padj threshold flip between otherwise identical runs.
+                    fgsea_res <- withr::with_seed(seed, fgsea::fgsea(
                         pathways = gs,
                         stats = ranks,
                         minSize = min_size,
                         maxSize = max_size,
                         nPermSimple = 10000
-                    )
+                    ))
 
                     fgsea_df <- as.data.frame(fgsea_res)
 
@@ -708,9 +951,11 @@ run_pathway_analysis <- function(de_tables,
                 # ---- ORA ----
                 if (method %in% c("ora", "both")) {
 
-                    # Identify significant up/down genes
-                    de_cfg_padj <- 0.05
-                    de_cfg_lfc  <- log2(1.5)
+                    # Identify significant up/down genes. Cutoffs come from the
+                    # caller's de: block rather than being hard-coded, so ORA
+                    # and the DE tables agree on what "significant" means.
+                    de_cfg_padj <- p_cutoff
+                    de_cfg_lfc  <- lfc_cutoff
                     sig_up   <- res$FeatureID[!is.na(res$padj) &
                                               res$padj < de_cfg_padj &
                                               res$log2FoldChange > de_cfg_lfc]
@@ -795,8 +1040,13 @@ save_pathway_results <- function(pathway_results, output_dir) {
 #' For GO terms, uses rrvgo (semantic similarity via GOSemSim).
 #' For KEGG/custom terms, uses Jaccard similarity on gene overlap.
 #'
+#' Which of the two applies is decided by the pathway identifiers, not by
+#' \code{database}: collections are named after their GMT file, so the name is
+#' not evidence of what the identifiers are.
+#'
 #' @param enrichment_df Data frame with enrichment results (must have 'pathway' and 'padj' columns)
-#' @param database Character: "GO", "KEGG", or "custom"
+#' @param database Character: "GO", "KEGG", or "custom". Retained for the
+#'   existing call sites; no longer used to choose the clustering method.
 #' @param gene_sets Named list of gene sets (needed for Jaccard clustering of non-GO terms)
 #' @param organism Character: organism name for OrgDb lookup (needed for GO clustering)
 #' @param threshold Numeric: similarity threshold for merging (0-1, default 0.7). Lower = more aggressive merging.
@@ -817,8 +1067,11 @@ cluster_enrichment_terms <- function(enrichment_df,
     sig <- enrichment_df[!is.na(enrichment_df$padj) & enrichment_df$padj < 0.05, ]
     if (nrow(sig) < 2) return(NULL)
 
-    is_go <- grepl("^GO", database, ignore.case = TRUE) ||
-        all(grepl("^GO:[0-9]+", sig$pathway))
+    # Decided by the identifiers, not by the collection's name. Collections are
+    # now named after the GMT file, so a custom set called GOLD_domains would
+    # otherwise be sent to rrvgo semantic clustering with identifiers that are
+    # not GO terms at all. GO ids are what makes semantic similarity meaningful.
+    is_go <- all(grepl("^GO:[0-9]+", sig$pathway))
 
     if (is_go) {
         clustered <- .cluster_go_terms(sig, organism, threshold, ont)

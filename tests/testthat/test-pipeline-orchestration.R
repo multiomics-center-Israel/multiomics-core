@@ -42,6 +42,7 @@ test_that("pipe_rnaseq returns a valid target list", {
 test_that("pipe_rnaseq contains expected target names", {
     result <- pipe_rnaseq()
     names <- get_target_names(result)
+    expect_true("rna_input_files" %in% names)
     expect_true("rna_inputs" %in% names)
     expect_true("rna_pre" %in% names)
     expect_true("rna_de_res" %in% names)
@@ -51,6 +52,74 @@ test_that("pipe_rnaseq contains expected target names", {
 test_that("pipe_rnaseq returns expected number of targets", {
     result <- pipe_rnaseq()
     expect_gte(length(result), 15)
+})
+
+test_that("everything that reads an RNA input file depends on rna_input_files", {
+    # rna_input_files is format = "file", so editing a tracked file invalidates
+    # whatever depends on it. rna_annot and rna_trinotate_main read
+    # config$modes$rna$files themselves rather than going through rna_inputs --
+    # so wiring only rna_inputs would leave an edited annotation file rebuilding
+    # the inputs while these two kept serving objects built from the old file.
+    result <- pipe_rnaseq()
+    by_name <- setNames(result, get_target_names(result))
+
+    expect_identical(by_name$rna_input_files$settings$format, "file")
+
+    # $command$deps is what targets builds the DAG from, but it is internal;
+    # falling back to the symbols in the command expression keeps this asserting
+    # something real rather than passing vacuously if that field ever moves.
+    target_deps <- function(tgt) {
+        deps <- tgt$command$deps
+        if (length(deps) > 0) return(deps)
+        unlist(lapply(as.list(tgt$command$expr), all.vars))
+    }
+
+    for (nm in c("rna_inputs", "rna_annot", "rna_trinotate_main")) {
+        deps <- target_deps(by_name[[nm]])
+        expect_true(length(deps) > 0,
+                    info = sprintf("%s reports no dependencies at all", nm))
+        expect_true("rna_input_files" %in% deps,
+                    info = sprintf("%s does not depend on rna_input_files", nm))
+    }
+})
+
+test_that("every configured RNA input file is tracked, de_table lists included", {
+    # load_omics_inputs() skips multi-value keys, but load_precomputed_rna_de()
+    # reads files$de_table directly and supports one table per contrast. Left
+    # out of the file target, editing one of them would leave the RNA branch
+    # looking up to date -- exactly the staleness this target exists to stop.
+    #
+    # Evaluated rather than pattern-matched on the source: what matters is the
+    # set of paths the target actually yields.
+    cfg <- list(
+        project = list(dir = "/proj"),
+        paths = list(raw = "data"),
+        modes = list(rna = list(files = list(
+            metadata          = "rna/meta.csv",
+            contrasts         = "rna/contrasts.csv",
+            de_table          = list("rna/de_A.tsv", "rna/de_B.tsv"),
+            annotation        = "",           # configured but empty: skipped
+            is_logtransformed = FALSE         # a flag, not a path
+        )))
+    )
+
+    result <- pipe_rnaseq()
+    tgt <- setNames(result, get_target_names(result))$rna_input_files
+    expr <- tgt$command$expr
+    if (is.list(expr) || is.expression(expr)) expr <- expr[[1]]
+
+    env <- new.env(parent = globalenv())
+    env$config <- cfg
+    paths <- eval(expr, envir = env)
+
+    expect_true(all(c("/proj/data/rna/de_A.tsv", "/proj/data/rna/de_B.tsv")
+                    %in% paths))
+    expect_true(all(c("/proj/data/rna/meta.csv", "/proj/data/rna/contrasts.csv")
+                    %in% paths))
+    # An empty path and a logical flag are not files; a duplicate would make
+    # targets track the same file twice.
+    expect_length(paths, 4L)
+    expect_false(any(duplicated(paths)))
 })
 
 

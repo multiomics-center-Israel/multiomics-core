@@ -137,10 +137,14 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             )
 
             if (!is.null(out_dir)) {
-                write.csv(cor_df,
-                          file.path(out_dir, "tables", "rna_protein_correlations.csv"),
-                          row.names = FALSE)
-
+                # The per-gene across-sample correlation is deliberately NOT
+                # written any more. Its feature ids are the harmonized MAE
+                # rownames (GENE_1, GENE_2, ...), which trace back to neither a
+                # gene nor a protein, and with the samples paired arbitrarily
+                # across omics the per-gene coefficient is not interpretable.
+                # The summary scalar is still computed below for the
+                # foundational summary. The checkable artifact is
+                # tables/rna_protein_log2FC_pairs.csv, written after the DE join.
                 p <- ggplot2::ggplot(cor_df, ggplot2::aes(x = correlation)) +
                     ggplot2::geom_histogram(bins = 50, fill = "steelblue",
                                             color = "white", alpha = 0.7) +
@@ -178,26 +182,35 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
     rna_de_tables <- .load_all_precomputed_de(config, "rna")
     prot_de_tables <- .load_all_precomputed_de(config, "proteomics")
 
-    # Fall back to extracted single-table if precomputed not available
+    # Fall back to extracted single-table if precomputed not available.
+    # The label comes from the design rather than a literal "contrast_1", which
+    # surfaced verbatim as a report heading and a per-contrast directory name.
+    fallback_label <- .first_contrast_name(config)
     if (length(rna_de_tables) == 0) {
         rna_obj <- mae_data$harmonized_omics$transcriptomics
         rna_de <- rna_obj$de_table %||% rna_obj$da_table
         if (!is.null(rna_de) && !all(grepl("^\\d+$", head(rna_de$feature_id, 20)))) {
-            rna_de_tables <- list(contrast_1 = rna_de)
+            rna_de_tables <- setNames(list(rna_de), fallback_label)
         }
     }
     if (length(prot_de_tables) == 0) {
         prot_obj <- mae_data$harmonized_omics$proteomics
         prot_de <- prot_obj$da_table %||% prot_obj$de_table
         if (!is.null(prot_de) && !all(grepl("^\\d+$", head(prot_de$feature_id, 20)))) {
-            prot_de_tables <- list(contrast_1 = prot_de)
+            prot_de_tables <- setNames(list(prot_de), fallback_label)
         }
     }
 
     # Match RNA and protein DE tables by position (contrast order from config)
     n_contrasts <- min(length(rna_de_tables), length(prot_de_tables))
 
-    if (n_contrasts > 0 && !is.null(gene_mapping)) {
+    # The wide gene_protein_mapping, not the long-form gene_mapping built by
+    # .mae_to_legacy(). The long form is keyed on gene_symbol, which drops every
+    # gene whose Protein.Group is a semicolon-separated set of accessions; the
+    # wide mapping carries gene_id and protein_id directly. The long form is
+    # still used above, for the per-gene expression correlation.
+    if (n_contrasts > 0 && !is.null(gene_protein_mapping) &&
+        nrow(gene_protein_mapping) > 0) {
         contrast_names <- names(rna_de_tables)
         if (is.null(contrast_names)) contrast_names <- paste0("contrast_", seq_len(n_contrasts))
 
@@ -205,17 +218,19 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
             cname <- contrast_names[ci]
             message("  DE concordance for contrast: ", cname)
 
-            contrast_out_dir <- NULL
-            if (!is.null(out_dir)) {
-                contrast_out_dir <- file.path(out_dir, "per_contrast", cname)
-                dir.create(file.path(contrast_out_dir, "plots"), recursive = TRUE, showWarnings = FALSE)
-                dir.create(file.path(contrast_out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+            # The directory is NOT created here. compute_de_concordance() makes
+            # it at write time, so a contrast that joins nothing leaves no empty
+            # plots/ and tables/ behind for the report to discover.
+            contrast_out_dir <- if (is.null(out_dir)) {
+                NULL
+            } else {
+                file.path(out_dir, "per_contrast", cname)
             }
 
             res <- compute_de_concordance(
                 rna_de = rna_de_tables[[ci]],
                 prot_de = prot_de_tables[[ci]],
-                gene_mapping = gene_mapping,
+                mapping = gene_protein_mapping,
                 out_dir = contrast_out_dir,
                 contrast_label = cname
             )
@@ -228,6 +243,7 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         # Also save a combined summary plot to the main plots dir
         if (length(de_concordance_list) > 0 && !is.null(out_dir)) {
             .save_combined_de_scatter(de_concordance_list, out_dir)
+            .write_log2fc_pairs_table(de_concordance_list, out_dir)
         }
     } else {
         message("  Skipping DE concordance: missing DE tables or gene mapping")
@@ -242,6 +258,61 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
         ),
         de_concordance = if (length(de_concordance_list) > 0) de_concordance_list else NULL
     )
+}
+
+
+#' Write the gene-protein log2FC pairs table
+#'
+#' The one artifact a reader needs to check the RNA-protein correlation by hand:
+#' one row per gene-protein pair, carrying both original identifiers and both
+#' fold changes, stacked over every contrast. Recomputing the correlation from
+#' its two log2FC columns reproduces the figure in the report exactly.
+#'
+#' Replaces the per-gene \code{rna_protein_correlations.csv}, whose feature ids
+#' were harmonized MAE rownames that traced back to neither a gene nor a
+#' protein. There is deliberately only one pair-level output.
+#'
+#' @param de_concordance_list Named list of per-contrast concordance tables.
+#' @param out_dir Directory whose tables/ subdirectory receives the file.
+#' @return Invisibly the path written, or NULL when there is nothing to write.
+.write_log2fc_pairs_table <- function(de_concordance_list, out_dir) {
+    cols <- c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+              "protein_log2FC", "protein_padj", "concordant")
+    parts <- lapply(names(de_concordance_list), function(cname) {
+        d <- de_concordance_list[[cname]]
+        have <- intersect(cols, names(d))
+        if (!all(c("rna_log2FC", "protein_log2FC") %in% have)) return(NULL)
+        out <- d[, have, drop = FALSE]
+        out$contrast <- cname
+        out
+    })
+    parts <- Filter(Negate(is.null), parts)
+    if (length(parts) == 0) return(invisible(NULL))
+
+    tbl <- do.call(rbind, parts)
+    dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+    f <- file.path(out_dir, "tables", "rna_protein_log2FC_pairs.csv")
+    write.csv(tbl, f, row.names = FALSE)
+    message("  Wrote ", nrow(tbl), " gene-protein log2FC pairs to ", basename(f))
+    invisible(f)
+}
+
+
+#' First contrast name from the config, for labelling the MAE fallback
+#'
+#' The fallback path has no contrast list of its own and used to hard-code
+#' "contrast_1", which surfaced verbatim as a report heading and a directory
+#' name. The design's own first contrast is the honest label.
+#'
+#' @param config Full config object.
+#' @return Single contrast name, or "contrast_1" when the config has none.
+.first_contrast_name <- function(config) {
+    contrasts <- config$design$contrasts
+    if (is.null(contrasts) || length(contrasts) == 0) return("contrast_1")
+    first <- contrasts[[1]]
+    nm <- if (is.list(first)) (first$name %||% first[[1]]) else first
+    nm <- as.character(nm)[1]
+    if (is.na(nm) || !nzchar(nm)) "contrast_1" else nm
 }
 
 
@@ -411,70 +482,47 @@ run_rna_protein_correlation <- function(mae, de_results = NULL,
 
 #' Compute differential expression concordance between RNA and protein
 #'
-#' @param rna_de RNA DE table (must have feature_id and log2FC columns)
-#' @param prot_de Protein DE/DA table (must have feature_id and log2FC columns)
-#' @param gene_mapping Gene mapping table
-#' @param out_dir Output directory (optional)
-#' @return Data frame with merged DE results and concordance metrics
-compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL,
+#' Pairs the two layers with \code{build_rna_protein_pairs()}, the single join
+#' shared with \code{analyze_rna_protein_concordance()}, then adds the
+#' significance category, sign agreement and translation-efficiency columns this
+#' path reports.
+#'
+#' @param rna_de RNA DE table (must have feature_id and log2FC columns).
+#' @param prot_de Protein DE/DA table (must have feature_id and log2FC columns).
+#' @param mapping Gene-protein mapping with gene_id and protein_id columns, in
+#'   the original ID space of both DE tables.
+#' @param out_dir Output directory; NULL writes nothing.
+#' @param contrast_label Contrast name used in plot titles.
+#' @return Data frame with gene_id, protein_id, both log2FCs and padj values,
+#'   category, concordant and te_log2FC; NULL when nothing joins.
+compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
                                    contrast_label = NULL) {
 
-    # Helper to get padj column name
-    get_padj_col <- function(df) {
-        if ("adj.P.Val" %in% colnames(df)) return("adj.P.Val")
-        if ("padj" %in% colnames(df)) return("padj")
-        if ("FDR" %in% colnames(df)) return("FDR")
+    # The pairing comes from build_rna_protein_pairs() so this path and the one
+    # in 06_concordance.R cannot drift. They used to join independently and
+    # disagreed -- every difference a semicolon-separated Protein.Group that
+    # only the other path matched.
+    pairs <- build_rna_protein_pairs(rna_de, prot_de, mapping)
+
+    if (nrow(pairs) == 0) {
+        message("  No RNA-protein pairs joined; skipping DE concordance")
         return(NULL)
     }
 
-    # Prepare RNA
-    rna_map_sub <- gene_mapping[gene_mapping$omics == "transcriptomics", ]
-
-    if (!"log2FC" %in% colnames(rna_de)) {
-        message("  RNA DE table missing log2FC column")
-        return(NULL)
-    }
-
-    rna_de$gene_symbol <- rna_map_sub$gene_symbol[match(rna_de$feature_id, rna_map_sub$feature_id)]
-
-    padj_col <- get_padj_col(rna_de)
-    cols_to_keep <- c("gene_symbol", "log2FC")
-    if (!is.null(padj_col)) cols_to_keep <- c(cols_to_keep, padj_col)
-
-    rna_de_clean <- rna_de[!is.na(rna_de$gene_symbol), cols_to_keep, drop = FALSE]
-
-    if (!is.null(padj_col)) {
-        colnames(rna_de_clean) <- c("gene_symbol", "rna_log2FC", "rna_padj")
-    } else {
-        colnames(rna_de_clean) <- c("gene_symbol", "rna_log2FC")
-        rna_de_clean$rna_padj <- NA
-    }
-
-    # Prepare Protein
-    prot_map_sub <- gene_mapping[gene_mapping$omics == "proteomics", ]
-
-    if (!"log2FC" %in% colnames(prot_de)) {
-        message("  Protein DE table missing log2FC column")
-        return(NULL)
-    }
-
-    prot_de$gene_symbol <- prot_map_sub$gene_symbol[match(prot_de$feature_id, prot_map_sub$feature_id)]
-
-    padj_col <- get_padj_col(prot_de)
-    cols_to_keep <- c("gene_symbol", "log2FC")
-    if (!is.null(padj_col)) cols_to_keep <- c(cols_to_keep, padj_col)
-
-    prot_de_clean <- prot_de[!is.na(prot_de$gene_symbol), cols_to_keep, drop = FALSE]
-
-    if (!is.null(padj_col)) {
-        colnames(prot_de_clean) <- c("gene_symbol", "protein_log2FC", "protein_padj")
-    } else {
-        colnames(prot_de_clean) <- c("gene_symbol", "protein_log2FC")
-        prot_de_clean$protein_padj <- NA
-    }
-
-    # Merge
-    de_merged <- merge(rna_de_clean, prot_de_clean, by = "gene_symbol")
+    # The legacy names are kept beside the identifiers: the report template and
+    # other projects read rna_log2FC / protein_log2FC / gene_symbol. The symbol
+    # is the mapping's own where it has one -- which is what this path used to
+    # carry -- and falls back to the gene id where it does not.
+    de_merged <- data.frame(
+        gene_id        = pairs$gene_id,
+        protein_id     = pairs$protein_id,
+        gene_symbol    = pairs$gene_symbol %||% pairs$gene_id,
+        rna_log2FC     = pairs$logFC_rna,
+        rna_padj       = pairs$padj_rna,
+        protein_log2FC = pairs$logFC_prot,
+        protein_padj   = pairs$padj_prot,
+        stringsAsFactors = FALSE
+    )
 
     if (nrow(de_merged) < 10) {
         message("  Fewer than 10 genes merged, skipping DE concordance")
@@ -540,6 +588,12 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
 
     # Save results and plots
     if (!is.null(out_dir)) {
+        # Created here rather than by the caller: a contrast that joins nothing
+        # returns above, so it no longer leaves empty plots/ and tables/ behind
+        # for the report to discover and announce as a section.
+        dir.create(file.path(out_dir, "plots"), recursive = TRUE, showWarnings = FALSE)
+        dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+
         write.csv(de_merged,
                   file.path(out_dir, "tables", "rna_protein_de_concordance.csv"),
                   row.names = FALSE)
@@ -663,7 +717,10 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
         if (length(fc_cols) > 0 && !is.null(id_col)) {
             out <- data.frame(
                 feature_id = df[[id_col]],
-                log2FC = log2(df[[fc_cols[1]]]),
+                # linearFC is a SIGNED linear ratio: -1/2^x where the change is
+                # negative. A plain log2() returns NaN for every down-regulated
+                # feature, which silently halved the proteome reaching the join.
+                log2FC = signed_linear_fc_to_log2(df[[fc_cols[1]]]),
                 stringsAsFactors = FALSE
             )
             if (length(padj_cols) > 0) out$padj <- df[[padj_cols[1]]]
@@ -744,24 +801,26 @@ compute_de_concordance <- function(rna_de, prot_de, gene_mapping, out_dir = NULL
     # by run_rna_protein_correlation (omics, feature_id, gene_symbol)
     gene_mapping <- NULL
     if (!is.null(gene_protein_mapping) && nrow(gene_protein_mapping) > 0) {
+        # gene_symbol is the key the two sides are joined on, so both sides must
+        # carry the SAME value. Falling back to gene_id on one side and
+        # protein_id on the other gave every row a key that existed nowhere
+        # else, and the join matched nothing at all for any organism whose
+        # mapping file has no gene_symbol column.
+        merge_key <- if ("gene_symbol" %in% colnames(gene_protein_mapping)) {
+            gene_protein_mapping$gene_symbol
+        } else {
+            gene_protein_mapping$gene_id
+        }
         rna_rows <- data.frame(
             omics = "transcriptomics",
             feature_id = gene_protein_mapping$gene_id,
-            gene_symbol = if ("gene_symbol" %in% colnames(gene_protein_mapping)) {
-                gene_protein_mapping$gene_symbol
-            } else {
-                gene_protein_mapping$gene_id
-            },
+            gene_symbol = merge_key,
             stringsAsFactors = FALSE
         )
         prot_rows <- data.frame(
             omics = "proteomics",
             feature_id = gene_protein_mapping$protein_id,
-            gene_symbol = if ("gene_symbol" %in% colnames(gene_protein_mapping)) {
-                gene_protein_mapping$gene_symbol
-            } else {
-                gene_protein_mapping$protein_id
-            },
+            gene_symbol = merge_key,
             stringsAsFactors = FALSE
         )
         gene_mapping <- rbind(rna_rows, prot_rows)

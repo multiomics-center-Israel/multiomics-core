@@ -64,7 +64,7 @@ test_that("blocking recovers a paired effect that the unpaired fit misses", {
     skip_if_not_installed("limma")
 
     # Six samples, three blocks. A large per-block offset swamps a small but
-    # perfectly consistent treatment effect, which is the Levenberg situation.
+    # perfectly consistent treatment effect, which is what blocking is for.
     withr::with_seed(42, {
         n_feat <- 300
         meta <- make_block_meta()

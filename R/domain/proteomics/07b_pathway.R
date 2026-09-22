@@ -50,8 +50,26 @@ extract_de_table_for_pathway <- function(summary_df, contrast_name, config) {
     } else if (identical(ranking, "lfc")) {
         stat_vals <- lfc_vals
     } else {
-        # Default "stat": sign(log2FC) * -log10(pvalue)
-        stat_vals <- sign(lfc_vals) * -log10(pval_vals + 1e-300)
+        # Default "stat": sign(log2FC) * -log10(pvalue).
+        # linearFC is stored via signif(x, 3), so any ratio in [0.995, 1.005)
+        # rounds to exactly 1, giving sign() == 0 and zeroing the rank whatever
+        # the p-value. Take the direction from the unrounded log2FC when it is
+        # available. Not linearRatio.imputs: the precomputed-input path writes
+        # that as 2^abs(logFC) (R/domain/proteomics/05_de_summary.R), so it is
+        # >= 1 for every feature and would rank downregulated proteins as
+        # upregulated.
+        #
+        # A feature with no direction to take does not get an invented one: NA
+        # stays NA and run_pathway_analysis() drops it from the ranking, while a
+        # genuine zero ranks neutrally. Forcing either to +1 would seat it in the
+        # upregulated tail on the strength of its p-value alone.
+        lfc_col <- paste0("log2FC.imputs.", cn)
+        dir_vals <- if (lfc_col %in% colnames(summary_df)) {
+            sign(as.numeric(summary_df[[lfc_col]]))
+        } else {
+            sign(lfc_vals)
+        }
+        stat_vals <- dir_vals * -log10(pval_vals + 1e-300)
     }
 
     de_tbl <- data.frame(
@@ -245,13 +263,17 @@ run_proteomics_pathway <- function(de_res, pre, config, out_dir) {
     # TODO(simplify-go): GO term simplification was wired here via simplify_go_results
     # (commit 4564b09, dropped by merge 29ffe3e). Restore via cluster_enrichment_terms()
     # in R/core/09_enrichment.R, which has correct score/sim_matrix alignment.
+    de_cfg <- cfg$de %||% list()
     pathway_results <- run_pathway_analysis(
         de_tables          = de_tables,
         gene_sets          = gene_sets,
         annotation         = annotation_df,
         method             = method,
         min_size           = min_size,
-        max_size           = max_size
+        max_size           = max_size,
+        seed               = config$params$seed %||% 1L,
+        p_cutoff           = de_cfg$p_cutoff %||% 0.05,
+        lfc_cutoff         = log2(de_cfg$linear_fc_cutoff %||% 1.5)
     )
 
     # Save results and plots

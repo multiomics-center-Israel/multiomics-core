@@ -38,24 +38,42 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
   
   pathway_memberships <- character(nrow(volcano_df))
   
-  # Flatten: collect all data.frames from the nested structure
+  # Flatten: collect all data.frames from the nested structure, keeping the name
+  # of the result they came from. Since gene-set collections are scored one per
+  # GMT file, two of them can carry the same pathway id and label; without the
+  # source, the later one's leading edge would replace the earlier one's under a
+  # single key and that membership would vanish from the export.
   all_result_dfs <- list()
+  result_sources <- character(0)
   for (top_name in names(pathway_results)) {
     top_elem <- pathway_results[[top_name]]
     if (is.data.frame(top_elem)) {
       all_result_dfs <- c(all_result_dfs, list(top_elem))
+      result_sources <- c(result_sources, top_name)
     } else if (is.list(top_elem)) {
       for (sub_name in names(top_elem)) {
         sub_elem <- top_elem[[sub_name]]
         if (is.data.frame(sub_elem)) {
           all_result_dfs <- c(all_result_dfs, list(sub_elem))
+          result_sources <- c(result_sources, sub_name)
         }
       }
     }
   }
-  
+
   enriched_sets <- list()
-  for (res in all_result_dfs) {
+  for (i in seq_along(all_result_dfs)) {
+    res <- all_result_dfs[[i]]
+    src <- result_sources[i]
+    # Only a label already taken by different genes is qualified by its source,
+    # so labels stay as they were except where one would otherwise be lost.
+    set_key <- function(label, genes) {
+      if (!is.null(enriched_sets[[label]]) && !identical(enriched_sets[[label]], genes)) {
+        paste0(label, " (", src, ")")
+      } else {
+        label
+      }
+    }
     if ("leadingEdge" %in% colnames(res)) {
       sig <- res[!is.na(res$padj) & res$padj < 0.05, , drop = FALSE]
       for (r in seq_len(nrow(sig))) {
@@ -65,14 +83,14 @@ build_pathway_volcano_data <- function(de_table, pathway_results) {
           sig$pathway[r]
         }
         genes <- trimws(strsplit(as.character(sig$leadingEdge[[r]]), ",")[[1]])
-        if (length(genes) > 0) enriched_sets[[pw_label]] <- genes
+        if (length(genes) > 0) enriched_sets[[set_key(pw_label, genes)]] <- genes
       }
     } else if ("geneID" %in% colnames(res)) {
       sig <- res[!is.na(res$p.adjust) & res$p.adjust < 0.05, , drop = FALSE]
       for (r in seq_len(nrow(sig))) {
         pw_label <- sig$Description[r] %||% sig$ID[r]
         genes <- unlist(strsplit(as.character(sig$geneID[r]), "/"))
-        if (length(genes) > 0) enriched_sets[[pw_label]] <- genes
+        if (length(genes) > 0) enriched_sets[[set_key(pw_label, genes)]] <- genes
       }
     }
   }

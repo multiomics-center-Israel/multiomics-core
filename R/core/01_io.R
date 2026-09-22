@@ -295,3 +295,130 @@ read_table_auto <- function(path, sep = NULL) {
   df <- sanitize_character_columns(df, source = basename(path))
   df
 }
+
+
+# =============================================================================
+# Pre-computed DE summary tables
+# =============================================================================
+
+#' Suffixed statistic columns a summary table holds, and the contrast each names
+#'
+#' Assigns each column to the FIRST prefix, in the caller's preference order,
+#' that claims it. Claiming once is what keeps overlapping prefixes such as
+#' \code{pvalue.imputs} and \code{pvalue} from reading a single column twice --
+#' as contrast \code{S_vs_NS} under the first and \code{imputs.S_vs_NS} under
+#' the second -- which would make one contrast look like two.
+#'
+#' Shared so that deciding which column to use and asking how many contrasts a
+#' file holds cannot drift apart.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param prefixes Candidate prefixes, in preference order.
+#' @return List with \code{col} (claimed columns, in prefix-preference order)
+#'   and \code{contrast} (the contrast each one names), positionally aligned.
+#' @keywords internal
+.de_summary_candidates <- function(cn, prefixes) {
+    cand_col <- character(0)
+    cand_contrast <- character(0)
+    for (stem in paste0(prefixes, ".")) {
+        for (col in cn[startsWith(cn, stem)]) {
+            if (col %in% cand_col) next
+            cand_col <- c(cand_col, col)
+            cand_contrast <- c(cand_contrast, substring(col, nchar(stem) + 1L))
+        }
+    }
+    list(col = cand_col, contrast = cand_contrast)
+}
+
+
+#' Resolve a column in a per-contrast DE summary table
+#'
+#' Our own \code{Datasets/*_summary_p0.05.tsv} exports hold every contrast in one
+#' table and suffix the statistic columns with the contrast name, e.g.
+#' \code{log2FC.S_vs_NS} or \code{padj.imputs.SP_vs_NSP}. The pre-computed DE
+#' loaders matched bare names only, so pointing one at an export this pipeline
+#' itself wrote loaded "successfully", logged a plausible feature count, and
+#' returned every statistic as NA -- indistinguishable downstream from a run with
+#' nothing differentially expressed. This resolves both shapes.
+#'
+#' Matching order: an exact bare name first, then an exact
+#' \code{<prefix>.<contrast_label>} across every candidate prefix, and only then
+#' the single-contrast fallback. Both later steps look at every prefix before
+#' deciding, because either one taken prefix-at-a-time guesses: an early prefix
+#' carrying one column would be taken while the exact match sat under the next,
+#' or while other prefixes held other contrasts entirely.
+#'
+#' The fallback exists because a file holding one contrast should resolve
+#' regardless of its short code -- that is what lets a single-omics export serve
+#' a multiomics run whose contrast is labelled differently. "One contrast" is
+#' counted across all the prefixes, not within one. A file holding several
+#' requires a matching label and otherwise aborts naming what it found.
+#'
+#' @param cn Character vector of column names in the table.
+#' @param bare Candidate bare column names, in the caller's preference order.
+#' @param prefixes Candidate prefixes for the suffixed form (e.g. "log2FC",
+#'   "linearFC.imputs"), in the caller's preference order.
+#' @param contrast_label Contrast name to prefer when the table holds several.
+#' @return The resolved column name, or NA_character_ when nothing matches.
+resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
+    # Subset `bare`, not `cn`: the preference order that decides this is the
+    # caller's, and `cn[cn %in% bare]` would instead have returned whichever
+    # candidate the table happened to list first.
+    hit <- bare[bare %in% cn]
+    if (length(hit) > 0) return(hit[1])
+
+    stems <- paste0(prefixes, ".")
+
+    if (!is.null(contrast_label)) {
+        for (stem in stems) {
+            exact <- paste0(stem, contrast_label)
+            if (exact %in% cn) return(exact)
+        }
+    }
+
+    cand <- .de_summary_candidates(cn, prefixes)
+    cand_col <- cand$col
+    if (length(cand_col) == 0) return(NA_character_)
+
+    contrasts <- unique(cand$contrast)
+    if (length(contrasts) == 1) {
+        # Genuinely one contrast across every candidate prefix. Its short code
+        # need not match the label: that is what lets a single-omics export
+        # serve a multiomics run whose contrast is named differently. cand_col
+        # is built in prefix-preference order, so its first entry is preferred.
+        return(cand_col[1])
+    }
+
+    if (!is.null(contrast_label)) {
+        stop("Cannot resolve a column for contrast '", contrast_label,
+             "': the table holds several contrasts (",
+             paste(contrasts, collapse = ", "), ") and none is named '",
+             contrast_label, "'. Columns examined: ",
+             paste(cand_col, collapse = ", "),
+             ". Rename the contrast or split the table.")
+    }
+    NA_character_
+}
+
+
+#' Convert a signed linear fold change to log2
+#'
+#' Proteomics summaries store linearFC as a signed linear ratio: 2^log2FC when
+#' the change is non-negative and -1 / 2^log2FC when it is negative (see
+#' \code{build_provenance_notes()} in \code{R/core/05_export_excel.R}). A plain
+#' \code{log2()} returns NaN for every down-regulated feature, silently dropping
+#' about half the proteome wherever the value is reused.
+#'
+#' @param x Numeric vector of signed linear fold changes.
+#' @return Numeric vector of log2 fold changes; NA where x is NA or zero.
+signed_linear_fc_to_log2 <- function(x) {
+    x <- as.numeric(x)
+    out <- rep(NA_real_, length(x))
+    # Index rather than ifelse(): ifelse evaluates both branches, so log2() of
+    # the negative values emits a NaN warning even though those are discarded.
+    up   <- !is.na(x) & x > 0
+    down <- !is.na(x) & x < 0
+    out[up]   <- log2(x[up])
+    out[down] <- -log2(abs(x[down]))
+    out
+}

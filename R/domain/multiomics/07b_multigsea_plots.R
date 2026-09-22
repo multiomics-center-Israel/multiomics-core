@@ -32,6 +32,12 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     p_thresh <- mg_config$pvalue_threshold %||% 0.05
     corr_method <- mg_config$correlation_method %||% "pearson"
 
+    # Resolved once and passed down explicitly. Every consumer of a term id below
+    # sits inside this function or is called from it, so nothing has to reach for
+    # config again -- and the pairwise panels, the combined panel and the
+    # per-contrast plots all key pathways the same way as a result.
+    kegg_org <- resolve_kegg_org_code(config$global$organism)
+
     # Create output directory
     if (!is.null(out_dir)) {
         dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -59,16 +65,47 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
         if (is.null(res1) || is.null(res2)) next
 
-        term1 <- .multigsea_term_ids(res1)
-        term2 <- .multigsea_term_ids(res2)
+        term1 <- .multigsea_term_ids(res1, kegg_org)
+        term2 <- .multigsea_term_ids(res2, kegg_org)
         if (is.null(term1) || is.null(term2)) {
             message("No term ID column in ", omic1, " or ", omic2,
                     " enrichment results; skipping this pair")
             next
         }
+        # Names first, from the original frames: the collapse below keeps one row
+        # per pathway by p-value, and that row is not necessarily the one carrying
+        # the readable name. Scoring picks a representative; display should still
+        # see every row that could name the pathway. Built before `term` is
+        # overwritten, too, so a frame whose own `term` carries its name still has
+        # that text to offer.
+        id_to_name <- .multigsea_term_names(list(res1, res2), kegg_org)
+
+        # A row whose every identifier column is blank has no key at all. It
+        # cannot be matched or labelled, and carrying it into common_terms hands
+        # resolve_term() an NA, where nchar(NA_character_) is NA and the `if`
+        # below it stops the whole pairwise loop.
+        res1 <- res1[!is.na(term1), , drop = FALSE]; term1 <- term1[!is.na(term1)]
+        res2 <- res2[!is.na(term2), , drop = FALSE]; term2 <- term2[!is.na(term2)]
+
+        # An omic left with nothing keyed has no enrichment identity to correlate.
+        # The union below cannot see that -- the other side alone can carry it past
+        # the length check -- and the pair would be plotted against a column of
+        # imputed zeros.
+        if (length(term1) == 0L || length(term2) == 0L) {
+            message("No usable pathway identity in ", omic1, " or ", omic2,
+                    "; skipping this pair")
+            next
+        }
+
+        # One row per pathway per omic before anything matches on it: match()
+        # below would otherwise resolve a duplicated key by row order.
+        keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
+        keep2 <- .multigsea_collapse_duplicate_terms(res2, term2)
+        res1 <- res1[keep1, , drop = FALSE]; term1 <- term1[keep1]
+        res2 <- res2[keep2, , drop = FALSE]; term2 <- term2[keep2]
+
         res1$term <- term1
         res2$term <- term2
-        id_to_name <- .multigsea_term_names(list(res1, res2))
 
         # Union of terms
         common_terms <- union(res1$term, res2$term)
@@ -169,10 +206,10 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
                 t <- id_to_name[[term]]
             } else {
-                # Fallback: strip GO/KEGG ID prefixes
-                t <- sub("^GO:\\d+~", "", term)
-                t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-                if (nchar(t) == 0) t <- term
+                # Same stripping rule as the name map synthesizes with. Two
+                # implementations of it is what let the map shadow this fallback
+                # with a worse label.
+                t <- .multigsea_readable_from_identifier(term)
             }
             if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
             t
@@ -270,7 +307,7 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 
     # Generate combined 2x2 plot
     if (length(plots) > 0 && !is.null(out_dir)) {
-        combined <- plot_multigsea_combined(plots, per_omics, out_dir)
+        combined <- plot_multigsea_combined(plots, per_omics, out_dir, kegg_org)
         if (!is.null(combined)) {
             plots[["combined"]] <- combined
         }
@@ -320,7 +357,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                         res1, res2, omic1, omic2,
                         corr_method = corr_method,
                         p_thresh = p_thresh,
-                        out_dir = contrast_out
+                        out_dir = contrast_out,
+                        kegg_org = kegg_org
                     )
                 }, error = function(e) {
                     message("    MultiGSEA plot failed for ", omic1, " vs ", omic2,
@@ -348,17 +386,39 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' @param corr_method Correlation method (default "pearson")
 #' @param p_thresh P-value threshold for labeling (default 0.05)
 #' @param out_dir Output directory for saved files
+#' @param kegg_org Active KEGG organism code for the run, or NULL. Passed in
+#'   rather than read from config so this function has no hidden dependency.
 #' @return Invisible NULL
 .save_multigsea_pair_plot <- function(res1, res2, omic1, omic2,
                                       corr_method = "pearson",
-                                      p_thresh = 0.05, out_dir) {
+                                      p_thresh = 0.05, out_dir,
+                                      kegg_org = NULL) {
 
-    term1 <- .multigsea_term_ids(res1)
-    term2 <- .multigsea_term_ids(res2)
+    term1 <- .multigsea_term_ids(res1, kegg_org)
+    term2 <- .multigsea_term_ids(res2, kegg_org)
     if (is.null(term1) || is.null(term2)) return(invisible(NULL))
+
+    # Names first, from the original frames and before `term` is overwritten, as
+    # in the pairwise loop above.
+    id_to_name <- .multigsea_term_names(list(res1, res2), kegg_org)
+
+    # Rows with no identity at all cannot be matched or labelled, as above.
+    res1 <- res1[!is.na(term1), , drop = FALSE]; term1 <- term1[!is.na(term1)]
+    res2 <- res2[!is.na(term2), , drop = FALSE]; term2 <- term2[!is.na(term2)]
+
+    # An omic left with nothing keyed has no enrichment identity to correlate,
+    # and the union below cannot see that -- the other side alone carries it
+    # past the length check, against a column of imputed zeros.
+    if (length(term1) == 0L || length(term2) == 0L) return(invisible(NULL))
+
+    # One row per pathway per omic, as in the pairwise loop above.
+    keep1 <- .multigsea_collapse_duplicate_terms(res1, term1)
+    keep2 <- .multigsea_collapse_duplicate_terms(res2, term2)
+    res1 <- res1[keep1, , drop = FALSE]; term1 <- term1[keep1]
+    res2 <- res2[keep2, , drop = FALSE]; term2 <- term2[keep2]
+
     res1$term <- term1
     res2$term <- term2
-    id_to_name <- .multigsea_term_names(list(res1, res2))
 
     common_terms <- union(res1$term, res2$term)
     if (length(common_terms) < 3) return(invisible(NULL))
@@ -387,9 +447,8 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         if (term %in% names(id_to_name) && nzchar(id_to_name[[term]])) {
             t <- id_to_name[[term]]
         } else {
-            t <- sub("^GO:\\d+~", "", term)
-            t <- sub("^[a-z]{2,3}\\d{5}\\s*", "", t)
-            if (nchar(t) == 0) t <- term
+            # Same stripping rule as the name map synthesizes with, as above.
+            t <- .multigsea_readable_from_identifier(term)
         }
         if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
         t
@@ -458,37 +517,267 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' aligned. There is no row-name fallback on purpose: bound tables carry
 #' positional row names, which would pair unrelated pathways by row number.
 #'
+#' Normalization is delegated to \code{normalize_pathway_join_key()}, so the two
+#' omics are matched on the same normalized key the cross-omics join uses: the
+#' KEGG forms hsa00010, map00010, ko00010 and 00010 are one pathway, while GO,
+#' PFAM, InterPro and custom gene-set names come through byte-identical.
+#'
 #' @param df Enrichment data frame for one omic.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @return Character vector of term IDs, one per row, or NULL when the table has
 #'   no recognised ID column.
-.multigsea_term_ids <- function(df) {
-    for (col in c("term", "ID", "pathway", "Description")) {
-        if (col %in% colnames(df)) return(as.character(df[[col]]))
+.multigsea_term_ids <- function(df, kegg_org = NULL) {
+    id <- .multigsea_identity(df, kegg_org)
+    if (is.null(id)) NULL else id$key
+}
+
+
+#' Where each row's identity came from, and what it was
+#'
+#' One object, resolved once, carrying the key **and** the decision that produced
+#' it. Everything downstream reads this rather than inferring from the columns
+#' again: a display fallback that re-derives "did this row key on its ID?" gets it
+#' wrong whenever the answer is subtler than the column being present, and after
+#' normalization the raw text it needed is no longer recoverable from the key.
+#'
+#' The ladder is `term`, then \code{pathway_join_key()}'s `ID` -> `pathway` ->
+#' `Description`. `term` is MultiGSEA's own: the pairwise callers write their
+#' resolved identity onto it, so it precedes the shared ladder by design.
+#'
+#' Trimming decides only whether a candidate is usable. `raw` is the original
+#' selected value, whitespace and all, and `key` is that value passed through
+#' \code{normalize_pathway_join_key()} -- the KEGG rule is not reimplemented here.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return List of three aligned character vectors -- `key`, `raw` and `source`
+#'   (one of "term", "ID", "pathway", "Description", or NA for a row where none
+#'   carried a value) -- or NULL when the table has no candidate column at all.
+#' @keywords internal
+.multigsea_identity <- function(df, kegg_org = NULL) {
+    candidates <- c("term", "ID", "pathway", "Description")
+    present <- intersect(candidates, colnames(df))
+    if (length(present) == 0L) return(NULL)
+
+    n <- nrow(df)
+    raw <- rep(NA_character_, n)
+    source <- rep(NA_character_, n)
+
+    for (col in present) {
+        v <- as.character(df[[col]])
+        fill <- is.na(raw) & .multigsea_usable_label(v)
+        raw[fill] <- v[fill]
+        source[fill] <- col
+    }
+
+    list(key = normalize_pathway_join_key(raw, kegg_org), raw = raw, source = source)
+}
+
+
+#' The column MultiGSEA scores a table on
+#'
+#' The same preference order the scoring and summary paths already use, in one
+#' place so a collapse cannot reduce on a different column than the one plotted.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @return Column name, or NULL when the table carries none of them.
+#' @keywords internal
+.multigsea_padj_col <- function(df) {
+    for (col in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
+        if (col %in% colnames(df)) return(col)
     }
     NULL
 }
 
 
+#' One row per normalized term within one omic
+#'
+#' Normalizing the identity makes hsa00010 and map00010 the same pathway, so a
+#' bound per-omic table can now hold two rows for it. Left alone those duplicates
+#' make \code{match()} pick whichever row came first -- row order standing in for
+#' biology -- and let one omic satisfy a co-significance test on its own.
+#'
+#' The reduction rule is the one #201 settled on for exactly this collapse:
+#' \code{merge_pathway_pvalues()} aggregates a normalized key with \code{FUN =
+#' min}. Nothing is recomputed or re-adjusted; the most significant of rows
+#' already declared the same pathway is kept.
+#'
+#' @param df Enrichment data frame for one omic.
+#' @param terms Normalized term ids aligned to the rows of \code{df}.
+#' @return Integer row indices to keep, in their original order. Rows whose term
+#'   is NA are all kept: they have no key to be duplicates of.
+#' @keywords internal
+.multigsea_collapse_duplicate_terms <- function(df, terms) {
+    n <- length(terms)
+    if (n == 0L) return(integer(0))
+
+    padj_col <- .multigsea_padj_col(df)
+    p <- if (is.null(padj_col)) {
+        rep(NA_real_, n)
+    } else {
+        v <- df[[padj_col]]
+        if (!is.numeric(v)) v <- suppressWarnings(as.numeric(as.character(v)))
+        v
+    }
+
+    # Sorting by term then p puts the most significant row of each term first;
+    # na.last keeps a row with no p-value behind one that has one.
+    ord <- order(terms, p, na.last = TRUE)
+    keep <- ord[!duplicated(terms[ord]) | is.na(terms[ord])]
+    sort(unique(keep))
+}
+
+
+#' Terms significant in at least two distinct omics
+#'
+#' Counted over distinct omics rather than rows. "Co-significant" has to mean two
+#' layers agreed, and normalizing the identity lets one layer hold several rows
+#' for one pathway -- counting rows would let a single omic satisfy it alone.
+#'
+#' @param summary_df Data frame with \code{term}, \code{omic} and \code{padj}.
+#' @param alpha Significance threshold, unchanged from the panel's own.
+#' @return Character vector of terms, possibly empty.
+#' @keywords internal
+.multigsea_cosignificant_terms <- function(summary_df, alpha = 0.05) {
+    sig <- summary_df[!is.na(summary_df$padj) & summary_df$padj < alpha, ,
+                      drop = FALSE]
+    if (nrow(sig) == 0L) return(character(0))
+    counts <- table(unique(sig[, c("term", "omic")])$term)
+    names(counts[counts >= 2])
+}
+
+
+#' Does this label actually say anything?
+#'
+#' @param x Character vector of candidate labels.
+#' @return Logical vector; FALSE for NA, empty and whitespace-only labels.
+#' @keywords internal
+.multigsea_usable_label <- function(x) {
+    x <- as.character(x)
+    !is.na(x) & nzchar(trimws(x))
+}
+
+
+#' Readable text of an identifier that carries its own name
+#'
+#' The non-model KEGG fallback names a gene set "<accession> <readable name>"
+#' in a single string. \code{resolve_term()} used to recover the readable part by
+#' stripping the accession off the term it was given; normalizing the key removes
+#' the prefix it stripped, so the name map has to carry that remainder instead or
+#' the plot label would regress to a bare map number.
+#'
+#' It reproduces \code{resolve_term()}'s fallback exactly -- both of its strips,
+#' and its rule that a strip leaving nothing behind falls back to the identifier
+#' itself. That is the point: whatever this returns is installed in the name map,
+#' which shadows the fallback, so anything it does not strip is text
+#' \code{resolve_term()} would have removed and the label would regress.
+#'
+#' Deliberately organism-agnostic, unlike the identity side. `resolve_term()`
+#' strips any two- or three-letter prefix, so a `mmu#####` label on a human run
+#' is still shortened for display even though `mmu00010` is correctly *not* the
+#' same pathway as `hsa00010` for joining. Display and identity answer different
+#' questions here.
+#'
+#' @param ids Character vector of identifiers.
+#' @return Character vector the same length as \code{ids}.
+#' @keywords internal
+.multigsea_readable_from_identifier <- function(ids) {
+    ids <- as.character(ids)
+    stripped <- sub("^GO:[0-9]+~", "", trimws(ids))
+    stripped <- sub("^[a-z]{2,3}[0-9]{5}[[:space:]]*", "", stripped)
+    ifelse(!is.na(stripped) & nzchar(stripped), stripped, ids)
+}
+
+
 #' Readable names for enrichment term IDs
 #'
+#' Driven by \code{.multigsea_identity()} rather than by re-inspecting which
+#' column probably supplied the key. Asking the columns again is what put wrong
+#' labels on rows: it cannot see `term`, it cannot see the raw text once the key
+#' is normalized, and a column being present is not the same as that row having
+#' keyed on it.
+#'
 #' @param dfs List of per-omic enrichment data frames.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @return Named character vector mapping term ID to readable name, keeping the
 #'   first name seen for each ID; empty when no table carries a name column.
-.multigsea_term_names <- function(dfs) {
-    id_to_name <- character(0)
+.multigsea_term_names <- function(dfs, kegg_org = NULL) {
+    all_keys <- character(0)
+    all_vals <- character(0)
+    all_explicit <- logical(0)
+
     for (df in dfs) {
-        if (all(c("pathway", "pathway_name") %in% colnames(df))) {
-            nms <- setNames(as.character(df$pathway_name), as.character(df$pathway))
-        } else if (all(c("pathway", "ID") %in% colnames(df))) {
-            # Older shape: the readable label sits in `pathway`, keyed by `ID`.
-            nms <- setNames(as.character(df$pathway), as.character(df$ID))
+        if (!is.data.frame(df)) next
+        id <- .multigsea_identity(df, kegg_org)
+        if (is.null(id)) next
+        keys <- id$key
+        n <- length(keys)
+
+        # Resolved per row throughout: a column filled for only some rows must not
+        # leave the rest permanently blank just because the column exists.
+
+        # 1. An explicit name column wins.
+        vals <- if ("pathway_name" %in% colnames(df)) {
+            as.character(df$pathway_name)
         } else {
-            next
+            rep(NA_character_, n)
         }
-        nms <- nms[!duplicated(names(nms))]
-        id_to_name <- c(id_to_name, nms[!names(nms) %in% names(id_to_name)])
+
+        col_or_na <- function(nm) {
+            if (nm %in% colnames(df)) as.character(df[[nm]]) else rep(NA_character_, n)
+        }
+
+        # 2. A row that keyed on its ID has the readable label in a column beside
+        #    it: the older shape puts it in `pathway`, clusterProfiler in
+        #    `Description`. Only rows that actually keyed on ID take this.
+        keyed_on_id <- !is.na(id$source) & id$source == "ID"
+        beside_id <- col_or_na("pathway")
+        desc_v <- col_or_na("Description")
+        fill <- !.multigsea_usable_label(beside_id)
+        beside_id[fill] <- desc_v[fill]
+        beside_id[!keyed_on_id] <- NA_character_
+
+        gap <- !.multigsea_usable_label(vals)
+        vals[gap] <- beside_id[gap]
+
+        # Rungs 1 and 2 are a name the table actually states. Rung 3 below only
+        # re-reads the identifier, so it must never outrank a stated name.
+        explicit <- .multigsea_usable_label(vals)
+
+        # 3. Anything still unnamed falls back to the readable text of the very
+        #    value that produced its key, whichever column that was. That covers a
+        #    `term` carrying its own name, an ID-only table whose accession would
+        #    otherwise be lost to normalization, and the pathway/Description rungs.
+        gap <- !.multigsea_usable_label(vals)
+        vals[gap] <- .multigsea_readable_from_identifier(id$raw)[gap]
+
+        # A label with nothing in it must not reserve a key. hsa00010 and
+        # map00010 collapse to one key now, so a blank name in the layer that
+        # happens to be visited first would otherwise lock out a readable name in
+        # the next one, and the panel would fall back to the bare map number.
+        keep <- .multigsea_usable_label(vals) & !is.na(keys)
+        all_keys <- c(all_keys, keys[keep])
+        all_vals <- c(all_vals, vals[keep])
+        all_explicit <- c(all_explicit, explicit[keep])
     }
-    id_to_name
+
+    if (length(all_keys) == 0L) return(character(0))
+
+    # Resolved across every frame at once rather than frame by frame, so one
+    # normalized key gets one label: two omics holding bare hsa00010 and map00010
+    # must not name the same pathway differently.
+    #
+    # A name the table states outranks one synthesized from an identifier, whether
+    # or not that identifier looks like an accession -- a bare "GO:0006915" is not
+    # a KEGG accession but it is not a name either, and before this map existed it
+    # contributed nothing and the stated name won. Among synthesized labels an
+    # accession still loses to anything else, and first seen breaks the remaining
+    # ties -- seq_along does that explicitly rather than relying on a stable sort.
+    readable <- !is_kegg_pathway_accession(all_vals, kegg_org)
+    ord <- order(!all_explicit, !readable, seq_along(all_vals))
+
+    id_to_name <- setNames(all_vals[ord], all_keys[ord])
+    id_to_name[!duplicated(names(id_to_name))]
 }
 
 
@@ -499,8 +788,11 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' @param pairwise_plots Named list of pairwise ggplot objects.
 #' @param per_omics Per-omics enrichment results list.
 #' @param out_dir Output directory.
+#' @param kegg_org Active KEGG organism code for the run, or NULL. Passed in
+#'   rather than read from config so this function has no hidden dependency.
 #' @return The combined ggplot/patchwork object, or NULL on failure.
-plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
+plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir,
+                                     kegg_org = NULL) {
     if (!requireNamespace("patchwork", quietly = TRUE)) {
         message("Package 'patchwork' not available. Skipping combined plot.")
         return(NULL)
@@ -510,22 +802,29 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
     omics_names <- names(per_omics)
     summary_rows <- list()
 
+    # Resolved once over every participating omic, not per omic: a normalized key
+    # must carry one label, or two layers holding bare hsa00010 and map00010 would
+    # label the same pathway differently and take a y-axis row each.
+    id_to_name <- .multigsea_term_names(per_omics, kegg_org)
+
     for (om in omics_names) {
         res <- per_omics[[om]]
         if (is.null(res) || !is.data.frame(res)) next
 
-        term_ids <- .multigsea_term_ids(res)
+        term_ids <- .multigsea_term_ids(res, kegg_org)
         if (is.null(term_ids)) next
 
-        # Find p-value column
-        padj_col <- NULL
-        for (pc in c("padj", "p.adjust", "adj.P.Val", "FDR", "qvalue", "pvalue")) {
-            if (pc %in% colnames(res)) { padj_col <- pc; break }
-        }
+        padj_col <- .multigsea_padj_col(res)
         if (is.null(padj_col)) next
 
-        # Readable name where the table has one, otherwise the ID itself
-        term_names <- unname(.multigsea_term_names(list(res))[term_ids])
+        # Rows with no identity cannot be placed on the panel, as in the pairwise
+        # paths above.
+        res <- res[!is.na(term_ids), , drop = FALSE]
+        term_ids <- term_ids[!is.na(term_ids)]
+        if (length(term_ids) == 0L) next
+
+        # Readable name where any omic has one, otherwise the ID itself
+        term_names <- unname(id_to_name[term_ids])
         term_names[is.na(term_names)] <- term_ids[is.na(term_names)]
 
         df_tmp <- data.frame(
@@ -536,6 +835,10 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
             stringsAsFactors = FALSE
         )
         df_tmp <- df_tmp[!is.na(df_tmp$padj), ]
+        # One row per pathway per omic, so the co-significance count below cannot
+        # read two prefix variants from this layer as two layers.
+        df_tmp <- df_tmp[.multigsea_collapse_duplicate_terms(df_tmp, df_tmp$term), ,
+                         drop = FALSE]
         summary_rows[[length(summary_rows) + 1]] <- df_tmp
     }
 
@@ -546,10 +849,7 @@ plot_multigsea_combined <- function(pairwise_plots, per_omics, out_dir) {
 
     summary_df <- do.call(rbind, summary_rows)
 
-    # Find terms significant in at least 2 omics
-    sig_terms <- summary_df[summary_df$padj < 0.05, ]
-    term_counts <- table(sig_terms$term)
-    co_sig <- names(term_counts[term_counts >= 2])
+    co_sig <- .multigsea_cosignificant_terms(summary_df)
 
     if (length(co_sig) == 0) {
         # Fall back to top terms by lowest p-value across any omic
@@ -819,17 +1119,41 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param harmonization_res Harmonization result with MAE and pre-processing data
 #' @param config Full config object
 #' @param out_dir Output directory for results and plots
+#' @param per_omics_enrichment This run's per-omics enrichment frames
+#'   (`multiomics_cross_enrichment$per_omics`), used by the no-OrgDb pathview
+#'   fallback to select pathways from the current run rather than from whatever
+#'   enrichment CSVs an earlier run left on disk.
 #' @return List with: results (data.frame), plots (list of paths)
-run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
+run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
+                          per_omics_enrichment = NULL) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
+
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # Both pathview renderers below write into this directory and the report
+    # finds their maps by globbing it, so a map this run no longer produces
+    # would otherwise linger on the page as a current result. Cleared here,
+    # once, rather than by either renderer: neither owns the other's output.
+    #
+    # Before the input check on purpose. A rerun with one omics layer fewer
+    # produces no Multi-ORA at all, and that is exactly the rerun whose stale
+    # maps would otherwise stay on the page looking current.
+    clear_multi_ora_pathview_outputs(out_dir)
+
+    # One gate for every pathview renderer below, resolved once. The cleanup
+    # above deliberately precedes it: turning the maps off has to remove the
+    # previous run's, or the report keeps showing maps nobody asked for.
+    run_pathview <- isTRUE(
+        (config$modes$multiomics$enrichment$pathview$run_pathview %||% TRUE))
+    if (!run_pathview) {
+        message("Multi-ORA: pathway maps disabled by enrichment.pathview.run_pathview")
+    }
 
     if (is.null(de_results) || length(de_results) < 2) {
         message("Multi-ORA requires DE results from at least 2 omics layers")
         return(NULL)
     }
-
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     # Track errors/warnings for reporting in HTML
     .ora_issues <- character(0)
@@ -845,6 +1169,17 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         if (is.null(gmt_res)) {
             message("Multi-ORA: organism annotation not available for ", organism,
                     " and no usable per-omic GMT gene sets")
+        }
+        # Without an OrgDb, pathway maps are still reachable: KEGG's reference
+        # maps are organism-independent, so a configured feature-to-KO map puts
+        # this run's features onto them in KO space.
+        if (run_pathview) {
+            tryCatch(
+                generate_per_omic_union_pathview(de_results, harmonization_res,
+                                                 config, out_dir,
+                                                 per_omics_enrichment = per_omics_enrichment),
+                error = function(e) message("  Union pathview failed: ", conditionMessage(e))
+            )
         }
         return(gmt_res)
     }
@@ -949,7 +1284,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
         sig_genes = pooled_sig_kegg,
         universe = pooled_univ_kegg,
         kegg_org = kegg_org,
-        label = "pooled"
+        label = "pooled",
+        exclude_classes = .excluded_pathway_classes(config)
     )
 
     # --- Run per-omics ORA (with same universe) ---
@@ -960,7 +1296,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
             sig_genes = per_omics_sig_kegg[[om]],
             universe = pooled_univ_kegg,
             kegg_org = kegg_org,
-            label = om
+            label = om,
+            exclude_classes = .excluded_pathway_classes(config)
         )
     }
 
@@ -976,7 +1313,9 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
                 de_df <- do.call(rbind, de_tables)
                 de_mapped <- merge(de_df, id_map, by = "feature_id")
                 de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
-                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1, universe = full_universe)
+                run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
+                                 universe = full_universe,
+                                 exclude_classes = .excluded_pathway_classes(config))
             } else NULL
         }, error = function(e) {
             message("  Metabolomics compound ORA failed: ", e$message)
@@ -1053,7 +1392,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     })
 
     # 4. Pathview maps for pathways supported by >= 2 omics
-    plots$pathview_pdf <- tryCatch({
+    plots$pathview_pdf <- if (!run_pathview) NULL else tryCatch({
         generate_multi_ora_pathview(
             combined = combined,
             de_results = de_results,
@@ -1069,7 +1408,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 
     # 5. Per-omics pathview: top metabolomics pathways + proteomics overlay,
     #    and top proteomics pathways + metabolomics overlay
-    per_omics_pv <- tryCatch({
+    per_omics_pv <- if (!run_pathview) NULL else tryCatch({
         generate_per_omics_pathview(
             per_omics_ora = per_omics_ora,
             metab_ora = metab_ora,
@@ -1121,7 +1460,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
                     kegg_org = kegg_org,
                     org_db = org_db,
                     out_dir = contrast_out,
-                    metab_de_tables = metab_de_tables
+                    metab_de_tables = metab_de_tables,
+                    exclude_classes = .excluded_pathway_classes(config)
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1153,10 +1493,14 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 #' @param org_db Organism annotation database
 #' @param out_dir Output directory for this contrast
 #' @param metab_de_tables Metabolomics DE tables (named list per contrast), or NULL
+#' @param exclude_classes BRITE classes this project excludes from its report,
+#'   passed down so a per-contrast section cannot show a class the run-level
+#'   sections removed.
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
-                                           out_dir, metab_de_tables = NULL) {
+                                           out_dir, metab_de_tables = NULL,
+                                           exclude_classes = NULL) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1199,13 +1543,15 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
     pooled_univ_kegg <- unique(kegg_conv[pooled_universe])
     pooled_univ_kegg <- pooled_univ_kegg[!is.na(pooled_univ_kegg)]
 
-    pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org, "pooled")
+    pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org,
+                                     "pooled", exclude_classes = exclude_classes)
 
     per_omics_ora <- list()
     for (om in names(per_omics_sig)) {
         k <- kegg_conv[per_omics_sig[[om]]]
         k <- unique(k[!is.na(k)])
-        per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om)
+        per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om,
+                                                  exclude_classes = exclude_classes)
     }
 
     # Run per-contrast metabolomics compound ORA if data is available
@@ -1231,7 +1577,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
                     de_mapped <- merge(de_df, id_map, by = "feature_id")
                     de_mapped$KEGG_ID <- de_mapped$KEGG_CPD
                     run_compound_ora(de_mapped, out_dir, 2, 500, 0.1,
-                                     universe = full_universe)
+                                     universe = full_universe,
+                                     exclude_classes = exclude_classes)
                 } else NULL
             }, error = function(e) {
                 message("    Per-contrast compound ORA failed for ", contrast_name,
@@ -1267,9 +1614,15 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir) {
 #' @param universe All KEGG gene IDs (shared universe)
 #' @param kegg_org KEGG organism code
 #' @param label Label for messages
+#' @param pval_cutoff Adjusted p-value cutoff for the preferred branch.
+#' @param exclude_classes BRITE classes this project leaves out of its report.
+#'   Applied to the finished table on the way out, so everything downstream --
+#'   the summary, the plots, the OrgDb pathview renderers -- inherits an already
+#'   filtered input instead of filtering again.
 #' @return data.frame with ORA results
 run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
-                                label = "pooled", pval_cutoff = 0.1) {
+                                label = "pooled", pval_cutoff = 0.1,
+                                exclude_classes = NULL) {
 
     if (length(sig_genes) < 3) {
         message("    ", label, ": too few significant genes (", length(sig_genes), ")")
@@ -1303,14 +1656,22 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
                 geneID = df$geneID,
                 stringsAsFactors = FALSE
             )
-            # Filter: prefer padj, fall back to pvalue < 0.05
+            # Filter: prefer padj, fall back to pvalue < 0.05.
+            # Which branch is taken is decided on the unfiltered results, so a
+            # project's class exclusion cannot move the run from adjusted hits
+            # to the raw-p fallback. Exclusion applies to whichever table this
+            # chose, on its way out.
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
-            if (nrow(padj_hits) > 0) return(padj_hits)
+            if (nrow(padj_hits) > 0) {
+                return(.exclude_kegg_classes(padj_hits, exclude_classes,
+                                             kegg_org, label))
+            }
             pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
             if (nrow(pval_hits) > 0) {
                 message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                         nrow(pval_hits), " pathways)")
-                return(pval_hits)
+                return(.exclude_kegg_classes(pval_hits, exclude_classes,
+                                             kegg_org, label))
             }
         }
         NULL
@@ -1325,7 +1686,44 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
     }
 
     # Fallback: Fisher's exact test
-    run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff)
+    .exclude_kegg_classes(
+        run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff),
+        exclude_classes, kegg_org, label)
+}
+
+
+#' Drop excluded KEGG classes from a finished gene-ORA table
+#'
+#' The one place the gene-based multi-ORA applies the exclusion, so every return
+#' path of \code{run_multi_ora_kegg()} filters identically and the tables that
+#' feed the summary, the plots and the OrgDb pathview renderers arrive already
+#' filtered -- rather than each of those growing a filter of its own.
+#'
+#' Applied to completed results: the tested universe, the p-values and the
+#' adjustment behind them are exactly what they were.
+#'
+#' @param df Finished ORA table, or NULL.
+#' @param exclude_classes BRITE classes to drop; NULL or empty is a no-op.
+#' @param kegg_org Active KEGG organism code, for accession recognition.
+#' @param label Short context word for the message naming what was dropped.
+#' @param classification Resolved class table, defaulted lazily to the fetch so
+#'   a call with nothing to exclude never reaches the network, and so a test can
+#'   supply one without depending on whether a machine has any.
+#' @return \code{df} with the excluded rows removed, or NULL when nothing is
+#'   left -- the same "no pathways" shape every other path here returns.
+#' @keywords internal
+.exclude_kegg_classes <- function(df, exclude_classes = NULL, kegg_org = NULL,
+                                  label = "pathways",
+                                  classification = kegg_pathway_categories()) {
+    if (is.null(df) || nrow(df) == 0) return(df)
+    if (length(unlist(exclude_classes)) == 0) return(df)
+
+    ids <- if ("ID" %in% names(df)) df$ID else df$pathway
+    df <- df[keep_kegg_pathways(ids, exclude = exclude_classes,
+                                kegg_org = kegg_org, label = label,
+                                classification = classification), ,
+             drop = FALSE]
+    if (nrow(df) == 0) NULL else df
 }
 
 
@@ -1366,9 +1764,27 @@ gmt_to_term2gene <- function(gmt_file) {
 #' @param term2name Optional data.frame(term, name) for readable pathway labels.
 #' @param label Label used in progress messages.
 #' @param pval_cutoff Adjusted-p cutoff (falls back to raw p < 0.05).
+#' @param exclude_classes BRITE classes to drop from the finished table, as
+#'   \code{run_multi_ora_kegg()} takes them. A GMT can carry KEGG sets, and
+#'   without this they reached the summary, the CSV and the pooled figure while
+#'   the KEGG branch had already excluded their class -- so the same project
+#'   config was honoured on a model organism and not on the fallback path that
+#'   exists for organisms where it matters most.
+#' @param kegg_org Active KEGG organism code, for accession recognition. Only
+#'   rows \code{is_kegg_pathway_accession()} recognises can be excluded, so GO,
+#'   Pfam, InterPro and custom sets in the same GMT are untouched.
+#' @param classification The resolved BRITE class table, defaulted lazily to the
+#'   fetch exactly as \code{.exclude_kegg_classes()} does, so a call with nothing
+#'   to exclude still never reaches the network. A caller running several
+#'   producers over one GMT should resolve it once and pass it here:
+#'   \code{kegg_pathway_categories()} caches a successful fetch but not a failed
+#'   one, so leaving each producer to its own default makes an unreachable
+#'   endpoint cost one timeout per producer before the run fails open.
 #' @return data.frame(pathway, ID, pvalue, padj, GeneRatio, Count, geneID), or NULL.
 run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = NULL,
-                                   label = "pooled", pval_cutoff = 0.1) {
+                                   label = "pooled", pval_cutoff = 0.1,
+                                   exclude_classes = NULL, kegg_org = NULL,
+                                   classification = kegg_pathway_categories()) {
 
     if (length(sig_genes) < 3) {
         message("    ", label, ": too few significant genes (", length(sig_genes), ")")
@@ -1402,13 +1818,23 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
                 geneID    = df$geneID,
                 stringsAsFactors = FALSE
             )
+            # Same ordering as run_multi_ora_kegg(): which branch is taken is
+            # decided on the unfiltered results, so a project's class exclusion
+            # cannot move the run from adjusted hits to the raw-p fallback.
+            # Exclusion applies to whichever table this chose, on its way out.
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
-            if (nrow(padj_hits) > 0) return(padj_hits)
+            if (nrow(padj_hits) > 0) {
+                return(.exclude_kegg_classes(padj_hits, exclude_classes,
+                                             kegg_org, label,
+                                             classification = classification))
+            }
             pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
             if (nrow(pval_hits) > 0) {
                 message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                         nrow(pval_hits), " pathways)")
-                return(pval_hits)
+                return(.exclude_kegg_classes(pval_hits, exclude_classes,
+                                             kegg_org, label,
+                                             classification = classification))
             }
         }
         NULL
@@ -1454,14 +1880,20 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     per_omics_t2n  <- list()
 
     for (om in intersect(gene_omics, names(de_results))) {
-        gmt_path <- config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file
-        if (is.null(gmt_path) || !nzchar(gmt_path)) next
+        # gmt_file may be a single path or a YAML list of paths (GO + KEGG);
+        # read_gmt() already merges several files, so only these guards needed
+        # to vectorise — with a list they were comparing length-2 vectors and
+        # aborting the whole Multi-ORA step.
+        gmt_path <- unlist(config$modes[[omic_cfg_key[[om]]]]$pathway$gmt_file,
+                           use.names = FALSE)
+        if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) next
         # Resolve like every other user-supplied input (metabolomics enrichment,
         # data files): absolute paths pass through, relative ones resolve under
         # the raw/ data dir. resolve_raw_path() would mangle an absolute path.
         gmt_abs <- resolve_input_path(config, gmt_path)
-        if (!file.exists(gmt_abs)) {
-            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ", gmt_abs)
+        if (any(!file.exists(gmt_abs))) {
+            message("  Multi-ORA (GMT): ", om, " gmt_file not found: ",
+                    paste(gmt_abs[!file.exists(gmt_abs)], collapse = ", "))
             next
         }
         gs <- gmt_to_term2gene(gmt_abs)
@@ -1509,15 +1941,49 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
     pooled_sig  <- unique(unlist(per_omics_sig))
     pooled_univ <- unique(unlist(per_omics_univ))
 
+    # Resolved once and applied at every producer, so the pooled table, the
+    # per-omics tables and the summary built from them agree. The pooled figure
+    # reads pooled_ora directly rather than the summary, so filtering only the
+    # summary would leave the picture and multi_ora_results.csv disagreeing
+    # about which pathways exist.
+    #
+    # resolve_kegg_org_code() rather than get_kegg_organism(): this branch is
+    # entered when EITHER the KEGG code or the OrgDb is missing, so an organism
+    # KEGG knows but Bioconductor has no OrgDb for arrives here with a perfectly
+    # good code. The narrower resolver would leave its organism-prefixed
+    # accessions unclassified, and therefore unexcluded.
+    exclude_classes <- .excluded_pathway_classes(config)
+    kegg_org <- resolve_kegg_org_code(config$global$organism)
+
+    # Resolved here rather than left to each producer's lazy default.
+    # kegg_pathway_categories() caches a successful fetch but returns NULL
+    # without writing anything when the endpoint cannot be reached, so a cold
+    # cache on an offline machine would otherwise cost one full timeout for the
+    # pooled table and one more for every omics layer -- and this path needs at
+    # least two layers -- before the run fails open and keeps everything.
+    #
+    # The `if` keeps the no-exclusion case as lazy as it was: a project that
+    # configures nothing still never touches the network, here or downstream.
+    pathway_classes <- if (length(exclude_classes) > 0) {
+        kegg_pathway_categories()
+    } else {
+        NULL
+    }
+
     message("  Running pooled GMT ORA...")
-    pooled_ora <- run_multi_ora_enricher(pooled_sig, pooled_univ, comb_t2g, comb_t2n, "pooled")
+    pooled_ora <- run_multi_ora_enricher(pooled_sig, pooled_univ, comb_t2g, comb_t2n,
+                                         "pooled", exclude_classes = exclude_classes,
+                                         kegg_org = kegg_org,
+                                         classification = pathway_classes)
 
     per_omics_ora <- list()
     for (om in names(per_omics_sig)) {
         message("  Running per-omics GMT ORA for ", om, "...")
         per_omics_ora[[om]] <- run_multi_ora_enricher(
             per_omics_sig[[om]], per_omics_univ[[om]],
-            per_omics_t2g[[om]], per_omics_t2n[[om]], om)
+            per_omics_t2g[[om]], per_omics_t2n[[om]], om,
+            exclude_classes = exclude_classes, kegg_org = kegg_org,
+            classification = pathway_classes)
     }
 
     combined <- build_multi_ora_summary(pooled_ora, per_omics_ora, NULL)
@@ -1533,7 +1999,16 @@ run_multi_ora_gmt <- function(de_results, harmonization_res, config, out_dir) {
         plots$pooled_barplot <- file.path(out_dir, "multi_ora_pooled_barplot.png")
         png(plots$pooled_barplot, width = 1000, height = 700, res = 120)
         tryCatch(
-            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)"),
+            # The one figure in this file whose table really mixes namespaces:
+            # comb_t2g above row-binds each omic's GMTs, so GO, KEGG and Pfam
+            # sets land in one pool and the largest collection takes every slot
+            # on set count alone. resolve_kegg_org_code() is NULL for an
+            # organism KEGG does not know -- the usual case on this fallback --
+            # and then only the map/ko/bare spellings count as KEGG, which is
+            # the identity contract answering honestly rather than a gap.
+            plot_multi_ora_barplot(pooled_ora, "Pooled Multi-ORA (GMT gene sets)",
+                                   by_collection = TRUE,
+                                   kegg_org = kegg_org),
             error = function(e) { plot.new(); text(0.5, 0.5, paste("Plot failed:", e$message), cex = 1.2) }
         )
         dev.off()
@@ -1661,23 +2136,309 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 }
 
 
+#' Bar colour for each gene-set collection
+#'
+#' Fixed by name rather than assigned in the order collections happen to appear,
+#' so a collection keeps its colour between runs and between contrasts. KEGG
+#' keeps the purple every one of these bar plots used before there were
+#' collections, so the KEGG-only figures look as they did.
+#'
+#' @keywords internal
+.ORA_COLLECTION_COLOURS <- c(KEGG     = "#7B2D8E",
+                             GO       = "#2C7FB8",
+                             Pfam     = "#41AB5D",
+                             InterPro = "#D95F0E",
+                             Other    = "#9E9E9E")
+
+
+#' Which significance column a pathway figure should show
+#'
+#' One choice for the whole table, never row by row: a figure whose bars are
+#' part adjusted and part raw p-values has no readable axis and no honest
+#' caption. Adjusted p is preferred wherever the table actually carries usable
+#' values -- \code{any(is.finite())} rather than column presence, since an
+#' all-NA `padj` column is common and would otherwise silence every bar.
+#'
+#' @param df Enrichment table, expected to carry `padj` and/or `pvalue`.
+#' @return A list with `column` (the column name to read, or NA_character_ when
+#'   the table carries neither), `values` (that column as numeric, or all NA),
+#'   and `adjusted` (TRUE when the choice fell on an adjusted p-value).
+#' @keywords internal
+.ora_display_score <- function(df) {
+    as_num <- function(col) suppressWarnings(as.numeric(df[[col]]))
+
+    if ("padj" %in% names(df)) {
+        padj <- as_num("padj")
+        if (any(is.finite(padj))) {
+            return(list(column = "padj", values = padj, adjusted = TRUE))
+        }
+    }
+    if ("pvalue" %in% names(df)) {
+        return(list(column = "pvalue", values = as_num("pvalue"),
+                    adjusted = FALSE))
+    }
+    list(column = NA_character_, values = rep(NA_real_, nrow(df)),
+         adjusted = FALSE)
+}
+
+
+#' Order pathway rows strongest-first, deterministically
+#'
+#' Every key is derived from the data: the significance score, then the
+#' normalized pathway identity, then the readable label. Arrival index is
+#' deliberately not a key -- a figure whose contents depend on the order rows
+#' happened to be bound in is not reproducible, and the tables reaching here are
+#' assembled from several sources. Rows still equal on all three are
+#' indistinguishable on every field this function can see, so their relative
+#' order carries no meaning.
+#'
+#' @param df Enrichment table.
+#' @param score Numeric score for each row, smaller is better, from
+#'   \code{.ora_display_score()}.
+#' @param kegg_org Active KEGG organism code, or NULL.
+#' @return Integer permutation of \code{seq_len(nrow(df))}.
+#' @keywords internal
+.order_ora_rows <- function(df, score, kegg_org = NULL) {
+    order(score,
+          pathway_join_key(df, kegg_org),
+          pathway_display_label(df),
+          na.last = TRUE)
+}
+
+
+#' Classify pathway identifiers by the gene-set collection they come from
+#'
+#' A pooled ORA over several GMTs mixes namespaces that nothing downstream can
+#' tell apart once the tables are row-bound, so the collection has to be read
+#' back off the identifier.
+#'
+#' KEGG is decided by the identity contract and nothing else:
+#' \code{pathway_join_key()} resolves identity per row and normalizes the
+#' spellings this pipeline produces, and \code{is_kegg_pathway_accession()}
+#' decides which of those are KEGG accessions. A shape-only rule such as "two to
+#' four letters then five digits" would claim a custom gene set named
+#' `abcd12345`, which is exactly the silent misclassification the contract
+#' exists to prevent.
+#'
+#' The other three patterns are fully anchored for the same reason: an
+#' unanchored `^GO:?[0-9]+` claims `GO12345_signalling`, a custom set name that
+#' has nothing to do with the Gene Ontology.
+#'
+#' Nothing is dropped and nothing is rewritten. A row whose identity is missing
+#' entirely is `Other`, not an error and not a gap.
+#'
+#' @param df Enrichment table.
+#' @param kegg_org Active KEGG organism code for the run, or NULL when the
+#'   organism has no KEGG code.
+#' @param keys Pre-computed join keys, defaulting to deriving them. The default
+#'   is lazy, so a caller that already has them -- as
+#'   \code{select_top_ora_per_collection()} does -- does not pay for them twice.
+#' @return Character vector, one collection name per row of \code{df}: one of
+#'   "KEGG", "GO", "Pfam", "InterPro" or "Other".
+#' @examples
+#' df <- data.frame(ID = c("hsa04110", "GO:0006915", "PF00069", "myset"))
+#' classify_pathway_collection(df, kegg_org = "hsa")
+#' # "KEGG" "GO" "Pfam" "Other"
+classify_pathway_collection <- function(df, kegg_org = NULL,
+                                        keys = pathway_join_key(df, kegg_org)) {
+    out <- rep("Other", length(keys))
+
+    # KEGG first and by contract. The remaining patterns are only ever offered
+    # keys KEGG has already declined, so no identifier can match two rules.
+    is_kegg <- is_kegg_pathway_accession(keys, kegg_org)
+    out[is_kegg] <- "KEGG"
+
+    # Each accepts the bare accession and the "<id>~<name>" form GMT files use,
+    # which is a real shape here: .multigsea_readable_from_identifier() strips
+    # exactly that prefix for display, and normalize_pathway_join_key() leaves
+    # it on the key because only KEGG's own "<accession> <name>" spelling is
+    # normalized. Treating a labelled GO term as Other would pool it with the
+    # custom collections and let it crowd them out inside that bucket -- the
+    # very thing the round-robin exists to stop.
+    #
+    # The digit counts stay exact and the tail stays anchored, so this is not
+    # the unanchored prefix match that claims GO12345_signalling. Seven digits
+    # rather than the display stripper's [0-9]+ because a GO accession is
+    # seven, zero-padded: a loose strip costs a slightly wrong label, a loose
+    # classification misfiles the term.
+    rest <- !is_kegg & !is.na(keys)
+    out[rest & grepl("^GO:[0-9]{7}(~|$)", keys)]  <- "GO"
+    out[rest & grepl("^PF[0-9]{5}(~|$)", keys)]   <- "Pfam"
+    out[rest & grepl("^IPR[0-9]{6}(~|$)", keys)]  <- "InterPro"
+
+    out
+}
+
+
+#' Pick top ORA terms while keeping every collection represented
+#'
+#' A pooled ORA over GO + KEGG + Pfam is dominated by GO on set count alone --
+#' thousands of GO terms against a few hundred KEGG maps -- so a plain top-n
+#' leaves a figure that looks like a GO-only analysis however much evidence the
+#' other collections hold.
+#'
+#' Terms are therefore drawn round-robin: collections enter the rotation
+#' best-first, and each contributes its next-best term per pass until the figure
+#' is full. No quota is computed, which is the point -- a collection with fewer
+#' terms than the others simply stops appearing in later passes and the
+#' remaining slots go to whoever still has terms, so there is nothing to
+#' redistribute and no allocation to get wrong.
+#'
+#' Round-robin decides *membership* only. The rows come back in global evidence
+#' order, so the figure still reads strongest-first and a reader is never told
+#' that the second bar outranks the third when it does not.
+#'
+#' With a single collection this is exactly the plain top-n. With fewer slots
+#' than collections the strongest collections are still the ones shown.
+#'
+#' Selection runs on whatever table it is handed: the KEGG class exclusion has
+#' already been applied to these results by \code{run_multi_ora_kegg()} on the
+#' way out, and nothing here reclassifies or re-filters a pathway.
+#'
+#' @param ora_df ORA table carrying `pvalue` and/or `padj`, plus the identity
+#'   columns \code{pathway_join_key()} reads.
+#' @param top_n Maximum number of rows to keep.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return A subset of \code{ora_df}, in global evidence order.
+#' @examples
+#' ora <- data.frame(ID = c("GO:0000001", "GO:0000002", "hsa04110"),
+#'                   pathway = c("a", "b", "c"), padj = c(0.001, 0.002, 0.04))
+#' select_top_ora_per_collection(ora, top_n = 2, kegg_org = "hsa")$ID
+#' # "GO:0000001" "hsa04110"  -- KEGG is not displaced by the second GO term
+select_top_ora_per_collection <- function(ora_df, top_n = 20, kegg_org = NULL) {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(ora_df)
+
+    score <- .ora_display_score(ora_df)$values
+    keys  <- pathway_join_key(ora_df, kegg_org)
+
+    ord   <- .order_ora_rows(ora_df, score, kegg_org)
+    df    <- ora_df[ord, , drop = FALSE]
+    score <- score[ord]
+    keys  <- keys[ord]
+
+    # Nothing to balance: every row is shown, so the collections cannot crowd
+    # each other out and the round-robin below would only reorder them.
+    if (nrow(df) <= top_n) return(df)
+
+    coll <- classify_pathway_collection(df, kegg_org, keys = keys)
+    by_coll <- split(seq_len(nrow(df)), coll)
+
+    # Best-first, so fewer slots than collections still shows the strongest
+    # ones. The collection name breaks a tie on the best score, because
+    # split() names the groups and nothing else here distinguishes them.
+    best <- vapply(by_coll, function(i) score[i[1]], numeric(1))
+    by_coll <- by_coll[order(best, names(by_coll), na.last = TRUE)]
+
+    keep <- integer(0)
+    rank <- 1L
+    while (length(keep) < top_n && any(lengths(by_coll) >= rank)) {
+        for (idx in by_coll) {
+            if (length(keep) >= top_n) break
+            if (length(idx) >= rank) keep <- c(keep, idx[rank])
+        }
+        rank <- rank + 1L
+    }
+
+    # sort() restores global evidence order: df is already in it, so the row
+    # numbers carry it.
+    df[sort(keep), , drop = FALSE]
+}
+
+
 #' Plot multi-ORA pooled barplot
-plot_multi_ora_barplot <- function(ora_df, title, top_n = 20) {
-    df <- ora_df[order(ora_df$pvalue), ]
-    df <- df[seq_len(min(top_n, nrow(df))), ]
+#'
+#' Horizontal bar plot of the strongest enriched terms.
+#'
+#' Bars show the adjusted p-value wherever the table carries usable ones and the
+#' raw p-value otherwise, and that one choice drives the ranking, the bar
+#' length, the threshold line and the axis label together. It was previously
+#' ranked and drawn on raw p while the report legend described a padj threshold,
+#' so the figure and its caption disagreed about which statistic was on screen.
+#'
+#' Collection-aware selection is opt-in, because only the pooled GMT figure
+#' actually mixes namespaces -- the KEGG bar plots hold KEGG maps alone, where
+#' round-robin would be an elaborate way of writing plain top-n. Where it is on,
+#' each bar is tagged and coloured by its collection so GO terms, KEGG maps and
+#' Pfam domains are never pooled into one anonymous ranking.
+#'
+#' @param ora_df ORA table carrying `pvalue` and/or `padj`.
+#' @param title Plot title.
+#' @param top_n Maximum number of bars.
+#' @param by_collection Draw terms round-robin across gene-set collections
+#'   rather than by plain top-n, tagging and colouring each bar with its
+#'   collection. FALSE by default: the caller opts in.
+#' @param kegg_org Active KEGG organism code, or NULL. Read only when
+#'   \code{by_collection} is TRUE, which is the only branch that classifies.
+#' @return Invisibly, a data frame describing the bars drawn -- `key`, `label`,
+#'   `collection` (NA where nothing was classified), `score` -- in the order
+#'   they were selected, so which terms a figure leads with can be checked
+#'   without reading pixels. NULL when there was nothing to draw.
+plot_multi_ora_barplot <- function(ora_df, title, top_n = 20,
+                                    by_collection = FALSE, kegg_org = NULL) {
+    if (is.null(ora_df) || nrow(ora_df) == 0) return(invisible(NULL))
 
-    df$label <- ifelse(nchar(df$pathway) > 50,
-                        paste0(substr(df$pathway, 1, 47), "..."),
-                        df$pathway)
-    neg_log_p <- -log10(df$pvalue + 1e-300)
-    neg_log_p <- pmin(neg_log_p, 15)
+    # Resolved on the whole table, then read from the selected rows. Choosing
+    # again on the subset could land on a different column than the ranking
+    # used, which is how a figure ends up ordered by one statistic and drawn
+    # with another.
+    score_col <- .ora_display_score(ora_df)
+    if (is.na(score_col$column)) return(invisible(NULL))
 
-    par(mar = c(5, 17, 3, 2))
-    barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(df$label),
-            las = 1, cex.names = 0.65, col = "#7B2D8E",
-            xlab = "-log10(p-value)",
-            main = title)
-    abline(v = -log10(0.05), col = "red", lty = 2)
+    if (isTRUE(by_collection)) {
+        df <- select_top_ora_per_collection(ora_df, top_n, kegg_org)
+        collection <- classify_pathway_collection(df, kegg_org)
+    } else {
+        ord <- .order_ora_rows(ora_df, score_col$values, kegg_org)
+        df <- ora_df[ord[seq_len(min(top_n, nrow(ora_df)))], , drop = FALSE]
+        collection <- rep(NA_character_, nrow(df))
+    }
+
+    keys <- pathway_join_key(df, kegg_org)
+    label <- pathway_display_label(df)
+    # A row with no readable text still gets a bar; the key is a poorer label
+    # than a name but a better one than "NA".
+    label[is.na(label)] <- keys[is.na(label)]
+    label[is.na(label)] <- "(unnamed pathway)"
+    label <- ifelse(nchar(label) > 50, paste0(substr(label, 1, 47), "..."),
+                    label)
+
+    mixed <- by_collection && length(unique(collection)) > 1
+    if (mixed) label <- paste0("[", collection, "] ", label)
+
+    score <- suppressWarnings(as.numeric(df[[score_col$column]]))
+    neg_log_p <- pmin(-log10(score + 1e-300), 15)
+
+    # Coloured by collection whenever anything was classified, not only when
+    # several were found: a GMT run that happens to yield GO terms alone should
+    # not be drawn in the colour this file reserves for KEGG. The tag and the
+    # legend are what a single collection does not need, since there is nothing
+    # to tell apart.
+    bar_col <- if (isTRUE(by_collection)) {
+        unname(.ORA_COLLECTION_COLOURS[collection])
+    } else {
+        .ORA_COLLECTION_COLOURS[["KEGG"]]
+    }
+
+    p_label <- if (score_col$adjusted) "adjusted p-value" else "p-value"
+
+    # with_par rather than a bare par(): these are called straight from tests
+    # and from renderers that draw more than one figure to a device, and a
+    # 17-line left margin left behind is not this function's to leave.
+    withr::with_par(list(mar = c(5, 17, 3, 2)), {
+        barplot(rev(neg_log_p), horiz = TRUE, names.arg = rev(label),
+                las = 1, cex.names = 0.65, col = rev(bar_col),
+                xlab = paste0("-log10(", p_label, ")"),
+                main = title)
+        abline(v = -log10(0.05), col = "red", lty = 2)
+        if (mixed) {
+            drawn <- unique(collection)
+            legend("bottomright", legend = drawn, bty = "n", cex = 0.7,
+                   fill = unname(.ORA_COLLECTION_COLOURS[drawn]))
+        }
+    })
+
+    invisible(data.frame(key = keys, label = label, collection = collection,
+                         score = score, stringsAsFactors = FALSE))
 }
 
 
@@ -1991,6 +2752,12 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     on.exit(setwd(cwd), add = TRUE)
 
     all_generated_pngs <- list()
+    # Now that the node rule can empty a layer, "metabolomics was present" no
+    # longer implies "a compound node carries a value". The report must not
+    # promise a colour that is not on the map, so what this run actually
+    # supplied is recorded rather than inferred -- as the union renderer
+    # already does beside its own PDF.
+    any_compounds <- FALSE
 
     for (ci in seq_along(contrast_names)) {
         contrast <- contrast_names[ci]
@@ -2002,7 +2769,11 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         for (om in names(gene_de_tables)) {
             de_tbl <- gene_de_tables[[om]]
             idx <- min(ci, length(de_tbl))
-            df <- de_tbl[[idx]]
+            # Same node-evidence rule as the KO-space renderer. Both figures
+            # carry one caption, and it states both thresholds -- so a feature
+            # that did not clear them must not colour a node here either.
+            df <- filter_changed_features(de_tbl[[idx]])
+            if (is.null(df) || nrow(df) == 0) next
             df_mapped <- merge(df, gene_id_maps[[om]], by = "feature_id")
             fc_arr <- tapply(df_mapped$log2fc, df_mapped$ENTREZID, mean, na.rm = TRUE)
             fc_vec <- as.numeric(fc_arr)
@@ -2028,12 +2799,19 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         if (!is.null(metab_id_map) && nrow(metab_id_map) > 0 &&
             !is.null(metab_de_tables) && length(metab_de_tables) > 0) {
             idx <- min(ci, length(metab_de_tables))
-            df <- metab_de_tables[[idx]]
-            df_mapped <- merge(df, metab_id_map, by = "feature_id")
-            cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD, mean, na.rm = TRUE)
-            cpd_data <- as.numeric(cpd_fc)
-            names(cpd_data) <- names(cpd_fc)
+            # Filtered before mapping and before the mean, so a compound node
+            # is the average of the features that cleared the rule, not of
+            # every feature that happened to map to it.
+            df <- filter_changed_features(metab_de_tables[[idx]])
+            if (!is.null(df) && nrow(df) > 0) {
+                df_mapped <- merge(df, metab_id_map, by = "feature_id")
+                cpd_fc <- tapply(df_mapped$log2fc, df_mapped$KEGG_CPD,
+                                 mean, na.rm = TRUE)
+                cpd_data <- as.numeric(cpd_fc)
+                names(cpd_data) <- names(cpd_fc)
+            }
         }
+        if (!is.null(cpd_data) && length(cpd_data) > 0) any_compounds <- TRUE
 
         if (is.null(gene_data) && is.null(cpd_data)) next
 
@@ -2085,6 +2863,10 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     }
 
     # --- Compile into a single PDF with contrast labels ---
+    # "supported" is a claim: these pathways are enriched in two or more omics
+    # layers. generate_per_omic_union_pathview(), the no-OrgDb fallback, unions
+    # single-layer hits and so writes its own file -- sharing this name would
+    # have presented one layer's evidence under this one's promise.
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
@@ -2108,6 +2890,13 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
             }
         }
         grDevices::dev.off()
+        # Written only once the PDF exists, so the sidecar cannot outlive the
+        # figure it describes.
+        tryCatch(
+            yaml::write_yaml(list(compound_nodes = any_compounds),
+                             file.path(out_dir, "multi_ora_pathview_supported.yaml")),
+            error = function(e) NULL
+        )
         total <- sum(lengths(all_generated_pngs))
         message("  Compiled ", total, " pathview maps (",
                 length(all_generated_pngs), " contrasts) into: ", basename(pdf_path))

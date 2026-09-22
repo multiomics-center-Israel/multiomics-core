@@ -392,30 +392,84 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
     de_files <- cfg$files$de_table
     if (is.list(de_files)) de_files <- unlist(de_files)
 
-    # Use contrast names from contrasts_df when available (must match file count)
-    if (!is.null(contrasts_df) && "Contrast_name" %in% colnames(contrasts_df) &&
-        nrow(contrasts_df) == length(de_files)) {
-        contrast_labels <- as.character(contrasts_df$Contrast_name)
+    # Which contrast each output table is for, and which file it comes from.
+    # Two input shapes are supported, and they need different pairings:
+    #
+    #   one file per contrast -- one label per file, paired by position;
+    #   one wide summary file -- our own Datasets/*_summary exports, holding
+    #     every contrast in one table with the statistics suffixed by contrast
+    #     name. There the labels come from the contrasts, not from the file,
+    #     and the file is read once and split.
+    #
+    # Pairing the wide shape by position used to fall through to the filename,
+    # which then matched no contrast in the table at all.
+    req_labels <- if (!is.null(contrasts_df) &&
+                      "Contrast_name" %in% colnames(contrasts_df)) {
+        as.character(contrasts_df$Contrast_name)
+    } else {
+        character(0)
+    }
+
+    labels_from_file <- FALSE
+    if (length(req_labels) == length(de_files)) {
+        contrast_labels <- req_labels
+        file_of <- seq_along(de_files)
+    } else if (length(de_files) == 1L && length(req_labels) > 1L) {
+        contrast_labels <- req_labels
+        file_of <- rep(1L, length(req_labels))
     } else {
         # Fallback: derive from file names
         contrast_labels <- vapply(de_files, function(f) {
             bn <- tools::file_path_sans_ext(basename(f))
             sub("^de_", "", bn)
         }, character(1), USE.NAMES = FALSE)
+        file_of <- seq_along(de_files)
+        labels_from_file <- TRUE
     }
 
     tables <- list()
-    for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
-        if (!file.exists(abs_path)) {
-            stop("Pre-computed RNA DE table not found: ", abs_path)
+    raw <- NULL
+    abs_path <- NA_character_
+    last_fi <- NA_integer_
+    for (i in seq_along(contrast_labels)) {
+        fi <- file_of[i]
+        # Read each file once: the wide shape asks for several contrasts out of
+        # the same table.
+        if (!identical(fi, last_fi)) {
+            abs_path <- resolve_raw_path(config, de_files[fi])
+            if (!file.exists(abs_path)) {
+                stop("Pre-computed RNA DE table not found: ", abs_path)
+            }
+            raw <- read_table_auto(abs_path)
+            last_fi <- fi
         }
 
-        raw <- read_table_auto(abs_path)
         cn <- colnames(raw)
+        label <- contrast_labels[i]
 
-        # Feature IDs: try named columns first, then unnamed first column
-        id_col <- cn[cn %in% c("FeatureID", "gene_id", "feature_id", "GeneID")][1]
+        # A wide summary names its contrasts only in its column suffixes, and
+        # the pre-computed branch of mod_rnaseq_de() returns before the
+        # auto_generate_contrasts() fallback -- so with no contrasts file there
+        # is nothing here that could say which of them was wanted. The filename
+        # is not an answer: it names the export, not a contrast. Refused
+        # explicitly, because the alternative error further down blames the
+        # contrast naming and sends the reader to fix the wrong thing.
+        if (labels_from_file) {
+            held <- unique(.de_summary_candidates(
+                cn, c("log2FC", "log2FoldChange", "logFC"))$contrast)
+            if (length(held) > 1) {
+                stop("Pre-computed RNA DE table holds several contrasts (",
+                     paste(held, collapse = ", "), "): ", abs_path,
+                     "\n  Point modes.rna.files.contrasts at a contrasts table ",
+                     "naming the ones to load. They cannot be inferred from the ",
+                     "file name, and this branch does not auto-generate them.")
+            }
+        }
+
+        # Feature IDs: try named columns first, then unnamed first column.
+        # "Gene" is what our own Datasets/deseq2_summary_p0.05.tsv export uses.
+        id_col <- cn[cn %in% c("FeatureID", "gene_id", "feature_id", "GeneID",
+                               "Gene")][1]
         if (is.na(id_col)) {
             # Unnamed first column (readr: "...1", base R: "X", "V1")
             id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
@@ -428,19 +482,38 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
             feat_ids <- as.character(raw[[id_col]])
         }
 
-        # log2FoldChange
-        lfc_col <- cn[cn %in% c("log2FoldChange", "logFC", "log2FC",
-                                 "log2(FC)", "log2.FC.")][1]
-        lfc_vals <- if (!is.na(lfc_col)) as.numeric(raw[[lfc_col]]) else NA_real_
+        # log2FoldChange. resolve_de_summary_col() also accepts the
+        # contrast-suffixed form our own summary exports use (log2FC.<contrast>).
+        lfc_col <- resolve_de_summary_col(
+            cn,
+            bare = c("log2FoldChange", "logFC", "log2FC", "log2(FC)", "log2.FC."),
+            prefixes = c("log2FC", "log2FoldChange", "logFC"),
+            contrast_label = label
+        )
+        if (is.na(lfc_col)) {
+            # Carrying NA forward made a mis-pointed config look exactly like a
+            # run with no differential expression at all.
+            stop("Pre-computed RNA DE table has no recognisable log2 fold-change ",
+                 "column: ", abs_path, "\n  columns: ", paste(cn, collapse = ", "))
+        }
+        lfc_vals <- as.numeric(raw[[lfc_col]])
 
         # pvalue
-        pval_col <- cn[cn %in% c("pvalue", "P.Value", "PValue", "p.value",
-                                  "raw.pval")][1]
+        pval_col <- resolve_de_summary_col(
+            cn,
+            bare = c("pvalue", "P.Value", "PValue", "p.value", "raw.pval"),
+            prefixes = c("pvalue", "P.Value"),
+            contrast_label = label
+        )
         pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
 
         # padj
-        padj_col <- cn[cn %in% c("padj", "adj.P.Val", "FDR", "q.value",
-                                  "p.adjust", "qvalue")][1]
+        padj_col <- resolve_de_summary_col(
+            cn,
+            bare = c("padj", "adj.P.Val", "FDR", "q.value", "p.adjust", "qvalue"),
+            prefixes = c("padj", "adj.P.Val", "FDR"),
+            contrast_label = label
+        )
         padj_vals <- if (!is.na(padj_col)) {
             as.numeric(raw[[padj_col]])
         } else {
@@ -468,7 +541,9 @@ load_precomputed_rna_de <- function(config, contrasts_df = NULL) {
         rownames(tab) <- feat_ids
 
         tables[[contrast_labels[i]]] <- tab
-        message("  Loaded ", nrow(tab), " features from ", basename(de_files[i]),
+        # de_files[fi], not de_files[i]: in the wide shape several contrasts
+        # share one file and i runs past the end of de_files.
+        message("  Loaded ", nrow(tab), " features from ", basename(de_files[fi]),
                 " (label: ", contrast_labels[i], ")")
     }
 

@@ -253,15 +253,30 @@ write_diablo_results <- function(diablo_results, out_dir) {
 
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+    # block.plsda() one-hot codes the outcome factor and hands it back as an extra
+    # block named "Y" beside the real omics. It carries no biological information
+    # -- diablo_design_matrix.csv already records the design -- and every consumer
+    # downstream strips it, so it has no business being written as an omics layer.
+    #
+    # Simply not writing it is not enough for a rerun into a directory from before
+    # this change: the two files from that run would stay behind, and the report
+    # globs diablo_top_features_*.csv, so the outcome would keep appearing -- now
+    # as a stale result that no longer tracks the data. Retire exactly those two
+    # paths by name. Never a glob, and never the directory.
+    for (stale in file.path(out_dir, c("diablo_scores_Y.csv",
+                                       "diablo_top_features_Y.csv"))) {
+        if (file.exists(stale)) unlink(stale)
+    }
+
     # Sample scores
-    for (om in names(diablo_results$sample_scores)) {
+    for (om in setdiff(names(diablo_results$sample_scores), "Y")) {
         scores <- diablo_results$sample_scores[[om]]
         write.csv(scores, file.path(out_dir, paste0("diablo_scores_", om, ".csv")),
                   row.names = TRUE)
     }
 
     # Top features
-    for (om in names(diablo_results$top_features)) {
+    for (om in setdiff(names(diablo_results$top_features), "Y")) {
         feat_df <- diablo_results$top_features[[om]]
         write.csv(feat_df, file.path(out_dir, paste0("diablo_top_features_", om, ".csv")),
                   row.names = FALSE)
@@ -379,7 +394,9 @@ plot_diablo_feature_heatmap <- function(mae, diablo_dir, config, top_n = 15) {
         return(NULL)
     }
 
-    # Read top_features CSVs (skip _Y.csv — that's the outcome)
+    # Read top_features CSVs (skip _Y.csv — that's the outcome). write_diablo_results()
+    # no longer writes that file, but this stays: the glob reads whatever is on disk,
+    # and a results directory from before that change still carries one.
     csv_files <- list.files(diablo_dir, "^diablo_top_features_.*\\.csv$",
                             full.names = TRUE)
     csv_files <- csv_files[!grepl("_Y\\.csv$", csv_files)]

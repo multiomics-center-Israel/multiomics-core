@@ -222,3 +222,40 @@ test_that("validate_rna_config rejects a non-boolean enrichment plot toggle", {
     cfg$enrichment <- list(plots = list(dotplot = "yes"))
     expect_error(validate_rna_config(cfg))
 })
+
+# --- Multi-omics config ---
+
+create_mock_multiomics_config <- function() {
+    list(
+        integration = list(
+            methods = c("DIABLO", "SNF"),
+            diablo = list(ncomp = 2),
+            snf = list(K = 3, alpha = 0.5, T = 20, n_clusters = 2)
+        ),
+        feature_selection = list(method = "variance", top_n = 500),
+        condition_column = "Group"
+    )
+}
+
+test_that("validate_multiomics_config returns the config section, not TRUE", {
+    # validate_config() assigns the return value back onto
+    # config$modes$multiomics; returning TRUE wiped the whole section.
+    cfg <- create_mock_multiomics_config()
+    res <- validate_multiomics_config(cfg)
+    expect_type(res, "list")
+    expect_equal(res$condition_column, "Group")
+    expect_equal(res$integration$methods, c("DIABLO", "SNF"))
+})
+
+test_that("validate_config keeps config$modes$multiomics a list", {
+    config <- list(
+        paths  = list(raw = "data", out = "outputs"),
+        params = list(seed = 1),
+        modes  = list(multiomics = create_mock_multiomics_config())
+    )
+    validated <- validate_config(config)
+    expect_type(validated$modes$multiomics, "list")
+    expect_equal(
+        validated$modes$multiomics$feature_selection$top_n, 500
+    )
+})
