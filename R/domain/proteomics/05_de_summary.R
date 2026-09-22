@@ -798,7 +798,7 @@ load_precomputed_proteomics_de <- function(config, contrasts_df = NULL) {
                      "change column: ", abs_path, "\n  columns: ",
                      paste(cn, collapse = ", "))
             }
-            lfc_vals <- signed_linear_fc_to_log2(raw[[lin_col]])
+            lfc_vals <- signed_fc_to_log2(raw[[lin_col]])
         }
 
         # P.Value

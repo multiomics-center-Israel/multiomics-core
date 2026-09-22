@@ -399,26 +399,3 @@ resolve_de_summary_col <- function(cn, bare, prefixes, contrast_label = NULL) {
     }
     NA_character_
 }
-
-
-#' Convert a signed linear fold change to log2
-#'
-#' Proteomics summaries store linearFC as a signed linear ratio: 2^log2FC when
-#' the change is non-negative and -1 / 2^log2FC when it is negative (see
-#' \code{build_provenance_notes()} in \code{R/core/05_export_excel.R}). A plain
-#' \code{log2()} returns NaN for every down-regulated feature, silently dropping
-#' about half the proteome wherever the value is reused.
-#'
-#' @param x Numeric vector of signed linear fold changes.
-#' @return Numeric vector of log2 fold changes; NA where x is NA or zero.
-signed_linear_fc_to_log2 <- function(x) {
-    x <- as.numeric(x)
-    out <- rep(NA_real_, length(x))
-    # Index rather than ifelse(): ifelse evaluates both branches, so log2() of
-    # the negative values emits a NaN warning even though those are discarded.
-    up   <- !is.na(x) & x > 0
-    down <- !is.na(x) & x < 0
-    out[up]   <- log2(x[up])
-    out[down] <- -log2(abs(x[down]))
-    out
-}

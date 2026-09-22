@@ -5,32 +5,39 @@
 # stored as 1.50, and log2(1.50) = 0.5849625 is EXACTLY the log2(1.5) threshold,
 # so features genuinely below 1.5-fold were counted as passing.
 #
-# On a real run this inflated the interactive volcano from 222 to 227:
-# PLS3, SERINC3, BLTP3A, CKAP2 and ISYNA1, whose true ratios were 1.4957 to
-# 1.4996. The tables, which use log2FC directly, reported 222 throughout.
+# It showed up as the interactive volcano counting a few more features than the
+# tables, which read log2FC directly.
+#
+# resolve_log2fc() lives in R/core/02_validation.R and is shared by the report,
+# the PowerPoint deck, the executive summary, the static volcano tables and the
+# pathway ranking, so they all count the same features.
 
-signed_fc_to_log2 <- function(fc) {
-    fc <- as.numeric(fc)
-    ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
-}
-
-resolve_log2fc <- function(df, contrast) {
-    for (nm in c(paste0("log2FC.imputs.", contrast), paste0("log2FC.", contrast))) {
-        if (nm %in% names(df)) return(as.numeric(df[[nm]]))
-    }
-    for (nm in c(paste0("linearFC.imputs.", contrast), paste0("linearFC.", contrast))) {
-        if (nm %in% names(df)) return(signed_fc_to_log2(as.numeric(df[[nm]])))
-    }
-    rep(NA_real_, nrow(df))
-}
-
-# The five real features, with their true log2FC and their stored linearFC.
+# Five synthetic features whose true ratios sit just under 1.5, so their stored
+# linearFC rounds to 1.50 and the rebuilt log2 lands exactly on the threshold.
 borderline <- data.frame(
-    Gene                      = c("PLS3", "SERINC3", "BLTP3A", "CKAP2", "ISYNA1"),
-    `log2FC.imputs.C_vs_V`    = c(-0.58329, -0.58461, 0.58085, 0.58300, 0.58202),
+    Gene                      = paste0("P", 1:5),
+    `log2FC.imputs.C_vs_V`    = c(-0.5810, -0.5835, 0.5815, 0.5840, 0.5825),
     `linearFC.imputs.C_vs_V`  = c(-1.5, -1.5, 1.5, 1.5, 1.5),
     check.names = FALSE, stringsAsFactors = FALSE
 )
+
+# The same features as the DE step writes them, all significant on padj.
+borderline_summary <- function() {
+    data.frame(
+        FeatureID                = paste0("P", 1:5),
+        `log2FC.imputs.C_vs_V`   = borderline$`log2FC.imputs.C_vs_V`,
+        `linearFC.imputs.C_vs_V` = borderline$`linearFC.imputs.C_vs_V`,
+        `pvalue.imputs.C_vs_V`   = rep(1e-4, 5),
+        `padj.imputs.C_vs_V`     = rep(1e-3, 5),
+        check.names = FALSE, stringsAsFactors = FALSE
+    )
+}
+
+# Locate a repo file from either the repo root or tests/testthat.
+repo_file <- function(...) {
+    candidates <- c(testthat::test_path("..", "..", ...), file.path(...))
+    candidates[file.exists(candidates)][1]
+}
 
 test_that("the stored log2FC is preferred over the rounded linearFC", {
     got <- resolve_log2fc(borderline, "C_vs_V")
@@ -88,17 +95,128 @@ test_that("features comfortably past the threshold are unaffected", {
     expect_true(all(abs(resolve_log2fc(df, "C_vs_V")) >= log2(1.5)))
 })
 
-test_that("the template defines the helper and no longer converts linearFC inline", {
-    candidates <- c(
-        testthat::test_path("..", "..", "R", "domain", "proteomics",
-                            "report_template_proteomics.Rmd"),
-        "R/domain/proteomics/report_template_proteomics.Rmd"
+test_that("the executive summary fallback count uses the stored log2FC", {
+    cfg <- list(de = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+    stats <- get_de_summary_stats_proteomics(borderline_summary(), cfg)
+    expect_equal(stats$C_vs_V$n_sig, 0)
+})
+
+test_that("the static volcano tables carry the stored log2FC", {
+    tabs <- qc_post_tables_from_summary(borderline_summary(), cfg = list(), use_adj = TRUE)
+    expect_equal(tabs$C_vs_V$logFC, borderline$`log2FC.imputs.C_vs_V`)
+})
+
+test_that("the pathway DE table carries the stored log2FC", {
+    config <- list(modes = list(proteomics = list(de_table = list(id_col = "FeatureID"))))
+    tbl <- extract_de_table_for_pathway(borderline_summary(), "C_vs_V", config)
+    expect_equal(tbl$log2FoldChange, borderline$`log2FC.imputs.C_vs_V`)
+})
+
+test_that("the pipeline summary fallback counts from the stored log2FC", {
+    config <- list(
+        project = list(name = "test"),
+        modes   = list(proteomics = list(de = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5)))
     )
-    f <- candidates[file.exists(candidates)][1]
+
+    # No pass.imputs columns, so the summary recomputes from padj and log2FC.
+    stats <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                               de_res = list(summary_df = borderline_summary()),
+                                               pathway_res = NULL)
+    expect_named(stats$de$contrasts, "C_vs_V")   # not "imputs.C_vs_V"
+    expect_equal(stats$de$contrasts$C_vs_V$total, 0)
+
+    # A table from before the log2FC column still falls back to linearFC.
+    old_sdf <- borderline_summary()
+    old_sdf$`log2FC.imputs.C_vs_V` <- NULL
+    stats_old <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                                   de_res = list(summary_df = old_sdf),
+                                                   pathway_res = NULL)
+    expect_equal(stats_old$de$contrasts$C_vs_V$total, 5)
+})
+
+test_that("the pipeline summary prefers log2FoldChange in per-contrast tables", {
+    config <- list(
+        project = list(name = "test"),
+        modes   = list(proteomics = list(de = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5)))
+    )
+    tbl <- data.frame(
+        padj           = rep(1e-3, 5),
+        linearFC       = borderline$`linearFC.imputs.C_vs_V`,
+        log2FoldChange = borderline$`log2FC.imputs.C_vs_V`
+    )
+    stats <- collect_proteomics_pipeline_stats(config, pre = list(),
+                                               de_res = list(tables = list(C_vs_V = tbl)),
+                                               pathway_res = NULL)
+    expect_equal(stats$de$contrasts$C_vs_V$total, 0)
+})
+
+test_that("the report template uses the core helper instead of its own copy", {
+    f <- repo_file("R", "domain", "proteomics", "report_template_proteomics.Rmd")
     skip_if(is.na(f), "report template not found from the test working directory")
 
     src <- readLines(f, warn = FALSE)
-    expect_gte(length(grep("resolve_log2fc <- function", src, fixed = TRUE)), 1)
-    expect_length(grep("signed_fc_to_log2(lfc_vals)", src, fixed = TRUE), 0)
-    expect_length(grep("signed_fc_to_log2(as.numeric(df[[lfc_col]]))", src, fixed = TRUE), 0)
+    expect_identical(grep("resolve_log2fc <- function", src, fixed = TRUE), integer(0))
+    expect_true(any(grepl("resolve_log2fc(", src, fixed = TRUE)))
+    expect_identical(grep("signed_fc_to_log2(lfc_vals)", src, fixed = TRUE), integer(0))
+    expect_identical(grep("signed_fc_to_log2(as.numeric(df[[lfc_col]]))", src, fixed = TRUE),
+                     integer(0))
+})
+
+test_that("the helpers live in core, and this file defines no local copy", {
+    # This file used to define its own signed_fc_to_log2() and resolve_log2fc()
+    # above the fixtures, so every assertion below described a duplicate that
+    # happened to sit next to the production code rather than the production
+    # code itself -- the call sites could drift and nothing here would notice.
+    #
+    # What this pins is exactly that: the definitions are in core, and this file
+    # shadows neither. helper.R sources the whole R/ tree, so that is good
+    # evidence the assertions run against production code -- but it is not proof
+    # that no later file in R/ redefines either name.
+    f <- repo_file("R", "core", "02_validation.R")
+    skip_if(is.na(f), "core validation file not found from the test working directory")
+
+    src <- readLines(f, warn = FALSE)
+    expect_true(any(grepl("resolve_log2fc <- function", src, fixed = TRUE)))
+    expect_true(any(grepl("signed_fc_to_log2 <- function", src, fixed = TRUE)))
+
+    own <- readLines(repo_file("tests", "testthat", "test-report-log2fc-rounding.R"),
+                     warn = FALSE)
+    expect_identical(grep("^resolve_log2fc <- function", own), integer(0))
+    expect_identical(grep("^signed_fc_to_log2 <- function", own), integer(0))
+})
+
+test_that("pptx, summary, volcano and pathway code read log2FC through the helper", {
+    rel_paths <- c(
+        file.path("R", "domain", "proteomics", "11_powerpoint.R"),
+        file.path("R", "domain", "proteomics", "09_executive_summary.R"),
+        file.path("R", "domain", "proteomics", "07b_pathway.R"),
+        file.path("R", "modules", "proteomics", "03_mod_qc_post.R")
+    )
+    for (rel in rel_paths) {
+        f <- repo_file(rel)
+        skip_if(is.na(f), paste(rel, "not found from the test working directory"))
+        src <- readLines(f, warn = FALSE)
+        expect_identical(grep("signed_fc_to_log2(", src, fixed = TRUE), integer(0),
+                         label = paste("signed_fc_to_log2() lines in", rel))
+        expect_true(any(grepl("resolve_log2fc(", src, fixed = TRUE)),
+                    label = paste("resolve_log2fc() used in", rel))
+    }
+})
+
+test_that("the pipeline summary and AI commentary no longer rebuild log2FC inline", {
+    checks <- list(
+        list(rel = file.path("R", "domain", "proteomics", "10_pipeline_summary.R"),
+             inline = "log2(abs(fc_vals)) * sign(fc_vals)"),
+        list(rel = file.path("R", "domain", "proteomics", "09b_commentary.R"),
+             inline = "log2(pmax(abs(lfc_vals), 1e-10))")
+    )
+    for (chk in checks) {
+        f <- repo_file(chk$rel)
+        skip_if(is.na(f), paste(chk$rel, "not found from the test working directory"))
+        src <- readLines(f, warn = FALSE)
+        expect_identical(grep(chk$inline, src, fixed = TRUE), integer(0),
+                         label = paste("inline log2 rebuild in", chk$rel))
+        expect_true(any(grepl("resolve_log2fc(", src, fixed = TRUE)),
+                    label = paste("resolve_log2fc() used in", chk$rel))
+    }
 })

@@ -167,7 +167,7 @@ qc_post_tables_from_summary <- function(summary_df, cfg, use_adj = TRUE) {
     
     de_tbl <- data.frame(
       FeatureID = summary_df[[src_id_col]],
-      logFC = signed_fc_to_log2(summary_df[[fc_col]]),
+      logFC = resolve_log2fc(summary_df, cn),
       P.Value = as.numeric(summary_df[[paste0("pvalue.imputs.", cn)]]),
       adj.P.Val = as.numeric(summary_df[[paste0("padj.imputs.", cn)]]),
       stringsAsFactors = FALSE

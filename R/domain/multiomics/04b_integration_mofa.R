@@ -558,7 +558,7 @@ plot_mofa_top_weights <- function(weights, view_name, n_top = 20, n_factors = 3,
         display_names[is.na(display_names) | display_names == ""] <- feat_ids[is.na(display_names) | display_names == ""]
 
         # Shorten before plotting. A non-model annotation produces ids like
-        # "evm.model.ptg000805l_np1212.7.10.6a34fca0|Spalangia_cameroni"; at full
+        # "evm.model.ptg000123l_np4567.1.2.3a4bc5de|Genus_species"; at full
         # length the axis text consumed the entire device and the proteomics panel
         # rendered with no visible bars at all. Drop the species tag, which is
         # constant within a view and carries nothing, then truncate from the LEFT

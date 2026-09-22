@@ -305,11 +305,47 @@ assert_scalar_num <- function(x, name, allow_null = FALSE, min_val = -Inf, max_v
 #'
 #' Proteomics linear FC convention: positive values = up, negative = down
 #' (e.g. 2 = 2x up, -1.5 = 1.5x down). Converts to log2 space preserving sign.
+#' A plain \code{log2()} would return NaN for every down-regulated feature,
+#' silently dropping about half the table wherever the value is reused.
+#'
+#' The single conversion for this convention: the multiomics concordance join
+#' and the pre-computed proteomics DE loader call this rather than keeping their
+#' own copy.
+#'
 #' @param fc Numeric vector of signed linear fold changes
-#' @return Numeric vector of log2 fold changes
+#' @return Numeric vector of log2 fold changes; NA where \code{fc} is NA or zero
 signed_fc_to_log2 <- function(fc) {
     fc <- as.numeric(fc)
+    # Guarded rather than left to ifelse(): ifelse() returns the shape of its
+    # test, so on a zero-length input it yields logical(0), which would put a
+    # logical column into a zero-row results frame instead of a numeric one.
+    if (length(fc) == 0) return(numeric(0))
     ifelse(is.na(fc) | fc == 0, NA_real_, log2(abs(fc)) * sign(fc))
+}
+
+#' Log2 fold changes for one contrast, preferring the stored log2FC column
+#'
+#' Proteomics DE summaries carry an unrounded \code{log2FC.imputs.<contrast>}
+#' beside \code{linearFC.imputs.<contrast>}, which is written with
+#' \code{signif(x, 3)}. Rebuilding log2 from the rounded column moves borderline
+#' features onto the cutoff: any ratio in [1.4950, 1.5049] is stored as 1.50, and
+#' log2(1.50) equals the log2(1.5) threshold exactly, so features just below
+#' 1.5-fold were counted as passing. The stored log2FC is used whenever it
+#' exists; linearFC is converted only for tables that predate that column.
+#'
+#' @param df DE summary or per-contrast table.
+#' @param contrast Contrast name as it appears in the column suffix, e.g.
+#'   "C_vs_V".
+#' @return Numeric vector of log2 fold changes, one per row of \code{df}; all NA
+#'   when \code{df} has no fold-change column for \code{contrast}.
+resolve_log2fc <- function(df, contrast) {
+    for (nm in c(paste0("log2FC.imputs.", contrast), paste0("log2FC.", contrast))) {
+        if (nm %in% names(df)) return(as.numeric(df[[nm]]))
+    }
+    for (nm in c(paste0("linearFC.imputs.", contrast), paste0("linearFC.", contrast))) {
+        if (nm %in% names(df)) return(signed_fc_to_log2(as.numeric(df[[nm]])))
+    }
+    rep(NA_real_, nrow(df))
 }
 
 assert_one_of <- function(x, name, choices, allow_null = FALSE) {

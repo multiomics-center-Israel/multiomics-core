@@ -720,7 +720,7 @@ compute_de_concordance <- function(rna_de, prot_de, mapping, out_dir = NULL,
                 # linearFC is a SIGNED linear ratio: -1/2^x where the change is
                 # negative. A plain log2() returns NaN for every down-regulated
                 # feature, which silently halved the proteome reaching the join.
-                log2FC = signed_linear_fc_to_log2(df[[fc_cols[1]]]),
+                log2FC = signed_fc_to_log2(df[[fc_cols[1]]]),
                 stringsAsFactors = FALSE
             )
             if (length(padj_cols) > 0) out$padj <- df[[padj_cols[1]]]
