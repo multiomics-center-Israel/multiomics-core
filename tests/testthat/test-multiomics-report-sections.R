@@ -123,3 +123,26 @@ test_that("GO figures say why metabolomics is absent from them", {
     expect_gte(lengths(regmatches(src, gregexpr("collection_note(coll)", src,
                                                 fixed = TRUE))), 3)
 })
+
+# ---- pathway maps --------------------------------------------------------
+
+test_that("pathway maps have their own top-level section after cross-omics enrichment", {
+    src <- template_lines()
+    headings <- static_headings(src)
+    top <- grep("^# ", headings, value = TRUE)
+    pv <- which(top == "# Pathway Maps (Pathview) {.tabset}")
+    expect_length(pv, 1)
+    expect_identical(top[pv - 1], "# Cross-Omics Enrichment {.tabset}")
+
+    # Every pathview chunk sits inside that section, none back in MultiGSEA.
+    at <- function(pattern) grep(pattern, src)[1]
+    section_start <- at("^# Pathway Maps \\(Pathview\\)")
+    section_end <- at("^`r if \\(show_harmonization\\)")
+    for (chunk in c("pathview-setup", "per-omics-pathview-setup", "pathview-all-pdf",
+                    "pathview-overview", "pathview-index-table", "pathview-plots",
+                    "per-omics-pathview-metab", "per-omics-pathview-prot")) {
+        line <- at(sprintf("^```\\{r %s,", chunk))
+        expect_true(line > section_start && line < section_end, info = chunk)
+    }
+    expect_false(any(grepl("Multi-Omics Pathway Maps", headings, fixed = TRUE)))
+})
