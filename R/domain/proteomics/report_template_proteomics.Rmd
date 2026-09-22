@@ -2241,6 +2241,28 @@ function clearBoxplot() {
     document.getElementById("boxplot_export_bar").style.display = "none";
 }
 
+// One explicit test for what counts as a measured value, shared by every site
+// that reads an expression array. Missing intensities reach the browser as the
+// string "NA" -- that is how jsonlite writes NA in a numeric vector -- and
+// isNaN() is what rejects those. The null test covers the one case isNaN()
+// alone would accept: Number(null) is 0, so a null would read as a measured
+// zero if the serialisation ever changed. The peptide explorer already tested
+// null this way; this puts the same test in one place for all four sites.
+function bpIsMeasured(v) {
+    return v !== null && v !== undefined && !isNaN(v);
+}
+
+// Group and protein labels come from the sample sheet and the annotation
+// columns. They are data, and the line below them is assembled with innerHTML,
+// so a label carrying angle brackets would be read as markup rather than shown.
+function bpEscapeHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2260,9 +2282,22 @@ function renderMultiBoxplot() {
         uniqueGroups.forEach(function(g, gi) {
             var gValues = [], gSamples = [];
             for (var i = 0; i < values.length; i++) {
-                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+                // Every sample in the group used to be pushed, missing ones
+                // included, so the trace carried non-numeric placeholders that
+                // Plotly silently declines to plot. Value and sample name are
+                // dropped together: the hover text is positional, so filtering
+                // one without the other would mislabel points.
+                if (groups[i] === g && bpIsMeasured(values[i])) {
+                    gValues.push(values[i]);
+                    gSamples.push(samples[i]);
+                }
             }
+            // Pin the box to the slot belonging to its own group, rather than
+            // letting Plotly hand out positions to whichever traces happen to
+            // draw. Without this, a group with nothing measured takes no slot
+            // at all and the groups after it shift left into the gap.
             traces.push({
+                x: gValues.map(function() { return gi; }),
                 y: gValues, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: gSamples,
@@ -2275,7 +2310,22 @@ function renderMultiBoxplot() {
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: bpGroupLabel },
+            // Label the axis from the group list, not from the data. A category
+            // axis only knows the categories its traces supply, so a group with
+            // nothing measured never creates one -- categoryarray orders the
+            // categories that exist, it does not bring a missing one into
+            // being. Ticks have no such dependency: tickmode "array" draws
+            // exactly the ticks listed here, so every group keeps a labelled
+            // slot whether or not anything was measured in it. The range is
+            // stated for the same reason, so an empty group at either end is
+            // not autoranged away.
+            xaxis: {
+                title: bpGroupLabel,
+                tickmode: "array",
+                tickvals: uniqueGroups.map(function(g, i) { return i; }),
+                ticktext: uniqueGroups,
+                range: [-0.5, uniqueGroups.length - 0.5]
+            },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },
             boxgap: 0.3
@@ -2285,14 +2335,20 @@ function renderMultiBoxplot() {
         // Multiple proteins: genes on x-axis, grouped by condition
         var containerH = Math.max(450, 350 + nGenes * 30);
         uniqueGroups.forEach(function(g, gi) {
-            var xVals = [], yVals = [], sampleTexts = [];
-            selectedGenes.forEach(function(sg) {
+            var xVals = [], yVals = [], sampleTexts = [], protTexts = [];
+            selectedGenes.forEach(function(sg, pi) {
                 var values = geneExprData.expr[sg.idx];
                 for (var i = 0; i < values.length; i++) {
-                    if (groups[i] === g) {
-                        xVals.push(sg.name);
+                    if (groups[i] === g && bpIsMeasured(values[i])) {
+                        // The slot, not the name. A protein measured nowhere
+                        // contributes no point, so naming the position would
+                        // leave it without one -- the same way an unmeasured
+                        // group used to lose its place above. The name travels
+                        // in customdata, so the hover reads as it always did.
+                        xVals.push(pi);
                         yVals.push(values[i]);
                         sampleTexts.push(samples[i]);
+                        protTexts.push(sg.name);
                     }
                 }
             });
@@ -2300,7 +2356,8 @@ function renderMultiBoxplot() {
                 x: xVals, y: yVals, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: sampleTexts,
-                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                customdata: protTexts,
+                hovertemplate: "%{customdata}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
                 marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
                 line: { color: colors[gi % colors.length] },
                 fillcolor: colors[gi % colors.length] + "33"
@@ -2311,7 +2368,17 @@ function renderMultiBoxplot() {
         var layout = {
             title: { text: "Protein Expression Comparison", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: "Protein", categoryorder: "array", categoryarray: protNames },
+            // Ticks from the selection, for the same reason as the
+            // single-protein branch: a protein measured in no sample creates no
+            // category, so categoryarray had nothing to order and the protein
+            // vanished from the comparison as soon as a second one was picked.
+            xaxis: {
+                title: "Protein",
+                tickmode: "array",
+                tickvals: protNames.map(function(p, i) { return i; }),
+                ticktext: protNames,
+                range: [-0.5, protNames.length - 0.5]
+            },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
             boxmode: "group",
@@ -2326,9 +2393,28 @@ function renderMultiBoxplot() {
 
     // Show info
     var infoLines = selectedGenes.map(function(sg) {
-        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
-        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " (" + vals.length + " samples)";
+        var values = geneExprData.expr[sg.idx];
+        var vals = values.filter(bpIsMeasured);
+        var txt = "<strong>" + bpEscapeHtml(sg.name) + "</strong>: ";
+        if (vals.length > 0) {
+            var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+            txt += "mean " + mean.toFixed(3) + " (" + vals.length + " measured samples)";
+        } else {
+            txt += "no measured values";
+        }
+        // Name the groups with nothing measured. An empty box should read as
+        // "not detected in this group", never as a plot that failed to draw.
+        var emptyGroups = uniqueGroups.filter(function(g) {
+            for (var i = 0; i < values.length; i++) {
+                if (groups[i] === g && bpIsMeasured(values[i])) return false;
+            }
+            return true;
+        });
+        if (emptyGroups.length > 0) {
+            txt += " &mdash; no measured values in: " +
+                emptyGroups.map(function(g) { return bpEscapeHtml(g); }).join(", ");
+        }
+        return txt;
     });
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
@@ -2901,8 +2987,18 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Ov
 ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora.*\\.csv$", full.names = TRUE)
 if (length(ora_files) > 0) {
     for (of in ora_files) {
-        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", basename(of))
+        fname <- basename(of)
+        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", fname)
         label_clean <- gsub("_", " ", label)
+        # The direction was stripped along with the suffix, so a database with
+        # both files produced two sections headed identically. Tested explicitly
+        # rather than with a backreference: the file pattern admits other
+        # suffixes, and a non-matching sub() would return the whole filename.
+        if (grepl("_ora_up\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(up-regulated)")
+        } else if (grepl("_ora_down\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(down-regulated)")
+        }
 
         ora_df <- read.csv(of, stringsAsFactors = FALSE)
         # Support both column names: padj (our pipeline) and p.adjust (clusterProfiler)
