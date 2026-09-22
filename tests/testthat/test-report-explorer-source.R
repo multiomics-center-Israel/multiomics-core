@@ -139,27 +139,31 @@ test_that("the heading states that these are measured values", {
 
     expect_match(txt, "measured", fixed = TRUE)
     expect_match(txt, "missing measurements left missing", fixed = TRUE)
-    # The reconciliation a reader needs, and the half of it that holds in every
-    # mode: a fold change is a model estimate, not a difference of these means.
-    expect_match(txt, "not the difference of the two means drawn here", fixed = TRUE)
 })
 
-test_that("the imputation claim is conditional on the configured method", {
-    # imputation.method = "none" returns the matrix with its NAs intact and the
-    # model fits that, so a report that unconditionally told the reader their
-    # statistics came from an imputed matrix would be wrong for those projects.
-    body <- explorer_chunk("protein-explorer-heading")
+test_that("the reconciliation claims only what holds in every configuration", {
+    # The fold changes may or may not equal a difference of group means:
+    # de$method ttest and welch compute exactly that (05c_de_ttest.R), an
+    # unblocked limma coefficient can equal it, and an externally precomputed
+    # table was not computed here at all. What holds regardless is that they
+    # come from the differential analysis rather than from these means.
+    body <- code_only(explorer_chunk("protein-explorer-heading"))
     txt <- paste(body, collapse = "\n")
 
-    expect_match(txt, 'prot_cfg$imputation$method %||% "none"', fixed = TRUE)
-    expect_match(txt, 'if (!identical(.imp_method_exp, "none")) {', fixed = TRUE)
-    # The method is named rather than assumed.
-    expect_match(txt, "imputes missing values (`%s`)", fixed = TRUE)
+    expect_match(txt, "not recomputed from the measured-only means shown here", fixed = TRUE)
+    # "may differ", never "must".
+    expect_match(txt, "may therefore differ", fixed = TRUE)
+})
 
-    # The unconditional half must say nothing about which matrix produced the
-    # statistics: with an externally precomputed DE table, none of the
-    # pipeline's own matrices did.
-    unconditional <- body[!grepl("^\\s*#", body)]
-    unconditional <- unconditional[seq_len(grep("^.imp_method_exp <-", unconditional)[1])]
-    expect_false(any(grepl("computed on a complete matrix", unconditional, fixed = TRUE)))
+test_that("the heading asserts no DE or imputation provenance", {
+    # Every one of these was wrong in some supported configuration, and each
+    # was written here before being removed. The measured-view contract does
+    # not need any of them.
+    body <- code_only(explorer_chunk("protein-explorer-heading"))
+
+    expect_false(any(grepl("model estimate", body, fixed = TRUE)))
+    expect_false(any(grepl("computed on a complete matrix", body, fixed = TRUE)))
+    # No prose conditioned on how imputation is configured.
+    expect_false(any(grepl("imputation$method", body, fixed = TRUE)))
+    expect_false(any(grepl(".imp_method_exp", body, fixed = TRUE)))
 })
