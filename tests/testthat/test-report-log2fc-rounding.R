@@ -162,11 +162,16 @@ test_that("the report template uses the core helper instead of its own copy", {
                      integer(0))
 })
 
-test_that("these tests exercise the sourced helpers, not a copy of their own", {
+test_that("the helpers live in core, and this file defines no local copy", {
     # This file used to define its own signed_fc_to_log2() and resolve_log2fc()
     # above the fixtures, so every assertion below described a duplicate that
     # happened to sit next to the production code rather than the production
     # code itself -- the call sites could drift and nothing here would notice.
+    #
+    # What this pins is exactly that: the definitions are in core, and this file
+    # shadows neither. helper.R sources the whole R/ tree, so that is good
+    # evidence the assertions run against production code -- but it is not proof
+    # that no later file in R/ redefines either name.
     f <- repo_file("R", "core", "02_validation.R")
     skip_if(is.na(f), "core validation file not found from the test working directory")
 
@@ -174,8 +179,6 @@ test_that("these tests exercise the sourced helpers, not a copy of their own", {
     expect_true(any(grepl("resolve_log2fc <- function", src, fixed = TRUE)))
     expect_true(any(grepl("signed_fc_to_log2 <- function", src, fixed = TRUE)))
 
-    # And this file no longer carries its own, so the assertions above run
-    # against what the pipeline sources.
     own <- readLines(repo_file("tests", "testthat", "test-report-log2fc-rounding.R"),
                      warn = FALSE)
     expect_identical(grep("^resolve_log2fc <- function", own), integer(0))
