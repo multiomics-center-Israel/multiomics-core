@@ -146,3 +146,77 @@ test_that("pathway maps have their own top-level section after cross-omics enric
     }
     expect_false(any(grepl("Multi-Omics Pathway Maps", headings, fixed = TRUE)))
 })
+
+# ---- every figure legend within 100 words ----------------------------------
+
+# String constants inside each figure_legend() call. Read off the parser's
+# tokens rather than by walking the syntax tree: an argument left empty, as in
+# df[i, ], is R's missing value, and passing it to any function -- including the
+# walker itself -- raises "argument is missing". Tokens have no such trap, and
+# paste()-built legends are still counted whole. Text a legend gets from a
+# function call at render time is not a constant and is checked on its own below.
+legend_texts <- function(src) {
+    starts <- grep("^```\\{r ", src)
+    out <- character(0)
+    for (s in starts) {
+        end <- s + which(grepl("^```\\s*$", src[(s + 1):length(src)]))[1]
+        if (is.na(end) || end <= s + 1) next
+        pd <- tryCatch(utils::getParseData(parse(text = src[(s + 1):(end - 1)],
+                                                 keep.source = TRUE)),
+                       error = function(e) NULL)
+        if (is.null(pd) || nrow(pd) == 0) next
+        pd <- pd[pd$terminal, , drop = FALSE]
+        pd <- pd[order(pd$line1, pd$col1), , drop = FALSE]
+
+        i <- 1
+        while (i <= nrow(pd)) {
+            if (pd$token[i] == "SYMBOL_FUNCTION_CALL" &&
+                pd$text[i] == "figure_legend") {
+                depth <- 0
+                strs <- character(0)
+                j <- i + 1
+                while (j <= nrow(pd)) {
+                    tk <- pd$token[j]
+                    if (tk == "'('") {
+                        depth <- depth + 1
+                    } else if (tk == "')'") {
+                        depth <- depth - 1
+                        if (depth == 0) break
+                    } else if (tk == "STR_CONST") {
+                        strs <- c(strs, pd$text[j])
+                    }
+                    j <- j + 1
+                }
+                out <- c(out, paste(gsub('^["\']|["\']$', "", strs), collapse = " "))
+                i <- j
+            }
+            i <- i + 1
+        }
+    }
+    out
+}
+
+n_words <- function(x) lengths(regmatches(x, gregexpr("[^[:space:]]+", x)))
+
+test_that("every figure legend in the report stays within 100 words", {
+    texts <- legend_texts(template_lines())
+    # The legends are there to be counted; finding none means the parse failed.
+    expect_gt(length(texts), 40)
+    over <- texts[n_words(texts) > 100]
+    expect_identical(length(over), 0L,
+                     info = paste(substr(over, 1, 60), collapse = " | "))
+})
+
+test_that("the pathway-map legend stays within 100 words with its threshold text", {
+    src <- template_lines()
+    i <- grep('"KEGG maps drawn with pathview', src, fixed = TRUE)
+    expect_length(i, 1)
+    base <- "KEGG maps drawn with pathview, per contrast. Gene nodes: transcriptomics (left) and proteomics (right) logFC. Compound nodes: metabolomics logFC. Red up, green/blue down."
+    expect_lte(n_words(paste(base, pathview_significance_caption())), 100)
+})
+
+test_that("the DIABLO variable loadings plot is no longer shown", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_false(grepl("diablo_variable_plot", src, fixed = TRUE))
+    expect_false(grepl("diablo-variable", src, fixed = TRUE))
+})
