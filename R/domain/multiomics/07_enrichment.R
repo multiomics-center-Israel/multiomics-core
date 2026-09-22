@@ -3649,20 +3649,32 @@ write_cross_omics_enrichment <- function(enrichment_res, out_dir) {
 
 #' Run geneset enrichment on integration loadings
 #'
-#' Takes top features from DIABLO loadings or MOFA2 weights and runs
-#' ORA enrichment (KEGG) for each component/factor per omics view.
+#' By default, GSEA over every feature ranked by its signed DIABLO loading or
+#' MOFA2 weight (\code{run_loadings_gsea()}, in 07e_loadings_gsea.R). With
+#' `modes.multiomics.enrichment.loadings.method: "ora"` it instead takes the
+#' top features by absolute loading or weight and runs ORA (KEGG) for each
+#' component/factor per omics view, as it always did.
 #'
 #' @param integration_res Output from mod_multiomics_integration()
 #' @param harmonization_res Output from mod_multiomics_harmonization()
 #' @param config Full config object
 #' @param out_dir Output directory for results
-#' @param top_n Number of top features per component/factor to use (default 50)
+#' @param top_n Number of top features per component/factor to use (default 50);
+#'   ORA only.
 #' @return List with diablo and mofa enrichment results
 run_loadings_enrichment <- function(integration_res, harmonization_res,
                                      config, out_dir, top_n = 50) {
 
     message("\n=== Loadings-based Geneset Enrichment ===\n")
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # GSEA unless the config asks for ORA. The record tells the report which
+    # test's files in these directories belong to this run.
+    method <- loadings_enrichment_method(config)
+    record_loadings_method(out_dir, method)
+    if (identical(method, "gsea")) {
+        return(run_loadings_gsea(integration_res, harmonization_res, config, out_dir))
+    }
 
     organism <- config$global$organism
     kegg_org <- get_kegg_organism(organism)
