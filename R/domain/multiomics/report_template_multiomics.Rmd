@@ -238,6 +238,18 @@ single_contrast_label <- local({
     else if (length(design_contrasts) == 1) design_contrasts
     else "Results"
 })
+# GO terms annotate genes and gene products; metabolites carry none, so a GO
+# figure can never hold a metabolomics column. Said beside the figure, because an
+# absent column otherwise reads as "tested and found nothing".
+has_metabolomics_layer <- !is.null(cfg$modes$metabolomics) ||
+    "metabolomics" %in% (cfg$global$omics_present %||% character(0))
+collection_note <- function(coll) {
+    if (has_metabolomics_layer && grepl("^GO", coll)) {
+        figure_legend(paste("GO annotates genes and proteins only; metabolites have",
+                            "no GO terms, so metabolomics cannot appear in GO figures."))
+    }
+}
+
 combined_tab <- function(level, multi_label) {
     label <- if (single_contrast) single_contrast_label else multi_label
     paste0(strrep("#", level), " ", label, " {.unnumbered}")
@@ -1199,13 +1211,22 @@ if (length(nes_pngs) > 0) {
             '```{r enrich-heatmap-img-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             gsub("[^a-zA-Z0-9]", "", coll), p
         ), quiet = TRUE))
+        collection_note(coll)
     }
 }
 ```
 
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_omics_pathway_heatmap_.*\\.png$")) > 0) {
-    figure_legend("Cross-omics pathway enrichment heatmap, one figure per gene-set collection, all contrasts combined. The collections are shown apart because they cover neither the same omics layers nor the same identifier space -- GO is annotated for the gene layers only, while the KEGG map space is the one every layer can share -- and because they differ by an order of magnitude in size, so a single combined figure gave its rows to whichever collection was largest and read as an analysis of that one alone. A layer absent from a figure contributed no retained enrichment result in that collection -- which may be because it carries no annotation there, or because nothing it was scored on reached these tables; the figure does not separate the two, and absence is not evidence that the layer was tested and found nothing. Showing the top 30 pathways, ordered first by nominal support -- the number of omics layers whose own p-value for the pathway is below 0.05 -- and then by Stouffer combined p-value, so that pathways several layers actually support are not displaced by single-layer ones from the largest gene-set collection, nor by pathways every layer measured and none found anything in. Nominal support orders the display only; it is not a significance threshold and no p-value or adjustment depends on it. the complete list, ordered by combined p-value, is in the table below. Color intensity represents -log10(p-value) for each pathway across omics layers. Each layer's p-value comes from one kind of test -- its rank-based (GSEA) result where the layer has one, otherwise its ORA result -- and the method columns of the table below name which. A grey cell means no enrichment p-value is available for that pathway in that layer -- which is not the same as a p-value close to 1, and does not by itself say whether the pathway was untestable there or simply did not reach that layer's enrichment table. Note: for each pathway, the minimum p-value across all contrasts is used per omics layer, so pathways with consistent but individually sub-significant signals across multiple contrasts may appear here but not in the per-contrast views.")
+    # Kept to three lines of rendered text: what the colour, the grey and the
+    # row order mean. The reasoning behind them lives in the code comments of
+    # analyze_cross_omics_enrichment() and select_multi_omics_pathways().
+    figure_legend(paste(
+        "One heatmap per gene-set collection. Colour: -log10 p of each layer's own",
+        "test (GSEA if available, else ORA; the table names which).",
+        "Grey: no result in that layer. Rows: top 30 pathways by number of layers",
+        "at p < 0.05, then Stouffer combined p. Full list in the table below.",
+        if (!single_contrast) "Each cell is the layer's smallest p across contrasts."))
     render_commentary("cross_omics_pathway_heatmap")
 }
 ```
@@ -1224,13 +1245,19 @@ if (length(ora_pngs) > 0) {
             '```{r enrich-ora-heatmap-img-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
             gsub("[^a-zA-Z0-9]", "", coll), p
         ), quiet = TRUE))
+        collection_note(coll)
     }
 }
 ```
 
 ```{r enrichment-ora-heatmap-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.png$")) > 0) {
-    figure_legend("One figure per gene-set collection; a layer absent from a figure contributed no adjusted ORA p-value in that collection, which may be because it carries no annotation there or because none of its results reached this table -- not evidence that it was scored there and found nothing. Over-representation analysis is the one test every omics layer runs, so this figure can place metabolomics alongside the gene layers. Each cell shows -log10 of the adjusted p-value that the layer's own ORA already reported for that pathway; nothing is re-adjusted here, and no gene set enrichment (GSEA) result contributes. Where several contrast-level ORA results for the same pathway are available within a layer, the cell shows the smallest adjusted p-value among them -- the strongest evidence available in that layer, which is a display choice and not an error rate controlled across contrasts. Adjusted p-values below 1e-10 all render at the top of the scale. Read the colour down a column: the layers differ in gene-set universe, coverage and upstream filtering, so a darker cell in one layer is not stronger biology than a lighter cell in another. A grey cell means no adjusted ORA p-value for that pathway and layer reached the table behind this figure -- the pathway may never have been testable there, or may have been tested and not carried into that layer's results, and this figure cannot tell those apart. The top 30 pathways are shown, ordered by how many layers contribute an adjusted ORA p-value and then by the smallest of them.")
+    figure_legend(paste(
+        "ORA evidence, one heatmap per gene-set collection. Colour: -log10 of each",
+        "layer's own BH-adjusted ORA p, capped at 1e-10. Grey: no",
+        "ORA result in that layer. Rows: top 30 pathways by number of layers with a",
+        "result, then smallest adjusted p. Compare colours within a column.",
+        if (!single_contrast) "Each cell is the layer's smallest adjusted p across contrasts."))
     render_commentary("cross_omics_ora_heatmap")
 }
 ```
@@ -1366,6 +1393,7 @@ if (dir.exists(enrich_per_contrast_dir)) {
                     '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
                     chunk_id, pg
                 ), quiet = TRUE))
+                collection_note(coll)
                 cat("\n\n")
             }
             TRUE

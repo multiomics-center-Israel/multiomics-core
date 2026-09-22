@@ -89,3 +89,37 @@ test_that("the shipped config template leaves the new switches on", {
         expect_true(show_section(sw), info = sw)
     }
 })
+
+# ---- cross-omics heatmap legends --------------------------------------------
+
+# The quoted text of one chunk, joined: what its figure_legend() calls can print.
+chunk_text <- function(src, label) {
+    start <- grep(sprintf("^```\\{r %s,", label), src)
+    expect_length(start, 1)
+    end <- start + which(grepl("^```\\s*$", src[(start + 1):length(src)]))[1]
+    body <- src[(start + 1):(end - 1)]
+    body <- body[!grepl("^\\s*#", body)]
+    quoted <- regmatches(body, gregexpr('"[^"]*"', body))
+    paste(gsub('"', "", unlist(quoted)), collapse = " ")
+}
+
+test_that("the cross-omics heatmap legends stay within three lines", {
+    src <- template_lines()
+    for (label in c("enrichment-heatmap-legend", "enrichment-ora-heatmap-legend")) {
+        txt <- chunk_text(src, label)
+        n_words <- length(strsplit(trimws(txt), "\\s+")[[1]])
+        # 120 words is the ceiling asked for; 400 characters is about three lines
+        # at the legend's width and font size.
+        expect_lte(n_words, 120, label = label)
+        expect_lte(nchar(txt), 400, label = label)
+    }
+})
+
+test_that("GO figures say why metabolomics is absent from them", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("collection_note <- function(coll)", src, fixed = TRUE))
+    expect_true(grepl('grepl("^GO", coll)', src, fixed = TRUE))
+    # Both run-level loops and the per-contrast helper place the note.
+    expect_gte(lengths(regmatches(src, gregexpr("collection_note(coll)", src,
+                                                fixed = TRUE))), 3)
+})
