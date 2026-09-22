@@ -2252,6 +2252,17 @@ function bpIsMeasured(v) {
     return v !== null && v !== undefined && !isNaN(v);
 }
 
+// Group and protein labels come from the sample sheet and the annotation
+// columns. They are data, and the line below them is assembled with innerHTML,
+// so a label carrying angle brackets would be read as markup rather than shown.
+function bpEscapeHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2367,7 +2378,7 @@ function renderMultiBoxplot() {
     var infoLines = selectedGenes.map(function(sg) {
         var values = geneExprData.expr[sg.idx];
         var vals = values.filter(bpIsMeasured);
-        var txt = "<strong>" + sg.name + "</strong>: ";
+        var txt = "<strong>" + bpEscapeHtml(sg.name) + "</strong>: ";
         if (vals.length > 0) {
             var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
             txt += "mean " + mean.toFixed(3) + " (" + vals.length + " measured samples)";
@@ -2383,7 +2394,8 @@ function renderMultiBoxplot() {
             return true;
         });
         if (emptyGroups.length > 0) {
-            txt += " &mdash; no measured values in: " + emptyGroups.join(", ");
+            txt += " &mdash; no measured values in: " +
+                emptyGroups.map(function(g) { return bpEscapeHtml(g); }).join(", ");
         }
         return txt;
     });

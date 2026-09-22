@@ -139,6 +139,19 @@ test_that("a group with nothing measured is named rather than left blank", {
     expect_match(src, "emptyGroups", fixed = TRUE)
 })
 
+test_that("labels are escaped before they reach innerHTML", {
+    src <- report_src()
+
+    # The info line is assembled as HTML, and both the group labels and the
+    # protein name come from the sample sheet and the annotation columns. They
+    # are data: a label carrying angle brackets must be shown, not parsed.
+    expect_match(src, "function bpEscapeHtml(s)", fixed = TRUE)
+    expect_match(src, "bpEscapeHtml(sg.name)", fixed = TRUE)
+    expect_match(src, "return bpEscapeHtml(g);", fixed = TRUE)
+    # Ampersand first, or the escapes would re-escape each other's output.
+    expect_match(src, ".replace(/&/g, \"&amp;\")", fixed = TRUE)
+})
+
 
 # =============================================================================
 # 3. ORA headings keep their direction
