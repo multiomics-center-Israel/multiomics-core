@@ -363,3 +363,132 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
         contrasts_df  = contrasts_df
     )
 }
+
+#' Per-run reconciliation of the multi-imputation fold change
+#'
+#' Multi-imputation proteomics reports \code{log2FC.imputs}, which is pooled
+#' across independently imputed DE fits as
+#' \code{log2( mean( 2^logFC ) )} — see \code{summarize_limma_mult_imputation()}.
+#' That rule is invisible in the results table, so a reader who recomputes a
+#' fold change from the exported per-sample values lands on a different number
+#' and has no way to tell which is wrong. This table shows the pooling itself:
+#' every per-run coefficient, its linear ratio, the arithmetic mean of those
+#' ratios, and the reported value beside it.
+#'
+#' It reconciles the POOLING step only, and it does so exactly. Whether a
+#' single run's coefficient equals a difference of that run's group means is a
+#' separate question, answered by \code{log2FC_from_means} and
+#' \code{log2FC_from_raw} in the results table.
+#'
+#' \code{jensen_gap} is the reason the two cannot be collapsed into one column.
+#' The mean of a set of ratios is not the ratio implied by the mean of their
+#' logs, so \code{log2FC.imputs} sits at or above \code{mean.log2FC.runs}, with
+#' equality exactly when every run agrees — which is the case for a feature
+#' that was measured in every sample and so had nothing imputed.
+#'
+#' Nothing here is a matrix: these are aggregates over fits that already
+#' happened, and no model was fitted to any of these values.
+#'
+#' @param de_res Proteomics DE result. Uses \code{runs_de_tables} (a list over
+#'   imputation runs of per-contrast limma tables) and \code{summary_df}.
+#' @param config Full pipeline config; only the feature ID column is read.
+#' @return A data.frame with one row per feature and contrast, or \code{NULL}
+#'   when there is nothing to reconcile. Rows are ordered by feature (in the
+#'   order of the first run's table) and then by contrast.
+build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
+    runs <- de_res$runs_de_tables
+    summary_df <- de_res$summary_df
+
+    # Two real runs is the whole precondition. One run means the pooling is the
+    # identity and every delta below would be zero by construction, which reads
+    # as a verification but demonstrates nothing. That covers both
+    # imputation$multi_imputation: false (make_imputations_proteomics() draws
+    # once) and precomputed DE input (load_precomputed_proteomics_de() wraps the
+    # loaded tables as a single pseudo-run and has no imputations at all).
+    if (is.null(runs) || length(runs) < 2L) return(NULL)
+    if (is.null(summary_df) || nrow(summary_df) == 0L) return(NULL)
+
+    id_col <- config$modes$proteomics$de_table$id_col %||% "FeatureID"
+    contrasts <- names(runs[[1]])
+    if (is.null(contrasts) || length(contrasts) == 0L) return(NULL)
+
+    ref_tbl <- runs[[1]][[contrasts[1]]]
+    if (is.null(ref_tbl) || !id_col %in% colnames(ref_tbl)) return(NULL)
+    ref_ids <- as.character(ref_tbl[[id_col]])
+    n_feat <- length(ref_ids)
+    n_runs <- length(runs)
+    if (n_feat == 0L) return(NULL)
+
+    if (!id_col %in% colnames(summary_df)) return(NULL)
+    srow <- match(ref_ids, as.character(summary_df[[id_col]]))
+
+    blocks <- list()
+    for (cn in contrasts) {
+        contrast_print <- normalize_contrast_name(cn)
+        lr_col  <- paste0("linearRatio.imputs.", contrast_print)
+        lfc_col <- paste0("log2FC.imputs.", contrast_print)
+        if (!all(c(lr_col, lfc_col) %in% names(summary_df))) {
+            message("    DE_reconciliation: no reported columns for contrast '",
+                    contrast_print, "'; skipping it.")
+            next
+        }
+
+        # Matched on the ID rather than on row position: the summary step has
+        # already validated that the runs align, and matching keeps this honest
+        # if that ever stops being true instead of silently pairing the wrong
+        # features.
+        per_run <- vapply(runs, function(one_run) {
+            tbl <- one_run[[cn]]
+            if (is.null(tbl) || !all(c(id_col, "logFC") %in% colnames(tbl))) {
+                return(rep(NA_real_, n_feat))
+            }
+            as.numeric(tbl[["logFC"]])[match(ref_ids, as.character(tbl[[id_col]]))]
+        }, numeric(n_feat))
+        # vapply drops the dim when FUN.VALUE has length 1, so a single-feature
+        # run would come back as a vector and rowMeans() would fail on it.
+        per_run <- matrix(per_run, nrow = n_feat, ncol = n_runs)
+
+        ratios <- 2^per_run
+        # na.rm matches summarize_limma_mult_imputation(), so a run that failed
+        # on a feature is dropped from both the reported value and this check.
+        mean_ratio <- rowMeans(ratios, na.rm = TRUE)
+        mean_log2fc_runs <- rowMeans(per_run, na.rm = TRUE)
+        log2fc_from_mean_ratio <- log2(mean_ratio)
+
+        reported_ratio <- as.numeric(summary_df[[lr_col]])[srow]
+        reported_log2fc <- as.numeric(summary_df[[lfc_col]])[srow]
+
+        block <- data.frame(ref_ids, contrast_print,
+                            stringsAsFactors = FALSE, check.names = FALSE)
+        names(block) <- c(id_col, "Contrast")
+
+        for (r in seq_len(n_runs)) {
+            block[[paste0("run", r, ".log2FC")]] <- per_run[, r]
+            block[[paste0("run", r, ".ratio")]]  <- ratios[, r]
+        }
+
+        block[["mean.ratio"]]              <- mean_ratio
+        block[["linearRatio.imputs"]]      <- reported_ratio
+        block[["delta.linearRatio"]]       <- mean_ratio - reported_ratio
+        block[["log2FC.from_mean_ratio"]]  <- log2fc_from_mean_ratio
+        block[["log2FC.imputs"]]           <- reported_log2fc
+        block[["delta.log2FC"]]            <- log2fc_from_mean_ratio - reported_log2fc
+        block[["mean.log2FC.runs"]]        <- mean_log2fc_runs
+        block[["jensen_gap"]]              <- reported_log2fc - mean_log2fc_runs
+
+        block[[".feature_order"]] <- seq_len(n_feat)
+        block[[".contrast_order"]] <- length(blocks) + 1L
+        blocks[[length(blocks) + 1L]] <- block
+    }
+
+    if (length(blocks) == 0L) return(NULL)
+
+    out <- do.call(rbind, blocks)
+    # Feature-major: every contrast for one feature sits together, which is how
+    # the table gets read -- someone checking one protein by hand.
+    out <- out[order(out[[".feature_order"]], out[[".contrast_order"]]), , drop = FALSE]
+    out[[".feature_order"]] <- NULL
+    out[[".contrast_order"]] <- NULL
+    rownames(out) <- NULL
+    out
+}

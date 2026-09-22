@@ -295,8 +295,19 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
             },
             "log2FC_from_raw is the same arithmetic on the MEASURED values only, ignoring blanks. Where a feature was fully measured the two agree exactly. linearFC_from_raw is that column under the linearFC rule above, so the measured-only pair reads the same way as the modelled pair.",
             "Where a feature was not fully measured, log2FC_from_raw and log2FC.imputs differ for two reasons: the imputed values are included in one and not the other, and the raw means may rest on unequal numbers of replicates per group. N.observed says how many values each raw mean rests on, and should be read alongside it.",
-            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect."
+            "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect.",
+            if (multi_imp) {
+                paste(
+                    "Where two or more runs were actually pooled, this workbook carries a DE_reconciliation sheet showing the pooling itself: every per-run coefficient, its linear ratio, and the arithmetic mean of those ratios that log2FC.imputs is the log2 of. Read it to check the reported value by hand.",
+                    "Its columns are aggregates over fits that already happened -- nothing there is a matrix, and the Mean. and .norm columns described above are unaffected by it."
+                )
+            }
         )
+        # Two conditions, deliberately: the sentence is dropped entirely for a
+        # single-imputation workbook (c() drops the NULL), and it is worded
+        # "where two or more runs were actually pooled" for the case this
+        # function cannot see -- multi_imputation: true with no_repetitions: 1
+        # produces one run, so the sheet is absent although the flag is on.
     } else {
         glossary <- data.frame(
             Column = c("<sample>", "Mean.<group>", "CV.<group>",
@@ -367,6 +378,54 @@ add_provenance_sheet <- function(wb, mode = "rna", sheet = "How to read",
     invisible(TRUE)
 }
 
+#' Add the DE_reconciliation sheet
+#'
+#' Writes a table built by \code{build_de_reconciliation_proteomics()} under a
+#' note that states what the numbers are and, as importantly, what they are
+#' not. The writer is generic — it takes a data.frame and does not know how it
+#' was produced — but only the proteomics export passes one, because only
+#' multi-imputation pools several fits into one reported statistic.
+#'
+#' @param wb openxlsx workbook.
+#' @param recon Data.frame of reconciliation rows, or NULL/empty to do nothing.
+#' @param sheet Sheet name (default "DE_reconciliation").
+#' @return TRUE invisibly if a sheet was written, FALSE invisibly otherwise.
+add_de_reconciliation_sheet <- function(wb, recon, sheet = "DE_reconciliation") {
+    if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
+    if (is.null(recon) || !is.data.frame(recon) || nrow(recon) == 0L) {
+        return(invisible(FALSE))
+    }
+
+    note <- c(
+        "How the reported multi-imputation fold change was pooled.",
+        "Each run<N>.log2FC is the limma coefficient from ONE independently imputed DE fit: every run imputed the missing values separately and was fitted on its own matrix.",
+        "run<N>.ratio is 2^run<N>.log2FC. mean.ratio is the arithmetic mean of those per-run ratios, and log2FC.from_mean_ratio is log2(mean.ratio).",
+        "That is the same pooling rule the pipeline uses for log2FC.imputs. delta.linearRatio and delta.log2FC are therefore reconciliation checks, not results: both should read 0 to floating-point precision. A value that does not is a bug in the pipeline, not a finding about the data.",
+        "jensen_gap is log2FC.imputs minus mean.log2FC.runs. The mean of a set of ratios is not the ratio implied by the mean of their logs, so the pooled value sits at or above the mean of the per-run coefficients. It is 0 exactly when every run agrees, which is what happens for a feature measured in every sample, where nothing was imputed. The column explains a difference; it is not a statistic to report.",
+        "None of these values is a matrix and none of them was used to fit anything. They are aggregates over fits that had already happened.",
+        "The results table is unchanged by this sheet: <sample>.norm and Mean.<group> still describe the single imputation run the model was fitted on, and the clustering, PCA and z-score columns keep the matrix semantics they have always had."
+    )
+
+    if (sheet %in% names(wb)) openxlsx::removeWorksheet(wb, sheet)
+    openxlsx::addWorksheet(wb, sheetName = sheet, gridLines = TRUE)
+
+    openxlsx::writeData(wb, sheet, x = note, startCol = 1, startRow = 1,
+                        colNames = FALSE, rowNames = FALSE)
+    openxlsx::addStyle(wb, sheet,
+                       openxlsx::createStyle(textDecoration = "bold", fontSize = 12),
+                       rows = 1, cols = 1, stack = TRUE)
+
+    table_start <- length(note) + 2L
+    openxlsx::writeData(wb, sheet, recon, startRow = table_start)
+    openxlsx::addStyle(wb, sheet,
+                       openxlsx::createStyle(textDecoration = "bold",
+                                             border = "bottom", borderStyle = "thin"),
+                       rows = table_start, cols = seq_along(names(recon)), stack = TRUE)
+    openxlsx::freezePane(wb, sheet, firstActiveRow = table_start + 1L, firstActiveCol = 3)
+    openxlsx::setColWidths(wb, sheet, cols = 1:2, widths = "auto")
+    invisible(TRUE)
+}
+
 #' Get p-value cutoff tag for filename (generic for any mode)
 p_tag_generic <- function(config, mode, default = "NA") {
     p <- config$modes[[mode]]$de$p_cutoff
@@ -388,6 +447,12 @@ p_tag_generic <- function(config, mode, default = "NA") {
 #'   column blocks and how to reconcile log2FC/linearFC with the per-sample
 #'   values. Opt-in so modes that do not export the normalized block are
 #'   unaffected.
+#' @param de_reconciliation Optional data.frame of per-run reconciliation rows
+#'   (from \code{build_de_reconciliation_proteomics()}), written as its own
+#'   sheet and filtered to the features on the workbook's Results sheet. NULL
+#'   for every mode that does not pool several model fits into one reported
+#'   statistic, which today is every mode but proteomics under
+#'   multi-imputation.
 write_final_results_excels_legacy_generic <- function(final_results, config, out_dir, mode, id_col,
                                                        expr_for_de, with_cutoffs = TRUE,
                                                        clustering_res = NULL,
@@ -395,7 +460,8 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                                                        sample_id_col = NULL,
                                                        annotation_rows = NULL,
                                                        sample_label_cols = NULL,
-                                                       provenance_sheet = FALSE) {
+                                                       provenance_sheet = FALSE,
+                                                       de_reconciliation = NULL) {
     if (!requireNamespace("openxlsx", quietly = TRUE)) stop("Package 'openxlsx' is required.")
     # Validate inputs
     if (is.null(final_results)) {
@@ -644,6 +710,16 @@ write_final_results_excels_legacy_generic <- function(final_results, config, out
                 wb, mode = mode,
                 multi_imputation = config$modes[[mode]]$imputation$multi_imputation %||% TRUE
             )
+        }
+        if (!is.null(de_reconciliation) && is.data.frame(de_reconciliation) &&
+            id_col %in% names(de_reconciliation)) {
+            # Narrowed to the features this workbook actually shows, so the DE
+            # workbook's reconciliation covers its own rows rather than the
+            # whole table. Written per workbook rather than once, because each
+            # one is handed out on its own.
+            recon_rows <- de_reconciliation[
+                de_reconciliation[[id_col]] %in% as.character(df[[id_col]]), , drop = FALSE]
+            add_de_reconciliation_sheet(wb, recon_rows)
         }
         # openxlsx registers drawing/vml parts it will not write; leaving the
         # relationships in place produces a zip Excel offers to repair.
