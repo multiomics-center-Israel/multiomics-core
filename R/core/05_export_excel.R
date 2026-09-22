@@ -298,7 +298,7 @@ build_provenance_notes <- function(mode = "rna", multi_imputation = TRUE) {
             "A large, one-sided gap between the two columns across many features is worth looking into: it is what fold-change shrinkage looks like in a table, and in the extreme case log2FC.imputs collapses towards zero while log2FC_from_raw still carries the effect.",
             if (multi_imp) {
                 paste(
-                    "Where two or more runs were actually pooled, this workbook carries a DE_reconciliation sheet showing the pooling itself: every per-run coefficient, its linear ratio, and the arithmetic mean of those ratios that log2FC.imputs is the log2 of. Read it to check the reported value by hand.",
+                    "Where two or more runs were pooled and their estimates actually differ, this workbook carries a DE_reconciliation sheet showing the pooling itself: every per-run estimate, its linear ratio, and the arithmetic mean of those ratios that log2FC.imputs is the log2 of. Read it to check the reported value by hand.",
                     "Its columns are aggregates over fits that already happened -- nothing there is a matrix, and the Mean. and .norm columns described above are unaffected by it."
                 )
             }
@@ -396,9 +396,11 @@ add_de_reconciliation_sheet <- function(wb, recon, sheet = "DE_reconciliation") 
         return(invisible(FALSE))
     }
 
+    # Eight lines, so the table below starts at length(note) + 2.
     note <- c(
         "How the reported multi-imputation fold change was pooled.",
-        "Each run<N>.log2FC is the limma coefficient from ONE independently imputed DE fit: every run imputed the missing values separately and was fitted on its own matrix.",
+        "Each run<N>.log2FC is the fold-change estimate from ONE independently imputed DE fit: every run imputed the missing values separately and was fitted on its own matrix. Which model produced it follows modes.proteomics.de.method -- limma, t-test, Welch or ANOVA post-hoc -- and is the same model in every run.",
+        "This sheet is written only when the runs genuinely differ. An imputation method that fills the same values every time leaves nothing to pool, and a sheet of identical run columns would read as agreement between draws when there were no separate draws to agree.",
         "run<N>.ratio is 2^run<N>.log2FC. mean.ratio is the arithmetic mean of those per-run ratios, and log2FC.from_mean_ratio is log2(mean.ratio).",
         "That is the same pooling rule the pipeline uses for log2FC.imputs. delta.linearRatio and delta.log2FC are therefore reconciliation checks, not results: both should read 0 to floating-point precision. A value that does not is a bug in the pipeline, not a finding about the data.",
         "jensen_gap is log2FC.imputs minus mean.log2FC.runs. The mean of a set of ratios is not the ratio implied by the mean of their logs, so the pooled value sits at or above the mean of the per-run coefficients. It is 0 exactly when every run agrees, which is what happens for a feature measured in every sample, where nothing was imputed. The column explains a difference; it is not a statistic to report.",

@@ -389,6 +389,12 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
 #' Nothing here is a matrix: these are aggregates over fits that already
 #' happened, and no model was fitted to any of these values.
 #'
+#' Built only when there are at least two runs AND those runs actually produced
+#' different estimates. Several supported imputation methods return identical
+#' matrices for every repetition, and for those the pooling is the identity: a
+#' sheet of identical run columns would read as agreement between independent
+#' draws when there were no separate draws to agree.
+#'
 #' @param de_res Proteomics DE result. Uses \code{runs_de_tables} (a list over
 #'   imputation runs of per-contrast limma tables) and \code{summary_df}.
 #' @param config Full pipeline config; only the feature ID column is read.
@@ -423,6 +429,7 @@ build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
     srow <- match(ref_ids, as.character(summary_df[[id_col]]))
 
     blocks <- list()
+    runs_vary <- FALSE
     for (cn in contrasts) {
         contrast_print <- normalize_contrast_name(cn)
         lr_col  <- paste0("linearRatio.imputs.", contrast_print)
@@ -447,6 +454,20 @@ build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
         # vapply drops the dim when FUN.VALUE has length 1, so a single-feature
         # run would come back as a vector and rowMeans() would fail on it.
         per_run <- matrix(per_run, nrow = n_feat, ncol = n_runs)
+
+        # Whether the runs are genuinely separate draws is asked of the numbers,
+        # not of the config. Only perseus_like actually varies per run today:
+        # impute_proteomics_qrilc() and impute_proteomics_dep2() call set.seed()
+        # with a fixed configured seed INSIDE each call, overwriting the per-run
+        # seed make_imputations_proteomics() sets, and none/minval/MinDet are
+        # deterministic by design. All of those produce N identical matrices, so
+        # the pooling is the identity and every column of this sheet would agree
+        # by construction -- which reads as agreement between independent draws
+        # when there were none. Asking the coefficients keeps this correct if a
+        # method's seeding is ever fixed or a new one is added.
+        if (!runs_vary) {
+            runs_vary <- any(per_run != per_run[, 1], na.rm = TRUE)
+        }
 
         ratios <- 2^per_run
         # na.rm matches summarize_limma_mult_imputation(), so a run that failed
@@ -482,6 +503,11 @@ build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
     }
 
     if (length(blocks) == 0L) return(NULL)
+    if (!runs_vary) {
+        message("    DE_reconciliation: every imputation run produced the same ",
+                "estimates, so there is no pooling to reconcile; skipping the sheet.")
+        return(NULL)
+    }
 
     out <- do.call(rbind, blocks)
     # Feature-major: every contrast for one feature sits together, which is how

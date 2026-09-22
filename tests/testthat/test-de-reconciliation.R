@@ -45,9 +45,10 @@ recon_config <- function(n_reps = 3, multi = TRUE) {
     )))
 }
 
-# One limma-shaped table per run per contrast. `spread` controls how far the
-# runs disagree: 0 means every run produced the same coefficient, which is what
-# a fully measured feature looks like.
+# One DE table per run per contrast. `spread` controls how far the runs
+# disagree and is recycled over features, so a vector gives a mixed fixture:
+# 0 for a feature every run agreed on (what a fully measured feature looks
+# like, since there was nothing to impute) and non-zero for one they did not.
 recon_runs <- function(n_runs = 3, contrasts = "S_vs_NS", spread = 0.05,
                        features = c("p1", "p2", "p3", "p4")) {
     base_lfc <- c(-0.7, 2, 0.1, -1.4)[seq_along(features)]
@@ -144,13 +145,21 @@ test_that("the pooled value is at or above the mean of the per-run log2FCs", {
     expect_true(all(rec$jensen_gap > 1e-6))
 })
 
-test_that("the gap is exactly zero when every run agrees", {
-    # spread = 0: the runs produced identical coefficients, as they do for a
-    # feature that was measured everywhere and had nothing imputed.
-    rec <- build_de_reconciliation_proteomics(recon_de_res(spread = 0), recon_config())
+test_that("the gap is exactly zero for a feature whose runs agree", {
+    # p1's runs are identical, as they are for a feature measured in every
+    # sample: nothing was imputed, so every draw saw the same matrix entries.
+    # The other three disagree.
+    cfg <- recon_config()
+    rec <- build_de_reconciliation_proteomics(
+        recon_de_res(spread = c(0, 0.4, 0.4, 0.4), config = cfg), cfg)
 
-    expect_equal(rec$jensen_gap, rep(0, nrow(rec)), tolerance = 1e-12)
-    expect_equal(rec$mean.log2FC.runs, rec$log2FC.imputs)
+    agreed <- rec[rec$FeatureID == "p1", ]
+    expect_equal(agreed$jensen_gap, 0, tolerance = 1e-12)
+    expect_equal(agreed$mean.log2FC.runs, agreed$log2FC.imputs)
+
+    # ...and the feature is not simply being skipped: the others still carry a
+    # real gap in the same sheet.
+    expect_true(all(rec$jensen_gap[rec$FeatureID != "p1"] > 1e-6))
 })
 
 
@@ -203,6 +212,23 @@ test_that("the column order is the documented one", {
 # Availability: only when two or more runs were really pooled
 # =============================================================================
 
+test_that("identical runs produce no sheet, however many of them there are", {
+    # Several supported imputation methods return the same matrix for every
+    # repetition: none, minval and DEP2 MinDet are deterministic, and both
+    # impute_proteomics_qrilc() and impute_proteomics_dep2() call set.seed()
+    # with a fixed configured seed inside each call, overwriting the per-run
+    # seed. The runs are then not independent draws, and a sheet of identical
+    # columns would read as agreement between draws that never differed.
+    cfg <- recon_config()
+    de_res <- recon_de_res(spread = 0, config = cfg)
+
+    expect_message(
+        res <- build_de_reconciliation_proteomics(de_res, cfg),
+        "no pooling to reconcile"
+    )
+    expect_null(res)
+})
+
 test_that("a single run produces no sheet rather than a zero-delta one", {
     cfg <- recon_config(n_reps = 1, multi = FALSE)
     de_res <- recon_de_res(n_runs = 1, config = cfg)
@@ -250,11 +276,17 @@ test_that("the sheet note says this is reconciliation, not a fitted matrix", {
     expect_true("DE_reconciliation" %in% names(wb))
 
     note <- openxlsx::readWorkbook(wb, sheet = "DE_reconciliation",
-                                   colNames = FALSE, rows = 1:7,
+                                   colNames = FALSE, rows = 1:8,
                                    skipEmptyRows = FALSE)
     note <- paste(unlist(note, use.names = FALSE), collapse = " ")
 
     expect_match(note, "independently imputed DE fit", fixed = TRUE)
+    # Method-neutral: limma is not the only DE method mod_proteomics_de()
+    # supports, so the note must not call every per-run estimate a limma
+    # coefficient.
+    expect_false(grepl("limma coefficient", note, fixed = TRUE))
+    expect_match(note, "modes.proteomics.de.method", fixed = TRUE)
+    expect_match(note, "written only when the runs genuinely differ", fixed = TRUE)
     expect_match(note, "2^run<N>.log2FC", fixed = TRUE)
     expect_match(note, "arithmetic mean", fixed = TRUE)
     expect_match(note, "log2(mean.ratio)", fixed = TRUE)
@@ -284,6 +316,6 @@ test_that("the How to read sheet points at the reconciliation only when pooled",
     # Worded for the case the notes cannot see: multi_imputation: true with
     # no_repetitions: 1 pools nothing, so the sheet is absent although the flag
     # is on. An unconditional sentence would point at a missing sheet.
-    expect_true(any(grepl("two or more runs were actually pooled",
+    expect_true(any(grepl("two or more runs were pooled and their estimates actually differ",
                           multi$notes, fixed = TRUE)))
 })
