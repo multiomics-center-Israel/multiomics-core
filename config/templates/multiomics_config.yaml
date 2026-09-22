@@ -161,6 +161,9 @@ modes:
       sections:
         # translation_efficiency: false  # protein log2FC - RNA log2FC panels
         # group_distance: false          # per-sample within vs cross-group distance
+        # harmonization: false           # "Data Harmonization" section, heading included
+        # sample_concordance: false      # "Sample Concordance Across Omics" section
+        # mechanistic: false             # "Mechanistic & Causal Inference" section
 
     # --- Feature selection for integration ---
     feature_selection:
