@@ -396,7 +396,8 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
 #' draws when there were no separate draws to agree.
 #'
 #' @param de_res Proteomics DE result. Uses \code{runs_de_tables} (a list over
-#'   imputation runs of per-contrast limma tables) and \code{summary_df}.
+#'   imputation runs of per-contrast DE tables, whichever model
+#'   \code{modes.proteomics.de.method} selected) and \code{summary_df}.
 #' @param config Full pipeline config; only the feature ID column is read.
 #' @return A data.frame with one row per feature and contrast, or \code{NULL}
 #'   when there is nothing to reconcile. Rows are ordered by feature (in the
@@ -465,8 +466,22 @@ build_de_reconciliation_proteomics <- function(de_res, config = NULL) {
         # by construction -- which reads as agreement between independent draws
         # when there were none. Asking the coefficients keeps this correct if a
         # method's seeding is ever fixed or a new one is added.
+        #
+        # identical(), not `!=`: any comparison against NA yields NA, and
+        # dropping those with na.rm = TRUE reported genuinely different runs as
+        # the same whenever run 1 was NA for a feature and another run was not.
+        # The pooling above uses na.rm = TRUE, so a feature really can
+        # contribute in some runs and not others, which makes that the live
+        # case rather than a hypothetical one. Exact and deliberately without a
+        # tolerance: the question is whether the estimates are identical,
+        # including their NA pattern, and a tolerance would collapse small but
+        # real differences between draws.
         if (!runs_vary) {
-            runs_vary <- any(per_run != per_run[, 1], na.rm = TRUE)
+            runs_vary <- !all(vapply(
+                seq_len(n_runs),
+                function(r) identical(per_run[, r], per_run[, 1]),
+                logical(1)
+            ))
         }
 
         ratios <- 2^per_run

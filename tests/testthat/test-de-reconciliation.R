@@ -229,6 +229,45 @@ test_that("identical runs produce no sheet, however many of them there are", {
     expect_null(res)
 })
 
+test_that("runs that differ only by an NA are not mistaken for identical runs", {
+    # The variation test used `any(per_run != per_run[, 1], na.rm = TRUE)`.
+    # A comparison against NA is NA, and na.rm dropped it, so a feature that
+    # run 1 could not estimate and run 2 could counted as no variation at all.
+    # Live rather than hypothetical: the pooling uses na.rm = TRUE, so a
+    # feature can contribute in some runs and not others.
+    #
+    # p2 is deliberately identical across both runs, so the NA on p1 is the
+    # ONLY thing distinguishing them. Under the old comparison this fixture
+    # returned NULL.
+    cfg <- recon_config(n_reps = 2)
+    mk <- function(lfc_p1) {
+        list(S_vs_NS = data.frame(
+            FeatureID = c("p1", "p2"),
+            logFC     = c(lfc_p1, 1.0),
+            P.Value   = c(1e-4, 1e-4),
+            adj.P.Val = c(1e-3, 1e-3),
+            stringsAsFactors = FALSE
+        ))
+    }
+    runs <- list(mk(NA_real_), mk(0.5))
+    de_res <- list(runs_de_tables = runs,
+                   summary_df = summarize_limma_mult_imputation(runs, cfg))
+
+    rec <- build_de_reconciliation_proteomics(de_res, cfg)
+    expect_false(is.null(rec))
+
+    p1 <- rec[rec$FeatureID == "p1", ]
+    expect_true(is.na(p1$run1.log2FC))
+    expect_equal(p1$run2.log2FC, 0.5)
+
+    # And the reconciliation still closes for that feature: the summariser also
+    # pools with na.rm = TRUE, so both sides see the one run that estimated it.
+    expect_equal(p1$mean.ratio, p1$linearRatio.imputs)
+    expect_equal(p1$log2FC.from_mean_ratio, p1$log2FC.imputs)
+    expect_equal(p1$delta.linearRatio, 0, tolerance = 1e-12)
+    expect_equal(p1$delta.log2FC, 0, tolerance = 1e-12)
+})
+
 test_that("a single run produces no sheet rather than a zero-delta one", {
     cfg <- recon_config(n_reps = 1, multi = FALSE)
     de_res <- recon_de_res(n_runs = 1, config = cfg)
