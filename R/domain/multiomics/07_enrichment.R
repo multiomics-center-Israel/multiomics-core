@@ -575,40 +575,82 @@ protein_group_members <- function(ids) {
 }
 
 
-#' Map protein groups to Entrez IDs, one member accession at a time
+#' Canonical UniProt accession of an isoform accession
 #'
-#' Each member accession is looked up on its own, and a group takes the Entrez
-#' ID of its first member that maps, in group order: the leading protein when it
-#' maps, otherwise the next one. That is the first-member convention
-#' \code{extract_protein_symbols()} already applies to gene symbols. A group
-#' none of whose members map is left out, as a single unmapped accession always
-#' was.
+#' UniProt writes isoforms as the canonical accession plus "-<n>" ("P12345-2").
+#' Annotation packages key genes on the canonical accession, so an isoform with
+#' no entry of its own can still be placed through it.
+#'
+#' @param accessions Character vector of accessions.
+#' @return The accessions with a trailing "-<digits>" removed; others unchanged.
+#' @examples
+#' canonical_uniprot_accession(c("P12345-2", "P12345", "Q9ABC1"))
+canonical_uniprot_accession <- function(accessions) {
+    sub("-[0-9]+$", "", as.character(accessions))
+}
+
+
+#' Map protein groups to Entrez IDs, through every member accession
+#'
+#' Each member accession is looked up on its own, and an isoform accession with
+#' no entry of its own is tried again as its canonical accession. A group maps
+#' to the Entrez ID of every member that maps, so a group whose members come
+#' from different genes stands for all of them; two members of one gene count
+#' once.
+#'
+#' One rule keeps that from double counting. A gene that a feature maps to
+#' through its first mapped member is that feature's own measurement, and it is
+#' not handed to another group through a secondary member as well -- otherwise a
+#' protein measured on its own would be claimed again by every group that
+#' happens to list it.
 #'
 #' @param ids Character vector of protein-group IDs.
 #' @param lookup Function taking a character vector of unique accessions and
 #'   returning Entrez IDs named by accession, NA where unmapped -- the shape
 #'   \code{AnnotationDbi::mapIds()} returns.
-#' @return Data frame with \code{feature_id}, \code{ENTREZID} and
-#'   \code{matched_accession}, one row per group that mapped.
+#' @return Data frame with \code{feature_id}, \code{ENTREZID},
+#'   \code{matched_accession} (the key that hit, possibly the canonical form of
+#'   an isoform), \code{member_rank} (1 for the group's first mapped gene,
+#'   2 for the next, ...) and \code{via_canonical} (TRUE where only the
+#'   canonical accession of an isoform mapped), ordered by feature and rank. A
+#'   group none of whose members map is left out.
 #' @examples
-#' fake <- function(keys) setNames(ifelse(keys == "P2", "1001", NA), keys)
-#' map_protein_groups_to_entrez(c("P1;P2", "P3"), fake)   # P1;P2 -> 1001 via P2
+#' fake <- function(keys) setNames(c(P1 = "101", P2 = "102", P3 = NA)[keys], keys)
+#' map_protein_groups_to_entrez(c("P1;P2", "P3"), fake)   # P1;P2 -> 101 and 102
 map_protein_groups_to_entrez <- function(ids, lookup) {
     empty <- data.frame(feature_id = character(0), ENTREZID = character(0),
-                        matched_accession = character(0), stringsAsFactors = FALSE)
+                        matched_accession = character(0), member_rank = integer(0),
+                        via_canonical = logical(0), stringsAsFactors = FALSE)
     members <- protein_group_members(ids)
     if (nrow(members) == 0) return(empty)
 
-    hits <- lookup(unique(members$accession))
-    members$ENTREZID <- unname(as.character(hits[members$accession]))
-    members <- members[!is.na(members$ENTREZID) & nzchar(members$ENTREZID), ,
-                       drop = FALSE]
+    members$canonical <- canonical_uniprot_accession(members$accession)
+    hits <- lookup(unique(c(members$accession, members$canonical)))
+    hit_of <- function(keys) unname(as.character(hits[keys]))
+    direct <- hit_of(members$accession)
+    via_canonical <- hit_of(members$canonical)
+    direct_ok <- !is.na(direct) & nzchar(direct)
+    canonical_ok <- !is.na(via_canonical) & nzchar(via_canonical)
+    members$ENTREZID <- ifelse(direct_ok, direct, via_canonical)
+    members$matched_accession <- ifelse(direct_ok, members$accession, members$canonical)
+    members$via_canonical <- !direct_ok
+    members <- members[direct_ok | canonical_ok, , drop = FALSE]
     if (nrow(members) == 0) return(empty)
 
     members <- members[order(members$feature_id, members$position), , drop = FALSE]
-    first <- members[!duplicated(members$feature_id), , drop = FALSE]
-    data.frame(feature_id = first$feature_id, ENTREZID = first$ENTREZID,
-               matched_accession = first$accession,
+    members <- members[!duplicated(members[c("feature_id", "ENTREZID")]), , drop = FALSE]
+    rank_within <- function(f) as.integer(stats::ave(seq_along(f), f, FUN = seq_along))
+    members$member_rank <- rank_within(members$feature_id)
+
+    own_genes <- members$ENTREZID[members$member_rank == 1L]
+    members <- members[members$member_rank == 1L | !members$ENTREZID %in% own_genes, ,
+                       drop = FALSE]
+    members$member_rank <- rank_within(members$feature_id)
+
+    data.frame(feature_id = members$feature_id, ENTREZID = members$ENTREZID,
+               matched_accession = members$matched_accession,
+               member_rank = members$member_rank,
+               via_canonical = members$via_canonical,
                stringsAsFactors = FALSE, row.names = NULL)
 }
 
@@ -659,8 +701,9 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
 
     } else if (omics_type == "proteomics") {
         # Try direct UniProt -> ENTREZID mapping first (works for most organisms).
-        # Protein groups are split into their member accessions first: a group
-        # string such as "P1;P2" is never a UniProt key itself.
+        # Protein groups are split into their member accessions first -- a group
+        # string such as "P1;P2" is never a UniProt key itself -- and a group
+        # maps to every gene its members come from.
         entrez_df <- tryCatch({
             df <- map_protein_groups_to_entrez(all_ids, function(keys) {
                 AnnotationDbi::mapIds(
@@ -672,11 +715,16 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
                 )
             })
             if (nrow(df) > 0) {
-                n_via_member <- sum(df$matched_accession != df$feature_id)
-                message("    Mapped ", nrow(df), "/", length(all_ids),
-                        " protein groups to ENTREZID directly (", n_via_member,
-                        " through a member accession of a multi-protein group)")
+                n_groups <- length(unique(df$feature_id))
+                n_multi_gene <- length(unique(df$feature_id[df$member_rank > 1L]))
+                n_isoform <- sum(df$via_canonical)
+                message("    Mapped ", n_groups, "/", length(all_ids),
+                        " protein groups to ENTREZID directly (", n_multi_gene,
+                        " to more than one gene, ", n_isoform,
+                        " member(s) through the canonical accession of an isoform)")
             }
+            # A group can stand for several genes, so a feature can have several
+            # rows here; callers merge on feature_id and dedupe or average by gene.
             df[, c("feature_id", "ENTREZID"), drop = FALSE]
         }, error = function(e) NULL)
 
