@@ -548,6 +548,71 @@ run_limma_for_proteomics <- function(harmonization_res) {
 }
 
 
+#' Split protein-group IDs into their member accessions
+#'
+#' A protein group ("P1;P2;P3") names every protein its peptides could belong
+#' to, leading protein first. None of those strings is itself a UniProt key, so
+#' anything that looks accessions up has to take the group apart first.
+#'
+#' @param ids Character vector of protein-group IDs.
+#' @return Data frame with one row per member: \code{feature_id} (the group ID
+#'   as given), \code{accession} (the trimmed member) and \code{position}
+#'   (1 for the leading protein). Missing and empty IDs are dropped.
+#' @examples
+#' protein_group_members(c("P1;P2", "P3"))
+protein_group_members <- function(ids) {
+    ids <- unique(as.character(ids))
+    ids <- ids[!is.na(ids) & nzchar(trimws(ids))]
+    parts <- strsplit(ids, ";", fixed = TRUE)
+    n <- lengths(parts)
+    out <- data.frame(
+        feature_id = rep(ids, n),
+        accession  = trimws(as.character(unlist(parts, use.names = FALSE))),
+        position   = as.integer(unlist(lapply(n, seq_len), use.names = FALSE)),
+        stringsAsFactors = FALSE
+    )
+    out[nzchar(out$accession), , drop = FALSE]
+}
+
+
+#' Map protein groups to Entrez IDs, one member accession at a time
+#'
+#' Each member accession is looked up on its own, and a group takes the Entrez
+#' ID of its first member that maps, in group order: the leading protein when it
+#' maps, otherwise the next one. That is the first-member convention
+#' \code{extract_protein_symbols()} already applies to gene symbols. A group
+#' none of whose members map is left out, as a single unmapped accession always
+#' was.
+#'
+#' @param ids Character vector of protein-group IDs.
+#' @param lookup Function taking a character vector of unique accessions and
+#'   returning Entrez IDs named by accession, NA where unmapped -- the shape
+#'   \code{AnnotationDbi::mapIds()} returns.
+#' @return Data frame with \code{feature_id}, \code{ENTREZID} and
+#'   \code{matched_accession}, one row per group that mapped.
+#' @examples
+#' fake <- function(keys) setNames(ifelse(keys == "P2", "1001", NA), keys)
+#' map_protein_groups_to_entrez(c("P1;P2", "P3"), fake)   # P1;P2 -> 1001 via P2
+map_protein_groups_to_entrez <- function(ids, lookup) {
+    empty <- data.frame(feature_id = character(0), ENTREZID = character(0),
+                        matched_accession = character(0), stringsAsFactors = FALSE)
+    members <- protein_group_members(ids)
+    if (nrow(members) == 0) return(empty)
+
+    hits <- lookup(unique(members$accession))
+    members$ENTREZID <- unname(as.character(hits[members$accession]))
+    members <- members[!is.na(members$ENTREZID) & nzchar(members$ENTREZID), ,
+                       drop = FALSE]
+    if (nrow(members) == 0) return(empty)
+
+    members <- members[order(members$feature_id, members$position), , drop = FALSE]
+    first <- members[!duplicated(members$feature_id), , drop = FALSE]
+    data.frame(feature_id = first$feature_id, ENTREZID = first$ENTREZID,
+               matched_accession = first$accession,
+               stringsAsFactors = FALSE, row.names = NULL)
+}
+
+
 #' Map feature IDs to KEGG gene IDs
 #'
 #' For C. elegans (and some other organisms), KEGG uses organism-specific gene
@@ -593,26 +658,26 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         return(entrez_df)
 
     } else if (omics_type == "proteomics") {
-        # Try direct UniProt -> ENTREZID mapping first (works for most organisms)
+        # Try direct UniProt -> ENTREZID mapping first (works for most organisms).
+        # Protein groups are split into their member accessions first: a group
+        # string such as "P1;P2" is never a UniProt key itself.
         entrez_df <- tryCatch({
-            res <- AnnotationDbi::mapIds(
-                org_db,
-                keys = all_ids,
-                keytype = "UNIPROT",
-                column = "ENTREZID",
-                multiVals = "first"
-            )
-            df <- data.frame(
-                feature_id = names(res),
-                ENTREZID = as.character(res),
-                stringsAsFactors = FALSE
-            )
-            df <- df[!is.na(df$ENTREZID), ]
+            df <- map_protein_groups_to_entrez(all_ids, function(keys) {
+                AnnotationDbi::mapIds(
+                    org_db,
+                    keys = keys,
+                    keytype = "UNIPROT",
+                    column = "ENTREZID",
+                    multiVals = "first"
+                )
+            })
             if (nrow(df) > 0) {
+                n_via_member <- sum(df$matched_accession != df$feature_id)
                 message("    Mapped ", nrow(df), "/", length(all_ids),
-                        " UniProt IDs to ENTREZID directly")
+                        " protein groups to ENTREZID directly (", n_via_member,
+                        " through a member accession of a multi-protein group)")
             }
-            df
+            df[, c("feature_id", "ENTREZID"), drop = FALSE]
         }, error = function(e) NULL)
 
         if (!is.null(entrez_df) && nrow(entrez_df) > 0) return(entrez_df)
