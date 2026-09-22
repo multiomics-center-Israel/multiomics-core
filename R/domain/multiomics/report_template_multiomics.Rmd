@@ -1237,7 +1237,15 @@ if (length(lookup_tsvs) > 0) {
 
 ```{r enrichment-cross-lookup-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0) {
-    figure_legend("Each layer's top pathways by its own raw p-value -- from its rank-based (GSEA) result where it has one, otherwise its ORA result -- shown beside the same pathways in the other layer, in both directions and whether or not they are significant. Points sit at the normalised enrichment score (NES); point size is -log10 of the raw p-value, and the legend marks p = 0.05. A square at zero is an ORA result, which has no NES. A hollow circle at zero means the other layer has no result for that pathway -- for example, no measured member there -- which is not the same as a result near p = 1. The second figure of each pair keeps only the pathways the other layer has a result for. At this all-contrasts level each value is that layer's best across contrasts, so the two sides can come from different contrasts; the table names them, and the per-contrast tabs show matched contrasts. All p-values are nominal; target_padj_within_lookup adjusts the other layer's p-values across the looked-up pathways only, and the two layers come from the same samples, so it is a guide rather than a controlled error rate. The same NES sign in two layers does not by itself mean they agree biologically: a metabolite pool can fall while the enzymes acting on it rise. These views are hypothesis-generating.")
+    figure_legend(paste(
+        "Each layer's top pathways by its own raw p-value (GSEA where available,",
+        "otherwise ORA), beside the same pathways in the other layer, both",
+        "directions. Colour and number: NES, grey at zero; * marks raw p < 0.05.",
+        "An unfilled cell has no NES: an ORA-only result, or a dash where the",
+        "other layer has no result. The",
+        "second heatmap keeps only pathways the other layer tested. P-values are",
+        "nominal, and the same NES sign in two layers is not by itself biological",
+        "agreement."))
 }
 ```
 

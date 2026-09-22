@@ -234,15 +234,82 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
 }
 
 
-#' Draw one ranking of a lookup as two panels sharing their rows
+#' Heatmap of one ranking of a lookup
 #'
-#' Left panel: the ranked layer; right panel: the layer it was read in. Each
-#' point sits at the pathway's NES, so its side of the grey zero line is the
-#' direction of the ranked statistic, and its size is -log10 of the raw p-value
-#' (the legend marks p = 0.05). A pathway with no NES -- an ORA result -- is
-#' drawn as a square at zero, and one the target has no result for as a hollow
-#' circle at zero. One neutral colour throughout: the figure is a lookup, and
-#' nothing in it is meant to stand out.
+#' One row per pathway, in rank order, and two columns: the ranked layer and the
+#' layer it was read in. Fill is the NES on a diverging scale whose centre is a
+#' mid grey, so a row reads as "same direction" or "opposite" at a glance; each
+#' cell also prints its NES, with a star where the raw p-value is below 0.05.
+#'
+#' A cell with no NES is left unfilled, outlined only: "ORA" where the layer has
+#' only an ORA result, a dash where it has no result for the pathway at all.
+#' The two greys used to be confusable -- a NES near zero sat at a near-white
+#' midpoint that read as the missing-value grey, and only its number told them
+#' apart.
+#'
+#' @param blk Rows of one ranking from \code{build_cross_omics_lookup()}, in
+#'   rank order.
+#' @return A ggplot object.
+.lookup_heatmap <- function(blk) {
+    from <- blk$source_layer[1]
+    to <- blk$target_layer[1]
+    labels <- disambiguate_pathway_labels(truncate_pathway_label(blk$pathway, 45),
+                                          blk$norm_id)
+    src_col <- paste0(from, "\n(ranked)")
+    tgt_col <- paste0(to, "\n(looked up)")
+
+    cell_text <- function(nes, p, tested) {
+        ifelse(!tested, "\u2013",
+               ifelse(is.na(nes), "ORA",
+                      paste0(sprintf("%.1f", nes),
+                             ifelse(!is.na(p) & p < 0.05, "*", ""))))
+    }
+    long <- rbind(
+        data.frame(layer = src_col, pathway = labels, NES = blk$source_NES,
+                   label = cell_text(blk$source_NES, blk$source_p,
+                                     rep(TRUE, nrow(blk))),
+                   stringsAsFactors = FALSE),
+        data.frame(layer = tgt_col, pathway = labels, NES = blk$target_NES,
+                   label = cell_text(blk$target_NES, blk$target_p,
+                                     blk$target_status == "tested"),
+                   stringsAsFactors = FALSE)
+    )
+    long$layer <- factor(long$layer, levels = c(src_col, tgt_col))
+    long$pathway <- factor(long$pathway, levels = rev(labels))
+    lim <- max(1, abs(long$NES), na.rm = TRUE)
+    method <- unique(stats::na.omit(blk$source_method))
+
+    ggplot2::ggplot(long, ggplot2::aes(x = layer, y = pathway, fill = NES)) +
+        ggplot2::geom_tile(colour = "grey70") +
+        ggplot2::geom_text(ggplot2::aes(label = label), size = 2.6,
+                           colour = "grey15") +
+        ggplot2::scale_fill_gradient2(
+            name = "NES", low = "#2166ac", mid = "#a6a6a6", high = "#b2182b",
+            midpoint = 0, limits = c(-lim, lim), na.value = NA) +
+        ggplot2::scale_x_discrete(position = "top") +
+        ggplot2::labs(
+            title = sprintf("Top %s pathways and their %s results", from, to),
+            subtitle = sprintf("Ranked by %s raw p-value (%s). Nominal p-values.",
+                               from, paste(method, collapse = "/")),
+            # Wrapped by hand: one line of this length is cut off at this
+            # figure's width.
+            caption = paste0("Colour and number: NES, grey at zero; ",
+                             "* raw p < 0.05.\n",
+                             "An unfilled cell has no NES: ORA only, or a dash ",
+                             "for no result in that layer."),
+            x = NULL, y = NULL) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(
+            panel.grid = ggplot2::element_blank(),
+            axis.text.y = ggplot2::element_text(size = 7),
+            axis.text.x = ggplot2::element_text(size = 9),
+            plot.title = ggplot2::element_text(hjust = 0.5),
+            plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 9),
+            plot.caption = ggplot2::element_text(size = 8, colour = "grey30"))
+}
+
+
+#' Draw one ranking of a lookup as a heatmap
 #'
 #' @param lookup Result of \code{build_cross_omics_lookup()}.
 #' @param ranking Which ranking to draw ("all" or "tested_in_target").
@@ -253,78 +320,8 @@ plot_cross_omics_lookup <- function(lookup, ranking = "all", out_path) {
     if (nrow(blk) == 0) return(invisible(NULL))
     blk <- blk[order(blk$rank), , drop = FALSE]
 
-    from <- blk$source_layer[1]
-    to <- blk$target_layer[1]
-    labels <- disambiguate_pathway_labels(truncate_pathway_label(blk$pathway, 45),
-                                          blk$norm_id)
-    src_panel <- paste0(from, " (ranked)")
-    tgt_panel <- paste0(to, " (looked up)")
-
-    state_of <- function(nes, tested) {
-        ifelse(!tested, "not in results", ifelse(is.na(nes), "no NES (ORA)", "NES"))
-    }
-    long <- rbind(
-        data.frame(panel = src_panel, pathway = labels, NES = blk$source_NES,
-                   p = blk$source_p,
-                   state = state_of(blk$source_NES, rep(TRUE, nrow(blk))),
-                   stringsAsFactors = FALSE),
-        data.frame(panel = tgt_panel, pathway = labels, NES = blk$target_NES,
-                   p = blk$target_p,
-                   state = state_of(blk$target_NES, blk$target_status == "tested"),
-                   stringsAsFactors = FALSE)
-    )
-    long$x <- ifelse(is.na(long$NES), 0, long$NES)
-    long$neg_log10_p <- pmin(-log10(pmax(long$p, 1e-300)), 10)
-    long$panel <- factor(long$panel, levels = c(src_panel, tgt_panel))
-    long$pathway <- factor(long$pathway, levels = rev(labels))
-
-    measured <- long[long$state != "not in results", , drop = FALSE]
-    absent <- long[long$state == "not in results", , drop = FALSE]
-
-    x_lim <- max(1, abs(long$x), na.rm = TRUE) * 1.1
-    size_max <- max(2.5, measured$neg_log10_p, na.rm = TRUE)
-    method <- unique(stats::na.omit(blk$source_method))
-
-    p <- ggplot2::ggplot(long, ggplot2::aes(x = x, y = pathway)) +
-        ggplot2::geom_vline(xintercept = 0, colour = "grey60") +
-        ggplot2::geom_point(
-            data = measured,
-            ggplot2::aes(size = neg_log10_p, shape = state),
-            colour = "grey25") +
-        ggplot2::geom_point(
-            data = absent, ggplot2::aes(shape = state),
-            size = 2.5, colour = "grey45") +
-        ggplot2::facet_wrap(~ panel, nrow = 1) +
-        ggplot2::scale_shape_manual(
-            name = NULL,
-            values = c("NES" = 16, "no NES (ORA)" = 15, "not in results" = 1),
-            drop = TRUE) +
-        ggplot2::scale_size_continuous(
-            name = "raw p-value",
-            breaks = -log10(c(0.5, 0.05, 0.005)),
-            labels = c("0.5", "0.05", "0.005"),
-            limits = c(0, size_max),
-            range = c(1.2, 6)) +
-        ggplot2::scale_x_continuous(limits = c(-x_lim, x_lim)) +
-        ggplot2::labs(
-            title = sprintf("Top %s pathways and their %s results", from, to),
-            subtitle = sprintf(
-                "Ranked by %s raw p-value (%s). Nominal p-values; hypothesis-generating.",
-                from, paste(method, collapse = "/")),
-            caption = paste(
-                "x: NES. Points at 0 carry no NES (square: ORA result; hollow:",
-                "no result in that layer). The same NES sign in two layers is",
-                "not by itself biological agreement."),
-            x = "NES", y = NULL) +
-        ggplot2::theme_minimal() +
-        ggplot2::theme(
-            axis.text.y = ggplot2::element_text(size = 7),
-            plot.title = ggplot2::element_text(hjust = 0.5),
-            plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 9),
-            plot.caption = ggplot2::element_text(size = 8, colour = "grey30"))
-
-    ggplot2::ggsave(out_path, plot = p, width = 11,
-                    height = max(4, 1.8 + nrow(blk) * 0.28), dpi = 300)
+    ggplot2::ggsave(out_path, plot = .lookup_heatmap(blk), width = 7,
+                    height = max(4, 2.2 + nrow(blk) * 0.3), dpi = 300)
     invisible(out_path)
 }
 

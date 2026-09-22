@@ -245,3 +245,39 @@ test_that("switching the lookup off writes none and clears the old ones", {
     expect_length(list.files(out_dir, pattern = "^cross_lookup_"), 0)
     expect_length(res$lookup_files, 0)
 })
+
+test_that("the lookup is drawn as an NES heatmap, one column per layer", {
+    skip_if_not_installed("ggplot2")
+    lk <- build_cross_omics_lookup(tables(), "metabolomics", "proteomics", top_n = 5,
+                                   kegg_org = "rno")
+    blk <- lk[lk$ranking == "all", , drop = FALSE]
+    blk <- blk[order(blk$rank), , drop = FALSE]
+    p <- .lookup_heatmap(blk)
+
+    expect_s3_class(p, "ggplot")
+    geoms <- vapply(p$layers, function(l) class(l$geom)[1], character(1))
+    expect_true("GeomTile" %in% geoms)
+    # A missing NES is left unfilled, so it cannot be read as a value near zero,
+    # which is what the scale's own centre now looks like.
+    fill_scale <- p$scales$scales[[which(vapply(p$scales$scales,
+        function(sc) "fill" %in% sc$aesthetics, logical(1)))[1]]]
+    expect_true(is.na(fill_scale$na.value))
+    expect_true(grepl("NES", paste(deparse(p$mapping$fill), collapse = "")))
+    expect_identical(levels(p$data$layer),
+                     c("metabolomics\n(ranked)", "proteomics\n(looked up)"))
+    # A pathway the target has no result for is a dash, not a number.
+    untested <- blk$pathway[blk$target_status != "tested"]
+    if (length(untested) > 0) {
+        tgt <- p$data[p$data$layer == "proteomics\n(looked up)", ]
+        expect_true(all(tgt$label[is.na(tgt$NES)] %in% c("–", "ORA")))
+    }
+})
+
+test_that("the heatmap is written to the path it was given", {
+    skip_if_not_installed("ggplot2")
+    skip_if_not(isTRUE(capabilities("png")), "no png device")
+    lk <- build_cross_omics_lookup(tables(), "metabolomics", "proteomics", top_n = 5)
+    out <- file.path(withr::local_tempdir(), "lookup.png")
+    expect_identical(plot_cross_omics_lookup(lk, "all", out), out)
+    expect_true(file.exists(out))
+})
