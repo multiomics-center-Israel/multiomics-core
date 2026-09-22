@@ -215,12 +215,14 @@ test_that("the column order is the documented one", {
 # =============================================================================
 
 test_that("identical runs produce no sheet, however many of them there are", {
-    # Several supported imputation methods return the same matrix for every
-    # repetition: none, minval and DEP2 MinDet are deterministic, and both
-    # impute_proteomics_qrilc() and impute_proteomics_dep2() call set.seed()
-    # with a fixed configured seed inside each call, overwriting the per-run
-    # seed. The runs are then not independent draws, and a sheet of identical
-    # columns would read as agreement between draws that never differed.
+    # The deterministic imputation methods -- none, minval and DEP2 MinDet --
+    # return the same matrix for every repetition by design. The runs are then
+    # not independent draws, and a sheet of identical columns would read as
+    # agreement between draws that never differed.
+    #
+    # qrilc and DEP2 MinProb used to land here too, because they reseeded the
+    # RNG internally from a configured constant; #229 fixed that, and this
+    # guard needed no change because it asks the estimates, not the method.
     cfg <- recon_config()
     de_res <- recon_de_res(spread = 0, config = cfg)
 
