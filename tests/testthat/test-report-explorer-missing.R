@@ -132,6 +132,72 @@ test_that("each box sits in its own group's slot", {
     expect_match(src, "tickvals: uniqueGroups.map(function(g, i) { return i; })", fixed = TRUE)
 })
 
+test_that("the multi-protein comparison keeps a slot for every selection", {
+    # The same defect one branch down: a protein measured in no sample
+    # contributes no point, so naming its x position left it without one and it
+    # disappeared from the comparison the moment a second protein was selected.
+    # Reachable because filtering$min_count has no lower bound -- 0 keeps every
+    # feature, all-missing included -- so the two branches must agree.
+    src <- report_src()
+
+    expect_match(src, "tickvals: protNames.map(function(p, i) { return i; })", fixed = TRUE)
+    expect_match(src, "ticktext: protNames", fixed = TRUE)
+    expect_match(src, "range: [-0.5, protNames.length - 0.5]", fixed = TRUE)
+    # The position is the protein's index in the selection, so the slots stay
+    # put whether or not each protein has anything to show.
+    expect_match(src, "selectedGenes.forEach(function(sg, pi) {", fixed = TRUE)
+    expect_match(src, "xVals.push(pi);", fixed = TRUE)
+    # The superseded mechanism must not creep back here either.
+    expect_false(grepl("categoryarray: protNames", src, fixed = TRUE))
+})
+
+test_that("the multi-protein hover still names the protein", {
+    # x carries a position now, so %{x} would render a number. The name travels
+    # in customdata instead, alongside the sample name in text, both pushed in
+    # lockstep with the value so the hover cannot drift off its point.
+    src <- report_src()
+
+    expect_match(src, "customdata: protTexts", fixed = TRUE)
+    expect_match(src, "protTexts.push(sg.name);", fixed = TRUE)
+    expect_match(src, "hovertemplate: \"%{customdata}<br>Sample: %{text}", fixed = TRUE)
+    expect_false(grepl("hovertemplate: \"%{x}<br>Sample: %{text}", src, fixed = TRUE))
+})
+
+test_that("the explorer script blocks carry no unescaped apostrophe", {
+    # Every one of these JS blocks is emitted from inside cat('...'), a
+    # single-quoted R string, so one bare apostrophe in the JavaScript closes
+    # that string early and breaks the chunk -- a comment reading "the group's
+    # slot" is enough, which is exactly how this got in. Nothing in this suite
+    # renders the template, so CI cannot see it; it surfaces only when someone
+    # knits the report, which is the most expensive place to find out.
+    f <- repo_file("R", "domain", "proteomics", "report_template_proteomics.Rmd")
+    skip_if(is.na(f) || !file.exists(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    opens <- which(trimws(lines) == "cat('")
+    closes <- which(trimws(lines) == "')")
+    expect_gt(length(opens), 0L)
+
+    offenders <- character(0)
+    for (a in opens) {
+        b <- closes[closes > a][1]
+        if (is.na(b) || b <= a + 1L) next
+        body <- lines[(a + 1L):(b - 1L)]
+        bare <- grepl("(^|[^\\\\])'", body)
+        if (any(bare)) offenders <- c(offenders, trimws(body[bare]))
+    }
+    expect_equal(offenders, character(0))
+})
+
+test_that("the multi-protein grouping and colours are untouched", {
+    src <- report_src()
+
+    # boxmode "group" is what offsets the groups within each protein's slot;
+    # without it the fix would stack them.
+    expect_match(src, "boxmode: \"group\"", fixed = TRUE)
+    expect_match(src, "boxgroupgap: 0.1", fixed = TRUE)
+})
+
 test_that("a group with nothing measured is named rather than left blank", {
     src <- report_src()
 

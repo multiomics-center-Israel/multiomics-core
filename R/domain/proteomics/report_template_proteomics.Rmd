@@ -2292,10 +2292,10 @@ function renderMultiBoxplot() {
                     gSamples.push(samples[i]);
                 }
             }
-            // Pin the box to its group's own slot rather than letting Plotly
-            // hand out positions to whichever traces happen to draw. Without
-            // this, a group with nothing measured takes no slot at all and the
-            // groups after it shift left into the gap.
+            // Pin the box to the slot belonging to its own group, rather than
+            // letting Plotly hand out positions to whichever traces happen to
+            // draw. Without this, a group with nothing measured takes no slot
+            // at all and the groups after it shift left into the gap.
             traces.push({
                 x: gValues.map(function() { return gi; }),
                 y: gValues, type: "box", name: g,
@@ -2335,14 +2335,20 @@ function renderMultiBoxplot() {
         // Multiple proteins: genes on x-axis, grouped by condition
         var containerH = Math.max(450, 350 + nGenes * 30);
         uniqueGroups.forEach(function(g, gi) {
-            var xVals = [], yVals = [], sampleTexts = [];
-            selectedGenes.forEach(function(sg) {
+            var xVals = [], yVals = [], sampleTexts = [], protTexts = [];
+            selectedGenes.forEach(function(sg, pi) {
                 var values = geneExprData.expr[sg.idx];
                 for (var i = 0; i < values.length; i++) {
                     if (groups[i] === g && bpIsMeasured(values[i])) {
-                        xVals.push(sg.name);
+                        // The slot, not the name. A protein measured nowhere
+                        // contributes no point, so naming the position would
+                        // leave it without one -- the same way an unmeasured
+                        // group used to lose its place above. The name travels
+                        // in customdata, so the hover reads as it always did.
+                        xVals.push(pi);
                         yVals.push(values[i]);
                         sampleTexts.push(samples[i]);
+                        protTexts.push(sg.name);
                     }
                 }
             });
@@ -2350,7 +2356,8 @@ function renderMultiBoxplot() {
                 x: xVals, y: yVals, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: sampleTexts,
-                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                customdata: protTexts,
+                hovertemplate: "%{customdata}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
                 marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
                 line: { color: colors[gi % colors.length] },
                 fillcolor: colors[gi % colors.length] + "33"
@@ -2361,7 +2368,17 @@ function renderMultiBoxplot() {
         var layout = {
             title: { text: "Protein Expression Comparison", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: "Protein", categoryorder: "array", categoryarray: protNames },
+            // Ticks from the selection, for the same reason as the
+            // single-protein branch: a protein measured in no sample creates no
+            // category, so categoryarray had nothing to order and the protein
+            // vanished from the comparison as soon as a second one was picked.
+            xaxis: {
+                title: "Protein",
+                tickmode: "array",
+                tickvals: protNames.map(function(p, i) { return i; }),
+                ticktext: protNames,
+                range: [-0.5, protNames.length - 0.5]
+            },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
             boxmode: "group",
