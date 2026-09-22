@@ -2,10 +2,10 @@
 # is deliberately kept away from.
 #
 # GSEA runs beside compound ORA, not instead of it, and its rows never enter
-# `pathway_tables`. That separation is structural rather than a filter:
-# merge_pathway_pvalues() aggregates a layer with FUN = min and no method
-# filter, so a GSEA row sitting beside an ORA row would silently become the
-# metabolomics p-value feeding the cross-omics meta-analysis.
+# `pathway_tables`, which drive the per-layer figures and the ORA figure. It
+# reaches the cross-omics meta-analysis through its own `rank_tables` argument,
+# where merge_pathway_pvalues() picks one method per layer instead of taking
+# the minimum across methods (see test-cross-omics-method-selection.R).
 #
 # Nothing here touches the network. The compound-pathway table is injected, and
 # the one function that reads it from disk reads a cache and never fetches.

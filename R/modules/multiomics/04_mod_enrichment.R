@@ -48,10 +48,11 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # Scored before the per_omics guard below, and kept out of per_omics
     # entirely. Two separate reasons, both deliberate:
     #
-    # Out of per_omics, because everything there becomes pathway_tables and
-    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
-    # and no method filter -- a GSEA row there would quietly become the
-    # metabolomics p-value feeding Stouffer.
+    # Out of per_omics, because per_omics drives the per-layer bar plots, CSVs
+    # and the ORA figure, which are ORA's. It reaches the meta-analysis through
+    # its own argument instead (rank_tables below), where
+    # merge_pathway_pvalues() picks one method per layer -- rank-based where a
+    # layer has it -- rather than taking the minimum across methods.
     #
     # Before the guard, because GSEA does not depend on any ORA table. A run
     # where no layer produced an enriched table is precisely a run where ranked
@@ -126,18 +127,30 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # shows them beside the one-layer results as though they were current.
     .clear_collection_heatmaps(out_dir)
 
+    # Compound GSEA joins the meta-analysis as the metabolomics layer's
+    # rank-based evidence. A metabolomics layer whose ORA found nothing still
+    # counts here, which is the case this exists for: no compound passing the
+    # DE threshold leaves ORA empty, while GSEA scores every measured compound.
+    rank_tables <- if (!is.null(compound_gsea) && nrow(compound_gsea) > 0) {
+        list(metabolomics = compound_gsea)
+    } else {
+        list()
+    }
+    n_layers <- length(union(names(per_omics), names(rank_tables)))
+
     cross_omics_enrich <- NULL
-    if (length(per_omics) >= 2) {
+    if (n_layers >= 2) {
         cross_omics_enrich <- analyze_cross_omics_enrichment(
             enrichment_results = per_omics,
             config = config,
-            out_dir = out_dir
+            out_dir = out_dir,
+            rank_tables = rank_tables
         )
         if (!is.null(cross_omics_enrich)) {
             write_cross_omics_enrichment(cross_omics_enrich, out_dir)
         }
     } else {
-        message("  Only ", length(per_omics), " omics with enrichment results; ",
+        message("  Only ", n_layers, " omics with enrichment results; ",
                 "skipping cross-omics comparison (need >= 2)")
     }
 
@@ -228,15 +241,27 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
                 }
             }
 
-            message("    ", cname, ": ", length(per_omics_contrast),
-                    " omics (", paste(names(per_omics_contrast), collapse = ", "), ")")
+            # The same contrast's compound GSEA rows, matched on the contrast
+            # key rather than the raw name: the layers spell one comparison
+            # differently, and per_omics was mapped to canonical names above.
+            rank_contrast <- lapply(rank_tables, function(df) {
+                if (!"contrast" %in% names(df)) return(df)
+                df[normalize_contrast_key(df$contrast) == normalize_contrast_key(cname),
+                   , drop = FALSE]
+            })
+            rank_contrast <- Filter(function(df) nrow(df) > 0, rank_contrast)
+            contrast_layers <- union(names(per_omics_contrast), names(rank_contrast))
 
-            if (length(per_omics_contrast) >= 2) {
+            message("    ", cname, ": ", length(contrast_layers),
+                    " omics (", paste(contrast_layers, collapse = ", "), ")")
+
+            if (length(contrast_layers) >= 2) {
                 cross_contrast <- tryCatch({
                     analyze_cross_omics_enrichment(
                         enrichment_results = per_omics_contrast,
                         config = config,
-                        out_dir = contrast_out
+                        out_dir = contrast_out,
+                        rank_tables = rank_contrast
                     )
                 }, error = function(e) {
                     message("    Cross-omics enrichment failed for ", cname, ": ", e$message)

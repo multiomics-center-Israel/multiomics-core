@@ -1616,6 +1616,10 @@ run_gsea_kegg <- function(de_mapped, kegg_org, min_gs, max_gs, pval_cutoff) {
                 padj = df$p.adjust,
                 NES = df$NES,
                 setSize = df$setSize,
+                # Said outright, as the other producers do: the cross-omics
+                # merge chooses rank-based rows by this column, and an unlabelled
+                # GSEA row would be treated as a method it cannot identify.
+                method = "gsea",
                 stringsAsFactors = FALSE
             )
             # Filter: prefer padj, fall back to pvalue < 0.05
@@ -1810,8 +1814,18 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
 #' @param enrichment_results Named list of enrichment data frames per omics
 #' @param config Full config object
 #' @param out_dir Output directory for plots
-#' @return List with: combined_pathways, meta_analysis, plots
-analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir = NULL) {
+#' @param rank_tables Optional named list of rank-based result tables per omics
+#'   that are not part of \code{enrichment_results} -- compound GSEA for
+#'   metabolomics, which is kept out of the per-omics tables on purpose. Their
+#'   rows join that layer's evidence for the meta-analysis only, where
+#'   \code{merge_pathway_pvalues()} picks one method per layer; the per-omics
+#'   bar plots, CSVs and the ORA figure are drawn from \code{enrichment_results}
+#'   alone. A layer present only here still counts towards the two needed.
+#' @return List with: common_pathways, union_pathways, meta_analysis,
+#'   pathway_tables, layer_methods (the test each layer contributed to the
+#'   meta-analysis, named by layer) and plots
+analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir = NULL,
+                                           rank_tables = NULL) {
 
     # Cleared before anything can return, not beside the code that writes the
     # figures. These two are now written one per gene-set collection, and which
@@ -1827,18 +1841,20 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         .clear_collection_heatmaps(out_dir)
     }
 
-    if (length(enrichment_results) < 2) {
+    rank_tables <- .usable_rank_tables(rank_tables)
+
+    if (length(union(names(enrichment_results), names(rank_tables))) < 2) {
         message("Cross-omics enrichment requires >= 2 omics layers with enrichment results")
         return(NULL)
     }
 
     message("Analyzing cross-omics pathway enrichment...")
 
-    omics <- names(enrichment_results)
+    omics <- union(names(enrichment_results), names(rank_tables))
 
     # Extract pathway-level results from each omics
     pathway_tables <- list()
-    for (om in omics) {
+    for (om in names(enrichment_results)) {
         enrich_res <- enrichment_results[[om]]
 
         if (is.data.frame(enrich_res) && nrow(enrich_res) > 0) {
@@ -1851,7 +1867,16 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         }
     }
 
-    if (length(pathway_tables) < 2) {
+    # What the meta-analysis reads: each layer's own table plus any rank-based
+    # rows supplied beside it. pathway_tables stays exactly what the layers
+    # handed over, because it drives the per-layer figures and CSVs.
+    merge_tables <- pathway_tables
+    for (om in names(rank_tables)) {
+        merge_tables[[om]] <- .rbind_fill(list(merge_tables[[om]], rank_tables[[om]]))
+    }
+    omics <- intersect(omics, names(merge_tables))
+
+    if (length(merge_tables) < 2) {
         warning("Insufficient pathway tables for cross-omics enrichment")
         return(NULL)
     }
@@ -1863,7 +1888,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # KEGG description at all.
     kegg_org <- resolve_kegg_org_code(config$global$organism)
 
-    all_pathways <- lapply(pathway_tables, function(df) {
+    all_pathways <- lapply(merge_tables, function(df) {
         keys <- pathway_join_key(df, kegg_org)
         keys[!is.na(keys)]
     })
@@ -1911,18 +1936,32 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         use_pathways <- use_pathways[
             keep_kegg_pathways(use_pathways, exclude = excl, kegg_org = kegg_org,
                                label = "cross-omics pathways")]
-        pathway_tables <- lapply(pathway_tables, function(df) {
+        drop_excluded <- function(df) {
             col <- if ("ID" %in% names(df)) "ID"
                    else if ("pathway" %in% names(df)) "pathway" else NULL
             if (is.null(col) || nrow(df) == 0) return(df)
             df[keep_kegg_pathways(df[[col]], exclude = excl, kegg_org = kegg_org,
                                   label = "per-omics pathways"), , drop = FALSE]
-        })
+        }
+        pathway_tables <- lapply(pathway_tables, drop_excluded)
+        merge_tables <- lapply(merge_tables, drop_excluded)
     }
 
-    # Merge pathway p-values for meta-analysis
-    merged_pathways <- merge_pathway_pvalues(pathway_tables, use_pathways, omics,
+    # Merge pathway p-values for meta-analysis, one method per layer -- see
+    # merge_pathway_pvalues(). The method each layer contributed is recorded
+    # beside its p-values, so the table says what was combined.
+    merged_pathways <- merge_pathway_pvalues(merge_tables, use_pathways, omics,
                                               kegg_org = kegg_org)
+    layer_methods <- vapply(omics, function(om) {
+        col <- paste0("method_", om)
+        vals <- if (col %in% names(merged_pathways)) merged_pathways[[col]] else NA
+        vals <- unique(vals[!is.na(vals)])
+        if (length(vals) == 0) NA_character_ else vals[1]
+    }, character(1))
+    message("  Meta-analysis p-values per layer: ",
+            paste(sprintf("%s = %s", omics, ifelse(is.na(layer_methods), "none",
+                                                   layer_methods)),
+                  collapse = "; "))
 
     # Combine p-values using Stouffer's method. Every candidate pathway gets a
     # row: the ones a single layer enriched are kept and carry n_omics = 1,
@@ -1932,7 +1971,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
 
     # The key joined the layers; the label is what a reader sees. Both are kept,
     # so the table can be traced back to the accession that produced a row.
-    meta_results <- attach_pathway_display_names(meta_results, pathway_tables,
+    meta_results <- attach_pathway_display_names(meta_results, merge_tables,
                                                   kegg_org = kegg_org)
 
     # Sort by combined p-value
@@ -2063,8 +2102,42 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         union_pathways = union_pathways,
         meta_analysis = meta_results,
         pathway_tables = pathway_tables,
+        layer_methods = layer_methods,
         plots = plots
     )
+}
+
+
+#' Keep the rank-based rows of the supplementary tables, and only those
+#'
+#' \code{analyze_cross_omics_enrichment()} accepts these tables precisely
+#' because they are rank-based, so that is checked rather than assumed. A table
+#' with no `method` column cannot be confirmed and is refused with a warning --
+#' the same fail-closed rule the ORA figure applies to ORA membership. Rows of
+#' any other method are dropped quietly; a table left with none is dropped.
+#'
+#' @param rank_tables Named list of data frames, or NULL.
+#' @return Named list holding only the usable tables, each reduced to its
+#'   rank-based rows; an empty list when nothing is usable.
+#' @keywords internal
+.usable_rank_tables <- function(rank_tables) {
+    if (is.null(rank_tables) || length(rank_tables) == 0) return(list())
+
+    out <- list()
+    for (om in names(rank_tables)) {
+        df <- rank_tables[[om]]
+        if (!is.data.frame(df) || nrow(df) == 0) next
+        if (!"method" %in% names(df)) {
+            warning("Ignoring the rank-based table supplied for ", om,
+                    ": it has no method column, so its rows cannot be ",
+                    "confirmed as rank-based")
+            next
+        }
+        is_rank <- !is.na(df$method) &
+            tolower(as.character(df$method)) %in% .RANK_BASED_METHODS
+        if (any(is_rank)) out[[om]] <- df[is_rank, , drop = FALSE]
+    }
+    out
 }
 
 
@@ -2502,6 +2575,14 @@ disambiguate_pathway_labels <- function(labels, keys = NULL) {
 
 #' Merge pathway p-values from multiple omics
 #'
+#' Each layer contributes one kind of test, chosen by
+#' \code{select_layer_method_rows()}: its rank-based rows (fgsea / GSEA) where it
+#' has any, otherwise its ORA rows. Choosing one column for the whole table used
+#' to decide this by accident -- `pvalue` was taken before `pval`, so a layer
+#' holding ORA rows in `pvalue` beside fgsea rows in `pval` contributed its ORA
+#' rows only, while a layer scored by GSEA alone contributed GSEA, and Stouffer
+#' then combined unlike tests.
+#'
 #' @param pathway_tables Named list of per-omics enrichment data frames.
 #' @param target_pathways Character vector of join keys to report on, as produced
 #'   by \code{pathway_join_key()}.
@@ -2509,7 +2590,9 @@ disambiguate_pathway_labels <- function(labels, keys = NULL) {
 #'   merge, in order.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @return Data frame with one row per element of \code{target_pathways}: a
-#'   \code{norm_id} column and one \code{pval_<omics>} column per layer.
+#'   \code{norm_id} column, and per layer a \code{pval_<omics>} column holding the
+#'   raw p-value and a \code{method_<omics>} column naming the test it came from
+#'   (NA where that layer has no p-value for the pathway).
 merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
                                    kegg_org = NULL) {
 
@@ -2528,37 +2611,28 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
             next
         }
 
-        # Identify p-value column
-        pval_col <- if ("pvalue" %in% names(df)) "pvalue"
-                    else if ("pval" %in% names(df)) "pval"
-                    else if ("p.adjust" %in% names(df)) "p.adjust"
-                    else if ("padj" %in% names(df)) "padj"
-                    else NULL
-
-        if (is.null(pval_col)) {
+        pvals <- .raw_p_values(df)
+        if (is.null(pvals)) {
             warning("Cannot identify p-value column in ", om, " enrichment table")
             next
         }
 
+        chosen <- select_layer_method_rows(df, pvals)
+
         # One row per key, as before: contrasts and now also KEGG prefix variants
-        # of one pathway collapse to their best p-value. The result having unique
-        # keys is what keeps the merge below one-to-one, so no layer can multiply
+        # of one pathway collapse to their best p-value -- within the one method
+        # chosen above, never across methods. The result having unique keys is
+        # what keeps the merge below one-to-one, so no layer can multiply
         # another's rows. Rows with no key or no p-value are dropped first, which
         # is what the formula form of aggregate() used to do via na.omit.
-        # Converted only when it is not already numeric: as.numeric() on a factor
-        # returns level codes, and round-tripping a double through as.character()
-        # would cost precision the p-values cannot spare.
-        pvals <- df[[pval_col]]
-        if (!is.numeric(pvals)) {
-            pvals <- suppressWarnings(as.numeric(as.character(pvals)))
-        }
-        usable <- !is.na(keys) & !is.na(pvals)
+        usable <- chosen$keep & !is.na(keys) & !is.na(pvals)
         if (!any(usable)) next
 
         df_agg <- aggregate(list(pval = pvals[usable]),
                             by = list(norm_id = keys[usable]),
                             FUN = min)
         colnames(df_agg) <- c("norm_id", paste0("pval_", om))
+        df_agg[[paste0("method_", om)]] <- chosen$method
 
         # Subset to target pathways
         df_sub <- df_agg[df_agg$norm_id %in% target_pathways, , drop = FALSE]
@@ -2568,6 +2642,109 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
     }
 
     merged
+}
+
+
+#' Methods the cross-omics merge treats as rank-based
+#'
+#' `fgsea` is what \code{run_pathway_analysis()} and \code{run_compound_gsea()}
+#' write; `gsea` is what \code{run_gsea_kegg()} writes. Both score a ranked list
+#' of every measured feature, with no significance cutoff upstream, which is why
+#' they are preferred: a layer can carry evidence here without any feature
+#' passing its DE threshold.
+#' @keywords internal
+.RANK_BASED_METHODS <- c("fgsea", "gsea")
+
+
+#' Raw p-value for each row, whichever column carries it
+#'
+#' Resolved per row, like \code{.ora_adjusted_p_values()} and for the same
+#' reason: \code{extract_enrichment_df()} binds heterogeneous sub-results with
+#' \code{dplyr::bind_rows()}, so one layer can hold fgsea rows carrying `pval`
+#' beside ORA rows carrying `pvalue`. Picking one column for the table reads NA
+#' for every row that used the other.
+#'
+#' Only when a table carries neither raw column does this fall back to an
+#' adjusted one, which is what the merge did before; that fallback is kept for
+#' tables from producers that export nothing else, not as a preference.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @return Numeric vector, one per row of \code{df} (NA where no accepted column
+#'   carries a value), or NULL when the table has no p-value column at all.
+#' @examples
+#' .raw_p_values(data.frame(pvalue = c(0.01, NA), pval = c(NA, 0.02)))  # 0.01 0.02
+#' @keywords internal
+.raw_p_values <- function(df) {
+    cols <- intersect(c("pvalue", "pval"), names(df))
+    if (length(cols) == 0) cols <- intersect(c("p.adjust", "padj"), names(df))[1]
+    if (length(cols) == 0 || all(is.na(cols))) return(NULL)
+
+    vals <- rep(NA_real_, nrow(df))
+    for (col in cols) {
+        # Converted only when it is not already numeric: as.numeric() on a factor
+        # returns level codes, and round-tripping a double through as.character()
+        # would cost precision the p-values cannot spare.
+        v <- df[[col]]
+        if (!is.numeric(v)) v <- suppressWarnings(as.numeric(as.character(v)))
+        fill <- is.na(vals) & !is.na(v)
+        vals[fill] <- v[fill]
+    }
+    vals
+}
+
+
+#' Choose one kind of test for a layer's rows
+#'
+#' Rank-based rows (see \code{.RANK_BASED_METHODS}) win when the layer has any
+#' with a p-value; otherwise ORA rows; otherwise every row, as before. Rows whose
+#' `method` is missing are left out whenever a known method was chosen, because
+#' they cannot be shown to belong to it -- \code{dplyr::bind_rows()} NA-fills the
+#' column when a layer stacks tables that do not all carry it.
+#'
+#' A table with no `method` column at all is used whole and labelled
+#' "unspecified". Refusing it, as the ORA figure does, would drop layers that
+#' custom producers hand over with p-values and nothing else, and the merge has
+#' accepted those since it was written.
+#'
+#' The choice is made per layer, not per contrast: the run-level merge collapses
+#' contrasts to their best p-value, and that minimum must not range over two
+#' different tests either. A layer whose contrasts were scored by different
+#' methods therefore contributes its rank-based contrasts only at run level; the
+#' per-contrast calls still see each contrast's own rows.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @param pvals Raw p-values for its rows, from \code{.raw_p_values()}.
+#' @return List with `keep` (logical, one per row of \code{df}) and `method`
+#'   (single string naming the test the kept rows come from; several unknown
+#'   methods are joined with "+").
+#' @examples
+#' df <- data.frame(ID = c("map00010", "map00010"), method = c("ora", "fgsea"),
+#'                  pvalue = c(0.001, NA), pval = c(NA, 0.2))
+#' select_layer_method_rows(df, .raw_p_values(df))$method   # "fgsea"
+select_layer_method_rows <- function(df, pvals) {
+    n <- nrow(df)
+    if (!"method" %in% names(df)) {
+        return(list(keep = rep(TRUE, n), method = "unspecified"))
+    }
+
+    m <- tolower(trimws(as.character(df$method)))
+    m[!is.na(m) & !nzchar(m)] <- NA_character_
+    has_p <- !is.na(pvals)
+
+    rank_rows <- !is.na(m) & m %in% .RANK_BASED_METHODS & has_p
+    if (any(rank_rows)) {
+        return(list(keep = rank_rows,
+                    method = paste(sort(unique(m[rank_rows])), collapse = "+")))
+    }
+
+    ora_rows <- !is.na(m) & m == "ora" & has_p
+    if (any(ora_rows)) {
+        return(list(keep = ora_rows, method = "ora"))
+    }
+
+    known <- sort(unique(m[!is.na(m)]))
+    list(keep = rep(TRUE, n),
+         method = if (length(known) == 0) "unspecified" else paste(known, collapse = "+"))
 }
 
 
