@@ -2241,6 +2241,14 @@ function clearBoxplot() {
     document.getElementById("boxplot_export_bar").style.display = "none";
 }
 
+// A cell counts as measured only if it survived as a number. Missing
+// intensities arrive as null, and isNaN(null) is false because Number(null) is
+// 0 -- so a plain !isNaN() test keeps nulls, averages them in as real zeros and
+// counts them toward N. Same guard the peptide explorer uses.
+function bpIsMeasured(v) {
+    return v !== null && v !== undefined && !isNaN(v);
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2260,7 +2268,12 @@ function renderMultiBoxplot() {
         uniqueGroups.forEach(function(g, gi) {
             var gValues = [], gSamples = [];
             for (var i = 0; i < values.length; i++) {
-                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+                // Value and sample name are pushed together: the hover text is
+                // positional, so dropping one without the other mislabels points.
+                if (groups[i] === g && bpIsMeasured(values[i])) {
+                    gValues.push(values[i]);
+                    gSamples.push(samples[i]);
+                }
             }
             traces.push({
                 y: gValues, type: "box", name: g,
@@ -2275,7 +2288,15 @@ function renderMultiBoxplot() {
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: bpGroupLabel },
+            // Seed the axis with every group in first-appearance order. A group
+            // with nothing measured has an empty trace, which contributes no
+            // category of its own and would otherwise drop off the axis.
+            xaxis: {
+                title: bpGroupLabel,
+                type: "category",
+                categoryorder: "array",
+                categoryarray: uniqueGroups
+            },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },
             boxgap: 0.3
@@ -2289,7 +2310,7 @@ function renderMultiBoxplot() {
             selectedGenes.forEach(function(sg) {
                 var values = geneExprData.expr[sg.idx];
                 for (var i = 0; i < values.length; i++) {
-                    if (groups[i] === g) {
+                    if (groups[i] === g && bpIsMeasured(values[i])) {
                         xVals.push(sg.name);
                         yVals.push(values[i]);
                         sampleTexts.push(samples[i]);
@@ -2326,9 +2347,27 @@ function renderMultiBoxplot() {
 
     // Show info
     var infoLines = selectedGenes.map(function(sg) {
-        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
-        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " (" + vals.length + " samples)";
+        var values = geneExprData.expr[sg.idx];
+        var vals = values.filter(bpIsMeasured);
+        var txt = "<strong>" + sg.name + "</strong>: ";
+        if (vals.length > 0) {
+            var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+            txt += "mean " + mean.toFixed(3) + " (" + vals.length + " measured samples)";
+        } else {
+            txt += "no measured values";
+        }
+        // Name the groups with nothing measured. An empty box should read as
+        // "not detected in this group", never as a plot that failed to draw.
+        var emptyGroups = uniqueGroups.filter(function(g) {
+            for (var i = 0; i < values.length; i++) {
+                if (groups[i] === g && bpIsMeasured(values[i])) return false;
+            }
+            return true;
+        });
+        if (emptyGroups.length > 0) {
+            txt += " &mdash; no measured values in: " + emptyGroups.join(", ");
+        }
+        return txt;
     });
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
@@ -2901,8 +2940,18 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Ov
 ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora.*\\.csv$", full.names = TRUE)
 if (length(ora_files) > 0) {
     for (of in ora_files) {
-        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", basename(of))
+        fname <- basename(of)
+        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", fname)
         label_clean <- gsub("_", " ", label)
+        # The direction was stripped along with the suffix, so a database with
+        # both files produced two sections headed identically. Tested explicitly
+        # rather than with a backreference: the file pattern admits other
+        # suffixes, and a non-matching sub() would return the whole filename.
+        if (grepl("_ora_up\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(up-regulated)")
+        } else if (grepl("_ora_down\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(down-regulated)")
+        }
 
         ora_df <- read.csv(of, stringsAsFactors = FALSE)
         # Support both column names: padj (our pipeline) and p.adjust (clusterProfiler)
