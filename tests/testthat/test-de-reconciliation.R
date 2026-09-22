@@ -145,10 +145,12 @@ test_that("the pooled value is at or above the mean of the per-run log2FCs", {
     expect_true(all(rec$jensen_gap > 1e-6))
 })
 
-test_that("the gap is exactly zero for a feature whose runs agree", {
-    # p1's runs are identical, as they are for a feature measured in every
-    # sample: nothing was imputed, so every draw saw the same matrix entries.
-    # The other three disagree.
+test_that("the gap is zero for a feature whose estimates are all the same", {
+    # One example of a zero gap, not the condition for one: p1's runs are
+    # identical, as they are for a feature measured in every sample, where
+    # nothing was imputed and every draw saw the same matrix entries. The
+    # degenerate case -- only one run with an estimate at all -- is covered by
+    # the NA test below, and also gives a zero gap.
     cfg <- recon_config()
     rec <- build_de_reconciliation_proteomics(
         recon_de_res(spread = c(0, 0.4, 0.4, 0.4), config = cfg), cfg)
@@ -266,6 +268,14 @@ test_that("runs that differ only by an NA are not mistaken for identical runs", 
     expect_equal(p1$log2FC.from_mean_ratio, p1$log2FC.imputs)
     expect_equal(p1$delta.linearRatio, 0, tolerance = 1e-12)
     expect_equal(p1$delta.log2FC, 0, tolerance = 1e-12)
+
+    # The gap is 0 here although the runs are plainly NOT identical. Both sides
+    # rest on the single estimate that exists, so the condition for a zero gap
+    # is that the estimates which EXIST are equal -- not that every run agrees.
+    # "Every run agrees" would have described this row as agreement between two
+    # estimates when there is only one.
+    expect_equal(p1$jensen_gap, 0, tolerance = 1e-12)
+    expect_false(identical(p1$run1.log2FC, p1$run2.log2FC))
 })
 
 test_that("a single run produces no sheet rather than a zero-delta one", {

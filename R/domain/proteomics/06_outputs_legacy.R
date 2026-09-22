@@ -383,8 +383,13 @@ build_group_cv_proteomics <- function(pre, contrasts_df, config = NULL) {
 #' \code{jensen_gap} is the reason the two cannot be collapsed into one column.
 #' The mean of a set of ratios is not the ratio implied by the mean of their
 #' logs, so \code{log2FC.imputs} sits at or above \code{mean.log2FC.runs}, with
-#' equality exactly when every run agrees — which is the case for a feature
-#' that was measured in every sample and so had nothing imputed.
+#' equality when every per-run estimate that EXISTS is the same value. Runs
+#' that produced no estimate do not enter it: the pooling drops them with
+#' \code{na.rm = TRUE} and so does \code{mean.log2FC.runs}, so a feature only
+#' one run could estimate has a zero gap while its runs are plainly not
+#' identical. A feature measured in every sample is the common example of a
+#' zero gap — nothing was imputed, so every run saw the same values — but it is
+#' an example, not the condition.
 #'
 #' Nothing here is a matrix: these are aggregates over fits that already
 #' happened, and no model was fitted to any of these values.
