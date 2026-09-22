@@ -2241,10 +2241,13 @@ function clearBoxplot() {
     document.getElementById("boxplot_export_bar").style.display = "none";
 }
 
-// A cell counts as measured only if it survived as a number. Missing
-// intensities arrive as null, and isNaN(null) is false because Number(null) is
-// 0 -- so a plain !isNaN() test keeps nulls, averages them in as real zeros and
-// counts them toward N. Same guard the peptide explorer uses.
+// One explicit test for what counts as a measured value, shared by every site
+// that reads an expression array. Missing intensities reach the browser as the
+// string "NA" -- that is how jsonlite writes NA in a numeric vector -- and
+// isNaN() is what rejects those. The null test covers the one case isNaN()
+// alone would accept: Number(null) is 0, so a null would read as a measured
+// zero if the serialisation ever changed. The peptide explorer already tested
+// null this way; this puts the same test in one place for all four sites.
 function bpIsMeasured(v) {
     return v !== null && v !== undefined && !isNaN(v);
 }
@@ -2268,8 +2271,11 @@ function renderMultiBoxplot() {
         uniqueGroups.forEach(function(g, gi) {
             var gValues = [], gSamples = [];
             for (var i = 0; i < values.length; i++) {
-                // Value and sample name are pushed together: the hover text is
-                // positional, so dropping one without the other mislabels points.
+                // Every sample in the group used to be pushed, missing ones
+                // included, so the trace carried non-numeric placeholders that
+                // Plotly silently declines to plot. Value and sample name are
+                // dropped together: the hover text is positional, so filtering
+                // one without the other would mislabel points.
                 if (groups[i] === g && bpIsMeasured(values[i])) {
                     gValues.push(values[i]);
                     gSamples.push(samples[i]);
@@ -2289,8 +2295,10 @@ function renderMultiBoxplot() {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
             // Seed the axis with every group in first-appearance order. A group
-            // with nothing measured has an empty trace, which contributes no
-            // category of its own and would otherwise drop off the axis.
+            // with nothing measured has no plottable point either way -- an
+            // empty trace now, a trace of unplottable placeholders before -- so
+            // it contributes no category of its own and drops off the axis
+            // entirely unless the categories are stated here.
             xaxis: {
                 title: bpGroupLabel,
                 type: "category",
