@@ -6,8 +6,8 @@
 # little or nothing -- an unmoderated paired t-test, or plain limma on a paired
 # design -- could not reach its report at all.
 #
-# Two runs died this way: the first Levenberg run (0 features, unblocked limma)
-# and the paired t-test comparison run.
+# Two runs died this way: an unblocked limma fit that returned 0 features, and
+# a paired t-test comparison run.
 
 test_that("run_clustering still refuses an empty feature set", {
     # The low-level contract is unchanged: it is the caller's job to check.
