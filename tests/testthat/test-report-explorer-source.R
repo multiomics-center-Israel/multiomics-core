@@ -135,9 +135,9 @@ test_that("the explorer stays unavailable without an aligned measured matrix", {
     # the primary only assigns inside its match guard, the fallback nulls out.
     expect_match(txt, "length(expr_cols_exp) > 0 && id_col_exp %in% names(final_df)",
                  fixed = TRUE)
-    expect_match(txt, "else norm_expr_exp <- NULL", fixed = TRUE)
+    expect_match(txt, "else measured_expr_exp <- NULL", fixed = TRUE)
     # And readiness is gated on having one.
-    expect_match(txt, "!is.null(norm_expr_exp) && !is.null(meta_df_exp)", fixed = TRUE)
+    expect_match(txt, "!is.null(measured_expr_exp) && !is.null(meta_df_exp)", fixed = TRUE)
 })
 
 test_that("the unavailable message says what is missing and what was refused", {
@@ -259,6 +259,16 @@ test_that("every overlay point keeps the group it came from", {
     expect_equal(length(grep("traces.push(bpOverlayTrace(", body, fixed = TRUE)), 1L)
     expect_false(any(grepl("bpImputedPoints(sg.idx, pi", body, fixed = TRUE)))
     expect_match(txt, "sgPts = sgPts.concat(bpImputedPoints(geneIdx, gi, g));", fixed = TRUE)
+})
+
+test_that("the overlay marker is actually visible", {
+    # An open symbol is drawn with marker.color: that attribute IS the outline,
+    # and marker.line does not supply it. A transparent marker.color therefore
+    # renders nothing at all -- the control would appear to do nothing.
+    txt <- paste(code_only(explorer_chunk("protein-explorer-js")), collapse = "\n")
+
+    expect_match(txt, 'color: "#8c8c8c", size: 9, symbol: "circle-open"', fixed = TRUE)
+    expect_false(grepl('color: "rgba(0,0,0,0)"', txt, fixed = TRUE))
 })
 
 test_that("the multi-protein view says why it draws no overlay", {

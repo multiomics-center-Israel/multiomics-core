@@ -2438,9 +2438,13 @@ function bpOverlayTrace(points) {
         showlegend: false,
         hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input: %{y:.3f}" +
                        "<extra>Imputed &mdash; model input</extra>",
+        // An open symbol is drawn with marker.color, which IS its outline --
+        // there is no fill to suppress and marker.line does not supply that
+        // stroke. A transparent marker.color here made every overlay point
+        // invisible, which is to say the whole feature did nothing.
         marker: {
-            color: "rgba(0,0,0,0)", size: 9, symbol: "circle-open",
-            line: { color: "#8c8c8c", width: 2 }
+            color: "#8c8c8c", size: 9, symbol: "circle-open",
+            line: { width: 2 }
         }
     };
 }
