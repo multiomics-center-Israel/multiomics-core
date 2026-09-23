@@ -1828,25 +1828,6 @@ if (length(main_files) > 0) {
 }
 ```
 
-```{r mofa-loadings-log2fc, eval=has_mofa, results='asis'}
-mofa_lfc_plots <- list.files(mofa_dir, pattern = "mofa_loadings_log2fc_.*\\.png$", full.names = TRUE)
-if (length(mofa_lfc_plots) > 0) {
-    cat("\n### Weights Colored by log2FC {.unnumbered}\n\n")
-    seen_contrasts <- character(0)
-    for (lp in mofa_lfc_plots) {
-        contrast_label <- gsub("mofa_loadings_log2fc_|\\.png$", "", basename(lp))
-        contrast_label <- gsub("\\.", " ", contrast_label)
-        dedup_key <- tolower(gsub("\\s+", "", contrast_label))
-        if (dedup_key %in% seen_contrasts) next
-        seen_contrasts <- c(seen_contrasts, dedup_key)
-        cat(sprintf("#### %s {.unnumbered}\n\n", contrast_label))
-        cat(sprintf("![MOFA2 Weights log2FC - %s](%s)\n\n", contrast_label, lp))
-    }
-    figure_legend("MOFA2 weights (Factor 1 vs Factor 2) colored by log2 fold-change from differential expression. Red indicates upregulation, blue indicates downregulation. Faceted by omics view; top features are labeled.")
-    render_commentary("mofa_loadings_log2fc")
-}
-```
-
 ## Loadings-Based Pathway Enrichment {.tabset}
 
 ```{r loadings-enrich-note, eval=!has_loadings_enrich, results='asis'}

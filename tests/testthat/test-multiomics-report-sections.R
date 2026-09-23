@@ -227,10 +227,12 @@ test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone
     src <- paste(template_lines(), collapse = "\n")
     for (gone in c("multigsea-plots", "multigsea-note",
                    "diablo-loadings-log2fc", "diablo_loadings_log2fc",
-                   "Loadings Colored by log2FC")) {
+                   "Loadings Colored by log2FC",
+                   "mofa-loadings-log2fc", "mofa_loadings_log2fc",
+                   "Weights Colored by log2FC")) {
         expect_false(grepl(gone, src, fixed = TRUE), info = gone)
     }
-    # The per-contrast MultiGSEA tab and the MOFA equivalent stay.
+    # The per-contrast MultiGSEA tab and the loadings enrichment stay.
     expect_true(grepl("multigsea-per-contrast", src, fixed = TRUE))
-    expect_true(grepl("mofa-loadings-log2fc", src, fixed = TRUE))
+    expect_true(grepl("Loadings-Based Pathway Enrichment", src, fixed = TRUE))
 })
