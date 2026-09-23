@@ -2028,6 +2028,16 @@ if (length(heatmap_files) > 0) {
 ```{r protein-explorer-heading, eval=show_protein_explorer, results='asis'}
 cat("## Protein Expression Explorer\n\n")
 cat("The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.\n\n")
+cat("These are **measured** values: the filtered, normalised intensities with missing measurements left missing. A protein not detected in a sample contributes nothing here, rather than a stand-in value, so a group with no detections is shown as an empty slot and the reported mean and sample count cover only what was measured.\n\n")
+
+# The reconciliation a reader needs, claiming only what is true in every
+# configuration. Deliberately says nothing about how the fold changes were
+# produced: with de$method ttest or welch they ARE a difference of group means
+# (05c_de_ttest.R), an unblocked limma coefficient can equal one too, and with
+# an externally precomputed DE table the pipeline computed none of them. What
+# holds regardless is that they come from the differential analysis rather than
+# from the measured-only means drawn here, so they MAY differ -- not must.
+cat("Fold changes reported elsewhere in this report are taken from the differential-analysis results and are not recomputed from the measured-only means shown here. They may therefore differ from the difference between the displayed group means.\n\n")
 ```
 
 ```{r protein-explorer-data, eval=show_protein_explorer, include=FALSE}
@@ -2063,12 +2073,25 @@ if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
         }
     }
 
-    # Fallback: imputed expression file
+    # Measured fallback: the filtered, unimputed matrix, named exactly.
+    #
+    # This used to be list.files(pattern = "imputed.*\\.tsv$"), which is not
+    # anchored -- it matches protein_log2_filtered_unimputed.tsv as readily as
+    # protein_log2_filtered_imputed_once_*.tsv, and list.files() sorts, so the
+    # imputed file came first and won. The explorer then plotted imputed
+    # intensities, labelled them measured, and averaged them into a mean the
+    # reader had no way to distinguish from a measured one.
+    #
+    # The measured source is named, never matched: only final_results.tsv's
+    # <sample> block and this file carry measured values with their missing
+    # entries intact. If neither is available the explorer stays unavailable,
+    # because showing the model input here would answer a different question
+    # than the one the reader is asking.
     if (is.null(norm_expr_exp)) {
-        imp_files <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)
-        if (length(imp_files) > 0) {
+        unimputed_file <- file.path(datasets_dir, "protein_log2_filtered_unimputed.tsv")
+        if (file.exists(unimputed_file)) {
             norm_expr_exp <- tryCatch(
-                read.delim(imp_files[1], stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
+                read.delim(unimputed_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
                 error = function(e) NULL
             )
             if (!is.null(norm_expr_exp)) {
@@ -2438,7 +2461,8 @@ document.addEventListener("click", function(e) {
 ```
 
 ```{r protein-explorer-fallback, eval=show_protein_explorer && !explorer_ready, results='asis'}
-cat("*Protein expression explorer not available. Normalized expression matrix not found.*\n")
+cat("*Protein expression explorer not available: measured expression data could not be loaded.*\n\n")
+cat("The explorer needs the measured per-sample values, which come either from the `<sample>` columns of `final_results.tsv` or from `protein_log2_filtered_unimputed.tsv` in the datasets directory. Neither was found with sample columns matching this project's metadata. The imputed matrices are deliberately not used as a substitute: they would fill the plot with modelled values under a measured heading.\n")
 ```
 
 ```{r peptide-explorer-heading, eval=show_peptide_explorer, results='asis'}
