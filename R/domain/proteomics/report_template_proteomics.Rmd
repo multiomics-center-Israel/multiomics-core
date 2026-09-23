@@ -2398,9 +2398,19 @@ function bpToggleImputed(el) {
     if (selectedGenes.length > 0) renderMultiBoxplot();
 }
 
-// The imputed points for one protein, as {pos, value, sample} in a given slot.
-// Deliberately returns a separate collection rather than appending to the
+// The imputed points for one protein in one group, each carrying the group it
+// belongs to. Deliberately a separate collection rather than an append to the
 // measured arrays: these values must never reach a box, a mean or a count.
+//
+// SINGLE-PROTEIN VIEW ONLY. There each group owns a whole x slot, so a point
+// placed at the group index belongs to that group and no other. The multi-protein
+// view separates groups by boxmode "group", which offsets box-family traces
+// within one protein slot -- and offsetgroup/alignmentgroup are attributes of
+// bar, box, violin, histogram, funnel and waterfall, not of scatter. A scatter
+// overlay there would land at the centre of the protein slot regardless of
+// group, which reads as though the value belonged to whichever box it fell
+// nearest. Rather than ship that, the overlay is offered for one protein at a
+// time and the info line says so.
 function bpImputedPoints(geneIdx, pos, groupName) {
     var out = [];
     if (!bpShowImputed || !bpHasImputed()) return out;
@@ -2408,21 +2418,26 @@ function bpImputedPoints(geneIdx, pos, groupName) {
     if (!vals) return out;
     for (var i = 0; i < vals.length; i++) {
         if (geneExprData.groups[i] === groupName && bpIsMeasured(vals[i])) {
-            out.push({ pos: pos, value: vals[i], sample: geneExprData.samples[i] });
+            out.push({
+                pos: pos, value: vals[i],
+                sample: geneExprData.samples[i], group: groupName
+            });
         }
     }
     return out;
 }
 
-function bpOverlayTrace(points, showLegend) {
+function bpOverlayTrace(points) {
     return {
         x: points.map(function(p) { return p.pos; }),
         y: points.map(function(p) { return p.value; }),
         text: points.map(function(p) { return bpEscapeHtml(p.sample); }),
+        customdata: points.map(function(p) { return bpEscapeHtml(p.group); }),
         type: "scatter", mode: "markers",
         name: "Imputed &mdash; model input",
-        showlegend: !!showLegend,
-        hovertemplate: "Sample: %{text}<br>Model input: %{y:.3f}<extra>Imputed &mdash; model input</extra>",
+        showlegend: false,
+        hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input: %{y:.3f}" +
+                       "<extra>Imputed &mdash; model input</extra>",
         marker: {
             color: "rgba(0,0,0,0)", size: 9, symbol: "circle-open",
             line: { color: "#8c8c8c", width: 2 }
@@ -2480,7 +2495,7 @@ function renderMultiBoxplot() {
         uniqueGroups.forEach(function(g, gi) {
             sgPts = sgPts.concat(bpImputedPoints(geneIdx, gi, g));
         });
-        if (sgPts.length > 0) traces.push(bpOverlayTrace(sgPts, false));
+        if (sgPts.length > 0) traces.push(bpOverlayTrace(sgPts));
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
@@ -2537,15 +2552,12 @@ function renderMultiBoxplot() {
                 fillcolor: colors[gi % colors.length] + "33"
             });
         });
-        // As above: a separate trace, positioned by the protein slot so it
-        // lands with the right cluster without joining any box.
-        var mpPts = [];
-        selectedGenes.forEach(function(sg, pi) {
-            uniqueGroups.forEach(function(g) {
-                mpPts = mpPts.concat(bpImputedPoints(sg.idx, pi, g));
-            });
-        });
-        if (mpPts.length > 0) traces.push(bpOverlayTrace(mpPts, true));
+        // No overlay here, deliberately. See bpImputedPoints: groups are
+        // separated by boxmode "group", which only offsets box-family traces,
+        // so a scatter point would sit at the centre of the protein slot with
+        // no way to tell which condition it came from. The info line says the
+        // overlay is a single-protein view rather than leaving the checkbox
+        // looking broken.
 
         var protNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
@@ -2599,6 +2611,12 @@ function renderMultiBoxplot() {
         }
         return txt;
     });
+    // Say why the checkbox drew nothing, rather than leaving it looking broken.
+    if (bpShowImputed && bpHasImputed() && nGenes > 1) {
+        infoLines.push("<em>Imputed model-input values are shown one protein at a time, " +
+                       "so that each point stays attributable to its " + bpEscapeHtml(bpGroupLabel) +
+                       ". Select a single protein to see them.</em>");
+    }
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
 }

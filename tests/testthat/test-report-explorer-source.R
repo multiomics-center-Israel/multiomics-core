@@ -96,9 +96,29 @@ test_that("no imputed matrix is referenced as a source", {
     # The single-imputation QC draw, and the per-run DE matrices.
     expect_false(any(grepl("imputed_once", body, fixed = TRUE)))
     expect_false(any(grepl("imputed_repetitions", body, fixed = TRUE)))
-    # The exported model-input block, which sits beside the measured columns in
-    # the very file this chunk reads.
-    expect_false(any(grepl(".norm", body, fixed = TRUE)))
+})
+
+test_that("the .norm block never becomes the measured matrix", {
+    # 2a forbade `.norm` in this chunk outright, which was right while the
+    # explorer had one layer. 2b reads it deliberately, for the separate
+    # overlay, so the contract is now about WHICH variable it can reach --
+    # not about whether the string may appear.
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+
+    # measured_expr_exp is assigned from the bare sample columns and from the
+    # unimputed fallback. Neither reads a .norm column, and no assignment to it
+    # mentions one.
+    assigns_measured <- grep("measured_expr_exp\\s*<-", body, value = TRUE)
+    expect_gt(length(assigns_measured), 0L)
+    expect_false(any(grepl(".norm", assigns_measured, fixed = TRUE)))
+
+    # The only place .norm is read is the model-input path, and it lands in its
+    # own variable.
+    expect_match(paste(body, collapse = "\n"),
+                 "model_input_exp <- final_df[, norm_cols_exp, drop = FALSE]", fixed = TRUE)
+    # The two layers stay distinct all the way into the payload.
+    expect_match(paste(body, collapse = "\n"), "expr = expr_matrix_list", fixed = TRUE)
+    expect_match(paste(body, collapse = "\n"), "explorer_data$imp <- imp_matrix_list", fixed = TRUE)
 })
 
 
@@ -210,12 +230,43 @@ test_that("overlay points are their own traces, never part of a box", {
 
     # A scatter trace, pushed after the box traces are complete.
     expect_match(txt, 'type: "scatter", mode: "markers"', fixed = TRUE)
-    expect_match(txt, "traces.push(bpOverlayTrace(sgPts, false));", fixed = TRUE)
-    expect_match(txt, "traces.push(bpOverlayTrace(mpPts, true));", fixed = TRUE)
+    expect_match(txt, "traces.push(bpOverlayTrace(sgPts));", fixed = TRUE)
     # The measured arrays that feed the boxes are never appended to from the
     # overlay: gValues/yVals are filled only inside the bpIsMeasured guards.
     expect_false(any(grepl("gValues.push(vals[i])", body, fixed = TRUE)))
     expect_false(any(grepl("yVals.push(geneExprData.imp", body, fixed = TRUE)))
+})
+
+test_that("every overlay point keeps the group it came from", {
+    # The failure this prevents: collecting points from several groups into one
+    # trace positioned by protein alone. In the multi-protein view groups are
+    # separated by boxmode "group", which offsets box-family traces only --
+    # offsetgroup is not a scatter attribute — so such a trace would sit at the
+    # centre of the protein slot and every point would look like it belonged to
+    # whichever box it happened to fall nearest.
+    body <- code_only(explorer_chunk("protein-explorer-js"))
+    txt <- paste(body, collapse = "\n")
+
+    # The group travels with the point, and reaches the hover.
+    expect_match(txt, "sample: geneExprData.samples[i], group: groupName", fixed = TRUE)
+    expect_match(txt, "customdata: points.map(function(p) { return bpEscapeHtml(p.group); })",
+                 fixed = TRUE)
+    expect_match(txt, 'hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input:',
+                 fixed = TRUE)
+
+    # Exactly one overlay trace is pushed, in the single-protein branch, where
+    # the position IS the group index. No protein-indexed overlay exists.
+    expect_equal(length(grep("traces.push(bpOverlayTrace(", body, fixed = TRUE)), 1L)
+    expect_false(any(grepl("bpImputedPoints(sg.idx, pi", body, fixed = TRUE)))
+    expect_match(txt, "sgPts = sgPts.concat(bpImputedPoints(geneIdx, gi, g));", fixed = TRUE)
+})
+
+test_that("the multi-protein view says why it draws no overlay", {
+    # Silence there would read as a broken checkbox.
+    txt <- paste(code_only(explorer_chunk("protein-explorer-js")), collapse = "\n")
+
+    expect_match(txt, "if (bpShowImputed && bpHasImputed() && nGenes > 1) {", fixed = TRUE)
+    expect_match(txt, "one protein at a time", fixed = TRUE)
 })
 
 test_that("the summary line still counts only measured values", {
