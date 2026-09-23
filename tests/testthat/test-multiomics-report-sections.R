@@ -220,3 +220,17 @@ test_that("the DIABLO variable loadings plot is no longer shown", {
     expect_false(grepl("diablo_variable_plot", src, fixed = TRUE))
     expect_false(grepl("diablo-variable", src, fixed = TRUE))
 })
+
+# ---- figures dropped on request --------------------------------------------
+
+test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone", {
+    src <- paste(template_lines(), collapse = "\n")
+    for (gone in c("multigsea-plots", "multigsea-note",
+                   "diablo-loadings-log2fc", "diablo_loadings_log2fc",
+                   "Loadings Colored by log2FC")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    # The per-contrast MultiGSEA tab and the MOFA equivalent stay.
+    expect_true(grepl("multigsea-per-contrast", src, fixed = TRUE))
+    expect_true(grepl("mofa-loadings-log2fc", src, fixed = TRUE))
+})
