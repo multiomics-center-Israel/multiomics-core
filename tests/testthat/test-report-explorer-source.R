@@ -167,3 +167,117 @@ test_that("the heading asserts no DE or imputation provenance", {
     expect_false(any(grepl("imputation$method", body, fixed = TRUE)))
     expect_false(any(grepl(".imp_method_exp", body, fixed = TRUE)))
 })
+
+
+# =============================================================================
+# The model-input overlay
+# =============================================================================
+#
+# The overlay adds ONLY the cells that were not measured and do have a
+# model-input value. Everything below exists to keep that definition in one
+# place and to keep an observed value out of the overlay layer entirely: the
+# matrix is built in R with every non-overlay cell set to NA, so the browser is
+# never in a position to decide what counts as imputed.
+
+test_that("the overlay is paired column by column with the measured block", {
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+    txt <- paste(body, collapse = "\n")
+
+    # Exact <sample>.norm counterparts of the measured columns, by name.
+    expect_match(txt, 'paste0(colnames(measured_expr_exp), ".norm")', fixed = TRUE)
+    # Every one of them, or no overlay: a partial block is a misalignment.
+    expect_match(txt, "all(norm_cols_exp %in% names(final_df))", fixed = TRUE)
+    # Rows aligned by feature id, not by position.
+    expect_match(txt, "model_input_exp[rownames(measured_expr_exp), , drop = FALSE]", fixed = TRUE)
+    expect_match(txt, "identical(dim(model_input_exp), dim(measured_expr_exp))", fixed = TRUE)
+})
+
+test_that("an overlay cell is measured-missing and model-input-present", {
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+    txt <- paste(body, collapse = "\n")
+
+    expect_match(txt, "keep_ov <- is.na(meas_m) & !is.na(mod_m)", fixed = TRUE)
+    # Everything else is blanked, so an observed value cannot reach the layer.
+    expect_match(txt, "mod_m[!keep_ov] <- NA_real_", fixed = TRUE)
+    # The overlay travels as its own key, never merged into `expr`.
+    expect_match(txt, "explorer_data$imp <- imp_matrix_list", fixed = TRUE)
+    expect_false(any(grepl("expr = imp_matrix_list", body, fixed = TRUE)))
+})
+
+test_that("overlay points are their own traces, never part of a box", {
+    body <- code_only(explorer_chunk("protein-explorer-js"))
+    txt <- paste(body, collapse = "\n")
+
+    # A scatter trace, pushed after the box traces are complete.
+    expect_match(txt, 'type: "scatter", mode: "markers"', fixed = TRUE)
+    expect_match(txt, "traces.push(bpOverlayTrace(sgPts, false));", fixed = TRUE)
+    expect_match(txt, "traces.push(bpOverlayTrace(mpPts, true));", fixed = TRUE)
+    # The measured arrays that feed the boxes are never appended to from the
+    # overlay: gValues/yVals are filled only inside the bpIsMeasured guards.
+    expect_false(any(grepl("gValues.push(vals[i])", body, fixed = TRUE)))
+    expect_false(any(grepl("yVals.push(geneExprData.imp", body, fixed = TRUE)))
+})
+
+test_that("the summary line still counts only measured values", {
+    body <- code_only(explorer_chunk("protein-explorer-js"))
+    txt <- paste(body, collapse = "\n")
+
+    # The mean and N read `expr`, never `imp`.
+    expect_match(txt, "var vals = values.filter(bpIsMeasured);", fixed = TRUE)
+    expect_match(txt, "measured samples", fixed = TRUE)
+    # And a group with nothing measured stays named as such, whatever the
+    # overlay draws into its slot.
+    expect_match(txt, "no measured values in: ", fixed = TRUE)
+    expect_match(txt, "if (groups[i] === g && bpIsMeasured(values[i])) return false;", fixed = TRUE)
+    expect_false(any(grepl("emptyGroups", body, fixed = TRUE) &
+                     grepl("geneExprData.imp", body, fixed = TRUE)))
+})
+
+test_that("precomputed DE is detected with the pipeline's own condition", {
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+    txt <- paste(body, collapse = "\n")
+
+    # Same three clauses as mod_proteomics_de(); see R/modules/proteomics/02_mod_de.R.
+    expect_match(txt, "prot_cfg$files$de_table", fixed = TRUE)
+    expect_match(txt, "length(.de_table_files_ov) > 0", fixed = TRUE)
+    expect_match(txt, "all(nzchar(unlist(.de_table_files_ov)))", fixed = TRUE)
+    # And it gates the overlay.
+    expect_match(txt, "!.has_precomputed_ov", fixed = TRUE)
+})
+
+test_that("every mode that cannot support an overlay is gated out", {
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+    txt <- paste(body, collapse = "\n")
+
+    # method "none": .norm is the measured matrix, NAs included.
+    expect_match(txt, 'prot_cfg$imputation$method %||% "perseus_like"', fixed = TRUE)
+    expect_match(txt, '!identical(.imp_method_ov, "none")', fixed = TRUE)
+    # The #239 fallback source carries no .norm block, and none is reconstructed.
+    expect_match(txt, "measured_from_final_results &&", fixed = TRUE)
+    expect_match(txt, "measured_from_final_results <- TRUE", fixed = TRUE)
+    # Fails closed: the flag starts FALSE and is set only inside the guards.
+    expect_match(txt, "overlay_ready <- FALSE", fixed = TRUE)
+    expect_equal(length(grep("overlay_ready <- TRUE", body, fixed = TRUE)), 1L)
+})
+
+test_that("the control is emitted only where an overlay exists", {
+    body <- code_only(explorer_chunk("protein-explorer-ui"))
+    txt <- paste(body, collapse = "\n")
+
+    expect_match(txt, "if (isTRUE(overlay_ready)) {", fixed = TRUE)
+    # The label says what the control does: it adds imputed values, it does not
+    # swap the plot for the full model-input matrix.
+    expect_match(txt, "Show imputed model-input values", fixed = TRUE)
+    expect_false(any(grepl("disabled", body, fixed = TRUE)))
+})
+
+test_that("no imputed file discovery is reintroduced for the overlay", {
+    # The overlay comes from final_results.tsv and nowhere else. This is the
+    # guarantee #239 established for the measured view, extended to the second
+    # layer: no glob, no imputed_once, no imputed_repetitions.
+    body <- code_only(explorer_chunk("protein-explorer-data"))
+
+    expect_false(any(grepl("list.files(", body, fixed = TRUE)))
+    expect_false(any(grepl("imputed_once", body, fixed = TRUE)))
+    expect_false(any(grepl("imputed_repetitions", body, fixed = TRUE)))
+})
