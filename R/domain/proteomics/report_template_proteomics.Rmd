@@ -2050,7 +2050,13 @@ meta_df_exp <- read_samplesheet(meta_file_exp)
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
-norm_expr_exp <- NULL
+measured_expr_exp <- NULL
+# Initialised here, not inside the branches below, so the overlay block can
+# test them whichever source the measured matrix came from -- or none.
+final_df <- NULL
+id_col_exp <- NULL
+measured_from_final_results <- FALSE
+overlay_ready <- FALSE
 
 if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
     meta_sample_ids <- as.character(meta_df_exp[[sample_col_exp]])
@@ -2067,8 +2073,10 @@ if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
             # Extract only sample columns that match metadata
             expr_cols_exp <- intersect(meta_sample_ids, names(final_df))
             if (length(expr_cols_exp) > 0 && id_col_exp %in% names(final_df)) {
-                norm_expr_exp <- final_df[, expr_cols_exp, drop = FALSE]
-                rownames(norm_expr_exp) <- final_df[[id_col_exp]]
+                measured_expr_exp <- final_df[, expr_cols_exp, drop = FALSE]
+                rownames(measured_expr_exp) <- final_df[[id_col_exp]]
+                # Only this source carries the paired <sample>.norm block.
+                measured_from_final_results <- TRUE
             }
         }
     }
@@ -2087,25 +2095,25 @@ if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
     # entries intact. If neither is available the explorer stays unavailable,
     # because showing the model input here would answer a different question
     # than the one the reader is asking.
-    if (is.null(norm_expr_exp)) {
+    if (is.null(measured_expr_exp)) {
         unimputed_file <- file.path(datasets_dir, "protein_log2_filtered_unimputed.tsv")
         if (file.exists(unimputed_file)) {
-            norm_expr_exp <- tryCatch(
+            measured_expr_exp <- tryCatch(
                 read.delim(unimputed_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
                 error = function(e) NULL
             )
-            if (!is.null(norm_expr_exp)) {
+            if (!is.null(measured_expr_exp)) {
                 # Keep only columns matching metadata sample IDs
-                keep <- intersect(meta_sample_ids, colnames(norm_expr_exp))
-                if (length(keep) > 0) norm_expr_exp <- norm_expr_exp[, keep, drop = FALSE]
-                else norm_expr_exp <- NULL
+                keep <- intersect(meta_sample_ids, colnames(measured_expr_exp))
+                if (length(keep) > 0) measured_expr_exp <- measured_expr_exp[, keep, drop = FALSE]
+                else measured_expr_exp <- NULL
             }
         }
     }
 }
 
-if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2) {
-    protein_ids <- rownames(norm_expr_exp)
+if (!is.null(measured_expr_exp) && !is.null(meta_df_exp) && ncol(measured_expr_exp) >= 2) {
+    protein_ids <- rownames(measured_expr_exp)
     protein_display <- protein_ids
 
     # Use Genes column from de_data if available
@@ -2122,22 +2130,96 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
     # Build sample -> group mapping
     if (sample_col_exp %in% names(meta_df_exp) && group_col_exp %in% names(meta_df_exp)) {
         group_map_exp <- setNames(as.character(meta_df_exp[[group_col_exp]]), meta_df_exp[[sample_col_exp]])
-        sample_groups_exp <- as.character(group_map_exp[colnames(norm_expr_exp)])
+        sample_groups_exp <- as.character(group_map_exp[colnames(measured_expr_exp)])
         sample_groups_exp[is.na(sample_groups_exp)] <- "Unknown"
     } else {
-        sample_groups_exp <- rep("All", ncol(norm_expr_exp))
+        sample_groups_exp <- rep("All", ncol(measured_expr_exp))
     }
 
-    expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
-        round(as.numeric(norm_expr_exp[i, ]), 3)
+    expr_matrix_list <- lapply(seq_len(nrow(measured_expr_exp)), function(i) {
+        round(as.numeric(measured_expr_exp[i, ]), 3)
     })
+
+    # ---------------------------------------------------------------------
+    # Model-input overlay
+    # ---------------------------------------------------------------------
+    # Carries ONLY the cells that were not measured and do have a model-input
+    # value. Built here rather than in the browser so the overlay layer cannot
+    # physically contain an observed value: every other cell is NA in it, so
+    # there is nothing for the plot to get wrong.
+    #
+    # Offered only when all of the following hold. Any one failing leaves the
+    # measured explorer exactly as it is and shows no control at all -- the
+    # overlay is never approximated from another source.
+    #
+    #   * the measured block came from final_results.tsv. That is the only file
+    #     carrying the paired <sample>.norm columns; the fallback source has
+    #     none, and no second file is searched to reconstruct them.
+    #   * imputation is configured. Under method "none" impute_proteomics()
+    #     returns the matrix untouched, so .norm IS the measured matrix, NAs
+    #     included, and there is nothing to overlay.
+    #   * DE was not precomputed. There .norm falls back to pre$expr_imp_single,
+    #     the QC draw, which is not the matrix an external analysis used and
+    #     must not be shown as its model input.
+    #   * every measured column has its exact <sample>.norm counterpart.
+    imp_matrix_list <- NULL
+    overlay_ready <- FALSE
+
+    .imp_method_ov <- tolower(as.character(prot_cfg$imputation$method %||% "perseus_like"))
+
+    # Same condition mod_proteomics_de() selects precomputed mode with; see
+    # R/modules/proteomics/02_mod_de.R for the source contract. Copied rather
+    # than extracted: two callers do not earn a shared helper, and the report
+    # reads the config it was rendered from, which carries files$de_table
+    # verbatim.
+    .de_table_files_ov <- prot_cfg$files$de_table
+    .has_precomputed_ov <- !is.null(.de_table_files_ov) &&
+                           length(.de_table_files_ov) > 0 &&
+                           all(nzchar(unlist(.de_table_files_ov)))
+
+    if (measured_from_final_results &&
+        !identical(.imp_method_ov, "none") &&
+        !.has_precomputed_ov &&
+        !is.null(final_df)) {
+
+        norm_cols_exp <- paste0(colnames(measured_expr_exp), ".norm")
+        if (all(norm_cols_exp %in% names(final_df))) {
+            model_input_exp <- final_df[, norm_cols_exp, drop = FALSE]
+            rownames(model_input_exp) <- final_df[[id_col_exp]]
+            # Align by feature id rather than by position, and require the same
+            # shape: a partial match means the two blocks describe different
+            # feature sets, which is a misalignment, not an overlay.
+            model_input_exp <- model_input_exp[rownames(measured_expr_exp), , drop = FALSE]
+
+            if (identical(dim(model_input_exp), dim(measured_expr_exp)) &&
+                !anyNA(rownames(model_input_exp))) {
+                meas_m <- as.matrix(measured_expr_exp)
+                mod_m  <- as.matrix(model_input_exp)
+                storage.mode(meas_m) <- "double"
+                storage.mode(mod_m)  <- "double"
+
+                # The overlay cell definition, and the only one used anywhere:
+                # measured missing AND model input present.
+                keep_ov <- is.na(meas_m) & !is.na(mod_m)
+                mod_m[!keep_ov] <- NA_real_
+
+                if (any(keep_ov)) {
+                    imp_matrix_list <- lapply(seq_len(nrow(mod_m)), function(i) {
+                        round(as.numeric(mod_m[i, ]), 3)
+                    })
+                    overlay_ready <- TRUE
+                }
+            }
+        }
+    }
 
     explorer_data <- list(
         genes = protein_display,
-        samples = colnames(norm_expr_exp),
+        samples = colnames(measured_expr_exp),
         groups = sample_groups_exp,
         expr = expr_matrix_list
     )
+    if (overlay_ready) explorer_data$imp <- imp_matrix_list
     explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = TRUE)
     explorer_ready <- TRUE
 }
@@ -2159,6 +2241,7 @@ cat('
 <button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
 </div>
 <div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_overlay_ctl" style="margin-top: 8px; font-size: 0.9em; color: #555; display: none;"></div>
 <div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
 </div>
 <div id="boxplot_container" style="width: 100%; min-height: 450px; margin-bottom: 10px;"></div>
@@ -2168,6 +2251,20 @@ cat('
   <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
 </div>
 ')
+
+# The control exists only where an overlay does. Emitting it unconditionally
+# and disabling it client-side would put a dead switch in front of every reader
+# whose run has nothing to overlay.
+if (isTRUE(overlay_ready)) {
+    cat('
+<script>
+document.getElementById("boxplot_overlay_ctl").style.display = "block";
+document.getElementById("boxplot_overlay_ctl").innerHTML =
+    "<label style=\\"cursor:pointer;\\"><input type=\\"checkbox\\" id=\\"bp_show_imputed\\" onchange=\\"bpToggleImputed(this)\\" style=\\"vertical-align:middle; margin-right:6px;\\">Show imputed model-input values</label>" +
+    " <span style=\\"color:#777;\\">&mdash; values not measured in that sample, taken from the matrix the model was fitted on. Shown as hollow grey points; they are not part of any box, mean or sample count.</span>";
+</script>
+')
+}
 ```
 
 ```{r protein-explorer-js, eval=show_protein_explorer && explorer_ready, results='asis'}
@@ -2286,6 +2383,84 @@ function bpEscapeHtml(s) {
         .replace(/"/g, "&quot;");
 }
 
+// Overlay state. geneExprData.imp is present only when the report decided an
+// overlay is available, and it holds ONLY cells that were unmeasured and have
+// a model-input value -- every other cell in it is null. So nothing here has
+// to decide what counts as imputed; that was settled when the data was built.
+var bpShowImputed = false;
+
+function bpHasImputed() {
+    return geneExprData.imp !== null && geneExprData.imp !== undefined;
+}
+
+function bpToggleImputed(el) {
+    bpShowImputed = !!el.checked;
+    if (selectedGenes.length > 0) renderMultiBoxplot();
+}
+
+// The imputed points for one protein in one group, each carrying the group it
+// belongs to. Deliberately a separate collection rather than an append to the
+// measured arrays: these values must never reach a box, a mean or a count.
+//
+// SINGLE-PROTEIN VIEW ONLY. There each group owns a whole x slot, so a point
+// placed at the group index belongs to that group and no other. The multi-protein
+// view separates groups by boxmode "group", which offsets box-family traces
+// within one protein slot -- and offsetgroup/alignmentgroup are attributes of
+// bar, box, violin, histogram, funnel and waterfall, not of scatter. A scatter
+// overlay there would land at the centre of the protein slot regardless of
+// group, which reads as though the value belonged to whichever box it fell
+// nearest. Rather than ship that, the overlay is offered for one protein at a
+// time and the info line says so.
+function bpImputedPoints(geneIdx, pos, groupName) {
+    var out = [];
+    if (!bpShowImputed || !bpHasImputed()) return out;
+    var vals = geneExprData.imp[geneIdx];
+    if (!vals) return out;
+    for (var i = 0; i < vals.length; i++) {
+        if (geneExprData.groups[i] === groupName && bpIsMeasured(vals[i])) {
+            out.push({
+                pos: pos, value: vals[i],
+                sample: geneExprData.samples[i], group: groupName
+            });
+        }
+    }
+    return out;
+}
+
+function bpOverlayTrace(points) {
+    return {
+        x: points.map(function(p) { return p.pos; }),
+        y: points.map(function(p) { return p.value; }),
+        // Raw, like every other trace in this file. bpEscapeHtml() exists for
+        // text that reaches innerHTML -- the chips and the info line. Applied
+        // here it was the same defect as the entity below, one step earlier: a
+        // sample or group containing & < > or " would have been turned INTO an
+        // entity that Plotly then shows verbatim.
+        text: points.map(function(p) { return p.sample; }),
+        customdata: points.map(function(p) { return p.group; }),
+        type: "scatter", mode: "markers",
+        // Plotly draws trace names and hover text as SVG text, and a named
+        // HTML entity is not decoded there: the em-dash one reached the hover
+        // box verbatim. Entities are right everywhere in this file that text
+        // reaches innerHTML -- the checkbox label, the protein chips, the info
+        // line -- and wrong everywhere it reaches Plotly. A JS escape keeps
+        // this file and the generated HTML pure ASCII and leaves the decoding
+        // to the browser, which cannot get it wrong.
+        name: "Imputed \\u2014 model input",
+        showlegend: false,
+        hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input: %{y:.3f}" +
+                       "<extra>Imputed \\u2014 model input</extra>",
+        // An open symbol is drawn with marker.color, which IS its outline --
+        // there is no fill to suppress and marker.line does not supply that
+        // stroke. A transparent marker.color here made every overlay point
+        // invisible, which is to say the whole feature did nothing.
+        marker: {
+            color: "#8c8c8c", size: 9, symbol: "circle-open",
+            line: { width: 2 }
+        }
+    };
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2330,6 +2505,13 @@ function renderMultiBoxplot() {
                 fillcolor: colors[gi % colors.length] + "33"
             });
         });
+        // Overlay last, as its own traces, so the boxes above are computed from
+        // measured values alone whatever the checkbox says.
+        var sgPts = [];
+        uniqueGroups.forEach(function(g, gi) {
+            sgPts = sgPts.concat(bpImputedPoints(geneIdx, gi, g));
+        });
+        if (sgPts.length > 0) traces.push(bpOverlayTrace(sgPts));
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
@@ -2386,6 +2568,12 @@ function renderMultiBoxplot() {
                 fillcolor: colors[gi % colors.length] + "33"
             });
         });
+        // No overlay here, deliberately. See bpImputedPoints: groups are
+        // separated by boxmode "group", which only offsets box-family traces,
+        // so a scatter point would sit at the centre of the protein slot with
+        // no way to tell which condition it came from. The info line says the
+        // overlay is a single-protein view rather than leaving the checkbox
+        // looking broken.
 
         var protNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
@@ -2439,6 +2627,12 @@ function renderMultiBoxplot() {
         }
         return txt;
     });
+    // Say why the checkbox drew nothing, rather than leaving it looking broken.
+    if (bpShowImputed && bpHasImputed() && nGenes > 1) {
+        infoLines.push("<em>Imputed model-input values are shown one protein at a time, " +
+                       "so that each point stays attributable to its " + bpEscapeHtml(bpGroupLabel) +
+                       ". Select a single protein to see them.</em>");
+    }
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
 }
