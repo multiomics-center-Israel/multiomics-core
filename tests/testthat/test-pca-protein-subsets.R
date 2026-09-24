@@ -38,7 +38,7 @@ test_that("NA flags are not counted as imputed", {
     expect_length(select_complete_case_features(rbind(a = c(FALSE, NA, FALSE, FALSE))), 1)
 })
 
-test_that("the dropdown lists all proteins first, top-N descending, complete-case last", {
+test_that("the selector lists all proteins first, then top-N descending", {
     d <- tempfile("pca-panels-")
     dir.create(d)
     on.exit(unlink(d, recursive = TRUE), add = TRUE)
@@ -46,14 +46,17 @@ test_that("the dropdown lists all proteins first, top-N descending, complete-cas
                     "PCA_top2000.png", "PCA_top500.png", "PCA_PC1.vs.PC2.png"))
 
     panels <- list_pca_feature_panels(d)
-    expect_equal(panels$key, c("all", "top2000", "top1000", "top500", "robust"))
+    expect_equal(panels$key, c("all", "top2000", "top1000", "top500"))
     # "All proteins" is the existing full-matrix PCA, not a second copy of it.
     expect_equal(basename(panels$path[panels$key == "all"]), "PCA_PC1.vs.PC2.png")
     expect_equal(panels$label[panels$key == "top1000"], "Top 1,000 variable proteins")
-    # The label states the selection, not an imputation-independence it cannot
-    # promise once batch correction has been fitted on the full imputed matrix.
-    expect_equal(panels$label[panels$key == "robust"], "Proteins observed in every sample")
-    expect_false(grepl("imputed", panels$label[panels$key == "robust"], fixed = TRUE))
+
+    # The complete-case panel is present in the directory and still absent from
+    # this list: the selector answers "how many proteins, ranked by variance",
+    # and is off by default. The report gives the complete-case view its own
+    # section beside the main PCA, so listing it here too would draw it twice.
+    expect_false("robust" %in% panels$key)
+    expect_false(any(basename(panels$path) == "PCA_robust.png"))
 })
 
 test_that("a stale PCA_all.png from an older run is never listed", {
@@ -88,9 +91,15 @@ test_that("only PCA_subset_<name>.png files are listed as sample subsets", {
     subsets <- list_pca_subset_panels(d)
     expect_equal(subsets$name, c("robust", "treated"))
 
-    # A subset named "robust" is its own file; the dropdown panel is untouched.
+    # A sample subset may be named "robust" without colliding with the
+    # complete-case panel: they are separate files, and the subset listing takes
+    # only the PCA_subset_ one.
+    expect_equal(basename(subsets$path[subsets$name == "robust"]),
+                 "PCA_subset_robust.png")
+
+    # Neither robust file reaches the feature-set selector.
     panels <- list_pca_feature_panels(d)
-    expect_equal(basename(panels$path[panels$key == "robust"]), "PCA_robust.png")
+    expect_false(any(grepl("robust", basename(panels$path), fixed = TRUE)))
 })
 
 test_that("the QC module uses the shared rule, clears old panels and namespaces subsets", {
@@ -124,6 +133,64 @@ test_that("the QC module uses the shared rule, clears old panels and namespaces 
     # second copy under another name: the full matrix is projected twice, for
     # PC1-vs-PC2 and PC1-vs-PC3, and not a third time.
     expect_equal(sum(grepl("qc_pca_scatter(pre$expr_imp_single", src, fixed = TRUE)), 2)
+})
+
+test_that("the report shows the complete-case panel, once, outside the selector", {
+    # PCA_robust.png was generated on every run but reachable only through the
+    # feature-set selector, which is behind report$show_pca_topvar and defaults
+    # to FALSE -- so a default report never showed it. It now has its own
+    # section, and must not also appear in the selector.
+    candidates <- c(
+        testthat::test_path("..", "..", "R", "domain", "proteomics",
+                            "report_template_proteomics.Rmd"),
+        "R/domain/proteomics/report_template_proteomics.Rmd"
+    )
+    f <- candidates[file.exists(candidates)][1]
+    skip_if(is.na(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    chunk_body <- function(label) {
+        start <- grep(sprintf("^```\\{r %s[ ,}]", label), lines)
+        expect_length(start, 1L)
+        rest <- lines[(start + 1L):length(lines)]
+        end <- start + which(grepl("^```\\s*$", rest))[1L]
+        list(header = lines[start], body = lines[(start + 1L):(end - 1L)])
+    }
+
+    cc <- chunk_body("pca-complete-case")
+    cc_txt <- paste(cc$body, collapse = "\n")
+
+    # Visible by default: gated on the PCA section and on the file existing,
+    # never on the selector's flag.
+    expect_match(cc$header, "eval=show_pca_section", fixed = TRUE)
+    expect_false(grepl("show_pca_topvar", cc$header, fixed = TRUE))
+    expect_match(cc_txt, 'file.path(diag_dir, "PCA_robust.png")', fixed = TRUE)
+    expect_match(cc_txt, "if (file.exists(pca_cc_file)) {", fixed = TRUE)
+
+    # No second PCA: the chunk renders the image the QC module already wrote.
+    # Code only -- the comments name the QC function deliberately, as the
+    # pointer to where the calculation actually lives.
+    cc_code <- paste(cc$body[!grepl("^\\s*#", cc$body)], collapse = "\n")
+    expect_false(grepl("prcomp", cc_code, fixed = TRUE))
+    expect_false(grepl("compute_pca_scores", cc_code, fixed = TRUE))
+    expect_false(grepl("qc_pca_scatter", cc_code, fixed = TRUE))
+
+    # Describes the selection, and explicitly refuses the stronger claim. The
+    # values stay batch-corrected where batch correction ran, so "before
+    # imputation" would be wrong even though no cell here was imputed.
+    expect_match(cc_txt, "observed in every sample", fixed = TRUE)
+    expect_match(cc_txt, "no within-PCA missing-value substitution is required",
+                 fixed = TRUE)
+    expect_match(cc_txt, "not be described as pre-imputation or imputation-free",
+                 fixed = TRUE)
+    for (phrase in c("before imputation", "imputation-free view",
+                     "no imputed values", "free of imputation")) {
+        expect_false(grepl(phrase, cc_txt, fixed = TRUE))
+    }
+
+    # Turning the selector on cannot draw the same panel a second time.
+    tv <- chunk_body("pca-topvar-block")
+    expect_false(any(grepl("PCA_robust", tv$body, fixed = TRUE)))
 })
 
 
