@@ -122,21 +122,40 @@ test_that("the log2 sentence is tied to scale_in and stays loader-agnostic", {
                        blocks_for(scale_in = "log")$data_processing, fixed = TRUE))
 })
 
-test_that("an absent scale_in falls back to files$is_logtransformed", {
-    # get_proteomics_expression_matrix() resolves a missing scale_in from
-    # files$is_logtransformed and leaves such a table untransformed. Resolving it
-    # to "linear" here would claim a log2 transformation these legacy configs
-    # never received.
-    legacy <- blocks_for(scale_in = NULL,
+test_that("the legacy log flag is honoured only on the preprocessed path", {
+    # get_proteomics_expression_matrix() consults files$is_logtransformed inside
+    # its preprocessed branch only. The DIA-NN branch ignores the flag and
+    # defaults an absent scale_in to "linear" before taking log2, so applying the
+    # fallback there would drop a transformation that did happen.
+    legacy <- blocks_for(scale_in = NULL, input = list(format = "preprocessed"),
                          files = list(is_logtransformed = TRUE))$data_processing
     expect_false(grepl("transformed to the log2 scale", legacy, fixed = TRUE))
 
-    # The same fallback in the other direction: no flag, no scale_in -> linear.
+    # Same flag, DIA-NN path: the loader transforms, so the sentence stays.
+    expect_match(blocks_for(scale_in = NULL,
+                            files = list(is_logtransformed = TRUE))$data_processing,
+                 "transformed to the log2 scale", fixed = TRUE)
+
+    # And the fallback's other direction: no flag, no scale_in -> linear.
     expect_match(blocks_for(scale_in = NULL)$data_processing,
                  "transformed to the log2 scale", fixed = TRUE)
-    expect_match(blocks_for(scale_in = NULL,
+    expect_match(blocks_for(scale_in = NULL, input = list(format = "preprocessed"),
                             files = list(is_logtransformed = FALSE))$data_processing,
                  "transformed to the log2 scale", fixed = TRUE)
+})
+
+test_that("batch correction does not claim DE re-imputation in precomputed mode", {
+    # mod_proteomics_de() returns the loaded tables before
+    # make_imputations_proteomics() is reached, so nothing is re-imputed for the
+    # model -- and the missing-values paragraph says exactly that.
+    bc <- list(method = "combat")
+    internal <- blocks_for(batch_correction = bc)$data_processing
+    expect_match(internal, "re-imputed for differential analysis", fixed = TRUE)
+
+    pre <- blocks_for(batch_correction = bc, de_method = "precomputed")$data_processing
+    expect_match(pre, "Batch effects were corrected with ComBat", fixed = TRUE)
+    expect_match(pre, "restored to the filtered matrix", fixed = TRUE)
+    expect_false(grepl("re-imputed for differential analysis", pre, fixed = TRUE))
 })
 
 test_that("batch correction needs the resolved enabled state, not just a method", {
@@ -316,7 +335,36 @@ test_that("the count is not called pipeline-filtered in precomputed mode", {
     expect_match(txt, "9,000 proteins were present in the precomputed result tables",
                  fixed = TRUE)
     expect_false(grepl("passed filtering", txt, fixed = TRUE))
-    expect_false(grepl("included in the differential analysis", txt, fixed = TRUE))
+    expect_false(grepl("were fitted", txt, fixed = TRUE))
+})
+
+test_that("the count does not claim every summary row was fitted", {
+    # Under limma_percontrast each comparison applies its own observed/floor
+    # filter and the dropped proteins are re-expanded as NA for alignment only,
+    # so a summary row is not evidence the protein was fitted anywhere. The
+    # wording therefore stays neutral about what produced the rows.
+    for (m in c("limma", "limma_percontrast", "ttest", "welch", "anova")) {
+        txt <- build_proteomics_methods_text(
+            cfg_for(de = list(method = m, p_cutoff = 0.05, linear_fc_cutoff = 1.5)),
+            de_method = m, n_included = 9000L)$differential
+        expect_match(txt, "9,000 proteins are reported in the differential-abundance results table",
+                     fixed = TRUE)
+        expect_false(grepl("passed filtering", txt, fixed = TRUE))
+        expect_false(grepl("included in the differential analysis", txt, fixed = TRUE))
+    }
+})
+
+test_that("the Results thresholds match the comparator each mode actually uses", {
+    # The internal summary calls a protein significant at padj <= cutoff, while
+    # load_precomputed_proteomics_de() uses a strict <. The Results sentence is
+    # built here so it cannot drift from the differential block beside it.
+    internal <- blocks_for()$results_thresholds
+    expect_match(internal, "adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    expect_match(internal, "|linear fold change| $\\geq$ 1.5", fixed = TRUE)
+
+    pre <- blocks_for(de_method = "precomputed")$results_thresholds
+    expect_match(pre, "fell below 0.05", fixed = TRUE)
+    expect_false(grepl("$\\leq$", pre, fixed = TRUE))
 })
 
 
@@ -613,4 +661,37 @@ test_that("the Results pointer is not emitted when Methods is hidden", {
     # The pointer itself lives only in the one-liner.
     expect_match(blocks_for()$results_oneliner, "see Methods", fixed = TRUE)
     expect_false(grepl("see Methods", blocks_for()$differential, fixed = TRUE))
+
+    # The thresholds come from the generator, and only beside the one-liner:
+    # the full description already ends with its own threshold sentence, so an
+    # unconditional second one stated the cutoffs twice.
+    expect_match(chunk, ".ds_blocks$results_thresholds", fixed = TRUE)
+    expect_false(grepl("Proteins were reported as differentially abundant at adjusted p-value",
+                       chunk, fixed = TRUE))
+    expect_match(blocks_for()$differential,
+                 "Proteins were reported as differentially abundant at adjusted p <= 0.05",
+                 fixed = TRUE)
+})
+
+test_that("the complete-case claim needs the PCA section, not just the file", {
+    # show_pca_section gates the panel's own chunk, and the QC module can leave a
+    # valid PCA_robust.png on a run where report$show_pca is off or no group has
+    # replicates. The template therefore withholds the path rather than letting
+    # file existence stand in for visibility.
+    f <- c(testthat::test_path("..", "..", "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"),
+           "R/domain/proteomics/report_template_proteomics.Rmd")
+    f <- f[file.exists(f)][1]
+    skip_if(is.na(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    start <- grep("^```\\{r methods-text[ ,}]", lines)
+    expect_length(start, 1L)
+    end <- start + which(grepl("^```\\s*$", lines[(start + 1):length(lines)]))[1]
+    chunk <- paste(lines[(start + 1):(end - 1)], collapse = "\n")
+
+    expect_match(chunk, "isTRUE(show_pca_section)", fixed = TRUE)
+    expect_match(chunk, "PCA_robust.png", fixed = TRUE)
+    # show_pca_section is defined well before this chunk, so the reference resolves.
+    expect_lt(grep("^show_pca_section <-", lines)[1], start)
 })

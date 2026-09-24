@@ -435,7 +435,8 @@ methods_de_phrase <- function(de_cfg, method) {
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
-#'   \code{results_oneliner}. Blocks that do not apply are NULL.
+#'   \code{results_oneliner} and \code{results_thresholds}. Blocks that do not
+#'   apply are NULL.
 build_proteomics_methods_text <- function(config, de_method = "limma",
                                           n_included = NA_integer_, run_dir = NULL,
                                           pca_cc_file = NULL, hier_file = NULL) {
@@ -460,11 +461,15 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
 
     # ---- Data processing ----------------------------------------------------
     dp <- sprintf("Proteins were quantified using %s.", cfg$engine %||% "the configured search engine")
-    # Resolved exactly as get_proteomics_expression_matrix() resolves it: an
-    # absent scale_in falls back to files$is_logtransformed, not to "linear".
-    # A legacy config carrying only that flag is already on the log2 scale, and
-    # claiming a transformation it never received would misdescribe the run.
-    scale_in <- cfg$scale_in %||% (if (isTRUE(cfg$files$is_logtransformed)) "log2" else "linear")
+    # Resolved as get_proteomics_expression_matrix() resolves it, including the
+    # branch: files$is_logtransformed is consulted only on the preprocessed path
+    # (01_expression.R:122-134). The DIA-NN branch ignores that legacy flag and
+    # defaults an absent scale_in to "linear" before taking log2
+    # (01_expression.R:152-155), so the fallback must not be applied there.
+    is_preprocessed <- identical(tolower(as.character(cfg$input$format %||% "")),
+                                 "preprocessed")
+    scale_in <- cfg$scale_in %||% (
+        if (is_preprocessed && isTRUE(cfg$files$is_logtransformed)) "log2" else "linear")
     if (identical(tolower(as.character(scale_in)), "linear")) {
         dp <- paste(dp, "Linear-scale intensities were transformed to the log2 scale before",
                     "downstream analysis.")
@@ -494,12 +499,23 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     bc_default_on <- !identical(bc_m, "none")
     bc_on <- isTRUE(cfg$batch_correction$enabled %||% bc_default_on)
     if (bc_on && !identical(bc_m, "none")) {
+        bc_name <- if (identical(bc_m, "combat")) "ComBat" else
+                   if (identical(bc_m, "probatch")) "proBatch" else bc_m
         dp <- paste(dp, sprintf(paste0(
             "Batch effects were corrected with %s. The correction was estimated and applied on ",
-            "the single-imputed complete matrix. The original missingness pattern was then ",
-            "restored to the filtered matrix, which is re-imputed for differential analysis, ",
-            "while quality-control and clustering use the corrected complete matrix."),
-            if (identical(bc_m, "combat")) "ComBat" else if (identical(bc_m, "probatch")) "proBatch" else bc_m))
+            "the single-imputed complete matrix."), bc_name))
+        # mod_proteomics_de() returns the loaded tables before
+        # make_imputations_proteomics() is reached, so in precomputed mode
+        # nothing is re-imputed for the model -- and saying otherwise would
+        # contradict the missing-values paragraph below.
+        dp <- paste(dp, if (is_precomputed) {
+            paste("The original missingness pattern was then restored to the filtered matrix.",
+                  "Quality control and clustering use the corrected complete matrix.")
+        } else {
+            paste("The original missingness pattern was then restored to the filtered matrix,",
+                  "which is re-imputed for differential analysis, while quality-control and",
+                  "clustering use the corrected complete matrix.")
+        })
     }
 
     # ---- Missing values -----------------------------------------------------
@@ -559,15 +575,19 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             de_txt <- paste(de_txt, "The per-run significance call used the unadjusted p-value.")
         }
     }
-    # In precomputed mode mod_proteomics_de() returns before the pipeline's
-    # filtered matrix is used, so these rows are whatever the upstream tables
-    # carried -- they did not pass this pipeline's filtering.
+    # This is a row count of the summary table, and the wording has to stay
+    # neutral about what produced those rows. In precomputed mode the rows come
+    # from the upstream tables, not from this pipeline's filtering. Under
+    # limma_percontrast each comparison applies its own observed/floor filter
+    # and the dropped proteins are re-expanded as NA purely for alignment
+    # (05_de_summary.R:595-599), so a summary row is not evidence that the
+    # protein was fitted in any comparison.
     if (!is.na(n_included)) {
         de_txt <- paste(de_txt, sprintf(
             if (is_precomputed) {
                 "%s proteins were present in the precomputed result tables."
             } else {
-                "%s proteins passed filtering and were included in the differential analysis."
+                "%s proteins are reported in the differential-abundance results table."
             },
             format(n_included, big.mark = ",")))
     }
@@ -670,7 +690,22 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                        "the full description."), de_method)
     }
 
+    # The thresholds belong with the one-liner in Results, and they are built
+    # here so the comparator cannot drift from the one the differential block
+    # states. The two modes genuinely differ: the internal summary calls a
+    # protein significant at padj <= cutoff (05_de_summary.R:117, 209), while
+    # load_precomputed_proteomics_de() uses a strict < (05_de_summary.R:895).
+    thresholds <- if (is_precomputed) {
+        sprintf(paste0("Proteins were reported as differentially abundant where the adjusted ",
+                       "p-value fell below %s and |linear fold change| was at least %s."),
+                p_cut, fc_cut)
+    } else {
+        sprintf(paste0("Proteins were reported as differentially abundant at adjusted ",
+                       "p-value $\\leq$ %s and |linear fold change| $\\geq$ %s."),
+                p_cut, fc_cut)
+    }
+
     list(data_processing = dp, missing_values = mv, differential = de_txt,
          consensus = cons, quality_control = qc, downstream = down, software = sw,
-         results_oneliner = one_liner)
+         results_oneliner = one_liner, results_thresholds = thresholds)
 }

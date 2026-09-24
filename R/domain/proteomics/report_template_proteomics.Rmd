@@ -1206,8 +1206,6 @@ if (exists("cutoff_panel_html")) {
 
 ```{r de-stats-description, results='asis'}
 de_method_name <- prot_cfg$de$method %||% "limma"
-padj_cut_de <- prot_cfg$de$p_cutoff %||% 0.05
-lfc_cut_de <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 
 # Custom stats text takes priority; otherwise auto-generate from config
 custom_stats_text <- report_cfg$stats_methods_text %||% ""
@@ -1230,12 +1228,14 @@ if (nzchar(trimws(custom_stats_text))) {
     # existed rather than sending the reader to a section that is not there.
     if (isTRUE(show_methods)) {
         cat(.ds_blocks$results_oneliner, "\n\n")
+        # Only the one-liner needs the thresholds spelled out beside it. The
+        # full description already ends with its own threshold sentence, so
+        # printing this unconditionally stated the cutoffs twice -- and with the
+        # wrong comparator in precomputed mode, where the loader tests padj < .
+        cat(.ds_blocks$results_thresholds, "\n\n")
     } else {
         cat(.ds_blocks$differential, "\n\n")
     }
-    cat(sprintf(
-        "Proteins were reported as differentially abundant at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
-        padj_cut_de, lfc_cut_de))
 }
 
 # Link to full results table
@@ -4160,9 +4160,14 @@ cat("# Methods\n\n")
 # the QC and clustering sentences describe panels that are skipped on several
 # legitimate runs, so they are gated on the artefact existing, not on the
 # config flag that asked for it.
+#
+# The complete-case path is withheld unless the PCA section renders at all.
+# 01_mod_qc_pre.R can leave a perfectly good PCA_robust.png on a run where
+# report$show_pca is off, or where no group has replicates and force_pca is
+# unset -- there the file exists and the panel is still not in the report.
 methods_blocks <- build_proteomics_methods_text(
     config = cfg, de_method = .mt_method, n_included = .mt_n, run_dir = run_dir,
-    pca_cc_file = file.path(diag_dir, "PCA_robust.png"),
+    pca_cc_file = if (isTRUE(show_pca_section)) file.path(diag_dir, "PCA_robust.png") else NULL,
     hier_file = file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png"))
 
 cat("## Data processing\n\n")
