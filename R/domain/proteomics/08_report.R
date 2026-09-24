@@ -460,6 +460,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     is_precomputed <- identical(tolower(as.character(de_method)), "precomputed")
     imp_method <- methods_imputation_method(imp_cfg)
     p_adjust <- de_cfg$p_adjust_method %||% "BH"
+    p_adjust_none <- identical(tolower(as.character(p_adjust)), "none")
     p_cut <- de_cfg$p_cutoff %||% 0.05
     fc_cut <- de_cfg$linear_fc_cutoff %||% 1.5
 
@@ -571,15 +572,28 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         }
         # ANOVA states its own adjustment, because the values being adjusted are
         # Tukey's rather than the raw per-protein p-values.
-        de_txt <- paste(de_txt, if (identical(m, "anova")) {
+        #
+        # de$p_adjust_method accepts "none" (90_config_validate.R:99-101), and
+        # p.adjust(method = "none") returns the input untouched. Calling that
+        # "adjusted with the none procedure" would describe a correction that
+        # did not happen, and the cutoff sentence would then call raw p-values
+        # adjusted -- so both branch on it.
+        de_txt <- paste(de_txt, if (p_adjust_none) {
+            if (identical(m, "anova")) {
+                "Those Tukey p-values were not further adjusted across proteins."
+            } else {
+                "P-values were not adjusted for multiple testing."
+            }
+        } else if (identical(m, "anova")) {
             sprintf(paste0("Those Tukey p-values were then adjusted across proteins using the ",
                            "%s procedure."), p_adjust)
         } else {
             sprintf("P-values were adjusted with the %s procedure.", p_adjust)
         })
         de_txt <- paste(de_txt, sprintf(paste0(
-            "Proteins were reported as differentially abundant at adjusted p <= %s and ",
-            "|linear fold change| >= %s."), p_cut, fc_cut))
+            "Proteins were reported as differentially abundant at %s p <= %s and ",
+            "|linear fold change| >= %s."),
+            if (p_adjust_none) "unadjusted" else "adjusted", p_cut, fc_cut))
         # summarize_limma_mult_imputation() reads this with isTRUE(), so an
         # absent key means the per-run call used the raw p-value. Stated here
         # only when no consensus paragraph follows to say it.
@@ -646,7 +660,11 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                     "included sample is shown as a sensitivity view.")
     }
     hier <- cfg$clustering$steps$hierarchical
-    if (isTRUE(cfg$clustering$enabled) && isTRUE(hier$enabled) &&
+    # clustering_run_flags() resolves this as isTRUE(steps$hierarchical$enabled
+    # %||% TRUE) (09_clustering.R:626), so a steps block with no enabled key
+    # runs the step. Reading it with a bare isTRUE() here would drop the
+    # sentence from a run whose heatmap is sitting right there.
+    if (isTRUE(cfg$clustering$enabled) && isTRUE(hier$enabled %||% TRUE) &&
         !is.null(hier_file) && file.exists(hier_file)) {
         qc <- paste(qc, sprintf(paste0(
             "When hierarchical clustering was enabled, row-z-scored values were clustered ",
@@ -692,7 +710,14 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                             error = function(e) NULL)
         }
     }
-    sw <- if (!is.null(sha) && nzchar(sha)) sprintf("%s (commit %s).", sw, sha) else paste0(sw, ".")
+    # An empty or whitespace-only git_commit.txt reads back as NA here, via
+    # readLines()[1] on a zero-length result. The commit is optional provenance,
+    # so an unusable file is treated as absent rather than printed.
+    sw <- if (!is.null(sha) && !is.na(sha) && nzchar(sha)) {
+        sprintf("%s (commit %s).", sw, sha)
+    } else {
+        paste0(sw, ".")
+    }
 
     # ---- Results-section pointer --------------------------------------------
     one_liner <- if (is_precomputed) {
@@ -712,9 +737,9 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                        "p-value fell below %s and |linear fold change| was at least %s."),
                 p_cut, fc_cut)
     } else {
-        sprintf(paste0("Proteins were reported as differentially abundant at adjusted ",
+        sprintf(paste0("Proteins were reported as differentially abundant at %s ",
                        "p-value $\\leq$ %s and |linear fold change| $\\geq$ %s."),
-                p_cut, fc_cut)
+                if (p_adjust_none) "unadjusted" else "adjusted", p_cut, fc_cut)
     }
 
     list(data_processing = dp, missing_values = mv, differential = de_txt,

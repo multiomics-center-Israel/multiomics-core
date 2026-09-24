@@ -535,6 +535,32 @@ test_that("the clustering sentence is specific to hierarchical clustering", {
     expect_false(grepl("linkage", off, fixed = TRUE))
 })
 
+test_that("a steps block with no enabled key still counts as hierarchical on", {
+    # clustering_run_flags() resolves it as isTRUE(steps$hierarchical$enabled
+    # %||% TRUE), so this configuration runs the step and writes the heatmap.
+    # Reading it with a bare isTRUE() would drop the sentence from a run whose
+    # artefact is present -- the opposite failure from claiming one that is not.
+    d <- withr::local_tempdir()
+    hm <- existing_file(d, "Hierarchical_DE_heatmap.png")
+
+    no_key <- blocks_for(clustering = list(
+        enabled = TRUE,
+        steps   = list(hierarchical = list(distance = "manhattan", linkage = "ward.D2"))),
+        hier_file = hm)$quality_control
+    expect_match(no_key, "manhattan distance and ward.D2 linkage", fixed = TRUE)
+
+    # An absent steps block resolves the same way on both sides.
+    no_steps <- blocks_for(clustering = list(enabled = TRUE),
+                           hier_file = hm)$quality_control
+    expect_match(no_steps, "euclidean distance and complete linkage", fixed = TRUE)
+
+    # An explicit FALSE is still honoured.
+    off <- blocks_for(clustering = list(
+        enabled = TRUE, steps = list(hierarchical = list(enabled = FALSE))),
+        hier_file = hm)$quality_control
+    expect_false(grepl("linkage", off, fixed = TRUE))
+})
+
 test_that("the clustering sentence needs the heatmap, not just the flags", {
     # mod_proteomics_clustering() returns before the hierarchical step when
     # fewer than two DE features are in the matrix, and says so with a message
@@ -613,6 +639,65 @@ test_that("the version identifier comes from provenance, never a literal", {
                file.path(d, "execution_info", "git_commit.txt"))
     expect_match(build_proteomics_methods_text(cfg_for(), run_dir = d)$software,
                  "(commit 01234567)", fixed = TRUE)
+})
+
+test_that("an unusable provenance file is treated as absent", {
+    # An interrupted write, or an imported historical run, can leave
+    # git_commit.txt empty. readLines()[1] is then NA, and the commit is
+    # optional provenance -- so the sentence must drop it rather than print it.
+    d <- withr::local_tempdir()
+    dir.create(file.path(d, "execution_info"), recursive = TRUE, showWarnings = FALSE)
+    f <- file.path(d, "execution_info", "git_commit.txt")
+
+    file.create(f)   # exists, zero bytes
+    sw <- build_proteomics_methods_text(cfg_for(), run_dir = d)$software
+    expect_false(grepl("commit", sw, fixed = TRUE))
+    expect_false(grepl("NA", sw, fixed = TRUE))
+    expect_match(sw, "Analyses were performed in R", fixed = TRUE)
+
+    writeLines("   ", f)   # whitespace only, trims to empty
+    sw2 <- build_proteomics_methods_text(cfg_for(), run_dir = d)$software
+    expect_false(grepl("commit", sw2, fixed = TRUE))
+
+    # A missing directory entirely is the same outcome, not an error.
+    expect_false(grepl("commit",
+                       build_proteomics_methods_text(
+                           cfg_for(), run_dir = file.path(d, "nope"))$software,
+                       fixed = TRUE))
+})
+
+test_that("p_adjust_method 'none' is never described as an adjustment", {
+    # de$p_adjust_method accepts "none" (90_config_validate.R:99-101) and
+    # p.adjust(method = "none") returns the input untouched, so calling the
+    # result an adjusted p-value misstates the statistics in both the
+    # description and the cutoff beside it.
+    none_cfg <- list(method = "limma", p_cutoff = 0.05,
+                     linear_fc_cutoff = 1.5, p_adjust_method = "none")
+    txt <- blocks_for(de = none_cfg)$differential
+    expect_match(txt, "P-values were not adjusted for multiple testing.", fixed = TRUE)
+    expect_match(txt, "at unadjusted p <= 0.05", fixed = TRUE)
+    expect_false(grepl("none procedure", txt, fixed = TRUE))
+    # The leading space matters: "unadjusted p <= " contains "adjusted p <= ",
+    # so the bare substring would pass on either wording and pin nothing.
+    expect_false(grepl(" at adjusted p <= ", txt, fixed = TRUE))
+
+    # The Results thresholds sentence follows the same branch.
+    thr <- blocks_for(de = none_cfg)$results_thresholds
+    expect_match(thr, "unadjusted p-value $\\leq$ 0.05", fixed = TRUE)
+
+    # ANOVA adjusts Tukey's values, so its sentence branches too.
+    anova_none <- blocks_for(de = utils::modifyList(none_cfg, list(method = "anova")),
+                             de_method = "anova")$differential
+    expect_match(anova_none, "not further adjusted across proteins", fixed = TRUE)
+    expect_false(grepl("none procedure", anova_none, fixed = TRUE))
+
+    # Every other accepted method keeps the adjustment wording.
+    for (m in c("BH", "bonferroni", "holm", "BY", "fdr")) {
+        t2 <- blocks_for(de = utils::modifyList(none_cfg,
+                                                list(p_adjust_method = m)))$differential
+        expect_match(t2, sprintf("adjusted with the %s procedure", m), fixed = TRUE)
+        expect_match(t2, "at adjusted p <= 0.05", fixed = TRUE)
+    }
 })
 
 
