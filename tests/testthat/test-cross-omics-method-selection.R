@@ -338,6 +338,9 @@ test_that("an unusable rank table does not add contrasts", {
 
 test_that("the per-contrast orchestration discovers contrasts with the rank tables", {
     src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
-    expect_true(grepl("canonicalize_enrichment_contrasts(per_omics, rank_tables)",
-                      src, fixed = TRUE))
+    # deparse() may break a long call across lines, which the collapse turns
+    # into runs of spaces, so the call is matched with any whitespace in it.
+    expect_true(grepl(
+        "canonicalize_enrichment_contrasts\\(\\s*per_omics\\s*,\\s*rank_tables\\s*\\)",
+        src, perl = TRUE))
 })
