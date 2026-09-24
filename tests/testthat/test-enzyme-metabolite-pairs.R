@@ -422,3 +422,32 @@ test_that("a mapped metabolite carries KEGG's name for it where KEGG has one", {
     unnamed <- run_pairs(list(kegg_compound_names = function(cache_dir = NULL) NULL))
     expect_true(all(is.na(only_pairs(unnamed)$compound_name)))
 })
+
+test_that("a failed KEGG request is retried before the table gives up", {
+    calls <- 0L
+    fake_read <- function(url, warn = FALSE) {
+        calls <<- calls + 1L
+        if (calls < 3L) stop("cannot open the connection")
+        c("cpd:C00100\trn:R00001")
+    }
+    # The reader is called through readLines(); swap it in this function's env.
+    target <- environment(.kegg_rest_lines)
+    old <- get("readLines", envir = target, inherits = TRUE)
+    assign("readLines", fake_read, envir = target)
+    withr::defer(assign("readLines", old, envir = target))
+
+    lines <- suppressMessages(.kegg_rest_lines("https://example.invalid", "test",
+                                               attempts = 3L, pause = 0))
+    expect_identical(calls, 3L)
+    expect_length(lines, 1)
+
+    calls <- 0L
+    fake_read <- function(url, warn = FALSE) {
+        calls <<- calls + 1L
+        stop("cannot open the connection")
+    }
+    assign("readLines", fake_read, envir = target)
+    expect_null(suppressMessages(.kegg_rest_lines("https://example.invalid", "test",
+                                                  attempts = 2L, pause = 0)))
+    expect_identical(calls, 2L)
+})

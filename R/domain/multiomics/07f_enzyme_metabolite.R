@@ -78,11 +78,8 @@ kegg_link_table <- function(target, source, cache_dir = NULL) {
         if (is.data.frame(cached)) return(cached)
     }
 
-    url <- paste0("https://rest.kegg.jp/link/", target, "/", source)
-    lines <- tryCatch(readLines(url, warn = FALSE), error = function(e) {
-        message("    KEGG link ", source, " -> ", target, " unavailable: ", e$message)
-        NULL
-    })
+    lines <- .kegg_rest_lines(paste0("https://rest.kegg.jp/link/", target, "/", source),
+                              what = paste("link", source, "->", target))
     if (is.null(lines) || length(lines) == 0) return(NULL)
 
     parts <- strsplit(lines, "\t")
@@ -102,7 +99,39 @@ kegg_link_table <- function(target, source, cache_dir = NULL) {
 }
 
 
-#' KEGG's own name for each compound
+#' Read one KEGG REST response, retrying a failed request
+#'
+#' The link endpoints return large responses -- reaction to compound is hundreds
+#' of thousands of lines -- and a single timeout used to be the end of it: the
+#' table that needed it was skipped for the whole run, silently, while the other
+#' link tables sat cached beside it. Each request is therefore tried a few
+#' times, with a short pause between attempts, and says so when it gives up.
+#'
+#' @param url Full KEGG REST URL.
+#' @param what Short description for the messages.
+#' @param attempts How many times to try.
+#' @param pause Seconds to wait after a failed attempt; doubles each time.
+#' @return Character vector of lines, or NULL when every attempt failed.
+#' @keywords internal
+.kegg_rest_lines <- function(url, what, attempts = 3L, pause = 2) {
+    for (i in seq_len(attempts)) {
+        lines <- tryCatch(readLines(url, warn = FALSE), error = function(e) {
+            message("    KEGG ", what, " attempt ", i, "/", attempts,
+                    " failed: ", conditionMessage(e))
+            NULL
+        })
+        if (!is.null(lines) && length(lines) > 0) return(lines)
+        if (i < attempts) {
+            Sys.sleep(pause)
+            pause <- pause * 2
+        }
+    }
+    message("    KEGG ", what, " unavailable after ", attempts, " attempts")
+    NULL
+}
+
+
+#' KEGG's own name for each compound#' KEGG's own name for each compound
 #'
 #' The metabolomics layer names a feature however its table did -- often an
 #' m/z and retention time, which says nothing to a reader. KEGG carries a name
@@ -127,11 +156,8 @@ kegg_compound_names <- function(cache_dir = NULL) {
         if (is.character(cached)) return(cached)
     }
 
-    lines <- tryCatch(readLines("https://rest.kegg.jp/list/compound", warn = FALSE),
-                      error = function(e) {
-                          message("    KEGG compound names unavailable: ", e$message)
-                          NULL
-                      })
+    lines <- .kegg_rest_lines("https://rest.kegg.jp/list/compound",
+                              what = "compound names")
     if (is.null(lines) || length(lines) == 0) return(NULL)
 
     parts <- strsplit(lines, "\t")
