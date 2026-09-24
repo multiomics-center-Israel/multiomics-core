@@ -426,12 +426,19 @@ methods_de_phrase <- function(de_cfg, method) {
 #' @param n_included Proteins carried into the differential analysis, or NA to
 #'   omit that sentence.
 #' @param run_dir Run directory, read only for \code{execution_info/git_commit.txt}.
+#' @param pca_cc_file Path to the complete-case PCA image, or NULL. The
+#'   sensitivity-view sentence is emitted only when this file exists, because
+#'   the panel is skipped on several legitimate runs.
+#' @param hier_file Path to the hierarchical clustering heatmap, or NULL. The
+#'   clustering sentence needs this as well as the enable flags, for the same
+#'   reason.
 #' @return Named list of character scalars: \code{data_processing},
 #'   \code{missing_values}, \code{differential}, \code{consensus},
 #'   \code{quality_control}, \code{downstream}, \code{software},
 #'   \code{results_oneliner}. Blocks that do not apply are NULL.
 build_proteomics_methods_text <- function(config, de_method = "limma",
-                                          n_included = NA_integer_, run_dir = NULL) {
+                                          n_included = NA_integer_, run_dir = NULL,
+                                          pca_cc_file = NULL, hier_file = NULL) {
     cfg <- config$modes$proteomics %||% list()
     de_cfg <- cfg$de %||% list()
     imp_cfg <- cfg$imputation %||% list()
@@ -453,7 +460,12 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
 
     # ---- Data processing ----------------------------------------------------
     dp <- sprintf("Proteins were quantified using %s.", cfg$engine %||% "the configured search engine")
-    if (identical(tolower(as.character(cfg$scale_in %||% "linear")), "linear")) {
+    # Resolved exactly as get_proteomics_expression_matrix() resolves it: an
+    # absent scale_in falls back to files$is_logtransformed, not to "linear".
+    # A legacy config carrying only that flag is already on the log2 scale, and
+    # claiming a transformation it never received would misdescribe the run.
+    scale_in <- cfg$scale_in %||% (if (isTRUE(cfg$files$is_logtransformed)) "log2" else "linear")
+    if (identical(tolower(as.character(scale_in)), "linear")) {
         dp <- paste(dp, "Linear-scale intensities were transformed to the log2 scale before",
                     "downstream analysis.")
     }
@@ -476,7 +488,12 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     })
 
     bc_m <- tolower(as.character(cfg$batch_correction$method %||% "none"))
-    if (!identical(bc_m, "none")) {
+    # get_proteomics_batch_config() resolves enabled as bc$enabled, defaulting to
+    # method != "none". An explicit enabled: false with a method set therefore
+    # runs no correction at all, so the method alone cannot gate this sentence.
+    bc_default_on <- !identical(bc_m, "none")
+    bc_on <- isTRUE(cfg$batch_correction$enabled %||% bc_default_on)
+    if (bc_on && !identical(bc_m, "none")) {
         dp <- paste(dp, sprintf(paste0(
             "Batch effects were corrected with %s. The correction was estimated and applied on ",
             "the single-imputed complete matrix. The original missingness pattern was then ",
@@ -542,9 +559,16 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             de_txt <- paste(de_txt, "The per-run significance call used the unadjusted p-value.")
         }
     }
+    # In precomputed mode mod_proteomics_de() returns before the pipeline's
+    # filtered matrix is used, so these rows are whatever the upstream tables
+    # carried -- they did not pass this pipeline's filtering.
     if (!is.na(n_included)) {
         de_txt <- paste(de_txt, sprintf(
-            "%s proteins passed filtering and were included in the differential analysis.",
+            if (is_precomputed) {
+                "%s proteins were present in the precomputed result tables."
+            } else {
+                "%s proteins passed filtering and were included in the differential analysis."
+            },
             format(n_included, big.mark = ",")))
     }
 
@@ -575,11 +599,23 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     }
 
     # ---- Quality control ----------------------------------------------------
+    # Both sentences below describe figures, and a configuration flag does not
+    # mean the figure exists. 01_mod_qc_pre.R skips the complete-case panel when
+    # there are no missingness flags, when fewer than three proteins are
+    # complete cases, or when the plot call fails; mod_proteomics_clustering()
+    # returns before the hierarchical step when fewer than two DE features are
+    # in the matrix. Both skip with a message rather than erroring, so the
+    # artefact is the only honest witness -- the same reason the complete-case
+    # chunk in the template tests for its file instead of reasoning about config.
     qc <- paste0("Principal component analysis was computed on the quality-control expression ",
-                 "matrix. A complete-case panel restricted to proteins observed in every ",
-                 "included sample is shown as a sensitivity view.")
+                 "matrix.")
+    if (!is.null(pca_cc_file) && file.exists(pca_cc_file)) {
+        qc <- paste(qc, "A complete-case panel restricted to proteins observed in every",
+                    "included sample is shown as a sensitivity view.")
+    }
     hier <- cfg$clustering$steps$hierarchical
-    if (isTRUE(cfg$clustering$enabled) && isTRUE(hier$enabled)) {
+    if (isTRUE(cfg$clustering$enabled) && isTRUE(hier$enabled) &&
+        !is.null(hier_file) && file.exists(hier_file)) {
         qc <- paste(qc, sprintf(paste0(
             "When hierarchical clustering was enabled, row-z-scored values were clustered ",
             "using %s distance and %s linkage."),

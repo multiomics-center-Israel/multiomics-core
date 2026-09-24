@@ -33,8 +33,20 @@ cfg_for <- function(...) {
     list(modes = list(proteomics = prot))
 }
 
-blocks_for <- function(..., de_method = "limma") {
-    build_proteomics_methods_text(cfg_for(...), de_method = de_method)
+blocks_for <- function(..., de_method = "limma",
+                       pca_cc_file = NULL, hier_file = NULL) {
+    build_proteomics_methods_text(cfg_for(...), de_method = de_method,
+                                  pca_cc_file = pca_cc_file, hier_file = hier_file)
+}
+
+# A path that exists, for the two Methods sentences that describe a figure and
+# are therefore gated on the figure being there rather than on the config flag
+# that asked for it. The caller supplies the directory -- withr::local_tempdir()
+# in the test body, so it is cleaned up with that test.
+existing_file <- function(dir, name) {
+    p <- file.path(dir, name)
+    file.create(p)
+    p
 }
 
 
@@ -108,6 +120,39 @@ test_that("the log2 sentence is tied to scale_in and stays loader-agnostic", {
 
     expect_false(grepl("transformed to the log2 scale",
                        blocks_for(scale_in = "log")$data_processing, fixed = TRUE))
+})
+
+test_that("an absent scale_in falls back to files$is_logtransformed", {
+    # get_proteomics_expression_matrix() resolves a missing scale_in from
+    # files$is_logtransformed and leaves such a table untransformed. Resolving it
+    # to "linear" here would claim a log2 transformation these legacy configs
+    # never received.
+    legacy <- blocks_for(scale_in = NULL,
+                         files = list(is_logtransformed = TRUE))$data_processing
+    expect_false(grepl("transformed to the log2 scale", legacy, fixed = TRUE))
+
+    # The same fallback in the other direction: no flag, no scale_in -> linear.
+    expect_match(blocks_for(scale_in = NULL)$data_processing,
+                 "transformed to the log2 scale", fixed = TRUE)
+    expect_match(blocks_for(scale_in = NULL,
+                            files = list(is_logtransformed = FALSE))$data_processing,
+                 "transformed to the log2 scale", fixed = TRUE)
+})
+
+test_that("batch correction needs the resolved enabled state, not just a method", {
+    # get_proteomics_batch_config() resolves enabled as bc$enabled, defaulting to
+    # method != "none". An explicit enabled: false leaves correct_batch_proteomics()
+    # returning uncorrected values, whatever the method says.
+    on <- blocks_for(batch_correction = list(method = "combat"))$data_processing
+    expect_match(on, "Batch effects were corrected with ComBat", fixed = TRUE)
+
+    expect_false(grepl("Batch effects", blocks_for(batch_correction = list(
+        method = "combat", enabled = FALSE))$data_processing, fixed = TRUE))
+    expect_match(blocks_for(batch_correction = list(
+        method = "probatch", enabled = TRUE))$data_processing,
+        "corrected with proBatch", fixed = TRUE)
+    expect_false(grepl("Batch effects", blocks_for(batch_correction = list(
+        method = "none", enabled = TRUE))$data_processing, fixed = TRUE))
 })
 
 
@@ -262,6 +307,18 @@ test_that("the count sentence says what the number is", {
     expect_false(grepl("were quantified", txt, fixed = TRUE))
 })
 
+test_that("the count is not called pipeline-filtered in precomputed mode", {
+    # mod_proteomics_de() returns before the filtered matrix is used, so the rows
+    # counted here are the ones the upstream tables carried. Saying they passed
+    # this pipeline's filtering credits it with a step it did not run.
+    txt <- build_proteomics_methods_text(cfg_for(), de_method = "precomputed",
+                                         n_included = 9000L)$differential
+    expect_match(txt, "9,000 proteins were present in the precomputed result tables",
+                 fixed = TRUE)
+    expect_false(grepl("passed filtering", txt, fixed = TRUE))
+    expect_false(grepl("included in the differential analysis", txt, fixed = TRUE))
+})
+
 
 # =============================================================================
 # Precomputed DE
@@ -377,26 +434,68 @@ test_that("the clustering sentence is specific to hierarchical clustering", {
     # describe the hierarchical step only.
     expect_false(grepl("linkage", blocks_for()$quality_control, fixed = TRUE))
 
+    d <- withr::local_tempdir()
+    hm <- existing_file(d, "Hierarchical_DE_heatmap.png")
     txt <- blocks_for(clustering = list(
         enabled = TRUE,
         steps = list(hierarchical = list(enabled = TRUE, distance = "manhattan",
-                                         linkage = "average"))))$quality_control
+                                         linkage = "average"))),
+        hier_file = hm)$quality_control
     expect_match(txt, "When hierarchical clustering was enabled", fixed = TRUE)
     expect_match(txt, "manhattan distance and average linkage", fixed = TRUE)
 
     off <- blocks_for(clustering = list(
         enabled = TRUE,
-        steps = list(hierarchical = list(enabled = FALSE))))$quality_control
+        steps = list(hierarchical = list(enabled = FALSE))),
+        hier_file = hm)$quality_control
     expect_false(grepl("linkage", off, fixed = TRUE))
 })
 
+test_that("the clustering sentence needs the heatmap, not just the flags", {
+    # mod_proteomics_clustering() returns before the hierarchical step when
+    # fewer than two DE features are in the matrix, and says so with a message
+    # rather than an error. On such a run the flags are on and no heatmap
+    # exists, so the flags alone must not produce the claim.
+    d <- withr::local_tempdir()
+    on_cfg <- list(enabled = TRUE,
+                   steps = list(hierarchical = list(enabled = TRUE,
+                                                    distance = "euclidean",
+                                                    linkage = "complete")))
+    expect_false(grepl("linkage", blocks_for(clustering = on_cfg)$quality_control,
+                       fixed = TRUE))
+    expect_false(grepl("linkage",
+                       blocks_for(clustering = on_cfg,
+                                  hier_file = file.path(d, "absent.png"))$quality_control,
+                       fixed = TRUE))
+    expect_match(blocks_for(clustering = on_cfg,
+                            hier_file = existing_file(d, "Hierarchical_DE_heatmap.png")
+                            )$quality_control,
+                 "euclidean distance and complete linkage", fixed = TRUE)
+})
+
 test_that("the complete-case PCA keeps its sensitivity-view framing", {
-    txt <- blocks_for()$quality_control
+    d <- withr::local_tempdir()
+    txt <- blocks_for(pca_cc_file = existing_file(d, "PCA_robust.png"))$quality_control
     expect_match(txt, "observed in every included sample is shown as a sensitivity view",
                  fixed = TRUE)
     for (bad in c("pre-imputation", "imputation-free", "before imputation")) {
         expect_false(grepl(bad, txt, fixed = TRUE))
     }
+})
+
+test_that("the sensitivity view is claimed only when the panel exists", {
+    # 01_mod_qc_pre.R skips the panel with no missingness flags, with fewer than
+    # three complete-case proteins, or when the plot call fails -- and the
+    # template additionally requires the file. A Methods claim for a figure the
+    # report does not contain sends the reader looking for nothing.
+    d <- withr::local_tempdir()
+    expect_false(grepl("sensitivity view", blocks_for()$quality_control, fixed = TRUE))
+    expect_false(grepl("sensitivity view",
+                       blocks_for(pca_cc_file = file.path(d, "absent.png"))$quality_control,
+                       fixed = TRUE))
+    # The PCA sentence itself is unconditional; only the panel claim is gated.
+    expect_match(blocks_for()$quality_control,
+                 "Principal component analysis was computed", fixed = TRUE)
 })
 
 test_that("pathway and PPI sentences survive, still gated on their flags", {
@@ -457,4 +556,61 @@ test_that("the report template has one source of Methods wording", {
     # And the second switch() that drifted from the Methods one.
     expect_false(grepl("limma-voom", src, fixed = TRUE))
     expect_false(grepl("negative binomial generalized linear models", src, fixed = TRUE))
+})
+
+test_that("the statistics override replaces statistics only", {
+    # Before the generator existed, the pathway and PPI Methods sentences were
+    # emitted from the Methods chunk with no override gate. Folding every block
+    # into the else-branch of stats_section_text would have deleted them for any
+    # project that supplies its own statistics text.
+    f <- c(testthat::test_path("..", "..", "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"),
+           "R/domain/proteomics/report_template_proteomics.Rmd")
+    f <- f[file.exists(f)][1]
+    skip_if(is.na(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    start <- grep("^```\\{r methods-statistical-analysis[ ,}]", lines)
+    expect_length(start, 1L)
+    end <- start + which(grepl("^```\\s*$", lines[(start + 1):length(lines)]))[1]
+    chunk <- lines[(start + 1):(end - 1)]
+
+    # The override's else-branch closes before the blocks that are not
+    # statistics, so those are emitted on both paths.
+    else_close <- grep("^\\}\\s*$", chunk)
+    expect_gt(length(else_close), 0L)
+    tail_txt <- paste(chunk[(else_close[1] + 1):length(chunk)], collapse = "\n")
+    for (blk in c("quality_control", "downstream", "software")) {
+        expect_match(tail_txt, sprintf("methods_blocks$%s", blk), fixed = TRUE)
+    }
+    # while the statistical blocks stay inside it.
+    head_txt <- paste(chunk[1:else_close[1]], collapse = "\n")
+    for (blk in c("differential", "consensus")) {
+        expect_match(head_txt, sprintf("methods_blocks$%s", blk), fixed = TRUE)
+    }
+})
+
+test_that("the Results pointer is not emitted when Methods is hidden", {
+    # report$show_methods gates the Methods chunks but not this one, so the
+    # one-liner's "see Methods" would point at a section the report omits.
+    f <- c(testthat::test_path("..", "..", "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"),
+           "R/domain/proteomics/report_template_proteomics.Rmd")
+    f <- f[file.exists(f)][1]
+    skip_if(is.na(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    start <- grep("^```\\{r de-stats-description[ ,}]", lines)
+    expect_length(start, 1L)
+    end <- start + which(grepl("^```\\s*$", lines[(start + 1):length(lines)]))[1]
+    chunk <- paste(lines[(start + 1):(end - 1)], collapse = "\n")
+
+    expect_match(chunk, "isTRUE(show_methods)", fixed = TRUE)
+    expect_match(chunk, ".ds_blocks$results_oneliner", fixed = TRUE)
+    # and the full description is what replaces it, not silence.
+    expect_match(chunk, ".ds_blocks$differential", fixed = TRUE)
+
+    # The pointer itself lives only in the one-liner.
+    expect_match(blocks_for()$results_oneliner, "see Methods", fixed = TRUE)
+    expect_false(grepl("see Methods", blocks_for()$differential, fixed = TRUE))
 })
