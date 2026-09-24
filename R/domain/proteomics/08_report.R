@@ -208,10 +208,15 @@ render_proteomics_report <- function(run_dir, config, config_file = NULL, report
 
 #' PCA feature-set panels for the report's protein-subset dropdown
 #'
-#' Lists the panel images the QC module wrote, in the order the dropdown shows
-#' them: all proteins, the top-variable sets from largest to smallest, then the
-#' complete-case set. Kept out of the template so the order and labels are
+#' Lists the panel images for the report's feature-set selector, in the order
+#' the dropdown shows them: all proteins, then the top-variable sets from
+#' largest to smallest. Kept out of the template so the order and labels are
 #' tested against the code the report actually runs.
+#'
+#' The complete-case panel (\code{PCA_robust.png}) is deliberately not listed.
+#' It answers a different question from "how many proteins, ranked by variance",
+#' and the report shows it as its own section beside the main PCA rather than as
+#' an entry here — so enabling this selector cannot draw it a second time.
 #'
 #' @param diag_dir Directory holding the proteomics diagnostic plots.
 #' @return Data frame with columns \code{key} (dropdown value), \code{path} and
@@ -237,10 +242,7 @@ list_pca_feature_panels <- function(diag_dir) {
                       sprintf("Top %s variable proteins", format(n_top[i], big.mark = ",")))
     }
 
-    # Says what the selection is, not what it is free of: the panel shares the
-    # matrix and the preprocessing of the others, batch correction included.
-    add(panels, "robust", file.path(diag_dir, "PCA_robust.png"),
-        "Proteins observed in every sample")
+    panels
 }
 
 #' Sample-subset PCA panels for the report's Subsets section

@@ -810,10 +810,60 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 }
 ```
 
+```{r pca-complete-case, eval=show_pca_section, echo=FALSE, results='asis'}
+# The complete-case sensitivity view, shown whenever the QC module wrote the
+# panel. R/modules/proteomics/01_mod_qc_pre.R writes it when the preprocessing
+# output carries missingness flags, at least three features are observed in
+# every sample, and qc_pca_scatter() succeeds; it skips with a message
+# otherwise. The configured imputation method is not one of those conditions --
+# under "none" the flags are plain missingness and the panel is written as
+# usual. Hence the file.exists() test below rather than a config check: this
+# chunk asks whether the panel exists, not whether it should.
+#
+# It is deliberately NOT part of the feature-set selector below. That selector
+# answers "how many proteins, ranked by variance", and is off by default;
+# this answers a different question and belongs beside the main PCA. The
+# selector therefore carries the full-matrix and top-variable panels only, and
+# this panel is never drawn twice.
+#
+# No calculation here: the image is what R/modules/proteomics/01_mod_qc_pre.R
+# already wrote via qc_pca_scatter(), on the same matrix as the PCA above.
+pca_cc_file <- file.path(diag_dir, "PCA_robust.png")
+if (file.exists(pca_cc_file)) {
+    cat("### Complete-case sensitivity \u2014 proteins observed in every sample\n\n")
+    cat(sprintf(
+        '<div style="text-align: center;"><img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA restricted to proteins observed in every sample" /></div>\n\n',
+        knitr::image_uri(pca_cc_file)))
+    # The legend states what the panel is and stops there. The semantic
+    # restriction lives here rather than in the report:
+    #
+    #   this view must not be described as pre-imputation or imputation-free
+    #
+    # because where batch correction ran, the displayed values were informed by
+    # imputed ones. Told to a reader that sentence lands as an instruction to
+    # whoever writes the next caption rather than as an explanation, so a test
+    # enforces it instead -- see "the report shows the complete-case panel,
+    # once, outside the selector" in tests/testthat/test-pca-protein-subsets.R,
+    # which requires the phrase here and forbids it in the legend.
+    #
+    # Each sentence is one element, so the phrases the tests pin stay intact on
+    # a single source line rather than straddling a line break.
+    figure_legend(paste(
+        "This PCA starts from the same QC-stage expression matrix as the main",
+        "PCA but restricts the feature set to proteins with an observed",
+        "measurement in every included sample.",
+        "Because this subset contains no missing cells,",
+        "no within-PCA missing-value substitution is required.",
+        "If batch correction was enabled, the displayed values remain batch-corrected."))
+}
+```
+
 ```{r pca-topvar-block, eval=show_pca_section && show_pca_topvar, echo=FALSE, results='asis'}
-# PCA feature-set selector. list_pca_feature_panels() in
-# R/domain/proteomics/08_report.R decides which panels exist, their order and
-# their labels, so the dropdown and its tests run the same code.
+# PCA feature-set selector: the full matrix and the top-variable sets.
+# list_pca_feature_panels() in R/domain/proteomics/08_report.R decides which
+# panels exist, their order and their labels, so the dropdown and its tests run
+# the same code. The complete-case panel is not among them -- it has its own
+# section above, so turning this selector on cannot show it a second time.
 pca_panels <- list_pca_feature_panels(diag_dir)
 pca_data_map <- list()
 for (i in seq_len(nrow(pca_panels))) {
@@ -830,7 +880,7 @@ if (length(pca_keys) > 0) {
     default_img_uri <- NULL
 }
 
-cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, the top-variable sets use the most variable proteins, and the last set keeps only proteins with an observed measurement in every sample.\n\n")
+cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, while the top-variable sets restrict the PCA to the most variable proteins. The complete-case sensitivity view is shown separately above when available.\n\n")
 cat('<div style="margin-bottom: 20px;">\n')
 cat('<label for="pca_prot_selector"><strong>Protein subset:</strong></label>\n')
 cat('<select id="pca_prot_selector" onchange="updateProtPCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">\n')
