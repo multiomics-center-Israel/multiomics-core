@@ -62,7 +62,11 @@ csh_cfg <- function(hierarchical_enabled = TRUE) {
         de         = list(p_cutoff = 0.05, linear_fc_cutoff = 1.5),
         clustering = list(
             enabled = TRUE,
-            steps   = list(hierarchical = list(enabled = hierarchical_enabled))
+            # clustering_run_flags() calls get_n_groups_from_effects(), which
+            # requires this key and aborts without it -- it is not only the
+            # binary-patterns gate.
+            group_col = "Condition",
+            steps     = list(hierarchical = list(enabled = hierarchical_enabled))
         )
     )))
 }

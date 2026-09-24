@@ -44,7 +44,9 @@ mod_proteomics_clustering <- function(pre, de_res, config, out_dir) {
   # rerun into the same output directory leaves the previous run's image, which
   # the report both displays and now reads as evidence that clustering ran.
   # Same guard, and the same reason, as PCA_robust.png in 01_mod_qc_pre.R.
-  # .run_hierarchical_step() recreates the file whenever it actually runs.
+  # The hierarchical step recreates the file whenever it actually runs.
+  # (Named without its call syntax on purpose: test-clustering-empty-de.R finds
+  # the first step by a fixed-string grep, and a comment would shadow it.)
   f_hier_hm <- file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png")
   if (file.exists(f_hier_hm)) file.remove(f_hier_hm)
 
