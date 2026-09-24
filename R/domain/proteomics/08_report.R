@@ -259,3 +259,382 @@ list_pca_subset_panels <- function(diag_dir) {
     data.frame(name = sub("^PCA_subset_(.+)\\.png$", "\\1", basename(paths)),
                path = paths, stringsAsFactors = FALSE)
 }
+
+# =============================================================================
+# Reader-facing Methods text
+# =============================================================================
+# Kept out of the template for the same reason list_pca_feature_panels() is:
+# the wording is then tested against the code the report actually runs, rather
+# than living as prose nobody can assert on.
+#
+# Two rules hold throughout, and the tests pin both:
+#
+#   * Nothing is stated for a step that did not run. Every sentence below is
+#     reached only when the configuration it describes is active.
+#   * No default is introduced that disagrees with runtime. imputation$method is
+#     read with the dispatcher's own default (impute_proteomics() in
+#     03_imputation.R), never with "none" -- a config omitting the key imputes,
+#     so a Methods section defaulting to "none" would describe a run that did
+#     not happen. The other readers in this repo still default "none"; that
+#     divergence is tracked separately and is deliberately not changed here.
+
+#' Describe the min-count filter, which may be per group
+#'
+#' \code{extract_min_count()} accepts a bare number, a \code{default} plus
+#' per-group overrides, or per-group values alone. The phrase has to survive all
+#' three without claiming a single scalar threshold.
+#'
+#' @param min_cfg The \code{filtering$min_count} config value, or NULL.
+#' @return A character scalar naming the threshold(s).
+methods_min_count_phrase <- function(min_cfg) {
+    if (is.null(min_cfg)) return("at least 1 sample")
+    if (is.numeric(min_cfg) && length(min_cfg) == 1 && is.null(names(min_cfg))) {
+        return(sprintf("at least %s sample(s)", format(min_cfg)))
+    }
+    default_v <- min_cfg$default
+    overrides <- min_cfg[setdiff(names(min_cfg), "default")]
+    ov_txt <- if (length(overrides) > 0) {
+        paste(sprintf("%s: %s", names(overrides), unlist(overrides)), collapse = ", ")
+    } else ""
+    if (!is.null(default_v) && nzchar(ov_txt)) {
+        sprintf("at least %s sample(s), with per-group thresholds (%s)",
+                format(default_v), ov_txt)
+    } else if (!is.null(default_v)) {
+        sprintf("at least %s sample(s)", format(default_v))
+    } else if (nzchar(ov_txt)) {
+        sprintf("the per-group thresholds %s", ov_txt)
+    } else {
+        "at least 1 sample"
+    }
+}
+
+#' The configured imputation method, resolved as the dispatcher resolves it
+#'
+#' @param imp_cfg The \code{imputation} config block, or NULL.
+#' @return Lower-case method name; "perseus" is folded to "perseus_like" and an
+#'   absent key resolves to the dispatcher's default, not to "none".
+methods_imputation_method <- function(imp_cfg) {
+    m <- tolower(as.character(imp_cfg$method %||% "perseus_like"))
+    if (identical(m, "perseus")) "perseus_like" else m
+}
+
+#' Whether the configured imputation repeats identically
+#'
+#' make_imputations_proteomics() seeds each run separately, but for a
+#' deterministic method every run returns the same matrix. Saying "independent"
+#' of those would be false, so the consensus text branches on this.
+#'
+#' @param imp_cfg The \code{imputation} config block.
+#' @return TRUE when repeated runs are identical by construction.
+methods_imputation_is_deterministic <- function(imp_cfg) {
+    m <- methods_imputation_method(imp_cfg)
+    if (m %in% c("none", "minval")) return(TRUE)
+    if (identical(m, "dep2")) {
+        return(!identical(tolower(as.character(imp_cfg$dep2_method %||% "MinDet")), "minprob"))
+    }
+    FALSE
+}
+
+#' One sentence describing how missing values were filled
+#'
+#' @param imp_cfg The \code{imputation} config block.
+#' @return A character scalar, or NULL when the method is "none".
+methods_imputation_phrase <- function(imp_cfg) {
+    m <- methods_imputation_method(imp_cfg)
+    if (identical(m, "none")) return(NULL)
+    if (identical(m, "perseus_like")) {
+        return(sprintf(paste0(
+            "Missing values were imputed by drawing, independently per sample, from a normal ",
+            "distribution shifted down by %s and narrowed to %s of that sample's observed ",
+            "standard deviation."),
+            format(imp_cfg$downshift %||% 1.8), format(imp_cfg$width %||% 0.3)))
+    }
+    if (identical(m, "dep2")) {
+        if (identical(tolower(as.character(imp_cfg$dep2_method %||% "MinDet")), "minprob")) {
+            return(paste0("Missing values were drawn from a narrow normal distribution centred ",
+                          "on the 1st percentile of each sample's observed values."))
+        }
+        return(paste0("Missing values were replaced by the 1st percentile of each sample's ",
+                      "observed values."))
+    }
+    if (identical(m, "qrilc")) {
+        return(paste0("Missing values were imputed by quantile regression imputation of ",
+                      "left-censored data (QRILC)."))
+    }
+    if (identical(m, "minval")) {
+        return("Missing values were replaced by a per-sample minimum-based value.")
+    }
+    sprintf("Missing values were imputed using the %s method.", m)
+}
+
+#' One sentence describing the fitted differential-abundance model
+#'
+#' Only for internally fitted modes. Precomputed DE is handled by the caller,
+#' which must not describe a model this pipeline did not fit.
+#'
+#' @param de_cfg The \code{de} config block.
+#' @param method The method \code{mod_proteomics_de()} reported.
+#' @return A character scalar.
+methods_de_phrase <- function(de_cfg, method) {
+    m <- tolower(as.character(method))
+    if (identical(m, "limma")) {
+        s <- paste0("Moderated t-tests were fitted with the *limma* package, using empirical ",
+                    "Bayes shrinkage of the per-protein variance estimates.")
+        bc <- de_cfg$block_col
+        if (!is.null(bc) && nzchar(bc)) {
+            s <- paste0(s, sprintf(paste0(
+                " Correlation among repeated measurements within %s was estimated with ",
+                "limma::duplicateCorrelation() and incorporated in the linear-model fit."), bc))
+        }
+        return(s)
+    }
+    if (identical(m, "limma_percontrast")) {
+        return(paste0("Each requested two-group comparison was fitted separately with *limma* ",
+                      "and empirical Bayes moderation. Within each comparison, a protein was ",
+                      "retained only where it was observed above the imputation floor in at ",
+                      "least one replicate of either group."))
+    }
+    if (m %in% c("ttest", "welch")) {
+        pcol <- de_cfg$pairing_col
+        if (isTRUE(de_cfg$paired) && !is.null(pcol) && nzchar(pcol)) {
+            return(sprintf(paste0("Paired t-tests were applied per protein, with samples ",
+                                  "matched on %s."), pcol))
+        }
+        return(sprintf("Two-sample t-tests assuming %s variances were applied per protein.",
+                       if (identical(m, "ttest")) "equal" else "unequal"))
+    }
+    if (identical(m, "anova")) {
+        return(paste0("A one-way ANOVA across all groups was fitted per protein, and the ",
+                      "requested pairwise comparisons were obtained from Tukey's honest ",
+                      "significant difference test."))
+    }
+    sprintf("Differential abundance was assessed using the %s method.", method)
+}
+
+#' Reader-facing Methods blocks for the proteomics report
+#'
+#' Builds every Methods paragraph from the configuration and from the DE mode
+#' that actually ran, so the section describes the run rather than the defaults.
+#'
+#' The top-level branch is \code{de_method == "precomputed"}:
+#' \code{mod_proteomics_de()} returns that before any internal imputation or
+#' model fitting, so in that mode no internal test, no fdrtool correction and no
+#' multi-imputation consensus may be described.
+#'
+#' @param config Full pipeline config, as written to \code{config_used.yaml}.
+#' @param de_method The method \code{mod_proteomics_de()} reported.
+#' @param n_included Proteins carried into the differential analysis, or NA to
+#'   omit that sentence.
+#' @param run_dir Run directory, read only for \code{execution_info/git_commit.txt}.
+#' @return Named list of character scalars: \code{data_processing},
+#'   \code{missing_values}, \code{differential}, \code{consensus},
+#'   \code{quality_control}, \code{downstream}, \code{software},
+#'   \code{results_oneliner}. Blocks that do not apply are NULL.
+build_proteomics_methods_text <- function(config, de_method = "limma",
+                                          n_included = NA_integer_, run_dir = NULL) {
+    cfg <- config$modes$proteomics %||% list()
+    de_cfg <- cfg$de %||% list()
+    imp_cfg <- cfg$imputation %||% list()
+    filt_cfg <- cfg$filtering %||% list()
+
+    is_precomputed <- identical(tolower(as.character(de_method)), "precomputed")
+    imp_method <- methods_imputation_method(imp_cfg)
+    p_adjust <- de_cfg$p_adjust_method %||% "BH"
+    p_cut <- de_cfg$p_cutoff %||% 0.05
+    fc_cut <- de_cfg$linear_fc_cutoff %||% 1.5
+
+    # Resolved before the differential block so the use_adj_for_pass1 sentence
+    # can be stated once: the consensus paragraph already names which p-value
+    # the per-run call used, so repeating it above would say the same thing
+    # twice in adjacent paragraphs.
+    n_reps <- suppressWarnings(as.integer(imp_cfg$no_repetitions %||% NA))
+    multi_on <- isTRUE(imp_cfg$multi_imputation %||% TRUE) &&
+                !is.na(n_reps) && n_reps > 1L && !is_precomputed
+
+    # ---- Data processing ----------------------------------------------------
+    dp <- sprintf("Proteins were quantified using %s.", cfg$engine %||% "the configured search engine")
+    if (identical(tolower(as.character(cfg$scale_in %||% "linear")), "linear")) {
+        dp <- paste(dp, "Linear-scale intensities were transformed to the log2 scale before",
+                    "downstream analysis.")
+    }
+    # Stated only when the flag is on: filter_contaminants() honours
+    # remove_contaminants and skips the step when it is FALSE.
+    if (isTRUE(filt_cfg$remove_contaminants %||% TRUE)) {
+        dp <- paste(dp, sprintf(
+            "Entries whose identifier begins with %s were removed as contaminants.",
+            filt_cfg$contaminant_prefix %||% "cRAP-"))
+    }
+    dp <- paste(dp, sprintf("Proteins were retained when observed in %s in at least %s group(s).",
+                            methods_min_count_phrase(filt_cfg$min_count),
+                            format(filt_cfg$min_groups %||% 1)))
+
+    norm_m <- tolower(as.character(cfg$normalization$method %||% "none"))
+    dp <- paste(dp, if (identical(norm_m, "median")) {
+        "Sample intensities were median-centred on the log2 scale."
+    } else {
+        "No between-sample normalization was applied."
+    })
+
+    bc_m <- tolower(as.character(cfg$batch_correction$method %||% "none"))
+    if (!identical(bc_m, "none")) {
+        dp <- paste(dp, sprintf(paste0(
+            "Batch effects were corrected with %s. The correction was estimated and applied on ",
+            "the single-imputed complete matrix. The original missingness pattern was then ",
+            "restored to the filtered matrix, which is re-imputed for differential analysis, ",
+            "while quality-control and clustering use the corrected complete matrix."),
+            if (identical(bc_m, "combat")) "ComBat" else if (identical(bc_m, "probatch")) "proBatch" else bc_m))
+    }
+
+    # ---- Missing values -----------------------------------------------------
+    mv <- methods_imputation_phrase(imp_cfg)
+    if (!is.null(mv)) {
+        if (is_precomputed) {
+            mv <- paste(mv, paste0(
+                "In precomputed-DE mode, pipeline imputation is not used to fit the ",
+                "differential-abundance model; it may still be used for quality-control ",
+                "visualisation and, when enabled, batch correction."))
+        }
+        mv <- paste(mv, "Where measured and model-input values are both presented, they are",
+                    "labelled separately.")
+    }
+
+    # ---- Differential protein abundance -------------------------------------
+    if (is_precomputed) {
+        # No internal model, and no re-adjustment: the loader takes the supplied
+        # adjusted p-value and only falls back to BH -- specifically BH, not
+        # de$p_adjust_method -- when the table carries none.
+        de_txt <- paste0(
+            "Differential-abundance statistics were loaded from precomputed result tables ",
+            "supplied with the project configuration. The upstream statistical model is not ",
+            "inferred by this pipeline and is not described here. ",
+            "The loader uses the supplied adjusted p-value when available; if only raw ",
+            "p-values are provided, adjusted p-values are calculated using the ",
+            "Benjamini-Hochberg procedure. ",
+            sprintf(paste0("Proteins were reported as differentially abundant where the ",
+                           "adjusted p-value fell below %s and |linear fold change| was at ",
+                           "least %s."), p_cut, fc_cut))
+    } else {
+        m <- tolower(as.character(de_method))
+        de_txt <- methods_de_phrase(de_cfg, de_method)
+        # fdrtool is implemented in run_limma_proteomics() and
+        # run_limma_percontrast_proteomics() only; the flag being TRUE does not
+        # mean a t-test or ANOVA run applied it.
+        if (isTRUE(de_cfg$fdrtool_correction) && m %in% c("limma", "limma_percontrast")) {
+            de_txt <- paste(de_txt, paste0(
+                "Before adjustment, p-values were re-estimated from the moderated t-statistics ",
+                "against an empirical null distribution (*fdrtool*)."))
+        }
+        # ANOVA states its own adjustment, because the values being adjusted are
+        # Tukey's rather than the raw per-protein p-values.
+        de_txt <- paste(de_txt, if (identical(m, "anova")) {
+            sprintf(paste0("Those Tukey p-values were then adjusted across proteins using the ",
+                           "%s procedure."), p_adjust)
+        } else {
+            sprintf("P-values were adjusted with the %s procedure.", p_adjust)
+        })
+        de_txt <- paste(de_txt, sprintf(paste0(
+            "Proteins were reported as differentially abundant at adjusted p <= %s and ",
+            "|linear fold change| >= %s."), p_cut, fc_cut))
+        # summarize_limma_mult_imputation() reads this with isTRUE(), so an
+        # absent key means the per-run call used the raw p-value. Stated here
+        # only when no consensus paragraph follows to say it.
+        if (!multi_on && !isTRUE(de_cfg$use_adj_for_pass1)) {
+            de_txt <- paste(de_txt, "The per-run significance call used the unadjusted p-value.")
+        }
+    }
+    if (!is.na(n_included)) {
+        de_txt <- paste(de_txt, sprintf(
+            "%s proteins passed filtering and were included in the differential analysis.",
+            format(n_included, big.mark = ",")))
+    }
+
+    # ---- Multiple-imputation consensus --------------------------------------
+    cons <- NULL
+    if (multi_on) {
+        min_passed <- suppressWarnings(as.integer(imp_cfg$min_no_passed %||% NA))
+        cons <- sprintf(paste0(
+            "The differential analysis was repeated across %d configured imputation runs. %s ",
+            "Within each run, a protein passed when its %s p-value met the cutoff and its ",
+            "|fold change| met the threshold. A protein was called differentially abundant ",
+            "when it passed in at least %s of the %d runs and its summarised adjusted p-value ",
+            "also met the cutoff."),
+            n_reps,
+            if (methods_imputation_is_deterministic(imp_cfg)) {
+                "These runs are identical by construction, since the imputation is deterministic."
+            } else {
+                "Each run was drawn under its own seed."
+            },
+            if (isTRUE(de_cfg$use_adj_for_pass1)) "adjusted" else "unadjusted",
+            format(min_passed), n_reps)
+        cons <- paste(cons, sprintf(paste0(
+            "The reported p-value and adjusted p-value are the %s quantile of the per-run ",
+            "values. The reported fold change is the mean of the per-run ratios on the linear ",
+            "scale; the reported log2 fold change is the logarithm of that mean, not the mean ",
+            "of the per-run log2 fold changes."),
+            if (!is.na(min_passed) && n_reps > 0) sprintf("%g", min_passed / n_reps) else "configured"))
+    }
+
+    # ---- Quality control ----------------------------------------------------
+    qc <- paste0("Principal component analysis was computed on the quality-control expression ",
+                 "matrix. A complete-case panel restricted to proteins observed in every ",
+                 "included sample is shown as a sensitivity view.")
+    hier <- cfg$clustering$steps$hierarchical
+    if (isTRUE(cfg$clustering$enabled) && isTRUE(hier$enabled)) {
+        qc <- paste(qc, sprintf(paste0(
+            "When hierarchical clustering was enabled, row-z-scored values were clustered ",
+            "using %s distance and %s linkage."),
+            hier$distance %||% "euclidean", hier$linkage %||% "complete"))
+    }
+
+    # ---- Downstream analyses ------------------------------------------------
+    # Carried over from the previous Methods text rather than dropped: both
+    # sentences are reader-facing Methods content and both were already gated on
+    # their enabled flag. Only the wording is config-driven now.
+    down <- character(0)
+    if (isTRUE(cfg$pathway$enabled)) {
+        pw <- tolower(as.character(cfg$pathway$method %||% "both"))
+        pw_desc <- if (identical(pw, "fgsea")) {
+            "gene-set enrichment analysis"
+        } else if (identical(pw, "ora")) {
+            "over-representation analysis"
+        } else if (identical(pw, "both")) {
+            "gene-set enrichment analysis and over-representation analysis"
+        } else {
+            sprintf("the %s method", pw)
+        }
+        down <- c(down, sprintf("Pathway enrichment was performed by %s against %s.",
+                                pw_desc,
+                                paste(cfg$pathway$databases %||% c("GO", "KEGG", "Reactome"),
+                                      collapse = ", ")))
+    }
+    if (isTRUE(cfg$ppi$enabled)) {
+        down <- c(down, paste0("Protein-protein interaction networks were constructed using ",
+                               "the STRING database."))
+    }
+    down <- if (length(down) > 0) paste(down, collapse = " ") else NULL
+
+    # ---- Software -----------------------------------------------------------
+    sw <- sprintf("Analyses were performed in R %s using the multiomics-core pipeline",
+                  paste(R.version$major, R.version$minor, sep = "."))
+    sha <- NULL
+    if (!is.null(run_dir)) {
+        sha_file <- file.path(run_dir, "execution_info", "git_commit.txt")
+        if (file.exists(sha_file)) {
+            sha <- tryCatch(substr(trimws(readLines(sha_file, warn = FALSE)[1]), 1, 8),
+                            error = function(e) NULL)
+        }
+    }
+    sw <- if (!is.null(sha) && nzchar(sha)) sprintf("%s (commit %s).", sw, sha) else paste0(sw, ".")
+
+    # ---- Results-section pointer --------------------------------------------
+    one_liner <- if (is_precomputed) {
+        "Differential-abundance statistics were loaded from precomputed tables; see Methods."
+    } else {
+        sprintf(paste0("Differential protein abundance was assessed with %s; see Methods for ",
+                       "the full description."), de_method)
+    }
+
+    list(data_processing = dp, missing_values = mv, differential = de_txt,
+         consensus = cons, quality_control = qc, downstream = down, software = sw,
+         results_oneliner = one_liner)
+}
