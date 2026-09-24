@@ -113,7 +113,8 @@ stub_annotation <- function(link_overrides = list()) {
             reaction = c("R00001", "R00002"), compound = c("C00100", "C00100"),
             role = c("substrate", "product"), stringsAsFactors = FALSE),
         .proteomics_symbol_lookup = function(...) c(P1 = "Aaa", P2 = "Bbb",
-                                                    P3 = "Ccc")
+                                                    P3 = "Ccc"),
+        kegg_compound_names = function(cache_dir = NULL) c(C00100 = "Alphanoate")
     )
 }
 
@@ -408,4 +409,16 @@ test_that("pairs whose metabolite cleared FDR come first, unpaired enzymes last"
     if (any(is.na(rows$compound)) && any(!is.na(rows$compound))) {
         expect_gt(min(which(is.na(rows$compound))), max(which(!is.na(rows$compound))))
     }
+})
+
+test_that("a mapped metabolite carries KEGG's name for it where KEGG has one", {
+    rows <- run_pairs()
+    paired <- only_pairs(rows)
+    expect_identical(paired$compound_name[paired$compound == "C00100"], "Alphanoate")
+    # A compound KEGG does not name, and an enzyme with no pair, stay empty
+    # rather than inventing a label.
+    expect_true(all(is.na(rows$compound_name[is.na(rows$compound)])))
+
+    unnamed <- run_pairs(list(kegg_compound_names = function(cache_dir = NULL) NULL))
+    expect_true(all(is.na(only_pairs(unnamed)$compound_name)))
 })

@@ -102,6 +102,55 @@ kegg_link_table <- function(target, source, cache_dir = NULL) {
 }
 
 
+#' KEGG's own name for each compound
+#'
+#' The metabolomics layer names a feature however its table did -- often an
+#' m/z and retention time, which says nothing to a reader. KEGG carries a name
+#' for every compound it knows, so a mapped metabolite can be shown by that
+#' name as well as by the id it was measured under. One bulk call, cached like
+#' the link tables.
+#'
+#' KEGG lists synonyms separated by "; "; the first is taken, which is the one
+#' KEGG itself leads with.
+#'
+#' @param cache_dir Directory to cache into; NULL skips caching.
+#' @return Named character vector, compound id to name, or NULL when KEGG
+#'   cannot be reached.
+#' @examples
+#' # kegg_compound_names(tempdir())["C00026"]   # "2-Oxoglutarate"
+kegg_compound_names <- function(cache_dir = NULL) {
+    cache_file <- if (!is.null(cache_dir)) {
+        file.path(cache_dir, "kegg_compound_names.rds")
+    } else NULL
+    if (!is.null(cache_file) && file.exists(cache_file)) {
+        cached <- tryCatch(readRDS(cache_file), error = function(e) NULL)
+        if (is.character(cached)) return(cached)
+    }
+
+    lines <- tryCatch(readLines("https://rest.kegg.jp/list/compound", warn = FALSE),
+                      error = function(e) {
+                          message("    KEGG compound names unavailable: ", e$message)
+                          NULL
+                      })
+    if (is.null(lines) || length(lines) == 0) return(NULL)
+
+    parts <- strsplit(lines, "\t")
+    keep <- lengths(parts) >= 2
+    if (!any(keep)) return(NULL)
+    ids <- .strip_kegg_prefix(vapply(parts[keep], `[`, character(1), 1))
+    names_first <- trimws(vapply(strsplit(
+        vapply(parts[keep], `[`, character(1), 2), ";", fixed = TRUE),
+        `[`, character(1), 1))
+    out <- stats::setNames(names_first, ids)
+
+    if (!is.null(cache_file)) {
+        dir.create(dirname(cache_file), recursive = TRUE, showWarnings = FALSE)
+        tryCatch(saveRDS(out, cache_file), error = function(e) NULL)
+    }
+    out
+}
+
+
 #' Drop the database prefix KEGG puts on every identifier
 #'
 #' "cpd:C00001", "ec:1.1.1.1" and "path:map00010" all carry a prefix that no

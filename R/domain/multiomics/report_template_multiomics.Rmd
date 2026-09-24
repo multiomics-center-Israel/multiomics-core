@@ -1174,9 +1174,9 @@ has_enzyme_metab <- file.exists(enzyme_metab_file)
 ```{r enzyme-metabolite-table, eval=has_enzyme_metab}
 em <- read.delim(enzyme_metab_file, stringsAsFactors = FALSE, check.names = FALSE)
 em_cols <- c("contrast", "gene_symbol", "protein", "ec", "enzyme_log2fc",
-             "enzyme_p", "enzyme_padj", "metabolite", "compound",
-             "metabolite_log2fc", "metabolite_p", "metabolite_padj", "role",
-             "pathway_name", "same_direction", "note")
+             "enzyme_p", "enzyme_padj", "compound_name", "compound",
+             "metabolite", "metabolite_log2fc", "metabolite_p",
+             "metabolite_padj", "role", "pathway_name", "same_direction", "note")
 em_show <- head(em[, intersect(em_cols, names(em)), drop = FALSE], 200)
 dt <- make_dt(em_show,
               caption = paste0("Enzymes that changed and the metabolites they act on (",

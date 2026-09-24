@@ -176,7 +176,8 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
 
     front <- c("contrast", "protein", "gene_symbol", "ec", "enzyme_log2fc",
                "enzyme_p", "enzyme_padj", "enzyme_hit", "enzyme_hit_rule",
-               "compound", "metabolite", "metabolite_log2fc", "metabolite_p",
+               "compound", "compound_name", "metabolite", "metabolite_log2fc",
+               "metabolite_p",
                "metabolite_padj", "metabolite_hit", "metabolite_hit_rule",
                "role", "reaction", "pathway_id", "pathway_name", "same_direction",
                "note")
@@ -277,6 +278,7 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     }
 
     cpd_path <- get_kegg_compound_pathways(file.path(out_dir, "metabolomics"))
+    compound_names <- kegg_compound_names(cache_dir)
     gene_pathways <- NULL
     if (!is.null(gene_path) && nrow(gene_path) > 0) {
         gene_path$gene_key <- kegg_gene_key(gene_path$from, kegg_org)
@@ -291,6 +293,7 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
         protein_ec = unique(protein_ec[, c("feature_id", "ec")]),
         ec_compound = unique(ec_compound),
         metab_map = metab_map,
+        compound_names = compound_names,
         gene_pathways = gene_pathways,
         compound_pathways = if (is.null(cpd_path)) NULL else unique(data.frame(
             compound = cpd_path$compound,
@@ -357,6 +360,8 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
             enzyme_padj = r$padj_enzyme, enzyme_hit = r$hit_enzyme,
             enzyme_hit_rule = prot_hits$rule,
             compound = r$compound,
+            compound_name = if (is.null(ann$compound_names)) NA_character_
+                            else unname(ann$compound_names[r$compound]),
             metabolite = r$feature_id_metabolite,
             metabolite_log2fc = r$log2fc_metabolite,
             metabolite_p = r$pvalue_metabolite,
@@ -395,7 +400,8 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
             enzyme_log2fc = left$log2fc[i], enzyme_p = left$pvalue[i],
             enzyme_padj = left$padj[i], enzyme_hit = left$hit[i],
             enzyme_hit_rule = prot_hits$rule,
-            compound = NA_character_, metabolite = NA_character_,
+            compound = NA_character_, compound_name = NA_character_,
+            metabolite = NA_character_,
             metabolite_log2fc = NA_real_, metabolite_p = NA_real_,
             metabolite_padj = NA_real_, metabolite_hit = NA,
             metabolite_hit_rule = metab_hits$rule,
