@@ -4,6 +4,11 @@
 #' paired test support. Returns results in the same structure as
 #' run_limma_proteomics() for pipeline compatibility.
 #'
+#' When \code{de$paired} is TRUE the pairing column must be set and present in
+#' the sample metadata; either failure aborts. A configured paired design is
+#' never downgraded to an unpaired test, because the run would then report
+#' statistics from a test nobody asked for.
+#'
 #' @param expr_imp numeric matrix (proteins x samples), imputed
 #' @param meta     data.frame with sample metadata
 #' @param contrasts_df data.frame with Contrast_name, Factor, Numerator, Denominator
@@ -37,6 +42,26 @@ run_ttest_de <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg, var_equal 
     de_table_cfg <- p_cfg$de_table %||% list()
     target_id_col <- de_table_cfg$id_col %||% "FeatureID"
 
+    # Refuse a paired design we cannot honour, rather than quietly running the
+    # unpaired test: silently changing the statistical test is worse than
+    # stopping, and it left the run's own Methods text claiming "paired".
+    # resolve_de_block() already takes this line for de$block_col.
+    if (paired) {
+        if (is.null(pairing_col) || !nzchar(pairing_col)) {
+            stop("de$paired is TRUE but de$pairing_col is not set.\n",
+                 "  A paired test needs the column that says which samples form a pair.\n",
+                 "  Set modes.proteomics.de.pairing_col, or set de$paired to FALSE.")
+        }
+        if (!pairing_col %in% colnames(meta_aligned)) {
+            stop("de$pairing_col is '", pairing_col,
+                 "' but that column is not in the sample metadata.\n",
+                 "  Available columns: ", paste(colnames(meta_aligned), collapse = ", "), "\n",
+                 "  Fix the column name, or set de$paired to FALSE to run unpaired tests.")
+        }
+    }
+    # Beyond this point `paired` is the mode that actually runs.
+    is_paired <- paired
+
     n_proteins <- nrow(expr_imp)
     contrast_names <- contrasts_df$Contrast_name
     stopifnot(length(contrast_names) > 0)
@@ -54,8 +79,9 @@ run_ttest_de <- function(expr_imp, meta, contrasts_df, prot_tbl, cfg, var_equal 
                          cn, length(idx_num), length(idx_den)))
         }
 
-        # For paired tests, align samples by pairing column
-        is_paired <- paired && !is.null(pairing_col) && pairing_col %in% colnames(meta_aligned)
+        # For paired tests, align samples by pairing column. The column is
+        # validated once above, so reaching here with is_paired means the
+        # paired test is the one that runs.
         if (is_paired) {
             pair_num <- meta_aligned[[pairing_col]][idx_num]
             pair_den <- meta_aligned[[pairing_col]][idx_den]
