@@ -92,6 +92,23 @@ test_that("the min-count phrase survives per-group thresholds", {
     expect_match(only, "Control: 3", fixed = TRUE)
 })
 
+test_that("per-group thresholds are called configured, not applied", {
+    # extract_min_count() keeps an override only when its name is among the
+    # analysed groups, so a group removed by sample_filter has a configured
+    # threshold that never took effect. This formatter sees the config alone and
+    # cannot tell the two apart, so it must not claim the override was applied.
+    both <- methods_min_count_phrase(list(default = 2, Treated = 4))
+    expect_match(both, "configured per-group overrides", fixed = TRUE)
+
+    only <- methods_min_count_phrase(list(Control = 3, Treated = 4))
+    expect_match(only, "configured per-group thresholds", fixed = TRUE)
+
+    # A bare scalar applies to every group, so it needs no such hedge.
+    expect_false(grepl("configured", methods_min_count_phrase(3), fixed = TRUE))
+    expect_false(grepl("configured", methods_min_count_phrase(list(default = 2)),
+                       fixed = TRUE))
+})
+
 test_that("batch correction describes the real matrix contract", {
     # 04b_batch_correction.R estimates and applies the correction on the
     # single-imputed complete matrix, restores the missingness mask to
@@ -267,10 +284,25 @@ test_that("limma blocking is described as duplicateCorrelation, not a random blo
     txt <- blocks_for(de = list(method = "limma", block_col = "Donor",
                                 p_cutoff = 0.05, linear_fc_cutoff = 1.5))$differential
     expect_match(txt, "limma::duplicateCorrelation()", fixed = TRUE)
-    expect_match(txt, "repeated measurements within Donor", fixed = TRUE)
+    expect_match(txt, "When Donor was configured", fixed = TRUE)
     expect_false(grepl("random block", txt, fixed = TRUE))
 
     expect_false(grepl("duplicateCorrelation", blocks_for()$differential, fixed = TRUE))
+})
+
+test_that("the blocking sentence states both duplicateCorrelation outcomes", {
+    # run_limma_proteomics() refits without blocking when the consensus is
+    # non-finite (05_de_summary.R:342-346), and that outcome never reaches the
+    # report. An unconditional "was incorporated" would therefore describe a fit
+    # that did not happen on that path.
+    txt <- blocks_for(de = list(method = "limma", block_col = "Donor",
+                                p_cutoff = 0.05, linear_fc_cutoff = 1.5))$differential
+    expect_match(txt, "A finite estimate was incorporated in the linear-model fit",
+                 fixed = TRUE)
+    expect_match(txt, "if the estimate was non-finite, the model was fitted without blocking",
+                 fixed = TRUE)
+    # The unconditional claim must not come back.
+    expect_false(grepl("and incorporated in the linear-model fit", txt, fixed = TRUE))
 })
 
 test_that("ANOVA states the Tukey path without implying an omnibus gate", {
@@ -319,11 +351,12 @@ test_that("the retired RNA-seq method descriptions cannot come back", {
     }
 })
 
-test_that("the count sentence says what the number is", {
-    txt <- build_proteomics_methods_text(cfg_for(), de_method = "limma",
-                                         n_included = 9000L)$differential
-    expect_match(txt, "9,000 proteins passed filtering and were included", fixed = TRUE)
-    expect_false(grepl("were quantified", txt, fixed = TRUE))
+test_that("the count sentence is omitted when there is no count", {
+    # NA means the caller had no row count to give, and an invented one would be
+    # worse than none. The rest of the block is unaffected.
+    txt <- build_proteomics_methods_text(cfg_for(), de_method = "limma")$differential
+    expect_false(grepl("proteins are reported in", txt, fixed = TRUE))
+    expect_match(txt, "Moderated t-tests were fitted", fixed = TRUE)
 })
 
 test_that("the count is not called pipeline-filtered in precomputed mode", {
@@ -351,6 +384,9 @@ test_that("the count does not claim every summary row was fitted", {
                      fixed = TRUE)
         expect_false(grepl("passed filtering", txt, fixed = TRUE))
         expect_false(grepl("included in the differential analysis", txt, fixed = TRUE))
+        # "quantified" belongs to data processing, where the engine is named;
+        # the count must not borrow it and imply a measurement claim.
+        expect_false(grepl("were quantified", txt, fixed = TRUE))
     }
 })
 

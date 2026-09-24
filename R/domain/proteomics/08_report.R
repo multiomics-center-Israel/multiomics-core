@@ -284,6 +284,12 @@ list_pca_subset_panels <- function(diag_dir) {
 #' per-group overrides, or per-group values alone. The phrase has to survive all
 #' three without claiming a single scalar threshold.
 #'
+#' Overrides are described as \emph{configured}, not applied:
+#' \code{extract_min_count()} keeps an override only when its name is among the
+#' analysed groups (\code{02_filtering.R:185-191}), so a group removed by
+#' \code{sample_filter} has a configured threshold that never took effect. This
+#' formatter sees the config alone and cannot tell the two apart.
+#'
 #' @param min_cfg The \code{filtering$min_count} config value, or NULL.
 #' @return A character scalar naming the threshold(s).
 methods_min_count_phrase <- function(min_cfg) {
@@ -297,12 +303,12 @@ methods_min_count_phrase <- function(min_cfg) {
         paste(sprintf("%s: %s", names(overrides), unlist(overrides)), collapse = ", ")
     } else ""
     if (!is.null(default_v) && nzchar(ov_txt)) {
-        sprintf("at least %s sample(s), with per-group thresholds (%s)",
+        sprintf("at least %s sample(s), with configured per-group overrides (%s)",
                 format(default_v), ov_txt)
     } else if (!is.null(default_v)) {
         sprintf("at least %s sample(s)", format(default_v))
     } else if (nzchar(ov_txt)) {
-        sprintf("the per-group thresholds %s", ov_txt)
+        sprintf("the configured per-group thresholds %s", ov_txt)
     } else {
         "at least 1 sample"
     }
@@ -382,9 +388,15 @@ methods_de_phrase <- function(de_cfg, method) {
                     "Bayes shrinkage of the per-protein variance estimates.")
         bc <- de_cfg$block_col
         if (!is.null(bc) && nzchar(bc)) {
+            # run_limma_proteomics() refits without blocking when the consensus is
+            # non-finite (05_de_summary.R:342-346), and that outcome never reaches
+            # the report. The sentence therefore states both branches rather than
+            # claiming the estimate was incorporated.
             s <- paste0(s, sprintf(paste0(
-                " Correlation among repeated measurements within %s was estimated with ",
-                "limma::duplicateCorrelation() and incorporated in the linear-model fit."), bc))
+                " When %s was configured, within-block correlation was estimated with ",
+                "limma::duplicateCorrelation(). A finite estimate was incorporated in the ",
+                "linear-model fit; if the estimate was non-finite, the model was fitted ",
+                "without blocking."), bc))
         }
         return(s)
     }
