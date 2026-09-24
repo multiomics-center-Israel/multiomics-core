@@ -142,6 +142,17 @@ validate_multiomics_config <- function(multiomics_cfg) {
         multiomics_cfg$enrichment$cross_lookup$top_n <- 15
     }
 
+    # Validate the enzyme-metabolite pair table: which measured metabolites the
+    # changed enzymes could act on, by KEGG annotation. On by default; the
+    # section is skipped, not failed, when KEGG cannot be reached.
+    em_cfg <- enrich_cfg$enzyme_metabolite %||% list()
+    for (key in c("enabled", "enzyme_hits_only", "require_shared_pathway",
+                  "drop_currency_metabolites")) {
+        if (is.null(em_cfg[[key]])) {
+            multiomics_cfg$enrichment$enzyme_metabolite[[key]] <- TRUE
+        }
+    }
+
     # Validate pathview config
     pv_cfg <- enrich_cfg$pathview %||% list()
     if (is.null(pv_cfg$run_pathview)) {
