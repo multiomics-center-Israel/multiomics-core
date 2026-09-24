@@ -2431,8 +2431,13 @@ function bpOverlayTrace(points) {
     return {
         x: points.map(function(p) { return p.pos; }),
         y: points.map(function(p) { return p.value; }),
-        text: points.map(function(p) { return bpEscapeHtml(p.sample); }),
-        customdata: points.map(function(p) { return bpEscapeHtml(p.group); }),
+        // Raw, like every other trace in this file. bpEscapeHtml() exists for
+        // text that reaches innerHTML -- the chips and the info line. Applied
+        // here it was the same defect as the entity below, one step earlier: a
+        // sample or group containing & < > or " would have been turned INTO an
+        // entity that Plotly then shows verbatim.
+        text: points.map(function(p) { return p.sample; }),
+        customdata: points.map(function(p) { return p.group; }),
         type: "scatter", mode: "markers",
         // Plotly draws trace names and hover text as SVG text, and a named
         // HTML entity is not decoded there: the em-dash one reached the hover

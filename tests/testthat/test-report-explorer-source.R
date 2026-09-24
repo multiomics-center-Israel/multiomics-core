@@ -249,7 +249,7 @@ test_that("every overlay point keeps the group it came from", {
 
     # The group travels with the point, and reaches the hover.
     expect_match(txt, "sample: geneExprData.samples[i], group: groupName", fixed = TRUE)
-    expect_match(txt, "customdata: points.map(function(p) { return bpEscapeHtml(p.group); })",
+    expect_match(txt, "customdata: points.map(function(p) { return p.group; })",
                  fixed = TRUE)
     expect_match(txt, 'hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input:',
                  fixed = TRUE)
@@ -286,12 +286,27 @@ test_that("no Plotly text field carries an HTML entity", {
         grep("&[A-Za-z][A-Za-z0-9]*;|&#[0-9]+;", plotly_text, value = TRUE),
         character(0))
 
+    # Nor may anything MANUFACTURE an entity on the way in. bpEscapeHtml() turns
+    # & < > " into entities, which is right for innerHTML (the chips, the info
+    # line) and wrong for a trace field: a sample or group containing one of
+    # those characters would arrive at the hover as "A &amp; B". Every measured
+    # trace in this chunk already passes raw values; the overlay was the only
+    # one that did not. Scanning the literal field lines alone missed this,
+    # which is the gap this second assertion closes.
+    trace_values <- grep("^\\s*(text|customdata):", body, value = TRUE)
+    expect_gt(length(trace_values), 0L)
+    expect_identical(grep("bpEscapeHtml", trace_values, value = TRUE), character(0))
+
     # A JS escape rather than a literal em dash: the Rmd and the generated HTML
     # both stay pure ASCII and the browser does the decoding, so no locale or
     # file-encoding step can mangle it on the way through cat().
     txt <- paste(body, collapse = "\n")
     expect_match(txt, 'name: "Imputed \\\\u2014 model input"', fixed = TRUE)
     expect_match(txt, "<extra>Imputed \\\\u2014 model input</extra>", fixed = TRUE)
+
+    # bpEscapeHtml() is still in use where it belongs, so this is a guard
+    # against misplacing it rather than a deletion the next edit can undo.
+    expect_match(txt, "bpEscapeHtml", fixed = TRUE)
 })
 
 test_that("the multi-protein view says why it draws no overlay", {
