@@ -811,9 +811,14 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 ```
 
 ```{r pca-complete-case, eval=show_pca_section, echo=FALSE, results='asis'}
-# The complete-case sensitivity view. Shown whenever the QC module wrote the
-# panel, which is every run that has missingness flags -- including
-# imputation.method "none", where the flags are plain missingness.
+# The complete-case sensitivity view, shown whenever the QC module wrote the
+# panel. R/modules/proteomics/01_mod_qc_pre.R writes it when the preprocessing
+# output carries missingness flags, at least three features are observed in
+# every sample, and qc_pca_scatter() succeeds; it skips with a message
+# otherwise. The configured imputation method is not one of those conditions --
+# under "none" the flags are plain missingness and the panel is written as
+# usual. Hence the file.exists() test below rather than a config check: this
+# chunk asks whether the panel exists, not whether it should.
 #
 # It is deliberately NOT part of the feature-set selector below. That selector
 # answers "how many proteins, ranked by variance", and is off by default;
