@@ -191,9 +191,14 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                          pairs$ec, pairs$compound, na.last = TRUE), , drop = FALSE]
     rownames(pairs) <- NULL
     n_pairs <- sum(!is.na(pairs$compound))
+    n_changed <- length(unique(unlist(lapply(prot_de, function(tab) {
+        tab$feature_id[de_hit_flags(tab, cutoff)$hit]
+    }))))
     message("  Enzyme-metabolite table: ", n_pairs, " pair(s) and ",
             nrow(pairs) - n_pairs, " enzyme(s) with nothing measured to pair, over ",
-            nrow(contrasts), " contrast(s)")
+            nrow(contrasts), " contrast(s); ",
+            n_changed - length(unique(pairs$protein)),
+            " changed protein(s) carry no EC number and are not listed")
     pairs
 }
 
@@ -372,9 +377,14 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     # Every enzyme that changed is listed, even when nothing it acts on was
     # measured: a reader asking "what happened to this enzyme's metabolites?"
     # needs to see that the question has no answer here, not an absent row.
-    left <- enzymes[!enzymes$feature_id %in% paired$protein, , drop = FALSE]
-    if (nrow(left) == 0) return(paired)
+    #
+    # A changed protein with no EC number is not an enzyme, so it is not listed
+    # at all -- it would be a row about a protein this table has nothing to say
+    # about. How many there were is reported by the caller instead.
     ec_of <- split(with_ec$ec, with_ec$feature_id)
+    left <- enzymes[!enzymes$feature_id %in% paired$protein &
+                        enzymes$feature_id %in% names(ec_of), , drop = FALSE]
+    if (nrow(left) == 0) return(paired)
     unpaired <- lapply(seq_len(nrow(left)), function(i) {
         id <- left$feature_id[i]
         ecs <- .join_unique(ec_of[[id]])
@@ -391,8 +401,7 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
             metabolite_hit_rule = metab_hits$rule,
             reaction = NA_character_, pathway_id = NA_character_,
             pathway_name = NA_character_, same_direction = NA,
-            note = if (is.na(ecs)) "no EC number in KEGG"
-                   else if (cfg$require_shared_pathway)
+            note = if (cfg$require_shared_pathway)
                        "no measured metabolite in a shared pathway"
                    else "no measured metabolite",
             stringsAsFactors = FALSE)

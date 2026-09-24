@@ -1198,7 +1198,8 @@ dt
 figure_legend(paste(
     "Every enzyme that changed, with the measured metabolites KEGG links to it",
     "through an EC number and a shared pathway; `note` says why an enzyme has",
-    "none. Bold rows have a metabolite at FDR < 0.05. KEGG says the class can",
+    "none; changed proteins with no EC number are not enzymes and are left out.",
+    "Bold rows have a metabolite at FDR < 0.05. KEGG says the class can",
     "act on the compound, not that it did here, and the same direction is not",
     "agreement: a substrate often falls as its enzyme rises. Nothing is tested,",
     "and one metabolite has many enzymes, so rows are not independent."))

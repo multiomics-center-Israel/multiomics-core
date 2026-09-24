@@ -377,18 +377,19 @@ test_that("kegg_gene_key strips only the organism prefix", {
 })
 
 test_that("every changed enzyme is listed, with a note when nothing pairs", {
-    # P1 pairs with alpha; P2's only compound shares no pathway. P3 has no EC
-    # and is not a hit either, so it needs the hits-only filter relaxed.
+    # P1 pairs with alpha; P2 carries an EC but its only compound shares no
+    # pathway. P3 has no EC at all, so it is not an enzyme and is left out even
+    # with the hits-only filter relaxed.
     all_rows <- run_pairs(config = list(modes = list(multiomics = list(
         enrichment = list(enzyme_metabolite = list(enzyme_hits_only = FALSE))))))
-    expect_setequal(all_rows$protein, c("P1", "P2", "P3"))
+    expect_setequal(all_rows$protein, c("P1", "P2"))
     unpaired <- all_rows[is.na(all_rows$compound), ]
-    expect_setequal(unpaired$protein, c("P2", "P3"))
-    expect_identical(unpaired$note[unpaired$protein == "P3"], "no EC number in KEGG")
+    expect_setequal(unpaired$protein, "P2")
     expect_match(unpaired$note[unpaired$protein == "P2"], "shared pathway")
     # An unpaired row carries the enzyme's own numbers and nothing invented.
     expect_true(all(is.na(unpaired$metabolite_log2fc)))
     expect_false(any(is.na(unpaired$enzyme_log2fc)))
+    expect_false(any(is.na(all_rows$ec)))
 })
 
 test_that("the unpaired enzymes can be switched off", {
