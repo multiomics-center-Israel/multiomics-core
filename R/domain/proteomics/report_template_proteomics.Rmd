@@ -880,7 +880,7 @@ if (length(pca_keys) > 0) {
     default_img_uri <- NULL
 }
 
-cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, the top-variable sets use the most variable proteins, and the last set keeps only proteins with an observed measurement in every sample.\n\n")
+cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, while the top-variable sets restrict the PCA to the most variable proteins. The complete-case sensitivity view is shown separately above.\n\n")
 cat('<div style="margin-bottom: 20px;">\n')
 cat('<label for="pca_prot_selector"><strong>Protein subset:</strong></label>\n')
 cat('<select id="pca_prot_selector" onchange="updateProtPCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">\n')

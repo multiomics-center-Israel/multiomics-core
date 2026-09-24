@@ -203,6 +203,22 @@ test_that("the report shows the complete-case panel, once, outside the selector"
     # Turning the selector on cannot draw the same panel a second time.
     tv <- chunk_body("pca-topvar-block")
     expect_false(any(grepl("PCA_robust", tv$body, fixed = TRUE)))
+
+    # The selector's own copy must describe what the selector actually holds.
+    # It kept saying "the last set keeps only proteins with an observed
+    # measurement in every sample" after that panel had been moved out, which
+    # no source assertion caught: the panel list was tested, the prose beside
+    # it was not. Scoped to code, because the surrounding comments discuss the
+    # complete-case panel deliberately.
+    tv_code <- paste(tv$body[!grepl("^\\s*#", tv$body)], collapse = "\n")
+    expect_match(tv_code, "the top-variable sets restrict the PCA to the most variable proteins",
+                 fixed = TRUE)
+    expect_match(tv_code, "The complete-case sensitivity view is shown separately above",
+                 fixed = TRUE)
+    for (phrase in c("the last set", "observed measurement in every sample",
+                     "observed in every sample")) {
+        expect_false(grepl(phrase, tv_code, fixed = TRUE))
+    }
 })
 
 
