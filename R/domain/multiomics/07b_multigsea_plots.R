@@ -2556,11 +2556,28 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
 
 #' Plot multi-ORA omics support barplot
 #'
-#' Shows how many omics layers support each enriched pathway.
+#' Shows how many omics layers support each enriched pathway, counted on raw
+#' p-values. It used to count layers at FDR < 0.05, which reads as "0 layers
+#' support this" on every bar of a run where no layer's ORA clears FDR -- while
+#' the pathway is on the figure precisely because a layer scored it. The
+#' FDR-based count is still written to the table beside the figure.
+#'
+#' @param combined Multi-ORA summary table.
+#' @param out_dir Directory to write the figure into.
+#' @param top_n Number of pathways to draw.
+#' @return Invisibly NULL; writes multi_ora_support_barplot.png.
 plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
     if (is.null(combined) || nrow(combined) == 0) return(invisible(NULL))
 
     top <- combined[seq_len(min(top_n, nrow(combined))), ]
+    # Older summaries carry only the FDR-based count.
+    support_col <- if ("n_omics_support_pval" %in% colnames(top)) {
+        "n_omics_support_pval"
+    } else "n_omics_support"
+    top$support <- top[[support_col]]
+    support_label <- if (identical(support_col, "n_omics_support_pval")) {
+        "Layers with\nraw p < 0.05"
+    } else "Layers with\nFDR < 0.05"
     top$label <- ifelse(nchar(top$pathway) > 45,
                          paste0(substr(top$pathway, 1, 42), "..."),
                          top$pathway)
@@ -2571,10 +2588,10 @@ plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
         ggplot2::aes(
             x = -log10(pooled_pvalue + 1e-300),
             y = stats::reorder(label, -pooled_pvalue),
-            fill = factor(n_omics_support)
+            fill = factor(support)
         )) +
         ggplot2::geom_col(alpha = 0.85) +
-        ggplot2::scale_fill_manual(values = support_colors, name = "# Omics\nSupporting") +
+        ggplot2::scale_fill_manual(values = support_colors, name = support_label) +
         ggplot2::geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "red", alpha = 0.5) +
         ggplot2::labs(
             title = "Multi-ORA: Pathway Enrichment with Omics Support",

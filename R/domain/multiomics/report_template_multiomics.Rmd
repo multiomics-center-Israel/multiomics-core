@@ -737,7 +737,12 @@ support_bp <- file.path(multi_ora_dir, "multi_ora_support_barplot.png")
 if (file.exists(support_bp)) {
     cat("\n#### Omics Support per Pathway {.unnumbered}\n\n")
     cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
-    figure_legend("Multi-ORA omics support barplot. Bar length shows pooled enrichment significance (-log10 p-value). Color indicates the number of individual omics layers that independently support each pathway (padj < 0.05).")
+    figure_legend(paste(
+        "Multi-ORA support. Bar length is the pooled enrichment significance",
+        "(-log10 p). Colour is how many layers score that pathway at raw",
+        "p < 0.05 on their own. The table below gives the same count and, beside",
+        "it, how many clear FDR < 0.05 -- which can be none while the pathway is",
+        "still on this figure."))
 }
 
 # Summary table
@@ -746,10 +751,16 @@ if (file.exists(multi_ora_csv)) {
     cat("\n#### Top Multi-ORA Pathways {.unnumbered}\n\n")
     mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
     mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
-    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(mora_show))
+    # Both counts, named for their rule: the FDR-based one alone reads as "no
+    # layer supports this" on a run where no layer's ORA clears FDR.
+    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count",
+                                "metabolomics_padj", "n_omics_support_pval",
+                                "n_omics_support"), colnames(mora_show))
     mora_show <- mora_show[, display_cols, drop = FALSE]
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
-                    metabolomics_padj = "Metab padj", n_omics_support = "# Omics Supporting")
+                    metabolomics_padj = "Metab padj",
+                    n_omics_support_pval = "# layers p<0.05",
+                    n_omics_support = "# layers FDR<0.05")
     colnames(mora_show) <- col_labels[display_cols]
     # Format numeric columns (signif handles NA gracefully)
     for (nc in intersect(c("Pooled padj", "Metab padj"), colnames(mora_show))) {
@@ -787,7 +798,9 @@ if (dir.exists(mora_per_contrast_dir)) {
         if (file.exists(c_csv)) {
             c_df <- read.csv(c_csv, stringsAsFactors = FALSE)
             c_show <- c_df[seq_len(min(20, nrow(c_df))), ]
-            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(c_show))
+            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count",
+                                        "metabolomics_padj", "n_omics_support_pval",
+                                        "n_omics_support"), colnames(c_show))
             if (length(display_cols) > 0) {
                 c_show <- c_show[, display_cols, drop = FALSE]
                 cat(sprintf("\n**%s:** %d enriched pathways\n\n",
@@ -1693,6 +1706,18 @@ if (length(diablo_feat_files) > 0) {
 
 ## SNF
 
+```{r snf-intro, eval=has_snf, results='asis'}
+cat("Similarity Network Fusion builds one sample-similarity network per omics",
+    "layer and fuses them into a single network, then clusters the samples in",
+    "it. It never sees the condition labels, so its clusters describe the",
+    "structure the fused data carries; whether they line up with the design is",
+    "for the reader to check against the table below. It answers a different",
+    "question from the other two methods: MOFA2 decomposes variation into",
+    "factors without labels, DIABLO looks for features that separate the",
+    "conditions with them. The three agreeing is evidence that one grouping",
+    "dominates; their disagreeing is not a fault in any of them.\n\n")
+```
+
 ```{r snf-heatmap, eval=has_snf, results='asis'}
 p <- file.path(snf_dir, "snf_network_heatmap.png")
 if (file.exists(p)) {
@@ -1728,6 +1753,51 @@ if (file.exists(clusters_file)) {
     clusters <- read.csv(clusters_file, stringsAsFactors = FALSE)
     make_dt(clusters, caption = "SNF Cluster Assignments")
 }
+```
+
+```{r snf-vs-methods-setup, include=FALSE}
+# The consensus step already wrote the per-sample assignments of every method
+# and the agreement between their partitions. Read here, next to the clusters
+# they explain, rather than left three sections away. consensus_dir is defined
+# later in the document, so the path is built again.
+snf_cons_dir <- file.path(run_dir, "consensus", "consensus")
+snf_cmp_file <- file.path(snf_cons_dir, "sample_clusters_comparison.csv")
+has_snf_cmp <- has_snf && file.exists(snf_cmp_file)
+.snf_agreement <- function(file, label) {
+    f <- file.path(snf_cons_dir, file)
+    if (!file.exists(f)) return(NULL)
+    m <- tryCatch(read.csv(f, row.names = 1, check.names = FALSE),
+                  error = function(e) NULL)
+    if (is.null(m) || !"snf" %in% rownames(m)) return(NULL)
+    others <- setdiff(colnames(m), "snf")
+    if (length(others) == 0) return(NULL)
+    sprintf("%s %s", label,
+            paste(sprintf("%.2f vs %s", as.numeric(m["snf", others]), others),
+                  collapse = ", "))
+}
+```
+
+```{r snf-vs-methods, eval=has_snf_cmp, results='asis'}
+cat("\n### Is this the same grouping the other methods found? {.unnumbered}\n\n")
+lines <- c(.snf_agreement("method_ari_matrix.csv", "Adjusted Rand index:"),
+           .snf_agreement("method_nmi_matrix.csv", "Normalised mutual information:"))
+if (length(lines) > 0) cat(paste(lines, collapse = "  \n"), "\n\n")
+cat("Both compare partitions, not labels: a cluster numbered 1 here and 2 there",
+    "is the same grouping. 1 means the two methods split the samples",
+    "identically, 0 means no more agreement than chance.\n\n")
+```
+
+```{r snf-vs-methods-table, eval=has_snf_cmp}
+cmp <- read.csv(snf_cmp_file, stringsAsFactors = FALSE)
+make_dt(cmp, caption = "Cluster per sample, by method")
+```
+
+```{r snf-vs-methods-legend, eval=has_snf_cmp, results='asis'}
+figure_legend(paste(
+    "Cluster assignments per sample from each integration method, and the",
+    "consensus of them, as written by the consensus step. Read down a row to see",
+    "where the methods place one sample. With few samples a single sample moving",
+    "between clusters changes both indices a lot."))
 ```
 
 ## MOFA2

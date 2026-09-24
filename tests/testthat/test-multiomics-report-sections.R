@@ -236,3 +236,31 @@ test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone
     expect_true(grepl("multigsea-per-contrast", src, fixed = TRUE))
     expect_true(grepl("Loadings-Based Pathway Enrichment", src, fixed = TRUE))
 })
+
+# ---- multi-ORA support, and SNF in context ---------------------------------
+
+test_that("multi-ORA support is reported on both rules, not FDR alone", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("# layers p<0.05", src, fixed = TRUE))
+    expect_true(grepl("# layers FDR<0.05", src, fixed = TRUE))
+    # The old single column claimed "# Omics Supporting" while counting FDR only.
+    expect_false(grepl("# Omics Supporting", src, fixed = TRUE))
+})
+
+test_that("the support barplot colours by the nominal count when it has one", {
+    f <- file.path(root_dir, "R", "domain", "multiomics", "07b_multigsea_plots.R")
+    skip_if_not(file.exists(f))
+    src <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    expect_true(grepl('support_col <- if ("n_omics_support_pval" %in% colnames(top))',
+                      src, fixed = TRUE))
+    expect_true(grepl("fill = factor(support)", src, fixed = TRUE))
+})
+
+test_that("the SNF section says what SNF is and compares it with the other methods", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("Similarity Network Fusion builds one sample-similarity network",
+                      src, fixed = TRUE))
+    expect_true(grepl("sample_clusters_comparison.csv", src, fixed = TRUE))
+    expect_true(grepl("method_ari_matrix.csv", src, fixed = TRUE))
+    expect_true(grepl("method_nmi_matrix.csv", src, fixed = TRUE))
+})
