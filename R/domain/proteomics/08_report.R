@@ -373,6 +373,35 @@ methods_imputation_phrase <- function(imp_cfg) {
     sprintf("Missing values were imputed using the %s method.", m)
 }
 
+#' Name the p-value a cutoff or gate is applied to
+#'
+#' Two things decide the label, and they are independent. One is whether an
+#' across-protein adjustment ran at all (\code{de$p_adjust_method}). The other is
+#' whether the per-protein value is already adjusted: \code{run_anova_posthoc()}
+#' puts TukeyHSD's \code{"p adj"} into \code{P.Value} (\code{05b_de_anova.R:82})
+#' and then adjusts \emph{that} across proteins, so an ANOVA run with
+#' \code{p_adjust_method: "none"} still reports an adjusted p-value -- one
+#' adjusted within the protein's pairwise family, just not across proteins.
+#' Calling it unadjusted would misstate the test that ran.
+#'
+#' @param method The DE method that ran.
+#' @param p_adjust_none TRUE when \code{de$p_adjust_method} is \code{"none"}.
+#' @param across_proteins TRUE to name the across-protein adjusted value
+#'   (\code{adj.P.Val}), FALSE to name the per-test value (\code{P.Value}).
+#' @return A character scalar: the adjective that precedes "p-value".
+#' @examples
+#' methods_p_value_label("anova", TRUE)   # "Tukey-adjusted"
+#' methods_p_value_label("limma", TRUE)   # "unadjusted"
+methods_p_value_label <- function(method, p_adjust_none, across_proteins = TRUE) {
+    adjusted_across <- isTRUE(across_proteins) && !isTRUE(p_adjust_none)
+    if (identical(tolower(as.character(method)), "anova")) {
+        # Either way the value carries Tukey's within-protein correction.
+        if (adjusted_across) "across-protein adjusted" else "Tukey-adjusted"
+    } else {
+        if (adjusted_across) "adjusted" else "unadjusted"
+    }
+}
+
 #' One sentence describing the fitted differential-abundance model
 #'
 #' Only for internally fitted modes. Precomputed DE is handled by the caller,
@@ -593,12 +622,16 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         de_txt <- paste(de_txt, sprintf(paste0(
             "Proteins were reported as differentially abundant at %s p <= %s and ",
             "|linear fold change| >= %s."),
-            if (p_adjust_none) "unadjusted" else "adjusted", p_cut, fc_cut))
+            methods_p_value_label(de_method, p_adjust_none), p_cut, fc_cut))
         # summarize_limma_mult_imputation() reads this with isTRUE(), so an
         # absent key means the per-run call used the raw p-value. Stated here
         # only when no consensus paragraph follows to say it.
         if (!multi_on && !isTRUE(de_cfg$use_adj_for_pass1)) {
-            de_txt <- paste(de_txt, "The per-run significance call used the unadjusted p-value.")
+            # Same labelling rule as the consensus paragraph: pass 1 read
+            # P.Value, which for ANOVA is already Tukey's.
+            de_txt <- paste(de_txt, sprintf(
+                "The per-run significance call used the %s p-value.",
+                methods_p_value_label(de_method, p_adjust_none, across_proteins = FALSE)))
         }
     }
     # This is a row count of the summary table, and the wording has to stay
@@ -622,17 +655,19 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     cons <- NULL
     if (multi_on) {
         min_passed <- suppressWarnings(as.integer(imp_cfg$min_no_passed %||% NA))
-        # Every mention of an adjusted value here has to answer to
-        # de$p_adjust_method the same way the differential block does. With
-        # "none" the adj.P.Val entering the consensus is the raw p-value, so the
-        # per-run gate, the final gate and the reported values are all
-        # unadjusted -- and with use_adj_for_pass1 on, "adjusted" would name a
-        # correction that was never applied.
+        # Every p-value named here goes through methods_p_value_label(), so the
+        # consensus cannot drift from the cutoff sentences above it. The per-run
+        # gate reads P.Value or adj.P.Val depending on use_adj_for_pass1; the
+        # summarised gate is always the across-protein value.
+        #
+        # When no across-protein adjustment ran, P.Value and adj.P.Val are the
+        # same number, so the reported-values sentence names one rather than
+        # implying two distinct quantities.
         cons <- sprintf(paste0(
             "The differential analysis was repeated across %d configured imputation runs. %s ",
             "Within each run, a protein passed when its %s p-value met the cutoff and its ",
             "|fold change| met the threshold. A protein was called differentially abundant ",
-            "when it passed in at least %s of the %d runs and its summarised %sp-value ",
+            "when it passed in at least %s of the %d runs and its summarised %s p-value ",
             "also met the cutoff."),
             n_reps,
             if (methods_imputation_is_deterministic(imp_cfg)) {
@@ -640,15 +675,21 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             } else {
                 "Each run was drawn under its own seed."
             },
-            if (p_adjust_none) "unadjusted" else if (isTRUE(de_cfg$use_adj_for_pass1)) "adjusted" else "unadjusted",
+            methods_p_value_label(de_method, p_adjust_none,
+                                  across_proteins = isTRUE(de_cfg$use_adj_for_pass1)),
             format(min_passed), n_reps,
-            if (p_adjust_none) "" else "adjusted ")
+            methods_p_value_label(de_method, p_adjust_none))
         cons <- paste(cons, sprintf(paste0(
             "The reported %s the %s quantile of the per-run ",
             "values. The reported fold change is the mean of the per-run ratios on the linear ",
             "scale; the reported log2 fold change is the logarithm of that mean, not the mean ",
             "of the per-run log2 fold changes."),
-            if (p_adjust_none) "p-value is" else "p-value and adjusted p-value are",
+            if (p_adjust_none) {
+                sprintf("%s p-value is", methods_p_value_label(de_method, p_adjust_none))
+            } else {
+                sprintf("p-value and %s p-value are",
+                        methods_p_value_label(de_method, p_adjust_none))
+            },
             if (!is.na(min_passed) && n_reps > 0) sprintf("%g", min_passed / n_reps) else "configured"))
     }
 
@@ -747,7 +788,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     } else {
         sprintf(paste0("Proteins were reported as differentially abundant at %s ",
                        "p-value $\\leq$ %s and |linear fold change| $\\geq$ %s."),
-                if (p_adjust_none) "unadjusted" else "adjusted", p_cut, fc_cut)
+                methods_p_value_label(de_method, p_adjust_none), p_cut, fc_cut)
     }
 
     list(data_processing = dp, missing_values = mv, differential = de_txt,

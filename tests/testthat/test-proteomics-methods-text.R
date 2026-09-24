@@ -493,8 +493,8 @@ test_that("the consensus drops every adjustment claim when adjustment is off", {
                           min_no_passed = 8))$consensus
 
     expect_match(txt, "its unadjusted p-value met the cutoff", fixed = TRUE)
-    expect_match(txt, "its summarised p-value also met the cutoff", fixed = TRUE)
-    expect_match(txt, "The reported p-value is the 0.8 quantile", fixed = TRUE)
+    expect_match(txt, "its summarised unadjusted p-value also met the cutoff", fixed = TRUE)
+    expect_match(txt, "The reported unadjusted p-value is the 0.8 quantile", fixed = TRUE)
     # The leading space is load-bearing: "unadjusted p-value" contains
     # "adjusted p-value", so the bare substring would fail on correct text.
     expect_false(grepl(" adjusted p-value", txt, fixed = TRUE))
@@ -506,6 +506,103 @@ test_that("the consensus drops every adjustment claim when adjustment is off", {
     expect_match(on, "summarised adjusted p-value also met the cutoff", fixed = TRUE)
     expect_match(on, "The reported p-value and adjusted p-value are the 0.8 quantile",
                  fixed = TRUE)
+})
+
+test_that("ANOVA p-values are never called unadjusted, in any block", {
+    # run_anova_posthoc() puts TukeyHSD's "p adj" into P.Value
+    # (05b_de_anova.R:82) and then adjusts that across proteins. With
+    # p_adjust_method "none" the across-protein step is the only thing missing,
+    # so the reported value is still Tukey-adjusted. Calling it unadjusted --
+    # which the generic p_adjust_none branch did -- misstates the test.
+    anova_none <- list(method = "anova", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                       p_adjust_method = "none", use_adj_for_pass1 = TRUE)
+    multi <- list(method = "perseus_like", width = 0.3, downshift = 1.8,
+                  multi_imputation = TRUE, no_repetitions = 10, min_no_passed = 8)
+    b <- blocks_for(de = anova_none, imputation = multi, de_method = "anova")
+
+    # 1. the differential cutoff sentence
+    expect_match(b$differential, "at Tukey-adjusted p <= 0.05", fixed = TRUE)
+    expect_match(b$differential, "not further adjusted across proteins", fixed = TRUE)
+    # 2. the Results thresholds sentence
+    expect_match(b$results_thresholds, "at Tukey-adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    # 3. the consensus paragraph, per-run gate and summarised gate alike
+    expect_match(b$consensus, "its Tukey-adjusted p-value met the cutoff", fixed = TRUE)
+    expect_match(b$consensus, "summarised Tukey-adjusted p-value also met the cutoff",
+                 fixed = TRUE)
+    expect_match(b$consensus, "The reported Tukey-adjusted p-value is the 0.8 quantile",
+                 fixed = TRUE)
+
+    # The whole point: "unadjusted p" must not survive anywhere a reader looks.
+    for (blk in c("differential", "results_thresholds", "consensus")) {
+        expect_false(grepl("unadjusted p", b[[blk]], fixed = TRUE))
+    }
+
+    # The pass-1 sentence is a fourth mention, emitted only on a single-run
+    # configuration where no consensus paragraph follows to state it.
+    single <- blocks_for(
+        de = utils::modifyList(anova_none, list(use_adj_for_pass1 = FALSE)),
+        imputation = list(method = "perseus_like", multi_imputation = FALSE,
+                          no_repetitions = 1, min_no_passed = 1),
+        de_method = "anova")
+    expect_null(single$consensus)
+    expect_match(single$differential,
+                 "The per-run significance call used the Tukey-adjusted p-value.",
+                 fixed = TRUE)
+    expect_false(grepl("unadjusted p", single$differential, fixed = TRUE))
+
+    # And the same sentence for a non-ANOVA method is untouched.
+    expect_match(
+        blocks_for(de = list(method = "limma", p_cutoff = 0.05,
+                             linear_fc_cutoff = 1.5))$differential,
+        "The per-run significance call used the unadjusted p-value.", fixed = TRUE)
+})
+
+test_that("ANOVA with an across-protein adjustment keeps the two levels apart", {
+    # The other half: adj.P.Val is Tukey's value adjusted again across proteins,
+    # and the cutoff applies to that. Without this case the two ANOVA semantics
+    # could collapse back into one label.
+    anova_bh <- list(method = "anova", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                     p_adjust_method = "BH", use_adj_for_pass1 = TRUE)
+    multi <- list(method = "perseus_like", width = 0.3, downshift = 1.8,
+                  multi_imputation = TRUE, no_repetitions = 10, min_no_passed = 8)
+    b <- blocks_for(de = anova_bh, imputation = multi, de_method = "anova")
+
+    expect_match(b$differential, "adjusted across proteins using the BH procedure",
+                 fixed = TRUE)
+    expect_match(b$differential, "at across-protein adjusted p <= 0.05", fixed = TRUE)
+    expect_match(b$results_thresholds, "at across-protein adjusted p-value $\\leq$ 0.05",
+                 fixed = TRUE)
+    expect_match(b$consensus, "summarised across-protein adjusted p-value", fixed = TRUE)
+    for (blk in c("differential", "results_thresholds", "consensus")) {
+        expect_false(grepl("unadjusted p", b[[blk]], fixed = TRUE))
+    }
+
+    # The per-run gate names whichever value pass 1 read, and for ANOVA that is
+    # Tukey's when use_adj_for_pass1 is off -- never "unadjusted".
+    off <- blocks_for(de = utils::modifyList(anova_bh, list(use_adj_for_pass1 = FALSE)),
+                      imputation = multi, de_method = "anova")
+    expect_match(off$consensus, "its Tukey-adjusted p-value met the cutoff", fixed = TRUE)
+    expect_match(off$consensus, "summarised across-protein adjusted p-value", fixed = TRUE)
+    expect_false(grepl("unadjusted p", off$consensus, fixed = TRUE))
+})
+
+test_that("the label helper covers every method and adjustment pairing", {
+    # One table, so the four cases cannot be changed independently of each other.
+    expect_equal(methods_p_value_label("limma", FALSE), "adjusted")
+    expect_equal(methods_p_value_label("limma", TRUE), "unadjusted")
+    expect_equal(methods_p_value_label("anova", FALSE), "across-protein adjusted")
+    expect_equal(methods_p_value_label("anova", TRUE), "Tukey-adjusted")
+
+    # across_proteins = FALSE names the per-test value instead.
+    expect_equal(methods_p_value_label("limma", FALSE, across_proteins = FALSE), "unadjusted")
+    expect_equal(methods_p_value_label("anova", FALSE, across_proteins = FALSE), "Tukey-adjusted")
+    expect_equal(methods_p_value_label("ANOVA", TRUE), "Tukey-adjusted")
+
+    # Non-ANOVA methods all share the generic labels.
+    for (m in c("limma", "limma_percontrast", "ttest", "welch")) {
+        expect_equal(methods_p_value_label(m, FALSE), "adjusted")
+        expect_equal(methods_p_value_label(m, TRUE), "unadjusted")
+    }
 })
 
 test_that("repetitions are not called independent when they are identical", {
