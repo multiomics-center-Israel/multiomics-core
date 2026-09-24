@@ -114,7 +114,10 @@ load_precomputed_metabolomics_de <- function(config) {
 
     de_tables <- list()
     for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
+        # resolve_input_path(), not resolve_raw_path(): a pre-computed table is
+        # usually another run's export under outputs/, and may be given as an
+        # absolute path.
+        abs_path <- resolve_input_path(config, de_files[i])[1]
         if (!file.exists(abs_path)) {
             stop("Pre-computed DE table not found: ", abs_path)
         }
@@ -124,13 +127,22 @@ load_precomputed_metabolomics_de <- function(config) {
         # Map columns to standard names
         cn <- colnames(raw)
 
-        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
+        # Feature ids: an unnamed first column (readr: "...1", base R: "X", or
+        # ""), or a named one. This pipeline's own metabolomics export names it
+        # `feature_id`, and falling through to rownames() there silently keyed
+        # every feature on its row number, so nothing downstream matched.
         id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
-        feat_ids <- if (!is.na(id_col_idx)) {
-            as.character(raw[[id_col_idx]])
-        } else {
-            rownames(raw)
+        if (is.na(id_col_idx)) {
+            id_col_idx <- match(TRUE, cn %in% c("feature_id", "FeatureID",
+                                                "Feature", "feature"))
         }
+        if (is.na(id_col_idx)) {
+            stop("Pre-computed metabolomics DE table has no feature id column: ",
+                 basename(abs_path), ". Expected an unnamed first column or one ",
+                 "named feature_id. Columns: ", paste(cn, collapse = ", "),
+                 call. = FALSE)
+        }
+        feat_ids <- as.character(raw[[id_col_idx]])
 
         # logFC: try common column name variants
         logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
@@ -147,7 +159,16 @@ load_precomputed_metabolomics_de <- function(config) {
             stringsAsFactors = FALSE
         )
         tbl$AveExpr <- NA_real_
-        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
+        # The file's own adjusted p-value where it has one: re-adjusting would
+        # quietly differ from the run that produced the table whenever that run
+        # tested a different set of features.
+        padj_col <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "adj.pval",
+                                 "adj.P.Value", "q.value")][1]
+        tbl$adj.P.Val <- if (!is.na(padj_col)) {
+            as.numeric(raw[[padj_col]])
+        } else {
+            stats::p.adjust(tbl$P.Value, method = "BH")
+        }
 
         de_tables[[contrast_labels[i]]] <- tbl
         message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
