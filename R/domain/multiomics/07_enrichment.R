@@ -597,9 +597,9 @@ canonical_uniprot_accession <- function(accessions) {
 #' and keeps its first symbol -- the convention harmonization already uses when
 #' it matches proteins to transcripts. The annotation is joined to the features
 #' by value, through the \code{row_data} column that holds the feature IDs, so a
-#' reordered \code{row_data} still lines up; when no column holds every feature
-#' ID exactly once, the annotation cannot be trusted to line up and none is
-#' returned.
+#' reordered \code{row_data} still lines up. That column must be a 1:1 key --
+#' as many rows as features, no duplicates, the same set of IDs -- or the
+#' annotation cannot be trusted to line up and none is returned.
 #'
 #' @param prot_pre The proteomics entry of \code{harmonization_res$inputs}:
 #'   a list carrying \code{row_data} and \code{expr_work}.
@@ -615,12 +615,13 @@ protein_group_gene_symbols <- function(prot_pre) {
     feature_ids <- rownames(prot_pre$expr_work)
     if (is.null(row_data) || nrow(row_data) == 0 || is.null(feature_ids)) return(NULL)
 
+    # A 1:1 key: one row per feature and nothing else, in any order.
     holds_ids <- vapply(colnames(row_data), function(col) {
         v <- as.character(row_data[[col]])
-        !anyDuplicated(v) && all(feature_ids %in% v)
+        length(v) == length(feature_ids) && !anyDuplicated(v) && setequal(v, feature_ids)
     }, logical(1))
     if (!any(holds_ids)) {
-        message("    No row_data column holds the proteomics feature IDs; ",
+        message("    No row_data column is a 1:1 key for the proteomics feature IDs; ",
                 "protein groups are mapped through their accessions only")
         return(NULL)
     }
@@ -722,7 +723,9 @@ map_protein_groups_to_entrez <- function(ids, lookup, symbols = NULL,
 #' Transcriptomics IDs are looked up as ENSEMBL, then WORMBASE, keys.
 #' Proteomics features go through \code{map_protein_groups_to_entrez()}; when
 #' no accession resolves at all, the whole layer falls back to the WormBase /
-#' gene_id column of \code{row_data} (C. elegans and similar).
+#' gene_id column of \code{row_data} (C. elegans and similar). When that
+#' fallback is unavailable or maps nothing, the groups already resolved by
+#' gene symbol are returned rather than nothing.
 #'
 #' @param de_tables Named list of DE data frames, each with a \code{feature_id}
 #'   column; the IDs of every table are mapped together.
@@ -813,19 +816,24 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
             any(entrez_df$source %in% c("accession", "canonical_accession"))) {
             return(entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE])
         }
+        # Groups already resolved by gene symbol are what this layer returns if
+        # the fallback below is unavailable or maps nothing -- not NULL.
+        symbol_only <- if (!is.null(entrez_df) && nrow(entrez_df) > 0) {
+            entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE]
+        }
 
         # Fallback: try via row_data WormBase/gene_id columns (C. elegans etc.)
         prot_pre <- harmonization_res$inputs$proteomics
         if (is.null(prot_pre) || is.null(prot_pre$row_data)) {
             message("    No proteomics row_data for ID mapping")
-            return(NULL)
+            return(symbol_only)
         }
 
         row_data <- prot_pre$row_data
         wbgene_col <- intersect(c("Wormbase_id", "wormbase_id", "gene_id"), colnames(row_data))
         if (length(wbgene_col) == 0) {
             message("    No WormBase/gene_id column in proteomics row_data")
-            return(NULL)
+            return(symbol_only)
         }
 
         prot_ids <- rownames(prot_pre$expr_work)
@@ -837,7 +845,7 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         )
         prot_to_wb <- prot_to_wb[!is.na(prot_to_wb$WBGene) & nzchar(prot_to_wb$WBGene), ]
 
-        if (nrow(prot_to_wb) == 0) return(NULL)
+        if (nrow(prot_to_wb) == 0) return(symbol_only)
 
         mapped <- tryCatch({
             res <- AnnotationDbi::mapIds(
@@ -860,6 +868,9 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
             )
         }, error = function(e) NULL)
 
+        if (is.null(mapped) || !any(!is.na(mapped$ENTREZID))) {
+            return(symbol_only %||% mapped)
+        }
         return(mapped)
 
     } else if (omics_type == "metabolomics") {

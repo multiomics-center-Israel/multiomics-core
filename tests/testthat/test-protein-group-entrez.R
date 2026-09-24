@@ -200,3 +200,64 @@ test_that("no gene symbols are returned when the annotation cannot be aligned", 
     expect_null(protein_group_gene_symbols(no_gene_col))
     expect_null(protein_group_gene_symbols(list(expr_work = expr)))
 })
+
+test_that("an ID column with the features plus extra rows is not taken as aligned", {
+    pre <- list(
+        expr_work = matrix(0, 2, 1, dimnames = list(c("P1;P2", "P3"), "S1")),
+        row_data = data.frame(Protein.Group = c("P3", "P1;P2", "P9"),
+                              Genes = c("GENE3", "GENEA", "GENE9"),
+                              stringsAsFactors = FALSE))
+    expect_null(suppressMessages(protein_group_gene_symbols(pre)))
+})
+
+
+# map_feature_ids_to_entrez() is sourced into the global environment, not a
+# package namespace, so the resolver it calls is swapped in its own
+# environment and restored on exit -- the pattern of the other enrichment tests.
+local_stubs <- function(stubs, env = parent.frame()) {
+    target <- environment(map_feature_ids_to_entrez)
+    nms <- names(stubs)
+    had <- vapply(nms, exists, logical(1), envir = target, inherits = FALSE)
+    old <- lapply(nms[had], get, envir = target, inherits = FALSE)
+    names(old) <- nms[had]
+    withr::defer({
+        for (nm in nms) {
+            if (nm %in% names(old)) {
+                assign(nm, old[[nm]], envir = target)
+            } else if (exists(nm, envir = target, inherits = FALSE)) {
+                rm(list = nm, envir = target)
+            }
+        }
+    }, envir = env)
+    for (nm in nms) assign(nm, stubs[[nm]], envir = target)
+    invisible(NULL)
+}
+
+test_that("symbol-only group mappings survive when the WormBase fallback has nothing", {
+    # No accession resolved, so the whole-layer fallback is tried; each way it
+    # can come up empty must hand back the groups mapped by gene symbol.
+    symbol_only <- data.frame(feature_id = "P1;P2", ENTREZID = "202",
+                              source = "gene_symbol", matched_key = "GENEB",
+                              stringsAsFactors = FALSE)
+    local_stubs(list(map_protein_groups_to_entrez = function(...) symbol_only))
+    de_tables <- list(c1 = data.frame(feature_id = c("P1;P2", "P3"),
+                                      stringsAsFactors = FALSE))
+    expr <- matrix(0, 2, 1, dimnames = list(c("P1;P2", "P3"), "S1"))
+    expected <- symbol_only[, c("feature_id", "ENTREZID")]
+
+    no_row_data <- list(inputs = list(proteomics = list(expr_work = expr)))
+    no_gene_col <- list(inputs = list(proteomics = list(
+        expr_work = expr,
+        row_data = data.frame(Protein.Group = c("P1;P2", "P3"), stringsAsFactors = FALSE))))
+    # A gene_id column is present, but the lookup errors (the OrgDb is a stub).
+    lookup_fails <- list(inputs = list(proteomics = list(
+        expr_work = expr,
+        row_data = data.frame(Protein.Group = c("P1;P2", "P3"),
+                              gene_id = c("WBG1", "WBG3"), stringsAsFactors = FALSE))))
+
+    for (h in list(no_row_data, no_gene_col, lookup_fails)) {
+        res <- suppressMessages(
+            map_feature_ids_to_entrez(de_tables, "proteomics", h, org_db = "OrgDb.stub"))
+        expect_identical(res, expected)
+    }
+})
