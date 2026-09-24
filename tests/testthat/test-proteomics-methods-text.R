@@ -967,6 +967,48 @@ test_that("the report template has one source of Methods wording", {
     expect_false(grepl("negative binomial generalized linear models", src, fixed = TRUE))
 })
 
+test_that("the Methods headings sit at the levels their content implies", {
+    # Quality control, downstream analyses and software are not statistical
+    # analysis. Emitting them at level 3 made them render as children of
+    # "Statistical Analysis" (11.3.3, 11.3.4, ...) rather than siblings of it.
+    # Only the differential and consensus blocks belong inside that section.
+    f <- c(testthat::test_path("..", "..", "R", "domain", "proteomics",
+                               "report_template_proteomics.Rmd"),
+           "R/domain/proteomics/report_template_proteomics.Rmd")
+    f <- f[file.exists(f)][1]
+    skip_if(is.na(f), "proteomics report template not found")
+    lines <- readLines(f, warn = FALSE)
+
+    start <- grep('^cat\\("# Methods', lines)
+    expect_length(start, 1L)
+    chunk_start <- grep('^```\\{r methods-statistical-analysis[ ,}]', lines)
+    expect_length(chunk_start, 1L)
+    stop_at <- chunk_start + which(grepl("^```\\s*$",
+                                         lines[(chunk_start + 1):length(lines)]))[1]
+    region <- lines[start:stop_at]
+
+    hits <- grep('^\\s*cat\\("#', region, value = TRUE)
+    level <- nchar(sub('^\\s*cat\\("(#+).*$', "\\1", hits))
+    title <- sub('^\\s*cat\\("#+ ([^\\\\]*).*$', "\\1", hits)
+
+    expect_equal(
+        title,
+        c("Methods", "Data processing", "Missing values", "Statistical Analysis",
+          "Differential protein abundance", "Multiple-imputation consensus",
+          "Quality control", "Downstream analyses", "Software"))
+    expect_equal(
+        level,
+        c(1L, 2L, 2L, 2L, 3L, 3L, 2L, 2L, 2L))
+
+    # Stated separately so a failure says which rule broke: only the two
+    # statistical blocks may be level 3.
+    expect_setequal(title[level == 3L],
+                    c("Differential protein abundance", "Multiple-imputation consensus"))
+    for (h in c("Quality control", "Downstream analyses", "Software")) {
+        expect_equal(level[title == h], 2L)
+    }
+})
+
 test_that("the statistics override replaces statistics only", {
     # Before the generator existed, the pathway and PPI Methods sentences were
     # emitted from the Methods chunk with no override gate. Folding every block

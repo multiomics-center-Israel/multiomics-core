@@ -4215,15 +4215,18 @@ if (nzchar(trimws(stats_section_text))) {
     }
 }
 
-cat("### Quality control\n\n")
+# Level 2, not 3: these are siblings of "Statistical Analysis" under Methods,
+# not subsections of it. Only the differential and consensus blocks above are
+# statistical-analysis content, and they stay at level 3 inside that section.
+cat("## Quality control\n\n")
 cat(methods_blocks$quality_control, "\n\n")
 
 if (!is.null(methods_blocks$downstream)) {
-    cat("### Downstream analyses\n\n")
+    cat("## Downstream analyses\n\n")
     cat(methods_blocks$downstream, "\n\n")
 }
 
-cat("### Software\n\n")
+cat("## Software\n\n")
 cat(methods_blocks$software, "\n\n")
 ```
 
