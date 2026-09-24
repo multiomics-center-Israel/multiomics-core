@@ -520,11 +520,15 @@ test_that("ANOVA p-values are never called unadjusted, in any block", {
                   multi_imputation = TRUE, no_repetitions = 10, min_no_passed = 8)
     b <- blocks_for(de = anova_none, imputation = multi, de_method = "anova")
 
-    # 1. the differential cutoff sentence
-    expect_match(b$differential, "at Tukey-adjusted p <= 0.05", fixed = TRUE)
+    # 1. the differential block. Under multiple imputation it carries no single
+    #    threshold pair, so the cutoff wording is checked on a single-run config.
     expect_match(b$differential, "not further adjusted across proteins", fixed = TRUE)
-    # 2. the Results thresholds sentence
-    expect_match(b$results_thresholds, "at Tukey-adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    single <- blocks_for(de = anova_none, de_method = "anova")$differential
+    expect_match(single, "at Tukey-adjusted p <= 0.05", fixed = TRUE)
+    # 2. the Results thresholds sentence -- consensus-shaped here
+    expect_match(b$results_thresholds, "using Tukey-adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    expect_match(blocks_for(de = anova_none, de_method = "anova")$results_thresholds,
+                 "at Tukey-adjusted p-value $\\leq$ 0.05", fixed = TRUE)
     # 3. the consensus paragraph, per-run gate and summarised gate alike
     expect_match(b$consensus, "its Tukey-adjusted p-value met the cutoff", fixed = TRUE)
     expect_match(b$consensus, "summarised Tukey-adjusted p-value also met the cutoff",
@@ -569,9 +573,12 @@ test_that("ANOVA with an across-protein adjustment keeps the two levels apart", 
 
     expect_match(b$differential, "adjusted across proteins using the BH procedure",
                  fixed = TRUE)
-    expect_match(b$differential, "at across-protein adjusted p <= 0.05", fixed = TRUE)
-    expect_match(b$results_thresholds, "at across-protein adjusted p-value $\\leq$ 0.05",
-                 fixed = TRUE)
+    # The single threshold pair belongs to a single-run analysis; under multiple
+    # imputation the Results sentence is the consensus rule instead.
+    expect_match(blocks_for(de = anova_bh, de_method = "anova")$differential,
+                 "at across-protein adjusted p <= 0.05", fixed = TRUE)
+    expect_match(b$results_thresholds,
+                 "using across-protein adjusted p-value $\\leq$ 0.05", fixed = TRUE)
     expect_match(b$consensus, "summarised across-protein adjusted p-value", fixed = TRUE)
     for (blk in c("differential", "results_thresholds", "consensus")) {
         expect_false(grepl("unadjusted p", b[[blk]], fixed = TRUE))
@@ -584,6 +591,72 @@ test_that("ANOVA with an across-protein adjustment keeps the two levels apart", 
     expect_match(off$consensus, "its Tukey-adjusted p-value met the cutoff", fixed = TRUE)
     expect_match(off$consensus, "summarised across-protein adjusted p-value", fixed = TRUE)
     expect_false(grepl("unadjusted p", off$consensus, fixed = TRUE))
+})
+
+test_that("a consensus call is never described as one threshold pair", {
+    # summarize_limma_mult_imputation() decides in three steps: mark_pass1()
+    # applies BOTH cutoffs inside each run (05_de_summary.R:209), the call needs
+    # MIN_NO_PASSED of those runs, and the only summarised gate is
+    # padj_imputs <= p_cutoff (05_de_summary.R:117). linearFC.imputs is reported
+    # and never thresholded, so "adjusted p <= X and |linear fold change| >= Y"
+    # describes a rule the pipeline does not apply.
+    multi <- list(method = "perseus_like", width = 0.3, downshift = 1.8,
+                  multi_imputation = TRUE, no_repetitions = 10, min_no_passed = 8)
+    b <- blocks_for(imputation = multi)
+
+    # 1. the simple pair is gone from the differential block
+    expect_false(grepl("Proteins were reported as differentially abundant at",
+                       b$differential, fixed = TRUE))
+    expect_false(grepl("|linear fold change| >=", b$differential, fixed = TRUE))
+    # the rest of that block is untouched
+    expect_match(b$differential, "Moderated t-tests were fitted", fixed = TRUE)
+    expect_match(b$differential, "adjusted with the BH procedure", fixed = TRUE)
+
+    # 2. the Results summary carries the vote and the per-run FC threshold
+    rt <- b$results_thresholds
+    expect_match(rt, "passage in at least 8 of 10 imputation runs", fixed = TRUE)
+    expect_match(rt, "|linear fold change| $\\geq$ 1.5 within each run", fixed = TRUE)
+    expect_match(rt, "summarised adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    # and says nothing that could read as a threshold on the pooled value
+    expect_false(grepl("pooled", rt, fixed = TRUE))
+    expect_false(grepl("linearFC", rt, fixed = TRUE))
+
+    # 3. the consensus block still holds the full rule
+    expect_match(b$consensus, "passed in at least 8 of the 10 runs", fixed = TRUE)
+    expect_match(b$consensus, "|fold change| met the threshold", fixed = TRUE)
+    expect_match(b$consensus, "summarised adjusted p-value also met the cutoff", fixed = TRUE)
+
+    # Numbers and labels come from config, not from the sentence.
+    alt <- blocks_for(imputation = utils::modifyList(
+        multi, list(no_repetitions = 5, min_no_passed = 3)))$results_thresholds
+    expect_match(alt, "passage in at least 3 of 5 imputation runs", fixed = TRUE)
+    # The per-run p-value follows use_adj_for_pass1, as pass 1 does.
+    expect_match(rt, "using unadjusted p-value $\\leq$ 0.05", fixed = TRUE)
+    expect_match(blocks_for(imputation = multi,
+                            de = list(method = "limma", p_cutoff = 0.05,
+                                      linear_fc_cutoff = 1.5,
+                                      use_adj_for_pass1 = TRUE))$results_thresholds,
+                 "using adjusted p-value $\\leq$ 0.05", fixed = TRUE)
+})
+
+test_that("single-imputation threshold wording is unchanged", {
+    # The simple pair is correct there: one run, one decision.
+    b <- blocks_for()
+    expect_null(b$consensus)
+    expect_match(b$differential,
+                 "Proteins were reported as differentially abundant at adjusted p <= 0.05 and |linear fold change| >= 1.5.",
+                 fixed = TRUE)
+    expect_match(b$results_thresholds,
+                 "Proteins were reported as differentially abundant at adjusted p-value $\\leq$ 0.05 and |linear fold change| $\\geq$ 1.5.",
+                 fixed = TRUE)
+    expect_false(grepl("imputation runs", b$results_thresholds, fixed = TRUE))
+
+    # multi_imputation on but a single repetition is still a single-run analysis.
+    one <- blocks_for(imputation = list(method = "perseus_like", multi_imputation = TRUE,
+                                        no_repetitions = 1, min_no_passed = 1))
+    expect_null(one$consensus)
+    expect_match(one$differential, "at adjusted p <= 0.05", fixed = TRUE)
+    expect_false(grepl("imputation runs", one$results_thresholds, fixed = TRUE))
 })
 
 test_that("the reported-values sentence names both pooled quantities", {

@@ -498,6 +498,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     # the per-run call used, so repeating it above would say the same thing
     # twice in adjacent paragraphs.
     n_reps <- suppressWarnings(as.integer(imp_cfg$no_repetitions %||% NA))
+    min_passed <- suppressWarnings(as.integer(imp_cfg$min_no_passed %||% NA))
     multi_on <- isTRUE(imp_cfg$multi_imputation %||% TRUE) &&
                 !is.na(n_reps) && n_reps > 1L && !is_precomputed
 
@@ -619,10 +620,19 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         } else {
             sprintf("P-values were adjusted with the %s procedure.", p_adjust)
         })
-        de_txt <- paste(de_txt, sprintf(paste0(
-            "Proteins were reported as differentially abundant at %s p <= %s and ",
-            "|linear fold change| >= %s."),
-            methods_p_value_label(de_method, p_adjust_none), p_cut, fc_cut))
+        # Only a single-run analysis is decided by one threshold pair. Under
+        # multiple imputation the rule is a vote: mark_pass1() applies both
+        # cutoffs inside each run (05_de_summary.R:209), the call needs
+        # MIN_NO_PASSED of them, and the only summarised gate is on the adjusted
+        # p-value (05_de_summary.R:117). linearFC.imputs is reported but never
+        # thresholded, so this sentence would imply a cutoff that does not
+        # exist. The consensus paragraph states the real rule instead.
+        if (!multi_on) {
+            de_txt <- paste(de_txt, sprintf(paste0(
+                "Proteins were reported as differentially abundant at %s p <= %s and ",
+                "|linear fold change| >= %s."),
+                methods_p_value_label(de_method, p_adjust_none), p_cut, fc_cut))
+        }
         # summarize_limma_mult_imputation() reads this with isTRUE(), so an
         # absent key means the per-run call used the raw p-value. Stated here
         # only when no consensus paragraph follows to say it.
@@ -654,7 +664,6 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     # ---- Multiple-imputation consensus --------------------------------------
     cons <- NULL
     if (multi_on) {
-        min_passed <- suppressWarnings(as.integer(imp_cfg$min_no_passed %||% NA))
         # Every p-value named here goes through methods_p_value_label(), so the
         # consensus cannot drift from the cutoff sentences above it. The per-run
         # gate reads P.Value or adj.P.Val depending on use_adj_for_pass1; the
@@ -792,6 +801,20 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
         sprintf(paste0("Proteins were reported as differentially abundant where the adjusted ",
                        "p-value fell below %s and |linear fold change| was at least %s."),
                 p_cut, fc_cut)
+    } else if (multi_on) {
+        # Both cutoffs are per-run, the vote is the middle step, and the only
+        # summarised threshold is on the adjusted p-value. Deliberately says
+        # nothing about the pooled linear fold change, which is reported and
+        # never thresholded.
+        sprintf(paste0("Consensus differential-abundance calls required passage in at least ",
+                       "%s of %s imputation runs, using %s p-value $\\leq$ %s and |linear ",
+                       "fold change| $\\geq$ %s within each run, together with a summarised ",
+                       "%s p-value $\\leq$ %s."),
+                format(min_passed), n_reps,
+                methods_p_value_label(de_method, p_adjust_none,
+                                      across_proteins = isTRUE(de_cfg$use_adj_for_pass1)),
+                p_cut, fc_cut,
+                methods_p_value_label(de_method, p_adjust_none), p_cut)
     } else {
         sprintf(paste0("Proteins were reported as differentially abundant at %s ",
                        "p-value $\\leq$ %s and |linear fold change| $\\geq$ %s."),
