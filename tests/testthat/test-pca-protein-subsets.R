@@ -213,8 +213,14 @@ test_that("the report shows the complete-case panel, once, outside the selector"
     tv_code <- paste(tv$body[!grepl("^\\s*#", tv$body)], collapse = "\n")
     expect_match(tv_code, "the top-variable sets restrict the PCA to the most variable proteins",
                  fixed = TRUE)
-    expect_match(tv_code, "The complete-case sensitivity view is shown separately above",
+    # Qualified, not unconditional: the selector is emitted whenever
+    # show_pca_topvar is on, but the complete-case section above appears only
+    # when the QC module managed to write the panel. Promising it outright
+    # would send a reader looking for a section that is not there.
+    expect_match(tv_code,
+                 "The complete-case sensitivity view is shown separately above when available",
                  fixed = TRUE)
+    expect_false(grepl("shown separately above.", tv_code, fixed = TRUE))
     for (phrase in c("the last set", "observed measurement in every sample",
                      "observed in every sample")) {
         expect_false(grepl(phrase, tv_code, fixed = TRUE))
