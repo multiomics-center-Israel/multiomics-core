@@ -167,25 +167,37 @@ test_that("the report shows the complete-case panel, once, outside the selector"
     expect_match(cc_txt, 'file.path(diag_dir, "PCA_robust.png")', fixed = TRUE)
     expect_match(cc_txt, "if (file.exists(pca_cc_file)) {", fixed = TRUE)
 
-    # No second PCA: the chunk renders the image the QC module already wrote.
-    # Code only -- the comments name the QC function deliberately, as the
-    # pointer to where the calculation actually lives.
+    # Code and comments are checked separately: one is what the reader sees,
+    # the other is what constrains whoever edits it next.
     cc_code <- paste(cc$body[!grepl("^\\s*#", cc$body)], collapse = "\n")
+    cc_comments <- paste(cc$body[grepl("^\\s*#", cc$body)], collapse = "\n")
+
+    # No second PCA: the chunk renders the image the QC module already wrote.
+    # The comments name the QC function deliberately, as the pointer to where
+    # the calculation actually lives, so this is scoped to code.
     expect_false(grepl("prcomp", cc_code, fixed = TRUE))
     expect_false(grepl("compute_pca_scores", cc_code, fixed = TRUE))
     expect_false(grepl("qc_pca_scatter", cc_code, fixed = TRUE))
 
-    # Describes the selection, and explicitly refuses the stronger claim. The
-    # values stay batch-corrected where batch correction ran, so "before
-    # imputation" would be wrong even though no cell here was imputed.
-    expect_match(cc_txt, "observed in every sample", fixed = TRUE)
-    expect_match(cc_txt, "no within-PCA missing-value substitution is required",
+    # What the reader sees: the selection, and why no substitution was needed.
+    expect_match(cc_code, "observed in every sample", fixed = TRUE)
+    expect_match(cc_code, "no within-PCA missing-value substitution is required",
                  fixed = TRUE)
-    expect_match(cc_txt, "not be described as pre-imputation or imputation-free",
+    expect_match(cc_code, "the displayed values remain batch-corrected",
                  fixed = TRUE)
-    for (phrase in c("before imputation", "imputation-free view",
+
+    # The semantic restriction is a contract on the caption, not a sentence for
+    # the reader: told to a reader it reads as an instruction to the next person
+    # writing one. It belongs in the comments, and must stay out of the legend.
+    expect_match(cc_comments,
+                 "not be described as pre-imputation or imputation-free",
+                 fixed = TRUE)
+    expect_false(grepl("not be described as", cc_code, fixed = TRUE))
+
+    # Neither the legend nor the heading may make the stronger claim.
+    for (phrase in c("before imputation", "pre-imputation", "imputation-free",
                      "no imputed values", "free of imputation")) {
-        expect_false(grepl(phrase, cc_txt, fixed = TRUE))
+        expect_false(grepl(phrase, cc_code, fixed = TRUE))
     }
 
     # Turning the selector on cannot draw the same panel a second time.

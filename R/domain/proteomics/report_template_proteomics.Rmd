@@ -829,6 +829,18 @@ if (file.exists(pca_cc_file)) {
     cat(sprintf(
         '<div style="text-align: center;"><img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA restricted to proteins observed in every sample" /></div>\n\n',
         knitr::image_uri(pca_cc_file)))
+    # The legend states what the panel is and stops there. The semantic
+    # restriction lives here rather than in the report:
+    #
+    #   this view must not be described as pre-imputation or imputation-free
+    #
+    # because where batch correction ran, the displayed values were informed by
+    # imputed ones. Told to a reader that sentence lands as an instruction to
+    # whoever writes the next caption rather than as an explanation, so a test
+    # enforces it instead -- see "the report shows the complete-case panel,
+    # once, outside the selector" in tests/testthat/test-pca-protein-subsets.R,
+    # which requires the phrase here and forbids it in the legend.
+    #
     # Each sentence is one element, so the phrases the tests pin stay intact on
     # a single source line rather than straddling a line break.
     figure_legend(paste(
@@ -837,9 +849,7 @@ if (file.exists(pca_cc_file)) {
         "measurement in every included sample.",
         "Because this subset contains no missing cells,",
         "no within-PCA missing-value substitution is required.",
-        "If batch correction was enabled, the displayed values remain",
-        "batch-corrected; this view should therefore",
-        "not be described as pre-imputation or imputation-free."))
+        "If batch correction was enabled, the displayed values remain batch-corrected."))
 }
 ```
 
