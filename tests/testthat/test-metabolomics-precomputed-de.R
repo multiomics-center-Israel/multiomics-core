@@ -78,6 +78,14 @@ test_that("a table with no id column at all is refused by name", {
     expect_error(load_quietly(path), basename(path), fixed = TRUE)
 })
 
+test_that("a later column named X or V1 is not taken as the feature id", {
+    # Only column 1 can be the unnamed/index-like fallback; here it is Name.
+    df <- data.frame(Name = c("Alpha", "Beta"), logFC = c(1.5, -0.2),
+                     P.Value = c(0.001, 0.4), X = c("F1", "F2"), V1 = c("a", "b"),
+                     stringsAsFactors = FALSE)
+    expect_error(load_quietly(write_de(df)), "no feature id column")
+})
+
 test_that("a missing feature id is refused, not dropped", {
     path <- de_export(ids = c("F1", NA, "F3"))
     expect_error(load_quietly(path), "missing feature id in column 'feature_id'")

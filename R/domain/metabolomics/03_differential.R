@@ -179,7 +179,11 @@ load_precomputed_metabolomics_de <- function(config) {
         # with row names carries both, and the unnamed one is then just row
         # numbers -- the silent mis-keying this loader must not do.
         id_col_idx <- match(TRUE, cn %in% c("feature_id", "FeatureID", "Feature", "feature"))
-        if (is.na(id_col_idx)) id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
+        # The unnamed fallback is column 1 only: a later column named X or V1
+        # is data, not an index.
+        if (is.na(id_col_idx) && length(cn) > 0 && cn[1] %in% c("...1", "", "X", "V1")) {
+            id_col_idx <- 1L
+        }
         if (is.na(id_col_idx)) {
             refuse(paste0("no feature id column. Expected one named feature_id ",
                           "(or FeatureID, Feature, feature), or an unnamed first column."))
