@@ -271,6 +271,29 @@ test_that("the overlay marker is actually visible", {
     expect_false(grepl('color: "rgba(0,0,0,0)"', txt, fixed = TRUE))
 })
 
+test_that("no Plotly text field carries an HTML entity", {
+    # The defect: Plotly draws trace names and hover text as SVG text and does
+    # not decode a named entity there, so the overlay's label reached the hover
+    # box with "&mdash;" spelled out. The rule is NOT "no entities in this
+    # chunk" -- the checkbox label, the protein chips and the info line all go
+    # through innerHTML, where entities are correct and must stay. The rule is
+    # "none in a field Plotly renders", which is what this scopes to.
+    body <- code_only(explorer_chunk("protein-explorer-js"))
+
+    plotly_text <- grep("^\\s*(name|hovertemplate|title):|<extra>", body, value = TRUE)
+    expect_gt(length(plotly_text), 0L)
+    expect_identical(
+        grep("&[A-Za-z][A-Za-z0-9]*;|&#[0-9]+;", plotly_text, value = TRUE),
+        character(0))
+
+    # A JS escape rather than a literal em dash: the Rmd and the generated HTML
+    # both stay pure ASCII and the browser does the decoding, so no locale or
+    # file-encoding step can mangle it on the way through cat().
+    txt <- paste(body, collapse = "\n")
+    expect_match(txt, 'name: "Imputed \\\\u2014 model input"', fixed = TRUE)
+    expect_match(txt, "<extra>Imputed \\\\u2014 model input</extra>", fixed = TRUE)
+})
+
 test_that("the multi-protein view says why it draws no overlay", {
     # Silence there would read as a broken checkbox.
     txt <- paste(code_only(explorer_chunk("protein-explorer-js")), collapse = "\n")

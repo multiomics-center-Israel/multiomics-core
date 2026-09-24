@@ -2434,10 +2434,17 @@ function bpOverlayTrace(points) {
         text: points.map(function(p) { return bpEscapeHtml(p.sample); }),
         customdata: points.map(function(p) { return bpEscapeHtml(p.group); }),
         type: "scatter", mode: "markers",
-        name: "Imputed &mdash; model input",
+        // Plotly draws trace names and hover text as SVG text, and a named
+        // HTML entity is not decoded there: the em-dash one reached the hover
+        // box verbatim. Entities are right everywhere in this file that text
+        // reaches innerHTML -- the checkbox label, the protein chips, the info
+        // line -- and wrong everywhere it reaches Plotly. A JS escape keeps
+        // this file and the generated HTML pure ASCII and leaves the decoding
+        // to the browser, which cannot get it wrong.
+        name: "Imputed \\u2014 model input",
         showlegend: false,
         hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input: %{y:.3f}" +
-                       "<extra>Imputed &mdash; model input</extra>",
+                       "<extra>Imputed \\u2014 model input</extra>",
         // An open symbol is drawn with marker.color, which IS its outline --
         // there is no fill to suppress and marker.line does not supply that
         // stroke. A transparent marker.color here made every overlay point
