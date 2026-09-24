@@ -548,11 +548,200 @@ run_limma_for_proteomics <- function(harmonization_res) {
 }
 
 
-#' Map feature IDs to KEGG gene IDs
+#' Split protein-group IDs into their member accessions
 #'
-#' For C. elegans (and some other organisms), KEGG uses organism-specific gene
-#' IDs (e.g. CELE_xxx) rather than NCBI ENTREZID. This function maps via:
-#' feature_id -> ENTREZID -> KEGG gene ID (via bitr_kegg).
+#' A protein group ("P1;P2;P3") names every protein its peptides could belong
+#' to, leading protein first. None of those strings is itself a UniProt key, so
+#' anything that looks accessions up has to take the group apart first.
+#'
+#' @param ids Character vector of protein-group IDs.
+#' @return Data frame with one row per member: \code{feature_id} (the group ID
+#'   as given), \code{accession} (the trimmed member) and \code{position}
+#'   (1 for the leading protein). Missing and empty IDs are dropped.
+#' @examples
+#' protein_group_members(c("P1;P2", "P3"))
+protein_group_members <- function(ids) {
+    ids <- unique(as.character(ids))
+    ids <- ids[!is.na(ids) & nzchar(trimws(ids))]
+    parts <- strsplit(ids, ";", fixed = TRUE)
+    n <- lengths(parts)
+    out <- data.frame(
+        feature_id = rep(ids, n),
+        accession  = trimws(as.character(unlist(parts, use.names = FALSE))),
+        position   = as.integer(unlist(lapply(n, seq_len), use.names = FALSE)),
+        stringsAsFactors = FALSE
+    )
+    out[nzchar(out$accession), , drop = FALSE]
+}
+
+
+#' Canonical UniProt accession of an isoform accession
+#'
+#' UniProt writes isoforms as the canonical accession plus "-<n>" ("P12345-2").
+#' Annotation packages key genes on the canonical accession, so an isoform with
+#' no entry of its own can still be placed through it.
+#'
+#' @param accessions Character vector of accessions.
+#' @return The accessions with a trailing "-<digits>" removed; others unchanged.
+#' @examples
+#' canonical_uniprot_accession(c("P12345-2", "P12345", "Q9ABC1"))
+canonical_uniprot_accession <- function(accessions) {
+    sub("-[0-9]+$", "", as.character(accessions))
+}
+
+
+#' First annotated gene symbol of each proteomics feature
+#'
+#' Reads the gene annotation that came in with the protein table (DIA-NN's
+#' \code{Genes}, or the other columns \code{extract_protein_symbols()} knows)
+#' and keeps its first symbol -- the convention harmonization already uses when
+#' it matches proteins to transcripts. The annotation is joined to the features
+#' by value, through the \code{row_data} column that holds the feature IDs, so a
+#' reordered \code{row_data} still lines up. That column must be a 1:1 key --
+#' as many rows as features, no duplicates, the same set of IDs -- or the
+#' annotation cannot be trusted to line up and none is returned.
+#'
+#' @param prot_pre The proteomics entry of \code{harmonization_res$inputs}:
+#'   a list carrying \code{row_data} and \code{expr_work}.
+#' @return Character vector of first gene symbols (NA where a feature has none),
+#'   named by feature ID; NULL when there is no usable, aligned annotation.
+#' @examples
+#' pre <- list(expr_work = matrix(0, 2, 1, dimnames = list(c("P1;P2", "P3"), "S1")),
+#'             row_data = data.frame(Protein.Group = c("P3", "P1;P2"),
+#'                                   Genes = c("GENE3", "GENEA;GENEB")))
+#' protein_group_gene_symbols(pre)   # "P3" = "GENE3", "P1;P2" = "GENEA"
+protein_group_gene_symbols <- function(prot_pre) {
+    row_data <- prot_pre$row_data
+    feature_ids <- rownames(prot_pre$expr_work)
+    if (is.null(row_data) || nrow(row_data) == 0 || is.null(feature_ids)) return(NULL)
+
+    # A 1:1 key: one row per feature and nothing else, in any order.
+    holds_ids <- vapply(colnames(row_data), function(col) {
+        v <- as.character(row_data[[col]])
+        length(v) == length(feature_ids) && !anyDuplicated(v) && setequal(v, feature_ids)
+    }, logical(1))
+    if (!any(holds_ids)) {
+        message("    No row_data column is a 1:1 key for the proteomics feature IDs; ",
+                "protein groups are mapped through their accessions only")
+        return(NULL)
+    }
+
+    symbols <- extract_protein_symbols(row_data, NULL)
+    if (is.null(symbols)) return(NULL)
+    stats::setNames(as.character(symbols),
+                    as.character(row_data[[names(which(holds_ids))[1]]]))
+}
+
+
+#' Map proteomics features to Entrez IDs, one gene per feature
+#'
+#' A single-accession feature is looked up as a UniProt accession, and an
+#' isoform accession with no entry of its own is tried again as its canonical
+#' accession.
+#'
+#' A protein group ("P1;P2") is one measurement, so it gets one representative
+#' gene, never one per member: expanding it would turn a single statistical
+#' observation into several gene-level ones in ORA and GSEA. The representative
+#' is the group's first annotated gene symbol when that symbol maps. When it is
+#' missing or does not map, the group falls back to its accessions in order and
+#' takes the first one that resolves in the annotation database -- an
+#' annotation fallback, not a claim about which member the group "is".
+#'
+#' @param ids Character vector of feature IDs: UniProt accessions or protein
+#'   groups of them.
+#' @param lookup Function taking a character vector of unique accessions and
+#'   returning Entrez IDs named by accession, NA where unmapped -- the shape
+#'   \code{AnnotationDbi::mapIds()} returns.
+#' @param symbols Optional character vector of first gene symbols named by
+#'   feature ID, as \code{protein_group_gene_symbols()} returns. Read for
+#'   protein groups only.
+#' @param symbol_lookup Function like \code{lookup}, keyed by gene symbol.
+#'   Required for \code{symbols} to be used.
+#' @return Data frame with one row per mapped feature, ordered by
+#'   \code{feature_id}: \code{feature_id}, \code{ENTREZID}, \code{source}
+#'   (\code{"accession"}, \code{"canonical_accession"} or \code{"gene_symbol"})
+#'   and \code{matched_key} (the accession or symbol that resolved). A feature
+#'   nothing resolves for is left out.
+#' @examples
+#' acc <- function(keys) setNames(c(P1 = "101", P2 = "102", P3 = NA)[keys], keys)
+#' map_protein_groups_to_entrez(c("P1;P2", "P3"), acc)   # P1;P2 -> 101 only
+map_protein_groups_to_entrez <- function(ids, lookup, symbols = NULL,
+                                         symbol_lookup = NULL) {
+    empty <- data.frame(feature_id = character(0), ENTREZID = character(0),
+                        source = character(0), matched_key = character(0),
+                        stringsAsFactors = FALSE)
+    members <- protein_group_members(ids)
+    if (nrow(members) == 0) return(empty)
+    n_members <- stats::ave(members$position, members$feature_id, FUN = length)
+    group_ids <- unique(members$feature_id[n_members > 1])
+
+    by_symbol <- empty
+    if (length(group_ids) > 0 && !is.null(symbols) && is.function(symbol_lookup)) {
+        sym <- trimws(unname(as.character(symbols[group_ids])))
+        has_sym <- !is.na(sym) & nzchar(sym)
+        if (any(has_sym)) {
+            hits <- symbol_lookup(unique(sym[has_sym]))
+            entrez <- unname(as.character(hits[sym[has_sym]]))
+            ok <- !is.na(entrez) & nzchar(entrez)
+            by_symbol <- data.frame(feature_id = group_ids[has_sym][ok],
+                                    ENTREZID = entrez[ok],
+                                    source = rep("gene_symbol", sum(ok)),
+                                    matched_key = sym[has_sym][ok],
+                                    stringsAsFactors = FALSE)
+        }
+    }
+
+    rest <- members[!members$feature_id %in% by_symbol$feature_id, , drop = FALSE]
+    by_accession <- empty
+    if (nrow(rest) > 0) {
+        rest$canonical <- canonical_uniprot_accession(rest$accession)
+        hits <- lookup(unique(c(rest$accession, rest$canonical)))
+        hit_of <- function(keys) unname(as.character(hits[keys]))
+        direct <- hit_of(rest$accession)
+        via_canonical <- hit_of(rest$canonical)
+        direct_ok <- !is.na(direct) & nzchar(direct)
+        canonical_ok <- !is.na(via_canonical) & nzchar(via_canonical)
+        rest$ENTREZID <- ifelse(direct_ok, direct, via_canonical)
+        rest$source <- ifelse(direct_ok, "accession", "canonical_accession")
+        rest$matched_key <- ifelse(direct_ok, rest$accession, rest$canonical)
+        rest <- rest[direct_ok | canonical_ok, , drop = FALSE]
+        # First member that resolves, in the group's own order.
+        rest <- rest[order(rest$feature_id, rest$position), , drop = FALSE]
+        rest <- rest[!duplicated(rest$feature_id), , drop = FALSE]
+        by_accession <- rest[, names(empty), drop = FALSE]
+    }
+
+    out <- rbind(by_symbol, by_accession)
+    out <- out[order(out$feature_id), , drop = FALSE]
+    rownames(out) <- NULL
+    out
+}
+
+
+#' Map feature IDs to Entrez gene IDs
+#'
+#' Transcriptomics IDs are looked up as ENSEMBL, then WORMBASE, keys.
+#' Proteomics features go through \code{map_protein_groups_to_entrez()}; when
+#' no accession resolves at all, the whole layer falls back to the WormBase /
+#' gene_id column of \code{row_data} (C. elegans and similar). When that
+#' fallback is unavailable or maps nothing, the groups already resolved by
+#' gene symbol are returned rather than nothing.
+#'
+#' @param de_tables Named list of DE data frames, each with a \code{feature_id}
+#'   column; the IDs of every table are mapped together.
+#' @param omics_type One of \code{"transcriptomics"}, \code{"proteomics"},
+#'   \code{"metabolomics"}.
+#' @param harmonization_res Harmonization result; its
+#'   \code{inputs$proteomics} supplies the gene annotation and the fallback
+#'   gene IDs for proteomics.
+#' @param org_db OrgDb annotation object.
+#' @return Data frame with \code{feature_id} and \code{ENTREZID}, \strong{at
+#'   most one row per \code{feature_id}}; NULL when nothing can be mapped (and
+#'   always for metabolomics). Proteomics: one representative gene per
+#'   feature, as \code{map_protein_groups_to_entrez()} describes; unmapped
+#'   features are omitted. Transcriptomics: one row per input ID, with NA
+#'   \code{ENTREZID} where unmapped. Several features may share an
+#'   \code{ENTREZID}; collapsing by gene is the caller's job.
 map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, org_db) {
 
     # Collect all unique feature IDs
@@ -593,42 +782,58 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         return(entrez_df)
 
     } else if (omics_type == "proteomics") {
-        # Try direct UniProt -> ENTREZID mapping first (works for most organisms)
+        # Try direct UniProt -> ENTREZID mapping first (works for most organisms).
+        # A group string such as "P1;P2" is never a UniProt key itself, so groups
+        # are resolved to one representative gene each. mapIds() errors when
+        # none of the keys is valid; that reads as "nothing mapped" here, as it
+        # did when the whole lookup sat in one tryCatch.
+        entrez_via <- function(keytype) function(keys) tryCatch(
+            AnnotationDbi::mapIds(org_db, keys = keys, keytype = keytype,
+                                  column = "ENTREZID", multiVals = "first"),
+            error = function(e) stats::setNames(rep(NA_character_, length(keys)), keys))
         entrez_df <- tryCatch({
-            res <- AnnotationDbi::mapIds(
-                org_db,
-                keys = all_ids,
-                keytype = "UNIPROT",
-                column = "ENTREZID",
-                multiVals = "first"
+            df <- map_protein_groups_to_entrez(
+                all_ids,
+                lookup = entrez_via("UNIPROT"),
+                symbols = protein_group_gene_symbols(harmonization_res$inputs$proteomics),
+                symbol_lookup = entrez_via("SYMBOL")
             )
-            df <- data.frame(
-                feature_id = names(res),
-                ENTREZID = as.character(res),
-                stringsAsFactors = FALSE
-            )
-            df <- df[!is.na(df$ENTREZID), ]
-            if (nrow(df) > 0) {
-                message("    Mapped ", nrow(df), "/", length(all_ids),
-                        " UniProt IDs to ENTREZID directly")
-            }
+            n_src <- table(factor(df$source, levels = c("accession", "canonical_accession",
+                                                        "gene_symbol")))
+            message("    Mapped ", nrow(df), "/", length(all_ids),
+                    " proteomics features to ENTREZID (", n_src[["accession"]],
+                    " by accession, ", n_src[["canonical_accession"]],
+                    " through the canonical accession of an isoform, ",
+                    n_src[["gene_symbol"]], " protein groups by their first gene symbol)")
             df
         }, error = function(e) NULL)
 
-        if (!is.null(entrez_df) && nrow(entrez_df) > 0) return(entrez_df)
+        # The WormBase fallback below stays a whole-layer decision, taken when no
+        # accession resolved -- the same condition as before protein groups were
+        # handled. Groups resolved by gene symbol alone do not count, or a layer
+        # that needs the fallback would skip it on the strength of a few groups.
+        if (!is.null(entrez_df) &&
+            any(entrez_df$source %in% c("accession", "canonical_accession"))) {
+            return(entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE])
+        }
+        # Groups already resolved by gene symbol are what this layer returns if
+        # the fallback below is unavailable or maps nothing -- not NULL.
+        symbol_only <- if (!is.null(entrez_df) && nrow(entrez_df) > 0) {
+            entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE]
+        }
 
         # Fallback: try via row_data WormBase/gene_id columns (C. elegans etc.)
         prot_pre <- harmonization_res$inputs$proteomics
         if (is.null(prot_pre) || is.null(prot_pre$row_data)) {
             message("    No proteomics row_data for ID mapping")
-            return(NULL)
+            return(symbol_only)
         }
 
         row_data <- prot_pre$row_data
         wbgene_col <- intersect(c("Wormbase_id", "wormbase_id", "gene_id"), colnames(row_data))
         if (length(wbgene_col) == 0) {
             message("    No WormBase/gene_id column in proteomics row_data")
-            return(NULL)
+            return(symbol_only)
         }
 
         prot_ids <- rownames(prot_pre$expr_work)
@@ -640,7 +845,7 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         )
         prot_to_wb <- prot_to_wb[!is.na(prot_to_wb$WBGene) & nzchar(prot_to_wb$WBGene), ]
 
-        if (nrow(prot_to_wb) == 0) return(NULL)
+        if (nrow(prot_to_wb) == 0) return(symbol_only)
 
         mapped <- tryCatch({
             res <- AnnotationDbi::mapIds(
@@ -663,6 +868,9 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
             )
         }, error = function(e) NULL)
 
+        if (is.null(mapped) || !any(!is.na(mapped$ENTREZID))) {
+            return(symbol_only %||% mapped)
+        }
         return(mapped)
 
     } else if (omics_type == "metabolomics") {
