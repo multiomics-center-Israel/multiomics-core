@@ -87,11 +87,45 @@ filter_to_biological <- function(mat, meta, condition_col, sample_col,
 
 #' Load pre-computed metabolomics DE tables from config$files$de_table
 #'
-#' Reads CSV files with columns: FC, log2(FC), raw.pval, -log10(p).
-#' Builds a summary_df conforming to the DE contract.
+#' Reads one table per contrast (CSV or TSV), such as this pipeline's own
+#' per-contrast export \code{Datasets/de_<contrast>.tsv} or a MetaboAnalyst
+#' volcano table, and builds a summary_df conforming to the DE contract. The
+#' contrast label is the file name without its extension and a leading
+#' \code{de_}.
+#'
+#' Each table must carry:
+#' \itemize{
+#'   \item a feature id column -- a named one (\code{feature_id},
+#'     \code{FeatureID}, \code{Feature}, \code{feature}) taking precedence over
+#'     an unnamed or index-like first column (\code{...1}, \code{""},
+#'     \code{X}, \code{V1}). The ids must be non-missing, non-blank and unique;
+#'     they are used as given, never repaired or de-duplicated;
+#'   \item a log2 fold-change column (\code{log2(FC)}, \code{log2.FC.},
+#'     \code{logFC}, \code{log2FC});
+#'   \item a raw p-value column (\code{raw.pval}, \code{P.Value},
+#'     \code{pvalue}, \code{PValue}, \code{p.value}).
+#' }
+#' Anything else stops the run naming the file, rather than loading a table
+#' whose statistics would all be NA. The wide \code{de_summary.tsv} shape, with
+#' contrast-suffixed columns, is refused for the same reason.
+#'
+#' An adjusted p-value column (\code{adj.P.Val}, \code{padj}, \code{FDR},
+#' \code{adj.pval}, \code{adj.P.Value}, \code{q.value}) is kept as supplied;
+#' its method is not inferred from its name. Without one, the adjusted p-value
+#' is computed here with Benjamini-Hochberg over the table's features.
+#' Significance is re-evaluated under the current config's \code{de} cutoffs.
+#'
+#' Paths are resolved by \code{resolve_input_path()}: a relative path under
+#' \code{paths.raw}, an absolute path as given (so a previous run's export can
+#' be named wherever it lives).
 #'
 #' @param config Full pipeline config.
-#' @return list conforming to the DE contract: summary_df, method, de_tables
+#' @return List conforming to the DE contract: \code{summary_df},
+#'   \code{method} (\code{"precomputed"}), \code{de_tables}, \code{de_model}
+#'   (NULL) and \code{padj_provenance} -- one row per contrast with
+#'   \code{contrast}, \code{padj_source} (\code{"input"} or
+#'   \code{"computed_bh"}) and \code{padj_column} (the input column the
+#'   adjusted p-values came from, NA when computed here).
 load_precomputed_metabolomics_de <- function(config) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
@@ -113,41 +147,100 @@ load_precomputed_metabolomics_de <- function(config) {
     }, character(1), USE.NAMES = FALSE)
 
     de_tables <- list()
+    padj_provenance <- data.frame(contrast = character(0), padj_source = character(0),
+                                  padj_column = character(0), stringsAsFactors = FALSE)
     for (i in seq_along(de_files)) {
-        abs_path <- resolve_raw_path(config, de_files[i])
+        # The shared input resolver: a relative path is read under paths.raw,
+        # an absolute one as given -- which is how a previous run's export
+        # under outputs/ is named.
+        abs_path <- resolve_input_path(config, de_files[i])[1]
         if (!file.exists(abs_path)) {
             stop("Pre-computed DE table not found: ", abs_path)
         }
 
         raw <- read_table_auto(abs_path)
-
-        # Map columns to standard names
         cn <- colnames(raw)
-
-        # Feature IDs: unnamed first column (readr: "...1", base R: "X", or "")
-        id_col_idx <- match(TRUE, cn %in% c("...1", "", "X", "V1"))
-        feat_ids <- if (!is.na(id_col_idx)) {
-            as.character(raw[[id_col_idx]])
-        } else {
-            rownames(raw)
+        refuse <- function(problem) {
+            stop("Pre-computed metabolomics DE table ", abs_path, ": ", problem,
+                 "\n  Columns: ", paste(cn, collapse = ", "), call. = FALSE)
         }
 
-        # logFC: try common column name variants
-        logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
-        logfc_vals <- if (!is.na(logfc_col)) as.numeric(raw[[logfc_col]]) else NA_real_
+        # The wide de_summary.tsv suffixes every statistic with its contrast,
+        # so none of the bare names below would match and every statistic
+        # would load as NA -- a run that looks like it found nothing.
+        if (any(grepl("^(linearFC|pvalue|padj)\\.", cn))) {
+            refuse(paste0("this looks like a wide DE summary (contrast-suffixed ",
+                          "columns such as pvalue.<contrast>), which is not supported ",
+                          "here. Point modes.metabolomics.files.de_table at the ",
+                          "per-contrast tables (Datasets/de_<contrast>.tsv) instead."))
+        }
 
-        # P-value: try common column name variants
+        # Feature ids. A named column wins over an unnamed one: a table written
+        # with row names carries both, and the unnamed one is then just row
+        # numbers -- the silent mis-keying this loader must not do.
+        id_col_idx <- match(TRUE, cn %in% c("feature_id", "FeatureID", "Feature", "feature"))
+        # The unnamed fallback is column 1 only: a later column named X or V1
+        # is data, not an index.
+        if (is.na(id_col_idx) && length(cn) > 0 && cn[1] %in% c("...1", "", "X", "V1")) {
+            id_col_idx <- 1L
+        }
+        if (is.na(id_col_idx)) {
+            refuse(paste0("no feature id column. Expected one named feature_id ",
+                          "(or FeatureID, Feature, feature), or an unnamed first column."))
+        }
+        feat_ids <- as.character(raw[[id_col_idx]])
+        id_col_label <- if (nzchar(cn[id_col_idx])) cn[id_col_idx] else "(unnamed)"
+        n_na <- sum(is.na(feat_ids))
+        if (n_na > 0) {
+            refuse(sprintf("%d row(s) have a missing feature id in column '%s'.",
+                           n_na, id_col_label))
+        }
+        n_blank <- sum(!nzchar(trimws(feat_ids)))
+        if (n_blank > 0) {
+            refuse(sprintf("%d row(s) have an empty feature id in column '%s'.",
+                           n_blank, id_col_label))
+        }
+        dups <- unique(feat_ids[duplicated(feat_ids)])
+        if (length(dups) > 0) {
+            refuse(sprintf(paste0("%d feature id(s) in column '%s' appear more than ",
+                                  "once (e.g. %s); a table with duplicated ids is ",
+                                  "ambiguous and is not de-duplicated here."),
+                           length(dups), id_col_label,
+                           paste(utils::head(dups, 3), collapse = ", ")))
+        }
+
+        logfc_col <- cn[cn %in% c("log2(FC)", "log2.FC.", "logFC", "log2FC")][1]
+        if (is.na(logfc_col)) {
+            refuse("no log2 fold-change column (log2(FC), log2.FC., logFC or log2FC).")
+        }
         pval_col <- cn[cn %in% c("raw.pval", "P.Value", "pvalue", "PValue", "p.value")][1]
-        pval_vals <- if (!is.na(pval_col)) as.numeric(raw[[pval_col]]) else NA_real_
+        if (is.na(pval_col)) {
+            refuse("no raw p-value column (raw.pval, P.Value, pvalue, PValue or p.value).")
+        }
 
         tbl <- data.frame(
             feature_id = feat_ids,
-            logFC      = logfc_vals,
-            P.Value    = pval_vals,
+            logFC      = as.numeric(raw[[logfc_col]]),
+            P.Value    = as.numeric(raw[[pval_col]]),
             stringsAsFactors = FALSE
         )
         tbl$AveExpr <- NA_real_
-        tbl$adj.P.Val <- stats::p.adjust(tbl$P.Value, method = "BH")
+        # The file's own adjusted p-value where it has one: re-adjusting would
+        # quietly differ from the run that produced the table whenever that run
+        # tested a different set of features. Its method is not guessed from
+        # the column name; provenance records only where it came from.
+        padj_col <- cn[cn %in% c("adj.P.Val", "padj", "FDR", "adj.pval",
+                                 "adj.P.Value", "q.value")][1]
+        tbl$adj.P.Val <- if (!is.na(padj_col)) {
+            as.numeric(raw[[padj_col]])
+        } else {
+            stats::p.adjust(tbl$P.Value, method = "BH")
+        }
+        padj_provenance <- rbind(padj_provenance, data.frame(
+            contrast    = contrast_labels[i],
+            padj_source = if (!is.na(padj_col)) "input" else "computed_bh",
+            padj_column = padj_col,
+            stringsAsFactors = FALSE))
 
         de_tables[[contrast_labels[i]]] <- tbl
         message("  Loaded ", nrow(tbl), " features from ", basename(de_files[i]),
@@ -189,8 +282,39 @@ load_precomputed_metabolomics_de <- function(config) {
         summary_df = summary_df,
         method     = "precomputed",
         de_tables  = de_tables,
-        de_model   = NULL
+        de_model   = NULL,
+        padj_provenance = padj_provenance
     )
+}
+
+
+#' Describe where a DE result's adjusted p-values came from
+#'
+#' One sentence for the Methods text, read off the provenance the DE step
+#' recorded rather than assumed: adjusted p-values supplied by pre-computed
+#' input tables are not described as Benjamini-Hochberg, because their method
+#' is not known here.
+#'
+#' @param padj_provenance Data frame with a \code{padj_source} column
+#'   (\code{"input"} or \code{"computed_bh"}), as the DE step returns it.
+#' @return A single sentence, or NULL when there is no provenance to describe
+#'   (the Methods text then says nothing about the adjustment method).
+#' @examples
+#' describe_padj_provenance(data.frame(padj_source = c("input", "computed_bh")))
+describe_padj_provenance <- function(padj_provenance) {
+    src <- padj_provenance$padj_source
+    # An unrecognised or missing source cannot be described truthfully.
+    if (is.null(src) || length(src) == 0 ||
+        !all(src %in% c("input", "computed_bh"))) return(NULL)
+    if (all(src == "computed_bh")) {
+        "Adjusted p-values were computed using the Benjamini-Hochberg procedure."
+    } else if (all(src == "input")) {
+        paste("Adjusted p-values were taken from the precomputed input tables and",
+              "were not recomputed by this pipeline.")
+    } else {
+        paste("Adjusted p-values supplied by the input tables were preserved; where",
+              "absent, they were computed using the Benjamini-Hochberg procedure.")
+    }
 }
 
 
@@ -201,7 +325,9 @@ load_precomputed_metabolomics_de <- function(config) {
 #' @param pre    List from preprocess_metabolomics() (pre contract).
 #' @param config Full pipeline config.
 #' @return list conforming to the DE contract:
-#'   summary_df, method, de_tables (per-contrast list), de_model
+#'   summary_df, method, de_tables (per-contrast list), de_model, and
+#'   padj_provenance (every contrast \code{"computed_bh"}; see
+#'   \code{load_precomputed_metabolomics_de()} for its shape)
 run_metabolomics_de <- function(pre, config, contrast_table) {
     cfg <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
@@ -360,7 +486,13 @@ run_metabolomics_de <- function(pre, config, contrast_table) {
         summary_df = summary_df,
         method     = method,
         de_tables  = de_tables,
-        de_model   = de_model
+        de_model   = de_model,
+        # Every computed method adjusts with BH per contrast (limma's
+        # topTable() default, p.adjust() in de_two_group()).
+        padj_provenance = data.frame(contrast = names(de_tables),
+                                     padj_source = rep("computed_bh", length(de_tables)),
+                                     padj_column = rep(NA_character_, length(de_tables)),
+                                     stringsAsFactors = FALSE)
     )
 }
 
