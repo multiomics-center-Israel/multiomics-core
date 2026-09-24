@@ -687,8 +687,15 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             if (p_adjust_none) {
                 sprintf("%s p-value is", methods_p_value_label(de_method, p_adjust_none))
             } else {
-                sprintf("p-value and %s p-value are",
-                        methods_p_value_label(de_method, p_adjust_none))
+                # Two quantities, pooled from two columns: summarize_limma_mult_
+                # imputation() takes pvalue_imputs from P.Value and padj_imputs
+                # from adj.P.Val (05_de_summary.R:91-92). Both need naming --
+                # for ANOVA the first is Tukey's, not a raw p-value.
+                sprintf("%s p-value and %s p-value are",
+                        methods_p_value_label(de_method, p_adjust_none,
+                                              across_proteins = FALSE),
+                        methods_p_value_label(de_method, p_adjust_none,
+                                              across_proteins = TRUE))
             },
             if (!is.na(min_passed) && n_reps > 0) sprintf("%g", min_passed / n_reps) else "configured"))
     }

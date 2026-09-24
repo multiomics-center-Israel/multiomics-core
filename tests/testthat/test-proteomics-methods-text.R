@@ -504,7 +504,7 @@ test_that("the consensus drops every adjustment claim when adjustment is off", {
     # And the ordinary path is unchanged.
     on <- multi_cfg()$consensus
     expect_match(on, "summarised adjusted p-value also met the cutoff", fixed = TRUE)
-    expect_match(on, "The reported p-value and adjusted p-value are the 0.8 quantile",
+    expect_match(on, "The reported unadjusted p-value and adjusted p-value are the 0.8 quantile",
                  fixed = TRUE)
 })
 
@@ -584,6 +584,47 @@ test_that("ANOVA with an across-protein adjustment keeps the two levels apart", 
     expect_match(off$consensus, "its Tukey-adjusted p-value met the cutoff", fixed = TRUE)
     expect_match(off$consensus, "summarised across-protein adjusted p-value", fixed = TRUE)
     expect_false(grepl("unadjusted p", off$consensus, fixed = TRUE))
+})
+
+test_that("the reported-values sentence names both pooled quantities", {
+    # summarize_limma_mult_imputation() pools two different columns:
+    # pvalue_imputs from P.Value and padj_imputs from adj.P.Val
+    # (05_de_summary.R:91-92). Naming only the second left the first reading as
+    # a raw p-value, which for ANOVA it is not -- it is Tukey's.
+    multi <- list(method = "perseus_like", width = 0.3, downshift = 1.8,
+                  multi_imputation = TRUE, no_repetitions = 10, min_no_passed = 8)
+
+    anova_bh <- blocks_for(
+        de = list(method = "anova", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                  p_adjust_method = "BH"),
+        imputation = multi, de_method = "anova")$consensus
+    expect_match(anova_bh,
+                 "The reported Tukey-adjusted p-value and across-protein adjusted p-value are",
+                 fixed = TRUE)
+
+    limma_bh <- blocks_for(
+        de = list(method = "limma", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                  p_adjust_method = "BH"),
+        imputation = multi)$consensus
+    expect_match(limma_bh, "The reported unadjusted p-value and adjusted p-value are",
+                 fixed = TRUE)
+
+    # Neither may fall back to the unqualified form.
+    for (txt in list(anova_bh, limma_bh)) {
+        expect_false(grepl("The reported p-value and", txt, fixed = TRUE))
+    }
+
+    # With no across-protein adjustment the two stored values are identical, so
+    # the sentence names one quantity rather than implying two.
+    for (m in c("anova", "limma")) {
+        one <- blocks_for(
+            de = list(method = m, p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                      p_adjust_method = "none"),
+            imputation = multi, de_method = m)$consensus
+        expect_match(one, sprintf("The reported %s p-value is the 0.8 quantile",
+                                  methods_p_value_label(m, TRUE)), fixed = TRUE)
+        expect_false(grepl("p-value and", one, fixed = TRUE))
+    }
 })
 
 test_that("the label helper covers every method and adjustment pairing", {
