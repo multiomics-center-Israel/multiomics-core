@@ -1235,6 +1235,13 @@ if (nzchar(trimws(custom_stats_text))) {
         cat(.ds_blocks$results_thresholds, "\n\n")
     } else {
         cat(.ds_blocks$differential, "\n\n")
+        # The differential block deliberately omits the per-run significance
+        # rule when multiple imputation is on, because the consensus block says
+        # it. With Methods hidden that block has nowhere else to appear, and the
+        # report would never state how a protein was called significant.
+        if (!is.null(.ds_blocks$consensus)) {
+            cat(.ds_blocks$consensus, "\n\n")
+        }
     }
 }
 

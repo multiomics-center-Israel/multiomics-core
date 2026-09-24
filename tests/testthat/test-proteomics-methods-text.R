@@ -479,6 +479,35 @@ test_that("the consensus text carries the whole contract", {
                  fixed = TRUE)
 })
 
+test_that("the consensus drops every adjustment claim when adjustment is off", {
+    # With de$p_adjust_method "none" the adj.P.Val entering the consensus is the
+    # raw p-value, so the per-run gate, the final gate and the reported values
+    # are all unadjusted. This is the same claim the differential block already
+    # branches on; the consensus must not reintroduce it.
+    none_de <- list(method = "limma", p_cutoff = 0.05, linear_fc_cutoff = 1.5,
+                    p_adjust_method = "none", use_adj_for_pass1 = TRUE)
+    txt <- blocks_for(
+        de = none_de,
+        imputation = list(method = "perseus_like", width = 0.3, downshift = 1.8,
+                          multi_imputation = TRUE, no_repetitions = 10,
+                          min_no_passed = 8))$consensus
+
+    expect_match(txt, "its unadjusted p-value met the cutoff", fixed = TRUE)
+    expect_match(txt, "its summarised p-value also met the cutoff", fixed = TRUE)
+    expect_match(txt, "The reported p-value is the 0.8 quantile", fixed = TRUE)
+    # The leading space is load-bearing: "unadjusted p-value" contains
+    # "adjusted p-value", so the bare substring would fail on correct text.
+    expect_false(grepl(" adjusted p-value", txt, fixed = TRUE))
+    # use_adj_for_pass1 must not resurrect it: there is no adjusted value to use.
+    expect_false(grepl("its adjusted p-value met the cutoff", txt, fixed = TRUE))
+
+    # And the ordinary path is unchanged.
+    on <- multi_cfg()$consensus
+    expect_match(on, "summarised adjusted p-value also met the cutoff", fixed = TRUE)
+    expect_match(on, "The reported p-value and adjusted p-value are the 0.8 quantile",
+                 fixed = TRUE)
+})
+
 test_that("repetitions are not called independent when they are identical", {
     # make_imputations_proteomics() seeds each run, but a deterministic method
     # returns the same matrix every time.
@@ -787,6 +816,15 @@ test_that("the Results pointer is not emitted when Methods is hidden", {
     # the full description already ends with its own threshold sentence, so an
     # unconditional second one stated the cutoffs twice.
     expect_match(chunk, ".ds_blocks$results_thresholds", fixed = TRUE)
+    # With Methods hidden the consensus block has nowhere else to appear, and
+    # the differential block deliberately omits the per-run rule when multiple
+    # imputation is on -- so the fallback has to carry it too, or the report
+    # never says how a protein was called significant.
+    expect_match(chunk, ".ds_blocks$consensus", fixed = TRUE)
+    expect_false(grepl("The per-run significance call used the unadjusted p-value",
+                       multi_cfg()$differential, fixed = TRUE))
+    expect_match(multi_cfg()$consensus, "Within each run, a protein passed when",
+                 fixed = TRUE)
     expect_false(grepl("Proteins were reported as differentially abundant at adjusted p-value",
                        chunk, fixed = TRUE))
     expect_match(blocks_for()$differential,

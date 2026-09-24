@@ -622,11 +622,17 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     cons <- NULL
     if (multi_on) {
         min_passed <- suppressWarnings(as.integer(imp_cfg$min_no_passed %||% NA))
+        # Every mention of an adjusted value here has to answer to
+        # de$p_adjust_method the same way the differential block does. With
+        # "none" the adj.P.Val entering the consensus is the raw p-value, so the
+        # per-run gate, the final gate and the reported values are all
+        # unadjusted -- and with use_adj_for_pass1 on, "adjusted" would name a
+        # correction that was never applied.
         cons <- sprintf(paste0(
             "The differential analysis was repeated across %d configured imputation runs. %s ",
             "Within each run, a protein passed when its %s p-value met the cutoff and its ",
             "|fold change| met the threshold. A protein was called differentially abundant ",
-            "when it passed in at least %s of the %d runs and its summarised adjusted p-value ",
+            "when it passed in at least %s of the %d runs and its summarised %sp-value ",
             "also met the cutoff."),
             n_reps,
             if (methods_imputation_is_deterministic(imp_cfg)) {
@@ -634,13 +640,15 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
             } else {
                 "Each run was drawn under its own seed."
             },
-            if (isTRUE(de_cfg$use_adj_for_pass1)) "adjusted" else "unadjusted",
-            format(min_passed), n_reps)
+            if (p_adjust_none) "unadjusted" else if (isTRUE(de_cfg$use_adj_for_pass1)) "adjusted" else "unadjusted",
+            format(min_passed), n_reps,
+            if (p_adjust_none) "" else "adjusted ")
         cons <- paste(cons, sprintf(paste0(
-            "The reported p-value and adjusted p-value are the %s quantile of the per-run ",
+            "The reported %s the %s quantile of the per-run ",
             "values. The reported fold change is the mean of the per-run ratios on the linear ",
             "scale; the reported log2 fold change is the logarithm of that mean, not the mean ",
             "of the per-run log2 fold changes."),
+            if (p_adjust_none) "p-value is" else "p-value and adjusted p-value are",
             if (!is.na(min_passed) && n_reps > 0) sprintf("%g", min_passed / n_reps) else "configured"))
     }
 
