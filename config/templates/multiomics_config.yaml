@@ -243,6 +243,9 @@ modes:
         # ATP, NAD(H), water and the like: in thousands of reactions, so a pair
         # with one says nothing about the enzyme
         drop_currency_metabolites: true
+        # every changed enzyme is listed, with a note where nothing it acts on
+        # was measured; false keeps only the pairs
+        list_unpaired_enzymes: true
 
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that

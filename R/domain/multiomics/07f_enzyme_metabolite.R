@@ -39,14 +39,16 @@ ENZYME_METABOLITE_CURRENCY_COMPOUNDS <- c(
 #'
 #' @param config Full config object.
 #' @return List with \code{enabled}, \code{enzyme_hits_only},
-#'   \code{require_shared_pathway} and \code{drop_currency_metabolites}.
+#'   \code{require_shared_pathway}, \code{drop_currency_metabolites} and
+#'   \code{list_unpaired_enzymes}.
 enzyme_metabolite_config <- function(config) {
     cfg <- ((config$modes$multiomics$enrichment %||% list())$enzyme_metabolite) %||% list()
     list(
         enabled = !identical(cfg$enabled, FALSE),
         enzyme_hits_only = !identical(cfg$enzyme_hits_only, FALSE),
         require_shared_pathway = !identical(cfg$require_shared_pathway, FALSE),
-        drop_currency_metabolites = !identical(cfg$drop_currency_metabolites, FALSE)
+        drop_currency_metabolites = !identical(cfg$drop_currency_metabolites, FALSE),
+        list_unpaired_enzymes = !identical(cfg$list_unpaired_enzymes, FALSE)
     )
 }
 

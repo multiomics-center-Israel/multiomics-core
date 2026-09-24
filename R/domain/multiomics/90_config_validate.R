@@ -147,7 +147,7 @@ validate_multiomics_config <- function(multiomics_cfg) {
     # section is skipped, not failed, when KEGG cannot be reached.
     em_cfg <- enrich_cfg$enzyme_metabolite %||% list()
     for (key in c("enabled", "enzyme_hits_only", "require_shared_pathway",
-                  "drop_currency_metabolites")) {
+                  "drop_currency_metabolites", "list_unpaired_enzymes")) {
         if (is.null(em_cfg[[key]])) {
             multiomics_cfg$enrichment$enzyme_metabolite[[key]] <- TRUE
         }

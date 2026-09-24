@@ -132,8 +132,12 @@ run_pairs <- function(overrides = list(), config = list(), quiet = TRUE,
 }
 
 
+# Rows with a compound; the table also lists enzymes nothing could be paired
+# with, which the tests below cover on their own.
+only_pairs <- function(x) x[!is.na(x$compound), , drop = FALSE]
+
 test_that("an enzyme is paired with every measured metabolite it acts on", {
-    pairs <- run_pairs()
+    pairs <- only_pairs(run_pairs())
 
     expect_s3_class(pairs, "data.frame")
     # P1 -> C00100 (alpha) survives; P1 -> C00002 is a currency compound,
@@ -147,7 +151,7 @@ test_that("an enzyme is paired with every measured metabolite it acts on", {
 })
 
 test_that("the reactions behind one pair are kept in one row", {
-    pairs <- run_pairs()
+    pairs <- only_pairs(run_pairs())
 
     # R00001 and R00002 both link EC 1.1.1.1 to C00100: one pair, not two rows.
     expect_identical(nrow(pairs), 1L)
@@ -212,17 +216,19 @@ test_that("only enzymes that changed are paired, unless the config says otherwis
         }
         list(`A vs. B` = std)
     }
-    expect_identical(run_pairs(stubs, config = relax)$protein, c("P1"))
+    expect_identical(only_pairs(run_pairs(stubs, config = relax))$protein, c("P1"))
 
     relax_all <- relax
     relax_all$modes$multiomics$enrichment$enzyme_metabolite$enzyme_hits_only <- FALSE
-    expect_setequal(run_pairs(stubs, config = relax_all)$protein, c("P1", "P2"))
+    # Paired proteins only: P3 is now listed too, as a row with no metabolite.
+    expect_setequal(only_pairs(run_pairs(stubs, config = relax_all))$protein,
+                    c("P1", "P2"))
 })
 
 test_that("a metabolite with no KEGG compound and a protein with no EC are dropped", {
     pairs <- run_pairs(list(map_metabolite_ids_to_kegg = function(...) data.frame(
         feature_id = "alpha", KEGG_CPD = "C00100", stringsAsFactors = FALSE)))
-    expect_false(any(pairs$metabolite == "beta"))
+    expect_false(any(only_pairs(pairs)$metabolite == "beta"))
     # P3 is in the DE table and maps to a KEGG gene, but that gene has no EC.
     expect_false(any(pairs$protein == "P3"))
 })
@@ -368,4 +374,37 @@ test_that("kegg_gene_key strips only the organism prefix", {
     expect_identical(kegg_gene_key(c("rno:29740", "29740", "hsa:1"), "rno"),
                      c("29740", "29740", "hsa:1"))
     expect_identical(kegg_gene_key("29740", NULL), "29740")
+})
+
+test_that("every changed enzyme is listed, with a note when nothing pairs", {
+    # P1 pairs with alpha; P2's only compound shares no pathway. P3 has no EC
+    # and is not a hit either, so it needs the hits-only filter relaxed.
+    all_rows <- run_pairs(config = list(modes = list(multiomics = list(
+        enrichment = list(enzyme_metabolite = list(enzyme_hits_only = FALSE))))))
+    expect_setequal(all_rows$protein, c("P1", "P2", "P3"))
+    unpaired <- all_rows[is.na(all_rows$compound), ]
+    expect_setequal(unpaired$protein, c("P2", "P3"))
+    expect_identical(unpaired$note[unpaired$protein == "P3"], "no EC number in KEGG")
+    expect_match(unpaired$note[unpaired$protein == "P2"], "shared pathway")
+    # An unpaired row carries the enzyme's own numbers and nothing invented.
+    expect_true(all(is.na(unpaired$metabolite_log2fc)))
+    expect_false(any(is.na(unpaired$enzyme_log2fc)))
+})
+
+test_that("the unpaired enzymes can be switched off", {
+    only_pairs <- run_pairs(config = list(modes = list(multiomics = list(
+        enrichment = list(enzyme_metabolite = list(list_unpaired_enzymes = FALSE))))))
+    expect_true(all(!is.na(only_pairs$compound)))
+    expect_setequal(only_pairs$protein, "P1")
+})
+
+test_that("pairs whose metabolite cleared FDR come first, unpaired enzymes last", {
+    rows <- run_pairs(config = list(modes = list(multiomics = list(
+        enrichment = list(enzyme_metabolite = list(require_shared_pathway = FALSE))))))
+    # alpha is the only metabolite under FDR 0.05, so its pair leads.
+    expect_identical(rows$metabolite[1], "alpha")
+    # Any row without a compound sits below every row with one.
+    if (any(is.na(rows$compound)) && any(!is.na(rows$compound))) {
+        expect_gt(min(which(is.na(rows$compound))), max(which(!is.na(rows$compound))))
+    }
 })

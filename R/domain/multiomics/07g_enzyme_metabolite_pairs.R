@@ -178,12 +178,21 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                "enzyme_p", "enzyme_padj", "enzyme_hit", "enzyme_hit_rule",
                "compound", "metabolite", "metabolite_log2fc", "metabolite_p",
                "metabolite_padj", "metabolite_hit", "metabolite_hit_rule",
-               "role", "reaction", "pathway_id", "pathway_name", "same_direction")
+               "role", "reaction", "pathway_id", "pathway_name", "same_direction",
+               "note")
     pairs <- pairs[, intersect(front, names(pairs)), drop = FALSE]
-    pairs <- pairs[order(pairs$contrast, pairs$gene_symbol, pairs$protein,
-                         pairs$ec, pairs$compound), , drop = FALSE]
+    # Pairs whose metabolite cleared FDR lead, then the rest of the pairs, then
+    # the enzymes nothing could be paired with; enzyme FDR orders within each.
+    tier <- ifelse(is.na(pairs$compound), 3L,
+                   ifelse(!is.na(pairs$metabolite_padj) & pairs$metabolite_padj < 0.05,
+                          1L, 2L))
+    pairs <- pairs[order(pairs$contrast, tier, pairs$enzyme_padj,
+                         pairs$metabolite_padj, pairs$gene_symbol, pairs$protein,
+                         pairs$ec, pairs$compound, na.last = TRUE), , drop = FALSE]
     rownames(pairs) <- NULL
-    message("  Enzyme-metabolite pairs: ", nrow(pairs), " rows over ",
+    n_pairs <- sum(!is.na(pairs$compound))
+    message("  Enzyme-metabolite table: ", n_pairs, " pair(s) and ",
+            nrow(pairs) - n_pairs, " enzyme(s) with nothing measured to pair, over ",
             nrow(contrasts), " contrast(s)")
     pairs
 }
@@ -310,10 +319,8 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     } else prot_tab
     if (nrow(enzymes) == 0) return(NULL)
 
-    pairs <- merge(enzymes, ann$protein_ec, by = "feature_id")
-    if (nrow(pairs) == 0) return(NULL)
-    pairs <- merge(pairs, ann$ec_compound, by = "ec")
-    if (nrow(pairs) == 0) return(NULL)
+    with_ec <- merge(enzymes, ann$protein_ec, by = "feature_id")
+    pairs <- if (nrow(with_ec) == 0) with_ec else merge(with_ec, ann$ec_compound, by = "ec")
 
     if (cfg$drop_currency_metabolites) {
         pairs <- pairs[!pairs$compound %in% ENZYME_METABOLITE_CURRENCY_COMPOUNDS, ,
@@ -321,15 +328,16 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     }
 
     measured <- merge(ann$metab_map, metab_tab, by = "feature_id")
-    pairs <- merge(pairs, measured, by.x = "compound", by.y = "KEGG_CPD",
-                   suffixes = c("_enzyme", "_metabolite"))
-    if (nrow(pairs) == 0) return(NULL)
-
-    pairs$pathway <- .shared_pathways(pairs$ec, pairs$compound, ann)
-    if (cfg$require_shared_pathway) {
-        pairs <- pairs[!is.na(pairs$pathway), , drop = FALSE]
+    if (nrow(pairs) > 0) {
+        pairs <- merge(pairs, measured, by.x = "compound", by.y = "KEGG_CPD",
+                       suffixes = c("_enzyme", "_metabolite"))
     }
-    if (nrow(pairs) == 0) return(NULL)
+    if (nrow(pairs) > 0) {
+        pairs$pathway <- .shared_pathways(pairs$ec, pairs$compound, ann)
+        if (cfg$require_shared_pathway) {
+            pairs <- pairs[!is.na(pairs$pathway), , drop = FALSE]
+        }
+    }
 
     key <- paste(pairs$feature_id_enzyme, pairs$ec, pairs$compound, sep = "\r")
     collapsed <- lapply(split(seq_len(nrow(pairs)), key), function(idx) {
@@ -357,7 +365,39 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                 sign(r$log2fc_enzyme) == sign(r$log2fc_metabolite),
             stringsAsFactors = FALSE)
     })
-    do.call(rbind, collapsed)
+    paired <- if (nrow(pairs) == 0) NULL else do.call(rbind, collapsed)
+    if (!is.null(paired)) paired$note <- NA_character_
+    if (!isTRUE(cfg$list_unpaired_enzymes)) return(paired)
+
+    # Every enzyme that changed is listed, even when nothing it acts on was
+    # measured: a reader asking "what happened to this enzyme's metabolites?"
+    # needs to see that the question has no answer here, not an absent row.
+    left <- enzymes[!enzymes$feature_id %in% paired$protein, , drop = FALSE]
+    if (nrow(left) == 0) return(paired)
+    ec_of <- split(with_ec$ec, with_ec$feature_id)
+    unpaired <- lapply(seq_len(nrow(left)), function(i) {
+        id <- left$feature_id[i]
+        ecs <- .join_unique(ec_of[[id]])
+        data.frame(
+            contrast = contrast, protein = id,
+            gene_symbol = if (is.null(symbols)) NA_character_ else unname(symbols[id]),
+            ec = ecs,
+            enzyme_log2fc = left$log2fc[i], enzyme_p = left$pvalue[i],
+            enzyme_padj = left$padj[i], enzyme_hit = left$hit[i],
+            enzyme_hit_rule = prot_hits$rule,
+            compound = NA_character_, metabolite = NA_character_,
+            metabolite_log2fc = NA_real_, metabolite_p = NA_real_,
+            metabolite_padj = NA_real_, metabolite_hit = NA,
+            metabolite_hit_rule = metab_hits$rule,
+            reaction = NA_character_, pathway_id = NA_character_,
+            pathway_name = NA_character_, same_direction = NA,
+            note = if (is.na(ecs)) "no EC number in KEGG"
+                   else if (cfg$require_shared_pathway)
+                       "no measured metabolite in a shared pathway"
+                   else "no measured metabolite",
+            stringsAsFactors = FALSE)
+    })
+    rbind(paired, do.call(rbind, unpaired))
 }
 
 
