@@ -514,6 +514,62 @@ plot_loadings_gsea_nes <- function(gsea_df, title, subtitle = NULL, top_n = 15,
 }
 
 
+#' Remove a previous run's loadings ORA files from one directory
+#'
+#' The ORA counterpart of \code{.clear_loadings_gsea_outputs()}: the
+#' `<label>_enrichment.csv` / `.png` files and the combined table, and nothing
+#' else, so GSEA outputs and the KEGG caches beside them are left alone.
+#'
+#' @param dir Output directory.
+#' @param combined_name File name of the combined ORA table.
+#' @return Invisibly, the paths removed.
+#' @keywords internal
+.clear_loadings_ora_outputs <- function(dir, combined_name) {
+    old <- c(list.files(dir, pattern = "_enrichment\\.(csv|png)$", full.names = TRUE),
+             file.path(dir, combined_name))
+    old <- old[file.exists(old)]
+    unlink(old)
+    invisible(old)
+}
+
+
+#' Remove the ORA files of both integrations before an ORA run
+#'
+#' @param out_dir The loadings-enrichment output directory.
+#' @return Invisibly, the paths removed.
+#' @keywords internal
+.clear_loadings_ora_all <- function(out_dir) {
+    invisible(c(
+        .clear_loadings_ora_outputs(file.path(out_dir, "diablo_loadings"),
+                                    "diablo_loadings_enrichment_all.csv"),
+        .clear_loadings_ora_outputs(file.path(out_dir, "mofa_loadings"),
+                                    "mofa_weights_enrichment_all.csv")))
+}
+
+
+#' Remove everything the loadings enrichment step writes
+#'
+#' For a run that skips or fails the step: the method record and both tests'
+#' outputs for both integrations go, so the report finds nothing rather than
+#' a previous run presented as this one. Caches and anything else in the
+#' directories are left alone.
+#'
+#' @param out_dir The loadings-enrichment output directory.
+#' @return Invisibly, the paths removed.
+clear_loadings_enrichment_outputs <- function(out_dir) {
+    record <- file.path(out_dir, "loadings_enrichment_method.txt")
+    removed <- c(
+        .clear_loadings_gsea_outputs(file.path(out_dir, "diablo_loadings"),
+                                     "diablo_loadings_gsea_all.csv"),
+        .clear_loadings_gsea_outputs(file.path(out_dir, "mofa_loadings"),
+                                     "mofa_weights_gsea_all.csv"),
+        .clear_loadings_ora_all(out_dir),
+        record[file.exists(record)])
+    unlink(record)
+    invisible(removed)
+}
+
+
 #' Score, write and plot a set of loadings rankings
 #'
 #' @param entries Entries from \code{diablo_loading_entries()} or

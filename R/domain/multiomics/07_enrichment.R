@@ -4014,6 +4014,11 @@ run_loadings_enrichment <- function(integration_res, harmonization_res,
         return(run_loadings_gsea(integration_res, harmonization_res, config, out_dir))
     }
 
+    # The record now says "ora", so a previous run's ORA files -- for an
+    # integration that is absent this time, or components that no longer
+    # produce rows -- would be reported as this run's.
+    .clear_loadings_ora_all(out_dir)
+
     organism <- config$global$organism
     kegg_org <- get_kegg_organism(organism)
     org_db <- get_organism_db(organism)

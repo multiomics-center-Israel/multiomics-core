@@ -497,9 +497,6 @@ test_that("a GSEA -> ORA -> GSEA sequence leaves the report on each run's own te
     out_dir <- withr::local_tempdir()
     diablo_dir <- file.path(out_dir, "diablo_loadings")
     dir.create(diablo_dir)
-    # Both tests' figures sit side by side, as they do after a switch.
-    file.create(file.path(diablo_dir, c("DIABLO_proteomics_comp1_gsea_nes.png",
-                                        "DIABLO_proteomics_comp1_enrichment.png")))
     calls <- character(0)
     local_stubs(list(
         run_loadings_gsea = function(...) { calls <<- c(calls, "gsea"); list() },
@@ -520,7 +517,10 @@ test_that("a GSEA -> ORA -> GSEA sequence leaves the report on each run's own te
     expect_identical(calls, c("gsea", "ora", "gsea"))
 
     # Each branch lists only its own figures; the other test's leftovers are
-    # not picked up as this run's.
+    # not picked up as this run's. Both kinds side by side, as after a switch
+    # (an ORA run clears only ORA's own files, so GSEA figures can remain).
+    file.create(file.path(diablo_dir, c("DIABLO_proteomics_comp1_gsea_nes.png",
+                                        "DIABLO_proteomics_comp1_enrichment.png")))
     rmd <- paste(readLines(testthat::test_path(
         "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
         collapse = "\n")
@@ -665,4 +665,91 @@ test_that("the report finds loadings results that are tables only", {
                  fixed = TRUE)
     expect_match(rmd, 'else if (!file.exists(file.path(mofa_le_dir, "mofa_weights_gsea_all.csv")))',
                  fixed = TRUE)
+})
+
+
+# ---- Copilot review of 69e10ce -----------------------------------------------
+
+# A directory as a previous run leaves it: both tests' outputs for both
+# integrations, the method record, and the KEGG caches beside them.
+previous_run <- function(out_dir) {
+    files <- list(
+        diablo_ora = file.path(out_dir, "diablo_loadings", c(
+            "DIABLO_proteomics_comp1_enrichment.csv",
+            "DIABLO_proteomics_comp2_enrichment.png",
+            "diablo_loadings_enrichment_all.csv")),
+        mofa_ora = file.path(out_dir, "mofa_loadings", c(
+            "MOFA_proteomics_Factor1_enrichment.csv",
+            "MOFA_proteomics_Factor1_enrichment.png",
+            "mofa_weights_enrichment_all.csv")),
+        gsea = c(file.path(out_dir, "diablo_loadings", c(
+                     "DIABLO_proteomics_comp1_gsea.csv",
+                     "DIABLO_proteomics_comp1_gsea_nes.png",
+                     "diablo_loadings_gsea_all.csv")),
+                 file.path(out_dir, "mofa_loadings", "mofa_weights_gsea_all.csv")),
+        record = file.path(out_dir, "loadings_enrichment_method.txt"),
+        cache = c(file.path(out_dir, "kegg_compound_pathways.rds"),
+                  file.path(out_dir, "diablo_loadings", "kegg_pathway_categories.rds")))
+    for (d in unique(dirname(unlist(files)))) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    file.create(unlist(files))
+    files
+}
+
+test_that("an ORA rerun with smaller or empty output leaves no previous ORA files", {
+    out_dir <- withr::local_tempdir()
+    old <- previous_run(out_dir)
+    # This run: DIABLO yields one component instead of two, MOFA2 is absent.
+    local_stubs(list(run_diablo_loadings_enrichment = function(out_dir, ...) {
+        write.csv(data.frame(x = 1),
+                  file.path(out_dir, "DIABLO_proteomics_comp1_enrichment.csv"),
+                  row.names = FALSE)
+        NULL
+    }))
+
+    cfg <- list(global = list(organism = "Synthetic organism"),
+                modes = list(multiomics = list(enrichment = list(
+                    loadings = list(method = "ora")))))
+    suppressMessages(run_loadings_enrichment(
+        list(diablo_results = list(x = 1)), list(), cfg, out_dir))
+
+    # Only what this run wrote is left of the ORA outputs.
+    expect_identical(
+        sort(basename(list.files(out_dir, "_enrichment(_all)?\\.(csv|png)$",
+                                 recursive = TRUE))),
+        "DIABLO_proteomics_comp1_enrichment.csv")
+    # Only ORA's own files went: GSEA outputs and caches are untouched.
+    expect_true(all(file.exists(c(old$gsea, old$cache))))
+    expect_identical(readLines(old$record), "ora")
+})
+
+test_that("a skipped or failed step removes the record and every loadings output", {
+    out_dir <- withr::local_tempdir()
+    old <- previous_run(out_dir)
+
+    removed <- clear_loadings_enrichment_outputs(out_dir)
+
+    gone <- c(old$diablo_ora, old$mofa_ora, old$gsea, old$record)
+    expect_false(any(file.exists(gone)))
+    expect_setequal(removed, gone)
+    expect_true(all(file.exists(old$cache)))
+    # A directory that was never written is not an error.
+    expect_length(clear_loadings_enrichment_outputs(file.path(out_dir, "absent")), 0)
+})
+
+test_that("the pipeline clears the step's outputs on both the skip and the error path", {
+    src <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "pipeline", "multiomics", "00_pipe_multiomics.R")),
+        collapse = "\n")
+    block <- regmatches(src, regexpr(
+        "(?s)multiomics_loadings_enrichment,.*?\n        \\),", src, perl = TRUE))
+    expect_length(block, 1)
+
+    skip <- regmatches(block, regexpr(
+        "(?s)Skipping loadings enrichment.*?return\\(NULL\\)", block, perl = TRUE))
+    expect_match(skip, "clear_loadings_enrichment_outputs(loadings_dir)", fixed = TRUE)
+    err <- regmatches(block, regexpr(
+        "(?s)error = function\\(e\\).*?NULL\n", block, perl = TRUE))
+    expect_match(err, "clear_loadings_enrichment_outputs(loadings_dir)", fixed = TRUE)
+    # And the step writes where it clears.
+    expect_match(block, "out_dir = loadings_dir", fixed = TRUE)
 })
