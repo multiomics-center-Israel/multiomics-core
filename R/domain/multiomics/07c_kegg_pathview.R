@@ -800,15 +800,19 @@ filter_changed_features <- function(de_table, thresholds = .PATHVIEW_THRESHOLDS)
 pathview_significance_caption <- function(thresholds = .PATHVIEW_THRESHOLDS) {
     fmt <- function(x) format(x, trim = TRUE, scientific = FALSE)
     paste0(
-        "Pathways are drawn where at least one layer scored them below ",
-        fmt(thresholds$fdr_alpha), ", on adjusted p-values or, where those ",
-        "selected nothing, on raw p-values, so the evidence is a floor rather ",
-        "than an FDR. A node is coloured only by features past ",
+        "Pathways are drawn where at least one omics layer scored them below ",
+        fmt(thresholds$fdr_alpha), " -- on adjusted p-values where those ",
+        "supported a selection, and on raw p-values where they did not, so ",
+        "which of the two a given map rests on is not fixed and the ",
+        "pathway-level evidence is a floor rather than an FDR. Within a map, a node is ",
+        "coloured only by features that both changed by more than ",
         fmt(thresholds$node_fc), "-fold (|log2FC| > ",
         format(round(log2(thresholds$node_fc), 2), nsmall = 2),
-        ") with raw p < ", fmt(thresholds$node_p),
-        "; an uncoloured node means no measured feature passed both rules, or ",
-        "nothing was measured -- the map does not separate the two."
+        ") and reached raw p < ", fmt(thresholds$node_p),
+        "; a feature failing either condition does not contribute to the ",
+        "node's mean. An uncoloured node therefore means no measured feature ",
+        "on it passed both rules, or that nothing there was measured at all -- ",
+        "the map does not separate the two."
     )
 }
 
