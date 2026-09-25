@@ -2031,7 +2031,8 @@ run_ora_kegg_fisher <- function(sig_genes, all_genes, kegg_org,
 #'   alone. A layer present only here still counts towards the two needed.
 #' @return List with: common_pathways, union_pathways, meta_analysis,
 #'   pathway_tables, layer_methods (the test each layer contributed to the
-#'   meta-analysis, named by layer) and plots
+#'   meta-analysis, named by layer), lookup_files (see
+#'   \code{write_cross_omics_lookups()}) and plots
 analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir = NULL,
                                            rank_tables = NULL) {
 
@@ -2047,6 +2048,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # per-contrast directories too because this function runs again for each.
     if (!is.null(out_dir) && dir.exists(out_dir)) {
         .clear_collection_heatmaps(out_dir)
+        .clear_cross_lookup_outputs(out_dir)
     }
 
     rank_tables <- .usable_rank_tables(rank_tables)
@@ -2340,12 +2342,33 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         message("  Cross-omics enrichment plots saved to: ", out_dir)
     }
 
+    # 5. Each layer's top pathways, looked up in every other layer. Read from
+    # merge_tables, so the rows each layer contributes are the ones the
+    # meta-analysis used -- rank-based where the layer has them.
+    lookup_files <- list()
+    lookup_cfg <- .cross_lookup_config(config)
+    if (!is.null(out_dir) && lookup_cfg$enabled) {
+        dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+        lookup_files <- tryCatch(
+            write_cross_omics_lookups(merge_tables, omics, out_dir,
+                                      top_n = lookup_cfg$top_n, kegg_org = kegg_org),
+            error = function(e) {
+                message("  Cross-omics lookup failed: ", e$message)
+                list()
+            })
+        for (nm in names(lookup_files)) {
+            pngs <- lookup_files[[nm]][names(lookup_files[[nm]]) != "tsv"]
+            for (rk in names(pngs)) plots[[paste0("lookup_", nm, "_", rk)]] <- pngs[[rk]]
+        }
+    }
+
     list(
         common_pathways = common_pathways,
         union_pathways = union_pathways,
         meta_analysis = meta_results,
         pathway_tables = pathway_tables,
         layer_methods = layer_methods,
+        lookup_files = lookup_files,
         plots = plots
     )
 }

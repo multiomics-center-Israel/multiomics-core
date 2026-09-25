@@ -213,6 +213,21 @@ modes:
       # Empty by default: nothing is excluded unless a project asks.
       exclude_pathway_classes: []
 
+      # --- Top pathways of one layer, looked up in another ---
+      # Exploratory, off by default. For every pair of layers, both
+      # directions: the source layer's top pathways by its own raw p-value (its
+      # GSEA result where it has one, otherwise ORA), among the pathways its
+      # enrichment step reported, beside what the other layer shows for the
+      # same pathways in the same contrast. The KEGG-from-DE fallback reports
+      # only pathways past its own cutoff, so for such a layer the ranking is
+      # not over every pathway it scored. A layer with no raw p-value column is
+      # skipped.
+      # Written as cross_lookup_<from>_to_<to>.tsv/.png, plus a report section.
+      # Descriptive: nominal p-values, nothing re-tested.
+      cross_lookup:
+        enabled: false
+        top_n: 15
+
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
       # would otherwise produce no pathway maps at all. The maps are KEGG's

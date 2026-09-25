@@ -1204,6 +1204,78 @@ if (length(list.files(enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.p
 }
 ```
 
+```{r enrichment-cross-lookup, eval=has_enrichment, results='asis'}
+# Each layer's top pathways read in every other layer, both directions.
+# Discovered by glob, like the heatmaps: which directions exist depends on the
+# layers a run enriched, and the lookup can be switched off in the config.
+lookup_tsvs <- sort(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.tsv$",
+                               full.names = TRUE))
+if (length(lookup_tsvs) > 0) {
+    cat("\n### Top Pathways of One Layer, Looked Up in Another {.unnumbered}\n\n")
+    for (tsv in lookup_tsvs) {
+        stem <- sub("\\.tsv$", "", tsv)
+        pair <- sub("^cross_lookup_", "", basename(stem))
+        from <- sub("_to_.*$", "", pair)
+        to <- sub("^.*_to_", "", pair)
+        cat(sprintf("\n#### %s to %s {.unnumbered}\n\n",
+                    tools::toTitleCase(from), tools::toTitleCase(to)))
+        for (suffix in c("", "_tested")) {
+            png <- paste0(stem, suffix, ".png")
+            if (!file.exists(png)) next
+            if (nzchar(suffix)) {
+                cat(sprintf("\nRestricted to pathways with a %s result:\n\n", to))
+            }
+            chunk_id <- paste0("enr-lookup-", gsub("[^a-zA-Z0-9]", "", pair),
+                               gsub("_", "-", suffix))
+            cat(knitr::knit_child(text = sprintf(
+                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                chunk_id, png
+            ), quiet = TRUE))
+            cat("\n\n")
+        }
+    }
+}
+```
+
+```{r enrichment-cross-lookup-legend, eval=has_enrichment, results='asis'}
+if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0) {
+    figure_legend(paste(
+        "Each layer's top pathways by its own raw p-value (GSEA where available,",
+        "otherwise ORA), among the pathways that layer's enrichment step reported,",
+        "beside the same pathways in the other layer, both directions. For a",
+        "layer from the KEGG-from-DE fallback those are only the pathways past its",
+        "own cutoff, so its ranking is not over every pathway it scored.",
+        "The other layer is read in the same contrast as each",
+        "pathway's ranked row, named in the table's contrast columns.",
+        "Colour and number: NES, grey at zero; * marks raw p < 0.05.",
+        "An unfilled cell has no NES: \"ORA\" where that layer has only an ORA",
+        "result in that contrast, a dash where it has no result there. The",
+        "second heatmap keeps only pathways the other layer tested. P-values are",
+        "nominal, and the same NES sign in two layers is not by itself biological",
+        "agreement."))
+}
+```
+
+```{r enrichment-cross-lookup-table, eval=has_enrichment}
+lookup_tsvs <- sort(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.tsv$",
+                               full.names = TRUE))
+lookup_cols <- c("ranking", "rank", "pathway", "source_method",
+                 "source_contrast", "source_NES", "source_p", "source_padj",
+                 "target_status", "target_method", "target_contrast",
+                 "target_NES", "target_p", "target_padj", "target_ora_p",
+                 "target_ora_padj")
+for (tsv in lookup_tsvs) {
+    tbl <- read.delim(tsv, stringsAsFactors = FALSE, check.names = FALSE)
+    if (nrow(tbl) == 0) next
+    pair <- gsub("_", " ", sub("^cross_lookup_", "", sub("\\.tsv$", "", basename(tsv))))
+    print(make_dt(
+        tbl[, intersect(lookup_cols, names(tbl)), drop = FALSE],
+        caption = paste0("Top-pathway lookup, ", pair, " (nominal p-values)"),
+        pageLength = 15
+    ))
+}
+```
+
 ```{r enrichment-table, eval=has_enrichment}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
@@ -1278,6 +1350,26 @@ if (dir.exists(enrich_per_contrast_dir)) {
         drew_ora <- show_collection_pngs("cross_omics_ora_heatmap",
                                          "Cross-Omics ORA Evidence", "enr-pc-ora-")
 
+        # Top-pathway lookups for this contrast; the "_tested" variants stay in
+        # the directory beside them.
+        c_lookups <- sort(list.files(cdir, pattern = "^cross_lookup_.*\\.png$",
+                                     full.names = TRUE))
+        c_lookups <- c_lookups[!grepl("_tested\\.png$", c_lookups)]
+        if (length(c_lookups) > 0) {
+            cat("\n#### Top Pathways of One Layer, Looked Up in Another {.unnumbered}\n\n")
+            for (lp in c_lookups) {
+                pair <- sub("^cross_lookup_", "", sub("\\.png$", "", basename(lp)))
+                cat(sprintf("\n##### %s {.unnumbered}\n\n", gsub("_", " ", pair)))
+                chunk_id <- paste0("enr-pc-lookup-", gsub("[^a-zA-Z0-9]", "", cname),
+                                   "-", gsub("[^a-zA-Z0-9]", "", pair))
+                cat(knitr::knit_child(text = sprintf(
+                    '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+                    chunk_id, lp
+                ), quiet = TRUE))
+                cat("\n\n")
+            }
+        }
+
         # Meta-analysis table for this contrast
         c_meta <- file.path(cdir, "cross_omics_pathways_meta_analysis.csv")
         if (file.exists(c_meta)) {
@@ -1286,7 +1378,8 @@ if (dir.exists(enrich_per_contrast_dir)) {
                         gsub("_", " ", cname), nrow(c_meta_df)))
         }
 
-        if (length(c_barplots) == 0 && !drew_heatmap && !drew_ora) {
+        if (length(c_barplots) == 0 && !drew_heatmap && !drew_ora &&
+            length(c_lookups) == 0) {
             cat("*No enrichment results for this contrast.*\n\n")
         }
     }

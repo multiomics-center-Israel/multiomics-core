@@ -28,6 +28,11 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # the file exists only if THIS invocation produced rows, and a guard that
     # returns before the cleanup is exactly how such an invariant is lost.
     write_compound_gsea_export(NULL, out_dir)
+    # Same invariant for the cross-omics lookups, at run level and in every
+    # existing per-contrast directory: the report finds them by glob, so they
+    # are cleared before any return, not only on the paths that write new ones.
+    .clear_cross_lookup_outputs(out_dir)
+    .clear_stale_contrast_lookups(out_dir)
 
     # Check if enrichment is enabled
     if (!isTRUE(config$modes$multiomics$enrichment$run_enrichment)) {
@@ -181,6 +186,7 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
             # is guarded on >= 2 layers too, so a contrast that drops below it
             # on a rerun would keep showing the previous run's figures.
             .clear_collection_heatmaps(contrast_out)
+            .clear_cross_lookup_outputs(contrast_out)
 
             per_omics_contrast <- list()
             for (om in names(per_omics)) {
