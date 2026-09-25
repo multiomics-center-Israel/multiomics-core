@@ -48,10 +48,11 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # Scored before the per_omics guard below, and kept out of per_omics
     # entirely. Two separate reasons, both deliberate:
     #
-    # Out of per_omics, because everything there becomes pathway_tables and
-    # reaches merge_pathway_pvalues(), which aggregates a layer with FUN = min
-    # and no method filter -- a GSEA row there would quietly become the
-    # metabolomics p-value feeding Stouffer.
+    # Out of per_omics, because per_omics drives the per-layer bar plots, CSVs
+    # and the ORA figure, which are ORA's. It reaches the meta-analysis through
+    # its own argument instead (rank_tables below), where
+    # merge_pathway_pvalues() picks one method per layer -- rank-based where a
+    # layer has it -- rather than taking the minimum across methods.
     #
     # Before the guard, because GSEA does not depend on any ORA table. A run
     # where no layer produced an enriched table is precisely a run where ranked
@@ -126,18 +127,30 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # shows them beside the one-layer results as though they were current.
     .clear_collection_heatmaps(out_dir)
 
+    # Compound GSEA joins the meta-analysis as the metabolomics layer's
+    # rank-based evidence. A metabolomics layer whose ORA found nothing still
+    # counts here, which is the case this exists for: no compound passing the
+    # DE threshold leaves ORA empty, while GSEA scores every measured compound.
+    rank_tables <- if (!is.null(compound_gsea) && nrow(compound_gsea) > 0) {
+        list(metabolomics = compound_gsea)
+    } else {
+        list()
+    }
+    n_layers <- length(union(names(per_omics), names(rank_tables)))
+
     cross_omics_enrich <- NULL
-    if (length(per_omics) >= 2) {
+    if (n_layers >= 2) {
         cross_omics_enrich <- analyze_cross_omics_enrichment(
             enrichment_results = per_omics,
             config = config,
-            out_dir = out_dir
+            out_dir = out_dir,
+            rank_tables = rank_tables
         )
         if (!is.null(cross_omics_enrich)) {
             write_cross_omics_enrichment(cross_omics_enrich, out_dir)
         }
     } else {
-        message("  Only ", length(per_omics), " omics with enrichment results; ",
+        message("  Only ", n_layers, " omics with enrichment results; ",
                 "skipping cross-omics comparison (need >= 2)")
     }
 
@@ -145,46 +158,14 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # Save per-contrast barplots, tables, and cross-omics comparison in
     # per_contrast/{contrast_name}/ subdirectories so results cannot overwrite.
 
-    # Normalize contrast names across omics so they aggregate correctly.
-    # normalize_contrast_key() lives in R/domain/multiomics/07_enrichment.R,
-    # so the pathview renderer keys contrasts exactly the same way.
-    .normalize_contrast_key <- normalize_contrast_key
-
-    # Collect all contrast names and build a canonical mapping
-    all_raw_contrasts <- unique(unlist(lapply(per_omics, function(df) {
-        if (is.data.frame(df) && "contrast" %in% colnames(df)) df$contrast
-        else NULL
-    })))
-
-    if (length(all_raw_contrasts) > 0) {
-        norm_keys <- .normalize_contrast_key(all_raw_contrasts)
-        # For each unique normalized key, pick the first raw name as canonical
-        canonical_map <- setNames(character(0), character(0))
-        for (i in seq_along(all_raw_contrasts)) {
-            nk <- norm_keys[i]
-            if (!nk %in% names(canonical_map)) {
-                canonical_map[nk] <- all_raw_contrasts[i]
-            }
-        }
-        # Build raw -> canonical mapping
-        raw_to_canonical <- setNames(
-            canonical_map[norm_keys],
-            all_raw_contrasts
-        )
-
-        # Replace contrast column in each per_omics data frame
-        for (om in names(per_omics)) {
-            df <- per_omics[[om]]
-            if (is.data.frame(df) && "contrast" %in% colnames(df)) {
-                per_omics[[om]]$contrast <- raw_to_canonical[df$contrast]
-            }
-        }
-    }
-
-    contrast_names <- unique(unlist(lapply(per_omics, function(df) {
-        if (is.data.frame(df) && "contrast" %in% colnames(df)) df$contrast
-        else NULL
-    })))
+    # Contrast names are normalized across omics with normalize_contrast_key(),
+    # the key the pathview renderer uses too, and discovered from every source
+    # that can take part in a per-contrast analysis -- the rank-based tables as
+    # well as per_omics -- so a contrast only compound GSEA scored is not
+    # silently skipped.
+    discovered <- canonicalize_enrichment_contrasts(per_omics, rank_tables)
+    per_omics <- discovered$per_omics
+    contrast_names <- discovered$contrast_names
 
     if (length(contrast_names) >= 1) {
         message("  Generating per-contrast enrichment output for ",
@@ -228,15 +209,27 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
                 }
             }
 
-            message("    ", cname, ": ", length(per_omics_contrast),
-                    " omics (", paste(names(per_omics_contrast), collapse = ", "), ")")
+            # The same contrast's compound GSEA rows, matched on the contrast
+            # key rather than the raw name: the layers spell one comparison
+            # differently, and per_omics was mapped to canonical names above.
+            rank_contrast <- lapply(rank_tables, function(df) {
+                if (!"contrast" %in% names(df)) return(df)
+                df[normalize_contrast_key(df$contrast) == normalize_contrast_key(cname),
+                   , drop = FALSE]
+            })
+            rank_contrast <- Filter(function(df) nrow(df) > 0, rank_contrast)
+            contrast_layers <- union(names(per_omics_contrast), names(rank_contrast))
 
-            if (length(per_omics_contrast) >= 2) {
+            message("    ", cname, ": ", length(contrast_layers),
+                    " omics (", paste(contrast_layers, collapse = ", "), ")")
+
+            if (length(contrast_layers) >= 2) {
                 cross_contrast <- tryCatch({
                     analyze_cross_omics_enrichment(
                         enrichment_results = per_omics_contrast,
                         config = config,
-                        out_dir = contrast_out
+                        out_dir = contrast_out,
+                        rank_tables = rank_contrast
                     )
                 }, error = function(e) {
                     message("    Cross-omics enrichment failed for ", cname, ": ", e$message)
@@ -259,4 +252,55 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
         compound_gsea = compound_gsea,
         plots = c(per_omics_plots, if (!is.null(cross_omics_enrich)) cross_omics_enrich$plots else list())
     )
+}
+
+
+#' Canonical contrast names across the per-omics and rank-based tables
+#'
+#' The layers spell one comparison differently, so contrasts are matched on
+#' \code{normalize_contrast_key()} and each key is given one canonical name --
+#' the first raw spelling met, per_omics first. Discovery reads the usable
+#' rank-based tables as well as per_omics: a contrast that only a rank-based
+#' source scored must still get its per-contrast analysis, where that source's
+#' rows are matched on the same key.
+#'
+#' @param per_omics Named list of per-omics enrichment data frames.
+#' @param rank_tables Named list of rank-based tables, as passed to
+#'   \code{analyze_cross_omics_enrichment()}; only their usable rows (see
+#'   \code{.usable_rank_tables()}) are read.
+#' @return List with \code{per_omics}, its \code{contrast} columns rewritten to
+#'   the canonical names, and \code{contrast_names}, the canonical name of
+#'   every contrast found in either source.
+#' @examples
+#' po <- list(proteomics = data.frame(contrast = "A_vs_B", pvalue = 0.01))
+#' rk <- list(metabolomics = data.frame(contrast = c("A vs B", "C_vs_D"),
+#'                                      method = "fgsea", pval = 0.02))
+#' canonicalize_enrichment_contrasts(po, rk)$contrast_names  # "A_vs_B" "C_vs_D"
+canonicalize_enrichment_contrasts <- function(per_omics, rank_tables = list()) {
+    raw_of <- function(tables) unlist(lapply(tables, function(df) {
+        if (is.data.frame(df) && "contrast" %in% colnames(df)) as.character(df$contrast)
+        else NULL
+    }), use.names = FALSE)
+
+    all_raw_contrasts <- unique(c(raw_of(per_omics),
+                                  raw_of(.usable_rank_tables(rank_tables))))
+    all_raw_contrasts <- all_raw_contrasts[!is.na(all_raw_contrasts)]
+    if (length(all_raw_contrasts) == 0) {
+        return(list(per_omics = per_omics, contrast_names = character(0)))
+    }
+
+    norm_keys <- normalize_contrast_key(all_raw_contrasts)
+    # For each normalized key, the first raw name met is canonical
+    canonical <- all_raw_contrasts[!duplicated(norm_keys)]
+    names(canonical) <- norm_keys[!duplicated(norm_keys)]
+    raw_to_canonical <- stats::setNames(unname(canonical[norm_keys]), all_raw_contrasts)
+
+    for (om in names(per_omics)) {
+        df <- per_omics[[om]]
+        if (is.data.frame(df) && "contrast" %in% colnames(df)) {
+            per_omics[[om]]$contrast <- unname(raw_to_canonical[as.character(df$contrast)])
+        }
+    }
+
+    list(per_omics = per_omics, contrast_names = unname(canonical))
 }

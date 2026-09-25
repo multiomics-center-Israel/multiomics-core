@@ -206,7 +206,9 @@ test_that("the production caller clears before its own two-layer guard", {
     expect_true(grepl(".clear_collection_heatmaps(contrast_out)", src,
                       fixed = TRUE))
 
-    guard <- regexpr("length(per_omics) >= 2", src, fixed = TRUE)
+    # The guard counts layers across per_omics and the rank-based tables
+    # supplied beside it, so it tests n_layers rather than per_omics alone.
+    guard <- regexpr("n_layers >= 2", src, fixed = TRUE)
     clear <- regexpr(".clear_collection_heatmaps(out_dir)", src, fixed = TRUE)
     expect_gt(guard, 0)
     expect_gt(clear, 0)
