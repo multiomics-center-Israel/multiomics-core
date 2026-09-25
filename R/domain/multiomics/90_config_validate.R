@@ -177,13 +177,22 @@ validate_multiomics_config <- function(multiomics_cfg) {
     }
 
     # Validate the enzyme-metabolite pair table: which measured metabolites the
-    # changed enzymes could act on, by KEGG annotation. On by default; the
-    # section is skipped, not failed, when KEGG cannot be reached.
+    # changed enzymes could act on, by KEGG annotation. Off by default, since it
+    # reaches KEGG; the section is skipped, not failed, when KEGG cannot be
+    # reached. Every flag must be a real TRUE/FALSE: "no" or "false" as a string
+    # would otherwise be read as switched on.
     em_cfg <- enrich_cfg$enzyme_metabolite %||% list()
-    for (key in c("enabled", "enzyme_hits_only", "require_shared_pathway",
-                  "drop_currency_metabolites", "list_unpaired_enzymes")) {
-        if (is.null(em_cfg[[key]])) {
-            multiomics_cfg$enrichment$enzyme_metabolite[[key]] <- TRUE
+    em_defaults <- c(enabled = FALSE, enzyme_hits_only = TRUE,
+                     require_shared_pathway = TRUE,
+                     drop_currency_metabolites = TRUE, list_unpaired_enzymes = TRUE)
+    for (key in names(em_defaults)) {
+        val <- em_cfg[[key]]
+        if (is.null(val)) {
+            multiomics_cfg$enrichment$enzyme_metabolite[[key]] <- em_defaults[[key]]
+        } else if (!(is.logical(val) && length(val) == 1 && !is.na(val))) {
+            stop("modes.multiomics.enrichment.enzyme_metabolite.", key,
+                 " must be true or false, not ",
+                 paste(format(unlist(val)), collapse = ", "), ".", call. = FALSE)
         }
     }
 

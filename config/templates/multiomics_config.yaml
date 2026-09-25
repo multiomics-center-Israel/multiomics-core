@@ -250,9 +250,10 @@ modes:
       # enzyme_metabolite_pairs.tsv and a report table. An annotation lookup,
       # not a test -- KEGG says the enzyme class can act on the compound, not
       # that it did here. Needs a KEGG organism code and an annotation
-      # database; skipped with a note when KEGG cannot be reached.
+      # database; skipped with a note when KEGG cannot be reached. Opt-in, since
+      # it reaches KEGG. Every switch below must be true or false.
       enzyme_metabolite:
-        enabled: true
+        enabled: false
         # false also pairs enzymes that did not change themselves
         enzyme_hits_only: true
         # a pair is kept only when enzyme and metabolite share a KEGG pathway,

@@ -112,8 +112,8 @@ stub_annotation <- function(link_overrides = list()) {
         fetch_reaction_roles = function(reaction_ids, cache_dir = NULL) data.frame(
             reaction = c("R00001", "R00002"), compound = c("C00100", "C00100"),
             role = c("substrate", "product"), stringsAsFactors = FALSE),
-        .proteomics_symbol_lookup = function(...) c(P1 = "Aaa", P2 = "Bbb",
-                                                    P3 = "Ccc"),
+        protein_group_gene_symbols = function(...) c(P1 = "Aaa", P2 = "Bbb",
+                                                     P3 = "Ccc"),
         kegg_compound_names = function(cache_dir = NULL) c(C00100 = "Alphanoate")
     )
 }
@@ -122,8 +122,13 @@ run_pairs <- function(overrides = list(), config = list(), quiet = TRUE,
                       env = parent.frame()) {
     stubs <- utils::modifyList(stub_annotation(), overrides)
     local_stubs(stubs, env = env)
+    # The table is opt-in; these tests exercise it switched on unless a test
+    # says otherwise.
     cfg <- utils::modifyList(
-        list(global = list(organism = "Test organism")), config)
+        list(global = list(organism = "Test organism"),
+             modes = list(multiomics = list(enrichment = list(
+                 enzyme_metabolite = list(enabled = TRUE))))),
+        config)
     call <- function() build_enzyme_metabolite_pairs(
         de_results = list(proteomics = prot_de(), metabolomics = metab_de()),
         harmonization_res = list(), config = cfg,
@@ -450,4 +455,184 @@ test_that("a failed KEGG request is retried before the table gives up", {
     expect_null(suppressMessages(.kegg_rest_lines("https://example.invalid", "test",
                                                   attempts = 2L, pause = 0)))
     expect_identical(calls, 2L)
+})
+
+
+# ---- review of #255 against main --------------------------------------------
+
+relaxed_pathways <- list(modes = list(multiomics = list(enrichment = list(
+    enzyme_metabolite = list(require_shared_pathway = FALSE)))))
+
+test_that("two measured metabolites on one KEGG compound are two rows", {
+    # alpha and alpha_neg are the same compound measured twice (say, in both
+    # ionisation modes), with different statistics.
+    stubs <- stub_annotation()
+    stubs$extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
+        std <- de_data$.std
+        if (identical(omics_type, "proteomics")) return(list(A_vs_B = std))
+        std <- rbind(std, data.frame(feature_id = "alpha_neg", log2fc = -0.5,
+                                     pvalue = 0.3, padj = 0.6,
+                                     stringsAsFactors = FALSE))
+        list(`A vs. B` = std)
+    }
+    stubs$map_metabolite_ids_to_kegg <- function(...) data.frame(
+        feature_id = c("alpha", "alpha_neg", "beta"),
+        KEGG_CPD = c("C00100", "C00100", "C00200"), stringsAsFactors = FALSE)
+
+    pairs <- only_pairs(run_pairs(stubs))
+    p1 <- pairs[pairs$protein == "P1" & pairs$compound == "C00100", ]
+    expect_setequal(p1$metabolite, c("alpha", "alpha_neg"))
+    # Each row keeps its own metabolite's numbers, not the other one's.
+    expect_equal(p1$metabolite_log2fc[p1$metabolite == "alpha"], 2)
+    expect_equal(p1$metabolite_log2fc[p1$metabolite == "alpha_neg"], -0.5)
+    # The reactions behind the pair are still joined within each row.
+    expect_true(all(p1$reaction == "R00001;R00002"))
+})
+
+test_that("with the shared-pathway filter on, missing pathway annotation skips the table", {
+    no_gene_paths <- stub_annotation(link_overrides = list(pathway = NULL))
+    expect_message(pairs <- run_pairs(no_gene_paths, quiet = FALSE),
+                   "pathway annotation unavailable.*skipping")
+    expect_null(pairs)
+
+    no_cpd_paths <- stub_annotation()
+    no_cpd_paths$get_kegg_compound_pathways <- function(...) NULL
+    expect_null(run_pairs(no_cpd_paths))
+})
+
+test_that("with the filter off, missing pathway annotation is said, not implied", {
+    stubs <- stub_annotation(link_overrides = list(pathway = NULL))
+    expect_message(pairs <- run_pairs(stubs, config = relaxed_pathways, quiet = FALSE),
+                   "listed without pathways")
+    paired <- only_pairs(pairs)
+    expect_true(nrow(paired) > 0)
+    expect_true(all(is.na(paired$pathway_id)))
+    expect_true(all(paired$note == "KEGG pathway annotation unavailable"))
+    # No unpaired enzyme is told it lacks a shared pathway: there was no filter.
+    unpaired <- pairs[is.na(pairs$compound), , drop = FALSE]
+    expect_false(any(grepl("shared pathway", unpaired$note)))
+})
+
+test_that("gene symbols are joined by feature id, not by row position", {
+    stubs <- stub_annotation()
+    stubs$protein_group_gene_symbols <- NULL
+    local_stubs(stubs)
+    # row_data is in a different order from the expression rows; a positional
+    # pairing would give P1 the symbol of P3.
+    harm <- list(inputs = list(proteomics = list(
+        expr_work = matrix(0, 3, 1, dimnames = list(c("P1", "P2", "P3"), "S1")),
+        row_data = data.frame(Protein.Group = c("P3", "P1", "P2"),
+                              Genes = c("Ccc", "Aaa", "Bbb"),
+                              stringsAsFactors = FALSE))))
+    cfg <- list(global = list(organism = "Test organism"),
+                modes = list(multiomics = list(enrichment = list(
+                    enzyme_metabolite = list(enabled = TRUE)))))
+    pairs <- suppressMessages(build_enzyme_metabolite_pairs(
+        de_results = list(proteomics = prot_de(), metabolomics = metab_de()),
+        harmonization_res = harm, config = cfg, out_dir = withr::local_tempdir()))
+    expect_identical(unique(pairs$gene_symbol[pairs$protein == "P1"]), "Aaa")
+})
+
+test_that("the legend says when 'changed' rests on raw p, and where", {
+    cfg <- enzyme_metabolite_config(list())
+    fdr_only <- data.frame(contrast = c("A_vs_B", "C_vs_D"),
+                           enzyme_hit_rule = "padj", metabolite_hit_rule = "padj",
+                           note = NA, stringsAsFactors = FALSE)
+    leg <- describe_enzyme_metabolite_table(fdr_only, cfg)
+    expect_match(leg, "A changed enzyme means FDR < 0.05.", fixed = TRUE)
+    expect_false(grepl("raw p", leg))
+
+    mixed <- fdr_only
+    mixed$enzyme_hit_rule[2] <- "raw p"
+    leg <- describe_enzyme_metabolite_table(mixed, cfg)
+    expect_match(leg, "except in C_vs_D, where no enzyme cleared FDR and it means raw p < 0.05, uncorrected (enzyme_hit_rule)",
+                 fixed = TRUE)
+    expect_match(leg, "A changed metabolite means FDR < 0.05.", fixed = TRUE)
+})
+
+test_that("the legend follows the settings the table was built with", {
+    tab <- data.frame(contrast = "A_vs_B", enzyme_hit_rule = "padj",
+                      metabolite_hit_rule = "padj", note = NA,
+                      stringsAsFactors = FALSE)
+    on <- describe_enzyme_metabolite_table(tab, enzyme_metabolite_config(list()))
+    expect_match(on, "Every enzyme that changed", fixed = TRUE)
+    expect_match(on, "a pathway both are in", fixed = TRUE)
+    expect_match(on, "listed too, and `note` says why", fixed = TRUE)
+
+    off <- enzyme_metabolite_config(list(modes = list(multiomics = list(enrichment = list(
+        enzyme_metabolite = list(enzyme_hits_only = FALSE, require_shared_pathway = FALSE,
+                                 list_unpaired_enzymes = FALSE))))))
+    leg <- describe_enzyme_metabolite_table(tab, off)
+    expect_match(leg, "Every measured enzyme, changed or not", fixed = TRUE)
+    expect_match(leg, "no shared-pathway requirement", fixed = TRUE)
+    expect_match(leg, "Only enzymes with at least one pair are listed", fixed = TRUE)
+    expect_false(grepl("a pathway both are in", leg, fixed = TRUE))
+
+    no_paths <- tab
+    no_paths$note <- "KEGG pathway annotation unavailable"
+    expect_match(describe_enzyme_metabolite_table(no_paths, off),
+                 "could not be fetched for this run", fixed = TRUE)
+})
+
+test_that("the report shows both hit rules and builds its legend from the table", {
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    cols <- regmatches(rmd, regexpr("em_cols <- c\\([^)]*\\)", rmd))
+    expect_length(cols, 1)
+    expect_match(cols, '"enzyme_hit_rule"', fixed = TRUE)
+    expect_match(cols, '"metabolite_hit_rule"', fixed = TRUE)
+    expect_match(rmd, "describe_enzyme_metabolite_table(em, enzyme_metabolite_config(cfg))",
+                 fixed = TRUE)
+})
+
+test_that("changed proteins without an EC are counted once, whatever the config", {
+    tabs <- list(
+        A = data.frame(feature_id = c("P1", "P3", "P4"), pvalue = 0.001,
+                       padj = c(0.01, 0.01, 0.9), stringsAsFactors = FALSE),
+        B = data.frame(feature_id = c("P3", "P4"), pvalue = 0.001,
+                       padj = c(0.01, 0.01), stringsAsFactors = FALSE))
+    ec <- data.frame(feature_id = "P1", ec = "1.1.1.1", stringsAsFactors = FALSE)
+    # P3 changed in both contrasts and counts once; P4 changed only in B.
+    expect_identical(.changed_without_ec(tabs, ec, 0.05), c("P3", "P4"))
+
+    # Through the builder: P3 is a hit with no EC. The count is the same whether
+    # unchanged enzymes and unpaired enzymes are listed or not.
+    stubs <- stub_annotation()
+    stubs$extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
+        std <- de_data$.std
+        if (identical(omics_type, "proteomics")) {
+            std$padj <- c(0.01, 0.9, 0.01)
+            return(list(A_vs_B = std))
+        }
+        list(`A vs. B` = std)
+    }
+    for (hits_only in c(TRUE, FALSE)) for (unpaired in c(TRUE, FALSE)) {
+        cfg <- list(modes = list(multiomics = list(enrichment = list(
+            enzyme_metabolite = list(enzyme_hits_only = hits_only,
+                                     list_unpaired_enzymes = unpaired)))))
+        expect_message(run_pairs(stubs, config = cfg, quiet = FALSE),
+                       "; 1 changed protein\\(s\\) carry no EC number")
+    }
+})
+
+test_that("the table is opt-in, and its flags must be real booleans", {
+    expect_false(enzyme_metabolite_config(list())$enabled)
+    expect_true(enzyme_metabolite_config(list())$require_shared_pathway)
+    # A string never switches anything on.
+    yes <- enzyme_metabolite_config(list(modes = list(multiomics = list(enrichment = list(
+        enzyme_metabolite = list(enabled = "yes"))))))
+    expect_false(yes$enabled)
+
+    validate <- function(em) suppressMessages(suppressWarnings(
+        validate_multiomics_config(list(integration = list(methods = "SNF"),
+                                        enrichment = list(enzyme_metabolite = em)))))
+    v <- validate(list())
+    expect_false(v$enrichment$enzyme_metabolite$enabled)
+    expect_true(v$enrichment$enzyme_metabolite$drop_currency_metabolites)
+    expect_error(validate(list(enabled = "no")), "enabled must be true or false")
+    expect_error(validate(list(require_shared_pathway = NA)), "must be true or false")
+    expect_error(validate(list(list_unpaired_enzymes = c(TRUE, FALSE))),
+                 "must be true or false")
+    expect_true(validate(list(enabled = TRUE))$enrichment$enzyme_metabolite$enabled)
 })

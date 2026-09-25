@@ -35,20 +35,26 @@ ENZYME_METABOLITE_CURRENCY_COMPOUNDS <- c(
 #'
 #' Defaults match \code{validate_multiomics_config()}; they are repeated here so
 #' the builder can be called with a bare config in a test without the validator
-#' having run first.
+#' having run first. The table is opt-in: it reaches KEGG, so it runs only when
+#' `enabled` is TRUE. A flag that is not literally TRUE reads as FALSE, so a
+#' string such as "no" can never switch anything on; the validator rejects
+#' such values outright.
 #'
 #' @param config Full config object.
 #' @return List with \code{enabled}, \code{enzyme_hits_only},
 #'   \code{require_shared_pathway}, \code{drop_currency_metabolites} and
 #'   \code{list_unpaired_enzymes}.
+#' @examples
+#' enzyme_metabolite_config(list())$enabled   # FALSE
 enzyme_metabolite_config <- function(config) {
     cfg <- ((config$modes$multiomics$enrichment %||% list())$enzyme_metabolite) %||% list()
+    flag <- function(x, default) if (is.null(x)) default else isTRUE(x)
     list(
-        enabled = !identical(cfg$enabled, FALSE),
-        enzyme_hits_only = !identical(cfg$enzyme_hits_only, FALSE),
-        require_shared_pathway = !identical(cfg$require_shared_pathway, FALSE),
-        drop_currency_metabolites = !identical(cfg$drop_currency_metabolites, FALSE),
-        list_unpaired_enzymes = !identical(cfg$list_unpaired_enzymes, FALSE)
+        enabled = flag(cfg$enabled, FALSE),
+        enzyme_hits_only = flag(cfg$enzyme_hits_only, TRUE),
+        require_shared_pathway = flag(cfg$require_shared_pathway, TRUE),
+        drop_currency_metabolites = flag(cfg$drop_currency_metabolites, TRUE),
+        list_unpaired_enzymes = flag(cfg$list_unpaired_enzymes, TRUE)
     )
 }
 

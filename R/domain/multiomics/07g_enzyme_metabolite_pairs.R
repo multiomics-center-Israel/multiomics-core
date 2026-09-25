@@ -32,28 +32,6 @@ de_hit_flags <- function(tab, cutoff = 0.05) {
 }
 
 
-#' Gene symbol for each proteomics feature id
-#'
-#' The DE tables key on whatever \code{extract_proteomics_de_tables()} resolved
-#' the protein to, which is the expression matrix's row name;
-#' \code{extract_protein_symbols()} reads symbols off \code{row_data} in the
-#' same order. Pairing them by position is only valid because the two are one
-#' per protein, so the lengths are checked rather than assumed.
-#'
-#' @param harmonization_res Harmonization result.
-#' @param config Full config object.
-#' @return Named character vector, feature id to symbol, or NULL.
-#' @keywords internal
-.proteomics_symbol_lookup <- function(harmonization_res, config) {
-    pre <- harmonization_res$inputs$proteomics
-    if (is.null(pre) || is.null(pre$row_data) || is.null(pre$expr_work)) return(NULL)
-    symbols <- extract_protein_symbols(pre$row_data, config$modes$proteomics)
-    ids <- rownames(pre$expr_work)
-    if (is.null(symbols) || is.null(ids) || length(symbols) != length(ids)) return(NULL)
-    stats::setNames(as.character(symbols), ids)
-}
-
-
 #' Pair the two layers' contrasts by their canonical key
 #'
 #' Proteomics and metabolomics spell one comparison differently often enough
@@ -104,14 +82,18 @@ de_hit_flags <- function(tab, cutoff = 0.05) {
 #' compound, and shares a KEGG pathway with the enzyme's gene -- each of the
 #' three switchable in the config.
 #'
-#' One row per (contrast, protein, EC, compound). A pair that KEGG links
-#' through several reactions or pathways keeps them in one cell, joined by ";",
-#' so a row stays one enzyme-metabolite pair and the table can be counted.
+#' One row per (contrast, protein, EC, compound, measured metabolite): two
+#' metabolite features mapped to one compound are two rows. A pair that KEGG
+#' links through several reactions or pathways keeps them in one cell, joined
+#' by ";", so a row stays one enzyme-metabolite pair and the table can be
+#' counted.
 #'
 #' Returns NULL, with a message, whenever the annotation cannot be built:
-#' no KEGG code for the organism, no OrgDb, a layer missing, no shared
-#' contrast, or KEGG unreachable. None of those is an error -- the pairs are a
-#' lookup beside the results, and the run does not depend on them.
+#' disabled in the config (the default), no KEGG code for the organism, no
+#' OrgDb, a layer missing, no shared contrast, KEGG unreachable, or the
+#' shared-pathway filter asked for while pathway membership could not be
+#' fetched. None of those is an error -- the pairs are a lookup beside the
+#' results, and the run does not depend on them.
 #'
 #' @param de_results Named list of DE results per omics layer.
 #' @param harmonization_res Harmonization result.
@@ -155,7 +137,20 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                                          kegg_org, org_db, out_dir, cache_dir)
     if (is.null(ann)) return(NULL)
 
-    symbols <- .proteomics_symbol_lookup(harmonization_res, config)
+    # Without pathway membership the shared-pathway filter would drop every
+    # pair and then report "no shared pathway", which KEGG never said.
+    if (!ann$pathways_available) {
+        if (cfg$require_shared_pathway) {
+            message("  KEGG pathway annotation unavailable, so the shared-pathway ",
+                    "filter cannot be applied; skipping enzyme-metabolite pairs")
+            return(NULL)
+        }
+        message("  KEGG pathway annotation unavailable; pairs are listed without ",
+                "pathways (require_shared_pathway is off)")
+    }
+
+    # Joined by value through a verified 1:1 key, not by position.
+    symbols <- protein_group_gene_symbols(harmonization_res$inputs$proteomics)
     rows <- list()
     for (i in seq_len(nrow(contrasts))) {
         rows[[i]] <- .pairs_for_contrast(
@@ -189,18 +184,36 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                           1L, 2L))
     pairs <- pairs[order(pairs$contrast, tier, pairs$enzyme_padj,
                          pairs$metabolite_padj, pairs$gene_symbol, pairs$protein,
-                         pairs$ec, pairs$compound, na.last = TRUE), , drop = FALSE]
+                         pairs$ec, pairs$compound, pairs$metabolite,
+                         na.last = TRUE), , drop = FALSE]
     rownames(pairs) <- NULL
     n_pairs <- sum(!is.na(pairs$compound))
-    n_changed <- length(unique(unlist(lapply(prot_de, function(tab) {
-        tab$feature_id[de_hit_flags(tab, cutoff)$hit]
-    }))))
     message("  Enzyme-metabolite table: ", n_pairs, " pair(s) and ",
             nrow(pairs) - n_pairs, " enzyme(s) with nothing measured to pair, over ",
             nrow(contrasts), " contrast(s); ",
-            n_changed - length(unique(pairs$protein)),
+            length(.changed_without_ec(prot_de[contrasts$prot], ann$protein_ec, cutoff)),
             " changed protein(s) carry no EC number and are not listed")
     pairs
+}
+
+
+#' Changed proteins that carry no EC number
+#'
+#' Counted directly rather than as "changed minus listed": which proteins are
+#' listed depends on the config (unchanged enzymes, unpaired enzymes), and a
+#' protein changed in two contrasts would otherwise count twice.
+#'
+#' @param prot_tabs Standardized proteomics DE tables of the matched contrasts.
+#' @param protein_ec Protein-to-EC table from the annotation.
+#' @param cutoff Significance cutoff.
+#' @return Unique feature ids, changed in at least one of those contrasts, with
+#'   no EC number.
+#' @keywords internal
+.changed_without_ec <- function(prot_tabs, protein_ec, cutoff) {
+    changed <- unique(unlist(lapply(prot_tabs, function(tab) {
+        tab$feature_id[de_hit_flags(tab, cutoff)$hit]
+    }), use.names = FALSE))
+    sort(setdiff(changed, protein_ec$feature_id))
 }
 
 
@@ -216,9 +229,10 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
 #' @param out_dir Cross-enrichment output directory.
 #' @param cache_dir Directory for the KEGG link caches.
 #' @return List with \code{protein_ec} (protein to EC), \code{ec_compound}
-#'   (EC to compound with reaction), \code{gene_pathways} (EC to normalized
-#'   pathway id), \code{compound_pathways} and \code{pathway_names}; NULL when
-#'   a required piece is missing.
+#'   (EC to compound with reaction), \code{pathways_available} (whether both
+#'   pathway membership tables were fetched), \code{gene_pathways} (EC to
+#'   normalized pathway id), \code{compound_pathways} and
+#'   \code{pathway_names}; NULL when a required piece is missing.
 #' @keywords internal
 .enzyme_metabolite_annotation <- function(prot_de, metab_de, harmonization_res,
                                           kegg_org, org_db, out_dir, cache_dir) {
@@ -294,6 +308,11 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
         ec_compound = unique(ec_compound),
         metab_map = metab_map,
         compound_names = compound_names,
+        # Whether both membership tables were fetched at all. An empty join
+        # after a successful fetch is a real "no shared pathway"; a failed
+        # fetch is not, and is told apart here.
+        pathways_available = !is.null(gene_path) && nrow(gene_path) > 0 &&
+            !is.null(cpd_path) && nrow(cpd_path) > 0,
         gene_pathways = gene_pathways,
         compound_pathways = if (is.null(cpd_path)) NULL else unique(data.frame(
             compound = cpd_path$compound,
@@ -347,7 +366,11 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
         }
     }
 
-    key <- paste(pairs$feature_id_enzyme, pairs$ec, pairs$compound, sep = "\r")
+    # The measured metabolite is part of the key: two features mapped to one
+    # KEGG compound (isomers, adducts, both ionisation modes) are two rows,
+    # each with its own statistics, not one row carrying whichever came first.
+    key <- paste(pairs$feature_id_enzyme, pairs$ec, pairs$compound,
+                 pairs$feature_id_metabolite, sep = "\r")
     collapsed <- lapply(split(seq_len(nrow(pairs)), key), function(idx) {
         r <- pairs[idx[1], , drop = FALSE]
         data.frame(
@@ -376,7 +399,12 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
             stringsAsFactors = FALSE)
     })
     paired <- if (nrow(pairs) == 0) NULL else do.call(rbind, collapsed)
-    if (!is.null(paired)) paired$note <- NA_character_
+    if (!is.null(paired)) {
+        # Only reached with the pathway filter off (the builder skips the
+        # table otherwise), so the empty pathway column needs its reason.
+        paired$note <- if (isTRUE(ann$pathways_available)) NA_character_
+                       else "KEGG pathway annotation unavailable"
+    }
     if (!isTRUE(cfg$list_unpaired_enzymes)) return(paired)
 
     # Every enzyme that changed is listed, even when nothing it acts on was
@@ -469,6 +497,65 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
         out <- .join_unique(found)
         if (is.na(out)) "unknown" else out
     }, character(1))
+}
+
+
+#' Report legend for the enzyme-metabolite table
+#'
+#' Says what the table holds under the settings it was built with, rather than
+#' one fixed sentence that three of those settings can make untrue, and says
+#' where "changed" rests on the raw-p fallback rather than on FDR. It reads the
+#' table and the resolved settings; it decides nothing.
+#'
+#' @param pairs The pair table, as written to \code{enzyme_metabolite_pairs.tsv}.
+#' @param cfg Output of \code{enzyme_metabolite_config()}.
+#' @param cutoff The significance cutoff the hit flags used.
+#' @return One legend string.
+#' @examples
+#' describe_enzyme_metabolite_table(
+#'     data.frame(contrast = "A_vs_B", enzyme_hit_rule = "padj",
+#'                metabolite_hit_rule = "raw p", note = NA),
+#'     enzyme_metabolite_config(list()))
+describe_enzyme_metabolite_table <- function(pairs, cfg, cutoff = 0.05) {
+    rule_note <- function(rule_col, what) {
+        base <- sprintf("A changed %s means FDR < %s", what, cutoff)
+        if (!all(c("contrast", rule_col) %in% names(pairs))) return(paste0(base, "."))
+        raw <- sort(unique(pairs$contrast[pairs[[rule_col]] %in% "raw p"]))
+        if (length(raw) == 0) return(paste0(base, "."))
+        sprintf(paste0("%s, except in %s, where no %s cleared FDR and it means ",
+                       "raw p < %s, uncorrected (%s)."),
+                base, paste(raw, collapse = ", "), what, cutoff, rule_col)
+    }
+
+    enzymes <- if (cfg$enzyme_hits_only) {
+        "Every enzyme that changed"
+    } else {
+        "Every measured enzyme, changed or not (enzyme_hit marks the changed ones)"
+    }
+    link <- if (cfg$require_shared_pathway) {
+        "with the measured metabolites KEGG links to it through an EC number and a pathway both are in"
+    } else {
+        "with the measured metabolites KEGG links to it through an EC number, with no shared-pathway requirement"
+    }
+    no_pathways <- any(pairs$note %in% "KEGG pathway annotation unavailable")
+    unpaired <- if (cfg$list_unpaired_enzymes) {
+        "Enzymes with nothing to pair are listed too, and `note` says why."
+    } else {
+        "Only enzymes with at least one pair are listed."
+    }
+
+    paste(
+        paste0(enzymes, ", ", link, "."),
+        if (no_pathways) "KEGG pathway membership could not be fetched for this run, so the pathway columns are empty.",
+        unpaired,
+        "Changed proteins with no EC number are not enzymes and are left out.",
+        rule_note("enzyme_hit_rule", "enzyme"),
+        rule_note("metabolite_hit_rule", "metabolite"),
+        sprintf("Bold rows have a metabolite at FDR < %s.", cutoff),
+        "KEGG says the class can act on the compound, not that it did here, and",
+        "the same direction is not agreement: a substrate often falls as its",
+        "enzyme rises. Nothing is tested, and one metabolite has many enzymes, so",
+        "rows are not independent.")
 }
 
 
