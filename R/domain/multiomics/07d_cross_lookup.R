@@ -8,38 +8,46 @@
 #' in both directions.
 #'
 #' Descriptive only. Every p-value shown is the one the layer's own enrichment
-#' produced; nothing is re-tested, and the one adjustment added here is named
-#' as such (\code{target_padj_within_lookup}).
+#' produced; nothing is re-tested or re-adjusted.
 #'
 #' Identity and method choice are the meta-analysis's own:
-#' \code{pathway_join_key()} joins the layers and
-#' \code{select_layer_method_rows()} decides which rows of a layer are read --
-#' its rank-based (GSEA) rows where it has them, otherwise its ORA rows.
+#' \code{.layer_contribution()} decides which rows of a layer are read -- its
+#' rank-based (GSEA) rows where it has them, otherwise its ORA rows -- and keys
+#' them with \code{pathway_join_key()}. The target is always read in the same
+#' contrast as the source row it sits beside, so two NES are never compared
+#' across different comparisons.
 
 
 #' Best row per pathway within the chosen rows of one layer
 #'
 #' The collapse is the one \code{merge_pathway_pvalues()} makes: the smallest
-#' raw p-value per join key, across contrasts and collections. Ties go to the
-#' larger |NES|, then to the incoming order, so reruns agree.
+#' raw p-value per join key, across contrasts and collections -- or, with
+#' \code{by_contrast}, per join key within each contrast, which is how a target
+#' is read so it can be matched to the source row's own contrast. Ties go to the
+#' larger |NES|, then to the join key and the contrast, so the order never
+#' depends on the order rows arrived in.
 #'
 #' @param df Enrichment data frame for one layer.
+#' @param contrib Its \code{.layer_contribution()} result, which supplies the
+#'   join keys, the raw p-values and the rows the layer contributes.
 #' @param keep Logical vector, one per row of \code{df}: the rows to read.
-#' @param kegg_org Active KEGG organism code for the run, or NULL.
-#' @return Data frame with one row per join key -- \code{norm_id}, \code{label},
-#'   \code{method}, \code{NES}, \code{p}, \code{padj}, \code{n_measured},
-#'   \code{contrast} -- sorted best first; NULL when no row is usable.
-#'   \code{n_measured} is the number of pathway members present in the layer's
-#'   ranked list (fgsea `size`, GSEA `setSize`) and is NA for ORA rows, whose
-#'   set-size columns count something else.
+#'   Defaults to the contributing rows; the target's ORA values beside its
+#'   chosen method pass the ORA rows instead.
+#' @param by_contrast Collapse per (pathway, contrast) rather than per pathway.
+#' @return Data frame with one row per join key (or per join key and contrast)
+#'   -- \code{norm_id}, \code{label}, \code{method}, \code{NES}, \code{p},
+#'   \code{padj}, \code{n_measured}, \code{contrast}, \code{contrast_key} --
+#'   sorted best first; NULL when no row is usable. \code{n_measured} is the
+#'   number of pathway members present in the layer's ranked list (fgsea
+#'   `size`, GSEA `setSize`) and is NA for ORA rows, whose set-size columns
+#'   count something else. \code{contrast_key} is
+#'   \code{normalize_contrast_key()} of the contrast, NA where there is none.
 #' @keywords internal
-.lookup_layer_stats <- function(df, keep, kegg_org = NULL) {
-    if (!is.data.frame(df) || nrow(df) == 0 || !any(keep)) return(NULL)
-
-    p <- .raw_p_values(df)
-    if (is.null(p)) return(NULL)
-    keys <- pathway_join_key(df, kegg_org)
-    ok <- keep & !is.na(keys) & !is.na(p)
+.lookup_layer_stats <- function(df, contrib, keep = contrib$keep,
+                                by_contrast = FALSE) {
+    if (!is.data.frame(df) || nrow(df) == 0 || is.null(contrib) ||
+        !is.null(contrib$problem)) return(NULL)
+    ok <- keep & !is.na(contrib$keys) & !is.na(contrib$pvals)
     if (!any(ok)) return(NULL)
 
     # First non-missing value per row across the named columns, numeric.
@@ -61,32 +69,51 @@
     }
     n_measured <- num_col(c("size", "setSize"))
     n_measured[!(method %in% .RANK_BASED_METHODS)] <- NA_real_
+    contrast <- if ("contrast" %in% names(df)) as.character(df$contrast)
+                else rep(NA_character_, nrow(df))
 
     tab <- data.frame(
-        norm_id    = keys,
-        label      = pathway_display_label(df),
-        method     = method,
-        NES        = num_col("NES"),
-        p          = p,
-        padj       = .ora_adjusted_p_values(df),
-        n_measured = n_measured,
-        contrast   = if ("contrast" %in% names(df)) as.character(df$contrast)
-                     else rep(NA_character_, nrow(df)),
+        norm_id      = contrib$keys,
+        label        = pathway_display_label(df),
+        method       = method,
+        NES          = num_col("NES"),
+        p            = contrib$pvals,
+        padj         = .ora_adjusted_p_values(df),
+        n_measured   = n_measured,
+        contrast     = contrast,
+        contrast_key = normalize_contrast_key(contrast),
         stringsAsFactors = FALSE
     )[ok, , drop = FALSE]
 
-    tab <- tab[order(tab$p, -abs(tab$NES), na.last = TRUE), , drop = FALSE]
-    tab <- tab[!duplicated(tab$norm_id), , drop = FALSE]
+    tab <- tab[order(tab$p, -abs(tab$NES), tab$norm_id, tab$contrast_key,
+                     na.last = TRUE), , drop = FALSE]
+    group <- if (by_contrast) .lookup_pair_key(tab) else tab$norm_id
+    tab <- tab[!duplicated(group), , drop = FALSE]
     rownames(tab) <- NULL
     tab
+}
+
+
+#' Pathway-and-contrast key used to match a source row to its target row
+#'
+#' A row with no contrast only ever matches another row with no contrast: a
+#' source row from one comparison is never paired with a target row from
+#' another, or from a table that does not say which comparison it is.
+#'
+#' @param tab Rows from \code{.lookup_layer_stats()}.
+#' @return Character vector, one key per row.
+#' @keywords internal
+.lookup_pair_key <- function(tab) {
+    paste(tab$norm_id, ifelse(is.na(tab$contrast_key), "<none>", tab$contrast_key),
+          sep = "\r")
 }
 
 
 #' Look up one layer's top pathways in another layer
 #'
 #' The source layer is ranked on its own raw p-value, from the rows
-#' \code{select_layer_method_rows()} chooses for it -- rank-based where it has
-#' them, which is what "ranked by GSEA" means here. Two rankings are returned:
+#' \code{.layer_contribution()} chooses for it -- rank-based where it has them,
+#' which is what "ranked by GSEA" means here. Two rankings are returned:
 #'
 #' \itemize{
 #'   \item \code{all}: the source's top \code{top_n} pathways, whether or not the
@@ -94,21 +121,16 @@
 #'     gene-based pathway may contain no measured compound -- and saying so is
 #'     part of the answer.
 #'   \item \code{tested_in_target}: the source's top \code{top_n} among the
-#'     pathways the target has a result for.
+#'     pathways the target has a result for in the same contrast.
 #' }
 #'
-#' For the target the chosen method's values are reported, and, where the
-#' target also carries ORA rows, its ORA p and adjusted p beside them. At run
-#' level, source and target values are each the best across contrasts, so they
-#' can come from different contrasts; \code{source_contrast} and
-#' \code{target_contrast} say which. The per-contrast directories carry the
-#' matched view.
-#'
-#' \code{target_padj_within_lookup} is a Benjamini-Hochberg adjustment of the
-#' target p-values across the looked-up pathways the target tested, within one
-#' ranking. It treats the source ranking as a pre-selection; the two layers come
-#' from the same samples or cultures, so they are not independent, and this is
-#' a guide rather than a controlled error rate.
+#' Each source pathway keeps its best row across contrasts, and the target is
+#' read in that row's contrast (matched on \code{normalize_contrast_key()}): a
+#' target with no result in that contrast is reported as such, never filled in
+#' from another contrast. \code{source_contrast} and \code{target_contrast}
+#' say which comparison each value comes from. For the target the chosen
+#' method's values are reported and, where the target also carries ORA rows,
+#' its ORA p and adjusted p in the same contrast beside them.
 #'
 #' @param pathway_tables Named list of per-omics enrichment data frames -- the
 #'   tables the meta-analysis merged, rank-based rows included.
@@ -121,8 +143,7 @@
 #'   source_layer, source_method, source_contrast, source_NES, source_p,
 #'   source_padj, source_n_measured, target_layer, target_status,
 #'   target_method, target_contrast, target_NES, target_p, target_padj,
-#'   target_n_measured, target_ora_p, target_ora_padj,
-#'   target_padj_within_lookup.
+#'   target_n_measured, target_ora_p, target_ora_padj.
 #' @examples
 #' tabs <- list(
 #'   proteomics   = data.frame(ID = c("map00010", "map00020"), pval = c(0.01, 0.2),
@@ -135,36 +156,31 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
                                      kegg_org = NULL) {
     src_df <- pathway_tables[[from]]
     if (!is.data.frame(src_df) || nrow(src_df) == 0) return(NULL)
-    src_p <- .raw_p_values(src_df)
-    if (is.null(src_p)) return(NULL)
-    src <- .lookup_layer_stats(src_df, select_layer_method_rows(src_df, src_p)$keep,
-                               kegg_org)
+    src <- .lookup_layer_stats(src_df, .layer_contribution(src_df, kegg_org))
     if (is.null(src)) return(NULL)
 
     tgt <- NULL
     tgt_ora <- NULL
     tgt_df <- pathway_tables[[to]]
     if (is.data.frame(tgt_df) && nrow(tgt_df) > 0) {
-        tgt_p <- .raw_p_values(tgt_df)
-        if (!is.null(tgt_p)) {
-            tgt <- .lookup_layer_stats(
-                tgt_df, select_layer_method_rows(tgt_df, tgt_p)$keep, kegg_org)
-            if ("method" %in% names(tgt_df)) {
-                is_ora <- !is.na(tgt_df$method) &
-                    tolower(trimws(as.character(tgt_df$method))) == "ora"
-                tgt_ora <- .lookup_layer_stats(tgt_df, is_ora, kegg_org)
-            }
+        tgt_cb <- .layer_contribution(tgt_df, kegg_org)
+        tgt <- .lookup_layer_stats(tgt_df, tgt_cb, by_contrast = TRUE)
+        if (!is.null(tgt) && "method" %in% names(tgt_df)) {
+            is_ora <- !is.na(tgt_df$method) &
+                tolower(trimws(as.character(tgt_df$method))) == "ora"
+            tgt_ora <- .lookup_layer_stats(tgt_df, tgt_cb, keep = is_ora,
+                                           by_contrast = TRUE)
         }
     }
 
     top_n <- suppressWarnings(as.integer(top_n))
     if (length(top_n) != 1 || is.na(top_n) || top_n < 1) top_n <- 15L
 
-    tested_keys <- if (is.null(tgt)) character(0) else tgt$norm_id
+    tested <- if (is.null(tgt)) rep(FALSE, nrow(src))
+              else .lookup_pair_key(src) %in% .lookup_pair_key(tgt)
     blocks <- list(
         all              = utils::head(src, top_n),
-        tested_in_target = utils::head(src[src$norm_id %in% tested_keys, , drop = FALSE],
-                                       top_n)
+        tested_in_target = utils::head(src[tested, , drop = FALSE], top_n)
     )
 
     out <- lapply(names(blocks), function(b) {
@@ -180,26 +196,30 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
 
 #' One ranking of a lookup, with the target's values joined on
 #'
+#' Target values are joined on pathway and contrast together
+#' (\code{.lookup_pair_key()}), so each target value is the one for the source
+#' row's own contrast.
+#'
 #' @param blk Source rows for this ranking, best first, from
 #'   \code{.lookup_layer_stats()}.
 #' @param ranking Name of the ranking ("all" or "tested_in_target").
 #' @param from,to Layer names.
-#' @param tgt Target stats for its chosen method, or NULL.
-#' @param tgt_ora Target stats for its ORA rows, or NULL.
+#' @param tgt Target stats per pathway and contrast for its chosen method, or
+#'   NULL.
+#' @param tgt_ora Target stats per pathway and contrast for its ORA rows, or
+#'   NULL.
 #' @return Data frame for this ranking, or NULL when \code{blk} is empty.
 #' @keywords internal
 .assemble_lookup_block <- function(blk, ranking, from, to, tgt, tgt_ora) {
     if (is.null(blk) || nrow(blk) == 0) return(NULL)
     n <- nrow(blk)
 
-    t_idx <- if (is.null(tgt)) rep(NA_integer_, n) else match(blk$norm_id, tgt$norm_id)
-    o_idx <- if (is.null(tgt_ora)) rep(NA_integer_, n) else match(blk$norm_id, tgt_ora$norm_id)
+    key <- .lookup_pair_key(blk)
+    t_idx <- if (is.null(tgt)) rep(NA_integer_, n) else match(key, .lookup_pair_key(tgt))
+    o_idx <- if (is.null(tgt_ora)) rep(NA_integer_, n) else match(key, .lookup_pair_key(tgt_ora))
     pick <- function(tab, idx, col, na) if (is.null(tab)) rep(na, n) else tab[[col]][idx]
 
     tested <- !is.na(t_idx)
-    target_p <- pick(tgt, t_idx, "p", NA_real_)
-    within <- rep(NA_real_, n)
-    if (any(tested)) within[tested] <- stats::p.adjust(target_p[tested], method = "BH")
 
     label <- blk$label
     tgt_label <- pick(tgt, t_idx, "label", NA_character_)
@@ -207,29 +227,31 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
     label[is.na(label)] <- blk$norm_id[is.na(label)]
 
     data.frame(
-        ranking                   = ranking,
-        rank                      = seq_len(n),
-        norm_id                   = blk$norm_id,
-        pathway                   = label,
-        source_layer              = from,
-        source_method             = blk$method,
-        source_contrast           = blk$contrast,
-        source_NES                = blk$NES,
-        source_p                  = blk$p,
-        source_padj               = blk$padj,
-        source_n_measured         = blk$n_measured,
-        target_layer              = to,
-        target_status             = ifelse(tested, "tested", "not in target results"),
-        target_method             = pick(tgt, t_idx, "method", NA_character_),
-        target_contrast           = pick(tgt, t_idx, "contrast", NA_character_),
-        target_NES                = pick(tgt, t_idx, "NES", NA_real_),
-        target_p                  = target_p,
-        target_padj               = pick(tgt, t_idx, "padj", NA_real_),
-        target_n_measured         = pick(tgt, t_idx, "n_measured", NA_real_),
-        target_ora_p              = pick(tgt_ora, o_idx, "p", NA_real_),
-        target_ora_padj           = pick(tgt_ora, o_idx, "padj", NA_real_),
-        target_padj_within_lookup = within,
-        stringsAsFactors = FALSE
+        ranking           = ranking,
+        rank              = seq_len(n),
+        norm_id           = blk$norm_id,
+        pathway           = label,
+        source_layer      = from,
+        source_method     = blk$method,
+        source_contrast   = blk$contrast,
+        source_NES        = blk$NES,
+        source_p          = blk$p,
+        source_padj       = blk$padj,
+        source_n_measured = blk$n_measured,
+        target_layer      = to,
+        target_status     = ifelse(tested, "tested",
+                                   ifelse(is.na(blk$contrast_key),
+                                          "not in target results",
+                                          "not in target results for this contrast")),
+        target_method     = pick(tgt, t_idx, "method", NA_character_),
+        target_contrast   = pick(tgt, t_idx, "contrast", NA_character_),
+        target_NES        = pick(tgt, t_idx, "NES", NA_real_),
+        target_p          = pick(tgt, t_idx, "p", NA_real_),
+        target_padj       = pick(tgt, t_idx, "padj", NA_real_),
+        target_n_measured = pick(tgt, t_idx, "n_measured", NA_real_),
+        target_ora_p      = pick(tgt_ora, o_idx, "p", NA_real_),
+        target_ora_padj   = pick(tgt_ora, o_idx, "padj", NA_real_),
+        stringsAsFactors  = FALSE
     )
 }
 
@@ -294,9 +316,9 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
             # Wrapped by hand: one line of this length is cut off at this
             # figure's width.
             caption = paste0("Colour and number: NES, grey at zero; ",
-                             "* raw p < 0.05.\n",
+                             "* raw p < 0.05. Both layers read in the same contrast.\n",
                              "An unfilled cell has no NES: ORA only, or a dash ",
-                             "for no result in that layer."),
+                             "for no result in that layer and contrast."),
             x = NULL, y = NULL) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
@@ -397,16 +419,17 @@ write_cross_omics_lookups <- function(pathway_tables, omics, out_dir,
 
 #' Lookup settings from the config, with defaults
 #'
-#' On unless the config turns it off; \code{top_n} falls back to 15 when absent
-#' or unusable. The config validator fills the same defaults, and they are
-#' repeated here so a config that bypassed it behaves the same.
+#' Off unless the config turns it on -- it is exploratory, and writes a table and
+#' two figures per ordered pair of layers; \code{top_n} falls back to 15 when
+#' absent or unusable. The config validator fills the same defaults, and they
+#' are repeated here so a config that bypassed it behaves the same.
 #'
 #' @param config Full config object.
 #' @return List with \code{enabled} (logical) and \code{top_n} (integer).
 #' @keywords internal
 .cross_lookup_config <- function(config) {
     cfg <- config$modes$multiomics$enrichment$cross_lookup %||% list()
-    enabled <- cfg$enabled %||% TRUE
+    enabled <- cfg$enabled %||% FALSE
     top_n <- suppressWarnings(as.integer(cfg$top_n %||% 15L))
     if (length(top_n) != 1 || is.na(top_n) || top_n < 1) top_n <- 15L
     list(enabled = isTRUE(enabled), top_n = top_n)

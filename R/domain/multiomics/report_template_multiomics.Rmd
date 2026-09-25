@@ -1242,9 +1242,11 @@ if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0)
     figure_legend(paste(
         "Each layer's top pathways by its own raw p-value (GSEA where available,",
         "otherwise ORA), beside the same pathways in the other layer, both",
-        "directions. Colour and number: NES, grey at zero; * marks raw p < 0.05.",
+        "directions. The other layer is read in the same contrast as each",
+        "pathway's ranked row, named in the table's contrast columns.",
+        "Colour and number: NES, grey at zero; * marks raw p < 0.05.",
         "An unfilled cell has no NES: an ORA-only result, or a dash where the",
-        "other layer has no result. The",
+        "other layer has no result in that contrast. The",
         "second heatmap keeps only pathways the other layer tested. P-values are",
         "nominal, and the same NES sign in two layers is not by itself biological",
         "agreement."))
@@ -1254,10 +1256,10 @@ if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0)
 ```{r enrichment-cross-lookup-table, eval=has_enrichment}
 lookup_tsvs <- sort(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.tsv$",
                                full.names = TRUE))
-lookup_cols <- c("ranking", "rank", "pathway", "source_method", "source_NES",
-                 "source_p", "source_padj", "target_status", "target_method",
-                 "target_NES", "target_p", "target_padj", "target_ora_p",
-                 "target_padj_within_lookup")
+lookup_cols <- c("ranking", "rank", "pathway", "source_method",
+                 "source_contrast", "source_NES", "source_p", "source_padj",
+                 "target_status", "target_method", "target_contrast",
+                 "target_NES", "target_p", "target_padj", "target_ora_p")
 for (tsv in lookup_tsvs) {
     tbl <- read.delim(tsv, stringsAsFactors = FALSE, check.names = FALSE)
     if (nrow(tbl) == 0) next

@@ -133,10 +133,10 @@ validate_multiomics_config <- function(multiomics_cfg) {
     }
 
     # Validate cross-omics lookup config: each layer's top pathways read in the
-    # other layers. On by default; see .cross_lookup_config().
+    # other layers. Off by default (exploratory); see .cross_lookup_config().
     lk_cfg <- enrich_cfg$cross_lookup %||% list()
     if (is.null(lk_cfg$enabled)) {
-        multiomics_cfg$enrichment$cross_lookup$enabled <- TRUE
+        multiomics_cfg$enrichment$cross_lookup$enabled <- FALSE
     }
     if (is.null(lk_cfg$top_n)) {
         multiomics_cfg$enrichment$cross_lookup$top_n <- 15

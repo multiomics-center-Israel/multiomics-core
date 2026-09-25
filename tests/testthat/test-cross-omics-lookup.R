@@ -52,7 +52,6 @@ test_that("a pathway the target has no result for is reported, not dropped", {
 
     expect_identical(row$target_status, "not in target results")
     expect_true(is.na(row$target_p))
-    expect_true(is.na(row$target_padj_within_lookup))
 })
 
 test_that("the tested ranking holds only pathways the target has", {
@@ -65,14 +64,14 @@ test_that("the tested ranking holds only pathways the target has", {
     expect_identical(tested$rank, seq_len(nrow(tested)))
 })
 
-test_that("the within-lookup adjustment covers the tested rows of one ranking", {
+test_that("no adjustment is recomputed over the looked-up subset", {
+    # A BH over pathways the source already selected reads as an ordinary FDR,
+    # which it is not; only the target's own p and adjusted p are reported.
     lk <- build_cross_omics_lookup(tables(), "metabolomics", "proteomics",
                                    top_n = 10, kegg_org = "rno")
-    blk <- lk[lk$ranking == "all", ]
-    tested <- blk$target_status == "tested"
-
-    expect_equal(blk$target_padj_within_lookup[tested],
-                 stats::p.adjust(blk$target_p[tested], method = "BH"))
+    expect_false("target_padj_within_lookup" %in% names(lk))
+    row <- lk[lk$ranking == "all" & lk$norm_id == "00010", ]
+    expect_equal(row$target_padj, 0.6)
 })
 
 
@@ -122,13 +121,20 @@ test_that("the source is ranked on its own raw p-value", {
     expect_identical(blk$norm_id, c("00010", "00020", "00030", "00040"))
 })
 
-test_that("ties on p-value go to the larger |NES|, then to incoming order", {
-    tied <- data.frame(pathway = c("rno00010", "rno00020", "rno00030"),
-                       pvalue = c(0.05, 0.05, 0.05), NES = c(1.1, -2.0, 1.1),
+test_that("ties on p-value go to the larger |NES|, then to the pathway id", {
+    # 00030 arrives before 00010 with the same p and |NES|: the pathway id, not
+    # the incoming order, decides.
+    tied <- data.frame(pathway = c("rno00030", "rno00020", "rno00010"),
+                       pvalue = c(0.05, 0.05, 0.05), NES = c(1.1, -2.0, -1.1),
                        method = "fgsea", stringsAsFactors = FALSE)
     lk <- build_cross_omics_lookup(list(a = tied, b = metab_gsea()), "a", "b",
                                    top_n = 3, kegg_org = "rno")
     expect_identical(lk$norm_id[lk$ranking == "all"], c("00020", "00010", "00030"))
+
+    reversed <- tied[rev(seq_len(nrow(tied))), ]
+    lk2 <- build_cross_omics_lookup(list(a = reversed, b = metab_gsea()), "a", "b",
+                                    top_n = 3, kegg_org = "rno")
+    expect_identical(lk2$norm_id[lk2$ranking == "all"], c("00020", "00010", "00030"))
 })
 
 test_that("a top_n larger than the table returns every pathway", {
@@ -161,8 +167,8 @@ test_that("one pathway across contrasts keeps its best row and says which", {
 
 # ---- config ----------------------------------------------------------------
 
-test_that("the lookup is on by default with fifteen pathways", {
-    expect_identical(.cross_lookup_config(list()), list(enabled = TRUE, top_n = 15L))
+test_that("the lookup is off by default, with fifteen pathways when on", {
+    expect_identical(.cross_lookup_config(list()), list(enabled = FALSE, top_n = 15L))
 })
 
 test_that("the reader's defaults match the config validator's", {
@@ -214,7 +220,8 @@ test_that("the written table reads back with the columns the report shows", {
     tbl <- read.delim(file.path(out_dir, "cross_lookup_metabolomics_to_proteomics.tsv"),
                       stringsAsFactors = FALSE)
     expect_true(all(c("ranking", "pathway", "source_NES", "target_status",
-                      "target_padj_within_lookup") %in% names(tbl)))
+                      "source_contrast", "target_contrast") %in% names(tbl)))
+    expect_false("target_padj_within_lookup" %in% names(tbl))
 })
 
 test_that("a previous run's lookup files are cleared", {
@@ -280,4 +287,158 @@ test_that("the heatmap is written to the path it was given", {
     out <- file.path(withr::local_tempdir(), "lookup.png")
     expect_identical(plot_cross_omics_lookup(lk, "all", out), out)
     expect_true(file.exists(out))
+})
+
+
+# ---- the target is read in the source row's own contrast --------------------
+
+# Per-contrast tables as the run-level merge sees them: each layer spells the
+# comparison its own way.
+metab_two_contrasts <- function() {
+    rbind(transform(metab_gsea(), contrast = "A_vs_B"),
+          transform(metab_gsea(), contrast = "C_vs_D",
+                    pvalue = c(0.3, 0.9, 0.9, 0.9)))
+}
+
+prot_two_contrasts <- function() {
+    data.frame(pathway = c("rno00010", "rno00010", "rno00030"),
+               pval = c(0.4, 0.001, 0.02), padj = c(0.7, 0.01, 0.2),
+               NES = c(1.2, -2.5, 1.6), size = c(40, 40, 25),
+               method = "fgsea", contrast = c("A vs B", "C_vs_D", "C_vs_D"),
+               stringsAsFactors = FALSE)
+}
+
+test_that("run-level source and target come from the same normalized contrast", {
+    lk <- build_cross_omics_lookup(
+        list(metabolomics = metab_two_contrasts(), proteomics = prot_two_contrasts()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
+    row <- lk[lk$ranking == "all" & lk$norm_id == "00010", ]
+
+    # The source's best 00010 row is A_vs_B. The target's C_vs_D row has the far
+    # smaller p but is a different comparison; its A vs B row is the one read.
+    expect_identical(row$source_contrast, "A_vs_B")
+    expect_identical(row$target_contrast, "A vs B")
+    expect_equal(row$target_p, 0.4)
+    expect_equal(row$target_NES, 1.2)
+    expect_identical(normalize_contrast_key(row$source_contrast),
+                     normalize_contrast_key(row$target_contrast))
+})
+
+test_that("a target missing in the source's contrast is not filled from another", {
+    lk <- build_cross_omics_lookup(
+        list(metabolomics = metab_two_contrasts(), proteomics = prot_two_contrasts()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
+    row <- lk[lk$ranking == "all" & lk$norm_id == "00030", ]
+
+    # The target has 00030 only in C_vs_D; the source's 00030 row is A_vs_B.
+    expect_identical(row$source_contrast, "A_vs_B")
+    expect_identical(row$target_status, "not in target results for this contrast")
+    expect_true(is.na(row$target_p))
+    expect_true(is.na(row$target_contrast))
+    expect_false("00030" %in% lk$norm_id[lk$ranking == "tested_in_target"])
+})
+
+test_that("a target that names no contrast is not matched to a source that does", {
+    lk <- build_cross_omics_lookup(
+        list(metabolomics = metab_two_contrasts(), proteomics = prot_mixed()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
+    expect_true(all(lk$target_status[lk$ranking == "all"] ==
+                        "not in target results for this contrast"))
+})
+
+
+# ---- which rows are read: .layer_contribution() is the path ----------------
+
+# Sourced functions live in the global environment rather than a package
+# namespace, so a stub is assigned there and restored on exit -- the pattern of
+# the other enrichment tests.
+local_stubs <- function(stubs, env = parent.frame()) {
+    target <- environment(build_cross_omics_lookup)
+    nms <- names(stubs)
+    had <- vapply(nms, exists, logical(1), envir = target, inherits = FALSE)
+    old <- lapply(nms[had], get, envir = target, inherits = FALSE)
+    names(old) <- nms[had]
+    withr::defer({
+        for (nm in nms) {
+            if (nm %in% names(old)) {
+                assign(nm, old[[nm]], envir = target)
+            } else if (exists(nm, envir = target, inherits = FALSE)) {
+                rm(list = nm, envir = target)
+            }
+        }
+    }, envir = env)
+    for (nm in nms) assign(nm, stubs[[nm]], envir = target)
+    invisible(NULL)
+}
+
+test_that("the rows read are the ones .layer_contribution() keeps", {
+    real <- .layer_contribution
+    # Keep only the source's rno00040 row: if the lookup chose its rows any
+    # other way, the other three pathways would appear.
+    local_stubs(list(.layer_contribution = function(df, kegg_org = NULL) {
+        cb <- real(df, kegg_org)
+        if (identical(df$pathway, metab_gsea()$pathway)) {
+            cb$keep <- cb$keep & grepl("00040", df$pathway)
+        }
+        cb
+    }))
+    lk <- build_cross_omics_lookup(tables(), "metabolomics", "proteomics",
+                                   top_n = 10, kegg_org = "rno")
+    expect_identical(lk$norm_id[lk$ranking == "all"], "00040")
+})
+
+test_that("the lookup no longer selects rows on its own", {
+    src <- paste(deparse(body(build_cross_omics_lookup)), collapse = " ")
+    expect_true(grepl("\\.layer_contribution\\(", src, perl = TRUE))
+    expect_false(grepl("select_layer_method_rows\\(", src, perl = TRUE))
+})
+
+
+# ---- run level: read from merge_tables after exclusions, rank tables in ----
+
+test_that("the run-level lookup reads the merged tables after exclusion", {
+    out_dir <- withr::local_tempdir()
+    prot <- data.frame(ID = c("map00010", "map00020", "map00030"),
+                       pval = c(0.01, 0.02, 0.03), padj = c(0.1, 0.1, 0.1),
+                       NES = c(1.5, -1.4, 1.2), method = "fgsea",
+                       contrast = "A_vs_B", stringsAsFactors = FALSE)
+    compound_gsea <- data.frame(ID = c("map00010", "map00020"),
+                                pvalue = c(0.04, 0.05), padj = c(0.2, 0.2),
+                                NES = c(-1.3, 1.1), method = "fgsea",
+                                contrast = "A vs B", stringsAsFactors = FALSE)
+    # A class exclusion that drops 00020, without the KEGG classification.
+    local_stubs(list(
+        .excluded_pathway_classes = function(config) "Stubbed class",
+        keep_kegg_pathways = function(ids, ...) !grepl("00020", ids)))
+    cfg <- list(global = list(organism = "Unlisted nonmodel species"),
+                modes = list(multiomics = list(enrichment = list(
+                    cross_lookup = list(enabled = TRUE, top_n = 10)))))
+
+    res <- suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        list(proteomics = prot), cfg, out_dir = out_dir,
+        rank_tables = list(metabolomics = compound_gsea))))
+
+    tsv <- file.path(out_dir, "cross_lookup_proteomics_to_metabolomics.tsv")
+    expect_true(file.exists(tsv))
+    lk <- read.delim(tsv, stringsAsFactors = FALSE, colClasses = c(norm_id = "character"))
+    # The excluded pathway is gone; the metabolomics layer is there only as the
+    # rank table supplied beside the per-layer ones.
+    expect_false("00020" %in% lk$norm_id)
+    row <- lk[lk$ranking == "all" & lk$norm_id == "00010", ]
+    expect_identical(row$target_method, "fgsea")
+    expect_equal(row$target_p, 0.04)
+})
+
+
+# ---- the report shows where each value comes from ----------------------------
+
+test_that("the report's lookup table carries both contrasts", {
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    cols_def <- regmatches(rmd, regexpr("lookup_cols <- c\\([^)]*\\)", rmd))
+    expect_length(cols_def, 1)
+    expect_true(grepl('"source_contrast"', cols_def, fixed = TRUE))
+    expect_true(grepl('"target_contrast"', cols_def, fixed = TRUE))
+    expect_false(grepl("target_padj_within_lookup", rmd, fixed = TRUE))
 })
