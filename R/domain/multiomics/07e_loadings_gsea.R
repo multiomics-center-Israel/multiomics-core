@@ -278,7 +278,8 @@ axis_orientation <- function(scores, conditions, axis) {
 #' clusterProfiler, keyed on NCBI gene ids, when the organism has a KEGG code
 #' and an OrgDb; otherwise the view's configured GMTs, one collection per file
 #' as \code{load_gene_sets()} builds them, scored by the core fgsea in
-#' \code{run_pathway_analysis()}. Every call is seeded.
+#' \code{run_pathway_analysis()}. Every call is seeded. A configured GMT that
+#' does not exist is skipped with a warning; the others are still scored.
 #'
 #' @param values Named numeric vector, signed loading per feature id.
 #' @param omics_type "transcriptomics" or "proteomics".
@@ -290,7 +291,8 @@ axis_orientation <- function(scores, conditions, axis) {
 #' @param seed Seed for the stochastic scoring.
 #' @param exclude_classes KEGG BRITE classes to drop after scoring, or NULL.
 #' @return Data frame with `pathway`, `ID`, `NES`, `ES`, `pvalue`, `padj`,
-#'   `setSize`, `leadingEdge`, `database`, `method`; NULL when nothing scored.
+#'   `setSize`, `leadingEdge`, `database`, `method`; NULL when nothing scored,
+#'   including when none of the configured GMTs exists.
 gene_loadings_gsea <- function(values, omics_type, harmonization_res, config,
                                kegg_org, org_db, min_size, max_size, seed,
                                exclude_classes = NULL) {
@@ -343,9 +345,22 @@ gene_loadings_gsea <- function(values, omics_type, harmonization_res, config,
         gmt_path <- unlist(config$modes[[cfg_key]]$pathway$gmt_file, use.names = FALSE)
         if (length(gmt_path) == 0 || !any(nzchar(gmt_path))) return(NULL)
 
+        # A missing file costs only its own collection. None left is NULL here:
+        # load_gene_sets() given no GMT would fall back to generating gene sets
+        # for a non-model organism, which is not what this view was configured
+        # to test against.
+        gmt_abs <- resolve_input_path(config, gmt_path[nzchar(gmt_path)])
+        missing_gmt <- !file.exists(gmt_abs)
+        if (any(missing_gmt)) {
+            warning("Loadings GSEA (GMT): ", omics_type, " gmt_file not found, ",
+                    "skipped: ", paste(gmt_abs[missing_gmt], collapse = ", "),
+                    call. = FALSE)
+        }
+        if (all(missing_gmt)) return(NULL)
+
         gene_sets <- load_gene_sets(config$global$organism,
                                     pathway_database = character(0),
-                                    gmt_file = resolve_input_path(config, gmt_path))
+                                    gmt_file = gmt_abs[!missing_gmt])
         if (length(gene_sets) == 0) return(NULL)
 
         ranks <- collapse_loading_ranks(values, keys)

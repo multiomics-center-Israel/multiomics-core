@@ -1827,10 +1827,15 @@ show_loadings_table <- function(csv, chunk_id, heading, caption) {
 }
 
 loadings_gsea_legend <- paste(
-    "GSEA over every feature of the layer, ranked by its signed loading (DIABLO) or weight (MOFA2);",
+    "GSEA over every mapped feature of the layer, ranked by its signed loading (DIABLO) or weight (MOFA2);",
     "genes against KEGG or the layer's GMTs, metabolites against KEGG compound pathways.",
     "Bars show NES, FDR beside each; the dashed red lines at NES = -2 and +2 are a visual guide, not a significance test.",
     "Axis signs are arbitrary: the subtitle names the condition scoring higher on the axis, and positive NES points towards it.")
+
+# DIABLO is supervised and MOFA2 is not, so only the DIABLO legends carry this.
+diablo_loadings_caveat <- paste(
+    "DIABLO loadings were fitted to separate the conditions, so enrichment on them is descriptive:",
+    "the FDR is not an independent, confirmatory error rate for a condition effect.")
 ```
 
 ```{r loadings-enrich-diablo, eval=has_loadings_enrich, results='asis'}
@@ -1842,7 +1847,7 @@ if (identical(loadings_method, "gsea")) {
         n_plots <- show_loadings_plots(diablo_le_dir, "_gsea_nes\\.png$",
                                        "^DIABLO_|_gsea_nes\\.png$", "diablo-gsea")
         if (n_plots > 0) {
-            figure_legend(loadings_gsea_legend)
+            figure_legend(paste(loadings_gsea_legend, diablo_loadings_caveat))
         } else {
             cat("*No pathways were scored for the DIABLO loadings. This can occur when features do not map to the gene sets or compound pathways.*\n\n")
         }
@@ -1869,7 +1874,7 @@ if (length(diablo_le_plots) > 0) {
         ), quiet = TRUE))
         cat("\n\n")
     }
-    figure_legend("KEGG pathway enrichment of top DIABLO loading features per component and omics layer. For gene-based omics (transcriptomics, proteomics), standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.")
+    figure_legend(paste("KEGG pathway enrichment of top DIABLO loading features per component and omics layer. For gene-based omics (transcriptomics, proteomics), standard KEGG gene ORA is used. For metabolomics, compound-based ORA maps metabolites to KEGG metabolic pathways. Red dashed line indicates p = 0.05.", diablo_loadings_caveat))
 } else if (dir.exists(diablo_le_dir)) {
     cat("\n### DIABLO Loadings Enrichment\n\n")
     cat("*No enriched pathways found for DIABLO loadings. This can occur when top features do not map to KEGG pathways or when enrichment p-values do not meet the significance threshold.*\n\n")

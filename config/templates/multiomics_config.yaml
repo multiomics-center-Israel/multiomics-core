@@ -235,6 +235,8 @@ modes:
       #   which condition scores higher on each axis.
       # "ora": the top 50 features by absolute loading, then over-representation
       #   (the earlier behaviour).
+      # The default changed from ORA to GSEA: a project config with no
+      # loadings.method now runs GSEA. Set method: "ora" to keep earlier results.
       # Gene sets: KEGG for organisms with a KEGG code and OrgDb, otherwise the
       # layer's pathway.gmt_file; KEGG compound pathways for metabolites.
       loadings:
