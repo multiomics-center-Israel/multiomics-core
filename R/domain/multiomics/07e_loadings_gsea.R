@@ -131,30 +131,6 @@ collapse_loading_ranks <- function(values, keys) {
 }
 
 
-#' Carry signed loadings over to gene ids, one feature to several genes
-#'
-#' A protein group can map to several genes (\code{map_feature_ids_to_entrez()}
-#' returns a row per gene), and each of those genes takes the group's value.
-#' A gene reached from several features then keeps the largest absolute value,
-#' by \code{collapse_loading_ranks()}.
-#'
-#' @param values Numeric vector of signed loadings or weights.
-#' @param keys Character vector, the same length: each value's feature id.
-#' @param id_map Data frame with \code{feature_id} and \code{ENTREZID}, possibly
-#'   several rows per feature.
-#' @return Named numeric vector as \code{collapse_loading_ranks()} returns it.
-#' @examples
-#' map_loading_ranks(c(0.5, -0.2), c("P1;P2", "P3"),
-#'                   data.frame(feature_id = c("P1;P2", "P1;P2", "P3"),
-#'                              ENTREZID = c("101", "102", "103")))
-map_loading_ranks <- function(values, keys, id_map) {
-    pairs <- merge(data.frame(feature_id = as.character(keys),
-                              value = as.numeric(values), stringsAsFactors = FALSE),
-                   id_map[, c("feature_id", "ENTREZID")], by = "feature_id")
-    collapse_loading_ranks(pairs$value, pairs$ENTREZID)
-}
-
-
 #' One ranking per DIABLO block and component
 #'
 #' `block.plsda` loadings are dense -- every feature of a block has one -- so
@@ -335,7 +311,7 @@ gene_loadings_gsea <- function(values, omics_type, harmonization_res, config,
             })
         if (is.null(id_map) || nrow(id_map) == 0) return(NULL)
 
-        ranks <- map_loading_ranks(values, keys, id_map)
+        ranks <- collapse_loading_ranks(values, id_map$ENTREZID[match(keys, id_map$feature_id)])
         if (length(ranks) < min_size) {
             message("    Too few features mapped to NCBI gene ids (", length(ranks), ")")
             return(NULL)
