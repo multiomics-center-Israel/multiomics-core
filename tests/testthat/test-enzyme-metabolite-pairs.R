@@ -588,13 +588,16 @@ test_that("the report shows both hit rules and builds its legend from the table"
 
 test_that("changed proteins without an EC are counted once, whatever the config", {
     tabs <- list(
-        A = data.frame(feature_id = c("P1", "P3", "P4"), pvalue = 0.001,
-                       padj = c(0.01, 0.01, 0.9), stringsAsFactors = FALSE),
+        A = data.frame(feature_id = c("P1", "P3", "P4", "P5"), pvalue = 0.001,
+                       padj = c(0.01, 0.01, 0.9, 0.01), stringsAsFactors = FALSE),
         B = data.frame(feature_id = c("P3", "P4"), pvalue = 0.001,
                        padj = c(0.01, 0.01), stringsAsFactors = FALSE))
     ec <- data.frame(feature_id = "P1", ec = "1.1.1.1", stringsAsFactors = FALSE)
-    # P3 changed in both contrasts and counts once; P4 changed only in B.
-    expect_identical(.changed_without_ec(tabs, ec, 0.05), c("P3", "P4"))
+    # P3 changed in both contrasts and counts once; P4 changed only in B; P5
+    # never reached a KEGG gene, which is a mapping gap, not a missing EC.
+    out <- .changed_not_listed(tabs, ec, mapped = c("P1", "P3", "P4"), cutoff = 0.05)
+    expect_identical(out$no_ec, c("P3", "P4"))
+    expect_identical(out$unmapped, "P5")
 
     # Through the builder: P3 is a hit with no EC. The count is the same whether
     # unchanged enzymes and unpaired enzymes are listed or not.
@@ -612,9 +615,108 @@ test_that("changed proteins without an EC are counted once, whatever the config"
             enzyme_metabolite = list(enzyme_hits_only = hits_only,
                                      list_unpaired_enzymes = unpaired)))))
         expect_message(run_pairs(stubs, config = cfg, quiet = FALSE),
-                       "; 1 changed protein\\(s\\) carry no EC number")
+                       "Not listed: 1 changed protein\\(s\\) with no EC number, and 0 whose id")
     }
+
+    # The same P3, now failing its KEGG gene conversion: counted as unmapped.
+    unmapped <- stubs
+    unmapped$convert_entrez_to_kegg <- function(...) c("1" = "tst:1", "2" = "tst:2")
+    expect_message(run_pairs(unmapped, quiet = FALSE),
+                   "Not listed: 0 changed protein\\(s\\) with no EC number, and 1 whose id")
 })
+
+
+# ---- Codex review of b979590 -------------------------------------------------
+
+test_that("the shared-pathway filter uses each protein's own pathways", {
+    # P4 carries the same EC as P1 but its gene sits only in tst00099, a
+    # pathway C00100 is not in. P1's pathway must not qualify P4's pair.
+    # Replaced whole rather than through link_overrides: modifyList() merges
+    # data frames column by column and cannot grow them.
+    stubs <- stub_annotation()
+    base_links <- stubs$kegg_link_table
+    stubs$kegg_link_table <- function(target, source, cache_dir = NULL) {
+        switch(target,
+               enzyme = data.frame(from = c("tst:1", "tst:2", "tst:4"),
+                                   to = c("1.1.1.1", "2.2.2.2", "1.1.1.1"),
+                                   stringsAsFactors = FALSE),
+               pathway = data.frame(from = c("tst:1", "tst:2", "tst:4"),
+                                    to = c("tst00010", "tst00020", "tst00099"),
+                                    stringsAsFactors = FALSE),
+               base_links(target, source, cache_dir))
+    }
+    stubs$extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
+        std <- de_data$.std
+        if (identical(omics_type, "proteomics")) {
+            std <- rbind(std, data.frame(feature_id = "P4", log2fc = 1, pvalue = 0.001,
+                                         padj = 0.01, stringsAsFactors = FALSE))
+            return(list(A_vs_B = std))
+        }
+        list(`A vs. B` = std)
+    }
+    stubs$map_feature_ids_to_entrez <- function(...) data.frame(
+        feature_id = c("P1", "P2", "P3", "P4"), ENTREZID = c("1", "2", "3", "4"),
+        stringsAsFactors = FALSE)
+    stubs$convert_entrez_to_kegg <- function(...) c("1" = "tst:1", "2" = "tst:2",
+                                                    "3" = "tst:3", "4" = "tst:4")
+
+    pairs <- run_pairs(stubs)
+    expect_true("P1" %in% only_pairs(pairs)$protein)
+    expect_false("P4" %in% only_pairs(pairs)$protein)
+    expect_identical(pairs$note[pairs$protein == "P4"],
+                     "no measured metabolite in a shared pathway")
+})
+
+test_that("an enzyme whose only measured compounds are currency ones says so", {
+    # P1 links C00100 (not measured here) and ATP (measured, and a currency
+    # compound); nothing is left to pair once ATP is dropped.
+    stubs <- stub_annotation()
+    stubs$extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
+        std <- de_data$.std
+        if (identical(omics_type, "proteomics")) return(list(A_vs_B = std))
+        std$feature_id <- c("atp", "beta")
+        list(`A vs. B` = std)
+    }
+    stubs$map_metabolite_ids_to_kegg <- function(...) data.frame(
+        feature_id = c("atp", "beta"), KEGG_CPD = c("C00002", "C00200"),
+        stringsAsFactors = FALSE)
+
+    pairs <- run_pairs(stubs)
+    expect_identical(pairs$note[pairs$protein == "P1"],
+                     "only currency metabolites measured, and those are dropped")
+    # Keeping currency compounds pairs it with ATP, which shares its pathway.
+    keep <- list(modes = list(multiomics = list(enrichment = list(
+        enzyme_metabolite = list(drop_currency_metabolites = FALSE)))))
+    expect_true("atp" %in% only_pairs(run_pairs(stubs, config = keep))$metabolite)
+
+    # And an enzyme with nothing measured at all is told apart from both.
+    cfg <- enzyme_metabolite_config(list())
+    expect_identical(.unpaired_note(FALSE, FALSE, cfg), "no measured metabolite")
+    expect_identical(.unpaired_note(TRUE, TRUE, cfg),
+                     "no measured metabolite in a shared pathway")
+})
+
+test_that("the report reads the TSV's blanks back as missing values", {
+    dir <- withr::local_tempdir()
+    tab <- data.frame(contrast = c("A_vs_B", "A_vs_B"), protein = c("P1", "P2"),
+                      compound = c("C00100", NA), note = c(NA, "no measured metabolite"),
+                      stringsAsFactors = FALSE)
+    path <- write_enzyme_metabolite_pairs(tab, dir)
+
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    call <- regmatches(rmd, regexpr("em <- read\\.delim\\([^)]*\\)", rmd))
+    expect_length(call, 1)
+    expect_match(call, 'na.strings = ""', fixed = TRUE)
+
+    # Read the way the report reads it: one pair and one unpaired enzyme.
+    em <- read.delim(path, stringsAsFactors = FALSE, check.names = FALSE,
+                     na.strings = "")
+    expect_identical(sum(!is.na(em$compound)), 1L)
+    expect_identical(sum(is.na(em$compound)), 1L)
+})
+
 
 test_that("the table is opt-in, and its flags must be real booleans", {
     expect_false(enzyme_metabolite_config(list())$enabled)

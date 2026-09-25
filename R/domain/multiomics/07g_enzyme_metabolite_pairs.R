@@ -190,30 +190,37 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     n_pairs <- sum(!is.na(pairs$compound))
     message("  Enzyme-metabolite table: ", n_pairs, " pair(s) and ",
             nrow(pairs) - n_pairs, " enzyme(s) with nothing measured to pair, over ",
-            nrow(contrasts), " contrast(s); ",
-            length(.changed_without_ec(prot_de[contrasts$prot], ann$protein_ec, cutoff)),
-            " changed protein(s) carry no EC number and are not listed")
+            nrow(contrasts), " contrast(s)")
+    unlisted <- .changed_not_listed(prot_de[contrasts$prot], ann$protein_ec,
+                                    ann$mapped_features, cutoff)
+    message("  Not listed: ", length(unlisted$no_ec), " changed protein(s) with no ",
+            "EC number, and ", length(unlisted$unmapped), " whose id could not be ",
+            "mapped to a KEGG gene")
     pairs
 }
 
 
-#' Changed proteins that carry no EC number
+#' Changed proteins the table cannot list, and why
 #'
 #' Counted directly rather than as "changed minus listed": which proteins are
 #' listed depends on the config (unchanged enzymes, unpaired enzymes), and a
-#' protein changed in two contrasts would otherwise count twice.
+#' protein changed in two contrasts would otherwise count twice. A protein
+#' whose id never reached a KEGG gene is kept apart from one that did and has
+#' no EC number: the first is a mapping gap, not evidence of a non-enzyme.
 #'
 #' @param prot_tabs Standardized proteomics DE tables of the matched contrasts.
 #' @param protein_ec Protein-to-EC table from the annotation.
+#' @param mapped Feature ids that reached a KEGG gene.
 #' @param cutoff Significance cutoff.
-#' @return Unique feature ids, changed in at least one of those contrasts, with
-#'   no EC number.
+#' @return List with \code{no_ec} and \code{unmapped}: unique feature ids,
+#'   changed in at least one of those contrasts, sorted.
 #' @keywords internal
-.changed_without_ec <- function(prot_tabs, protein_ec, cutoff) {
+.changed_not_listed <- function(prot_tabs, protein_ec, mapped, cutoff) {
     changed <- unique(unlist(lapply(prot_tabs, function(tab) {
         tab$feature_id[de_hit_flags(tab, cutoff)$hit]
     }), use.names = FALSE))
-    sort(setdiff(changed, protein_ec$feature_id))
+    list(no_ec = sort(setdiff(intersect(changed, mapped), protein_ec$feature_id)),
+         unmapped = sort(setdiff(changed, mapped)))
 }
 
 
@@ -229,9 +236,10 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
 #' @param out_dir Cross-enrichment output directory.
 #' @param cache_dir Directory for the KEGG link caches.
 #' @return List with \code{protein_ec} (protein to EC), \code{ec_compound}
-#'   (EC to compound with reaction), \code{pathways_available} (whether both
-#'   pathway membership tables were fetched), \code{gene_pathways} (EC to
-#'   normalized pathway id), \code{compound_pathways} and
+#'   (EC to compound with reaction), \code{mapped_features} (proteins that
+#'   reached a KEGG gene), \code{pathways_available} (whether both pathway
+#'   membership tables were fetched), \code{gene_pathways} (protein to
+#'   normalized pathway id, through its gene), \code{compound_pathways} and
 #'   \code{pathway_names}; NULL when a required piece is missing.
 #' @keywords internal
 .enzyme_metabolite_annotation <- function(prot_de, metab_de, harmonization_res,
@@ -296,15 +304,21 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     gene_pathways <- NULL
     if (!is.null(gene_path) && nrow(gene_path) > 0) {
         gene_path$gene_key <- kegg_gene_key(gene_path$from, kegg_org)
-        gp <- merge(protein_ec[, c("gene_key", "ec")],
+        # Keyed by protein, not by EC: two measured genes can share an EC and
+        # sit in different pathways, and one must not lend the other its own.
+        gp <- merge(unique(protein_ec[, c("gene_key", "feature_id")]),
                     gene_path[, c("gene_key", "to")], by = "gene_key")
         gene_pathways <- unique(data.frame(
-            ec = gp$ec, pathway = normalize_pathway_join_key(gp$to, kegg_org),
+            feature_id = gp$feature_id,
+            pathway = normalize_pathway_join_key(gp$to, kegg_org),
             stringsAsFactors = FALSE))
     }
 
     list(
         protein_ec = unique(protein_ec[, c("feature_id", "ec")]),
+        # Proteins that reached a KEGG gene at all, so one with no EC can be
+        # told apart from one whose id could not be mapped.
+        mapped_features = unique(id_map$feature_id),
         ec_compound = unique(ec_compound),
         metab_map = metab_map,
         compound_names = compound_names,
@@ -360,7 +374,7 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                        suffixes = c("_enzyme", "_metabolite"))
     }
     if (nrow(pairs) > 0) {
-        pairs$pathway <- .shared_pathways(pairs$ec, pairs$compound, ann)
+        pairs$pathway <- .shared_pathways(pairs$feature_id_enzyme, pairs$compound, ann)
         if (cfg$require_shared_pathway) {
             pairs <- pairs[!is.na(pairs$pathway), , drop = FALSE]
         }
@@ -418,6 +432,14 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     left <- enzymes[!enzymes$feature_id %in% paired$protein &
                         enzymes$feature_id %in% names(ec_of), , drop = FALSE]
     if (nrow(left) == 0) return(paired)
+    # Why each one has no row: what it links to among the measured compounds
+    # before any filter, so a metabolite that was measured and then filtered
+    # out is not reported as never measured.
+    linked <- merge(with_ec[, c("feature_id", "ec")],
+                    ann$ec_compound[, c("ec", "compound")], by = "ec")
+    linked <- linked[linked$compound %in% measured$KEGG_CPD, , drop = FALSE]
+    non_currency <- linked$feature_id[
+        !linked$compound %in% ENZYME_METABOLITE_CURRENCY_COMPOUNDS]
     unpaired <- lapply(seq_len(nrow(left)), function(i) {
         id <- left$feature_id[i]
         ecs <- .join_unique(ec_of[[id]])
@@ -435,30 +457,47 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
             metabolite_hit_rule = metab_hits$rule,
             reaction = NA_character_, pathway_id = NA_character_,
             pathway_name = NA_character_, same_direction = NA,
-            note = if (cfg$require_shared_pathway)
-                       "no measured metabolite in a shared pathway"
-                   else "no measured metabolite",
+            note = .unpaired_note(id %in% linked$feature_id, id %in% non_currency, cfg),
             stringsAsFactors = FALSE)
     })
     rbind(paired, do.call(rbind, unpaired))
 }
 
 
-#' Pathways an EC and a compound both sit in
+#' Why an enzyme has no pair
 #'
-#' @param ec,compound Vectors of equal length.
+#' @param any_measured Whether the enzyme links to any measured compound at
+#'   all, before the filters.
+#' @param any_non_currency Whether any of those is not a currency metabolite.
+#' @param cfg Output of \code{enzyme_metabolite_config()}.
+#' @return One note.
+#' @keywords internal
+.unpaired_note <- function(any_measured, any_non_currency, cfg) {
+    if (!any_measured) return("no measured metabolite")
+    if (cfg$drop_currency_metabolites && !any_non_currency) {
+        return("only currency metabolites measured, and those are dropped")
+    }
+    if (cfg$require_shared_pathway) return("no measured metabolite in a shared pathway")
+    "no measured metabolite passed the filters"
+}
+
+
+#' Pathways a protein's gene and a compound both sit in
+#'
+#' @param feature_id,compound Vectors of equal length: the enzyme's proteomics
+#'   feature id and the compound it is paired with.
 #' @param ann Output of \code{.enzyme_metabolite_annotation()}.
 #' @return Character vector of ";"-joined pathway ids, NA where the two share
 #'   none or a membership table is missing.
 #' @keywords internal
-.shared_pathways <- function(ec, compound, ann) {
+.shared_pathways <- function(feature_id, compound, ann) {
     if (is.null(ann$gene_pathways) || is.null(ann$compound_pathways)) {
-        return(rep(NA_character_, length(ec)))
+        return(rep(NA_character_, length(feature_id)))
     }
-    by_ec <- split(ann$gene_pathways$pathway, ann$gene_pathways$ec)
+    by_feature <- split(ann$gene_pathways$pathway, ann$gene_pathways$feature_id)
     by_cpd <- split(ann$compound_pathways$pathway, ann$compound_pathways$compound)
-    vapply(seq_along(ec), function(i) {
-        .join_unique(intersect(by_ec[[ec[i]]] %||% character(0),
+    vapply(seq_along(feature_id), function(i) {
+        .join_unique(intersect(by_feature[[feature_id[i]]] %||% character(0),
                                by_cpd[[compound[i]]] %||% character(0)))
     }, character(1))
 }
@@ -548,7 +587,7 @@ describe_enzyme_metabolite_table <- function(pairs, cfg, cutoff = 0.05) {
         paste0(enzymes, ", ", link, "."),
         if (no_pathways) "KEGG pathway membership could not be fetched for this run, so the pathway columns are empty.",
         unpaired,
-        "Changed proteins with no EC number are not enzymes and are left out.",
+        "Changed proteins with no EC number, or whose id could not be mapped to a KEGG gene, are left out.",
         rule_note("enzyme_hit_rule", "enzyme"),
         rule_note("metabolite_hit_rule", "metabolite"),
         sprintf("Bold rows have a metabolite at FDR < %s.", cutoff),

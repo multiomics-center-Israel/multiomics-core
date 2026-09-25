@@ -1305,7 +1305,10 @@ has_enzyme_metab <- file.exists(enzyme_metab_file)
 `r if (has_enzyme_metab) "## Enzymes and the Metabolites They Act On {.unnumbered}"`
 
 ```{r enzyme-metabolite-table, eval=has_enzyme_metab}
-em <- read.delim(enzyme_metab_file, stringsAsFactors = FALSE, check.names = FALSE)
+# The writer stores missing values as blanks, so blanks are read back as NA;
+# otherwise an unpaired enzyme's empty compound would count as a pair.
+em <- read.delim(enzyme_metab_file, stringsAsFactors = FALSE, check.names = FALSE,
+                 na.strings = "")
 # The hit rules are shown: in a contrast where nothing cleared FDR, "changed"
 # rests on raw p, and the reader has to be able to see that.
 em_cols <- c("contrast", "gene_symbol", "protein", "ec", "enzyme_log2fc",
