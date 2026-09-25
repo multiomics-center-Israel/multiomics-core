@@ -213,12 +213,13 @@ show_fs_rf             <- fs_subs$rf
 show_fs_plsda          <- fs_subs$plsda
 
 # Enrichment sub-keys
-enr_subs <- resolve_section(rs$enrichment, list(qea = TRUE, ssgsea = TRUE, ora = TRUE, gsea = TRUE))
-show_enrichment     <- any(unlist(enr_subs))
-show_enr_qea        <- enr_subs$qea
-show_enr_ssgsea     <- enr_subs$ssgsea
-show_enr_ora        <- enr_subs$ora
-show_enr_gsea       <- enr_subs$gsea
+enr_subs <- resolve_section(rs$enrichment, list(qea = TRUE, ssgsea = TRUE, ora = TRUE, gsea = TRUE, selfcontained = TRUE))
+show_enrichment       <- any(unlist(enr_subs))
+show_enr_qea          <- enr_subs$qea
+show_enr_ssgsea       <- enr_subs$ssgsea
+show_enr_ora          <- enr_subs$ora
+show_enr_gsea         <- enr_subs$gsea
+show_enr_selfcontained <- enr_subs$selfcontained
 
 # ---------------------------------------------------------------------------
 # Load AI commentary (if available)
@@ -2300,6 +2301,56 @@ if (!is.null(gsea_tbl)) {
 ```
 
 `r if (is.null(enrichment_res$gsea) || !show_enr_gsea) "-->"`
+
+`r if (is.null(enrichment_res$selfcontained) || !show_enr_selfcontained) "<!--"`
+
+## Self-contained set test {.tabset}
+
+QEA/ORA/GSEA/ssGSEA are **competitive** tests: they ask whether a pathway is
+*more* changed than the rest of the measured features, and lose power when a
+large fraction of features move together (there is little "background" left to
+stand out against). This method is **self-contained**: it asks only whether the
+pathway changed *at all*, using a `limma` rotation test (`fry`) on the **same
+model as the differential-abundance analysis** (same design and contrasts). Because
+it asks a more permissive question, its results are **hypothesis-generating —
+not a correction of the competitive methods**. The **directional** FDR
+(coordinated up/down) is the interpretable value; a mixed FDR is also reported
+in the table.
+
+### Lollipop Plot
+
+```{r selfcontained-lollipop, fig.width=12, fig.height=8, results='asis'}
+scbc <- enrichment_res$selfcontained_by_contrast
+if (is.null(scbc) || length(scbc) == 0) {
+  if (!is.null(enrichment_res$plots$selfcontained_lollipop)) safe_print_plot(enrichment_res$plots$selfcontained_lollipop)
+} else {
+  for (ct in names(scbc)) {
+    p <- scbc[[ct]]$plots$lollipop
+    if (!is.null(p)) { cat("\n\n#### ", ct, "\n\n"); safe_print_plot(p) }
+  }
+}
+figure_legend("Self-contained set test (limma rotation) lollipop plots, one per contrast. Bar length is -log10(directional FDR); color is the coordinated direction (up/down).")
+```
+
+### Results Table
+
+```{r selfcontained-table}
+scbc <- enrichment_res$selfcontained_by_contrast
+sc_tbl <- if (!is.null(scbc) && length(scbc) > 0) {
+  do.call(rbind, lapply(names(scbc), function(ct) {
+    t <- scbc[[ct]]$res$table
+    if (is.null(t) || nrow(t) == 0) return(NULL)
+    cbind(contrast = ct, t, stringsAsFactors = FALSE)
+  }))
+} else {
+  enrichment_res$selfcontained$table
+}
+if (!is.null(sc_tbl)) {
+  make_dt(sc_tbl, caption = "Self-contained set test (limma rotation) — all contrasts. Directional FDR is interpretable; FDR_mixed is retained for reference.")
+}
+```
+
+`r if (is.null(enrichment_res$selfcontained) || !show_enr_selfcontained) "-->"`
 
 `r if (is.null(enrichment_res) || !show_enrichment) "-->"`
 
