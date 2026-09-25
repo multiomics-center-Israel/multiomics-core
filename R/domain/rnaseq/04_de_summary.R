@@ -179,11 +179,27 @@ build_rnaseq_summary_df <- function(de_tables, de_cfg) {
     summary_df[[paste0("padj.", cn)]] <- tab$padj[idx]
     
     pass_col <- paste0(cn, "_pass")
-    
-    is_sig <- !is.na(tab$padj[idx]) & 
-      tab$padj[idx] <= padj_cutoff & 
-      abs(as.numeric(rounded_fc)) >= linear_fc_cutoff
-    
+
+    # Gate on lfc, the model's own estimate, not on rounded_fc.
+    #
+    # rounded_fc is signif(2^log2FC, 3), a display value. At three significant
+    # digits everything in [1.495, 1.5) rounds UP to 1.50, and 1.50 >= 1.5 is
+    # TRUE, so a gene that moved 1.4957-fold was flagged as passing a 1.5-fold
+    # cutoff. The window is |log2FC| in [0.58015, 0.58496) and the error is
+    # one-sided: rounding can only add genes, never drop a real one.
+    #
+    # This is the pipeline's own significance flag, so those genes reached the
+    # Excel and TSV exports, the Shiny payload, the clustering heatmap and the
+    # enrichment gene lists, with nothing anywhere to contradict them.
+    #
+    # lfc is right there, three lines up, and is already written unrounded to
+    # log2FC.<contrast>. Comparing in log2 space keeps the same threshold:
+    # |FC| >= C on the linear scale is |log2FC| >= log2(C).
+    is_sig <- !is.na(tab$padj[idx]) &
+      tab$padj[idx] <= padj_cutoff &
+      !is.na(lfc) &
+      abs(lfc) >= log2(linear_fc_cutoff)
+
     summary_df[[pass_col]] <- ifelse(is_sig, 1, NA)
                                     
   }

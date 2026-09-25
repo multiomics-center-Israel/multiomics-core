@@ -287,6 +287,69 @@ test_that("P4 the log2FC -> linearFC round trip holds for every feature", {
     expect_equal(sdf$linearFC.A_vs_B, signif(ifelse(l >= 0, 2^l, -1 * (2^-l)), 3))
 })
 
+test_that("P4 the pass flag is gated on log2FC, not on the rounded linearFC", {
+    # linearFC is signif(2^log2FC, 3), a display value. Everything in
+    # [1.495, 1.5) rounds up to 1.50, and 1.50 >= 1.5 is TRUE, so gating on it
+    # flagged genes that moved less than 1.5-fold. This is the pipeline's own
+    # pass column, so those genes reached the exports, the Shiny payload, the
+    # clustering heatmap and the enrichment gene lists.
+    #
+    # The five log2FC values below all sit in the rounding window
+    # [0.58015, 0.58496) and all have a passing padj, so only the gate decides.
+    borderline <- c(0.58085, 0.58202, 0.58300, 0.58329, 0.58461)
+
+    de_tables <- list(S_vs_NS = data.frame(
+        FeatureID      = paste0("g", seq_along(borderline)),
+        log2FoldChange = borderline,
+        pvalue         = rep(1e-4, length(borderline)),
+        padj           = rep(1e-3, length(borderline)),
+        stringsAsFactors = FALSE
+    ))
+
+    sdf <- build_rnaseq_summary_df(de_tables, list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+
+    # Every one of them really is below 1.5-fold...
+    expect_true(all(2^abs(sdf$log2FC.S_vs_NS) < 1.5))
+    # ...and the displayed linearFC really does round to 1.50, which is what
+    # made the old gate accept them. Pin that, so the hazard cannot quietly go
+    # away and leave this test passing for the wrong reason.
+    expect_true(all(abs(sdf$linearFC.S_vs_NS) >= 1.5))
+    # ...so none may be flagged.
+    expect_true(all(is.na(sdf$S_vs_NS_pass)))
+    expect_true(all(is.na(sdf$pass_any_contrast)))
+})
+
+test_that("P4 genes past the cutoff still pass, and NA log2FC never does", {
+    de_tables <- list(S_vs_NS = data.frame(
+        FeatureID      = c("clear_up", "clear_down", "just_over", "no_estimate"),
+        log2FoldChange = c(2, -2, 0.5850, NA_real_),
+        pvalue         = c(1e-6, 1e-6, 1e-6, 1e-6),
+        padj           = c(1e-4, 1e-4, 1e-4, 1e-4),
+        stringsAsFactors = FALSE
+    ))
+
+    sdf <- build_rnaseq_summary_df(de_tables, list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+    names(sdf$S_vs_NS_pass) <- sdf$FeatureID
+
+    expect_equal(unname(sdf$S_vs_NS_pass[1:3]), c(1, 1, 1))   # 0.5850 > log2(1.5)
+    expect_true(is.na(sdf$S_vs_NS_pass[4]))                   # NA estimate, not a pass
+})
+
+test_that("P4 a non-default cutoff moves the gate with it", {
+    # The threshold is log2(linear_fc_cutoff), not a hard-coded log2(1.5).
+    de_tables <- list(S_vs_NS = data.frame(
+        FeatureID      = c("two_fold", "one_point_five"),
+        log2FoldChange = c(1, log2(1.5)),
+        pvalue         = c(1e-6, 1e-6),
+        padj           = c(1e-4, 1e-4),
+        stringsAsFactors = FALSE
+    ))
+
+    sdf <- build_rnaseq_summary_df(de_tables, list(p_cutoff = 0.05, linear_fc_cutoff = 2))
+    expect_equal(sdf$S_vs_NS_pass[1], 1)          # exactly 2-fold passes
+    expect_true(is.na(sdf$S_vs_NS_pass[2]))       # 1.5-fold no longer does
+})
+
 test_that("P4 get_contrast_cols exposes log2fc for rna and proteomics only", {
     expect_equal(get_contrast_cols("A_vs_B", mode = "rna")$log2fc, "log2FC.A_vs_B")
     expect_equal(get_contrast_cols("A_vs_B", mode = "proteomics")$log2fc,
