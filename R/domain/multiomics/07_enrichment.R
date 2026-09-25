@@ -2280,11 +2280,16 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         # does not show. Built before each device is opened so that a
         # collection with no adjusted ORA p-value at all leaves no figure
         # behind for the report to find.
+        #
+        # Its candidates come from the per-layer tables it draws from, not from
+        # the meta-analysis: the meta-analysis keeps one method per layer, so a
+        # layer contributing its rank-based rows there still has ORA evidence --
+        # GO terms only ORA scored, say -- that belongs in this figure.
+        ora_pathways <- .ora_figure_candidates(pathway_tables, kegg_org, exclude = excl)
+        ora_collections <- classify_pathway_collection(NULL, kegg_org, keys = ora_pathways)
         any_ora <- FALSE
-        for (cl in sort(unique(collections[!is.na(collections)]))) {
-            sub <- meta_results[collections == cl, , drop = FALSE]
-            if (nrow(sub) == 0) next
-            cl_pathways <- intersect(use_pathways, sub$norm_id)
+        for (cl in sort(unique(ora_collections))) {
+            cl_pathways <- ora_pathways[ora_collections == cl]
             if (length(cl_pathways) == 0) next
 
             ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, cl_pathways,
@@ -3043,6 +3048,41 @@ select_layer_method_rows <- function(df, pvals) {
     known <- sort(unique(m[!is.na(m)]))
     list(keep = rep(TRUE, n),
          method = if (length(known) == 0) "unspecified" else paste(known, collapse = "+"))
+}
+
+
+#' Candidate pathways for the cross-omics ORA figure
+#'
+#' Every pathway the per-layer tables carry, whatever the meta-analysis chose
+#' to combine: this figure shows each layer's own adjusted ORA p-value, and
+#' \code{build_ora_adjusted_p_matrix()} decides which rows of a table are ORA.
+#' Rows with no ORA value for any layer are dropped by the figure itself, so
+#' the candidates need not pre-filter on method. The KEGG class exclusion is
+#' applied to the keys as it is to the meta-analysis candidates.
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames, with
+#'   the class exclusion already applied to their rows.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @param exclude Excluded KEGG classes (\code{.excluded_pathway_classes()}).
+#' @return Character vector of unique join keys, as \code{pathway_join_key()}
+#'   produces them.
+#' @examples
+#' .ora_figure_candidates(list(proteomics = data.frame(
+#'     ID = c("map00010", "GO:0006096"), method = c("fgsea", "ora"))))
+#' @keywords internal
+.ora_figure_candidates <- function(pathway_tables, kegg_org = NULL,
+                                   exclude = character(0)) {
+    keys <- unique(unlist(lapply(pathway_tables, function(df) {
+        if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
+        k <- pathway_join_key(df, kegg_org)
+        k[!is.na(k)]
+    }), use.names = FALSE))
+    if (length(keys) == 0) return(character(0))
+    if (length(exclude) > 0) {
+        keys <- keys[keep_kegg_pathways(keys, exclude = exclude, kegg_org = kegg_org,
+                                        label = "cross-omics ORA pathways")]
+    }
+    keys
 }
 
 

@@ -344,3 +344,38 @@ test_that("the per-contrast orchestration discovers contrasts with the rank tabl
         "canonicalize_enrichment_contrasts\\(\\s*per_omics\\s*,\\s*rank_tables\\s*\\)",
         src, perl = TRUE))
 })
+
+
+# ---- the ORA figure keeps ORA evidence the meta-analysis did not select ----
+
+# fgsea on KEGG, ORA on a GO term only: the meta-analysis takes this layer's
+# fgsea rows, but the GO term's ORA evidence is still this layer's to show.
+kegg_fgsea_go_ora_layer <- function() {
+    dplyr::bind_rows(
+        data.frame(ID = c("map00010", "map00020"), pval = c(0.04, 0.2),
+                   padj = c(0.1, 0.4), NES = c(1.8, -0.9), method = "fgsea",
+                   stringsAsFactors = FALSE),
+        data.frame(ID = "GO:0006096", pvalue = 1e-5, padj = 1e-4,
+                   method = "ora", stringsAsFactors = FALSE))
+}
+
+test_that("ORA figure candidates do not depend on the meta-analysis method choice", {
+    keys <- .ora_figure_candidates(list(proteomics = kegg_fgsea_go_ora_layer(),
+                                        metabolomics = ora_only_layer()))
+    expect_true("GO:0006096" %in% keys)
+    expect_true(all(c("00010", "00020", "00030") %in% keys))
+})
+
+test_that("an ORA-only GO term of a rank-selected layer still gets its ORA figure", {
+    out_dir <- withr::local_tempdir()
+    res <- suppressWarnings(suppressMessages(analyze_cross_omics_enrichment(
+        list(proteomics = kegg_fgsea_go_ora_layer(), metabolomics = ora_only_layer()),
+        nonmodel_config(), out_dir = out_dir)))
+
+    # The meta-analysis leaves the GO term out: its only rows are ORA rows of a
+    # layer whose selected method is fgsea ...
+    expect_false("GO:0006096" %in% res$meta_analysis$norm_id)
+    # ... but the ORA figure, drawn from the per-layer tables, still has it.
+    expect_true("ora_heatmap_GO" %in% names(res$plots))
+    expect_true(file.exists(res$plots[["ora_heatmap_GO"]]))
+})
