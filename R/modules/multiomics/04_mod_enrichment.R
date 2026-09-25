@@ -168,6 +168,11 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     per_omics <- discovered$per_omics
     contrast_names <- discovered$contrast_names
 
+    # Lookup files in any existing per-contrast directory, including contrasts
+    # this run no longer has: the report renders every directory there, and the
+    # loop below only clears the contrasts it visits.
+    .clear_stale_contrast_lookups(out_dir)
+
     if (length(contrast_names) >= 1) {
         message("  Generating per-contrast enrichment output for ",
                 length(contrast_names), " contrasts")

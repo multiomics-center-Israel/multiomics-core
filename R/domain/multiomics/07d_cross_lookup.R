@@ -3,9 +3,13 @@
 #' The meta-analysis heatmaps rank pathways on how many layers support them,
 #' so a layer whose own results are weak -- no feature past its DE threshold,
 #' nothing below FDR -- rarely sets the rows. This view starts from one layer
-#' instead: its top pathways by its own evidence, whether or not they are
-#' significant, and what the other layer shows for the same pathways. It runs
-#' in both directions.
+#' instead: its top pathways by its own evidence among the pathways its
+#' enrichment step reported, and what the other layer shows for the same
+#' pathways. It runs in both directions. Where a layer's enrichment step
+#' reports every pathway it scored (fgsea, compound GSEA), that ranking covers
+#' non-significant pathways too; the KEGG-from-DE fallback reports only
+#' pathways past its own cutoff, so there it does not -- see
+#' \code{.lookup_cutoff_filtered()}.
 #'
 #' Descriptive only. Every p-value shown is the one the layer's own enrichment
 #' produced; nothing is re-tested or re-adjusted.
@@ -121,8 +125,17 @@
 #'     gene-based pathway may contain no measured compound -- and saying so is
 #'     part of the answer.
 #'   \item \code{tested_in_target}: the source's top \code{top_n} among the
-#'     pathways the target has a result for in the same contrast.
+#'     pathways the target has a result for in the same contrast -- from its
+#'     selected method or only from its ORA rows.
 #' }
+#'
+#' \code{target_status} is \code{"tested"} (the target's selected method has
+#' the pathway in that contrast), \code{"ORA only in this contrast"} (only its
+#' ORA rows do; their p and adjusted p are in \code{target_ora_p} /
+#' \code{target_ora_padj}), or \code{"not in target results"}.
+#'
+#' Either layer without a raw p-value column gives NULL: the ranking and the
+#' stars are on raw p-values, and an adjusted value is not shown in their place.
 #'
 #' Each source pathway keeps its best row across contrasts, and the target is
 #' read in that row's contrast (matched on \code{normalize_contrast_key()}): a
@@ -156,16 +169,22 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
                                      kegg_org = NULL) {
     src_df <- pathway_tables[[from]]
     if (!is.data.frame(src_df) || nrow(src_df) == 0) return(NULL)
+    # Both layers must carry a raw p-value: this view ranks and stars raw
+    # p-values, and an adjusted value standing in for one would be mislabelled.
+    tgt_df <- pathway_tables[[to]]
+    if (!.lookup_has_raw_p(src_df)) return(NULL)
+    if (is.data.frame(tgt_df) && nrow(tgt_df) > 0 && !.lookup_has_raw_p(tgt_df)) {
+        return(NULL)
+    }
     src <- .lookup_layer_stats(src_df, .layer_contribution(src_df, kegg_org))
     if (is.null(src)) return(NULL)
 
     tgt <- NULL
     tgt_ora <- NULL
-    tgt_df <- pathway_tables[[to]]
     if (is.data.frame(tgt_df) && nrow(tgt_df) > 0) {
         tgt_cb <- .layer_contribution(tgt_df, kegg_org)
         tgt <- .lookup_layer_stats(tgt_df, tgt_cb, by_contrast = TRUE)
-        if (!is.null(tgt) && "method" %in% names(tgt_df)) {
+        if (is.null(tgt_cb$problem) && "method" %in% names(tgt_df)) {
             is_ora <- !is.na(tgt_df$method) &
                 tolower(trimws(as.character(tgt_df$method))) == "ora"
             tgt_ora <- .lookup_layer_stats(tgt_df, tgt_cb, keep = is_ora,
@@ -176,8 +195,13 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
     top_n <- suppressWarnings(as.integer(top_n))
     if (length(top_n) != 1 || is.na(top_n) || top_n < 1) top_n <- 15L
 
-    tested <- if (is.null(tgt)) rep(FALSE, nrow(src))
-              else .lookup_pair_key(src) %in% .lookup_pair_key(tgt)
+    # A target result in the source's contrast counts whether it is the
+    # target's selected method or only its ORA rows.
+    has_result <- function(tab) {
+        if (is.null(tab)) rep(FALSE, nrow(src))
+        else .lookup_pair_key(src) %in% .lookup_pair_key(tab)
+    }
+    tested <- has_result(tgt) | has_result(tgt_ora)
     blocks <- list(
         all              = utils::head(src, top_n),
         tested_in_target = utils::head(src[tested, , drop = FALSE], top_n)
@@ -220,6 +244,7 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
     pick <- function(tab, idx, col, na) if (is.null(tab)) rep(na, n) else tab[[col]][idx]
 
     tested <- !is.na(t_idx)
+    ora_only <- !tested & !is.na(o_idx)
 
     label <- blk$label
     tgt_label <- pick(tgt, t_idx, "label", NA_character_)
@@ -240,11 +265,13 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
         source_n_measured = blk$n_measured,
         target_layer      = to,
         target_status     = ifelse(tested, "tested",
-                                   ifelse(is.na(blk$contrast_key),
-                                          "not in target results",
-                                          "not in target results for this contrast")),
-        target_method     = pick(tgt, t_idx, "method", NA_character_),
-        target_contrast   = pick(tgt, t_idx, "contrast", NA_character_),
+                                   ifelse(ora_only, "ORA only in this contrast",
+                                          "not in target results")),
+        target_method     = ifelse(ora_only, "ora",
+                                   pick(tgt, t_idx, "method", NA_character_)),
+        target_contrast   = ifelse(ora_only,
+                                   pick(tgt_ora, o_idx, "contrast", NA_character_),
+                                   pick(tgt, t_idx, "contrast", NA_character_)),
         target_NES        = pick(tgt, t_idx, "NES", NA_real_),
         target_p          = pick(tgt, t_idx, "p", NA_real_),
         target_padj       = pick(tgt, t_idx, "padj", NA_real_),
@@ -293,7 +320,7 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
                    stringsAsFactors = FALSE),
         data.frame(layer = tgt_col, pathway = labels, NES = blk$target_NES,
                    label = cell_text(blk$target_NES, blk$target_p,
-                                     blk$target_status == "tested"),
+                                     blk$target_status != "not in target results"),
                    stringsAsFactors = FALSE)
     )
     long$layer <- factor(long$layer, levels = c(src_col, tgt_col))
@@ -361,10 +388,34 @@ plot_cross_omics_lookup <- function(lookup, ranking = "all", out_path) {
 #' @param out_dir Directory to write into.
 #' @param top_n Number of pathways per ranking.
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' A layer with no raw p-value column is skipped, with a message; a layer from
+#' the KEGG-from-DE enrichment is logged as ranking only among the pathways
+#' past that step's cutoff (\code{.lookup_cutoff_filtered()}).
+#'
 #' @return Named list, one element per direction written, each a named
 #'   character vector of the paths written (tsv, all, tested_in_target).
 write_cross_omics_lookups <- function(pathway_tables, omics, out_dir,
                                       top_n = 15, kegg_org = NULL) {
+    no_raw_p <- omics[!vapply(omics, function(om) {
+        df <- pathway_tables[[om]]
+        !is.data.frame(df) || nrow(df) == 0 || .lookup_has_raw_p(df)
+    }, logical(1))]
+    for (om in no_raw_p) {
+        message("  Cross-omics lookup: skipping ", om, " -- its table has no raw ",
+                "p-value column (pvalue/pval), and this view does not show an ",
+                "adjusted p-value in place of a raw one")
+    }
+    omics <- setdiff(omics, no_raw_p)
+
+    for (om in omics) {
+        if (.lookup_cutoff_filtered(pathway_tables[[om]], kegg_org)) {
+            message("  Cross-omics lookup: ", om, " comes from the KEGG-from-DE ",
+                    "enrichment, which reports only pathways that passed its own ",
+                    "cutoff; its lookup ranks among those, not over every pathway ",
+                    "it scored")
+        }
+    }
+
     written <- list()
     for (from in omics) {
         for (to in setdiff(omics, from)) {
@@ -395,6 +446,65 @@ write_cross_omics_lookups <- function(pathway_tables, omics, out_dir,
         message("  Cross-omics lookups written: ", paste(names(written), collapse = ", "))
     }
     written
+}
+
+
+#' Whether a layer's table carries a raw p-value column
+#'
+#' \code{.raw_p_values()} falls back to an adjusted column when a table has no
+#' raw one, which the meta-analysis accepts; this view ranks and stars raw
+#' p-values, so it asks for a real one.
+#'
+#' @param df Enrichment data frame for one layer.
+#' @return TRUE when \code{df} has a \code{pvalue} or \code{pval} column.
+#' @keywords internal
+.lookup_has_raw_p <- function(df) {
+    any(c("pvalue", "pval") %in% names(df))
+}
+
+
+#' Whether a layer's contributing rows are cut at significance upstream
+#'
+#' The KEGG-from-DE enrichment (\code{run_kegg_enrichment_for_omics()}) keeps
+#' only the pathways that pass its own cutoff: \code{run_gsea_kegg()},
+#' \code{run_ora_kegg()} and \code{run_compound_ora()} drop every other scored
+#' row. Its rows are recognisable without changing it: \code{run_gsea_kegg()}
+#' is the only producer labelling rows \code{method = "gsea"}, and the
+#' orchestrator stamps an \code{omics} column on the ORA rows it returns.
+#' Compound GSEA also carries \code{omics} but is fgsea and unfiltered, so it
+#' is not caught by the ORA test.
+#'
+#' @param df Enrichment data frame for one layer.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return TRUE when any row the layer contributes is from that enrichment.
+#' @keywords internal
+.lookup_cutoff_filtered <- function(df, kegg_org = NULL) {
+    if (!is.data.frame(df) || nrow(df) == 0 || !"method" %in% names(df)) return(FALSE)
+    cb <- .layer_contribution(df, kegg_org)
+    if (!is.null(cb$problem) || !any(cb$keep)) return(FALSE)
+    m <- tolower(trimws(as.character(df$method)))
+    has_omics <- if ("omics" %in% names(df)) !is.na(df$omics) else rep(FALSE, nrow(df))
+    from_de <- !is.na(m) & (m == "gsea" | (m == "ora" & has_omics))
+    any(cb$keep & from_de)
+}
+
+
+#' Remove lookup files left in per-contrast directories of a previous run
+#'
+#' The report renders every directory under \code{per_contrast/}, and the
+#' orchestrator clears only the contrasts this run visits -- so a contrast
+#' renamed or dropped since would keep showing an earlier run's lookups.
+#' Cleared for every existing per-contrast directory before the loop. Lookup
+#' files only; other per-contrast outputs are out of scope here.
+#'
+#' @param out_dir The enrichment output directory holding \code{per_contrast/}.
+#' @return Invisibly, the paths removed.
+#' @keywords internal
+.clear_stale_contrast_lookups <- function(out_dir) {
+    pc <- file.path(out_dir, "per_contrast")
+    if (is.null(out_dir) || !dir.exists(pc)) return(invisible(character(0)))
+    dirs <- list.dirs(pc, full.names = TRUE, recursive = FALSE)
+    invisible(unlist(lapply(dirs, .clear_cross_lookup_outputs), use.names = FALSE))
 }
 
 

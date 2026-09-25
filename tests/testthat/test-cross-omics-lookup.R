@@ -332,7 +332,7 @@ test_that("a target missing in the source's contrast is not filled from another"
 
     # The target has 00030 only in C_vs_D; the source's 00030 row is A_vs_B.
     expect_identical(row$source_contrast, "A_vs_B")
-    expect_identical(row$target_status, "not in target results for this contrast")
+    expect_identical(row$target_status, "not in target results")
     expect_true(is.na(row$target_p))
     expect_true(is.na(row$target_contrast))
     expect_false("00030" %in% lk$norm_id[lk$ranking == "tested_in_target"])
@@ -343,7 +343,7 @@ test_that("a target that names no contrast is not matched to a source that does"
         list(metabolomics = metab_two_contrasts(), proteomics = prot_mixed()),
         "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
     expect_true(all(lk$target_status[lk$ranking == "all"] ==
-                        "not in target results for this contrast"))
+                        "not in target results"))
 })
 
 
@@ -441,4 +441,138 @@ test_that("the report's lookup table carries both contrasts", {
     expect_true(grepl('"source_contrast"', cols_def, fixed = TRUE))
     expect_true(grepl('"target_contrast"', cols_def, fixed = TRUE))
     expect_false(grepl("target_padj_within_lookup", rmd, fixed = TRUE))
+})
+
+
+# ---- Codex review of ca03b6f -------------------------------------------------
+
+# F3: a target result that exists only as ORA in the source's contrast.
+prot_fgsea_plus_ora_only <- function() {
+    dplyr::bind_rows(
+        data.frame(pathway = "rno00010", pval = 0.3, padj = 0.6, NES = 1.2,
+                   size = 40, method = "fgsea", contrast = "A_vs_B",
+                   stringsAsFactors = FALSE),
+        # rno00020 exists only as an ORA row, in the same contrast.
+        data.frame(pathway = "rno00020", pvalue = 0.01, padj = 0.05,
+                   method = "ora", contrast = "A vs B", stringsAsFactors = FALSE)
+    )
+}
+
+test_that("a target result that is ORA only in the same contrast is a result", {
+    lk <- build_cross_omics_lookup(
+        list(metabolomics = transform(metab_gsea(), contrast = "A_vs_B"),
+             proteomics = prot_fgsea_plus_ora_only()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
+    row <- lk[lk$ranking == "all" & lk$norm_id == "00020", ]
+
+    expect_identical(row$target_status, "ORA only in this contrast")
+    expect_equal(row$target_ora_p, 0.01)
+    expect_identical(row$target_method, "ora")
+    expect_identical(row$target_contrast, "A vs B")
+    expect_true(is.na(row$target_p))
+    # It counts for the tested-in-target ranking ...
+    expect_true("00020" %in% lk$norm_id[lk$ranking == "tested_in_target"])
+    # ... and a pathway the target has nowhere is still absent.
+    expect_identical(lk$target_status[lk$ranking == "all" & lk$norm_id == "00040"],
+                     "not in target results")
+})
+
+test_that("an ORA-only target cell is drawn as ORA, not a dash", {
+    skip_if_not_installed("ggplot2")
+    lk <- build_cross_omics_lookup(
+        list(metabolomics = transform(metab_gsea(), contrast = "A_vs_B"),
+             proteomics = prot_fgsea_plus_ora_only()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno")
+    blk <- lk[lk$ranking == "all", , drop = FALSE]
+    blk <- blk[order(blk$rank), , drop = FALSE]
+    p <- .lookup_heatmap(blk)
+    tgt <- p$data[p$data$layer == "proteomics\n(looked up)", ]
+    lab <- setNames(tgt$label, as.character(blk$norm_id))
+    expect_identical(unname(lab["00020"]), "ORA")
+    expect_identical(unname(lab["00040"]), "\u2013")
+})
+
+# F2: an adjusted p-value is never shown as a raw one.
+padj_only <- function() {
+    data.frame(pathway = c("rno00010", "rno00030"), padj = c(0.01, 0.2),
+               NES = c(1.5, -1.1), method = "fgsea", stringsAsFactors = FALSE)
+}
+
+test_that("a layer with no raw p-value column gives no lookup either way", {
+    expect_null(build_cross_omics_lookup(
+        list(proteomics = padj_only(), metabolomics = metab_gsea()),
+        "proteomics", "metabolomics", top_n = 10, kegg_org = "rno"))
+    expect_null(build_cross_omics_lookup(
+        list(proteomics = padj_only(), metabolomics = metab_gsea()),
+        "metabolomics", "proteomics", top_n = 10, kegg_org = "rno"))
+})
+
+test_that("the writer skips a layer with no raw p-value column and says so", {
+    out_dir <- withr::local_tempdir()
+    expect_message(
+        written <- write_cross_omics_lookups(
+            list(proteomics = padj_only(), metabolomics = metab_gsea()),
+            c("proteomics", "metabolomics"), out_dir, top_n = 10, kegg_org = "rno"),
+        "skipping proteomics -- its table has no raw p-value column")
+    expect_length(written, 0)
+    expect_length(list.files(out_dir, pattern = "^cross_lookup_"), 0)
+})
+
+# F1: KEGG-from-DE layers only carry pathways past their own cutoff.
+kegg_from_de_gsea <- function() {
+    data.frame(pathway = c("Pathway A", "Pathway C"), ID = c("rno00010", "rno00030"),
+               pvalue = c(0.001, 0.01), padj = c(0.01, 0.05), NES = c(1.9, -1.4),
+               setSize = c(30L, 20L), method = "gsea", contrast = "A_vs_B",
+               omics = "proteomics", stringsAsFactors = FALSE)
+}
+
+test_that("a layer from the KEGG-from-DE fallback is recognised as cut at significance", {
+    expect_true(.lookup_cutoff_filtered(kegg_from_de_gsea(), "rno"))
+    kegg_ora <- transform(kegg_from_de_gsea(), method = "ora")
+    expect_true(.lookup_cutoff_filtered(kegg_ora, "rno"))
+    # fgsea from the core producer and compound GSEA report every scored row.
+    expect_false(.lookup_cutoff_filtered(prot_mixed(), "rno"))
+    expect_false(.lookup_cutoff_filtered(transform(metab_gsea(), omics = "metabolomics"),
+                                         "rno"))
+})
+
+test_that("the writer logs a lookup that ranks among cut-at-significance pathways", {
+    out_dir <- withr::local_tempdir()
+    expect_message(
+        suppressWarnings(write_cross_omics_lookups(
+            list(proteomics = kegg_from_de_gsea(),
+                 metabolomics = transform(metab_gsea(), contrast = "A_vs_B")),
+            c("proteomics", "metabolomics"), out_dir, top_n = 10, kegg_org = "rno")),
+        "proteomics comes from the KEGG-from-DE enrichment, which reports only pathways that passed its own cutoff")
+})
+
+# F4: lookups of a contrast this run no longer has are cleared too.
+test_that("stale lookups in every per-contrast directory are cleared", {
+    out_dir <- withr::local_tempdir()
+    gone <- file.path(out_dir, "per_contrast", "Old_vs_Gone")
+    kept <- file.path(out_dir, "per_contrast", "A_vs_B")
+    dir.create(gone, recursive = TRUE)
+    dir.create(kept, recursive = TRUE)
+    stale <- c(file.path(gone, "cross_lookup_a_to_b.png"),
+               file.path(kept, "cross_lookup_a_to_b.tsv"))
+    for (f in stale) writeLines("from an earlier run", f)
+    bystander <- file.path(gone, "cross_omics_pathway_heatmap_KEGG.png")
+    writeLines("not a lookup", bystander)
+
+    .clear_stale_contrast_lookups(out_dir)
+
+    expect_false(any(file.exists(stale)))
+    # Scope is lookups only: other per-contrast outputs are left alone.
+    expect_true(file.exists(bystander))
+    expect_length(.clear_stale_contrast_lookups(file.path(out_dir, "absent")), 0)
+})
+
+test_that("the module clears stale lookups before its per-contrast loop", {
+    src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
+    clear_at <- regexpr("\\.clear_stale_contrast_lookups\\(\\s*out_dir\\s*\\)", src,
+                        perl = TRUE)
+    loop_at <- regexpr("for\\s*\\(\\s*cname in contrast_names\\s*\\)", src, perl = TRUE)
+    expect_gt(clear_at, 0)
+    expect_gt(loop_at, 0)
+    expect_lt(clear_at, loop_at)
 })
