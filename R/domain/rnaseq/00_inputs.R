@@ -87,4 +87,98 @@ validate_rna_inputs <- function(inputs, cfg) {
 }
 
 
+#' Import a folder of RSEM results as a tximport object
+#'
+#' Reads per-sample RSEM gene-level result files and summarises them into a
+#' tximport-style list (\code{counts}, \code{abundance}, \code{length}) ready to
+#' be saved as the \code{.rds} the pipeline consumes via
+#' \code{modes.rna.files.txi}. This is a pre-pipeline helper: it does no I/O of
+#' its own beyond reading the RSEM files — persist the result yourself with
+#' \code{saveRDS()} so the write stays a separate, explicit step.
+#'
+#' @param rsem_dir Path to the directory holding the RSEM result files.
+#' @param pattern Regex matching the per-sample files to import. Defaults to
+#'   gene-level RSEM output (\code{"\\.genes\\.results$"}); pass an isoform
+#'   pattern together with \code{tx2gene} to summarise transcripts to genes.
+#' @param sample_names Optional character vector of sample IDs, one per matched
+#'   file in sorted order. When \code{NULL} (default) IDs are derived by
+#'   stripping \code{pattern} from each file's basename. These become the
+#'   tximport column names and must match the metadata \code{SampleID} column.
+#' @param tx2gene Optional two-column data.frame (transcript, gene) used to
+#'   summarise isoform-level RSEM output to genes. Leave \code{NULL} for
+#'   gene-level input.
+#' @param fix_zero_length When \code{TRUE} (default) replaces effective lengths
+#'   of 0 with 1. RSEM reports length 0 for features with no reads, which
+#'   otherwise makes \code{DESeq2::DESeqDataSetFromTximport()} abort — this is
+#'   the fix recommended in the tximport documentation.
+#' @return A tximport list with \code{counts}, \code{abundance} and
+#'   \code{length} matrices (genes x samples) plus \code{countsFromAbundance},
+#'   validated against the structure the pipeline expects.
+#' @examples
+#' \dontrun{
+#' txi <- load_rsem_as_tximport("data/rsem")
+#' saveRDS(txi, "data/rsem/txi.rds") # then point modes.rna.files.txi here
+#' }
+load_rsem_as_tximport <- function(rsem_dir,
+                                  pattern = "\\.genes\\.results$",
+                                  sample_names = NULL,
+                                  tx2gene = NULL,
+                                  fix_zero_length = TRUE) {
+    if (!requireNamespace("tximport", quietly = TRUE)) {
+        stop("[load_rsem_as_tximport] Package 'tximport' is required but not installed.", call. = FALSE)
+    }
+    if (!dir.exists(rsem_dir)) {
+        stop("[load_rsem_as_tximport] Directory does not exist: ", rsem_dir, call. = FALSE)
+    }
+
+    files <- sort(list.files(rsem_dir, pattern = pattern, full.names = TRUE))
+    if (length(files) == 0) {
+        stop(
+            "[load_rsem_as_tximport] No files matching /", pattern, "/ found in: ", rsem_dir,
+            ". Gene-level RSEM output is usually named '<sample>.genes.results'.",
+            call. = FALSE
+        )
+    }
+
+    if (is.null(sample_names)) {
+        sample_names <- sub(pattern, "", basename(files))
+    } else if (length(sample_names) != length(files)) {
+        stop(
+            "[load_rsem_as_tximport] 'sample_names' has ", length(sample_names),
+            " entries but ", length(files), " files were matched.",
+            call. = FALSE
+        )
+    }
+    dupes <- sample_names[duplicated(sample_names)]
+    if (length(dupes) > 0) {
+        stop("[load_rsem_as_tximport] Sample names are not unique: ",
+             paste(unique(dupes), collapse = ", "), call. = FALSE)
+    }
+    names(files) <- sample_names
+
+    # Isoform-level input needs a tx2gene map; gene-level (the default) does not.
+    txi <- tximport::tximport(
+        files,
+        type = "rsem",
+        txIn = !is.null(tx2gene),
+        txOut = FALSE,
+        tx2gene = tx2gene
+    )
+
+    if (fix_zero_length) {
+        # RSEM reports effective_length 0 for features with no reads; DESeq2's
+        # tximport path rejects a zero-length offset. Setting them to 1 keeps
+        # the offset matrix finite without affecting the counts.
+        txi$length[txi$length == 0] <- 1
+    }
+
+    validate_tximport(txi)
+    message(sprintf(
+        "[load_rsem_as_tximport] Imported %d samples x %d genes from RSEM",
+        ncol(txi$counts), nrow(txi$counts)
+    ))
+    txi
+}
+
+
 # load_omics_inputs and validate_contrasts_content live in R/core/01_io.R
