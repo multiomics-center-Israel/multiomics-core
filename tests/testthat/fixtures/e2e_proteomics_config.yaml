@@ -1,0 +1,107 @@
+# ==============================================================================
+# End-to-end regression fixture — proteomics
+# Points at the repo's shipped synthetic data (data/example_proteomics/), which
+# injects a known DE signal into the first 20 real proteins and adds 3 cRAP-
+# contaminants (filtered out). `project.dir` is a placeholder — run_omic_e2e()
+# overrides it with a temp dir so the run is fully isolated.
+# ==============================================================================
+
+project:
+  dir: "__OVERRIDDEN_BY_HELPER__"
+  name: "e2e_proteomics"
+  analysis_round: "T01"
+
+paths:
+  raw: "data"
+  out: "outputs"
+
+params:
+  seed: 1
+
+modes:
+  proteomics:
+
+    engine: "DIANN"
+    scale_in: "linear"
+
+    files:
+      protein: "proteomics/protein_matrix.csv"
+      sample_map: "proteomics/sample_map.csv"
+      metadata: "proteomics/metadata.csv"
+      contrasts: "proteomics/contrasts.csv"
+
+    id_columns:
+      protein_id: "Protein.Group"
+      sample_col: "SampleID"
+      protein_annot:
+        - "Protein.Names"
+        - "Genes"
+        - "First.Protein.Description"
+      map_from: "sample_orig_name"
+      map_to: "SampleID"
+
+    filtering:
+      remove_contaminants: true
+      contaminant_prefix: "cRAP-"
+      min_count:
+        default: 3
+      min_groups: 1
+
+    normalization:
+      method: "none"
+
+    batch_correction:
+      method: "none"
+
+    imputation:
+      # Multi-imputation is seeded (set.seed(params.seed + i)) so the run is
+      # reproducible. Fewer repetitions than production keeps the test light.
+      multi_imputation: true
+      method: "perseus_like"
+      no_repetitions: 4
+      min_no_passed: 3
+      width: 0.2
+      downshift: 1.6
+
+    de:
+      method: "limma"
+      # Raw p-value gate so the injected signal is reliably recovered on n=3/group.
+      use_adj_for_pass1: false
+      p_cutoff: 0.05
+      linear_fc_cutoff: 1.5
+      p_adjust_method: "BH"
+      paired: false
+
+    de_table:
+      id_col: "FeatureID"
+
+    effects:
+      color: "Condition"
+      shape: null
+      samples: "SampleID"
+
+    clustering:
+      enabled: false
+
+    annotation:
+      organism: "Homo sapiens"
+      id_type: "auto"
+      skip_annotation: true
+
+    pathway:
+      enabled: false
+
+    ppi:
+      enabled: false
+
+    domain_analysis:
+      enabled: false
+
+    advanced_stats:
+      enabled: false
+
+    commentary:
+      enabled: false
+
+    excel:
+      group_cv: false
