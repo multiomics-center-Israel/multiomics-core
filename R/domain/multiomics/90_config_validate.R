@@ -185,6 +185,13 @@ validate_multiomics_config <- function(multiomics_cfg) {
     em_defaults <- c(enabled = FALSE, enzyme_hits_only = TRUE,
                      require_shared_pathway = TRUE,
                      drop_currency_metabolites = TRUE, list_unpaired_enzymes = TRUE)
+    # A misspelt switch would otherwise be ignored and its default used.
+    em_unknown <- setdiff(names(em_cfg), names(em_defaults))
+    if (length(em_unknown) > 0) {
+        stop("Unknown key(s) in modes.multiomics.enrichment.enzyme_metabolite: ",
+             paste(em_unknown, collapse = ", "), ". Known keys: ",
+             paste(names(em_defaults), collapse = ", "), ".", call. = FALSE)
+    }
     for (key in names(em_defaults)) {
         val <- em_cfg[[key]]
         if (is.null(val)) {

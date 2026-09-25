@@ -137,7 +137,7 @@ kegg_link_table <- function(target, source, cache_dir = NULL) {
 }
 
 
-#' KEGG's own name for each compound#' KEGG's own name for each compound
+#' KEGG's own name for each compound
 #'
 #' The metabolomics layer names a feature however its table did -- often an
 #' m/z and retention time, which says nothing to a reader. KEGG carries a name

@@ -137,6 +137,15 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
                                          kegg_org, org_db, out_dir, cache_dir)
     if (is.null(ann)) return(NULL)
 
+    # Logged here, before any later return, so a run that ends with no pair
+    # (or skips for want of pathways) still says which changed proteins it
+    # could not list.
+    unlisted <- .changed_not_listed(prot_de[contrasts$prot], ann$protein_ec,
+                                    ann$mapped_features, cutoff)
+    message("  Not listed: ", length(unlisted$no_ec), " changed protein(s) with no ",
+            "EC number, and ", length(unlisted$unmapped), " whose id could not be ",
+            "mapped to a KEGG gene")
+
     # Without pathway membership the shared-pathway filter would drop every
     # pair and then report "no shared pathway", which KEGG never said.
     if (!ann$pathways_available) {
@@ -197,11 +206,6 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     message("  Enzyme-metabolite table: ", n_pairs, " pair(s) and ",
             nrow(pairs) - n_pairs, " enzyme(s) with nothing measured to pair, over ",
             nrow(contrasts), " contrast(s)")
-    unlisted <- .changed_not_listed(prot_de[contrasts$prot], ann$protein_ec,
-                                    ann$mapped_features, cutoff)
-    message("  Not listed: ", length(unlisted$no_ec), " changed protein(s) with no ",
-            "EC number, and ", length(unlisted$unmapped), " whose id could not be ",
-            "mapped to a KEGG gene")
     pairs
 }
 

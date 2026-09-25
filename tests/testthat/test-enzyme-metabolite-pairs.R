@@ -761,3 +761,43 @@ test_that("an unpaired enzyme has no role, and a pair without an equation is unk
     expect_identical(only_pairs(fetched)$role, "unknown")
     expect_true(all(is.na(fetched$role[is.na(fetched$compound)])))
 })
+
+
+# ---- Copilot review of 4fc7ca1 -----------------------------------------------
+
+test_that("the unlisted-protein count is logged even when no pair survives", {
+    # Only P2 changes, and its one measured compound shares no pathway with it,
+    # so no pair survives; P3 changes too, with no EC.
+    stubs <- stub_annotation()
+    stubs$extract_de_tables <- function(de_data, omics_type, harmonization_res = NULL) {
+        std <- de_data$.std
+        if (identical(omics_type, "proteomics")) {
+            std$padj <- c(0.9, 0.01, 0.01)
+            return(list(A_vs_B = std))
+        }
+        list(`A vs. B` = std)
+    }
+    no_list <- list(modes = list(multiomics = list(enrichment = list(
+        enzyme_metabolite = list(list_unpaired_enzymes = FALSE)))))
+    msgs <- character(0)
+    res <- withCallingHandlers(run_pairs(stubs, config = no_list, quiet = FALSE),
+                               message = function(m) {
+                                   msgs <<- c(msgs, conditionMessage(m))
+                                   invokeRestart("muffleMessage")
+                               })
+    expect_null(res)
+    expect_true(any(grepl("No enzyme-metabolite pair survived", msgs)))
+    expect_true(any(grepl("Not listed: 1 changed protein\\(s\\) with no EC number", msgs)))
+
+    # And on the pathway-skip return.
+    skip <- stub_annotation(link_overrides = list(pathway = NULL))
+    expect_message(run_pairs(skip, quiet = FALSE), "Not listed: 0 changed protein")
+})
+
+test_that("an unknown enzyme_metabolite key is rejected, not ignored", {
+    validate <- function(em) suppressMessages(suppressWarnings(
+        validate_multiomics_config(list(integration = list(methods = "SNF"),
+                                        enrichment = list(enzyme_metabolite = em)))))
+    expect_error(validate(list(enabled = TRUE, require_shared_pathways = FALSE)),
+                 "Unknown key\\(s\\).*require_shared_pathways")
+})
