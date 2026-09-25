@@ -548,11 +548,200 @@ run_limma_for_proteomics <- function(harmonization_res) {
 }
 
 
-#' Map feature IDs to KEGG gene IDs
+#' Split protein-group IDs into their member accessions
 #'
-#' For C. elegans (and some other organisms), KEGG uses organism-specific gene
-#' IDs (e.g. CELE_xxx) rather than NCBI ENTREZID. This function maps via:
-#' feature_id -> ENTREZID -> KEGG gene ID (via bitr_kegg).
+#' A protein group ("P1;P2;P3") names every protein its peptides could belong
+#' to, leading protein first. None of those strings is itself a UniProt key, so
+#' anything that looks accessions up has to take the group apart first.
+#'
+#' @param ids Character vector of protein-group IDs.
+#' @return Data frame with one row per member: \code{feature_id} (the group ID
+#'   as given), \code{accession} (the trimmed member) and \code{position}
+#'   (1 for the leading protein). Missing and empty IDs are dropped.
+#' @examples
+#' protein_group_members(c("P1;P2", "P3"))
+protein_group_members <- function(ids) {
+    ids <- unique(as.character(ids))
+    ids <- ids[!is.na(ids) & nzchar(trimws(ids))]
+    parts <- strsplit(ids, ";", fixed = TRUE)
+    n <- lengths(parts)
+    out <- data.frame(
+        feature_id = rep(ids, n),
+        accession  = trimws(as.character(unlist(parts, use.names = FALSE))),
+        position   = as.integer(unlist(lapply(n, seq_len), use.names = FALSE)),
+        stringsAsFactors = FALSE
+    )
+    out[nzchar(out$accession), , drop = FALSE]
+}
+
+
+#' Canonical UniProt accession of an isoform accession
+#'
+#' UniProt writes isoforms as the canonical accession plus "-<n>" ("P12345-2").
+#' Annotation packages key genes on the canonical accession, so an isoform with
+#' no entry of its own can still be placed through it.
+#'
+#' @param accessions Character vector of accessions.
+#' @return The accessions with a trailing "-<digits>" removed; others unchanged.
+#' @examples
+#' canonical_uniprot_accession(c("P12345-2", "P12345", "Q9ABC1"))
+canonical_uniprot_accession <- function(accessions) {
+    sub("-[0-9]+$", "", as.character(accessions))
+}
+
+
+#' First annotated gene symbol of each proteomics feature
+#'
+#' Reads the gene annotation that came in with the protein table (DIA-NN's
+#' \code{Genes}, or the other columns \code{extract_protein_symbols()} knows)
+#' and keeps its first symbol -- the convention harmonization already uses when
+#' it matches proteins to transcripts. The annotation is joined to the features
+#' by value, through the \code{row_data} column that holds the feature IDs, so a
+#' reordered \code{row_data} still lines up. That column must be a 1:1 key --
+#' as many rows as features, no duplicates, the same set of IDs -- or the
+#' annotation cannot be trusted to line up and none is returned.
+#'
+#' @param prot_pre The proteomics entry of \code{harmonization_res$inputs}:
+#'   a list carrying \code{row_data} and \code{expr_work}.
+#' @return Character vector of first gene symbols (NA where a feature has none),
+#'   named by feature ID; NULL when there is no usable, aligned annotation.
+#' @examples
+#' pre <- list(expr_work = matrix(0, 2, 1, dimnames = list(c("P1;P2", "P3"), "S1")),
+#'             row_data = data.frame(Protein.Group = c("P3", "P1;P2"),
+#'                                   Genes = c("GENE3", "GENEA;GENEB")))
+#' protein_group_gene_symbols(pre)   # "P3" = "GENE3", "P1;P2" = "GENEA"
+protein_group_gene_symbols <- function(prot_pre) {
+    row_data <- prot_pre$row_data
+    feature_ids <- rownames(prot_pre$expr_work)
+    if (is.null(row_data) || nrow(row_data) == 0 || is.null(feature_ids)) return(NULL)
+
+    # A 1:1 key: one row per feature and nothing else, in any order.
+    holds_ids <- vapply(colnames(row_data), function(col) {
+        v <- as.character(row_data[[col]])
+        length(v) == length(feature_ids) && !anyDuplicated(v) && setequal(v, feature_ids)
+    }, logical(1))
+    if (!any(holds_ids)) {
+        message("    No row_data column is a 1:1 key for the proteomics feature IDs; ",
+                "protein groups are mapped through their accessions only")
+        return(NULL)
+    }
+
+    symbols <- extract_protein_symbols(row_data, NULL)
+    if (is.null(symbols)) return(NULL)
+    stats::setNames(as.character(symbols),
+                    as.character(row_data[[names(which(holds_ids))[1]]]))
+}
+
+
+#' Map proteomics features to Entrez IDs, one gene per feature
+#'
+#' A single-accession feature is looked up as a UniProt accession, and an
+#' isoform accession with no entry of its own is tried again as its canonical
+#' accession.
+#'
+#' A protein group ("P1;P2") is one measurement, so it gets one representative
+#' gene, never one per member: expanding it would turn a single statistical
+#' observation into several gene-level ones in ORA and GSEA. The representative
+#' is the group's first annotated gene symbol when that symbol maps. When it is
+#' missing or does not map, the group falls back to its accessions in order and
+#' takes the first one that resolves in the annotation database -- an
+#' annotation fallback, not a claim about which member the group "is".
+#'
+#' @param ids Character vector of feature IDs: UniProt accessions or protein
+#'   groups of them.
+#' @param lookup Function taking a character vector of unique accessions and
+#'   returning Entrez IDs named by accession, NA where unmapped -- the shape
+#'   \code{AnnotationDbi::mapIds()} returns.
+#' @param symbols Optional character vector of first gene symbols named by
+#'   feature ID, as \code{protein_group_gene_symbols()} returns. Read for
+#'   protein groups only.
+#' @param symbol_lookup Function like \code{lookup}, keyed by gene symbol.
+#'   Required for \code{symbols} to be used.
+#' @return Data frame with one row per mapped feature, ordered by
+#'   \code{feature_id}: \code{feature_id}, \code{ENTREZID}, \code{source}
+#'   (\code{"accession"}, \code{"canonical_accession"} or \code{"gene_symbol"})
+#'   and \code{matched_key} (the accession or symbol that resolved). A feature
+#'   nothing resolves for is left out.
+#' @examples
+#' acc <- function(keys) setNames(c(P1 = "101", P2 = "102", P3 = NA)[keys], keys)
+#' map_protein_groups_to_entrez(c("P1;P2", "P3"), acc)   # P1;P2 -> 101 only
+map_protein_groups_to_entrez <- function(ids, lookup, symbols = NULL,
+                                         symbol_lookup = NULL) {
+    empty <- data.frame(feature_id = character(0), ENTREZID = character(0),
+                        source = character(0), matched_key = character(0),
+                        stringsAsFactors = FALSE)
+    members <- protein_group_members(ids)
+    if (nrow(members) == 0) return(empty)
+    n_members <- stats::ave(members$position, members$feature_id, FUN = length)
+    group_ids <- unique(members$feature_id[n_members > 1])
+
+    by_symbol <- empty
+    if (length(group_ids) > 0 && !is.null(symbols) && is.function(symbol_lookup)) {
+        sym <- trimws(unname(as.character(symbols[group_ids])))
+        has_sym <- !is.na(sym) & nzchar(sym)
+        if (any(has_sym)) {
+            hits <- symbol_lookup(unique(sym[has_sym]))
+            entrez <- unname(as.character(hits[sym[has_sym]]))
+            ok <- !is.na(entrez) & nzchar(entrez)
+            by_symbol <- data.frame(feature_id = group_ids[has_sym][ok],
+                                    ENTREZID = entrez[ok],
+                                    source = rep("gene_symbol", sum(ok)),
+                                    matched_key = sym[has_sym][ok],
+                                    stringsAsFactors = FALSE)
+        }
+    }
+
+    rest <- members[!members$feature_id %in% by_symbol$feature_id, , drop = FALSE]
+    by_accession <- empty
+    if (nrow(rest) > 0) {
+        rest$canonical <- canonical_uniprot_accession(rest$accession)
+        hits <- lookup(unique(c(rest$accession, rest$canonical)))
+        hit_of <- function(keys) unname(as.character(hits[keys]))
+        direct <- hit_of(rest$accession)
+        via_canonical <- hit_of(rest$canonical)
+        direct_ok <- !is.na(direct) & nzchar(direct)
+        canonical_ok <- !is.na(via_canonical) & nzchar(via_canonical)
+        rest$ENTREZID <- ifelse(direct_ok, direct, via_canonical)
+        rest$source <- ifelse(direct_ok, "accession", "canonical_accession")
+        rest$matched_key <- ifelse(direct_ok, rest$accession, rest$canonical)
+        rest <- rest[direct_ok | canonical_ok, , drop = FALSE]
+        # First member that resolves, in the group's own order.
+        rest <- rest[order(rest$feature_id, rest$position), , drop = FALSE]
+        rest <- rest[!duplicated(rest$feature_id), , drop = FALSE]
+        by_accession <- rest[, names(empty), drop = FALSE]
+    }
+
+    out <- rbind(by_symbol, by_accession)
+    out <- out[order(out$feature_id), , drop = FALSE]
+    rownames(out) <- NULL
+    out
+}
+
+
+#' Map feature IDs to Entrez gene IDs
+#'
+#' Transcriptomics IDs are looked up as ENSEMBL, then WORMBASE, keys.
+#' Proteomics features go through \code{map_protein_groups_to_entrez()}; when
+#' no accession resolves at all, the whole layer falls back to the WormBase /
+#' gene_id column of \code{row_data} (C. elegans and similar). When that
+#' fallback is unavailable or maps nothing, the groups already resolved by
+#' gene symbol are returned rather than nothing.
+#'
+#' @param de_tables Named list of DE data frames, each with a \code{feature_id}
+#'   column; the IDs of every table are mapped together.
+#' @param omics_type One of \code{"transcriptomics"}, \code{"proteomics"},
+#'   \code{"metabolomics"}.
+#' @param harmonization_res Harmonization result; its
+#'   \code{inputs$proteomics} supplies the gene annotation and the fallback
+#'   gene IDs for proteomics.
+#' @param org_db OrgDb annotation object.
+#' @return Data frame with \code{feature_id} and \code{ENTREZID}, \strong{at
+#'   most one row per \code{feature_id}}; NULL when nothing can be mapped (and
+#'   always for metabolomics). Proteomics: one representative gene per
+#'   feature, as \code{map_protein_groups_to_entrez()} describes; unmapped
+#'   features are omitted. Transcriptomics: one row per input ID, with NA
+#'   \code{ENTREZID} where unmapped. Several features may share an
+#'   \code{ENTREZID}; collapsing by gene is the caller's job.
 map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, org_db) {
 
     # Collect all unique feature IDs
@@ -593,42 +782,58 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         return(entrez_df)
 
     } else if (omics_type == "proteomics") {
-        # Try direct UniProt -> ENTREZID mapping first (works for most organisms)
+        # Try direct UniProt -> ENTREZID mapping first (works for most organisms).
+        # A group string such as "P1;P2" is never a UniProt key itself, so groups
+        # are resolved to one representative gene each. mapIds() errors when
+        # none of the keys is valid; that reads as "nothing mapped" here, as it
+        # did when the whole lookup sat in one tryCatch.
+        entrez_via <- function(keytype) function(keys) tryCatch(
+            AnnotationDbi::mapIds(org_db, keys = keys, keytype = keytype,
+                                  column = "ENTREZID", multiVals = "first"),
+            error = function(e) stats::setNames(rep(NA_character_, length(keys)), keys))
         entrez_df <- tryCatch({
-            res <- AnnotationDbi::mapIds(
-                org_db,
-                keys = all_ids,
-                keytype = "UNIPROT",
-                column = "ENTREZID",
-                multiVals = "first"
+            df <- map_protein_groups_to_entrez(
+                all_ids,
+                lookup = entrez_via("UNIPROT"),
+                symbols = protein_group_gene_symbols(harmonization_res$inputs$proteomics),
+                symbol_lookup = entrez_via("SYMBOL")
             )
-            df <- data.frame(
-                feature_id = names(res),
-                ENTREZID = as.character(res),
-                stringsAsFactors = FALSE
-            )
-            df <- df[!is.na(df$ENTREZID), ]
-            if (nrow(df) > 0) {
-                message("    Mapped ", nrow(df), "/", length(all_ids),
-                        " UniProt IDs to ENTREZID directly")
-            }
+            n_src <- table(factor(df$source, levels = c("accession", "canonical_accession",
+                                                        "gene_symbol")))
+            message("    Mapped ", nrow(df), "/", length(all_ids),
+                    " proteomics features to ENTREZID (", n_src[["accession"]],
+                    " by accession, ", n_src[["canonical_accession"]],
+                    " through the canonical accession of an isoform, ",
+                    n_src[["gene_symbol"]], " protein groups by their first gene symbol)")
             df
         }, error = function(e) NULL)
 
-        if (!is.null(entrez_df) && nrow(entrez_df) > 0) return(entrez_df)
+        # The WormBase fallback below stays a whole-layer decision, taken when no
+        # accession resolved -- the same condition as before protein groups were
+        # handled. Groups resolved by gene symbol alone do not count, or a layer
+        # that needs the fallback would skip it on the strength of a few groups.
+        if (!is.null(entrez_df) &&
+            any(entrez_df$source %in% c("accession", "canonical_accession"))) {
+            return(entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE])
+        }
+        # Groups already resolved by gene symbol are what this layer returns if
+        # the fallback below is unavailable or maps nothing -- not NULL.
+        symbol_only <- if (!is.null(entrez_df) && nrow(entrez_df) > 0) {
+            entrez_df[, c("feature_id", "ENTREZID"), drop = FALSE]
+        }
 
         # Fallback: try via row_data WormBase/gene_id columns (C. elegans etc.)
         prot_pre <- harmonization_res$inputs$proteomics
         if (is.null(prot_pre) || is.null(prot_pre$row_data)) {
             message("    No proteomics row_data for ID mapping")
-            return(NULL)
+            return(symbol_only)
         }
 
         row_data <- prot_pre$row_data
         wbgene_col <- intersect(c("Wormbase_id", "wormbase_id", "gene_id"), colnames(row_data))
         if (length(wbgene_col) == 0) {
             message("    No WormBase/gene_id column in proteomics row_data")
-            return(NULL)
+            return(symbol_only)
         }
 
         prot_ids <- rownames(prot_pre$expr_work)
@@ -640,7 +845,7 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
         )
         prot_to_wb <- prot_to_wb[!is.na(prot_to_wb$WBGene) & nzchar(prot_to_wb$WBGene), ]
 
-        if (nrow(prot_to_wb) == 0) return(NULL)
+        if (nrow(prot_to_wb) == 0) return(symbol_only)
 
         mapped <- tryCatch({
             res <- AnnotationDbi::mapIds(
@@ -663,6 +868,9 @@ map_feature_ids_to_entrez <- function(de_tables, omics_type, harmonization_res, 
             )
         }, error = function(e) NULL)
 
+        if (is.null(mapped) || !any(!is.na(mapped$ENTREZID))) {
+            return(symbol_only %||% mapped)
+        }
         return(mapped)
 
     } else if (omics_type == "metabolomics") {
@@ -1890,10 +2098,58 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # KEGG description at all.
     kegg_org <- resolve_kegg_org_code(config$global$organism)
 
-    all_pathways <- lapply(merge_tables, function(df) {
-        keys <- pathway_join_key(df, kegg_org)
-        keys[!is.na(keys)]
+    # KEGG's reference maps are pan-species, so an organism with no KEGG code of
+    # its own can score well on maps of organs it does not have. Excluding those
+    # classes is a reporting decision, applied to finished results: the p-values
+    # and the adjustment behind them are untouched, and nothing is excluded
+    # unless the config asks. The per-omics tables get the same treatment --
+    # they drive the per-layer barplots and CSVs, and filtering only the merged
+    # selection would leave the excluded classes visible one section away.
+    #
+    # Applied before the candidates are found, not after: which method a layer
+    # contributes is chosen from the rows it still has, so filtering later could
+    # change that choice under candidates already taken from the other method.
+    excl <- .excluded_pathway_classes(config)
+    if (length(excl) > 0) {
+        drop_excluded <- function(df) {
+            col <- if ("ID" %in% names(df)) "ID"
+                   else if ("pathway" %in% names(df)) "pathway" else NULL
+            if (is.null(col) || nrow(df) == 0) return(df)
+            df[keep_kegg_pathways(df[[col]], exclude = excl, kegg_org = kegg_org,
+                                  label = "per-omics pathways"), , drop = FALSE]
+        }
+        pathway_tables <- lapply(pathway_tables, drop_excluded)
+        merge_tables <- lapply(merge_tables, drop_excluded)
+    }
+
+    # Candidates come from the rows that can contribute -- the same rows
+    # merge_pathway_pvalues() aggregates, through the same helper -- so a
+    # pathway that only an unselected method's rows support is not a candidate,
+    # and cannot reach the meta-analysis with no layer behind it.
+    contrib <- lapply(merge_tables[omics], .layer_contribution, kegg_org = kegg_org)
+    all_pathways <- lapply(contrib, function(cb) {
+        if (!is.null(cb$problem)) return(character(0))
+        unique(cb$keys[cb$keep])
     })
+
+    # A layer contributes one method; say when that leaves a contrast or a
+    # collection of it out of the run-level meta-analysis entirely.
+    for (om in omics) {
+        lost <- .method_selection_losses(merge_tables[[om]], contrib[[om]])
+        if (lost$n_rows == 0) next
+        msg <- sprintf("  %s: the meta-analysis uses its %s rows only; %d row(s) of other methods are left out",
+                       om, contrib[[om]]$method, lost$n_rows)
+        if (length(lost$contrasts) > 0) {
+            msg <- paste0(msg, ", including every row for contrast(s) ",
+                          paste(lost$contrasts, collapse = ", "))
+        }
+        if (length(lost$collections) > 0) {
+            msg <- paste0(msg, if (length(lost$contrasts) > 0) " and" else ", including",
+                          " every row for collection(s) ",
+                          paste(lost$collections, collapse = ", "))
+        }
+        message(msg)
+    }
 
     union_pathways <- unique(unlist(all_pathways))
     common_pathways <- Reduce(intersect, all_pathways)
@@ -1906,7 +2162,7 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     message(sprintf("  Found %d total pathways (%d in common) across %d omics layers",
                     length(union_pathways), length(common_pathways), length(omics)))
 
-    # The candidate universe is the union of what the layers enriched, always.
+    # The candidate universe is the union of what the layers contribute, always.
     #
     # This is not a display choice: use_pathways is what merge_pathway_pvalues()
     # assembles and what stouffer_combined_pvalues() then scores, so it decides
@@ -1925,28 +2181,10 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
     # common_pathways is still reported, and is still in the returned result;
     # it is a description of the overlap, not a gate on it.
     use_pathways <- union_pathways
-
-    # KEGG's reference maps are pan-species, so an organism with no KEGG code of
-    # its own can score well on maps of organs it does not have. Excluding those
-    # classes is a reporting decision, applied to finished results: the p-values
-    # and the adjustment behind them are untouched, and nothing is excluded
-    # unless the config asks. The per-omics tables get the same treatment --
-    # they drive the per-layer barplots and CSVs, and filtering only the merged
-    # selection would leave the excluded classes visible one section away.
-    excl <- .excluded_pathway_classes(config)
     if (length(excl) > 0) {
         use_pathways <- use_pathways[
             keep_kegg_pathways(use_pathways, exclude = excl, kegg_org = kegg_org,
                                label = "cross-omics pathways")]
-        drop_excluded <- function(df) {
-            col <- if ("ID" %in% names(df)) "ID"
-                   else if ("pathway" %in% names(df)) "pathway" else NULL
-            if (is.null(col) || nrow(df) == 0) return(df)
-            df[keep_kegg_pathways(df[[col]], exclude = excl, kegg_org = kegg_org,
-                                  label = "per-omics pathways"), , drop = FALSE]
-        }
-        pathway_tables <- lapply(pathway_tables, drop_excluded)
-        merge_tables <- lapply(merge_tables, drop_excluded)
     }
 
     # Merge pathway p-values for meta-analysis, one method per layer -- see
@@ -2044,11 +2282,16 @@ analyze_cross_omics_enrichment <- function(enrichment_results, config, out_dir =
         # does not show. Built before each device is opened so that a
         # collection with no adjusted ORA p-value at all leaves no figure
         # behind for the report to find.
+        #
+        # Its candidates come from the per-layer tables it draws from, not from
+        # the meta-analysis: the meta-analysis keeps one method per layer, so a
+        # layer contributing its rank-based rows there still has ORA evidence --
+        # GO terms only ORA scored, say -- that belongs in this figure.
+        ora_pathways <- .ora_figure_candidates(pathway_tables, kegg_org, exclude = excl)
+        ora_collections <- classify_pathway_collection(NULL, kegg_org, keys = ora_pathways)
         any_ora <- FALSE
-        for (cl in sort(unique(collections[!is.na(collections)]))) {
-            sub <- meta_results[collections == cl, , drop = FALSE]
-            if (nrow(sub) == 0) next
-            cl_pathways <- intersect(use_pathways, sub$norm_id)
+        for (cl in sort(unique(ora_collections))) {
+            cl_pathways <- ora_pathways[ora_collections == cl]
             if (length(cl_pathways) == 0) next
 
             ora_padj <- build_ora_adjusted_p_matrix(pathway_tables, cl_pathways,
@@ -2624,38 +2867,26 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
     for (om in omics) {
         df <- pathway_tables[[om]]
 
-        # Identity is resolved per row, so a table that mixes collections -- some
-        # rows carrying an ID, some only a gene-set name -- keys each row on what
-        # that row actually has.
-        keys <- pathway_join_key(df, kegg_org)
-
-        if (all(is.na(keys))) {
-            warning("Cannot identify pathway column in ", om, " enrichment table")
+        contrib <- .layer_contribution(df, kegg_org)
+        if (!is.null(contrib$problem)) {
+            warning("Cannot identify ", contrib$problem, " column in ", om,
+                    " enrichment table")
             next
         }
-
-        pvals <- .raw_p_values(df)
-        if (is.null(pvals)) {
-            warning("Cannot identify p-value column in ", om, " enrichment table")
-            next
-        }
-
-        chosen <- select_layer_method_rows(df, pvals)
 
         # One row per key, as before: contrasts and now also KEGG prefix variants
         # of one pathway collapse to their best p-value -- within the one method
-        # chosen above, never across methods. The result having unique keys is
-        # what keeps the merge below one-to-one, so no layer can multiply
-        # another's rows. Rows with no key or no p-value are dropped first, which
-        # is what the formula form of aggregate() used to do via na.omit.
-        usable <- chosen$keep & !is.na(keys) & !is.na(pvals)
+        # chosen, never across methods. The result having unique keys is what
+        # keeps the merge below one-to-one, so no layer can multiply another's
+        # rows.
+        usable <- contrib$keep
         if (!any(usable)) next
 
-        df_agg <- aggregate(list(pval = pvals[usable]),
-                            by = list(norm_id = keys[usable]),
+        df_agg <- aggregate(list(pval = contrib$pvals[usable]),
+                            by = list(norm_id = contrib$keys[usable]),
                             FUN = min)
         colnames(df_agg) <- c("norm_id", paste0("pval_", om))
-        df_agg[[paste0("method_", om)]] <- chosen$method
+        df_agg[[paste0("method_", om)]] <- contrib$method
 
         # Subset to target pathways
         df_sub <- df_agg[df_agg$norm_id %in% target_pathways, , drop = FALSE]
@@ -2716,6 +2947,78 @@ merge_pathway_pvalues <- function(pathway_tables, target_pathways, omics,
 }
 
 
+#' The rows of one layer that can contribute to the meta-analysis
+#'
+#' The single place the cross-omics analysis decides which of a layer's rows
+#' count: \code{merge_pathway_pvalues()} aggregates them and
+#' \code{analyze_cross_omics_enrichment()} builds its candidate pathways from
+#' them, so a pathway only rows of an unselected method support can never
+#' become a candidate with no layer behind it.
+#'
+#' Identity is resolved per row (\code{pathway_join_key()}), so a table mixing
+#' collections keys each row on what that row carries; the raw p-value is read
+#' per row (\code{.raw_p_values()}); one method is chosen for the layer
+#' (\code{select_layer_method_rows()}). A row contributes when it belongs to
+#' that method and has both a key and a p-value.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return List with \code{problem} -- NULL, or \code{"pathway"} /
+#'   \code{"p-value"} when the table has no usable column of that kind, in
+#'   which case nothing else is returned -- and otherwise \code{keys},
+#'   \code{pvals} (one per row), \code{keep} (logical, the contributing rows)
+#'   and \code{method} (the test they come from).
+#' @examples
+#' df <- data.frame(ID = c("map00010", "map00020"), method = c("fgsea", "ora"),
+#'                  pval = c(0.2, NA), pvalue = c(NA, 0.001))
+#' .layer_contribution(df)$keep   # TRUE FALSE: map00020 has ORA rows only
+#' @keywords internal
+.layer_contribution <- function(df, kegg_org = NULL) {
+    keys <- pathway_join_key(df, kegg_org)
+    if (all(is.na(keys))) return(list(problem = "pathway"))
+
+    pvals <- .raw_p_values(df)
+    if (is.null(pvals)) return(list(problem = "p-value"))
+
+    chosen <- select_layer_method_rows(df, pvals)
+    list(problem = NULL, keys = keys, pvals = pvals,
+         keep = chosen$keep & !is.na(keys) & !is.na(pvals),
+         method = chosen$method)
+}
+
+
+#' What choosing one method left out of a layer
+#'
+#' Rows of the methods not chosen are left out on purpose -- a layer
+#' contributes one kind of test -- but when that removes every row of a
+#' contrast or of a gene-set collection, the layer's evidence for it is gone
+#' from the run-level meta-analysis, and that is said rather than left for the
+#' reader to infer from a missing cell.
+#'
+#' @param df Enrichment data frame for one omics layer.
+#' @param contrib Its \code{.layer_contribution()} result.
+#' @return List with \code{n_rows} (rows with a key and p-value left out),
+#'   \code{contrasts} and \code{collections} (values of the \code{contrast} /
+#'   \code{database} columns that only left-out rows carry; empty when the
+#'   column is absent).
+#' @keywords internal
+.method_selection_losses <- function(df, contrib) {
+    none <- list(n_rows = 0L, contrasts = character(0), collections = character(0))
+    if (!is.null(contrib$problem)) return(none)
+
+    left_out <- !contrib$keep & !is.na(contrib$keys) & !is.na(contrib$pvals)
+    only_left_out <- function(col) {
+        if (!col %in% names(df)) return(character(0))
+        v <- as.character(df[[col]])
+        lost <- unique(v[left_out & !is.na(v)])
+        sort(setdiff(lost, unique(v[contrib$keep])))
+    }
+    list(n_rows = sum(left_out),
+         contrasts = only_left_out("contrast"),
+         collections = only_left_out("database"))
+}
+
+
 #' Choose one kind of test for a layer's rows
 #'
 #' Rank-based rows (see \code{.RANK_BASED_METHODS}) win when the layer has any
@@ -2768,6 +3071,41 @@ select_layer_method_rows <- function(df, pvals) {
     known <- sort(unique(m[!is.na(m)]))
     list(keep = rep(TRUE, n),
          method = if (length(known) == 0) "unspecified" else paste(known, collapse = "+"))
+}
+
+
+#' Candidate pathways for the cross-omics ORA figure
+#'
+#' Every pathway the per-layer tables carry, whatever the meta-analysis chose
+#' to combine: this figure shows each layer's own adjusted ORA p-value, and
+#' \code{build_ora_adjusted_p_matrix()} decides which rows of a table are ORA.
+#' Rows with no ORA value for any layer are dropped by the figure itself, so
+#' the candidates need not pre-filter on method. The KEGG class exclusion is
+#' applied to the keys as it is to the meta-analysis candidates.
+#'
+#' @param pathway_tables Named list of per-omics enrichment data frames, with
+#'   the class exclusion already applied to their rows.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @param exclude Excluded KEGG classes (\code{.excluded_pathway_classes()}).
+#' @return Character vector of unique join keys, as \code{pathway_join_key()}
+#'   produces them.
+#' @examples
+#' .ora_figure_candidates(list(proteomics = data.frame(
+#'     ID = c("map00010", "GO:0006096"), method = c("fgsea", "ora"))))
+#' @keywords internal
+.ora_figure_candidates <- function(pathway_tables, kegg_org = NULL,
+                                   exclude = character(0)) {
+    keys <- unique(unlist(lapply(pathway_tables, function(df) {
+        if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
+        k <- pathway_join_key(df, kegg_org)
+        k[!is.na(k)]
+    }), use.names = FALSE))
+    if (length(keys) == 0) return(character(0))
+    if (length(exclude) > 0) {
+        keys <- keys[keep_kegg_pathways(keys, exclude = exclude, kegg_org = kegg_org,
+                                        label = "cross-omics ORA pathways")]
+    }
+    keys
 }
 
 
