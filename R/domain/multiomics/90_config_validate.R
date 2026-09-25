@@ -158,6 +158,23 @@ validate_multiomics_config <- function(multiomics_cfg) {
     if (is.null(ld_cfg$max_size)) {
         multiomics_cfg$enrichment$loadings$max_size <- 500
     }
+    # A bad bound would otherwise become NA downstream, error inside the
+    # per-integration tryCatch, and read as "no pathways scored".
+    ld_min <- multiomics_cfg$enrichment$loadings$min_size
+    ld_max <- multiomics_cfg$enrichment$loadings$max_size
+    is_size <- function(x) {
+        is.numeric(x) && length(x) == 1 && is.finite(x) && x >= 1 && x == round(x)
+    }
+    if (!is_size(ld_min) || !is_size(ld_max)) {
+        stop("modes.multiomics.enrichment.loadings.min_size and max_size must be ",
+             "positive whole numbers, got min_size = ", format(ld_min),
+             ", max_size = ", format(ld_max), ".", call. = FALSE)
+    }
+    if (ld_min > ld_max) {
+        stop("modes.multiomics.enrichment.loadings.min_size (", ld_min, ") is larger ",
+             "than max_size (", ld_max, "); no gene set could be tested.",
+             call. = FALSE)
+    }
 
     # Validate pathview config
     pv_cfg <- enrich_cfg$pathview %||% list()

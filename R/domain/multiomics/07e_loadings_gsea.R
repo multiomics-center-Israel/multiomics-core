@@ -588,6 +588,14 @@ run_loadings_gsea_entries <- function(entries, ctx, out_dir, combined_name) {
 #' @param out_dir Loadings-enrichment output directory.
 #' @return List with `diablo` and `mofa` combined tables (either may be NULL).
 run_loadings_gsea <- function(integration_res, harmonization_res, config, out_dir) {
+    # Cleared up front, for both integrations: the method record will say
+    # "gsea", so a previous run's files left behind by an integration that is
+    # now absent, or by a failure further down, would be reported as current.
+    diablo_dir <- file.path(out_dir, "diablo_loadings")
+    mofa_dir <- file.path(out_dir, "mofa_loadings")
+    .clear_loadings_gsea_outputs(diablo_dir, "diablo_loadings_gsea_all.csv")
+    .clear_loadings_gsea_outputs(mofa_dir, "mofa_weights_gsea_all.csv")
+
     organism <- config$global$organism
     settings <- .loadings_gsea_settings(config)
 
@@ -622,8 +630,7 @@ run_loadings_gsea <- function(integration_res, harmonization_res, config, out_di
     if (length(diablo_entries) > 0) {
         message("Running GSEA on DIABLO loadings...")
         results$diablo <- tryCatch(
-            run_loadings_gsea_entries(diablo_entries, ctx,
-                                      file.path(out_dir, "diablo_loadings"),
+            run_loadings_gsea_entries(diablo_entries, ctx, diablo_dir,
                                       "diablo_loadings_gsea_all.csv"),
             error = function(e) {
                 message("  DIABLO loadings GSEA failed: ", conditionMessage(e))
@@ -633,8 +640,7 @@ run_loadings_gsea <- function(integration_res, harmonization_res, config, out_di
     if (length(mofa_entries) > 0) {
         message("Running GSEA on MOFA2 weights...")
         results$mofa <- tryCatch(
-            run_loadings_gsea_entries(mofa_entries, ctx,
-                                      file.path(out_dir, "mofa_loadings"),
+            run_loadings_gsea_entries(mofa_entries, ctx, mofa_dir,
                                       "mofa_weights_gsea_all.csv"),
             error = function(e) {
                 message("  MOFA2 weights GSEA failed: ", conditionMessage(e))

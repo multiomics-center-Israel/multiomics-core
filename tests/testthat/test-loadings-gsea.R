@@ -553,3 +553,45 @@ test_that("the report legends say what was ranked, and caveat DIABLO only", {
         "(?s)```\\{r loadings-enrich-mofa[^}]*\\}\n.*?\n```", rmd, perl = TRUE))
     expect_false(grepl("diablo_loadings_caveat", mofa_chunk, fixed = TRUE))
 })
+
+
+# ---- Codex review of 8ffb3f1 -------------------------------------------------
+
+test_that("a rerun without an integration clears that integration's GSEA files", {
+    out_dir <- withr::local_tempdir()
+    stale <- c(file.path(out_dir, "diablo_loadings",
+                         c("DIABLO_proteomics_comp1_gsea.csv",
+                           "DIABLO_proteomics_comp1_gsea_nes.png",
+                           "diablo_loadings_gsea_all.csv")),
+               file.path(out_dir, "mofa_loadings",
+                         c("MOFA_proteomics_Factor1_gsea.csv",
+                           "mofa_weights_gsea_all.csv")))
+    ora_file <- file.path(out_dir, "diablo_loadings",
+                          "DIABLO_proteomics_comp1_enrichment.png")
+    for (d in unique(dirname(stale))) dir.create(d)
+    file.create(c(stale, ora_file))
+
+    # Neither DIABLO nor MOFA2 produced anything this time.
+    res <- suppressMessages(run_loadings_gsea(
+        list(), list(), list(global = list(organism = "Synthetic organism")), out_dir))
+
+    expect_identical(res, list())
+    expect_false(any(file.exists(stale)))
+    # Only this path's own files go; the ORA output beside them stays.
+    expect_true(file.exists(ora_file))
+})
+
+test_that("the validator rejects unusable loadings size bounds", {
+    validate <- function(loadings) suppressMessages(suppressWarnings(
+        validate_multiomics_config(list(integration = list(methods = "SNF"),
+                                        enrichment = list(loadings = loadings)))))
+
+    expect_error(validate(list(min_size = "ten")), "positive whole numbers")
+    expect_error(validate(list(min_size = 0)), "positive whole numbers")
+    expect_error(validate(list(max_size = 2.5)), "positive whole numbers")
+    expect_error(validate(list(min_size = 50, max_size = 20)), "larger than max_size")
+
+    ok <- validate(list(min_size = 5, max_size = 100))
+    expect_equal(ok$enrichment$loadings$min_size, 5)
+    expect_equal(ok$enrichment$loadings$max_size, 100)
+})
