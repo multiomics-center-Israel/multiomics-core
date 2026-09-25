@@ -532,7 +532,12 @@ run_loadings_gsea_entries <- function(entries, ctx, out_dir, combined_name) {
     all_results <- list()
     for (e in entries) {
         message("  ", e$label, ": ", length(e$values), " ranked features")
-        res <- if (identical(e$omics, "metabolomics")) {
+        res <- if (identical(e$omics, "metabolomics") && is.null(ctx$cpd_pathways)) {
+            # The one shared lookup already failed; NULL here would make
+            # metabolite_loadings_gsea() fetch again, once per entry.
+            message("    KEGG compound pathways unavailable; skipping ", e$label)
+            NULL
+        } else if (identical(e$omics, "metabolomics")) {
             metabolite_loadings_gsea(
                 e$values, ctx$harmonization_res, cache_dir = ctx$cache_dir,
                 min_size = ctx$min_size, max_size = ctx$max_size, seed = ctx$seed,
@@ -617,11 +622,22 @@ run_loadings_gsea <- function(integration_res, harmonization_res, config, out_di
         })
     } else NULL
 
+    # run_compound_gsea() reads the class table from this cache only (it never
+    # fetches), so without it a class exclusion would fail open for metabolites
+    # while the gene views apply it.
+    exclude_classes <- .excluded_pathway_classes(config)
+    if (has_metab && !is.null(cpd_pathways) && length(unlist(exclude_classes)) > 0) {
+        tryCatch(kegg_pathway_categories(cache_dir = out_dir), error = function(e) {
+            message("  KEGG pathway classification unavailable: ", conditionMessage(e))
+            NULL
+        })
+    }
+
     ctx <- list(
         harmonization_res = harmonization_res, config = config,
         kegg_org = get_kegg_organism(organism), org_db = get_organism_db(organism),
         min_size = settings$min_size, max_size = settings$max_size,
-        seed = settings$seed, exclude_classes = .excluded_pathway_classes(config),
+        seed = settings$seed, exclude_classes = exclude_classes,
         cpd_pathways = cpd_pathways,
         conditions = loadings_sample_conditions(harmonization_res, config),
         cache_dir = out_dir)

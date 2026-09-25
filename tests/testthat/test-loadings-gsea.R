@@ -595,3 +595,74 @@ test_that("the validator rejects unusable loadings size bounds", {
     expect_equal(ok$enrichment$loadings$min_size, 5)
     expect_equal(ok$enrichment$loadings$max_size, 100)
 })
+
+
+# ---- Codex review of 69e10ce -------------------------------------------------
+
+metab_mofa <- function() {
+    list(weights = list(metabolomics = matrix(
+        seq(1, -1, length.out = 6), ncol = 1,
+        dimnames = list(paste0("feature_", 1:6), "Factor1"))))
+}
+
+test_that("an unavailable compound lookup is tried once, not once per entry", {
+    skip_if_not_installed("ggplot2")
+    out_dir <- withr::local_tempdir()
+    fetches <- 0L
+    local_stubs(list(
+        get_kegg_compound_pathways = function(...) { fetches <<- fetches + 1L; NULL },
+        gene_loadings_gsea = function(...) gsea_table()))
+
+    integ <- list(mofa_results = list(weights = list(
+        metabolomics = matrix(c(1, -1, 0.5, -0.5), ncol = 2,
+                              dimnames = list(c("m1", "m2"), c("Factor1", "Factor2"))),
+        proteomics = matrix(c(0.3, -0.3), ncol = 1,
+                            dimnames = list(c("P1", "P2"), "Factor1")))))
+    res <- suppressMessages(run_loadings_gsea(
+        integ, list(), list(global = list(organism = "Synthetic organism")), out_dir))
+
+    # One shared attempt; the two metabolomics factors are skipped without
+    # another, and the proteomics view is still scored.
+    expect_identical(fetches, 1L)
+    expect_setequal(unique(res$mofa$omics), "proteomics")
+})
+
+test_that("a class exclusion warms the classification cache the compound path reads", {
+    out_dir <- withr::local_tempdir()
+    cache_dirs <- character(0)
+    local_stubs(list(
+        get_kegg_compound_pathways = function(...) data.frame(
+            pathway = "map90001", compound = "C00001", name = "P",
+            stringsAsFactors = FALSE),
+        kegg_pathway_categories = function(cache_dir = NULL, ...) {
+            cache_dirs <<- c(cache_dirs, cache_dir)
+            NULL
+        },
+        metabolite_loadings_gsea = function(...) NULL))
+
+    cfg <- function(excl) list(global = list(organism = "Synthetic organism"),
+                               modes = list(multiomics = list(enrichment = list(
+                                   exclude_pathway_classes = excl))))
+    suppressMessages(run_loadings_gsea(list(mofa_results = metab_mofa()), list(),
+                                       cfg("Human Diseases"), out_dir))
+    expect_identical(cache_dirs, out_dir)
+
+    # Nothing to exclude: no classification is fetched at all.
+    cache_dirs <- character(0)
+    suppressMessages(run_loadings_gsea(list(mofa_results = metab_mofa()), list(),
+                                       cfg(NULL), out_dir))
+    expect_length(cache_dirs, 0)
+})
+
+test_that("the report finds loadings results that are tables only", {
+    rmd <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "domain", "multiomics", "report_template_multiomics.Rmd")),
+        collapse = "\n")
+    def <- regmatches(rmd, regexpr("has_loadings_enrich <- [^\n]*\n[^\n]*", rmd))
+    expect_match(def, "\\.(png|csv)$", fixed = TRUE)
+    # And it does not also say nothing was scored when the table is there.
+    expect_match(rmd, 'else if (!file.exists(file.path(diablo_le_dir, "diablo_loadings_gsea_all.csv")))',
+                 fixed = TRUE)
+    expect_match(rmd, 'else if (!file.exists(file.path(mofa_le_dir, "mofa_weights_gsea_all.csv")))',
+                 fixed = TRUE)
+})

@@ -208,8 +208,9 @@ has_rna_prot    <- has_transcriptomics &&
     dir.exists(file.path(rna_prot_dir, "plots")) &&
     length(list.files(file.path(rna_prot_dir, "plots"), "\\.png$")) > 0
 has_multigsea   <- dir.exists(multigsea_dir) && length(list.files(multigsea_dir, "\\.png$")) > 0
+# Tables count too: an entry whose rows cannot be drawn still writes its CSV.
 has_loadings_enrich <- dir.exists(loadings_enrich_dir) &&
-    length(list.files(loadings_enrich_dir, "\\.png$", recursive = TRUE)) > 0
+    length(list.files(loadings_enrich_dir, "\\.(png|csv)$", recursive = TRUE)) > 0
 
 # Load gene-protein mapping if available
 mapping_file <- file.path(run_dir, "gene_protein_mapping.csv")
@@ -1848,7 +1849,7 @@ if (identical(loadings_method, "gsea")) {
                                        "^DIABLO_|_gsea_nes\\.png$", "diablo-gsea")
         if (n_plots > 0) {
             figure_legend(paste(loadings_gsea_legend, diablo_loadings_caveat))
-        } else {
+        } else if (!file.exists(file.path(diablo_le_dir, "diablo_loadings_gsea_all.csv"))) {
             cat("*No pathways were scored for the DIABLO loadings. This can occur when features do not map to the gene sets or compound pathways.*\n\n")
         }
         show_loadings_table(file.path(diablo_le_dir, "diablo_loadings_gsea_all.csv"),
@@ -1902,7 +1903,7 @@ if (identical(loadings_method, "gsea")) {
                                        "^MOFA_|_gsea_nes\\.png$", "mofa-gsea")
         if (n_plots > 0) {
             figure_legend(loadings_gsea_legend)
-        } else {
+        } else if (!file.exists(file.path(mofa_le_dir, "mofa_weights_gsea_all.csv"))) {
             cat("*No pathways were scored for the MOFA2 weights. This can occur when features do not map to the gene sets or compound pathways.*\n\n")
         }
         show_loadings_table(file.path(mofa_le_dir, "mofa_weights_gsea_all.csv"),
