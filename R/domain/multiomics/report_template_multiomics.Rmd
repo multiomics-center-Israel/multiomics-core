@@ -1262,7 +1262,8 @@ lookup_tsvs <- sort(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.tsv
 lookup_cols <- c("ranking", "rank", "pathway", "source_method",
                  "source_contrast", "source_NES", "source_p", "source_padj",
                  "target_status", "target_method", "target_contrast",
-                 "target_NES", "target_p", "target_padj", "target_ora_p")
+                 "target_NES", "target_p", "target_padj", "target_ora_p",
+                 "target_ora_padj")
 for (tsv in lookup_tsvs) {
     tbl <- read.delim(tsv, stringsAsFactors = FALSE, check.names = FALSE)
     if (nrow(tbl) == 0) next

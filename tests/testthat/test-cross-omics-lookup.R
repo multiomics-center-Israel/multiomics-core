@@ -440,6 +440,9 @@ test_that("the report's lookup table carries both contrasts", {
     expect_length(cols_def, 1)
     expect_true(grepl('"source_contrast"', cols_def, fixed = TRUE))
     expect_true(grepl('"target_contrast"', cols_def, fixed = TRUE))
+    # An ORA-only target's adjusted p is shown beside its nominal one.
+    expect_true(grepl('"target_ora_p"', cols_def, fixed = TRUE))
+    expect_true(grepl('"target_ora_padj"', cols_def, fixed = TRUE))
     expect_false(grepl("target_padj_within_lookup", rmd, fixed = TRUE))
 })
 
@@ -567,12 +570,18 @@ test_that("stale lookups in every per-contrast directory are cleared", {
     expect_length(.clear_stale_contrast_lookups(file.path(out_dir, "absent")), 0)
 })
 
-test_that("the module clears stale lookups before its per-contrast loop", {
+test_that("the module clears lookups before any of its returns", {
+    # The report finds lookup files by glob, so a rerun that switches enrichment
+    # off or finds no enrichment tables must not leave the previous run's.
     src <- paste(deparse(body(mod_multiomics_enrichment)), collapse = " ")
-    clear_at <- regexpr("\\.clear_stale_contrast_lookups\\(\\s*out_dir\\s*\\)", src,
-                        perl = TRUE)
-    loop_at <- regexpr("for\\s*\\(\\s*cname in contrast_names\\s*\\)", src, perl = TRUE)
-    expect_gt(clear_at, 0)
-    expect_gt(loop_at, 0)
-    expect_lt(clear_at, loop_at)
+    at <- function(pattern) regexpr(pattern, src, perl = TRUE)
+    first_return <- at("return\\(")
+    run_clear <- at("\\.clear_cross_lookup_outputs\\(\\s*out_dir\\s*\\)")
+    stale_clear <- at("\\.clear_stale_contrast_lookups\\(\\s*out_dir\\s*\\)")
+    expect_gt(first_return, 0)
+    expect_gt(run_clear, 0)
+    expect_gt(stale_clear, 0)
+    expect_lt(run_clear, first_return)
+    expect_lt(stale_clear, first_return)
+    expect_lt(stale_clear, at("for\\s*\\(\\s*cname in contrast_names\\s*\\)"))
 })

@@ -28,6 +28,11 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # the file exists only if THIS invocation produced rows, and a guard that
     # returns before the cleanup is exactly how such an invariant is lost.
     write_compound_gsea_export(NULL, out_dir)
+    # Same invariant for the cross-omics lookups, at run level and in every
+    # existing per-contrast directory: the report finds them by glob, so they
+    # are cleared before any return, not only on the paths that write new ones.
+    .clear_cross_lookup_outputs(out_dir)
+    .clear_stale_contrast_lookups(out_dir)
 
     # Check if enrichment is enabled
     if (!isTRUE(config$modes$multiomics$enrichment$run_enrichment)) {
@@ -126,7 +131,6 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     # the report finds the earlier run's per-collection figures by glob and
     # shows them beside the one-layer results as though they were current.
     .clear_collection_heatmaps(out_dir)
-    .clear_cross_lookup_outputs(out_dir)
 
     # Compound GSEA joins the meta-analysis as the metabolomics layer's
     # rank-based evidence. A metabolomics layer whose ORA found nothing still
@@ -167,11 +171,6 @@ mod_multiomics_enrichment <- function(enrichment_results = NULL,
     discovered <- canonicalize_enrichment_contrasts(per_omics, rank_tables)
     per_omics <- discovered$per_omics
     contrast_names <- discovered$contrast_names
-
-    # Lookup files in any existing per-contrast directory, including contrasts
-    # this run no longer has: the report renders every directory there, and the
-    # loop below only clears the contrasts it visits.
-    .clear_stale_contrast_lookups(out_dir)
 
     if (length(contrast_names) >= 1) {
         message("  Generating per-contrast enrichment output for ",
