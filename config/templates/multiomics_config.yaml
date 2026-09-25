@@ -228,6 +228,22 @@ modes:
         enabled: false
         top_n: 15
 
+      # --- Pathway enrichment of DIABLO loadings and MOFA2 weights ---
+      # "gsea": every feature of a view ranked by its signed loading (DIABLO) or
+      #   weight (MOFA2) on each component/factor, then GSEA. Each pathway gets
+      #   an NES whose sign follows the axis orientation; the report states
+      #   which condition scores higher on each axis.
+      # "ora": the top 50 features by absolute loading, then over-representation
+      #   (the earlier behaviour).
+      # The default changed from ORA to GSEA: a project config with no
+      # loadings.method now runs GSEA. Set method: "ora" to keep earlier results.
+      # Gene sets: KEGG for organisms with a KEGG code and OrgDb, otherwise the
+      # layer's pathway.gmt_file; KEGG compound pathways for metabolites.
+      loadings:
+        method: "gsea"
+        min_size: 10
+        max_size: 500
+
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
       # would otherwise produce no pathway maps at all. The maps are KEGG's

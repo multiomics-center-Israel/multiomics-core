@@ -171,8 +171,12 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_loadings_enrichment,
             {
+                loadings_dir <- file.path(multiomics_out_dir, "loadings_enrichment")
+                # Skipped or failed, the previous run's record and files must
+                # not be reported as this run's.
                 if (is.null(multiomics_integration) || is.null(multiomics_harmonization)) {
                     message("Skipping loadings enrichment: integration or harmonization not available")
+                    clear_loadings_enrichment_outputs(loadings_dir)
                     return(NULL)
                 }
 
@@ -181,10 +185,11 @@ pipe_multiomics <- function() {
                         integration_res = multiomics_integration,
                         harmonization_res = multiomics_harmonization,
                         config = config,
-                        out_dir = file.path(multiomics_out_dir, "loadings_enrichment")
+                        out_dir = loadings_dir
                     )
                 }, error = function(e) {
                     warning("Loadings enrichment failed: ", e$message)
+                    clear_loadings_enrichment_outputs(loadings_dir)
                     NULL
                 })
             }

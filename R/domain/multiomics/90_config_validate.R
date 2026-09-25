@@ -142,6 +142,40 @@ validate_multiomics_config <- function(multiomics_cfg) {
         multiomics_cfg$enrichment$cross_lookup$top_n <- 15
     }
 
+    # Validate loadings enrichment config: GSEA over the signed DIABLO loadings
+    # and MOFA2 weights unless a project asks for the top-feature ORA.
+    ld_cfg <- enrich_cfg$loadings %||% list()
+    ld_method <- tolower(as.character(ld_cfg$method %||% "gsea")[1])
+    if (!ld_method %in% c("gsea", "ora")) {
+        stop("modes.multiomics.enrichment.loadings.method must be \"gsea\" ",
+             "(rank every feature by its signed loading) or \"ora\" (top features ",
+             "by absolute loading), not \"", ld_cfg$method, "\".", call. = FALSE)
+    }
+    multiomics_cfg$enrichment$loadings$method <- ld_method
+    if (is.null(ld_cfg$min_size)) {
+        multiomics_cfg$enrichment$loadings$min_size <- 10
+    }
+    if (is.null(ld_cfg$max_size)) {
+        multiomics_cfg$enrichment$loadings$max_size <- 500
+    }
+    # A bad bound would otherwise become NA downstream, error inside the
+    # per-integration tryCatch, and read as "no pathways scored".
+    ld_min <- multiomics_cfg$enrichment$loadings$min_size
+    ld_max <- multiomics_cfg$enrichment$loadings$max_size
+    is_size <- function(x) {
+        is.numeric(x) && length(x) == 1 && is.finite(x) && x >= 1 && x == round(x)
+    }
+    if (!is_size(ld_min) || !is_size(ld_max)) {
+        stop("modes.multiomics.enrichment.loadings.min_size and max_size must be ",
+             "positive whole numbers, got min_size = ", format(ld_min),
+             ", max_size = ", format(ld_max), ".", call. = FALSE)
+    }
+    if (ld_min > ld_max) {
+        stop("modes.multiomics.enrichment.loadings.min_size (", ld_min, ") is larger ",
+             "than max_size (", ld_max, "); no gene set could be tested.",
+             call. = FALSE)
+    }
+
     # Validate pathview config
     pv_cfg <- enrich_cfg$pathview %||% list()
     if (is.null(pv_cfg$run_pathview)) {
