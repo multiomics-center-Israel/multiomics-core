@@ -272,7 +272,11 @@ test_that("KEGG being unreachable gives NULL and a message, not an error", {
 
 test_that("a run with one layer, or no shared contrast, yields NULL", {
     local_stubs(stub_annotation())
-    cfg <- list(global = list(organism = "Test organism"))
+    # Opted in, so the run reaches the layer and contrast checks rather than
+    # stopping at the (default-off) switch.
+    cfg <- list(global = list(organism = "Test organism"),
+                modes = list(multiomics = list(enrichment = list(
+                    enzyme_metabolite = list(enabled = TRUE)))))
     out <- withr::local_tempdir()
 
     expect_message(
