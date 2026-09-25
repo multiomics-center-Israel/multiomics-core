@@ -166,8 +166,14 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
     }
     pairs <- do.call(rbind, rows)
 
-    roles <- fetch_reaction_roles(unlist(strsplit(pairs$reaction, ";")), cache_dir)
-    pairs$role <- .roles_for_pairs(pairs, roles)
+    # Roles only for rows that are pairs: an unpaired enzyme has no reaction
+    # or compound, and "unknown" would make it look like a pair whose equation
+    # could not be read.
+    has_pair <- !is.na(pairs$compound)
+    roles <- fetch_reaction_roles(unlist(strsplit(pairs$reaction[has_pair], ";")),
+                                  cache_dir)
+    pairs$role <- NA_character_
+    pairs$role[has_pair] <- .roles_for_pairs(pairs[has_pair, , drop = FALSE], roles)
 
     front <- c("contrast", "protein", "gene_symbol", "ec", "enzyme_log2fc",
                "enzyme_p", "enzyme_padj", "enzyme_hit", "enzyme_hit_rule",

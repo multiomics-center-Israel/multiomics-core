@@ -738,3 +738,22 @@ test_that("the table is opt-in, and its flags must be real booleans", {
                  "must be true or false")
     expect_true(validate(list(enabled = TRUE))$enrichment$enzyme_metabolite$enabled)
 })
+
+
+# ---- Codex review of 9cf232a -------------------------------------------------
+
+test_that("an unpaired enzyme has no role, and a pair without an equation is unknown", {
+    pairs <- run_pairs()
+    # P2 has nothing to pair with: no reaction, no compound, so no role.
+    unpaired <- pairs[is.na(pairs$compound), , drop = FALSE]
+    expect_true("P2" %in% unpaired$protein)
+    expect_true(all(is.na(unpaired$role)))
+    expect_identical(only_pairs(pairs)$role, "product;substrate")
+
+    # A real pair whose equation could not be fetched is still "unknown".
+    no_eq <- stub_annotation()
+    no_eq$fetch_reaction_roles <- function(...) NULL
+    fetched <- run_pairs(no_eq)
+    expect_identical(only_pairs(fetched)$role, "unknown")
+    expect_true(all(is.na(fetched$role[is.na(fetched$compound)])))
+})
