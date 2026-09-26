@@ -104,6 +104,14 @@ modes:
       multi_imputation: true  # false = single imputation (no consensus filter)
       method: "perseus_like"    # "none" | "perseus_like" | "dep2" | "qrilc" | "minval"
 
+      # Reproducibility for every draw below comes from params.seed at the
+      # bottom of this file: the QC draw uses params.seed, and DE imputation
+      # run i uses params.seed + i. There is no per-method seed.
+      #
+      # none, minval and dep2 MinDet are deterministic, so their repetitions
+      # are identical by design. perseus_like, qrilc and dep2 MinProb draw
+      # independently in every repetition, which is what the consensus
+      # statistics are computed over.
       no_repetitions: 10
       min_no_passed: 8
 
@@ -112,11 +120,7 @@ modes:
       downshift: 1.6
 
       # DEP2 parameters (future implementation)
-      dep2_method: "MinDet"
-      dep2_random_seed: 1
-
-      # QRILC parameters (truncated normal, single imputation)
-      qrilc_random_seed: 1
+      dep2_method: "MinDet"    # "MinDet" (deterministic) | "MinProb" (stochastic)
 
     # --------------------------------------------------------
     # Differential expression
@@ -321,4 +325,7 @@ modes:
 # Global parameters
 # ============================================================
 params:
+  # The single reproducibility seed for this project. Proteomics imputation
+  # derives its whole sequence from it (QC draw = seed, DE run i = seed + i),
+  # so the same config and the same seed reproduce a run exactly.
   seed: 1
