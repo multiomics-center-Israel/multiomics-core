@@ -65,7 +65,9 @@ test_that("RNA-protein tabs appear only with results, otherwise one top-level no
     for (h in c("Concordance Distribution", "DE Scatter (All Contrasts)",
                 "Per-Contrast DE Details", "Top Proteins by RNA Agreement")) {
         expect_false(any(grepl(h, headings, fixed = TRUE)), info = h)
-        expect_true(any(grepl(sprintf('`r if (has_rna_prot) "## %s', h), src,
+        # Per-contrast details need a contrast with files, the rest the results.
+        gate <- if (h == "Per-Contrast DE Details") "has_rna_prot_contrasts" else "has_rna_prot"
+        expect_true(any(grepl(sprintf('`r if (%s) "## %s', gate, h), src,
                               fixed = TRUE)), info = h)
     }
     expect_true(any(grepl('`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency',
@@ -180,4 +182,44 @@ test_that("the report takes its contrast layout from the resolver", {
                       src, fixed = TRUE))
     expect_true(grepl("single_contrast <- contrast_layout$single_contrast", src, fixed = TRUE))
     expect_true(grepl("single_contrast_label <- contrast_layout$label", src, fixed = TRUE))
+})
+
+
+# ---- RNA-protein per-contrast tabs follow real artifacts ---------------------
+
+# The report's own setup chunk, evaluated as the report evaluates it.
+rna_prot_setup <- function(rna_prot_dir, has_rna_prot = TRUE) {
+    src <- paste(template_lines(), collapse = "\n")
+    chunk <- regmatches(src, regexpr(
+        "(?s)```\\{r rna-prot-per-contrast-setup[^}]*\\}\n.*?\n```", src, perl = TRUE))
+    expect_length(chunk, 1)
+    code <- sub("^```\\{r[^}]*\\}\n", "", sub("\n```$", "", chunk))
+    env <- new.env()
+    env$rna_prot_dir <- rna_prot_dir
+    env$has_rna_prot <- has_rna_prot
+    eval(parse(text = code), envir = env)
+    env
+}
+
+test_that("the per-contrast RNA-protein tabset needs a contrast with files", {
+    d <- withr::local_tempdir()
+    # No per_contrast/ at all: the top-level results exist, but no DE join did.
+    expect_false(rna_prot_setup(d)$has_rna_prot_contrasts)
+
+    # One contrast with a table, one that joined nothing.
+    dir.create(file.path(d, "per_contrast", "A_vs_B", "tables"), recursive = TRUE)
+    file.create(file.path(d, "per_contrast", "A_vs_B", "tables",
+                          "rna_protein_de_concordance.csv"))
+    dir.create(file.path(d, "per_contrast", "C_vs_D"), recursive = TRUE)
+    env <- rna_prot_setup(d)
+    expect_true(env$has_rna_prot_contrasts)
+    expect_identical(basename(env$rna_prot_contrast_dirs), "A_vs_B")
+
+    # Without RNA-protein results the section is closed regardless.
+    expect_false(rna_prot_setup(d, has_rna_prot = FALSE)$has_rna_prot_contrasts)
+
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl('`r if (has_rna_prot_contrasts) "## Per-Contrast DE Details {.tabset}"`',
+                      src, fixed = TRUE))
+    expect_true(grepl("rna-prot-per-contrast, eval=has_rna_prot_contrasts", src, fixed = TRUE))
 })

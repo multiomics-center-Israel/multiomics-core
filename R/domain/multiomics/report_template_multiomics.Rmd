@@ -360,93 +360,96 @@ figure_legend("RNA vs protein differential expression scatter plot per contrast.
 render_commentary("rna_protein_de_scatter")
 ```
 
-`r if (has_rna_prot) "## Per-Contrast DE Details {.tabset}"`
+```{r rna-prot-per-contrast-setup, include=FALSE}
+# A contrast that joined nothing writes no files, and per_contrast/ exists only
+# for successful DE joins. One predicate decides both which contrasts get a tab
+# and whether the tabset's heading appears at all, so it never stands empty.
+rna_prot_contrast_files <- function(cdir) {
+    c(file.path(cdir, "plots", "rna_protein_de_scatter.png"),
+      file.path(cdir, "plots", "translation_efficiency_hist.png"),
+      file.path(cdir, "plots", "translation_efficiency_scatter.png"),
+      file.path(cdir, "tables", "rna_protein_de_concordance.csv"))
+}
+rna_prot_pc_dir <- file.path(rna_prot_dir, "per_contrast")
+rna_prot_contrast_dirs <- if (has_rna_prot && dir.exists(rna_prot_pc_dir)) {
+    Filter(function(cdir) any(file.exists(rna_prot_contrast_files(cdir))),
+           list.dirs(rna_prot_pc_dir, full.names = TRUE, recursive = FALSE))
+} else character(0)
+has_rna_prot_contrasts <- length(rna_prot_contrast_dirs) > 0
+```
 
-```{r rna-prot-per-contrast, eval=has_transcriptomics && has_rna_prot, results='asis'}
-per_contrast_dir <- file.path(rna_prot_dir, "per_contrast")
-if (dir.exists(per_contrast_dir)) {
-    contrast_dirs <- list.dirs(per_contrast_dir, full.names = TRUE, recursive = FALSE)
-    for (cdir in contrast_dirs) {
-        cname <- basename(cdir)
+`r if (has_rna_prot_contrasts) "## Per-Contrast DE Details {.tabset}"`
 
-        # A contrast that joined nothing writes no files. Emitting its heading
-        # anyway left a numbered section with nothing under it, which reads as a
-        # rendering failure rather than as an absence of pairs.
-        de_csv <- file.path(cdir, "tables", "rna_protein_de_concordance.csv")
-        contrast_files <- c(
-            file.path(cdir, "plots", "rna_protein_de_scatter.png"),
-            file.path(cdir, "plots", "translation_efficiency_hist.png"),
-            file.path(cdir, "plots", "translation_efficiency_scatter.png"),
-            de_csv
-        )
-        if (!any(file.exists(contrast_files))) next
+```{r rna-prot-per-contrast, eval=has_rna_prot_contrasts, results='asis'}
+for (cdir in rna_prot_contrast_dirs) {
+    cname <- basename(cdir)
+    de_csv <- file.path(cdir, "tables", "rna_protein_de_concordance.csv")
 
-        cat(sprintf("\n### %s\n\n", gsub("_", " ", cname)))
+    cat(sprintf("\n### %s\n\n", gsub("_", " ", cname)))
 
-        de_scatter <- file.path(cdir, "plots", "rna_protein_de_scatter.png")
-        if (file.exists(de_scatter)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-scatter-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), de_scatter
-            ), quiet = TRUE))
+    de_scatter <- file.path(cdir, "plots", "rna_protein_de_scatter.png")
+    if (file.exists(de_scatter)) {
+        cat(knitr::knit_child(text = sprintf(
+            '```{r rna-prot-scatter-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            gsub("[^a-zA-Z0-9]", "", cname), de_scatter
+        ), quiet = TRUE))
+    }
+
+    te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
+    if (show_translation_eff && file.exists(te_hist)) {
+        cat(knitr::knit_child(text = sprintf(
+            '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            gsub("[^a-zA-Z0-9]", "", cname), te_hist
+        ), quiet = TRUE))
+    }
+
+    te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
+    if (show_translation_eff && file.exists(te_scatter)) {
+        cat(knitr::knit_child(text = sprintf(
+            '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+            gsub("[^a-zA-Z0-9]", "", cname), te_scatter
+        ), quiet = TRUE))
+    }
+
+    # Summary line plus the per-pair table it is computed from.
+    if (file.exists(de_csv)) {
+        de_df <- read.csv(de_csv, stringsAsFactors = FALSE)
+        n_total <- nrow(de_df)
+        n_conc <- sum(de_df$concordant, na.rm = TRUE)
+        r_val <- cor(de_df$rna_log2FC, de_df$protein_log2FC, use = "complete.obs")
+        # Spearman alongside Pearson: the two layers' fold changes come from
+        # different models, so a rank agreement and a linear one can differ
+        # and a reader should see both rather than one chosen for them.
+        rho_val <- suppressWarnings(
+            cor(de_df$rna_log2FC, de_df$protein_log2FC,
+                method = "spearman", use = "complete.obs"))
+        tf_msg <- ""
+        if ("is_transcription_factor" %in% colnames(de_df)) {
+            n_tf <- sum(de_df$is_transcription_factor, na.rm = TRUE)
+            if (n_tf > 0) tf_msg <- sprintf(", %d known TFs", n_tf)
         }
+        cat(sprintf(paste0("\n**%s:** %d gene-protein pairs, Pearson r = %.3f, ",
+                           "Spearman rho = %.3f, %d/%d (%.0f%%) concordant%s\n\n"),
+                    gsub("_", " ", cname), n_total, r_val, rho_val,
+                    n_conc, n_total, 100 * n_conc / n_total, tf_msg))
 
-        te_hist <- file.path(cdir, "plots", "translation_efficiency_hist.png")
-        if (show_translation_eff && file.exists(te_hist)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-te-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), te_hist
-            ), quiet = TRUE))
-        }
-
-        te_scatter <- file.path(cdir, "plots", "translation_efficiency_scatter.png")
-        if (show_translation_eff && file.exists(te_scatter)) {
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-tes-%s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), te_scatter
-            ), quiet = TRUE))
-        }
-
-        # Summary line plus the per-pair table it is computed from.
-        if (file.exists(de_csv)) {
-            de_df <- read.csv(de_csv, stringsAsFactors = FALSE)
-            n_total <- nrow(de_df)
-            n_conc <- sum(de_df$concordant, na.rm = TRUE)
-            r_val <- cor(de_df$rna_log2FC, de_df$protein_log2FC, use = "complete.obs")
-            # Spearman alongside Pearson: the two layers' fold changes come from
-            # different models, so a rank agreement and a linear one can differ
-            # and a reader should see both rather than one chosen for them.
-            rho_val <- suppressWarnings(
-                cor(de_df$rna_log2FC, de_df$protein_log2FC,
-                    method = "spearman", use = "complete.obs"))
-            tf_msg <- ""
-            if ("is_transcription_factor" %in% colnames(de_df)) {
-                n_tf <- sum(de_df$is_transcription_factor, na.rm = TRUE)
-                if (n_tf > 0) tf_msg <- sprintf(", %d known TFs", n_tf)
-            }
-            cat(sprintf(paste0("\n**%s:** %d gene-protein pairs, Pearson r = %.3f, ",
-                               "Spearman rho = %.3f, %d/%d (%.0f%%) concordant%s\n\n"),
-                        gsub("_", " ", cname), n_total, r_val, rho_val,
-                        n_conc, n_total, 100 * n_conc / n_total, tf_msg))
-
-            # The table the line above is computed from. Rendered through
-            # knit_child because print() inside a results='asis' chunk emits
-            # nothing for an htmlwidget -- the idiom the rest of this file uses.
-            # Columns lead with both identifiers: the layers use different ID
-            # spaces, and a reader looking a gene up in the proteomics tables
-            # needs the protein id to join on.
-            show_cols <- intersect(
-                c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
-                  "protein_log2FC", "protein_padj", "concordant", "category"),
-                names(de_df))
-            de_csv_abs <- normalizePath(de_csv, winslash = "/", mustWork = FALSE)
-            cat(knitr::knit_child(text = sprintf(
-                '```{r rna-prot-tbl-%s, echo=FALSE}\nd <- read.csv("%s", stringsAsFactors = FALSE)\nd <- d[, intersect(c(%s), names(d)), drop = FALSE]\nmake_dt(d, caption = "RNA vs protein log2FC per gene-protein pair - %s", pageLength = 15)\n```\n',
-                gsub("[^a-zA-Z0-9]", "", cname), de_csv_abs,
-                paste(sprintf('"%s"', show_cols), collapse = ", "),
-                gsub("_", " ", cname)
-            ), quiet = TRUE))
-        }
+        # The table the line above is computed from. Rendered through
+        # knit_child because print() inside a results='asis' chunk emits
+        # nothing for an htmlwidget -- the idiom the rest of this file uses.
+        # Columns lead with both identifiers: the layers use different ID
+        # spaces, and a reader looking a gene up in the proteomics tables
+        # needs the protein id to join on.
+        show_cols <- intersect(
+            c("gene_id", "protein_id", "rna_log2FC", "rna_padj",
+              "protein_log2FC", "protein_padj", "concordant", "category"),
+            names(de_df))
+        de_csv_abs <- normalizePath(de_csv, winslash = "/", mustWork = FALSE)
+        cat(knitr::knit_child(text = sprintf(
+            '```{r rna-prot-tbl-%s, echo=FALSE}\nd <- read.csv("%s", stringsAsFactors = FALSE)\nd <- d[, intersect(c(%s), names(d)), drop = FALSE]\nmake_dt(d, caption = "RNA vs protein log2FC per gene-protein pair - %s", pageLength = 15)\n```\n',
+            gsub("[^a-zA-Z0-9]", "", cname), de_csv_abs,
+            paste(sprintf('"%s"', show_cols), collapse = ", "),
+            gsub("_", " ", cname)
+        ), quiet = TRUE))
     }
 }
 ```
