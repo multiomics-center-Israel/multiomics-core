@@ -1061,7 +1061,6 @@ modes:
       width: %s
       downshift: %s
       dep2_method: "%s"
-      dep2_random_seed: 1
     de:
       method: "limma"
       use_adj_for_pass1: true
