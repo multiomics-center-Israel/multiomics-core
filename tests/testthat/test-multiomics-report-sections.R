@@ -574,8 +574,8 @@ test_that("every legend with text from outside its call is checked", {
     known <- c(
         # conditions: both branches are already counted as constants
         "single_contrast", "pathview_has_compounds",
-        # a layer or view name, a few words at most; see the next test
-        "display_name", "view_name",
+        # a MOFA2 view name, a few words at most; see the next test
+        "view_name",
         # counted with the pathway-map legend above
         "pathview_significance_caption",
         # worst case checked in test-enzyme-metabolite-pairs.R
@@ -585,7 +585,7 @@ test_that("every legend with text from outside its call is checked", {
     used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
     expect_identical(setdiff(used, known), character(0))
     # A name-filled legend leaves room for a name of three words.
-    named <- dyn[grepl("display_name|view_name", dyn$dynamic), ]
+    named <- dyn[grepl("view_name", dyn$dynamic, fixed = TRUE), ]
     expect_gt(nrow(named), 0)
     expect_true(all(n_words(named$text) <= 97), info = paste(named$text, collapse = " | "))
 })
@@ -617,4 +617,88 @@ test_that("the DIABLO variable loadings plot stays in the report", {
     src <- paste(template_lines(), collapse = "\n")
     expect_true(grepl("diablo_variable_plot.png", src, fixed = TRUE))
     expect_true(grepl("```{r diablo-variable-legend", src, fixed = TRUE))
+})
+
+# ---- figures dropped on request --------------------------------------------
+
+test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone", {
+    src <- paste(template_lines(), collapse = "\n")
+    for (gone in c("multigsea-plots", "multigsea-note",
+                   "diablo-loadings-log2fc", "diablo_loadings_log2fc",
+                   "Loadings Colored by log2FC",
+                   "mofa-loadings-log2fc", "mofa_loadings_log2fc",
+                   "Weights Colored by log2FC")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    # The per-contrast MultiGSEA tab and the loadings enrichment stay.
+    expect_true(grepl("multigsea-per-contrast", src, fixed = TRUE))
+    expect_true(grepl("Loadings-Based Pathway Enrichment", src, fixed = TRUE))
+})
+
+test_that("the section is named for what is left in it", {
+    headings <- static_headings(template_lines())
+    expect_true("# MultiGSEA, Multi-ORA and Compound Enrichment {.tabset}" %in% headings)
+    expect_false(any(grepl("MultiGSEA Plots|Multi-Omics Enrichment", headings)))
+})
+
+test_that("the pairwise MultiGSEA figures show whenever there is no per-contrast set", {
+    src <- template_lines()
+    joined <- paste(src, collapse = "\n")
+    # The view follows what MultiGSEA wrote: it writes per_contrast/ only when
+    # its own inputs hold more than one contrast, which a config listing several
+    # can fall short of. Without it, the top-level pairs are shown -- under the
+    # lone contrast's name in a single-contrast run, as #249 does elsewhere.
+    # A figure, not a directory: MultiGSEA creates a contrast's directory before
+    # finding it has no pair to draw.
+    expect_true(grepl('has_mg_per_contrast <- length(list.files(file.path(multigsea_dir, "per_contrast"),',
+                      joined, fixed = TRUE))
+    expect_true(grepl('pattern = "^multigsea_.*\\\\.png$",\n                                         recursive = TRUE)) > 0',
+                      joined, fixed = TRUE))
+    expect_false(grepl('list.dirs(file.path(multigsea_dir, "per_contrast")', joined, fixed = TRUE))
+    expect_true(grepl("show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast",
+                      joined, fixed = TRUE))
+    expect_true(grepl("show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast",
+                      joined, fixed = TRUE))
+    expect_true(grepl('`r if (show_mg_top_pairs) combined_tab(2, "All Contrasts (Pooled)")`',
+                      joined, fixed = TRUE))
+    expect_true(grepl('`r if (show_mg_per_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`',
+                      joined, fixed = TRUE))
+    top <- grep("^```\\{r multigsea-top-pairs,", src, value = TRUE)
+    expect_length(top, 1)
+    expect_true(grepl("eval=show_mg_top_pairs", top, fixed = TRUE))
+    pc <- grep("^```\\{r multigsea-per-contrast,", src, value = TRUE)
+    expect_true(grepl("eval=show_mg_per_contrast", pc, fixed = TRUE))
+    # The same figures the per-contrast tab draws: the pairwise ones only.
+    expect_true(grepl('pattern = "^multigsea_.*_vs_.*\\\\.png$"', joined, fixed = TRUE))
+    # Drawn and captioned by one helper in both places (calls, not definitions).
+    expect_identical(lengths(regmatches(joined, gregexpr("show_multigsea_pair(",
+                                                         joined, fixed = TRUE))), 2L)
+    expect_identical(lengths(regmatches(joined, gregexpr("multigsea_pair_legend()",
+                                                         joined, fixed = TRUE))), 2L)
+    expect_false(grepl("Per-contrast MultiGSEA results not available", joined, fixed = TRUE))
+})
+
+test_that("the pairwise MultiGSEA legend says what the figure can and cannot show", {
+    calls <- legend_calls(template_lines())
+    leg <- calls$text[grepl("Two layers compared pathway by pathway", calls$text, fixed = TRUE)]
+    expect_length(leg, 1)
+    expect_lte(n_words(leg), 100)
+    for (phrase in c("Each point is a pathway", "-log10", "adjusted p-value",
+                     "sits at zero", "size or colour key", "unscored layer counting as zero",
+                     "union of pathways, zeros included",
+                     "not a measure of biological agreement")) {
+        expect_true(grepl(phrase, leg, fixed = TRUE), info = phrase)
+    }
+    # The correlation is over the union, not the pathways both layers scored.
+    for (phrase in c("overlapping pathways", "intersection")) {
+        expect_false(grepl(phrase, leg, fixed = TRUE), info = phrase)
+    }
+})
+
+test_that("paths pasted into generated chunks use forward slashes", {
+    # Child chunks are built with sprintf(), so every image path lands in R
+    # source as a string literal; a Windows backslash there is an escape.
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl('run_dir <- normalizePath(dirname(knitr::current_input()), winslash = "/", mustWork = TRUE)',
+                      src, fixed = TRUE))
 })

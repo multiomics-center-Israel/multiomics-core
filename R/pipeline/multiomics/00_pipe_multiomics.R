@@ -216,12 +216,15 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_multigsea,
             {
+                mg_dir <- file.path(multiomics_out_dir, "multigsea")
+
                 if (is.null(multiomics_cross_enrichment)) {
                     message("Skipping MultiGSEA plots: no enrichment results")
+                    # The report finds these figures by filename, so a skipped
+                    # run must not leave the last run's to be shown as current.
+                    clear_multigsea_outputs(mg_dir)
                     return(NULL)
                 }
-
-                mg_dir <- file.path(multiomics_out_dir, "multigsea")
 
                 gsea_plots <- tryCatch({
                     run_multigsea_plots(
@@ -231,6 +234,9 @@ pipe_multiomics <- function() {
                     )
                 }, error = function(e) {
                     warning("MultiGSEA plots failed: ", e$message)
+                    # A failure after some pairs were drawn would otherwise
+                    # leave a partial set for the report to show as complete.
+                    clear_multigsea_outputs(mg_dir)
                     NULL
                 })
 
