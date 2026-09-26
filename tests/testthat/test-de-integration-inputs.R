@@ -491,9 +491,9 @@ test_that("a layer whose id column holds no ids stops the run", {
                  "id column 'prot' holds no feature ids")
 })
 
-test_that("a malformed value past readr's type guess stops the run", {
-    # readr guesses the column type from its first 1000 rows; a bad value
-    # later becomes NA with only a warning.
+test_that("a malformed value in a numeric column stops the run", {
+    # Whether readr then reads the column as text or turns the value into NA
+    # depends on how it guesses types; either way the run must stop, naming it.
     n <- 1100
     ext <- data.frame(prot = paste0("X", seq_len(n)), logFC = rep(1, n),
                       P = as.character(rep(0.01, n)), stringsAsFactors = FALSE)
@@ -503,7 +503,18 @@ test_that("a malformed value past readr's type guess stops the run", {
         read_de_layer(layer_cfg(path, format = "generic", contrast = "T_vs_C",
                                 columns = list(id = "prot", log2fc = "logFC", pvalue = "P")),
                       "T_vs_C", NULL, hits_default),
-        "Layer 'cells': path .*column 'P' has values that are not numbers \\(e.g. 'oops'\\)"))
+        "Layer 'cells'.*column 'P' (has values that are not numbers|must hold p-values but is not numeric)"))
+})
+
+test_that("a value readr turned into NA is caught against the file as written", {
+    f <- tempfile(fileext = ".csv")
+    writeLines(c("id,P", "X1,0.01", "X2,oops", "X3,NA", "X4,"), f)
+    # What readr hands back when it guessed the column numeric.
+    parsed <- data.frame(id = c("X1", "X2", "X3", "X4"), P = c(0.01, NA, NA, NA))
+    expect_error(.dei_check_table(parsed, f, "Layer 'x'"),
+                 "column 'P' has values that are not numbers \\(e.g. 'oops'\\)")
+    writeLines(c("id,P", "X1,0.01", "X2,NaN", "X3,NA", "X4,"), f)
+    expect_silent(.dei_check_table(parsed, f, "Layer 'x'"))
 })
 
 test_that("an annotation or observed matrix that matches no feature id stops the run", {
