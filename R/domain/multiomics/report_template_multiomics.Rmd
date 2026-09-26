@@ -1297,6 +1297,47 @@ if (file.exists(meta_file)) {
 }
 ```
 
+```{r enzyme-metabolite-setup, include=FALSE}
+enzyme_metab_file <- file.path(enrichment_dir, "enzyme_metabolite_pairs.tsv")
+has_enzyme_metab <- file.exists(enzyme_metab_file)
+```
+
+`r if (has_enzyme_metab) "## Enzymes and the Metabolites They Act On {.unnumbered}"`
+
+```{r enzyme-metabolite-table, eval=has_enzyme_metab}
+# The writer stores missing values as blanks, so blanks are read back as NA;
+# otherwise an unpaired enzyme's empty compound would count as a pair.
+em <- read.delim(enzyme_metab_file, stringsAsFactors = FALSE, check.names = FALSE,
+                 na.strings = "")
+# The hit rules are shown: in a contrast where nothing cleared FDR, "changed"
+# rests on raw p, and the reader has to be able to see that.
+em_cols <- c("contrast", "gene_symbol", "protein", "ec", "enzyme_log2fc",
+             "enzyme_p", "enzyme_padj", "enzyme_hit_rule", "compound_name",
+             "compound", "metabolite", "metabolite_log2fc", "metabolite_p",
+             "metabolite_padj", "metabolite_hit_rule", "role", "pathway_name",
+             "same_direction", "note")
+em_show <- head(em[, intersect(em_cols, names(em)), drop = FALSE], 200)
+dt <- make_dt(em_show,
+              caption = paste0("Enzymes and the measured metabolites they act on (",
+                               sum(!is.na(em$compound)), " pairs, ",
+                               sum(is.na(em$compound)), " enzymes with nothing ",
+                               "measured to pair; the full table is ",
+                               "enzyme_metabolite_pairs.tsv)"),
+              pageLength = 15)
+# The rows worth reading first are the ones where the metabolite itself cleared
+# FDR; bold says so without hiding the rest.
+if ("metabolite_padj" %in% names(em_show)) {
+    dt <- DT::formatStyle(dt, "metabolite_padj", target = "row",
+                          fontWeight = DT::styleInterval(0.05, c("bold", "normal")))
+}
+dt
+```
+
+```{r enzyme-metabolite-legend, eval=has_enzyme_metab, results='asis'}
+# Built from the table and the settings it was made with, not fixed text.
+figure_legend(describe_enzyme_metabolite_table(em, enzyme_metabolite_config(cfg)))
+```
+
 ## Per-Contrast Enrichment {.tabset .unnumbered}
 
 ```{r enrichment-per-contrast, eval=has_enrichment, results='asis'}

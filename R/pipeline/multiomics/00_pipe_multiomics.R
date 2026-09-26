@@ -143,6 +143,23 @@ pipe_multiomics <- function() {
             }
         ),
 
+        # Enzyme-metabolite pairs: what the changed enzymes could act on among
+        # the measured metabolites. Depends on the cross-enrichment target so
+        # that it reads the compound-pathway cache that step fills rather than
+        # fetching one of its own.
+        tar_target(
+            multiomics_enzyme_metabolite,
+            {
+                force(multiomics_cross_enrichment)
+                mod_multiomics_enzyme_metabolite(
+                    de_results = multiomics_de_results,
+                    harmonization_res = multiomics_harmonization,
+                    config = config,
+                    out_dir = file.path(multiomics_out_dir, "cross_enrichment")
+                )
+            }
+        ),
+
         # RNA-protein correlation (extended analysis)
         tar_target(
             multiomics_rna_protein_corr,
@@ -335,6 +352,7 @@ pipe_multiomics <- function() {
                 force(multiomics_consensus)
                 force(multiomics_commentary)
                 force(multiomics_loadings_enrichment)
+                force(multiomics_enzyme_metabolite)
 
                 if (is.null(multiomics_harmonization)) {
                     message("Skipping multi-omics report: no harmonization results")

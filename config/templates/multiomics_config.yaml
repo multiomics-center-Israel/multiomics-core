@@ -244,6 +244,28 @@ modes:
         min_size: 10
         max_size: 500
 
+      # --- Enzyme-metabolite pairs ---
+      # One row per (enzyme, metabolite) pair that KEGG links through an EC
+      # number: the enzyme's own change beside the measured metabolite's, in
+      # enzyme_metabolite_pairs.tsv and a report table. An annotation lookup,
+      # not a test -- KEGG says the enzyme class can act on the compound, not
+      # that it did here. Needs a KEGG organism code and an annotation
+      # database; skipped with a note when KEGG cannot be reached. Opt-in, since
+      # it reaches KEGG. Every switch below must be true or false.
+      enzyme_metabolite:
+        enabled: false
+        # false also pairs enzymes that did not change themselves
+        enzyme_hits_only: true
+        # a pair is kept only when enzyme and metabolite share a KEGG pathway,
+        # which is what stops cofactor links from flooding the table
+        require_shared_pathway: true
+        # ATP, NAD(H), water and the like: in thousands of reactions, so a pair
+        # with one says nothing about the enzyme
+        drop_currency_metabolites: true
+        # every changed enzyme is listed, with a note where nothing it acts on
+        # was measured; false keeps only the pairs
+        list_unpaired_enzymes: true
+
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
       # would otherwise produce no pathway maps at all. The maps are KEGG's
