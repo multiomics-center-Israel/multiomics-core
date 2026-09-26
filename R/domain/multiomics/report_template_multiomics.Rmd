@@ -578,8 +578,9 @@ figure_legend(paste(
     "Each column is one gene-protein pair, ranked by protein log2FC, most extreme",
     "first; the upper row is the protein fold change, the lower row the RNA fold",
     "change of the same pair. Blue marks pairs whose RNA moved past 1.5-fold in the",
-    "same direction (dashed lines). The panel label gives observed and expected",
-    "counts and a hypergeometric p. Protein is the limma log2FC and RNA the DESeq2",
+    "same direction (dashed lines). The panel label gives the observed count, the",
+    "count expected if the top proteins were a random draw of mapped pairs, and a",
+    "hypergeometric p. Protein is the limma log2FC and RNA the DESeq2",
     "log2FC, so this shows agreement of direction, not size. Unmapped proteins are",
     "absent. Source: rna_protein_log2FC_pairs.csv. Hypothesis-generating."))
 ```
@@ -1106,19 +1107,14 @@ if (length(lookup_tsvs) > 0) {
 ```{r enrichment-cross-lookup-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0) {
     figure_legend(paste(
-        "Each layer's top pathways by its own raw p-value (GSEA where available,",
-        "otherwise ORA), among the pathways that layer's enrichment step reported,",
-        "beside the same pathways in the other layer, both directions. For a",
-        "layer from the KEGG-from-DE fallback those are only the pathways past its",
-        "own cutoff, so its ranking is not over every pathway it scored.",
-        "The other layer is read in the same contrast as each",
-        "pathway's ranked row, named in the table's contrast columns.",
-        "Colour and number: NES, grey at zero; * marks raw p < 0.05.",
-        "An unfilled cell has no NES: \"ORA\" where that layer has only an ORA",
-        "result in that contrast, a dash where it has no result there. The",
+        "Each layer's top pathways by its own raw p-value (GSEA, else ORA), among",
+        "those its enrichment reported, beside the same pathways in the other layer",
+        "and contrast (see the contrast columns), both directions. A KEGG-from-DE",
+        "layer reports only pathways past its own cutoff, so it is not ranked over",
+        "all it scored. Colour/number: NES, grey at zero; * raw p < 0.05. Unfilled:",
+        "\"ORA\" where that layer has only ORA there, a dash where it has none. The",
         "second heatmap keeps only pathways the other layer tested. P-values are",
-        "nominal, and the same NES sign in two layers is not by itself biological",
-        "agreement."))
+        "nominal; a shared NES sign is not by itself biological agreement."))
 }
 ```
 
@@ -1157,7 +1153,15 @@ if (file.exists(meta_file)) {
 ```{r enrichment-table-legend, eval=has_enrichment, results='asis'}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
-    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Stouffer's method. Each layer contributes one kind of test -- its rank-based (GSEA) p-values where it has them, otherwise its ORA p-values -- so no layer mixes methods, and the method_<layer> columns record which one was used. A contrast or collection that a layer scored only with its other test is therefore left out of that layer's contribution here, and the run log names any such case. Layers can still differ from each other in method; read the combined p-value with that in mind. Pathways significant in multiple omics are most informative.")
+    figure_legend(paste(
+        "Top pathways from cross-omics meta-analysis: per-layer p-values combined",
+        "with Stouffer's method. Each layer contributes one kind of test -- its",
+        "rank-based (GSEA) p-values where it has them, otherwise its ORA p-values --",
+        "so no layer mixes methods; the method_<layer> columns record which. A",
+        "contrast or collection a layer scored only with its other test is therefore",
+        "left out of that layer's contribution, and the run log names any such case.",
+        "Layers can still differ from each other in method; read the combined p-value",
+        "with that in mind. Pathways significant in multiple omics are most informative."))
     render_commentary("cross_omics_meta_analysis")
 }
 ```
@@ -1450,7 +1454,7 @@ for (i in seq_len(nrow(pv_multi))) {
 }
 figure_legend(paste0(
     "KEGG maps drawn with pathview, per contrast. Gene nodes: transcriptomics",
-    " (left) and proteomics (right) logFC. ",
+    " (left) and proteomics (right) logFC, where available. ",
     if (pathview_has_compounds) "Compound nodes: metabolomics logFC. " else "",
     "Red up, green/blue down. ",
     # Taken from the same constants the selection and the node filter
@@ -1615,6 +1619,18 @@ if (file.exists(p)) {
 ```{r diablo-sample-legend, eval=has_diablo, results='asis'}
 figure_legend("DIABLO sample scores plot. Samples are projected onto the first two components of the multi-omics discriminant analysis. Colors represent experimental groups.")
 render_commentary("diablo_sample_plot")
+```
+
+```{r diablo-variable-plot, eval=has_diablo, results='asis'}
+p <- file.path(diablo_dir, "diablo_variable_plot.png")
+if (file.exists(p)) {
+    knitr::include_graphics(p)
+}
+```
+
+```{r diablo-variable-legend, eval=has_diablo, results='asis'}
+figure_legend("DIABLO variable loadings plot. Top contributing features from each omics layer are shown on the first two components.")
+render_commentary("diablo_variable_plot")
 ```
 
 ```{r diablo-circos, eval=has_diablo, results='asis'}

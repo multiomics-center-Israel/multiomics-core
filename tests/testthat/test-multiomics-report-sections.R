@@ -490,11 +490,14 @@ test_that("the pathway selection says whether it fell back to one layer", {
 # tokens rather than by walking the syntax tree: an argument left empty, as in
 # df[i, ], is R's missing value, and passing it to any function -- including the
 # walker itself -- raises "argument is missing". Tokens have no such trap, and
-# paste()-built legends are still counted whole. Text a legend gets from a
-# function call at render time is not a constant and is checked on its own below.
-legend_texts <- function(src) {
+# paste()-built legends are still counted whole. Both branches of an if () are
+# counted together, which is the worst case. Text a legend gets at render time
+# -- a variable or a function call -- is not a constant: its names are recorded
+# in `dynamic` so each one can be checked on its own below.
+legend_calls <- function(src) {
     starts <- grep("^```\\{r ", src)
-    out <- character(0)
+    out <- data.frame(text = character(0), dynamic = character(0),
+                      stringsAsFactors = FALSE)
     for (s in starts) {
         end <- s + which(grepl("^```\\s*$", src[(s + 1):length(src)]))[1]
         if (is.na(end) || end <= s + 1) next
@@ -511,6 +514,7 @@ legend_texts <- function(src) {
                 pd$text[i] == "figure_legend") {
                 depth <- 0
                 strs <- character(0)
+                syms <- character(0)
                 j <- i + 1
                 while (j <= nrow(pd)) {
                     tk <- pd$token[j]
@@ -521,10 +525,16 @@ legend_texts <- function(src) {
                         if (depth == 0) break
                     } else if (tk == "STR_CONST") {
                         strs <- c(strs, pd$text[j])
+                    } else if (tk %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL") &&
+                               !pd$text[j] %in% c("paste", "paste0", "sprintf")) {
+                        syms <- c(syms, pd$text[j])
                     }
                     j <- j + 1
                 }
-                out <- c(out, paste(gsub('^["\']|["\']$', "", strs), collapse = " "))
+                out <- rbind(out, data.frame(
+                    text = paste(gsub('^["\']|["\']$', "", strs), collapse = " "),
+                    dynamic = paste(sort(unique(syms)), collapse = ","),
+                    stringsAsFactors = FALSE))
                 i <- j
             }
             i <- i + 1
@@ -532,6 +542,8 @@ legend_texts <- function(src) {
     }
     out
 }
+
+legend_texts <- function(src) legend_calls(src)$text
 
 n_words <- function(x) lengths(regmatches(x, gregexpr("[^[:space:]]+", x)))
 
@@ -545,15 +557,64 @@ test_that("every figure legend in the report stays within 100 words", {
 })
 
 test_that("the pathway-map legend stays within 100 words with its threshold text", {
-    src <- template_lines()
-    i <- grep('"KEGG maps drawn with pathview', src, fixed = TRUE)
-    expect_length(i, 1)
-    base <- "KEGG maps drawn with pathview, per contrast. Gene nodes: transcriptomics (left) and proteomics (right) logFC. Compound nodes: metabolomics logFC. Red up, green/blue down."
-    expect_lte(n_words(paste(base, pathview_significance_caption())), 100)
+    # Read from the template, compound sentence included, so an edit there is
+    # counted rather than a copy of the text kept here.
+    calls <- legend_calls(template_lines())
+    pv <- calls[grepl("KEGG maps drawn with pathview", calls$text, fixed = TRUE), ]
+    expect_identical(nrow(pv), 1L)
+    expect_match(pv$text, "where available", fixed = TRUE)
+    expect_lte(n_words(paste(pv$text, pathview_significance_caption())), 100)
 })
 
-test_that("the DIABLO variable loadings plot is no longer shown", {
+test_that("every legend with text from outside its call is checked", {
+    # A legend the parse cannot count whole has to be named here with how its
+    # length is bounded, so a new one fails until it is covered.
+    calls <- legend_calls(template_lines())
+    dyn <- calls[nzchar(calls$dynamic), ]
+    known <- c(
+        # conditions: both branches are already counted as constants
+        "single_contrast", "pathview_has_compounds",
+        # a layer or view name, a few words at most; see the next test
+        "display_name", "view_name",
+        # counted with the pathway-map legend above
+        "pathview_significance_caption",
+        # worst case checked in test-enzyme-metabolite-pairs.R
+        "describe_enzyme_metabolite_table", "enzyme_metabolite_config", "em", "cfg",
+        # evaluated from the template below
+        "loadings_gsea_legend", "diablo_loadings_caveat")
+    used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
+    expect_identical(setdiff(used, known), character(0))
+    # A name-filled legend leaves room for a name of three words.
+    named <- dyn[grepl("display_name|view_name", dyn$dynamic), ]
+    expect_gt(nrow(named), 0)
+    expect_true(all(n_words(named$text) <= 97), info = paste(named$text, collapse = " | "))
+})
+
+test_that("the loadings legends stay within 100 words with their caveat", {
+    # Built from two variables in a setup chunk; evaluated from the template.
+    src <- template_lines()
+    joined <- paste(src, collapse = "\n")
+    grab <- function(name) {
+        start <- grep(sprintf("^%s <- paste\\(", name), src)
+        expect_length(start, 1)
+        end <- start + which(grepl("\\)\\s*$", src[start:length(src)]))[1] - 1
+        eval(parse(text = src[start:end]), envir = new.env())
+    }
+    gsea <- grab("loadings_gsea_legend")
+    caveat <- grab("diablo_loadings_caveat")
+    expect_lte(n_words(gsea), 100)
+    expect_true(grepl("figure_legend(paste(loadings_gsea_legend, diablo_loadings_caveat))",
+                      joined, fixed = TRUE))
+    expect_lte(n_words(paste(gsea, caveat)), 100)
+    calls <- legend_calls(src)
+    ora <- calls[grepl("diablo_loadings_caveat", calls$dynamic, fixed = TRUE) &
+                 nzchar(calls$text), ]
+    expect_identical(nrow(ora), 1L)
+    expect_lte(n_words(paste(ora$text, caveat)), 100)
+})
+
+test_that("the DIABLO variable loadings plot stays in the report", {
     src <- paste(template_lines(), collapse = "\n")
-    expect_false(grepl("diablo_variable_plot", src, fixed = TRUE))
-    expect_false(grepl("diablo-variable", src, fixed = TRUE))
+    expect_true(grepl("diablo_variable_plot.png", src, fixed = TRUE))
+    expect_true(grepl("```{r diablo-variable-legend", src, fixed = TRUE))
 })

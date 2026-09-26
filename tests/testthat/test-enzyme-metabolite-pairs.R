@@ -543,15 +543,48 @@ test_that("the legend says when 'changed' rests on raw p, and where", {
                            enzyme_hit_rule = "padj", metabolite_hit_rule = "padj",
                            note = NA, stringsAsFactors = FALSE)
     leg <- describe_enzyme_metabolite_table(fdr_only, cfg)
-    expect_match(leg, "A changed enzyme means FDR < 0.05.", fixed = TRUE)
+    expect_match(leg, "Changed means FDR < 0.05.", fixed = TRUE)
     expect_false(grepl("raw p", leg))
 
+    # Where the fallback applied is named by the per-row rule column the table
+    # shows, not by listing contrasts, which has no length bound.
     mixed <- fdr_only
     mixed$enzyme_hit_rule[2] <- "raw p"
     leg <- describe_enzyme_metabolite_table(mixed, cfg)
-    expect_match(leg, "except in C_vs_D, where no enzyme cleared FDR and it means raw p < 0.05, uncorrected (enzyme_hit_rule)",
+    expect_match(leg, "or raw p < 0.05, uncorrected, where enzyme_hit_rule says raw p.",
                  fixed = TRUE)
-    expect_match(leg, "A changed metabolite means FDR < 0.05.", fixed = TRUE)
+    expect_false(grepl("metabolite_hit_rule", leg, fixed = TRUE))
+
+    both <- mixed
+    both$metabolite_hit_rule[1] <- "raw p"
+    expect_match(describe_enzyme_metabolite_table(both, cfg),
+                 "where enzyme_hit_rule or metabolite_hit_rule says raw p.", fixed = TRUE)
+})
+
+test_that("the legend stays within 100 words under every setting and fallback", {
+    # The report caps every legend at 100 words. This one is built at render
+    # time, so the cap is checked here over every combination that changes it:
+    # the three switches, a missing-pathway note, and a raw-p fallback in either
+    # rule column across many long-named contrasts.
+    contrasts <- paste0("A_very_long_contrast_name_", seq_len(12), "_vs_control")
+    grid <- expand.grid(hits = c(TRUE, FALSE), shared = c(TRUE, FALSE),
+                        unpaired = c(TRUE, FALSE), no_paths = c(TRUE, FALSE),
+                        enz_raw = c(TRUE, FALSE), met_raw = c(TRUE, FALSE))
+    n_words <- function(x) lengths(regmatches(x, gregexpr("[^[:space:]]+", x)))
+    for (i in seq_len(nrow(grid))) {
+        g <- grid[i, ]
+        cfg <- enzyme_metabolite_config(list(modes = list(multiomics = list(enrichment = list(
+            enzyme_metabolite = list(enzyme_hits_only = g$hits,
+                                     require_shared_pathway = g$shared,
+                                     list_unpaired_enzymes = g$unpaired))))))
+        tab <- data.frame(contrast = contrasts,
+                          enzyme_hit_rule = if (g$enz_raw) "raw p" else "padj",
+                          metabolite_hit_rule = if (g$met_raw) "raw p" else "padj",
+                          note = if (g$no_paths) "KEGG pathway annotation unavailable" else NA,
+                          stringsAsFactors = FALSE)
+        leg <- describe_enzyme_metabolite_table(tab, cfg, cutoff = 0.001)
+        expect_lte(n_words(leg), 100, label = paste(names(g), unlist(g), collapse = ","))
+    }
 })
 
 test_that("the legend follows the settings the table was built with", {
