@@ -1329,10 +1329,16 @@ pathview_has_compounds <- if (pathview_is_union) {
 } else {
     isTRUE(pathview_supported_meta$compound_nodes)
 }
-# Map filenames are keyed on the canonical contrast, which distinguishes two
-# contrasts that make.names() would collide; the readable spelling comes back
-# from here rather than from the filename.
-pathview_contrast_labels <- pathview_union_meta$contrast_labels %||% list()
+# Map filenames carry a contrast key that cannot be read back into the
+# contrast's own spelling; each renderer records the spelling beside its PDF.
+# Read from whichever renderer drew these maps. A run from before the supported
+# renderer recorded them falls back to reading the key.
+pathview_active_meta <- if (pathview_is_union) pathview_union_meta else pathview_supported_meta
+pathview_contrast_labels <- pathview_active_meta$contrast_labels %||% list()
+# Set name and opening sentence from what the renderer recorded, so neither
+# claims more layers than the maps rest on.
+pathview_support <- pathview_multi_ora_support(pathview_is_union,
+                                               pathview_supported_meta$support_layers)
 ```
 
 ```{r per-omics-pathview-setup, include=FALSE}
@@ -1347,7 +1353,7 @@ has_any_pv <- has_pathview || has_per_omics_pv
 # assigned a contrast the same way in both; see pathview_map_index().
 pv_index <- pathview_map_index(pathview_dir, multi_ora = has_pathview,
                                metab_top = has_pv_metab, prot_top = has_pv_prot,
-                               multi_ora_union = pathview_is_union,
+                               multi_ora_label = pathview_support$label,
                                contrast_labels = pathview_contrast_labels)
 ```
 
@@ -1417,14 +1423,7 @@ if (nrow(pv_index) > 0) {
 `r if (has_pathview) "## Multi-Omics Maps {.unnumbered}"`
 
 ```{r pathview-plots, eval=has_pathview, results='asis'}
-cat(if (pathview_is_union) {
-        paste("KEGG reference maps, in KO space, for pathways enriched in",
-              "**at least one** gene-based omics layer, shown **per contrast**.",
-              "A map here can rest on transcriptomics or proteomics alone.")
-    } else {
-        paste("KEGG pathway maps for pathways enriched in **>= 2 omics layers**,",
-              "shown **per contrast**.")
-    },
+cat(pathview_support$intro,
     " Gene nodes are colored by logFC (transcriptomics and/or proteomics)",
     if (pathview_has_compounds) {
         "; compound nodes are colored by metabolomics logFC.\n\n"

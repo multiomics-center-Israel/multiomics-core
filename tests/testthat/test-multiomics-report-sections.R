@@ -357,7 +357,8 @@ test_that("the map index gives each contrast of a pathway its own row", {
     expect_identical(idx$heading, c("Glycolysis (00010) - A vs B",
                                     "Glycolysis (00010) - C vs D",
                                     "Pathway 00020", "Pathway 00030"))
-    expect_identical(idx$map_set[1], "Enriched in >= 2 layers")
+    # Without the renderer's record, the set claims no number of layers.
+    expect_identical(idx$map_set[1], "Cross-omics pathways")
     # The blank KEGG template beside the overlays is not a map.
     expect_false(any(basename(idx$png) == "ko00010.png"))
     # No two rows describe the same thing.
@@ -370,7 +371,7 @@ test_that("the map index includes only the sets the report shows", {
     idx <- pathview_map_index(d, multi_ora = FALSE, prot_top = FALSE)
     expect_identical(idx$set, "metab_top")
     union <- pathview_map_index(d, metab_top = FALSE, prot_top = FALSE,
-                                multi_ora_union = TRUE)
+                                multi_ora_label = "Enriched in a gene layer")
     expect_identical(union$map_set, "Enriched in a gene layer")
 
     none <- pathview_map_index(file.path(d, "absent"))
@@ -390,4 +391,95 @@ test_that("with no maps the section says whether they were switched off", {
         expect_match(on, "No pathway maps are available", fixed = TRUE)
         expect_false(grepl("switched off", on, fixed = TRUE))
     }
+})
+
+test_that("per-layer maps pathview wrote as .multi.png are indexed too", {
+    # The per-layer renderer keeps whichever of the two names pathview wrote;
+    # the combined PDF already took both, so the table and tab must as well.
+    d <- pathview_fixture(c("hsa00020.metab_top.multi.png", "hsa00030.prot_top.multi.png",
+                            "hsa00040.metab_top.png"),
+                          titled = list(hsa00020 = "Citrate cycle"))
+    idx <- pathview_map_index(d, multi_ora = FALSE)
+    expect_identical(idx$set, c("metab_top", "metab_top", "prot_top"))
+    expect_identical(idx$kegg_id, c("00020", "00040", "00030"))
+    expect_identical(idx$heading[1], "Citrate cycle (00020)")
+    expect_identical(idx$contrast, c("", "", ""))
+})
+
+test_that("the map set is named from the tier the renderer recorded", {
+    two <- pathview_multi_ora_support(FALSE, 2L)
+    expect_identical(two$label, "Enriched in >= 2 layers")
+    expect_match(two$intro, ">= 2 omics layers", fixed = TRUE)
+
+    # The single-layer fallback must not read as a two-layer result.
+    one <- pathview_multi_ora_support(FALSE, 1L)
+    expect_identical(one$label, "Enriched in one layer or more")
+    expect_false(grepl(">= 2", paste(one$label, one$intro), fixed = TRUE))
+    expect_match(one$intro, "one layer alone", fixed = TRUE)
+
+    # No record (a run from before it existed): no claim about layers at all.
+    for (none in list(NULL, NA, "unknown")) {
+        res <- pathview_multi_ora_support(FALSE, none)
+        expect_identical(res$label, "Cross-omics pathways")
+        expect_false(grepl("layer", paste(res$label, res$intro), fixed = TRUE))
+    }
+
+    # The union renderer is its own case whatever the supported record says.
+    expect_identical(pathview_multi_ora_support(TRUE, 2L)$label, "Enriched in a gene layer")
+
+    # The report takes both from the resolver, never from fixed text.
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("multi_ora_label = pathview_support$label", src, fixed = TRUE))
+    expect_true(grepl("cat(pathview_support$intro,", src, fixed = TRUE))
+    expect_false(grepl("**>= 2 omics layers**", src, fixed = TRUE))
+})
+
+test_that("contrast spellings are read from the renderer that drew the maps", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl(paste0("pathview_active_meta <- if (pathview_is_union) ",
+                             "pathview_union_meta else pathview_supported_meta"),
+                      src, fixed = TRUE))
+    expect_true(grepl("pathview_active_meta$contrast_labels %||% list()", src, fixed = TRUE))
+    # With the recorded spelling, a decimal contrast survives make.names().
+    key <- make.names("1.5 - 0")
+    png <- sprintf("hsa00010.multi_ora_%s.multi.png", key)
+    labels <- stats::setNames(list("1.5 - 0"), key)
+    expect_identical(pathview_map_contrast(png, labels), "1.5 - 0")
+    # Without it (an older run), the existing fallback still applies.
+    expect_identical(pathview_map_contrast(png), gsub("\\.", " ", key))
+})
+
+test_that("the supported renderer records its tier and contrast spellings", {
+    # Reaching the sidecar needs a pathview call, so it is pinned at the source,
+    # as the compound_nodes record already is.
+    body_src <- paste(deparse(body(generate_multi_ora_pathview)), collapse = " ")
+    expect_true(grepl("support_layers = selection$support_layers", body_src, fixed = TRUE))
+    expect_true(grepl("contrast_labels = contrast_labels", body_src, fixed = TRUE))
+    expect_true(grepl("make.names(names(all_generated_pngs))", body_src, fixed = TRUE))
+})
+
+test_that("the pathway selection says whether it fell back to one layer", {
+    tbl <- function(support, support_pval = support) {
+        data.frame(ID = paste0("P", seq_along(support)), pathway = "x",
+                   n_omics_support = support, n_omics_support_pval = support_pval,
+                   pooled_pvalue = seq_along(support) / 100)
+    }
+    # A pathway in two layers: the two-layer rule holds.
+    two <- select_multi_ora_pathview_pathways(tbl(c(2, 1)), min_support = 2)
+    expect_identical(two$support_layers, 2L)
+    expect_identical(two$supported$ID, "P1")
+    # Two layers only on raw p: still the two-layer rule.
+    raw <- select_multi_ora_pathview_pathways(tbl(c(1, 0), c(2, 1)), min_support = 2)
+    expect_identical(raw$support_layers, 2L)
+    expect_identical(raw$supported$ID, "P1")
+    # No pathway in two layers: the fallback, recorded as one layer.
+    one <- suppressMessages(select_multi_ora_pathview_pathways(tbl(c(1, 0)), min_support = 2))
+    expect_identical(one$support_layers, 1L)
+    expect_identical(one$supported$ID, "P1")
+    # Both metabolomics and proteomics under FDR: the paired tier, two layers.
+    paired <- cbind(tbl(c(0, 0)), metabolomics_padj = c(0.01, 0.5),
+                    proteomics_padj = c(0.02, 0.5))
+    res <- suppressMessages(select_multi_ora_pathview_pathways(paired, min_support = 2))
+    expect_identical(res$support_layers, 2L)
+    expect_identical(res$supported$ID, "P1")
 })

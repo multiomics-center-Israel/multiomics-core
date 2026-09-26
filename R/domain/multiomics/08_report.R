@@ -200,9 +200,8 @@ pathview_map_contrast <- function(png_path, contrast_labels = list()) {
 #' @param pathview_dir The Multi-ORA \code{pathview/} directory.
 #' @param multi_ora,metab_top,prot_top Logical: include the cross-omics maps, the
 #'   top metabolomics pathways, the top proteomics pathways.
-#' @param multi_ora_union Logical: the cross-omics maps came from the no-OrgDb
-#'   fallback, which unions the gene layers, rather than from pathways enriched
-#'   in two or more layers. Only changes the set's name.
+#' @param multi_ora_label Display name of the cross-omics set, from
+#'   \code{pathview_multi_ora_support()}.
 #' @param contrast_labels Passed to \code{pathview_map_contrast()}.
 #' @return Data frame with columns \code{set} (\code{"multi_ora"},
 #'   \code{"metab_top"} or \code{"prot_top"}), \code{map_set} (its display
@@ -210,17 +209,20 @@ pathview_map_contrast <- function(png_path, contrast_labels = list()) {
 #'   \code{pathway} ("" without a KGML title), \code{heading} and \code{png};
 #'   zero rows when there is nothing to show.
 pathview_map_index <- function(pathview_dir, multi_ora = TRUE, metab_top = TRUE,
-                               prot_top = TRUE, multi_ora_union = FALSE,
+                               prot_top = TRUE, multi_ora_label = "Cross-omics pathways",
                                contrast_labels = list()) {
     sets <- list(
         list(on = multi_ora, key = "multi_ora",
              pattern = "\\.multi_ora.*\\.(multi\\.)?png$", strip = "\\.multi_ora.*$",
-             label = if (isTRUE(multi_ora_union)) "Enriched in a gene layer"
-                     else "Enriched in >= 2 layers"),
-        list(on = metab_top, key = "metab_top", pattern = "\\.metab_top\\.png$",
-             strip = "\\.metab_top\\.png$", label = "Top metabolomics pathways"),
-        list(on = prot_top, key = "prot_top", pattern = "\\.prot_top\\.png$",
-             strip = "\\.prot_top\\.png$", label = "Top proteomics pathways"))
+             label = multi_ora_label),
+        # The per-layer renderer keeps whichever of `.png` and `.multi.png`
+        # pathview wrote, so both are maps.
+        list(on = metab_top, key = "metab_top",
+             pattern = "\\.metab_top(\\.multi)?\\.png$",
+             strip = "\\.metab_top(\\.multi)?\\.png$", label = "Top metabolomics pathways"),
+        list(on = prot_top, key = "prot_top",
+             pattern = "\\.prot_top(\\.multi)?\\.png$",
+             strip = "\\.prot_top(\\.multi)?\\.png$", label = "Top proteomics pathways"))
     empty <- data.frame(set = character(0), map_set = character(0),
                         contrast = character(0), kegg_id = character(0),
                         pathway = character(0), heading = character(0),
@@ -244,6 +246,47 @@ pathview_map_index <- function(pathview_dir, multi_ora = TRUE, metab_top = TRUE,
     out <- do.call(rbind, c(list(empty), rows))
     rownames(out) <- NULL
     out
+}
+
+
+#' How the report names the cross-omics pathway maps, and what it says of them
+#'
+#' The supported renderer prefers pathways enriched in two or more layers but
+#' falls back to a single layer when none qualify, and records which in its
+#' sidecar; the no-OrgDb renderer unions the hits of either gene layer. The
+#' overview's set name and the tab's opening sentence both come from here, so
+#' neither can claim more layers than the maps rest on. A run from before the
+#' record existed gets wording that claims no number of layers.
+#'
+#' @param is_union Logical: the maps came from the no-OrgDb union renderer.
+#' @param support_layers The supported renderer's recorded
+#'   \code{support_layers}, or NULL when its sidecar has none.
+#' @return List with \code{label} (the overview's map-set name) and
+#'   \code{intro} (the tab's opening sentence, Markdown).
+#' @examples
+#' pathview_multi_ora_support(FALSE, 1L)$label  # "Enriched in one layer or more"
+pathview_multi_ora_support <- function(is_union, support_layers = NULL) {
+    if (isTRUE(is_union)) {
+        return(list(
+            label = "Enriched in a gene layer",
+            intro = paste("KEGG reference maps, in KO space, for pathways enriched in",
+                          "**at least one** gene-based omics layer, shown **per contrast**.",
+                          "A map here can rest on transcriptomics or proteomics alone.")))
+    }
+    n <- suppressWarnings(as.integer(unlist(support_layers))[1])
+    if (length(n) == 0 || is.na(n) || n < 1) {
+        list(label = "Cross-omics pathways",
+             intro = "KEGG pathway maps for the top cross-omics pathways, shown **per contrast**.")
+    } else if (n == 1) {
+        list(label = "Enriched in one layer or more",
+             intro = paste("KEGG pathway maps for pathways enriched in **at least one**",
+                           "omics layer, shown **per contrast**. No pathway reached two",
+                           "layers in this run, so a map here can rest on one layer alone."))
+    } else {
+        list(label = sprintf("Enriched in >= %d layers", n),
+             intro = sprintf(paste("KEGG pathway maps for pathways enriched in",
+                                   "**>= %d omics layers**, shown **per contrast**."), n))
+    }
 }
 
 
