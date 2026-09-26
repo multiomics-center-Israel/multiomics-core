@@ -857,3 +857,19 @@ test_that("a MultiGSEA run that draws nothing still clears the previous run's fi
     expect_false(any(file.exists(one_layer$old)))
     expect_true(all(file.exists(one_layer$kept)))
 })
+
+test_that("the pipeline clears MultiGSEA outputs when it skips the step", {
+    # Without cross-omics enrichment the target returns before calling
+    # run_multigsea_plots(), so the cleanup has to run on that path too.
+    src <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "pipeline", "multiomics", "00_pipe_multiomics.R")),
+        collapse = "\n")
+    block <- regmatches(src, regexpr(
+        "(?s)multiomics_multigsea,.*?\n        \\),", src, perl = TRUE))
+    expect_length(block, 1)
+    skip <- regmatches(block, regexpr(
+        "(?s)Skipping MultiGSEA plots.*?return\\(NULL\\)", block, perl = TRUE))
+    expect_match(skip, "clear_multigsea_outputs(mg_dir)", fixed = TRUE)
+    # And it clears the directory the step writes to.
+    expect_match(block, "out_dir = mg_dir", fixed = TRUE)
+})
