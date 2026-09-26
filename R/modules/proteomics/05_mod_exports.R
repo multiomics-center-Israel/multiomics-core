@@ -144,7 +144,11 @@ mod_proteomics_exports <- function(
             sample_id_col = prot_sample_id_col,
             annotation_rows = excel_cfg$annotation_rows,
             sample_label_cols = excel_cfg$sample_label_cols,
-            provenance_sheet = TRUE
+            provenance_sheet = TRUE,
+            # NULL unless this run pooled two or more imputed DE fits, which is
+            # the only case where the reported fold change is not simply the
+            # coefficient of the model the workbook already describes.
+            de_reconciliation = build_de_reconciliation_proteomics(de_res, config)
         )
         files <- c(files, excel_files)
     }
