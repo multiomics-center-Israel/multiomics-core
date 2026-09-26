@@ -234,6 +234,9 @@ pipe_multiomics <- function() {
                     )
                 }, error = function(e) {
                     warning("MultiGSEA plots failed: ", e$message)
+                    # A failure after some pairs were drawn would otherwise
+                    # leave a partial set for the report to show as complete.
+                    clear_multigsea_outputs(mg_dir)
                     NULL
                 })
 

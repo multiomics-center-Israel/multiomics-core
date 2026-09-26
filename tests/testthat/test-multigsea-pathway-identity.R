@@ -858,9 +858,10 @@ test_that("a MultiGSEA run that draws nothing still clears the previous run's fi
     expect_true(all(file.exists(one_layer$kept)))
 })
 
-test_that("the pipeline clears MultiGSEA outputs when it skips the step", {
+test_that("the pipeline clears MultiGSEA outputs when it skips or fails the step", {
     # Without cross-omics enrichment the target returns before calling
-    # run_multigsea_plots(), so the cleanup has to run on that path too.
+    # run_multigsea_plots(), and an error part-way through is caught here after
+    # some pairs are written, so the cleanup has to run on both paths too.
     src <- paste(readLines(testthat::test_path(
         "..", "..", "R", "pipeline", "multiomics", "00_pipe_multiomics.R")),
         collapse = "\n")
@@ -870,6 +871,10 @@ test_that("the pipeline clears MultiGSEA outputs when it skips the step", {
     skip <- regmatches(block, regexpr(
         "(?s)Skipping MultiGSEA plots.*?return\\(NULL\\)", block, perl = TRUE))
     expect_match(skip, "clear_multigsea_outputs(mg_dir)", fixed = TRUE)
+    # And when the step fails part-way, so no partial set is left behind.
+    err <- regmatches(block, regexpr(
+        "(?s)MultiGSEA plots failed.*?NULL\n", block, perl = TRUE))
+    expect_match(err, "clear_multigsea_outputs(mg_dir)", fixed = TRUE)
     # And it clears the directory the step writes to.
     expect_match(block, "out_dir = mg_dir", fixed = TRUE)
 })

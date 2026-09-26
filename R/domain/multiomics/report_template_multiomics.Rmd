@@ -137,7 +137,10 @@ render_commentary <- function(figure_id) {
 }
 
 # Paths
-run_dir <- normalizePath(dirname(knitr::current_input()), mustWork = TRUE)
+# Forward slashes on every platform: paths built from run_dir are pasted into
+# generated child chunks as R string literals, where a Windows backslash would
+# read as an escape ("C:\Users" is a parse error) and abort the render.
+run_dir <- normalizePath(dirname(knitr::current_input()), winslash = "/", mustWork = TRUE)
 config_path <- file.path(run_dir, "execution_info", "config_used.yaml")
 
 # Multiomics output subdirectories

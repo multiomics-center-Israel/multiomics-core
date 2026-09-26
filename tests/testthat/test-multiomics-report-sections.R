@@ -694,3 +694,11 @@ test_that("the pairwise MultiGSEA legend says what the figure can and cannot sho
         expect_false(grepl(phrase, leg, fixed = TRUE), info = phrase)
     }
 })
+
+test_that("paths pasted into generated chunks use forward slashes", {
+    # Child chunks are built with sprintf(), so every image path lands in R
+    # source as a string literal; a Windows backslash there is an escape.
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl('run_dir <- normalizePath(dirname(knitr::current_input()), winslash = "/", mustWork = TRUE)',
+                      src, fixed = TRUE))
+})
