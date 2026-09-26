@@ -865,7 +865,8 @@ pick_key_position <- function(template_png, frac = 0.28) {
 #' Ownership follows the `run_pathview` switch: \code{run_multi_ora()} decides
 #' for all three of its pathview renderers at once, so this clears the artifacts
 #' of all three -- the cross-omics `.multi_ora*` overlays, the per-omics
-#' `.metab_top*` and `.prot_top*` overlays, and every compiled PDF they produce.
+#' `.metab_top*` and `.prot_top*` overlays, every compiled PDF they produce, and
+#' the sidecars that describe those PDFs.
 #' A per-omics map is as stale as a cross-omics one when its pathway drops out
 #' of the current top-N, and the report cannot tell either from a fresh one.
 #'
@@ -889,6 +890,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
             full.names = TRUE)
     }
     pdfs <- file.path(out_dir, c("multi_ora_pathview_supported.pdf",
+                                 "multi_ora_pathview_supported.yaml",
                                  "multi_ora_pathview_union.pdf",
                                  "multi_ora_pathview_union.yaml",
                                  "pathview_top_metabolomics_pathways.pdf",

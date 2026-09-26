@@ -64,24 +64,6 @@ make_dt <- function(df, caption = NULL, pageLength = 5) {
     )
 }
 
-#' Human-readable title for a rendered pathview map
-#'
-#' pathview leaves the KGML beside the PNG it renders, and that file carries the
-#' pathway's title. Reading it avoids both a network call and a bare numeric id
-#' as the section heading.
-#'
-#' @param png_path Path to the rendered pathview PNG.
-#' @return Character title, or NA when no KGML sits beside the image.
-pathview_map_title <- function(png_path) {
-    stem <- sub("\\..*$", "", basename(png_path))
-    kgml <- file.path(dirname(png_path), paste0(stem, ".xml"))
-    if (!file.exists(kgml)) return(NA_character_)
-    hit <- grep("title=", readLines(kgml, n = 40, warn = FALSE), value = TRUE)
-    if (length(hit) == 0) return(NA_character_)
-    ttl <- sub('.*title="([^"]+)".*', "\\1", hit[1])
-    if (identical(ttl, hit[1])) NA_character_ else ttl
-}
-
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -950,188 +932,6 @@ figure_legend("Compound-level gene set enrichment analysis over KEGG metabolic p
 render_commentary("compound_gsea")
 ```
 
-```{r pathview-setup, include=FALSE}
-# Two renderers can fill this section, on mutually exclusive branches of
-# run_multi_ora(), and they do not make the same claim: "supported" means the
-# pathway was enriched in two or more omics layers, while the no-OrgDb fallback
-# unions the hits of either gene layer, so a map there can rest on one layer
-# alone. The section says which of the two it is showing.
-pathview_supported_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_supported.pdf")
-pathview_union_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_union.pdf")
-pathview_is_union <- !file.exists(pathview_supported_pdf) && file.exists(pathview_union_pdf)
-pathview_pdf <- if (pathview_is_union) pathview_union_pdf else pathview_supported_pdf
-pathview_dir <- file.path(multi_ora_dir, "pathview")
-has_pathview <- file.exists(pathview_pdf)
-
-# Whether compound nodes actually carry metabolomics values is recorded by the
-# renderer beside its PDF, because the section must not promise a colour that is
-# not on the map. Absent sidecar: assume not, and say less rather than more.
-pathview_union_meta <- if (pathview_is_union) {
-    tryCatch(yaml::read_yaml(file.path(multi_ora_dir,
-                                       "multi_ora_pathview_union.yaml")),
-             error = function(e) list())
-} else {
-    list()
-}
-# Both renderers record this now. The supported one used to be assumed to have
-# compounds whenever metabolomics was in the run, which stopped being true once
-# a metabolite had to clear the node thresholds to reach the map: every one of
-# them can fail while the gene layers still produce a figure.
-pathview_supported_meta <- if (pathview_is_union) {
-    list()
-} else {
-    tryCatch(yaml::read_yaml(file.path(multi_ora_dir,
-                                       "multi_ora_pathview_supported.yaml")),
-             error = function(e) list())
-}
-pathview_has_compounds <- if (pathview_is_union) {
-    isTRUE(pathview_union_meta$compound_nodes)
-} else {
-    isTRUE(pathview_supported_meta$compound_nodes)
-}
-# Map filenames are keyed on the canonical contrast, which distinguishes two
-# contrasts that make.names() would collide; the readable spelling comes back
-# from here rather than from the filename.
-pathview_contrast_labels <- pathview_union_meta$contrast_labels %||% list()
-```
-
-## Multi-Omics Pathway Maps (Pathview) {.unnumbered}
-
-```{r pathview-note, eval=!has_pathview, results='asis'}
-cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layers,",
-    "or, for an organism with no annotation database, a configured feature-to-KO map.*\n")
-```
-
-```{r pathview-plots, eval=has_pathview, results='asis'}
-pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$", full.names = TRUE))
-cat(if (pathview_is_union) {
-        paste("KEGG reference maps, in KO space, for pathways enriched in",
-              "**at least one** gene-based omics layer, shown **per contrast**.",
-              "A map here can rest on transcriptomics or proteomics alone.")
-    } else {
-        paste("KEGG pathway maps for pathways enriched in **>= 2 omics layers**,",
-              "shown **per contrast**.")
-    },
-    " Gene nodes are colored by logFC (transcriptomics and/or proteomics)",
-    if (pathview_has_compounds) {
-        "; compound nodes are colored by metabolomics logFC.\n\n"
-    } else {
-        paste(". No metabolomics compound values were available for these maps,",
-              "so compound nodes are uncolored.\n\n")
-    })
-cat(sprintf("[Download compiled PDF](%s)\n\n", pathview_pdf))
-
-# Group PNGs by contrast (extracted from filename suffix)
-for (pv_png in pv_pngs) {
-    bn <- basename(pv_png)
-    # Extract pathway ID and contrast from filename
-    # e.g. "cel00053.multi_ora_X1.56ppm.vs..0ppm.multi.png"
-    pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora.*$", "", bn))
-    contrast_part <- sub("^.*\\.multi_ora_?", "", bn)
-    contrast_part <- sub("\\.(multi\\.)?png$", "", contrast_part)
-    contrast_label <- if (!is.null(pathview_contrast_labels[[contrast_part]])) {
-        pathview_contrast_labels[[contrast_part]]
-    } else {
-        gsub("\\.", " ", contrast_part)
-    }
-    pw_title <- pathview_map_title(pv_png)
-    pw_label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else
-        paste0(pw_title, " (", pw_id, ")")
-    if (nzchar(contrast_label)) {
-        label <- paste0(pw_label, " - ", contrast_label)
-    } else {
-        label <- pw_label
-    }
-    cat(sprintf("\n### %s {.unnumbered}\n\n", label))
-    cat(sprintf("![%s](%s)\n\n", label, pv_png))
-}
-figure_legend(paste0(
-    "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
-    if (pathview_has_compounds) "Compound nodes show metabolomics logFC. " else "",
-    "Red = upregulated, green/blue = downregulated. ",
-    # Taken from the same constants the selection and the node filter
-    # read, so the caption cannot describe a rule the figure did not apply.
-    pathview_significance_caption()))
-render_commentary("multi_ora_pathview")
-```
-
-```{r per-omics-pathview-setup, include=FALSE}
-pv_metab_pdf <- file.path(multi_ora_dir, "pathview_top_metabolomics_pathways.pdf")
-pv_prot_pdf <- file.path(multi_ora_dir, "pathview_top_proteomics_pathways.pdf")
-has_pv_metab <- file.exists(pv_metab_pdf)
-has_pv_prot <- file.exists(pv_prot_pdf)
-has_per_omics_pv <- has_pv_metab || has_pv_prot
-```
-
-```{r per-omics-pathview-metab, eval=has_pv_metab, results='asis'}
-cat("\n## Top Metabolomics Pathways (with Proteomics Overlay) {.unnumbered}\n\n")
-cat("Top enriched metabolomics KEGG pathways with compound logFC (metabolomics) and ",
-    "enzyme/gene logFC (proteomics) overlaid on the same pathway map.\n\n")
-cat(sprintf("[Download PDF](%s)\n\n", pv_metab_pdf))
-metab_pngs <- sort(list.files(pathview_dir, pattern = "\\.metab_top\\.png$", full.names = TRUE))
-for (pv_png in metab_pngs) {
-    pw_id <- sub("^[a-z]+", "", sub("\\.metab_top\\.png$", "", basename(pv_png)))
-    cat(sprintf("\n### Pathway %s {.unnumbered}\n\n", pw_id))
-    cat(sprintf("![Pathway %s](%s)\n\n", pw_id, pv_png))
-}
-figure_legend("Top metabolomics-enriched KEGG pathways. Compound nodes show metabolomics logFC; gene/enzyme nodes show proteomics logFC. Red = upregulated, blue/green = downregulated.")
-```
-
-```{r per-omics-pathview-prot, eval=has_pv_prot, results='asis'}
-cat("\n## Top Proteomics Pathways (with Metabolomics Overlay) {.unnumbered}\n\n")
-cat("Top enriched proteomics KEGG pathways with enzyme/gene logFC (proteomics) and ",
-    "compound logFC (metabolomics) overlaid on the same pathway map.\n\n")
-cat(sprintf("[Download PDF](%s)\n\n", pv_prot_pdf))
-prot_pngs <- sort(list.files(pathview_dir, pattern = "\\.prot_top\\.png$", full.names = TRUE))
-for (pv_png in prot_pngs) {
-    pw_id <- sub("^[a-z]+", "", sub("\\.prot_top\\.png$", "", basename(pv_png)))
-    cat(sprintf("\n### Pathway %s {.unnumbered}\n\n", pw_id))
-    cat(sprintf("![Pathway %s](%s)\n\n", pw_id, pv_png))
-}
-figure_legend("Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show proteomics logFC; compound nodes show metabolomics logFC. Red = upregulated, blue/green = downregulated.")
-```
-
-```{r pathview-all-pdf, eval=has_pathview || has_pv_metab || has_pv_prot, results='asis'}
-# Collect ALL pathview PNGs from all sections into one combined PDF
-all_pv_pngs <- character(0)
-if (dir.exists(pathview_dir)) {
-    # Only the overlaid maps. pathview also leaves the blank KEGG reference PNG
-    # it downloaded (ko00010.png beside ko00010.multi_ora.multi.png), which
-    # filled half the PDF with pages carrying no data.
-    all_pv_pngs <- sort(list.files(
-        pathview_dir,
-        pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
-        full.names = TRUE))
-}
-
-if (length(all_pv_pngs) > 0) {
-    combined_pdf <- file.path(multi_ora_dir, "all_pathview_combined.pdf")
-    compile_ok <- tryCatch({
-        grDevices::pdf(combined_pdf, width = 12, height = 8)
-        for (png_file in all_pv_pngs) {
-            img <- png::readPNG(png_file)
-            grid::grid.newpage()
-            # Add pathway ID as title at top
-            pw_label <- sub("\\..*$", "", basename(png_file))
-            grid::grid.text(pw_label, x = 0.5, y = 0.98,
-                            gp = grid::gpar(fontsize = 10, col = "grey40"))
-            grid::grid.raster(img, width = 0.95, height = 0.92, y = 0.48)
-        }
-        grDevices::dev.off()
-        TRUE
-    }, error = function(e) {
-        tryCatch(grDevices::dev.off(), error = function(e2) NULL)
-        FALSE
-    })
-
-    if (compile_ok && file.exists(combined_pdf)) {
-        cat(sprintf(
-            '\n<div style="text-align: center; margin: 16px 0;">\n<a href="%s" download style="display: inline-block; padding: 10px 24px; background-color: #4a90d9; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 1em;">Download All Pathview Plots (PDF, %d figures)</a>\n</div>\n\n',
-            combined_pdf, length(all_pv_pngs)
-        ))
-    }
-}
-```
 
 ---
 
@@ -1484,6 +1284,194 @@ if (dir.exists(enrich_per_contrast_dir)) {
 } else {
     cat("*Per-contrast enrichment results not available.*\n")
 }
+```
+
+---
+
+# Pathway Maps (Pathview) {.tabset}
+
+```{r pathview-setup, include=FALSE}
+# Two renderers can fill this section, on mutually exclusive branches of
+# run_multi_ora(), and they do not make the same claim: "supported" means the
+# pathway was enriched in two or more omics layers, while the no-OrgDb fallback
+# unions the hits of either gene layer, so a map there can rest on one layer
+# alone. The section says which of the two it is showing.
+pathview_supported_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_supported.pdf")
+pathview_union_pdf <- file.path(multi_ora_dir, "multi_ora_pathview_union.pdf")
+pathview_is_union <- !file.exists(pathview_supported_pdf) && file.exists(pathview_union_pdf)
+pathview_pdf <- if (pathview_is_union) pathview_union_pdf else pathview_supported_pdf
+pathview_dir <- file.path(multi_ora_dir, "pathview")
+has_pathview <- file.exists(pathview_pdf)
+
+# Whether compound nodes actually carry metabolomics values is recorded by the
+# renderer beside its PDF, because the section must not promise a colour that is
+# not on the map. Absent sidecar: assume not, and say less rather than more.
+pathview_union_meta <- if (pathview_is_union) {
+    tryCatch(yaml::read_yaml(file.path(multi_ora_dir,
+                                       "multi_ora_pathview_union.yaml")),
+             error = function(e) list())
+} else {
+    list()
+}
+# Both renderers record this now. The supported one used to be assumed to have
+# compounds whenever metabolomics was in the run, which stopped being true once
+# a metabolite had to clear the node thresholds to reach the map: every one of
+# them can fail while the gene layers still produce a figure.
+pathview_supported_meta <- if (pathview_is_union) {
+    list()
+} else {
+    tryCatch(yaml::read_yaml(file.path(multi_ora_dir,
+                                       "multi_ora_pathview_supported.yaml")),
+             error = function(e) list())
+}
+pathview_has_compounds <- if (pathview_is_union) {
+    isTRUE(pathview_union_meta$compound_nodes)
+} else {
+    isTRUE(pathview_supported_meta$compound_nodes)
+}
+# Map filenames carry a contrast key that cannot be read back into the
+# contrast's own spelling; each renderer records the spelling beside its PDF.
+# Read from whichever renderer drew these maps. A run from before the supported
+# renderer recorded them falls back to reading the key.
+pathview_active_meta <- if (pathview_is_union) pathview_union_meta else pathview_supported_meta
+pathview_contrast_labels <- pathview_active_meta$contrast_labels %||% list()
+# Set name and opening sentence from what the renderer recorded, so neither
+# claims more layers than the maps rest on.
+pathview_support <- pathview_multi_ora_support(pathview_is_union,
+                                               pathview_supported_meta$support_layers)
+```
+
+```{r per-omics-pathview-setup, include=FALSE}
+pv_metab_pdf <- file.path(multi_ora_dir, "pathview_top_metabolomics_pathways.pdf")
+pv_prot_pdf <- file.path(multi_ora_dir, "pathview_top_proteomics_pathways.pdf")
+has_pv_metab <- file.exists(pv_metab_pdf)
+has_pv_prot <- file.exists(pv_prot_pdf)
+has_per_omics_pv <- has_pv_metab || has_pv_prot
+has_any_pv <- has_pathview || has_per_omics_pv
+
+# One index feeds the overview table and every tab, so a map is named and
+# assigned a contrast the same way in both; see pathview_map_index().
+pv_index <- pathview_map_index(pathview_dir, multi_ora = has_pathview,
+                               metab_top = has_pv_metab, prot_top = has_pv_prot,
+                               multi_ora_label = pathview_support$label,
+                               contrast_labels = pathview_contrast_labels)
+```
+
+```{r pathview-all-pdf, eval=has_any_pv, include=FALSE}
+# Collect ALL pathview PNGs from all sections into one combined PDF; the
+# overview tab links to it.
+all_pv_pngs <- character(0)
+has_combined_pv_pdf <- FALSE
+combined_pdf <- file.path(multi_ora_dir, "all_pathview_combined.pdf")
+if (dir.exists(pathview_dir)) {
+    # Only the overlaid maps. pathview also leaves the blank KEGG reference PNG
+    # it downloaded (ko00010.png beside ko00010.multi_ora.multi.png), which
+    # filled half the PDF with pages carrying no data.
+    all_pv_pngs <- sort(list.files(
+        pathview_dir,
+        pattern = "\\.(multi_ora|metab_top|prot_top)[^/]*\\.png$",
+        full.names = TRUE))
+}
+
+if (length(all_pv_pngs) > 0) {
+    compile_ok <- tryCatch({
+        grDevices::pdf(combined_pdf, width = 12, height = 8)
+        for (png_file in all_pv_pngs) {
+            img <- png::readPNG(png_file)
+            grid::grid.newpage()
+            # Add pathway ID as title at top
+            pw_label <- sub("\\..*$", "", basename(png_file))
+            grid::grid.text(pw_label, x = 0.5, y = 0.98,
+                            gp = grid::gpar(fontsize = 10, col = "grey40"))
+            grid::grid.raster(img, width = 0.95, height = 0.92, y = 0.48)
+        }
+        grDevices::dev.off()
+        TRUE
+    }, error = function(e) {
+        tryCatch(grDevices::dev.off(), error = function(e2) NULL)
+        FALSE
+    })
+
+    has_combined_pv_pdf <- compile_ok && file.exists(combined_pdf)
+}
+```
+
+## Overview {.unnumbered}
+
+```{r pathview-overview, results='asis'}
+if (!has_any_pv) {
+    cat(pathview_missing_note(multi_cfg), "\n")
+} else {
+    cat("KEGG pathway maps with each layer's log2 fold changes drawn on the nodes.",
+        "Each tab holds one set of maps; this table lists all of them.\n\n")
+    if (isTRUE(has_combined_pv_pdf)) {
+        cat(sprintf(
+            '\n<div style="text-align: center; margin: 16px 0;">\n<a href="%s" download style="display: inline-block; padding: 10px 24px; background-color: #4a90d9; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 1em;">Download all pathway maps (PDF, %d figures)</a>\n</div>\n\n',
+            combined_pdf, length(all_pv_pngs)))
+    }
+}
+```
+
+```{r pathview-index-table, eval=has_any_pv}
+if (nrow(pv_index) > 0) {
+    pv_table <- pv_index[, c("map_set", "contrast", "kegg_id", "pathway")]
+    names(pv_table) <- c("Map set", "Contrast", "KEGG id", "Pathway")
+    make_dt(pv_table, caption = "Pathway maps in this report", pageLength = 10)
+}
+```
+
+`r if (has_pathview) "## Multi-Omics Maps {.unnumbered}"`
+
+```{r pathview-plots, eval=has_pathview, results='asis'}
+cat(pathview_support$intro,
+    " Gene nodes are colored by logFC (transcriptomics and/or proteomics)",
+    if (pathview_has_compounds) {
+        "; compound nodes are colored by metabolomics logFC.\n\n"
+    } else {
+        paste(". No metabolomics compound values were available for these maps,",
+              "so compound nodes are uncolored.\n\n")
+    })
+cat(sprintf("[Download these maps (PDF)](%s)\n\n", pathview_pdf))
+
+pv_multi <- pv_index[pv_index$set == "multi_ora", ]
+for (i in seq_len(nrow(pv_multi))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_multi$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_multi$heading[i], pv_multi$png[i]))
+}
+figure_legend(paste0(
+    "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
+    if (pathview_has_compounds) "Compound nodes show metabolomics logFC. " else "",
+    "Red = upregulated, green/blue = downregulated. ",
+    # Taken from the same constants the selection and the node filter
+    # read, so the caption cannot describe a rule the figure did not apply.
+    pathview_significance_caption()))
+render_commentary("multi_ora_pathview")
+```
+
+```{r per-omics-pathview-metab, eval=has_pv_metab, results='asis'}
+cat("\n## Top Metabolomics Pathways (with Proteomics Overlay) {.unnumbered}\n\n")
+cat("Top enriched metabolomics KEGG pathways with compound logFC (metabolomics) and ",
+    "enzyme/gene logFC (proteomics) overlaid on the same pathway map.\n\n")
+cat(sprintf("[Download PDF](%s)\n\n", pv_metab_pdf))
+pv_metab <- pv_index[pv_index$set == "metab_top", ]
+for (i in seq_len(nrow(pv_metab))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_metab$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_metab$heading[i], pv_metab$png[i]))
+}
+figure_legend("Top metabolomics-enriched KEGG pathways. Compound nodes show metabolomics logFC; gene/enzyme nodes show proteomics logFC. Red = upregulated, blue/green = downregulated.")
+```
+
+```{r per-omics-pathview-prot, eval=has_pv_prot, results='asis'}
+cat("\n## Top Proteomics Pathways (with Metabolomics Overlay) {.unnumbered}\n\n")
+cat("Top enriched proteomics KEGG pathways with enzyme/gene logFC (proteomics) and ",
+    "compound logFC (metabolomics) overlaid on the same pathway map.\n\n")
+cat(sprintf("[Download PDF](%s)\n\n", pv_prot_pdf))
+pv_prot <- pv_index[pv_index$set == "prot_top", ]
+for (i in seq_len(nrow(pv_prot))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_prot$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_prot$heading[i], pv_prot$png[i]))
+}
+figure_legend("Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show proteomics logFC; compound nodes show metabolomics logFC. Red = upregulated, blue/green = downregulated.")
 ```
 
 ---
