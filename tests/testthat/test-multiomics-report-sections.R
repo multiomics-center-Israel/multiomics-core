@@ -637,7 +637,7 @@ test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone
 
 test_that("the section is named for what is left in it", {
     headings <- static_headings(template_lines())
-    expect_true("# Multi-ORA and Compound Enrichment {.tabset}" %in% headings)
+    expect_true("# MultiGSEA, Multi-ORA and Compound Enrichment {.tabset}" %in% headings)
     expect_false(any(grepl("MultiGSEA Plots|Multi-Omics Enrichment", headings)))
 })
 
@@ -662,12 +662,17 @@ test_that("a single-contrast run keeps its pairwise MultiGSEA figures", {
 
 test_that("the pairwise MultiGSEA legend says what the figure can and cannot show", {
     calls <- legend_calls(template_lines())
-    leg <- calls$text[grepl("One pair of layers compared", calls$text, fixed = TRUE)]
+    leg <- calls$text[grepl("Two layers compared pathway by pathway", calls$text, fixed = TRUE)]
     expect_length(leg, 1)
     expect_lte(n_words(leg), 100)
     for (phrase in c("Each point is a pathway", "-log10", "adjusted p-value",
-                     "sits at zero", "size or colour key",
+                     "sits at zero", "size or colour key", "unscored layer counting as zero",
+                     "union of pathways, zeros included",
                      "not a measure of biological agreement")) {
         expect_true(grepl(phrase, leg, fixed = TRUE), info = phrase)
+    }
+    # The correlation is over the union, not the pathways both layers scored.
+    for (phrase in c("overlapping pathways", "intersection")) {
+        expect_false(grepl(phrase, leg, fixed = TRUE), info = phrase)
     }
 })

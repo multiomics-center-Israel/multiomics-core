@@ -617,7 +617,7 @@ render_commentary("translation_efficiency_scatter")
 
 ---
 
-# Multi-ORA and Compound Enrichment {.tabset}
+# MultiGSEA, Multi-ORA and Compound Enrichment {.tabset}
 
 ```{r multigsea-pair-helpers, include=FALSE}
 # The pairwise MultiGSEA figures appear per contrast, and for a single-contrast
@@ -633,14 +633,14 @@ show_multigsea_pair <- function(png, chunk_prefix) {
 }
 multigsea_pair_legend <- function() {
     figure_legend(paste(
-        "One pair of layers compared, pathway by pathway. Each point is a pathway",
-        "either layer scored; each axis is -log10 of that layer's adjusted p-value",
-        "(raw p where a result has none), and a pathway one layer did not score sits",
-        "at zero on its axis. The dashed line marks equal significance. Where a size",
-        "or colour key is shown, it is the two layers' average of the quantity it",
-        "names, an unscored layer counting as zero. The subtitle correlation compares",
-        "enrichment results across overlapping pathways, so its p-value is nominal;",
-        "it is not a measure of biological agreement."))
+        "Two layers compared pathway by pathway. Each point is a pathway either",
+        "layer scored; each axis is -log10 of that layer's adjusted p-value (raw p",
+        "where a result has none), and a pathway one layer did not score sits at zero",
+        "on its axis. The dashed line marks equal significance. A size or colour key,",
+        "where shown, is the two layers' average of what it names, an unscored layer",
+        "counting as zero. The subtitle correlation runs over the union of pathways,",
+        "zeros included; pathways share genes, so its p-value is nominal, and it is",
+        "not a measure of biological agreement."))
 }
 ```
 
