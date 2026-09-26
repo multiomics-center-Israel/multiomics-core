@@ -481,6 +481,16 @@ test_that("a unique column name that merely ends in ...<n> is accepted", {
     expect_error(.dei_check_table(df, f, "Layer 'x'"), "repeated column name \\(s1\\)")
 })
 
+test_that("a layer whose id column holds no ids stops the run", {
+    ext <- data.frame(prot = c(NA, NA), name = c("a", "b"), logFC = c(1, -1), P = c(0.01, 0.2))
+    expect_error(read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                         contrast = "T_vs_C",
+                                         columns = list(id = "prot", log2fc = "logFC",
+                                                        pvalue = "P")),
+                               "T_vs_C", NULL, hits_default),
+                 "id column 'prot' holds no feature ids")
+})
+
 test_that("a malformed value past readr's type guess stops the run", {
     # readr guesses the column type from its first 1000 rows; a bad value
     # later becomes NA with only a warning.

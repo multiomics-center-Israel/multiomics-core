@@ -197,9 +197,19 @@ test_that("contrast and columns belong to generic tables, and contrast is one la
 
 test_that("well_observed_min is a number", {
     expect_error(validate_de_integration_config(list(layers = two_layers(),
-        concordance = list(well_observed_min = "2"))), "well_observed_min must be a number")
+        concordance = list(well_observed_min = "2"))), "well_observed_min must be a finite number")
     expect_error(validate_de_integration_config(list(layers = two_layers(),
         concordance = list(well_observed_min = -1))), "well_observed_min")
+})
+
+test_that("cutoffs and thresholds must be finite", {
+    base <- list(layers = two_layers())
+    expect_error(validate_de_integration_config(c(base, list(hits = list(linear_fc_cutoff = Inf)))),
+                 "linear_fc_cutoff .*finite number >= 1")
+    expect_error(validate_de_integration_config(c(base, list(
+        concordance = list(well_observed_min = Inf)))), "well_observed_min must be a finite")
+    y <- yaml::yaml.load("hits: {linear_fc_cutoff: .inf}")
+    expect_error(validate_de_integration_config(c(base, y)), "linear_fc_cutoff")
 })
 
 test_that("a layer's hit override is checked as the settings it will use", {

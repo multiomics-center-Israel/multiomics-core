@@ -385,7 +385,11 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
         # then dropped would adjust over a family the table no longer holds. The
         # smallest p-value is kept, then the first in id order, so reruns agree;
         # radix sorts ids bytewise, so the order is the same under any locale.
-        valid <- which(!is.na(all_ids) & nzchar(all_ids))
+        valid <- which(!is.na(all_ids) & nzchar(trimws(all_ids)))
+        if (length(valid) == 0) {
+            stop(where, ": its id column '", id_col, "' holds no feature ids, so there is ",
+                 "nothing to read. Check the id column the layer names.", call. = FALSE)
+        }
         ord <- valid[order(all_ids[valid], all_p[valid], na.last = TRUE, method = "radix")]
         keep <- ord[!duplicated(all_ids[ord])]
         n_dup <- length(ord) - length(keep)

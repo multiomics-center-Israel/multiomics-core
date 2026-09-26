@@ -71,13 +71,13 @@ de_integration_column_keys <- function() {
         }
     }
     p <- hits$p_cutoff
-    if (!is.numeric(p) || length(p) != 1 || is.na(p) || p <= 0 || p > 1) {
+    if (!is.numeric(p) || length(p) != 1 || !is.finite(p) || p <= 0 || p > 1) {
         stop(at, ".p_cutoff must be a number in (0, 1].", call. = FALSE)
     }
     fc <- hits$linear_fc_cutoff
-    if (!is.numeric(fc) || length(fc) != 1 || is.na(fc) || fc < 1) {
-        stop(at, ".linear_fc_cutoff is a linear fold change and must be ",
-             ">= 1 (1.5 means 1.5-fold either way).", call. = FALSE)
+    if (!is.numeric(fc) || length(fc) != 1 || !is.finite(fc) || fc < 1) {
+        stop(at, ".linear_fc_cutoff is a linear fold change and must be a ",
+             "finite number >= 1 (1.5 means 1.5-fold either way).", call. = FALSE)
     }
     invisible(hits)
 }
@@ -298,8 +298,8 @@ validate_de_integration_config <- function(cfg) {
     conc <- cfg$concordance %||% list()
     conc$well_observed_min <- conc$well_observed_min %||% 2
     w <- conc$well_observed_min
-    if (!is.numeric(w) || length(w) != 1 || is.na(w) || w < 0) {
-        stop(where, ".concordance.well_observed_min must be a number >= 0 ",
+    if (!is.numeric(w) || length(w) != 1 || !is.finite(w) || w < 0) {
+        stop(where, ".concordance.well_observed_min must be a finite number >= 0 ",
              "(observed values each group needs).", call. = FALSE)
     }
     cfg$concordance <- conc
