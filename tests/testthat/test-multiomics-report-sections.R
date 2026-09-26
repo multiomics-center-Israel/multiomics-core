@@ -641,16 +641,28 @@ test_that("the section is named for what is left in it", {
     expect_false(any(grepl("MultiGSEA Plots|Multi-Omics Enrichment", headings)))
 })
 
-test_that("a single-contrast run keeps its pairwise MultiGSEA figures", {
+test_that("the pairwise MultiGSEA figures show whenever there is no per-contrast set", {
     src <- template_lines()
     joined <- paste(src, collapse = "\n")
-    # Shown under the contrast's own name, and only when there is something to
-    # show, as #249 does for the other per-contrast sections.
-    expect_true(grepl('`r if (has_multigsea && single_contrast) combined_tab(2, "")`',
+    # The view follows what MultiGSEA wrote: it writes per_contrast/ only when
+    # its own inputs hold more than one contrast, which a config listing several
+    # can fall short of. Without it, the top-level pairs are shown -- under the
+    # lone contrast's name in a single-contrast run, as #249 does elsewhere.
+    expect_true(grepl('has_mg_per_contrast <- length(list.dirs(file.path(multigsea_dir, "per_contrast"),',
                       joined, fixed = TRUE))
-    line <- grep("^```\\{r multigsea-single-contrast,", src, value = TRUE)
-    expect_length(line, 1)
-    expect_true(grepl("eval=has_multigsea && single_contrast", line, fixed = TRUE))
+    expect_true(grepl("show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast",
+                      joined, fixed = TRUE))
+    expect_true(grepl("show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast",
+                      joined, fixed = TRUE))
+    expect_true(grepl('`r if (show_mg_top_pairs) combined_tab(2, "All Contrasts (Pooled)")`',
+                      joined, fixed = TRUE))
+    expect_true(grepl('`r if (show_mg_per_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`',
+                      joined, fixed = TRUE))
+    top <- grep("^```\\{r multigsea-top-pairs,", src, value = TRUE)
+    expect_length(top, 1)
+    expect_true(grepl("eval=show_mg_top_pairs", top, fixed = TRUE))
+    pc <- grep("^```\\{r multigsea-per-contrast,", src, value = TRUE)
+    expect_true(grepl("eval=show_mg_per_contrast", pc, fixed = TRUE))
     # The same figures the per-contrast tab draws: the pairwise ones only.
     expect_true(grepl('pattern = "^multigsea_.*_vs_.*\\\\.png$"', joined, fixed = TRUE))
     # Drawn and captioned by one helper in both places (calls, not definitions).
@@ -658,6 +670,7 @@ test_that("a single-contrast run keeps its pairwise MultiGSEA figures", {
                                                          joined, fixed = TRUE))), 2L)
     expect_identical(lengths(regmatches(joined, gregexpr("multigsea_pair_legend()",
                                                          joined, fixed = TRUE))), 2L)
+    expect_false(grepl("Per-contrast MultiGSEA results not available", joined, fixed = TRUE))
 })
 
 test_that("the pairwise MultiGSEA legend says what the figure can and cannot show", {

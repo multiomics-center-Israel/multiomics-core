@@ -631,6 +631,14 @@ show_multigsea_pair <- function(png, chunk_prefix) {
     ), quiet = TRUE))
     cat("\n\n")
 }
+# Which view to show is read from what MultiGSEA wrote, not from the contrast
+# count: it writes per_contrast/ only when its own inputs hold more than one
+# contrast, which a config listing several can still fall short of. Without
+# per_contrast/, the top-level pairs are the only MultiGSEA figures there are.
+has_mg_per_contrast <- length(list.dirs(file.path(multigsea_dir, "per_contrast"),
+                                        recursive = FALSE)) > 0
+show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast
+show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast
 multigsea_pair_legend <- function() {
     figure_legend(paste(
         "Two layers compared pathway by pathway. Each point is a pathway either",
@@ -644,48 +652,44 @@ multigsea_pair_legend <- function() {
 }
 ```
 
-`r if (has_multigsea && single_contrast) combined_tab(2, "")`
+`r if (show_mg_top_pairs) combined_tab(2, "All Contrasts (Pooled)")`
 
-```{r multigsea-single-contrast, eval=has_multigsea && single_contrast, results='asis'}
-# With one contrast the pipeline writes no per_contrast/ directory: the pairwise
-# figures at the top of multigsea/ are that contrast's own view.
+```{r multigsea-top-pairs, eval=show_mg_top_pairs, results='asis'}
+# No per_contrast/: the pairwise figures at the top of multigsea/ are drawn over
+# every contrast MultiGSEA was given -- one contrast's own view in a
+# single-contrast run, named after it above.
 pair_pngs <- sort(list.files(multigsea_dir, pattern = "^multigsea_.*_vs_.*\\.png$",
                              full.names = TRUE))
 if (length(pair_pngs) == 0) {
-    cat("*No pairwise MultiGSEA plots for this contrast.*\n\n")
+    cat("*No pairwise MultiGSEA plots were drawn.*\n\n")
 } else {
     for (pp in pair_pngs) show_multigsea_pair(pp, "mg-sc")
     multigsea_pair_legend()
 }
 ```
 
-`r if (!single_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`
+`r if (show_mg_per_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`
 
-```{r multigsea-per-contrast, eval=has_multigsea && !single_contrast, results='asis'}
+```{r multigsea-per-contrast, eval=show_mg_per_contrast && !single_contrast, results='asis'}
 multigsea_per_contrast_dir <- file.path(multigsea_dir, "per_contrast")
-if (dir.exists(multigsea_per_contrast_dir)) {
-    contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
-    for (cdir in contrast_dirs) {
-        cname <- basename(cdir)
-        cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
+# Only reached when per_contrast/ holds at least one contrast directory.
+contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
+for (cdir in contrast_dirs) {
+    cname <- basename(cdir)
+    cat(sprintf("\n### %s {.unnumbered}\n\n", gsub("_", " ", cname)))
 
-        # Per-contrast dirs hold only the pairwise multigsea_<a>_vs_<b>.png
-        # plots — the combined figure is written at the top level only, so
-        # filtering "_vs_" out here (as the top-level block does) left nothing.
-        cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
-        if (length(cpngs) == 0) {
-            cat("*No MultiGSEA plots for this contrast.*\n\n")
-            next
-        }
-        for (cp in cpngs) {
-            show_multigsea_pair(cp, paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname)))
-        }
-        multigsea_pair_legend()
+    # Per-contrast dirs hold only the pairwise multigsea_<a>_vs_<b>.png
+    # plots — the combined figure is written at the top level only, so
+    # filtering "_vs_" out here (as the top-level block does) left nothing.
+    cpngs <- list.files(cdir, pattern = "^multigsea_.*\\.png$", full.names = TRUE)
+    if (length(cpngs) == 0) {
+        cat("*No MultiGSEA plots for this contrast.*\n\n")
+        next
     }
-} else {
-    # Single-contrast runs never reach this chunk (see single_contrast), so a
-    # missing directory here means the per-contrast step produced nothing.
-    cat("*Per-contrast MultiGSEA results not available.*\n")
+    for (cp in cpngs) {
+        show_multigsea_pair(cp, paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname)))
+    }
+    multigsea_pair_legend()
 }
 ```
 
