@@ -574,8 +574,8 @@ test_that("every legend with text from outside its call is checked", {
     known <- c(
         # conditions: both branches are already counted as constants
         "single_contrast", "pathview_has_compounds",
-        # a layer or view name, a few words at most; see the next test
-        "display_name", "view_name",
+        # a MOFA2 view name, a few words at most; see the next test
+        "view_name",
         # counted with the pathway-map legend above
         "pathview_significance_caption",
         # worst case checked in test-enzyme-metabolite-pairs.R
@@ -585,7 +585,7 @@ test_that("every legend with text from outside its call is checked", {
     used <- unique(unlist(strsplit(dyn$dynamic, ",", fixed = TRUE)))
     expect_identical(setdiff(used, known), character(0))
     # A name-filled legend leaves room for a name of three words.
-    named <- dyn[grepl("display_name|view_name", dyn$dynamic), ]
+    named <- dyn[grepl("view_name", dyn$dynamic, fixed = TRUE), ]
     expect_gt(nrow(named), 0)
     expect_true(all(n_words(named$text) <= 97), info = paste(named$text, collapse = " | "))
 })
@@ -633,4 +633,41 @@ test_that("the combined MultiGSEA figure and the DIABLO log2FC loadings are gone
     # The per-contrast MultiGSEA tab and the loadings enrichment stay.
     expect_true(grepl("multigsea-per-contrast", src, fixed = TRUE))
     expect_true(grepl("Loadings-Based Pathway Enrichment", src, fixed = TRUE))
+})
+
+test_that("the section is named for what is left in it", {
+    headings <- static_headings(template_lines())
+    expect_true("# Multi-ORA and Compound Enrichment {.tabset}" %in% headings)
+    expect_false(any(grepl("MultiGSEA Plots|Multi-Omics Enrichment", headings)))
+})
+
+test_that("a single-contrast run keeps its pairwise MultiGSEA figures", {
+    src <- template_lines()
+    joined <- paste(src, collapse = "\n")
+    # Shown under the contrast's own name, and only when there is something to
+    # show, as #249 does for the other per-contrast sections.
+    expect_true(grepl('`r if (has_multigsea && single_contrast) combined_tab(2, "")`',
+                      joined, fixed = TRUE))
+    line <- grep("^```\\{r multigsea-single-contrast,", src, value = TRUE)
+    expect_length(line, 1)
+    expect_true(grepl("eval=has_multigsea && single_contrast", line, fixed = TRUE))
+    # The same figures the per-contrast tab draws: the pairwise ones only.
+    expect_true(grepl('pattern = "^multigsea_.*_vs_.*\\\\.png$"', joined, fixed = TRUE))
+    # Drawn and captioned by one helper in both places (calls, not definitions).
+    expect_identical(lengths(regmatches(joined, gregexpr("show_multigsea_pair(",
+                                                         joined, fixed = TRUE))), 2L)
+    expect_identical(lengths(regmatches(joined, gregexpr("multigsea_pair_legend()",
+                                                         joined, fixed = TRUE))), 2L)
+})
+
+test_that("the pairwise MultiGSEA legend says what the figure can and cannot show", {
+    calls <- legend_calls(template_lines())
+    leg <- calls$text[grepl("One pair of layers compared", calls$text, fixed = TRUE)]
+    expect_length(leg, 1)
+    expect_lte(n_words(leg), 100)
+    for (phrase in c("Each point is a pathway", "-log10", "adjusted p-value",
+                     "sits at zero", "size or colour key",
+                     "not a measure of biological agreement")) {
+        expect_true(grepl(phrase, leg, fixed = TRUE), info = phrase)
+    }
 })

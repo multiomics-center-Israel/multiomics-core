@@ -617,7 +617,47 @@ render_commentary("translation_efficiency_scatter")
 
 ---
 
-# Multi-Omics Enrichment {.tabset}
+# Multi-ORA and Compound Enrichment {.tabset}
+
+```{r multigsea-pair-helpers, include=FALSE}
+# The pairwise MultiGSEA figures appear per contrast, and for a single-contrast
+# run under that contrast's name; both places draw and caption them alike.
+show_multigsea_pair <- function(png, chunk_prefix) {
+    pair_name <- gsub("multigsea_|\\.png$", "", basename(png))
+    chunk_id <- paste0(chunk_prefix, "-", gsub("[^a-zA-Z0-9]", "", pair_name))
+    cat(knitr::knit_child(text = sprintf(
+        '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
+        chunk_id, png
+    ), quiet = TRUE))
+    cat("\n\n")
+}
+multigsea_pair_legend <- function() {
+    figure_legend(paste(
+        "One pair of layers compared, pathway by pathway. Each point is a pathway",
+        "either layer scored; each axis is -log10 of that layer's adjusted p-value",
+        "(raw p where a result has none), and a pathway one layer did not score sits",
+        "at zero on its axis. The dashed line marks equal significance. Where a size",
+        "or colour key is shown, it is the two layers' average of the quantity it",
+        "names, an unscored layer counting as zero. The subtitle correlation compares",
+        "enrichment results across overlapping pathways, so its p-value is nominal;",
+        "it is not a measure of biological agreement."))
+}
+```
+
+`r if (has_multigsea && single_contrast) combined_tab(2, "")`
+
+```{r multigsea-single-contrast, eval=has_multigsea && single_contrast, results='asis'}
+# With one contrast the pipeline writes no per_contrast/ directory: the pairwise
+# figures at the top of multigsea/ are that contrast's own view.
+pair_pngs <- sort(list.files(multigsea_dir, pattern = "^multigsea_.*_vs_.*\\.png$",
+                             full.names = TRUE))
+if (length(pair_pngs) == 0) {
+    cat("*No pairwise MultiGSEA plots for this contrast.*\n\n")
+} else {
+    for (pp in pair_pngs) show_multigsea_pair(pp, "mg-sc")
+    multigsea_pair_legend()
+}
+```
 
 `r if (!single_contrast) "## Per-Contrast MultiGSEA {.tabset .unnumbered}"`
 
@@ -638,16 +678,9 @@ if (dir.exists(multigsea_per_contrast_dir)) {
             next
         }
         for (cp in cpngs) {
-            pair_name <- gsub("multigsea_|\\.png$", "", basename(cp))
-            display_name <- gsub("_", " ", pair_name)
-            chunk_id <- paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname), "-",
-                               gsub("[^a-zA-Z0-9]", "", pair_name))
-            cat(knitr::knit_child(text = sprintf(
-                '```{r %s, echo=FALSE}\nknitr::include_graphics("%s")\n```\n',
-                chunk_id, cp
-            ), quiet = TRUE))
-            cat("\n\n")
+            show_multigsea_pair(cp, paste0("mg-pc-", gsub("[^a-zA-Z0-9]", "", cname)))
         }
+        multigsea_pair_legend()
     }
 } else {
     # Single-contrast runs never reach this chunk (see single_contrast), so a
