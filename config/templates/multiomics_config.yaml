@@ -217,14 +217,57 @@ modes:
       exclude_pathway_classes: []
 
       # --- Top pathways of one layer, looked up in another ---
-      # For every pair of layers, both directions: the source layer's top
-      # pathways by its own raw p-value (its GSEA result where it has one,
-      # otherwise ORA), significant or not, beside what the other layer shows
-      # for the same pathways. Written as cross_lookup_<from>_to_<to>.tsv/.png.
+      # Exploratory, off by default. For every pair of layers, both
+      # directions: the source layer's top pathways by its own raw p-value (its
+      # GSEA result where it has one, otherwise ORA), among the pathways its
+      # enrichment step reported, beside what the other layer shows for the
+      # same pathways in the same contrast. The KEGG-from-DE fallback reports
+      # only pathways past its own cutoff, so for such a layer the ranking is
+      # not over every pathway it scored. A layer with no raw p-value column is
+      # skipped.
+      # Written as cross_lookup_<from>_to_<to>.tsv/.png, plus a report section.
       # Descriptive: nominal p-values, nothing re-tested.
       cross_lookup:
-        enabled: true
+        enabled: false
         top_n: 15
+
+      # --- Pathway enrichment of DIABLO loadings and MOFA2 weights ---
+      # "gsea": every feature of a view ranked by its signed loading (DIABLO) or
+      #   weight (MOFA2) on each component/factor, then GSEA. Each pathway gets
+      #   an NES whose sign follows the axis orientation; the report states
+      #   which condition scores higher on each axis.
+      # "ora": the top 50 features by absolute loading, then over-representation
+      #   (the earlier behaviour).
+      # The default changed from ORA to GSEA: a project config with no
+      # loadings.method now runs GSEA. Set method: "ora" to keep earlier results.
+      # Gene sets: KEGG for organisms with a KEGG code and OrgDb, otherwise the
+      # layer's pathway.gmt_file; KEGG compound pathways for metabolites.
+      loadings:
+        method: "gsea"
+        min_size: 10
+        max_size: 500
+
+      # --- Enzyme-metabolite pairs ---
+      # One row per (enzyme, metabolite) pair that KEGG links through an EC
+      # number: the enzyme's own change beside the measured metabolite's, in
+      # enzyme_metabolite_pairs.tsv and a report table. An annotation lookup,
+      # not a test -- KEGG says the enzyme class can act on the compound, not
+      # that it did here. Needs a KEGG organism code and an annotation
+      # database; skipped with a note when KEGG cannot be reached. Opt-in, since
+      # it reaches KEGG. Every switch below must be true or false.
+      enzyme_metabolite:
+        enabled: false
+        # false also pairs enzymes that did not change themselves
+        enzyme_hits_only: true
+        # a pair is kept only when enzyme and metabolite share a KEGG pathway,
+        # which is what stops cofactor links from flooding the table
+        require_shared_pathway: true
+        # ATP, NAD(H), water and the like: in thousands of reactions, so a pair
+        # with one says nothing about the enzyme
+        drop_currency_metabolites: true
+        # every changed enzyme is listed, with a note where nothing it acts on
+        # was measured; false keeps only the pairs
+        list_unpaired_enzymes: true
 
       # --- KEGG reference maps in KO space (pathview) ---
       # Only consulted when the organism has no OrgDb, which is the branch that
