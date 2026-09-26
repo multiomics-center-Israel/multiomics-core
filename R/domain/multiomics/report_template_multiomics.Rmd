@@ -153,6 +153,7 @@ loadings_enrich_dir <- file.path(run_dir, "loadings_enrichment")
 rna_prot_dir     <- file.path(run_dir, "rna_protein_correlation")
 multigsea_dir    <- file.path(run_dir, "multigsea")
 commentary_dir   <- file.path(run_dir, "commentary")
+consensus_dir    <- file.path(run_dir, "consensus", "consensus")
 
 # Load commentary if available
 commentary <- NULL
@@ -813,9 +814,7 @@ if (dir.exists(mora_per_contrast_dir)) {
         if (file.exists(c_csv)) {
             c_df <- read.csv(c_csv, stringsAsFactors = FALSE)
             c_show <- c_df[seq_len(min(20, nrow(c_df))), ]
-            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count",
-                                        "metabolomics_padj", "n_omics_support_pval",
-                                        "n_omics_support"), colnames(c_show))
+            display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(c_show))
             if (length(display_cols) > 0) {
                 c_show <- c_show[, display_cols, drop = FALSE]
                 cat(sprintf("\n**%s:** %d enriched pathways\n\n",
@@ -1746,16 +1745,49 @@ if (length(diablo_feat_files) > 0) {
 
 ## SNF
 
+```{r snf-vs-methods-setup, include=FALSE}
+# The consensus step already wrote the per-sample assignments of every method
+# and the agreement between their partitions; they are read here, beside the
+# clusters they explain, rather than left three sections away.
+snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")
+has_snf_cmp <- has_snf && file.exists(snf_cmp_file)
+# Which methods the comparison actually holds, from its own columns.
+snf_cmp_methods <- if (has_snf_cmp) {
+    tryCatch(setdiff(names(read.csv(snf_cmp_file, nrows = 1, check.names = FALSE)),
+                     c("sample_id", "consensus")),
+             error = function(e) character(0))
+} else character(0)
+.snf_agreement <- function(file, label) {
+    f <- file.path(consensus_dir, file)
+    if (!file.exists(f)) return(NULL)
+    m <- tryCatch(read.csv(f, row.names = 1, check.names = FALSE),
+                  error = function(e) NULL)
+    if (is.null(m) || !"snf" %in% rownames(m)) return(NULL)
+    others <- setdiff(colnames(m), "snf")
+    if (length(others) == 0) return(NULL)
+    sprintf("%s %s", label,
+            paste(sprintf("%.2f vs %s", as.numeric(m["snf", others]), others),
+                  collapse = ", "))
+}
+```
+
 ```{r snf-intro, eval=has_snf, results='asis'}
+# Only the methods that ran are named: a default run has DIABLO and SNF only.
+snf_others <- c(
+    if (has_diablo) "DIABLO, which looks for features that separate the conditions using their labels",
+    if (has_mofa) "MOFA2, which decomposes variation into factors without labels")
 cat("Similarity Network Fusion builds one sample-similarity network per omics",
     "layer and fuses them into a single network, then clusters the samples in",
     "it. It never sees the condition labels, so its clusters describe the",
-    "structure the fused data carries; whether they line up with the design is",
-    "for the reader to check against the table below. It answers a different",
-    "question from the other two methods: MOFA2 decomposes variation into",
-    "factors without labels, DIABLO looks for features that separate the",
-    "conditions with them. The three agreeing is evidence that one grouping",
-    "dominates; their disagreeing is not a fault in any of them.\n\n")
+    "structure the fused data carries.",
+    if (length(snf_others) > 0)
+        paste0("It answers a different question from ",
+               paste(snf_others, collapse = ", and from "), "."),
+    if (has_snf_cmp)
+        paste("The comparison below shows how its partition lines up with the",
+              "other methods'. Agreement means the methods produced similar",
+              "partitions; disagreement is not a fault in any of them."),
+    "\n\n")
 ```
 
 ```{r snf-heatmap, eval=has_snf, results='asis'}
@@ -1795,36 +1827,21 @@ if (file.exists(clusters_file)) {
 }
 ```
 
-```{r snf-vs-methods-setup, include=FALSE}
-# The consensus step already wrote the per-sample assignments of every method
-# and the agreement between their partitions. Read here, next to the clusters
-# they explain, rather than left three sections away. consensus_dir is defined
-# later in the document, so the path is built again.
-snf_cons_dir <- file.path(run_dir, "consensus", "consensus")
-snf_cmp_file <- file.path(snf_cons_dir, "sample_clusters_comparison.csv")
-has_snf_cmp <- has_snf && file.exists(snf_cmp_file)
-.snf_agreement <- function(file, label) {
-    f <- file.path(snf_cons_dir, file)
-    if (!file.exists(f)) return(NULL)
-    m <- tryCatch(read.csv(f, row.names = 1, check.names = FALSE),
-                  error = function(e) NULL)
-    if (is.null(m) || !"snf" %in% rownames(m)) return(NULL)
-    others <- setdiff(colnames(m), "snf")
-    if (length(others) == 0) return(NULL)
-    sprintf("%s %s", label,
-            paste(sprintf("%.2f vs %s", as.numeric(m["snf", others]), others),
-                  collapse = ", "))
-}
-```
-
 ```{r snf-vs-methods, eval=has_snf_cmp, results='asis'}
 cat("\n### Is this the same grouping the other methods found? {.unnumbered}\n\n")
 lines <- c(.snf_agreement("method_ari_matrix.csv", "Adjusted Rand index:"),
            .snf_agreement("method_nmi_matrix.csv", "Normalised mutual information:"))
 if (length(lines) > 0) cat(paste(lines, collapse = "  \n"), "\n\n")
 cat("Both compare partitions, not labels: a cluster numbered 1 here and 2 there",
-    "is the same grouping. 1 means the two methods split the samples",
-    "identically, 0 means no more agreement than chance.\n\n")
+    "can be the same grouping. The adjusted Rand index is corrected for chance:",
+    "1 means the two methods split the samples identically, and values near 0",
+    "mean chance-level agreement. Normalised mutual information is not: 1 still",
+    "means identical splits, but unrelated partitions can score above 0,",
+    "especially with few samples or many clusters.",
+    if ("diablo" %in% snf_cmp_methods)
+        paste("DIABLO's partition comes from its supervised component space, so",
+              "SNF-DIABLO agreement is not independent unsupervised confirmation."),
+    "\n\n")
 ```
 
 ```{r snf-vs-methods-table, eval=has_snf_cmp}
@@ -2111,7 +2128,6 @@ if (file.exists(mofa_le_csv)) {
 # Consensus Analysis {.tabset}
 
 ```{r consensus-setup, include=FALSE}
-consensus_dir <- file.path(run_dir, "consensus", "consensus")
 has_consensus <- dir.exists(consensus_dir) &&
     length(list.files(consensus_dir, "\\.png$|\\.csv$", recursive = TRUE)) > 0
 ```

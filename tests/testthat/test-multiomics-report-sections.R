@@ -730,3 +730,38 @@ test_that("the SNF section says what SNF is and compares it with the other metho
     expect_true(grepl("method_ari_matrix.csv", src, fixed = TRUE))
     expect_true(grepl("method_nmi_matrix.csv", src, fixed = TRUE))
 })
+
+test_that("the SNF context names only the methods that ran", {
+    src <- paste(template_lines(), collapse = "\n")
+    # A default run has DIABLO and SNF only; MOFA2 is deferred.
+    for (gone in c("the other two methods", "The three agreeing",
+                   "one grouping", "check against the table below")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    expect_true(grepl('if (has_diablo) "DIABLO, which looks for features', src, fixed = TRUE))
+    expect_true(grepl('if (has_mofa) "MOFA2, which decomposes variation', src, fixed = TRUE))
+    # The comparison is referred to only when it is there, and set up first.
+    expect_true(grepl("if (has_snf_cmp)\n        paste(\"The comparison below", src, fixed = TRUE))
+    expect_lt(regexpr("```{r snf-vs-methods-setup", src, fixed = TRUE),
+              regexpr("```{r snf-intro", src, fixed = TRUE))
+    expect_true(grepl("Agreement means the methods produced similar", src, fixed = TRUE))
+})
+
+test_that("ARI and NMI are read differently, and DIABLO's partition is caveated", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("The adjusted Rand index is corrected for chance", src, fixed = TRUE))
+    expect_true(grepl("Normalised mutual information is not", src, fixed = TRUE))
+    expect_true(grepl("unrelated partitions can score above 0", src, fixed = TRUE))
+    expect_false(grepl("0 means no more agreement than chance", src, fixed = TRUE))
+    expect_true(grepl('if ("diablo" %in% snf_cmp_methods)', src, fixed = TRUE))
+    expect_true(grepl("not independent unsupervised confirmation", src, fixed = TRUE))
+})
+
+test_that("the consensus directory is defined once and reused", {
+    src <- template_lines()
+    expect_length(grep("^consensus_dir +<- ", src), 1L)
+    expect_false(any(grepl("snf_cons_dir", src, fixed = TRUE)))
+    joined <- paste(src, collapse = "\n")
+    expect_true(grepl('snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")',
+                      joined, fixed = TRUE))
+})
