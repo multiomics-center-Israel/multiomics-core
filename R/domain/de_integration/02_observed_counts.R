@@ -106,6 +106,19 @@ layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL
                 "); its observed counts are unavailable.", call. = FALSE)
         return(none)
     }
+    # A group no counted sample carries (a typo, or a group missing from this
+    # matrix) would come back as an all-NA column, read as "not available".
+    sheet <- observed$samplesheet
+    in_matrix <- as.character(sheet[[ly$observed$sample_col]]) %in% colnames(observed$matrix)
+    present <- unique(as.character(sheet[[grp$factor]][in_matrix]))
+    absent <- setdiff(c(grp$numerator, grp$denominator), present)
+    if (length(absent) > 0) {
+        stop("Layer '", ly$name, "': observed.contrasts_file (",
+             basename(ly$observed$contrasts_file), ") names group(s) ",
+             paste(absent, collapse = ", "), " for contrast '", contrast, "', but no ",
+             "sample of observed.matrix has that value in the sample sheet's '",
+             grp$factor, "' column.", call. = FALSE)
+    }
     counts <- compute_group_stat_columns(
         expr = observed$matrix, sample_meta = observed$samplesheet,
         sample_id_col = ly$observed$sample_col,

@@ -292,6 +292,15 @@ test_that("an observed block that cannot serve its purpose stops the run", {
     expect_error(read_with(obs), "observed.matrix .*no column named after a sample")
 })
 
+test_that("a contrasts-file group that no counted sample carries stops the run", {
+    path <- write_table_tmp(prot_summary())
+    contr <- data.frame(Contrast_name = "A_vs_B", Factor = "Group",
+                        Numerator = "Treatd", Denominator = "B")
+    expect_error(read_de_layer(layer_cfg(path, observed = obs_block(contr)), "A_vs_B", NULL,
+                               hits_default),
+                 "Layer 'cells': observed.contrasts_file .*group\\(s\\) Treatd for contrast 'A_vs_B'.*'Group' column")
+})
+
 test_that("a contrast missing from the contrasts file leaves counts unavailable, with a warning", {
     path <- write_table_tmp(prot_summary())
     contr <- data.frame(Contrast_name = "C_vs_D", Factor = "Group",

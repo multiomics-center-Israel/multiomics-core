@@ -133,6 +133,54 @@ test_that("hit cutoffs are range-checked", {
         list(layers = two_layers(), hits = list(linear_fc_cutoff = 0.5))), ">= 1")
 })
 
+test_that("well_observed_min is a number", {
+    expect_error(validate_de_integration_config(list(layers = two_layers(),
+        concordance = list(well_observed_min = "2"))), "well_observed_min must be a number")
+    expect_error(validate_de_integration_config(list(layers = two_layers(),
+        concordance = list(well_observed_min = -1))), "well_observed_min")
+})
+
+test_that("a layer's hit override is checked as the settings it will use", {
+    ly <- two_layers(); ly[[1]]$hits <- list(linear_fc_cutoff = 0.5)
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "layers\\[\\[1\\]\\] \\('cells'\\).hits.linear_fc_cutoff .*>= 1")
+    ly[[1]]$hits <- list(p_cutoff = 2)
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "\\('cells'\\).hits.p_cutoff must be a number in \\(0, 1\\]")
+    ly[[1]]$hits <- list(use_adjusted = "yes")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "\\('cells'\\).hits.use_adjusted must be true or false")
+    ly[[1]]$hits <- list(p_cutof = 0.01)
+    expect_error(validate_de_integration_config(list(layers = ly)), "unknown key\\(s\\): p_cutof")
+    ly[[1]]$hits <- list(p_cutoff = 0.01, use_table_flag = FALSE)
+    expect_silent(validate_de_integration_config(list(layers = ly)))
+})
+
+test_that("every column-map entry of a generic layer is one column name", {
+    ly <- two_layers()
+    ly[[1]]$format <- "generic"
+    ly[[1]]$columns <- list(id = "protein", pvalue = NULL, log2fc = "logFC")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "columns.pvalue must each be one column name")
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = "logFC", padj = "")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "columns.padj must each be one column name")
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = c("a", "b"))
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "columns.log2fc must each be one column name")
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = "logFC", padjj = "q")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "unknown key\\(s\\): padjj")
+})
+
+test_that("a blank YAML mapping is caught, not dropped", {
+    y <- yaml::yaml.load("columns: {id: protein, pvalue: P, log2fc: logFC, padj: }")
+    ly <- two_layers()
+    ly[[1]]$format <- "generic"
+    ly[[1]]$columns <- y$columns
+    expect_error(validate_de_integration_config(list(layers = ly)), "columns.padj")
+})
+
 test_that("validate_config() hands the section to the validator and keeps its defaults", {
     cfg <- validate_config(list(paths = list(raw = "data"), params = list(seed = 1),
                                 modes = list(de_integration = list(layers = two_layers()))))

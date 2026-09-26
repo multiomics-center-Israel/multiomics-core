@@ -13,6 +13,43 @@ de_integration_formats <- function() {
 }
 
 
+#' Keys a generic layer's \code{columns} map may hold
+#'
+#' @return Character vector of the accepted keys.
+de_integration_column_keys <- function() {
+    c("id", "symbol", "gene_id", "description", "log2fc", "linear_fc", "pvalue",
+      "padj", "hit", "n_obs_num", "n_obs_den")
+}
+
+
+#' Check one set of hit settings
+#'
+#' The global \code{hits} and every layer's override merged onto it go
+#' through the same checks, so an override cannot slip a threshold past them.
+#'
+#' @param hits Hit settings with every default filled in.
+#' @param at Config path of the settings, for the error message.
+#' @return \code{hits}, invisibly.
+.check_dei_hits <- function(hits, at) {
+    for (k in c("use_table_flag", "use_adjusted")) {
+        v <- hits[[k]]
+        if (!is.logical(v) || length(v) != 1 || is.na(v)) {
+            stop(at, ".", k, " must be true or false.", call. = FALSE)
+        }
+    }
+    p <- hits$p_cutoff
+    if (!is.numeric(p) || length(p) != 1 || is.na(p) || p <= 0 || p > 1) {
+        stop(at, ".p_cutoff must be a number in (0, 1].", call. = FALSE)
+    }
+    fc <- hits$linear_fc_cutoff
+    if (!is.numeric(fc) || length(fc) != 1 || is.na(fc) || fc < 1) {
+        stop(at, ".linear_fc_cutoff is a linear fold change and must be ",
+             ">= 1 (1.5 means 1.5-fold either way).", call. = FALSE)
+    }
+    invisible(hits)
+}
+
+
 #' Validate the DE-integration config and fill its defaults
 #'
 #' Checks every layer and comparison and fills the defaults the readers rely
@@ -74,6 +111,27 @@ validate_de_integration_config <- function(cfg) {
         }
         if (identical(ly$format, "generic")) {
             cols <- ly$columns %||% list()
+            # A key present but blank (YAML "padj:") or misspelt would otherwise
+            # be dropped, and the reader would fall back to BH or cutoffs.
+            if (!is.list(cols) || (length(cols) > 0 && is.null(names(cols)))) {
+                stop(at, " ('", nm, "').columns must map keys to column names, ",
+                     "e.g. {id: protein, pvalue: P.Value}.", call. = FALSE)
+            }
+            unknown_keys <- setdiff(names(cols), de_integration_column_keys())
+            if (length(unknown_keys) > 0) {
+                stop(at, " ('", nm, "').columns has unknown key(s): ",
+                     paste(unknown_keys, collapse = ", "), ". Known: ",
+                     paste(de_integration_column_keys(), collapse = ", "), ".",
+                     call. = FALSE)
+            }
+            blank <- names(cols)[!vapply(cols, function(v) {
+                is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
+            }, logical(1))]
+            if (length(blank) > 0) {
+                stop(at, " ('", nm, "').columns.", paste(blank, collapse = ", columns."),
+                     " must each be one column name; remove a key to leave it unmapped.",
+                     call. = FALSE)
+            }
             missing <- c("id", "pvalue")[!c("id", "pvalue") %in% names(cols)]
             if (is.null(cols$log2fc) && is.null(cols$linear_fc)) {
                 missing <- c(missing, "log2fc (or linear_fc)")
@@ -165,17 +223,33 @@ validate_de_integration_config <- function(cfg) {
     hits$p_cutoff         <- hits$p_cutoff %||% 0.05
     hits$use_adjusted     <- hits$use_adjusted %||% TRUE
     hits$linear_fc_cutoff <- hits$linear_fc_cutoff %||% 1.5
-    if (!is.numeric(hits$p_cutoff) || hits$p_cutoff <= 0 || hits$p_cutoff > 1) {
-        stop(where, ".hits.p_cutoff must be a number in (0, 1].", call. = FALSE)
-    }
-    if (!is.numeric(hits$linear_fc_cutoff) || hits$linear_fc_cutoff < 1) {
-        stop(where, ".hits.linear_fc_cutoff is a linear fold change and must be ",
-             ">= 1 (1.5 means 1.5-fold either way).", call. = FALSE)
-    }
+    .check_dei_hits(hits, paste0(where, ".hits"))
     cfg$hits <- hits
+
+    # read_de_layer() merges each override onto the global settings the same
+    # way; what is checked here is the threshold that layer will actually use.
+    for (i in seq_along(cfg$layers)) {
+        ov <- cfg$layers[[i]]$hits
+        if (is.null(ov)) next
+        at <- sprintf("%s.layers[[%d]] ('%s').hits", where, i, cfg$layers[[i]]$name)
+        if (!is.list(ov) || (length(ov) > 0 && is.null(names(ov)))) {
+            stop(at, " must be a map of hit settings.", call. = FALSE)
+        }
+        bad_keys <- setdiff(names(ov), names(hits))
+        if (length(bad_keys) > 0) {
+            stop(at, " has unknown key(s): ", paste(bad_keys, collapse = ", "), ".",
+                 call. = FALSE)
+        }
+        .check_dei_hits(utils::modifyList(hits, ov), at)
+    }
 
     conc <- cfg$concordance %||% list()
     conc$well_observed_min <- conc$well_observed_min %||% 2
+    w <- conc$well_observed_min
+    if (!is.numeric(w) || length(w) != 1 || is.na(w) || w < 0) {
+        stop(where, ".concordance.well_observed_min must be a number >= 0 ",
+             "(observed values each group needs).", call. = FALSE)
+    }
     cfg$concordance <- conc
 
     cfg
