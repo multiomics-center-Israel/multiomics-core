@@ -54,30 +54,40 @@
 #' @return List with \code{values} (numeric, one per row) and \code{source}
 #'   (text naming the column or rule used).
 layer_log2fc <- function(df, cols, where = "The layer's table") {
-    num <- function(nm) .dei_numeric_col(df, nm, where, what = "fold changes")
+    # Every fold change must be finite: an infinite one clears any |log2FC|
+    # cutoff, and a NaN silently drops the feature.
+    num <- function(nm) .dei_numeric_col(df, nm, where, finite = TRUE, what = "fold changes")
+    # A signed linear fold change is >= 1 up or <= -1 down; anything between is
+    # not in that convention -- signed_fc_to_log2() would read -0.5 as a
+    # doubling, and a 0 would carry no sign at all.
+    signed_fc <- function(nm) {
+        fc <- num(nm)
+        if (any(!is.na(fc) & abs(fc) < 1)) {
+            stop(where, ": column '", nm, "' must hold signed linear fold changes ",
+                 "(>= 1 for an increase, <= -1 for a decrease); it has values between ",
+                 "-1 and 1. Map a log2 fold change instead if that is what it holds.",
+                 call. = FALSE)
+        }
+        fc
+    }
     for (nm in cols$log2fc) {
         if (nm %in% names(df)) return(list(values = num(nm), source = nm))
     }
     has <- function(nm) !is.null(nm) && nm %in% names(df)
     if (has(cols$linear_ratio) && has(cols$linear_fc)) {
         ratio <- num(cols$linear_ratio)
-        sgn <- sign(num(cols$linear_fc))
+        if (any(!is.na(ratio) & ratio <= 0)) {
+            stop(where, ": column '", cols$linear_ratio, "' must hold positive linear ",
+                 "ratios; it has values <= 0, whose log2 is not a fold change.",
+                 call. = FALSE)
+        }
+        sgn <- sign(signed_fc(cols$linear_fc))
         return(list(values = sgn * abs(log2(ratio)),
                     source = sprintf("sign(%s) * |log2(%s)|", cols$linear_fc,
                                      cols$linear_ratio)))
     }
     if (has(cols$linear_fc)) {
-        # A signed linear fold change is >= 1 up or <= -1 down; anything between
-        # is not in that convention, and signed_fc_to_log2() would read -0.5 as
-        # a doubling -- a decrease turned into an increase.
-        fc <- num(cols$linear_fc)
-        if (any(!is.na(fc) & abs(fc) < 1)) {
-            stop(where, ": column '", cols$linear_fc, "' must hold signed linear fold ",
-                 "changes (>= 1 for an increase, <= -1 for a decrease); it has values ",
-                 "between -1 and 1. Map a log2 fold change instead if that is what it holds.",
-                 call. = FALSE)
-        }
-        return(list(values = signed_fc_to_log2(fc),
+        return(list(values = signed_fc_to_log2(signed_fc(cols$linear_fc)),
                     source = paste0(cols$linear_fc, " (3 significant digits)")))
     }
     stop("No fold-change column found; looked for: ",

@@ -409,6 +409,24 @@ test_that("a signed linear fold change between -1 and 1 stops the run", {
                  "column 'FC' must hold signed linear fold changes")
 })
 
+test_that("fold changes must be finite, and ratios positive", {
+    read_prot <- function(df) {
+        read_de_layer(layer_cfg(write_table_tmp(df)), "A_vs_B", NULL, hits_default)
+    }
+    df <- prot_summary(); df$log2FC.imputs.A_vs_B <- NULL
+    df$linearRatio.imputs.A_vs_B <- c(0, 4, 1.07)
+    expect_error(read_prot(df), "column 'linearRatio.imputs.A_vs_B' must hold positive")
+    df$linearRatio.imputs.A_vs_B <- c(-2, 4, 1.07)
+    expect_error(read_prot(df), "must hold positive linear ratios")
+    # The sign source is held to the signed convention too.
+    df <- prot_summary(); df$log2FC.imputs.A_vs_B <- NULL
+    df$linearFC.imputs.A_vs_B <- c(2.3, -0.25, 1.07)
+    expect_error(read_prot(df), "linearFC.imputs.A_vs_B' must hold signed linear fold changes")
+    expect_error(.dei_numeric_col(data.frame(L = c(1, -Inf)), "L", "Layer 'x'", finite = TRUE,
+                                  what = "fold changes"),
+                 "must hold fold changes; it has values that are not finite")
+})
+
 test_that("an annotation row without a symbol neither clashes nor hides one", {
     rna <- data.frame(Gene = c("ENSG1", "ENSG2"),
                       log2FC.A_vs_B = c(1, -1), pvalue.A_vs_B = c(0.01, 0.02),
