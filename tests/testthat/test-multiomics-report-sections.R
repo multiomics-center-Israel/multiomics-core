@@ -132,6 +132,22 @@ test_that("more contrasts in the outputs than in the config is not single-contra
     expect_identical(lay$n_contrasts, 3L)
 })
 
+test_that("Multi-ORA's own per-contrast outputs count too", {
+    # MultiGSEA produced nothing per contrast, but Multi-ORA, which runs on its
+    # own, wrote two: the Multi-ORA per-contrast section must not be hidden.
+    mg <- withr::local_tempdir()
+    contrast_dirs(file.path(mg, "multi_ora"), c("A_vs_B", "C_vs_D"))
+    lay <- report_contrast_layout(list("A_vs_B"), withr::local_tempdir(), mg)
+    expect_false(lay$single_contrast)
+    expect_identical(lay$n_contrasts, 2L)
+
+    # And a lone Multi-ORA directory names a single-contrast run.
+    mg1 <- withr::local_tempdir()
+    contrast_dirs(file.path(mg1, "multi_ora"), "P_vs_Q")
+    expect_identical(report_contrast_layout(NULL, withr::local_tempdir(), mg1)$label,
+                     "P vs Q")
+})
+
 test_that("more contrasts in the config than in the outputs is not single-contrast", {
     enr <- contrast_dirs(withr::local_tempdir(), "A_vs_B")
     lay <- report_contrast_layout(list("A_vs_B", "C_vs_D"), enr, withr::local_tempdir())

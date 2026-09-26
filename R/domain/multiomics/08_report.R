@@ -100,12 +100,16 @@ render_multiomics_report <- function(run_dir, config, config_file = NULL) {
 #' was configured: the design block records the intent, but the pipeline writes
 #' one `per_contrast/` directory per contrast it actually found in the data,
 #' and a run fed per-omics DE tables can hold more contrasts than its design
-#' lists. The count is the largest of the three, so a run is only treated as
-#' single-contrast when neither the config nor any output says otherwise.
+#' lists. Each of the three per-contrast report sections has its own producer
+#' -- enrichment, MultiGSEA and Multi-ORA, the last of which runs even when
+#' MultiGSEA does not -- so all three are counted. The count is the largest of
+#' the design and those outputs, so a run is only treated as single-contrast
+#' when neither the config nor any output says otherwise.
 #'
 #' @param design_contrasts The config's \code{design$contrasts}, or NULL.
 #' @param enrichment_dir Cross-omics enrichment output directory.
-#' @param multigsea_dir MultiGSEA output directory.
+#' @param multigsea_dir MultiGSEA output directory; Multi-ORA writes under its
+#'   \code{multi_ora/} subdirectory.
 #' @return List with \code{n_contrasts}, \code{single_contrast} (logical) and
 #'   \code{label}: the lone contrast's name for a single-contrast run (from its
 #'   output directory, else the design), or "Results" when none is known.
@@ -120,12 +124,15 @@ report_contrast_layout <- function(design_contrasts, enrichment_dir, multigsea_d
     design <- as.character(unlist(design_contrasts, use.names = FALSE))
     enrich <- contrast_dirs(enrichment_dir)
     mg <- contrast_dirs(multigsea_dir)
+    mora <- contrast_dirs(file.path(multigsea_dir, "multi_ora"))
 
-    n_contrasts <- max(length(design), length(enrich), length(mg))
+    n_contrasts <- max(length(design), length(enrich), length(mg), length(mora))
     label <- if (length(enrich) == 1) {
         gsub("_", " ", enrich)
     } else if (length(mg) == 1) {
         gsub("_", " ", mg)
+    } else if (length(mora) == 1) {
+        gsub("_", " ", mora)
     } else if (length(design) == 1) {
         design
     } else {
