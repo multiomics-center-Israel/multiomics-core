@@ -384,6 +384,53 @@ test_that("an annotation giving one gene id two symbols stops the run", {
     expect_identical(ly$tables$A_vs_B$symbol, c("G1", "ENSG2"))
 })
 
+test_that("BH runs over the rows the table keeps, not the ones it drops", {
+    ext <- data.frame(prot = c("X1", "X2", "X2", NA), logFC = c(2, 2, 2, 2),
+                      P = c(0.01, 0.02, 0.5, 0.03), stringsAsFactors = FALSE)
+    expect_warning(
+        ly <- read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                      contrast = "T_vs_C",
+                                      columns = list(id = "prot", log2fc = "logFC", pvalue = "P")),
+                            "T_vs_C", NULL, hits_default),
+        "1 duplicated feature id")
+    tab <- ly$tables$T_vs_C
+    expect_identical(tab$feature_id, c("X1", "X2"))
+    expect_equal(tab$pvalue, c(0.01, 0.02))
+    expect_equal(tab$padj, p.adjust(c(0.01, 0.02), "BH"))
+})
+
+test_that("a signed linear fold change between -1 and 1 stops the run", {
+    ext <- data.frame(prot = c("X1", "X2"), FC = c(2, -0.5), P = c(0.01, 0.02))
+    expect_error(read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                         contrast = "T_vs_C",
+                                         columns = list(id = "prot", linear_fc = "FC",
+                                                        pvalue = "P")),
+                               "T_vs_C", NULL, hits_default),
+                 "column 'FC' must hold signed linear fold changes")
+})
+
+test_that("an annotation row without a symbol neither clashes nor hides one", {
+    rna <- data.frame(Gene = c("ENSG1", "ENSG2"),
+                      log2FC.A_vs_B = c(1, -1), pvalue.A_vs_B = c(0.01, 0.02),
+                      padj.A_vs_B = c(0.04, 0.04), stringsAsFactors = FALSE)
+    path <- write_table_tmp(rna)
+    # The blank row comes first, so a first-match lookup would find no symbol.
+    ann <- write_table_tmp(data.frame(gene_id = c("ENSG1", "ENSG1"), symbol = c(NA, "G1")),
+                           "csv")
+    ly <- read_de_layer(layer_cfg(path, format = "rnaseq_summary", omics = "rnaseq",
+                                  annotation_file = ann), "A_vs_B", NULL, hits_default)
+    expect_identical(ly$tables$A_vs_B$symbol, c("G1", "ENSG2"))
+    expect_identical(ly$tables$A_vs_B$symbol_source, c("symbol", "gene_id"))
+})
+
+test_that("a contrasts file with a blank Contrast_name stops the run", {
+    path <- write_table_tmp(prot_summary())
+    obs <- obs_block(data.frame(Contrast_name = c("A_vs_B", NA), Factor = "Group",
+                                Numerator = c("A", "B"), Denominator = c("B", "A")))
+    expect_error(read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default),
+                 "observed.contrasts_file .*blank or missing Contrast_name")
+})
+
 test_that("a contrast missing from the contrasts file leaves counts unavailable, with a warning", {
     path <- write_table_tmp(prot_summary())
     contr <- data.frame(Contrast_name = "C_vs_D", Factor = "Group",

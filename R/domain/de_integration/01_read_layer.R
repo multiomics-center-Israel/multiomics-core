@@ -67,7 +67,17 @@ layer_log2fc <- function(df, cols, where = "The layer's table") {
                                      cols$linear_ratio)))
     }
     if (has(cols$linear_fc)) {
-        return(list(values = signed_fc_to_log2(num(cols$linear_fc)),
+        # A signed linear fold change is >= 1 up or <= -1 down; anything between
+        # is not in that convention, and signed_fc_to_log2() would read -0.5 as
+        # a doubling -- a decrease turned into an increase.
+        fc <- num(cols$linear_fc)
+        if (any(!is.na(fc) & abs(fc) < 1)) {
+            stop(where, ": column '", cols$linear_fc, "' must hold signed linear fold ",
+                 "changes (>= 1 for an increase, <= -1 for a decrease); it has values ",
+                 "between -1 and 1. Map a log2 fold change instead if that is what it holds.",
+                 call. = FALSE)
+        }
+        return(list(values = signed_fc_to_log2(fc),
                     source = paste0(cols$linear_fc, " (3 significant digits)")))
     }
     stop("No fold-change column found; looked for: ",
@@ -189,10 +199,13 @@ layer_symbols <- function(ly, df, cols, ids, annotation = NULL) {
 #' A configured \code{annotation_file} is how an RNA layer gets symbols, so a
 #' file without its \code{gene_id} and \code{symbol} columns stops the run
 #' rather than leaving every feature keyed on its gene id with nothing said.
+#' Rows without a symbol say nothing and are dropped; a gene id given two
+#' different symbols is an error.
 #'
 #' @param ly The layer's config.
 #' @param config Full config, for path resolution.
-#' @return The annotation table, or NULL when the layer names none.
+#' @return Data frame with one row per annotated gene id (\code{gene_id},
+#'   \code{symbol}), or NULL when the layer names none.
 read_layer_annotation <- function(ly, config) {
     if (is.null(ly$annotation_file)) return(NULL)
     path <- resolve_input_path(config, ly$annotation_file)
@@ -202,18 +215,21 @@ read_layer_annotation <- function(ly, config) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
              paste(gap, collapse = ", "), ".", call. = FALSE)
     }
-    # match() would silently take the first of two symbols for one gene id.
+    # match() would silently take the first of two symbols for one gene id,
+    # or a blank row ahead of the one that names it.
     pairs <- unique(data.frame(gene_id = as.character(ann$gene_id),
                                symbol = trimws(as.character(ann$symbol)),
                                stringsAsFactors = FALSE))
-    pairs <- pairs[!is.na(pairs$gene_id), , drop = FALSE]
+    pairs <- pairs[!is.na(pairs$gene_id) & nzchar(pairs$gene_id) &
+                   !is.na(pairs$symbol) & nzchar(pairs$symbol), , drop = FALSE]
     clash <- unique(pairs$gene_id[duplicated(pairs$gene_id)])
     if (length(clash) > 0) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") gives more than one ",
              "symbol for gene id(s) ", paste(utils::head(clash, 5), collapse = ", "),
              if (length(clash) > 5) ", ..." else "", ".", call. = FALSE)
     }
-    ann
+    rownames(pairs) <- NULL
+    pairs
 }
 
 
@@ -275,26 +291,45 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
                  basename(path), " for contrast '", contrast, "'.", call. = FALSE)
         }
         where <- sprintf("Layer '%s' (%s)", ly$name, basename(path))
-        ids <- as.character(df[[id_col]])
-        lfc <- layer_log2fc(df, cols, where)
-        pvalue <- .dei_numeric_col(df, cols$pvalue, where, 0, 1, finite = TRUE,
-                                   what = "p-values")
+        all_ids <- as.character(df[[id_col]])
+        all_p <- .dei_numeric_col(df, cols$pvalue, where, 0, 1, finite = TRUE,
+                                  what = "p-values")
+
+        # One row per feature, chosen before anything is computed from the rows:
+        # a duplicated id would pair twice later on, and a BH over rows that are
+        # then dropped would adjust over a family the table no longer holds. The
+        # smallest p-value is kept, then the first in id order, so reruns agree;
+        # radix sorts ids bytewise, so the order is the same under any locale.
+        valid <- which(!is.na(all_ids) & nzchar(all_ids))
+        ord <- valid[order(all_ids[valid], all_p[valid], na.last = TRUE, method = "radix")]
+        keep <- ord[!duplicated(all_ids[ord])]
+        n_dup <- length(ord) - length(keep)
+        if (n_dup > 0) {
+            warning("Layer '", ly$name, "', contrast '", contrast, "': ", n_dup,
+                    " duplicated feature id(s); kept the row with the smallest p-value.",
+                    call. = FALSE)
+        }
+        d <- df[keep, , drop = FALSE]
+        ids <- all_ids[keep]
+        pvalue <- all_p[keep]
+
+        lfc <- layer_log2fc(d, cols, where)
         # Which it was goes into the provenance: a BH computed here, over the
         # rows this table kept, is not the adjusted p-value its producer reported.
         has_padj <- !is.null(cols$padj) && cols$padj %in% cn
         padj <- if (has_padj) {
-            .dei_numeric_col(df, cols$padj, where, 0, 1, finite = TRUE,
+            .dei_numeric_col(d, cols$padj, where, 0, 1, finite = TRUE,
                              what = "adjusted p-values")
         } else {
             stats::p.adjust(pvalue, method = "BH")
         }
         padj_source <- if (has_padj) cols$padj else paste0("BH of ", cols$pvalue)
-        hit <- layer_hit_flags(df, cols, lfc$values, pvalue, padj, hits_cfg)
-        obs <- layer_observed_counts(ly, df, ids, contrast, config, observed)
-        sym <- layer_symbols(ly, df, cols, ids, annotation)
+        hit <- layer_hit_flags(d, cols, lfc$values, pvalue, padj, hits_cfg)
+        obs <- layer_observed_counts(ly, d, ids, contrast, config, observed)
+        sym <- layer_symbols(ly, d, cols, ids, annotation)
         desc <- if (!is.null(cols$description) && cols$description %in% cn) {
-            as.character(df[[cols$description]])
-        } else rep(NA_character_, nrow(df))
+            as.character(d[[cols$description]])
+        } else rep(NA_character_, nrow(d))
 
         tab <- data.frame(
             feature_id = ids, symbol = sym$symbol, symbol_source = sym$symbol_source,
@@ -303,20 +338,6 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
             stringsAsFactors = FALSE)
         tab$well_observed <- ifelse(is.na(tab$n_obs_num) | is.na(tab$n_obs_den), NA,
                                     pmin(tab$n_obs_num, tab$n_obs_den) >= well_observed_min)
-
-        # One row per feature: a duplicated id would pair twice later on. The
-        # smallest p-value is kept, then the first in id order, so reruns agree.
-        # Radix sorts ids bytewise, so the order is the same under any locale.
-        tab <- tab[!is.na(tab$feature_id) & nzchar(tab$feature_id), , drop = FALSE]
-        tab <- tab[order(tab$feature_id, tab$pvalue, na.last = TRUE, method = "radix"), ,
-                   drop = FALSE]
-        n_dup <- sum(duplicated(tab$feature_id))
-        if (n_dup > 0) {
-            warning("Layer '", ly$name, "', contrast '", contrast, "': ", n_dup,
-                    " duplicated feature id(s); kept the row with the smallest p-value.",
-                    call. = FALSE)
-            tab <- tab[!duplicated(tab$feature_id), , drop = FALSE]
-        }
         rownames(tab) <- NULL
 
         tables[[requested]] <- tab

@@ -200,6 +200,9 @@ read_observed_inputs <- function(ly, config) {
         fail("contrasts_file", contr$path, paste("lacks column(s):", paste(gap, collapse = ", ")))
     }
     keys <- normalize_contrast_key(as.character(contr$df$Contrast_name))
+    if (any(is.na(keys) | !nzchar(keys))) {
+        fail("contrasts_file", contr$path, "has a blank or missing Contrast_name")
+    }
     if (anyDuplicated(keys)) {
         fail("contrasts_file", contr$path,
              paste0("names one contrast more than once (",
