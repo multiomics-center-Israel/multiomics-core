@@ -453,14 +453,32 @@ test_that("a repeated column name in any input stops the run", {
                               "P1\t20\t21\t19\t20", "P2;P9\tNA\tNA\t22\t23",
                               "P3\t15\t15\tNA\t16"), "tsv")
     expect_error(read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default),
-                 "Layer 'cells': observed.matrix .*repeated or blank column name")
+                 "Layer 'cells': observed.matrix .*repeated column name \\(s1\\)")
 
     # The DE table itself: two p-value columns for one contrast.
     df <- prot_summary()
     lines <- c(paste(c(names(df), "pvalue.imputs.A_vs_B"), collapse = "\t"),
                apply(cbind(df, 0.5), 1, paste, collapse = "\t"))
     expect_error(read_de_layer(layer_cfg(write_raw(lines, "tsv")), "A_vs_B", NULL, hits_default),
-                 "Layer 'cells': path .*repeated or blank column name")
+                 "Layer 'cells': path .*repeated column name \\(pvalue.imputs.A_vs_B\\)")
+
+    # A blank header cell.
+    obs <- obs_block()
+    obs$matrix <- write_raw(c("Protein.Group\ts1\t\ts3\ts4",
+                              "P1\t20\t21\t19\t20", "P2;P9\tNA\tNA\t22\t23",
+                              "P3\t15\t15\tNA\t16"), "tsv")
+    expect_error(read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default),
+                 "observed.matrix .*a blank column name")
+})
+
+test_that("a unique column name that merely ends in ...<n> is accepted", {
+    # Checked on the header as written, not on the names readr hands back.
+    f <- tempfile(fileext = ".csv")
+    writeLines(c("sample...1,sample...2", "1,2"), f)
+    df <- data.frame(a = 1, b = 2)
+    expect_silent(.dei_check_header(df, f, "Layer 'x'"))
+    writeLines(c("s1,s1", "1,2"), f)
+    expect_error(.dei_check_header(df, f, "Layer 'x'"), "repeated column name \\(s1\\)")
 })
 
 test_that("an observed matrix with infinite values stops the run", {

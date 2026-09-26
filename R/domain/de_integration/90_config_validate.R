@@ -22,12 +22,12 @@ de_integration_column_keys <- function() {
 }
 
 
-#' TRUE for one non-empty string
+#' TRUE for one string that is not empty or only spaces
 #'
 #' @param v Any value.
 #' @return TRUE or FALSE.
 .dei_is_name <- function(v) {
-    is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
+    is.character(v) && length(v) == 1 && !is.na(v) && nzchar(trimws(v))
 }
 
 

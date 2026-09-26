@@ -173,7 +173,7 @@ read_observed_inputs <- function(ly, config) {
             fail(key, path, paste("cannot be read:", conditionMessage(e)))
         })
         if (!is.data.frame(out) || nrow(out) == 0) fail(key, path, "cannot be read, or is empty")
-        .dei_check_header(out, sprintf("Layer '%s': observed.%s (%s)", ly$name, key, path))
+        .dei_check_header(out, path, sprintf("Layer '%s': observed.%s (%s)", ly$name, key, path))
         list(df = out, path = path)
     }
 

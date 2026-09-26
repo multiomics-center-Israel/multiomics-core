@@ -39,20 +39,42 @@
 
 #' Stop on a table whose header repeats or leaves out a column name
 #'
-#' readr renames a repeated or blank header ("s1" twice becomes "s1" and
+#' readr renames a repeated or blank header ("s1" twice becomes "s1...1" and
 #' "s1...3"), so a lookup by name silently takes one copy and drops the other
-#' -- one of two p-value columns, or a sample's second column. Every table this
-#' mode reads is checked here.
+#' -- one of two p-value columns, or a sample's second column. The header is
+#' re-read without repair and checked as written, so a unique name that merely
+#' ends in "...<n>" is left alone. Every table this mode reads is checked here.
 #'
-#' @param df A table from \code{read_table_auto()}.
+#' @param df A table from \code{read_table_auto()} or \code{read_samplesheet()}.
+#' @param path The file it was read from.
 #' @param where Which layer, key and file, for the error message.
 #' @return \code{df}, invisibly.
-.dei_check_header <- function(df, where) {
-    repaired <- grep("\\.\\.\\.[0-9]+$", names(df), value = TRUE)
-    if (length(repaired) > 0) {
-        stop(where, " has a repeated or blank column name in its header (read as ",
-             paste(utils::head(repaired, 5), collapse = ", "),
-             "). Give every column its own name.", call. = FALSE)
+.dei_check_header <- function(df, path, where) {
+    raw <- NULL
+    # The delimiter whose header has as many fields as the table read is the
+    # one its reader used.
+    for (delim in c("\t", ",")) {
+        r <- tryCatch(names(readr::read_delim(path, delim = delim, n_max = 0,
+                                              name_repair = "minimal",
+                                              col_types = readr::cols(.default = "c"),
+                                              show_col_types = FALSE, progress = FALSE)),
+                      error = function(e) NULL)
+        if (length(r) == ncol(df)) {
+            raw <- r
+            break
+        }
+    }
+    if (is.null(raw)) return(invisible(df))
+    blank <- is.na(raw) | !nzchar(trimws(raw))
+    rep_names <- unique(raw[!blank & duplicated(raw)])
+    if (any(blank) || length(rep_names) > 0) {
+        stop(where, " has ",
+             if (length(rep_names) > 0) paste0("a repeated column name (",
+                                               paste(utils::head(rep_names, 5), collapse = ", "),
+                                               ")") else "",
+             if (length(rep_names) > 0 && any(blank)) " and " else "",
+             if (any(blank)) "a blank column name" else "",
+             " in its header. Give every column its own name.", call. = FALSE)
     }
     invisible(df)
 }
@@ -241,7 +263,7 @@ read_layer_annotation <- function(ly, config) {
     if (is.null(ly$annotation_file)) return(NULL)
     path <- resolve_input_path(config, ly$annotation_file)
     ann <- read_table_auto(path)
-    .dei_check_header(ann, sprintf("Layer '%s': annotation_file (%s)", ly$name, path))
+    .dei_check_header(ann, path, sprintf("Layer '%s': annotation_file (%s)", ly$name, path))
     gap <- setdiff(c("gene_id", "symbol"), names(ann))
     if (length(gap) > 0) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
@@ -285,7 +307,7 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
                           well_observed_min = 2, df = NULL) {
     path <- resolve_input_path(config, ly$path)
     if (is.null(df)) df <- read_table_auto(path)
-    .dei_check_header(df, sprintf("Layer '%s': path (%s)", ly$name, path))
+    .dei_check_header(df, path, sprintf("Layer '%s': path (%s)", ly$name, path))
     cn <- names(df)
     available <- list_layer_contrasts(cn, ly$format, ly$contrast %||% "contrast")
     hits_cfg <- utils::modifyList(hits_default, ly$hits %||% list())

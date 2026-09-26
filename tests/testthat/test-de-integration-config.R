@@ -182,6 +182,9 @@ test_that("contrast and columns belong to generic tables, and contrast is one la
     ly[[1]]$contrast <- ""
     expect_error(validate_de_integration_config(list(layers = ly)),
                  "contrast must be one non-empty label")
+    ly[[1]]$contrast <- "   "
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "contrast must be one non-empty label")
     ly[[1]]$contrast <- "A_vs_B"
     expect_silent(validate_de_integration_config(list(layers = ly)))
 })
