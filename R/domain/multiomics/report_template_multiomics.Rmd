@@ -631,12 +631,15 @@ show_multigsea_pair <- function(png, chunk_prefix) {
     ), quiet = TRUE))
     cat("\n\n")
 }
-# Which view to show is read from what MultiGSEA wrote, not from the contrast
+# Which view to show is read from what MultiGSEA drew, not from the contrast
 # count: it writes per_contrast/ only when its own inputs hold more than one
-# contrast, which a config listing several can still fall short of. Without
-# per_contrast/, the top-level pairs are the only MultiGSEA figures there are.
-has_mg_per_contrast <- length(list.dirs(file.path(multigsea_dir, "per_contrast"),
-                                        recursive = FALSE)) > 0
+# contrast, which a config listing several can still fall short of, and it
+# creates a contrast's directory before finding it has no pair to draw. So the
+# per-contrast view is chosen only when a per-contrast figure exists; otherwise
+# the top-level pairs are the only MultiGSEA figures there are.
+has_mg_per_contrast <- length(list.files(file.path(multigsea_dir, "per_contrast"),
+                                         pattern = "^multigsea_.*\\.png$",
+                                         recursive = TRUE)) > 0
 show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast
 show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast
 multigsea_pair_legend <- function() {
@@ -672,7 +675,8 @@ if (length(pair_pngs) == 0) {
 
 ```{r multigsea-per-contrast, eval=show_mg_per_contrast && !single_contrast, results='asis'}
 multigsea_per_contrast_dir <- file.path(multigsea_dir, "per_contrast")
-# Only reached when per_contrast/ holds at least one contrast directory.
+# Only reached when per_contrast/ holds at least one figure; a contrast with
+# none says so in its own tab.
 contrast_dirs <- list.dirs(multigsea_per_contrast_dir, full.names = TRUE, recursive = FALSE)
 for (cdir in contrast_dirs) {
     cname <- basename(cdir)

@@ -648,8 +648,13 @@ test_that("the pairwise MultiGSEA figures show whenever there is no per-contrast
     # its own inputs hold more than one contrast, which a config listing several
     # can fall short of. Without it, the top-level pairs are shown -- under the
     # lone contrast's name in a single-contrast run, as #249 does elsewhere.
-    expect_true(grepl('has_mg_per_contrast <- length(list.dirs(file.path(multigsea_dir, "per_contrast"),',
+    # A figure, not a directory: MultiGSEA creates a contrast's directory before
+    # finding it has no pair to draw.
+    expect_true(grepl('has_mg_per_contrast <- length(list.files(file.path(multigsea_dir, "per_contrast"),',
                       joined, fixed = TRUE))
+    expect_true(grepl('pattern = "^multigsea_.*\\\\.png$",\n                                         recursive = TRUE)) > 0',
+                      joined, fixed = TRUE))
+    expect_false(grepl('list.dirs(file.path(multigsea_dir, "per_contrast")', joined, fixed = TRUE))
     expect_true(grepl("show_mg_per_contrast <- has_multigsea && has_mg_per_contrast && !single_contrast",
                       joined, fixed = TRUE))
     expect_true(grepl("show_mg_top_pairs <- has_multigsea && !show_mg_per_contrast",
