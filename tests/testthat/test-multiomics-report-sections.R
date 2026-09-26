@@ -765,3 +765,29 @@ test_that("the consensus directory is defined once and reused", {
     expect_true(grepl('snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")',
                       joined, fixed = TRUE))
 })
+
+test_that("the SNF agreement line handles more than one other method", {
+    # m["snf", others] is a data frame once two methods sit beside SNF, and
+    # as.numeric() of a data frame is an error that would abort the render.
+    src <- template_lines()
+    start <- grep("^\\.snf_agreement <- function", src)
+    expect_length(start, 1)
+    end <- start + which(grepl("^}", src[start:length(src)]))[1] - 1
+    env <- new.env()
+    env$consensus_dir <- withr::local_tempdir()
+    eval(parse(text = src[start:end]), envir = env)
+
+    ari <- matrix(c(1, 0.5, 0.25, 0.5, 1, 0.1, 0.25, 0.1, 1), 3,
+                  dimnames = list(c("snf", "diablo", "mofa"), c("snf", "diablo", "mofa")))
+    write.csv(as.data.frame(ari), file.path(env$consensus_dir, "method_ari_matrix.csv"))
+    line <- env$.snf_agreement("method_ari_matrix.csv", "ARI:")
+    expect_identical(line, "ARI: 0.50 vs diablo, 0.25 vs mofa")
+
+    # One other method, as in a default DIABLO + SNF run.
+    two <- ari[1:2, 1:2]
+    write.csv(as.data.frame(two), file.path(env$consensus_dir, "method_nmi_matrix.csv"))
+    expect_identical(env$.snf_agreement("method_nmi_matrix.csv", "NMI:"),
+                     "NMI: 0.50 vs diablo")
+    # No file, or no SNF row: nothing to say.
+    expect_null(env$.snf_agreement("absent.csv", "x"))
+})

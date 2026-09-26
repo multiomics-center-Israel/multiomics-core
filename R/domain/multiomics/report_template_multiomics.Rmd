@@ -1766,7 +1766,8 @@ snf_cmp_methods <- if (has_snf_cmp) {
     others <- setdiff(colnames(m), "snf")
     if (length(others) == 0) return(NULL)
     sprintf("%s %s", label,
-            paste(sprintf("%.2f vs %s", as.numeric(m["snf", others]), others),
+            paste(sprintf("%.2f vs %s",
+                          as.numeric(unlist(m["snf", others], use.names = FALSE)), others),
                   collapse = ", "))
 }
 ```
