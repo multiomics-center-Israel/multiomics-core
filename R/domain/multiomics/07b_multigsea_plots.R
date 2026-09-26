@@ -6,6 +6,33 @@
 #' @name multigsea_plots
 NULL
 
+#' Remove the MultiGSEA outputs of an earlier run
+#'
+#' The report finds MultiGSEA figures by filename, so a figure a later run no
+#' longer draws -- a layer dropped, a pair with too few terms, a run that
+#' produced nothing -- would otherwise stay on the page as a current result.
+#' Removes only what \code{run_multigsea_plots()} writes: the top-level
+#' \code{multigsea_*} figures, PDFs and tables, and its \code{per_contrast/}
+#' directory. Multi-ORA writes under \code{multi_ora/} in the same directory and
+#' is left alone, as is anything else there.
+#'
+#' @param out_dir MultiGSEA output directory, or NULL.
+#' @return Character vector of the removed paths, invisibly.
+clear_multigsea_outputs <- function(out_dir) {
+    if (is.null(out_dir) || !dir.exists(out_dir)) return(invisible(character(0)))
+    stale <- list.files(out_dir, pattern = "^multigsea_.*\\.(png|pdf|csv)$",
+                        full.names = TRUE)
+    stale <- stale[!dir.exists(stale)]
+    per_contrast <- file.path(out_dir, "per_contrast")
+    if (dir.exists(per_contrast)) stale <- c(stale, per_contrast)
+    if (length(stale) > 0) {
+        unlink(stale, recursive = TRUE)
+        message("  MultiGSEA: cleared ", length(stale), " output(s) from a previous run")
+    }
+    invisible(stale)
+}
+
+
 #' Run MultiGSEA Correlation Analysis
 #'
 #' Generates scatter plots comparing enrichment scores between pairs of omics.
@@ -17,6 +44,10 @@ NULL
 #' @export
 run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     message("=== Running MultiGSEA Correlation Analysis ===")
+
+    # Before any early return: a run that draws nothing must not leave the
+    # previous run's figures for the report to show.
+    clear_multigsea_outputs(out_dir)
 
     if (is.null(enrichment_results) || is.null(enrichment_results$per_omics)) {
         message("No enrichment results available for MultiGSEA.")
@@ -1391,7 +1422,7 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         message("  Multi-ORA support plot failed: ", e$message)
     })
 
-    # 4. Pathview maps for pathways supported by >= 2 omics
+    # 4. Pathview maps, preferring pathways supported by >= 2 omics
     plots$pathview_pdf <- if (!run_pathview) NULL else tryCatch({
         generate_multi_ora_pathview(
             combined = combined,
@@ -2612,6 +2643,86 @@ plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
 }
 
 
+#' Pick the pathways the supported Multi-ORA renderer draws, and say on what
+#'
+#' Pathways enriched in two or more layers are preferred, by adjusted p-value
+#' and then raw p-value; when none qualify the selection falls back to pathways
+#' of a single layer. Which of the two happened is returned beside the table,
+#' because the report names the map set by it and must not call a single-layer
+#' map a two-layer result.
+#'
+#' @param combined Multi-ORA summary table with \code{n_omics_support} and,
+#'   optionally, \code{n_omics_support_pval} and per-layer p-value columns.
+#' @param min_support Layers a pathway needs before the single-layer fallback.
+#' @return List with \code{supported} (the selected rows, possibly none) and
+#'   \code{support_layers}: the fewest layers the chosen rule required.
+select_multi_ora_pathview_pathways <- function(combined, min_support = 2) {
+    has_met_padj <- "metabolomics_padj" %in% colnames(combined)
+    has_prot_padj <- "proteomics_padj" %in% colnames(combined)
+    has_met_pval <- "metabolomics_pvalue" %in% colnames(combined)
+    has_prot_pval <- "proteomics_pvalue" %in% colnames(combined)
+
+    supported <- NULL
+    support_layers <- NA_integer_
+
+    # Tier 1: both metabolomics + proteomics padj < 0.05
+    if (has_met_padj && has_prot_padj) {
+        tier1 <- combined[
+            !is.na(combined$metabolomics_padj) & combined$metabolomics_padj < 0.05 &
+            !is.na(combined$proteomics_padj) & combined$proteomics_padj < 0.05, ]
+        if (nrow(tier1) > 0) {
+            message("  Pathview: ", nrow(tier1),
+                    " pathways supported by both metabolomics & proteomics (padj < 0.05)")
+            supported <- tier1
+            support_layers <- 2L
+        }
+    }
+
+    # Tier 2: both metabolomics + proteomics pvalue < 0.05
+    if (is.null(supported) || nrow(supported) == 0) {
+        if (has_met_pval && has_prot_pval) {
+            tier2 <- combined[
+                !is.na(combined$metabolomics_pvalue) & combined$metabolomics_pvalue < 0.05 &
+                !is.na(combined$proteomics_pvalue) & combined$proteomics_pvalue < 0.05, ]
+            if (nrow(tier2) > 0) {
+                message("  Pathview: padj too strict; ", nrow(tier2),
+                        " pathways with metabolomics & proteomics pvalue < 0.05")
+                supported <- tier2
+                support_layers <- 2L
+            }
+        }
+    }
+
+    # Tier 3: general n_omics_support >= min_support (padj-based)
+    if (is.null(supported) || nrow(supported) == 0) {
+        supported <- combined[combined$n_omics_support >= min_support, ]
+        support_layers <- as.integer(min_support)
+    }
+
+    # Tier 4: general pvalue-based support
+    if (nrow(supported) == 0 && "n_omics_support_pval" %in% colnames(combined)) {
+        message("  No pathways with padj-based support >= ", min_support,
+                ", falling back to pvalue < 0.05")
+        supported <- combined[combined$n_omics_support_pval >= min_support, ]
+        support_layers <- as.integer(min_support)
+    }
+
+    # Tier 5: relax to single-omics support with pvalue
+    if (nrow(supported) == 0 && min_support > 1) {
+        message("  No pathways with pvalue-based support >= ", min_support,
+                ", relaxing to single-omics support")
+        if ("n_omics_support_pval" %in% colnames(combined)) {
+            supported <- combined[combined$n_omics_support_pval >= 1, ]
+        } else {
+            supported <- combined[combined$n_omics_support >= 1, ]
+        }
+        support_layers <- 1L
+    }
+
+    list(supported = supported, support_layers = support_layers)
+}
+
+
 #' Generate pathview overlays for multi-omics-supported KEGG pathways
 #'
 #' For pathways enriched in >= min_support omics, renders KEGG pathway maps
@@ -2639,63 +2750,8 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     pv_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
     top_n <- pv_cfg$top_n %||% top_n
 
-    # --- Prioritize pathways supported by both metabolomics AND proteomics ---
-    has_met_padj <- "metabolomics_padj" %in% colnames(combined)
-    has_prot_padj <- "proteomics_padj" %in% colnames(combined)
-    has_met_pval <- "metabolomics_pvalue" %in% colnames(combined)
-    has_prot_pval <- "proteomics_pvalue" %in% colnames(combined)
-
-    supported <- NULL
-
-    # Tier 1: both metabolomics + proteomics padj < 0.05
-    if (has_met_padj && has_prot_padj) {
-        tier1 <- combined[
-            !is.na(combined$metabolomics_padj) & combined$metabolomics_padj < 0.05 &
-            !is.na(combined$proteomics_padj) & combined$proteomics_padj < 0.05, ]
-        if (nrow(tier1) > 0) {
-            message("  Pathview: ", nrow(tier1),
-                    " pathways supported by both metabolomics & proteomics (padj < 0.05)")
-            supported <- tier1
-        }
-    }
-
-    # Tier 2: both metabolomics + proteomics pvalue < 0.05
-    if (is.null(supported) || nrow(supported) == 0) {
-        if (has_met_pval && has_prot_pval) {
-            tier2 <- combined[
-                !is.na(combined$metabolomics_pvalue) & combined$metabolomics_pvalue < 0.05 &
-                !is.na(combined$proteomics_pvalue) & combined$proteomics_pvalue < 0.05, ]
-            if (nrow(tier2) > 0) {
-                message("  Pathview: padj too strict; ", nrow(tier2),
-                        " pathways with metabolomics & proteomics pvalue < 0.05")
-                supported <- tier2
-            }
-        }
-    }
-
-    # Tier 3: general n_omics_support >= min_support (padj-based)
-    if (is.null(supported) || nrow(supported) == 0) {
-        supported <- combined[combined$n_omics_support >= min_support, ]
-    }
-
-    # Tier 4: general pvalue-based support
-    if (nrow(supported) == 0 && "n_omics_support_pval" %in% colnames(combined)) {
-        message("  No pathways with padj-based support >= ", min_support,
-                ", falling back to pvalue < 0.05")
-        supported <- combined[combined$n_omics_support_pval >= min_support, ]
-    }
-
-    # Tier 5: relax to single-omics support with pvalue
-    if (nrow(supported) == 0 && min_support > 1) {
-        message("  No pathways with pvalue-based support >= ", min_support,
-                ", relaxing to single-omics support")
-        if ("n_omics_support_pval" %in% colnames(combined)) {
-            supported <- combined[combined$n_omics_support_pval >= 1, ]
-        } else {
-            supported <- combined[combined$n_omics_support >= 1, ]
-        }
-    }
-
+    selection <- select_multi_ora_pathview_pathways(combined, min_support)
+    supported <- selection$supported
     if (nrow(supported) == 0) {
         message("  No pathways with any omics support for pathview")
         return(NULL)
@@ -2706,7 +2762,7 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     supported <- head(supported, top_n)
 
     message("  Generating pathview for ", nrow(supported),
-            " pathways (>= ", min_support, " omics support)")
+            " pathways (>= ", selection$support_layers, " omics support)")
 
     organism <- config$global$organism %||% "human"
     kegg_org <- get_kegg_organism(organism)
@@ -2880,10 +2936,10 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
     }
 
     # --- Compile into a single PDF with contrast labels ---
-    # "supported" is a claim: these pathways are enriched in two or more omics
-    # layers. generate_per_omic_union_pathview(), the no-OrgDb fallback, unions
-    # single-layer hits and so writes its own file -- sharing this name would
-    # have presented one layer's evidence under this one's promise.
+    # "supported" prefers pathways enriched in two or more omics layers, but can
+    # fall back to one; the sidecar records which, and the report names the map
+    # set from it. generate_per_omic_union_pathview(), the no-OrgDb fallback,
+    # unions single-layer hits of the gene layers and writes its own file.
     pdf_path <- file.path(out_dir, "multi_ora_pathview_supported.pdf")
     tryCatch({
         grDevices::pdf(pdf_path, width = 12, height = 8)
@@ -2908,9 +2964,15 @@ generate_multi_ora_pathview <- function(combined, de_results, harmonization_res,
         }
         grDevices::dev.off()
         # Written only once the PDF exists, so the sidecar cannot outlive the
-        # figure it describes.
+        # figure it describes. Map filenames carry make.names(contrast), which
+        # cannot be read back into the contrast's own spelling, so the spelling
+        # is recorded here under that key, as the union renderer does.
+        contrast_labels <- stats::setNames(as.list(names(all_generated_pngs)),
+                                           make.names(names(all_generated_pngs)))
         tryCatch(
-            yaml::write_yaml(list(compound_nodes = any_compounds),
+            yaml::write_yaml(list(compound_nodes = any_compounds,
+                                  support_layers = selection$support_layers,
+                                  contrast_labels = contrast_labels),
                              file.path(out_dir, "multi_ora_pathview_supported.yaml")),
             error = function(e) NULL
         )

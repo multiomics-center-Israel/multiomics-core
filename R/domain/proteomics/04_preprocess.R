@@ -95,6 +95,18 @@ preprocess_proteomics <- function(inputs, config) {
   }
   
   # Single imputation (QC/plots) — dispatches based on cfg$imputation$method
+  #
+  # Seeded here because the imputation functions do not seed themselves: the
+  # caller owns reproducibility (see make_imputations_proteomics()). Read from
+  # the FULL config, not cfg, which is mode-level and has no params.
+  #
+  # params$seed with no offset. The DE runs take params$seed + 1 .. + n, so
+  # this draw cannot collide with any of them, and the whole proteomics
+  # imputation sequence is reproducible from one number.
+  #
+  # Before this, perseus_like reached here on whatever RNG state preceded it,
+  # so the default method's QC draw was not reproducible at all.
+  set.seed(as.integer(config$params$seed %||% 1L))
   imp_res <- impute_proteomics(expr_mat = expr_filt, cfg = cfg, return_flags = TRUE)
   expr_imp_single <- imp_res$imputed
   assert_numeric_matrix(expr_imp_single, "expr_imp_single")

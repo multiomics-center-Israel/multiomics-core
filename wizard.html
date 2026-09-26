@@ -2261,8 +2261,7 @@ function generateProtYaml() {
   yaml += '      no_repetitions: 10\n      min_no_passed: 8\n';
   yaml += '      width: ' + (v('prot_imp_width') || '0.2') + '\n';
   yaml += '      downshift: ' + (v('prot_imp_downshift') || '1.6') + '\n';
-  yaml += '      dep2_method: "MinDet"\n      dep2_random_seed: 1\n';
-  yaml += '      qrilc_random_seed: 1\n';
+  yaml += '      dep2_method: "MinDet"\n';
 
   var deMethod = v('prot_de_method') || 'limma';
   var useAdj = v('prot_use_adj') || 'true';

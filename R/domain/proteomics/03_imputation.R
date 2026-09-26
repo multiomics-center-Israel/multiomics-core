@@ -63,14 +63,15 @@ impute_proteomics_perseus_like <- function(expr_mat, cfg, return_flags = FALSE) 
 #' @return imputed matrix or list(imputed, imputed_flag)
 impute_proteomics_dep2 <- function(expr_mat, cfg, return_flags = FALSE) {
     dep2_method <- cfg$imputation$dep2_method %||% "MinDet"
-    dep2_seed <- as.integer(cfg$imputation$dep2_random_seed %||% 1)
 
     expr_mat <- as.matrix(expr_mat)
     imputed_flag <- is.na(expr_mat)
     imputed <- expr_mat
 
-    set.seed(dep2_seed)
-
+    # No set.seed() here: the caller owns reproducibility, as it already did for
+    # perseus_like. Seeding from a config value inside the call overwrote the
+    # per-run seed make_imputations_proteomics() had just set, so MinProb
+    # returned the same draw for every repetition.
     if (dep2_method == "MinDet") {
         # Deterministic: replace NAs with 1st percentile of observed values per sample
         for (j in seq_len(ncol(imputed))) {
@@ -117,13 +118,12 @@ impute_proteomics_dep2 <- function(expr_mat, cfg, return_flags = FALSE) {
 #' @param return_flags if TRUE, return list(imputed, imputed_flag)
 #' @return imputed matrix or list(imputed, imputed_flag)
 impute_proteomics_qrilc <- function(expr_mat, cfg, return_flags = FALSE) {
-    qrilc_seed <- as.integer(cfg$imputation$qrilc_random_seed %||% 1)
-
     expr_mat <- as.matrix(expr_mat)
     imputed_flag <- is.na(expr_mat)
 
-    set.seed(qrilc_seed)
-
+    # No set.seed() here: see the note in impute_proteomics_dep2(). Both QRILC
+    # paths below draw from the ambient RNG stream, so the caller's seed decides
+    # the result.
     # Use imputeLCMD::impute.QRILC when available (exact DEP match)
     if (requireNamespace("imputeLCMD", quietly = TRUE)) {
         result <- imputeLCMD::impute.QRILC(expr_mat, tune.sigma = 1)
@@ -220,13 +220,39 @@ impute_proteomics_minval <- function(expr_mat, cfg, return_flags = FALSE) {
 }
 
 #' Wrapper to run multiple imputations (with seed increments)
+#'
+#' Owns reproducibility for the DE imputation runs. \code{params$seed} is the
+#' single source, and the whole proteomics imputation sequence is derived from
+#' it:
+#'
+#' \itemize{
+#'   \item \code{params$seed} — the preprocessing/QC draw
+#'     (\code{expr_imp_single}, seeded at its call site in
+#'     \code{preprocess_proteomics()});
+#'   \item \code{params$seed + 1} — DE imputation run 1;
+#'   \item \code{params$seed + i} — DE imputation run i.
+#' }
+#'
+#' The offsets never collide, so every draw is reproducible and no two draws
+#' share a seed. The imputation functions themselves must not call
+#' \code{set.seed()}: one of them doing so is what made QRILC and DEP2 MinProb
+#' return the same matrix for every repetition.
+#'
+#' @param expr_mat Numeric matrix (features x samples) with NAs to fill.
+#' @param cfg Full pipeline config (reads \code{modes$proteomics$imputation}
+#'   and \code{params$seed}).
+#' @param verbose Logical; report each run as it is drawn.
+#' @return List of \code{no_repetitions} imputed matrices, or one matrix when
+#'   \code{multi_imputation} is FALSE.
 make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     imp_cfg <- cfg$modes$proteomics$imputation
     method <- imp_cfg$method %||% "perseus_like"
     if (method == "perseus") method <- "perseus_like"
     multi_imp <- imp_cfg$multi_imputation %||% TRUE
     n_imputations <- as.integer(imp_cfg$no_repetitions)
-    seed_base <- cfg$params$seed
+    # Defaulted like every other params$seed reader in the repo. Without it a
+    # config that omits params.seed reaches set.seed(integer(0)), which errors.
+    seed_base <- as.integer(cfg$params$seed %||% 1L)
 
     if (isFALSE(multi_imp)) {
         n_imputations <- 1L
@@ -236,15 +262,15 @@ make_imputations_proteomics <- function(expr_mat, cfg, verbose = FALSE) {
     stopifnot(is.matrix(expr_mat))
 
     # For deterministic methods (none, MinDet, minval), all runs are identical —
-    # still produce n_imputations copies for pipeline compatibility
-    is_deterministic <- method == "none" ||
-        method == "minval" ||
-        (method == "dep2" && (imp_cfg$dep2_method %||% "MinDet") == "MinDet")
+    # still produce n_imputations copies for pipeline compatibility. That is
+    # deliberate: the repetitions exist so the rest of the pipeline sees the
+    # same shape whatever the method, and a deterministic method having nothing
+    # to vary is not a reason to change its output.
 
     imps <- vector("list", n_imputations)
     for (i in seq_len(n_imputations)) {
         if (isTRUE(verbose)) message(sprintf("Imputation [%s]: %d / %d", method, i, n_imputations))
-        set.seed(as.integer(seed_base) + i)
+        set.seed(seed_base + i)
 
         expr_imp_i <- impute_proteomics(
             expr_mat,

@@ -45,11 +45,29 @@ validate_proteomics_config <- function(cfg) {
 
         if (identical(cfg$imputation$method, "dep2")) {
             assert_scalar_chr(cfg$imputation$dep2_method, "imputation$dep2_method")
-            assert_scalar_num(cfg$imputation$dep2_random_seed, "imputation$dep2_random_seed")
         }
 
-        if (identical(cfg$imputation$method, "qrilc")) {
-            assert_scalar_num(cfg$imputation$qrilc_random_seed, "imputation$qrilc_random_seed", allow_null = TRUE)
+        # Deprecated: these seeded the RNG inside the imputation call, which
+        # overwrote the per-run seed and made every repetition identical for the
+        # stochastic methods. params.seed is now the single source for the whole
+        # proteomics imputation sequence. Warned rather than ignored, because a
+        # project that set one of these did so for reproducibility and deserves
+        # to know it no longer has any effect. Checked without asserting a type:
+        # the keys are no longer required, and a deprecated value is not worth
+        # failing a run over.
+        deprecated_seeds <- c("dep2_random_seed", "qrilc_random_seed")
+        present <- deprecated_seeds[vapply(deprecated_seeds,
+                                           function(k) !is.null(cfg$imputation[[k]]),
+                                           logical(1))]
+        if (length(present) > 0) {
+            warning(sprintf(
+                paste0("imputation$%s is deprecated and ignored. Proteomics ",
+                       "imputation reproducibility is controlled by params$seed: ",
+                       "the QC draw uses params$seed and DE run i uses ",
+                       "params$seed + i. Remove the deprecated key and set ",
+                       "params$seed instead."),
+                paste(present, collapse = " and imputation$")
+            ), call. = FALSE)
         }
     }
 

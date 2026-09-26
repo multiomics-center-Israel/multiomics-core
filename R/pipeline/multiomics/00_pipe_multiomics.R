@@ -143,6 +143,23 @@ pipe_multiomics <- function() {
             }
         ),
 
+        # Enzyme-metabolite pairs: what the changed enzymes could act on among
+        # the measured metabolites. Depends on the cross-enrichment target so
+        # that it reads the compound-pathway cache that step fills rather than
+        # fetching one of its own.
+        tar_target(
+            multiomics_enzyme_metabolite,
+            {
+                force(multiomics_cross_enrichment)
+                mod_multiomics_enzyme_metabolite(
+                    de_results = multiomics_de_results,
+                    harmonization_res = multiomics_harmonization,
+                    config = config,
+                    out_dir = file.path(multiomics_out_dir, "cross_enrichment")
+                )
+            }
+        ),
+
         # RNA-protein correlation (extended analysis)
         tar_target(
             multiomics_rna_protein_corr,
@@ -171,8 +188,12 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_loadings_enrichment,
             {
+                loadings_dir <- file.path(multiomics_out_dir, "loadings_enrichment")
+                # Skipped or failed, the previous run's record and files must
+                # not be reported as this run's.
                 if (is.null(multiomics_integration) || is.null(multiomics_harmonization)) {
                     message("Skipping loadings enrichment: integration or harmonization not available")
+                    clear_loadings_enrichment_outputs(loadings_dir)
                     return(NULL)
                 }
 
@@ -181,10 +202,11 @@ pipe_multiomics <- function() {
                         integration_res = multiomics_integration,
                         harmonization_res = multiomics_harmonization,
                         config = config,
-                        out_dir = file.path(multiomics_out_dir, "loadings_enrichment")
+                        out_dir = loadings_dir
                     )
                 }, error = function(e) {
                     warning("Loadings enrichment failed: ", e$message)
+                    clear_loadings_enrichment_outputs(loadings_dir)
                     NULL
                 })
             }
@@ -194,12 +216,15 @@ pipe_multiomics <- function() {
         tar_target(
             multiomics_multigsea,
             {
+                mg_dir <- file.path(multiomics_out_dir, "multigsea")
+
                 if (is.null(multiomics_cross_enrichment)) {
                     message("Skipping MultiGSEA plots: no enrichment results")
+                    # The report finds these figures by filename, so a skipped
+                    # run must not leave the last run's to be shown as current.
+                    clear_multigsea_outputs(mg_dir)
                     return(NULL)
                 }
-
-                mg_dir <- file.path(multiomics_out_dir, "multigsea")
 
                 gsea_plots <- tryCatch({
                     run_multigsea_plots(
@@ -209,6 +234,9 @@ pipe_multiomics <- function() {
                     )
                 }, error = function(e) {
                     warning("MultiGSEA plots failed: ", e$message)
+                    # A failure after some pairs were drawn would otherwise
+                    # leave a partial set for the report to show as complete.
+                    clear_multigsea_outputs(mg_dir)
                     NULL
                 })
 
@@ -330,6 +358,7 @@ pipe_multiomics <- function() {
                 force(multiomics_consensus)
                 force(multiomics_commentary)
                 force(multiomics_loadings_enrichment)
+                force(multiomics_enzyme_metabolite)
 
                 if (is.null(multiomics_harmonization)) {
                     message("Skipping multi-omics report: no harmonization results")

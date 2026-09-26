@@ -64,14 +64,34 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         }
     }
 
+    # Every per-run block below is a features x runs matrix, and every summary
+    # after them (rowSums, rowMeans, apply over rows) needs it to stay two
+    # dimensional. sapply() does not guarantee that: when each run returns a
+    # single value -- i.e. when the dataset has exactly one feature -- it
+    # simplifies to a plain vector of length NO_REPETITIONS, and rowSums() then
+    # aborts with "'x' must be an array of at least two dimensions". One
+    # surviving feature after filtering is enough to reach it.
+    #
+    # Reshaped at construction rather than handled downstream, so the summaries
+    # never have to know about the case. matrix() reads its input column by
+    # column, and a features x runs matrix unrolls to exactly its own columns in
+    # order, so the already-correct shapes pass through untouched -- no run is
+    # reordered and no value moves. No type constraint either: mark_pass1()
+    # returns logical when a whole run is NA, which is why this is not vapply().
+    n_feat <- length(ref_ids)
+    per_run_matrix <- function(extract) {
+        matrix(sapply(seq_len(NO_REPETITIONS), extract),
+               nrow = n_feat, ncol = NO_REPETITIONS)
+    }
+
     for (cn in contrasts) {
         contrast_print <- normalize_contrast_name(cn)
 
-        logfc_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["logFC"]])
-        p_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
-        padj_mat <- sapply(seq_len(NO_REPETITIONS), function(n) runs_de_tables[[n]][[cn]][["adj.P.Val"]])
+        logfc_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["logFC"]])
+        p_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["P.Value"]])
+        padj_mat <- per_run_matrix(function(n) runs_de_tables[[n]][[cn]][["adj.P.Val"]])
 
-        pass1_mat <- sapply(seq_len(NO_REPETITIONS), function(n) {
+        pass1_mat <- per_run_matrix(function(n) {
             mark_pass1(runs_de_tables[[n]][[cn]],
                 p_cutoff    = p_cutoff,
                 lfc_cutoff  = lfc_cutoff,
