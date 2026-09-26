@@ -74,8 +74,18 @@ contrast_groups <- function(contrast, contrasts_df = NULL, groups = NULL, layer 
 layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL) {
     none <- list(num = rep(NA_integer_, nrow(df)), den = rep(NA_integer_, nrow(df)),
                  source = "not available")
+    where <- sprintf("Layer '%s' (%s)", ly$name, basename(ly$path))
+    count_col <- function(col) {
+        x <- .dei_numeric_col(df, col, where, 0, Inf, finite = TRUE,
+                              what = "counts of observed values")
+        if (any(!is.na(x) & x != round(x))) {
+            stop(where, ": column '", col, "' must hold whole counts of observed ",
+                 "values.", call. = FALSE)
+        }
+        as.integer(x)
+    }
     from_table <- function(num_col, den_col) {
-        list(num = as.integer(df[[num_col]]), den = as.integer(df[[den_col]]),
+        list(num = count_col(num_col), den = count_col(den_col),
              source = paste(num_col, den_col, sep = ", "))
     }
 
@@ -171,12 +181,30 @@ read_observed_inputs <- function(ly, config) {
         fail("samplesheet", sheet$path,
              paste0("has no column '", obs$sample_col, "' (observed.sample_col)"))
     }
+    # Samples are matched to their group by id; a repeated or blank id would
+    # silently take the first row's group.
+    sid <- as.character(sheet$df[[obs$sample_col]])
+    if (any(is.na(sid) | !nzchar(trimws(sid)))) {
+        fail("samplesheet", sheet$path, paste0("has blank sample ids in '", obs$sample_col, "'"))
+    }
+    if (anyDuplicated(sid)) {
+        fail("samplesheet", sheet$path,
+             paste0("repeats sample id(s) ", paste(unique(sid[duplicated(sid)]), collapse = ", "),
+                    " in '", obs$sample_col, "'"))
+    }
 
     contr <- read_or_fail("contrasts_file", read_table_auto)
     need <- c("Contrast_name", "Factor", "Numerator", "Denominator")
     gap <- setdiff(need, names(contr$df))
     if (length(gap) > 0) {
         fail("contrasts_file", contr$path, paste("lacks column(s):", paste(gap, collapse = ", ")))
+    }
+    keys <- normalize_contrast_key(as.character(contr$df$Contrast_name))
+    if (anyDuplicated(keys)) {
+        fail("contrasts_file", contr$path,
+             paste0("names one contrast more than once (",
+                    paste(unique(contr$df$Contrast_name[keys %in% keys[duplicated(keys)]]),
+                          collapse = ", "), ")"))
     }
     factors <- setdiff(unique(as.character(contr$df$Factor)), names(sheet$df))
     if (length(factors) > 0) {
@@ -203,8 +231,20 @@ read_observed_inputs <- function(ly, config) {
         fail("matrix", mat$path, paste("has non-numeric sample column(s):",
                                        paste(not_num, collapse = ", ")))
     }
+    # Counts are looked up by feature id; a repeated id would silently give
+    # the first row's counts to a feature whose DE row came from another.
+    fid <- as.character(mat$df[[id_col]])
+    if (any(is.na(fid) | !nzchar(trimws(fid)))) {
+        fail("matrix", mat$path, paste0("has blank feature ids in '", id_col, "'"))
+    }
+    if (anyDuplicated(fid)) {
+        fail("matrix", mat$path,
+             paste0("repeats feature id(s) ",
+                    paste(utils::head(unique(fid[duplicated(fid)]), 5), collapse = ", "),
+                    " in '", id_col, "'"))
+    }
     m <- as.matrix(mat$df[, samples, drop = FALSE])
-    rownames(m) <- as.character(mat$df[[id_col]])
+    rownames(m) <- fid
 
     list(matrix = m, samplesheet = sheet$df, contrasts = contr$df)
 }

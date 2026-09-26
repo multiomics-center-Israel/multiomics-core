@@ -133,6 +133,59 @@ test_that("hit cutoffs are range-checked", {
         list(layers = two_layers(), hits = list(linear_fc_cutoff = 0.5))), ">= 1")
 })
 
+test_that("a misspelt key anywhere in the section is an error, not a silent default", {
+    base <- list(layers = two_layers())
+    expect_error(validate_de_integration_config(c(base, list(hits = list(p_cutof = 0.01)))),
+                 "de_integration.hits has unknown key\\(s\\): p_cutof")
+    expect_error(validate_de_integration_config(c(base, list(comparison = list()))),
+                 "de_integration has unknown key\\(s\\): comparison")
+    expect_error(validate_de_integration_config(c(base, list(
+        concordance = list(well_observed = 3)))),
+        "concordance has unknown key\\(s\\): well_observed")
+
+    ly <- two_layers(); ly[[2]]$annotaton_file <- "ann.csv"
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "layers\\[\\[2\\]\\] has unknown key\\(s\\): annotaton_file")
+
+    ly <- two_layers()
+    ly[[1]]$observed <- list(matrix = "m.tsv", samplesheet = "s.csv", sample_col = "S",
+                             contrasts_file = "c.csv", idcol = "FeatureID")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "observed has unknown key\\(s\\): idcol")
+    ly[[1]]$observed <- list(matrix = "m.tsv", samplesheet = "s.csv", sample_col = "",
+                             contrasts_file = "c.csv")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "observed.sample_col must each be one non-empty string")
+
+    cfg <- list(layers = two_layers(), comparisons = list(list(
+        name = "c1", members = list(cells = "A_vs_B", media = "A_vs_B"), flipp = "media")))
+    expect_error(validate_de_integration_config(cfg), "unknown key\\(s\\): flipp")
+    cfg$comparisons[[1]]$flipp <- NULL
+    cfg$comparisons[[1]]$flip <- list(1)
+    expect_error(validate_de_integration_config(cfg), "flip must list layer names")
+})
+
+test_that("contrast and columns belong to generic tables, and contrast is one label", {
+    ly <- two_layers(); ly[[1]]$contrast <- "A_vs_B"
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "contrast is only read for a \"generic\" table")
+    ly <- two_layers(); ly[[1]]$columns <- list(id = "x")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "columns is only read for a \"generic\" table")
+
+    ly <- two_layers()
+    ly[[1]]$format <- "generic"
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = "logFC")
+    ly[[1]]$contrast <- c("A_vs_B", "C_vs_D")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "contrast must be one non-empty label")
+    ly[[1]]$contrast <- ""
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "contrast must be one non-empty label")
+    ly[[1]]$contrast <- "A_vs_B"
+    expect_silent(validate_de_integration_config(list(layers = ly)))
+})
+
 test_that("well_observed_min is a number", {
     expect_error(validate_de_integration_config(list(layers = two_layers(),
         concordance = list(well_observed_min = "2"))), "well_observed_min must be a number")

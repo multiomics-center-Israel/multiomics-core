@@ -301,6 +301,89 @@ test_that("a contrasts-file group that no counted sample carries stops the run",
                  "Layer 'cells': observed.contrasts_file .*group\\(s\\) Treatd for contrast 'A_vs_B'.*'Group' column")
 })
 
+test_that("p-values outside [0, 1], or not numbers, stop the run", {
+    read_p <- function(p, padj = NULL) {
+        ext <- data.frame(prot = c("X1", "X2"), logFC = c(2, -2), P = p,
+                          stringsAsFactors = FALSE)
+        cols <- list(id = "prot", log2fc = "logFC", pvalue = "P")
+        if (!is.null(padj)) { ext$Q <- padj; cols$padj <- "Q" }
+        read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                contrast = "T_vs_C", columns = cols),
+                      "T_vs_C", NULL, hits_default)
+    }
+    expect_error(read_p(c(-0.01, 0.5)), "Layer 'cells' .*column 'P' must hold p-values")
+    expect_error(read_p(c(0.01, 1.5)), "column 'P' must hold p-values")
+    expect_error(.dei_numeric_col(data.frame(P = c(0.01, Inf)), "P", "Layer 'x'", 0, 1,
+                                  finite = TRUE, what = "p-values"),
+                 "Layer 'x': column 'P' must hold p-values; it has values that are not finite")
+    expect_error(read_p(c("0.01", "low")), "column 'P' must hold p-values but is not numeric")
+    expect_error(read_p(c(0.01, 0.5), padj = c(0.02, 2)),
+                 "column 'Q' must hold adjusted p-values")
+    # Missing values stay missing rather than stopping the run.
+    expect_identical(read_p(c(0.01, NA))$tables$T_vs_C$hit, c(TRUE, FALSE))
+})
+
+test_that("a fold-change column that is not numeric stops the run", {
+    ext <- data.frame(prot = c("X1", "X2"), logFC = c("up", "down"), P = c(0.01, 0.2))
+    expect_error(read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                         contrast = "T_vs_C",
+                                         columns = list(id = "prot", log2fc = "logFC",
+                                                        pvalue = "P")),
+                               "T_vs_C", NULL, hits_default),
+                 "column 'logFC' must hold fold changes but is not numeric")
+})
+
+test_that("mapped observed counts must be whole, non-negative numbers", {
+    counts <- function(nA) {
+        ext <- data.frame(prot = c("X1", "X2"), logFC = c(1, -1), P = c(0.01, 0.2),
+                          nA = nA, nB = c(2, 2))
+        read_de_layer(layer_cfg(write_table_tmp(ext, "csv"), format = "generic",
+                                contrast = "T_vs_C",
+                                columns = list(id = "prot", log2fc = "logFC", pvalue = "P",
+                                               n_obs_num = "nA", n_obs_den = "nB")),
+                      "T_vs_C", NULL, hits_default)
+    }
+    expect_error(counts(c(-1, 2)), "column 'nA' must hold counts of observed values")
+    expect_error(counts(c(1.5, 2)), "column 'nA' must hold whole counts")
+})
+
+test_that("observed inputs with repeated or blank ids stop the run", {
+    path <- write_table_tmp(prot_summary())
+    read_with <- function(obs) {
+        read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default)
+    }
+
+    obs <- obs_block()
+    sheet <- data.frame(SampleName = c("s1", "s1", "s3", "s4"), Group = c("A", "B", "B", "B"))
+    obs$samplesheet <- write_table_tmp(sheet, "csv")
+    expect_error(read_with(obs), "observed.samplesheet .*repeats sample id\\(s\\) s1")
+
+    obs <- obs_block(ids = c("P1", "P1", "P3"))
+    expect_error(read_with(obs), "observed.matrix .*repeats feature id\\(s\\) P1")
+
+    obs <- obs_block(data.frame(Contrast_name = c("A_vs_B", "A vs B"), Factor = "Group",
+                                Numerator = c("A", "B"), Denominator = c("B", "A")))
+    expect_error(read_with(obs), "observed.contrasts_file .*names one contrast more than once")
+})
+
+test_that("an annotation giving one gene id two symbols stops the run", {
+    rna <- data.frame(Gene = c("ENSG1", "ENSG2"),
+                      log2FC.A_vs_B = c(1, -1), pvalue.A_vs_B = c(0.01, 0.02),
+                      padj.A_vs_B = c(0.04, 0.04), stringsAsFactors = FALSE)
+    path <- write_table_tmp(rna)
+    ann <- write_table_tmp(data.frame(gene_id = c("ENSG1", "ENSG1", "ENSG2"),
+                                      symbol = c("G1", "G1b", "G2")), "csv")
+    expect_error(read_de_layer(layer_cfg(path, format = "rnaseq_summary", omics = "rnaseq",
+                                         annotation_file = ann), "A_vs_B", NULL, hits_default),
+                 "more than one symbol for gene id\\(s\\) ENSG1")
+    # The same pairing written twice is not a conflict.
+    ann <- write_table_tmp(data.frame(gene_id = c("ENSG1", "ENSG1"), symbol = c("G1", "G1")),
+                           "csv")
+    ly <- read_de_layer(layer_cfg(path, format = "rnaseq_summary", omics = "rnaseq",
+                                  annotation_file = ann), "A_vs_B", NULL, hits_default)
+    expect_identical(ly$tables$A_vs_B$symbol, c("G1", "ENSG2"))
+})
+
 test_that("a contrast missing from the contrasts file leaves counts unavailable, with a warning", {
     path <- write_table_tmp(prot_summary())
     contr <- data.frame(Contrast_name = "C_vs_D", Factor = "Group",

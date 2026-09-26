@@ -22,6 +22,39 @@ de_integration_column_keys <- function() {
 }
 
 
+#' TRUE for one non-empty string
+#'
+#' @param v Any value.
+#' @return TRUE or FALSE.
+.dei_is_name <- function(v) {
+    is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
+}
+
+
+#' Check that a config block is a map holding only known keys
+#'
+#' A misspelt key is dropped without a word and its default used instead, so
+#' every block of this mode's config refuses keys it does not read.
+#'
+#' @param x The block, or NULL when absent.
+#' @param known Keys the block may hold.
+#' @param at Config path of the block, for the error message.
+#' @return \code{x}, invisibly.
+.check_dei_keys <- function(x, known, at) {
+    if (is.null(x)) return(invisible(x))
+    if (!is.list(x) || (length(x) > 0 &&
+                        (is.null(names(x)) || any(is.na(names(x)) | !nzchar(names(x)))))) {
+        stop(at, " must be a map of settings (key: value).", call. = FALSE)
+    }
+    bad <- setdiff(names(x), known)
+    if (length(bad) > 0) {
+        stop(at, " has unknown key(s): ", paste(bad, collapse = ", "), ". Known: ",
+             paste(known, collapse = ", "), ".", call. = FALSE)
+    }
+    invisible(x)
+}
+
+
 #' Check one set of hit settings
 #'
 #' The global \code{hits} and every layer's override merged onto it go
@@ -67,6 +100,7 @@ de_integration_column_keys <- function() {
 #' validate_de_integration_config(cfg)$hits$p_cutoff   # 0.05
 validate_de_integration_config <- function(cfg) {
     where <- "modes.de_integration"
+    .check_dei_keys(cfg, c("layers", "comparisons", "hits", "concordance"), where)
     layers <- cfg$layers
     if (!is.list(layers) || length(layers) < 2) {
         stop(where, ".layers needs at least two layers to compare; found ",
@@ -78,6 +112,9 @@ validate_de_integration_config <- function(cfg) {
     for (i in seq_along(layers)) {
         ly <- layers[[i]]
         at <- sprintf("%s.layers[[%d]]", where, i)
+        .check_dei_keys(ly, c("name", "label", "omics_type", "format", "path", "id_col",
+                              "contrast", "columns", "observed", "annotation_file",
+                              "hits"), at)
         nm <- ly$name
         if (!is.character(nm) || length(nm) != 1 || !grepl("^[a-z][a-z0-9_]*$", nm)) {
             stop(at, ".name must be one lower-case word (letters, digits, '_', ",
@@ -105,28 +142,37 @@ validate_de_integration_config <- function(cfg) {
                  ly$omics_type, " export. Use a ", ly$omics_type,
                  "_* format or \"generic\" with a column map.", call. = FALSE)
         }
-        if (!is.character(ly$path) || length(ly$path) != 1 || !nzchar(ly$path)) {
+        if (!.dei_is_name(ly$path)) {
             stop(at, " ('", nm, "').path must be the path to the DE table.",
                  call. = FALSE)
         }
+        for (k in c("label", "annotation_file")) {
+            if (!is.null(ly[[k]]) && !.dei_is_name(ly[[k]])) {
+                stop(at, " ('", nm, "').", k, " must be one non-empty string.", call. = FALSE)
+            }
+        }
+        if (!identical(ly$format, "generic")) {
+            # A native export's contrasts and columns come from the shared naming
+            # contract; either key here would be silently ignored.
+            for (k in c("contrast", "columns")) {
+                if (!is.null(ly[[k]])) {
+                    stop(at, " ('", nm, "').", k, " is only read for a \"generic\" table; ",
+                         "a native export's ", k, " come from its column names.",
+                         call. = FALSE)
+                }
+            }
+        }
         if (identical(ly$format, "generic")) {
+            if (!is.null(ly$contrast) && !.dei_is_name(ly$contrast)) {
+                stop(at, " ('", nm, "').contrast must be one non-empty label: a generic ",
+                     "table holds one contrast.", call. = FALSE)
+            }
             cols <- ly$columns %||% list()
             # A key present but blank (YAML "padj:") or misspelt would otherwise
             # be dropped, and the reader would fall back to BH or cutoffs.
-            if (!is.list(cols) || (length(cols) > 0 && is.null(names(cols)))) {
-                stop(at, " ('", nm, "').columns must map keys to column names, ",
-                     "e.g. {id: protein, pvalue: P.Value}.", call. = FALSE)
-            }
-            unknown_keys <- setdiff(names(cols), de_integration_column_keys())
-            if (length(unknown_keys) > 0) {
-                stop(at, " ('", nm, "').columns has unknown key(s): ",
-                     paste(unknown_keys, collapse = ", "), ". Known: ",
-                     paste(de_integration_column_keys(), collapse = ", "), ".",
-                     call. = FALSE)
-            }
-            blank <- names(cols)[!vapply(cols, function(v) {
-                is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
-            }, logical(1))]
+            .check_dei_keys(cols, de_integration_column_keys(),
+                            sprintf("%s ('%s').columns", at, nm))
+            blank <- names(cols)[!vapply(cols, .dei_is_name, logical(1))]
             if (length(blank) > 0) {
                 stop(at, " ('", nm, "').columns.", paste(blank, collapse = ", columns."),
                      " must each be one column name; remove a key to leave it unmapped.",
@@ -149,17 +195,24 @@ validate_de_integration_config <- function(cfg) {
                      "\"generic\" table names its id in columns.id.", call. = FALSE)
             }
         }
-        if (!is.null(ly$id_col) &&
-            (!is.character(ly$id_col) || length(ly$id_col) != 1 || !nzchar(ly$id_col))) {
+        if (!is.null(ly$id_col) && !.dei_is_name(ly$id_col)) {
             stop(at, " ('", nm, "').id_col must be one column name.", call. = FALSE)
         }
         if (!is.null(ly$observed)) {
             obs <- ly$observed
+            obs_at <- sprintf("%s ('%s').observed", at, nm)
+            .check_dei_keys(obs, c("matrix", "samplesheet", "sample_col",
+                                   "contrasts_file", "id_col"), obs_at)
             need <- c("matrix", "samplesheet", "sample_col", "contrasts_file")
             gap <- need[!need %in% names(obs)]
             if (length(gap) > 0) {
                 stop(at, " ('", nm, "').observed needs ", paste(gap, collapse = ", "),
                      " to count observed values per group.", call. = FALSE)
+            }
+            blank <- names(obs)[!vapply(obs, .dei_is_name, logical(1))]
+            if (length(blank) > 0) {
+                stop(obs_at, ".", paste(blank, collapse = paste0(", ", obs_at, ".")),
+                     " must each be one non-empty string.", call. = FALSE)
             }
         }
         layers[[i]]$label <- ly$label %||% nm
@@ -171,6 +224,7 @@ validate_de_integration_config <- function(cfg) {
     for (j in seq_along(comps)) {
         cp <- comps[[j]]
         at <- sprintf("%s.comparisons[[%d]]", where, j)
+        .check_dei_keys(cp, c("name", "members", "flip"), at)
         if (!is.character(cp$name) || length(cp$name) != 1 || !nzchar(cp$name)) {
             stop(at, ".name is required.", call. = FALSE)
         }
@@ -194,9 +248,7 @@ validate_de_integration_config <- function(cfg) {
             stop(at, " ('", cp$name, "').members names layer(s) more than once: ",
                  paste(dup, collapse = ", "), ".", call. = FALSE)
         }
-        scalar <- vapply(members, function(v) {
-            is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
-        }, logical(1))
+        scalar <- vapply(members, .dei_is_name, logical(1))
         if (!all(scalar)) {
             stop(at, " ('", cp$name, "').members must give one contrast label per ",
                  "layer; not a single non-empty label for: ",
@@ -208,7 +260,11 @@ validate_de_integration_config <- function(cfg) {
                  paste(unknown, collapse = ", "), ". Layers: ",
                  paste(layer_names, collapse = ", "), ".", call. = FALSE)
         }
-        flip <- unlist(cp$flip %||% character(0), use.names = FALSE)
+        flip_in <- cp$flip %||% character(0)
+        if (!all(vapply(as.list(flip_in), .dei_is_name, logical(1)))) {
+            stop(at, " ('", cp$name, "').flip must list layer names.", call. = FALSE)
+        }
+        flip <- unlist(flip_in, use.names = FALSE)
         bad_flip <- setdiff(flip, names(members))
         if (length(bad_flip) > 0) {
             stop(at, " ('", cp$name, "').flip names layer(s) not in its members: ",
@@ -218,6 +274,8 @@ validate_de_integration_config <- function(cfg) {
     }
     cfg$comparisons <- comps
 
+    hit_keys <- c("use_table_flag", "p_cutoff", "use_adjusted", "linear_fc_cutoff")
+    .check_dei_keys(cfg$hits, hit_keys, paste0(where, ".hits"))
     hits <- cfg$hits %||% list()
     hits$use_table_flag   <- hits$use_table_flag %||% TRUE
     hits$p_cutoff         <- hits$p_cutoff %||% 0.05
@@ -232,17 +290,11 @@ validate_de_integration_config <- function(cfg) {
         ov <- cfg$layers[[i]]$hits
         if (is.null(ov)) next
         at <- sprintf("%s.layers[[%d]] ('%s').hits", where, i, cfg$layers[[i]]$name)
-        if (!is.list(ov) || (length(ov) > 0 && is.null(names(ov)))) {
-            stop(at, " must be a map of hit settings.", call. = FALSE)
-        }
-        bad_keys <- setdiff(names(ov), names(hits))
-        if (length(bad_keys) > 0) {
-            stop(at, " has unknown key(s): ", paste(bad_keys, collapse = ", "), ".",
-                 call. = FALSE)
-        }
+        .check_dei_keys(ov, hit_keys, at)
         .check_dei_hits(utils::modifyList(hits, ov), at)
     }
 
+    .check_dei_keys(cfg$concordance, "well_observed_min", paste0(where, ".concordance"))
     conc <- cfg$concordance %||% list()
     conc$well_observed_min <- conc$well_observed_min %||% 2
     w <- conc$well_observed_min

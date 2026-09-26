@@ -5,6 +5,38 @@
 # Column names and contrasts are resolved in 00_inputs.R, observed counts in
 # 02_observed_counts.R.
 
+#' A numeric column of a layer's table, checked
+#'
+#' \code{as.numeric()} turns text into NA with only a warning, and nothing
+#' stops a p-value of -0.1 from passing \code{p <= cutoff}; either would then
+#' be reported as a result. A column that is not numeric, or holds values
+#' outside its range, stops the run instead. Missing values stay missing.
+#'
+#' @param df The layer's table.
+#' @param col Column name.
+#' @param where Which layer and file, for the error message.
+#' @param lower,upper Allowed range of the non-missing values.
+#' @param finite Whether non-missing values must also be finite.
+#' @param what What the column holds, for the error message.
+#' @return Numeric vector.
+.dei_numeric_col <- function(df, col, where, lower = -Inf, upper = Inf, finite = FALSE,
+                             what = "numbers") {
+    x <- df[[col]]
+    if (!is.numeric(x) && !all(is.na(x))) {
+        stop(where, ": column '", col, "' must hold ", what, " but is not numeric.",
+             call. = FALSE)
+    }
+    x <- as.numeric(x)
+    ok <- is.na(x) | (x >= lower & x <= upper & (!finite | is.finite(x)))
+    if (!all(ok)) {
+        stop(where, ": column '", col, "' must hold ", what, "; it has values ",
+             if (finite) "that are not finite or " else "", "outside [", lower, ", ",
+             upper, "].", call. = FALSE)
+    }
+    x
+}
+
+
 #' Signed log2 fold changes for one contrast, and where they came from
 #'
 #' In order of preference: a stored log2FC column; the unrounded
@@ -18,22 +50,24 @@
 #'
 #' @param df The layer's table.
 #' @param cols Output of \code{de_layer_columns()}.
+#' @param where Which layer and file, for error messages.
 #' @return List with \code{values} (numeric, one per row) and \code{source}
 #'   (text naming the column or rule used).
-layer_log2fc <- function(df, cols) {
+layer_log2fc <- function(df, cols, where = "The layer's table") {
+    num <- function(nm) .dei_numeric_col(df, nm, where, what = "fold changes")
     for (nm in cols$log2fc) {
-        if (nm %in% names(df)) return(list(values = as.numeric(df[[nm]]), source = nm))
+        if (nm %in% names(df)) return(list(values = num(nm), source = nm))
     }
     has <- function(nm) !is.null(nm) && nm %in% names(df)
     if (has(cols$linear_ratio) && has(cols$linear_fc)) {
-        ratio <- as.numeric(df[[cols$linear_ratio]])
-        sgn <- sign(as.numeric(df[[cols$linear_fc]]))
+        ratio <- num(cols$linear_ratio)
+        sgn <- sign(num(cols$linear_fc))
         return(list(values = sgn * abs(log2(ratio)),
                     source = sprintf("sign(%s) * |log2(%s)|", cols$linear_fc,
                                      cols$linear_ratio)))
     }
     if (has(cols$linear_fc)) {
-        return(list(values = signed_fc_to_log2(df[[cols$linear_fc]]),
+        return(list(values = signed_fc_to_log2(num(cols$linear_fc)),
                     source = paste0(cols$linear_fc, " (3 significant digits)")))
     }
     stop("No fold-change column found; looked for: ",
@@ -168,6 +202,17 @@ read_layer_annotation <- function(ly, config) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
              paste(gap, collapse = ", "), ".", call. = FALSE)
     }
+    # match() would silently take the first of two symbols for one gene id.
+    pairs <- unique(data.frame(gene_id = as.character(ann$gene_id),
+                               symbol = trimws(as.character(ann$symbol)),
+                               stringsAsFactors = FALSE))
+    pairs <- pairs[!is.na(pairs$gene_id), , drop = FALSE]
+    clash <- unique(pairs$gene_id[duplicated(pairs$gene_id)])
+    if (length(clash) > 0) {
+        stop("Layer '", ly$name, "': annotation_file (", path, ") gives more than one ",
+             "symbol for gene id(s) ", paste(utils::head(clash, 5), collapse = ", "),
+             if (length(clash) > 5) ", ..." else "", ".", call. = FALSE)
+    }
     ann
 }
 
@@ -229,14 +274,17 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
             stop("Layer '", ly$name, "': column '", cols$pvalue, "' not found in ",
                  basename(path), " for contrast '", contrast, "'.", call. = FALSE)
         }
+        where <- sprintf("Layer '%s' (%s)", ly$name, basename(path))
         ids <- as.character(df[[id_col]])
-        lfc <- layer_log2fc(df, cols)
-        pvalue <- as.numeric(df[[cols$pvalue]])
+        lfc <- layer_log2fc(df, cols, where)
+        pvalue <- .dei_numeric_col(df, cols$pvalue, where, 0, 1, finite = TRUE,
+                                   what = "p-values")
         # Which it was goes into the provenance: a BH computed here, over the
         # rows this table kept, is not the adjusted p-value its producer reported.
         has_padj <- !is.null(cols$padj) && cols$padj %in% cn
         padj <- if (has_padj) {
-            as.numeric(df[[cols$padj]])
+            .dei_numeric_col(df, cols$padj, where, 0, 1, finite = TRUE,
+                             what = "adjusted p-values")
         } else {
             stats::p.adjust(pvalue, method = "BH")
         }
