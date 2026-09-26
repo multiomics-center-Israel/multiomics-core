@@ -575,18 +575,14 @@ if (!tb_ok) {
 
 ```{r rna-prot-topn-bars-legend, eval=has_transcriptomics && has_rna_prot, results='asis'}
 figure_legend(paste(
-    "Rows share an order: each column position is one gene-protein pair, ranked by",
-    "the protein log2 fold change, most extreme first. The upper row is that protein",
-    "fold change, the lower row the RNA fold change of the same pair, so the two are",
-    "read down the column. Blue marks pairs whose RNA moved past 1.5-fold in the same",
-    "direction; dashed lines mark that threshold. The panel label gives the observed",
-    "count, the count expected if the top proteins were a random draw from every",
-    "mapped pair, and a hypergeometric p for the excess.",
-    "The two rows are not the same statistic -- protein is the limma moderated log2FC",
-    "and RNA the DESeq2 log2FC -- so this shows agreement of direction, not of size.",
-    "Only pairs present in the gene-protein mapping appear: a protein group with no",
-    "mapped transcript is absent by construction, not scored and found wanting.",
-    "Source: rna_protein_log2FC_pairs.csv. Descriptive and hypothesis-generating."))
+    "Each column is one gene-protein pair, ranked by protein log2FC, most extreme",
+    "first; the upper row is the protein fold change, the lower row the RNA fold",
+    "change of the same pair. Blue marks pairs whose RNA moved past 1.5-fold in the",
+    "same direction (dashed lines). The panel label gives the observed count, the",
+    "count expected if the top proteins were a random draw of mapped pairs, and a",
+    "hypergeometric p. Protein is the limma log2FC and RNA the DESeq2",
+    "log2FC, so this shows agreement of direction, not size. Unmapped proteins are",
+    "absent. Source: rna_protein_log2FC_pairs.csv. Hypothesis-generating."))
 ```
 
 `r if (has_rna_prot && show_translation_eff) "## Translation Efficiency (All Contrasts)"`
@@ -714,7 +710,14 @@ pooled_bp <- file.path(multi_ora_dir, "multi_ora_pooled_barplot.png")
 if (file.exists(pooled_bp)) {
     cat("\n#### Pooled Multi-ORA {.unnumbered}\n\n")
     cat(sprintf("![Pooled Multi-ORA](%s)\n\n", pooled_bp))
-    figure_legend("Pooled multi-ORA barplot. Significant genes from all gene-based omics (transcriptomics, proteomics) are pooled into a single set and tested for over-representation using Fisher's exact test, against KEGG pathways or, for organisms without KEGG support, the gene sets supplied as GMT files. Bar length and the red dashed threshold line both show the adjusted p-value where the pooled result carries usable ones and the raw p-value otherwise; the axis label states which. Where the gene sets come from several collections, terms are drawn in turn from each collection so that the largest collection cannot fill every slot on set count alone, and each bar is tagged and coloured with the collection it came from; the bars are still ordered strongest-first.")
+    figure_legend(paste(
+        "Pooled multi-ORA: significant genes from all gene-based layers, pooled into",
+        "one set and tested with Fisher's exact test against KEGG pathways, or the",
+        "supplied GMT gene sets where KEGG is unavailable. Bar length and the red",
+        "dashed line show the adjusted p-value where usable, otherwise the raw",
+        "p-value (see the axis label). With several collections, terms are taken in",
+        "turn from each, and bars are tagged and coloured by collection, strongest",
+        "first."))
 }
 
 # Dot plot
@@ -928,7 +931,15 @@ knitr::kable(gsea_show, row.names = FALSE,
 ```
 
 ```{r metab-gsea-legend, eval=has_metab_gsea, results='asis'}
-figure_legend("Compound-level gene set enrichment analysis over KEGG metabolic pathways, run alongside the compound ORA above rather than in place of it. The two answer different questions: ORA asks whether a pathway is crowded with significantly changed metabolites, GSEA asks whether a pathway's metabolites sit systematically high or low in the ranked list, and reports a direction with it. NES is that directional score -- positive where the pathway's metabolites concentrate at the top of the ranking for the contrast, negative at the bottom. Metabolites are ranked on the moderated statistic where the differential abundance table carries usable values, and on sign(log2FC) x -log10(p-value) otherwise. The adjusted p-value is a Benjamini-Hochberg family over the pathways this analysis scored, and is therefore not comparable with the adjusted p-value in the compound ORA table above, which has its own family. Only the strongest 30 rows are shown; the complete scored table, with no significance cutoff applied, is in metabolomics_compound_gsea.csv.")
+figure_legend(paste(
+    "Compound GSEA over KEGG metabolic pathways, beside the compound ORA above.",
+    "ORA asks whether a pathway holds many significant metabolites; GSEA asks",
+    "whether its metabolites sit high or low in the ranked list, and NES gives",
+    "that direction (positive: concentrated at the top for the contrast).",
+    "Ranking: the moderated statistic where available, else sign(log2FC) x",
+    "-log10(p). Adjusted p is BH over the pathways scored here, so it is not",
+    "comparable with the ORA table's. The strongest 30 rows are shown; all are in",
+    "metabolomics_compound_gsea.csv."))
 render_commentary("compound_gsea")
 ```
 
@@ -1096,19 +1107,14 @@ if (length(lookup_tsvs) > 0) {
 ```{r enrichment-cross-lookup-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_lookup_.*\\.png$")) > 0) {
     figure_legend(paste(
-        "Each layer's top pathways by its own raw p-value (GSEA where available,",
-        "otherwise ORA), among the pathways that layer's enrichment step reported,",
-        "beside the same pathways in the other layer, both directions. For a",
-        "layer from the KEGG-from-DE fallback those are only the pathways past its",
-        "own cutoff, so its ranking is not over every pathway it scored.",
-        "The other layer is read in the same contrast as each",
-        "pathway's ranked row, named in the table's contrast columns.",
-        "Colour and number: NES, grey at zero; * marks raw p < 0.05.",
-        "An unfilled cell has no NES: \"ORA\" where that layer has only an ORA",
-        "result in that contrast, a dash where it has no result there. The",
+        "Each layer's top pathways by its own raw p-value (GSEA, else ORA), among",
+        "those its enrichment reported, beside the same pathways in the other layer",
+        "and contrast (see the contrast columns), both directions. A KEGG-from-DE",
+        "layer reports only pathways past its own cutoff, so it is not ranked over",
+        "all it scored. Colour/number: NES, grey at zero; * raw p < 0.05. Unfilled:",
+        "\"ORA\" where that layer has only ORA there, a dash where it has none. The",
         "second heatmap keeps only pathways the other layer tested. P-values are",
-        "nominal, and the same NES sign in two layers is not by itself biological",
-        "agreement."))
+        "nominal; a shared NES sign is not by itself biological agreement."))
 }
 ```
 
@@ -1147,7 +1153,15 @@ if (file.exists(meta_file)) {
 ```{r enrichment-table-legend, eval=has_enrichment, results='asis'}
 meta_file <- file.path(enrichment_dir, "cross_omics_pathways_meta_analysis.csv")
 if (file.exists(meta_file)) {
-    figure_legend("Top pathways from cross-omics meta-analysis. P-values from individual omics layers were combined using Stouffer's method. Each layer contributes one kind of test -- its rank-based (GSEA) p-values where it has them, otherwise its ORA p-values -- so no layer mixes methods, and the method_<layer> columns record which one was used. A contrast or collection that a layer scored only with its other test is therefore left out of that layer's contribution here, and the run log names any such case. Layers can still differ from each other in method; read the combined p-value with that in mind. Pathways significant in multiple omics are most informative.")
+    figure_legend(paste(
+        "Top pathways from cross-omics meta-analysis: per-layer p-values combined",
+        "with Stouffer's method. Each layer contributes one kind of test -- its",
+        "rank-based (GSEA) p-values where it has them, otherwise its ORA p-values --",
+        "so no layer mixes methods; the method_<layer> columns record which. A",
+        "contrast or collection a layer scored only with its other test is therefore",
+        "left out of that layer's contribution, and the run log names any such case.",
+        "Layers can still differ from each other in method; read the combined p-value",
+        "with that in mind. Pathways significant in multiple omics are most informative."))
     render_commentary("cross_omics_meta_analysis")
 }
 ```
@@ -1439,9 +1453,10 @@ for (i in seq_len(nrow(pv_multi))) {
     cat(sprintf("![%s](%s)\n\n", pv_multi$heading[i], pv_multi$png[i]))
 }
 figure_legend(paste0(
-    "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
-    if (pathview_has_compounds) "Compound nodes show metabolomics logFC. " else "",
-    "Red = upregulated, green/blue = downregulated. ",
+    "KEGG maps drawn with pathview, per contrast. Gene nodes: transcriptomics",
+    " (left) and proteomics (right) logFC, where available. ",
+    if (pathview_has_compounds) "Compound nodes: metabolomics logFC. " else "",
+    "Red up, green/blue down. ",
     # Taken from the same constants the selection and the node filter
     # read, so the caption cannot describe a rule the figure did not apply.
     pathview_significance_caption()))
@@ -1740,7 +1755,12 @@ if (file.exists(p)) {
 ```
 
 ```{r snf-silhouette-legend, eval=has_snf, results='asis'}
-figure_legend("SNF cluster silhouette plot. Silhouette width measures how well each sample matches its assigned cluster compared to the nearest alternative cluster. **Interpretation:** values close to **+1** indicate the sample is well-matched to its cluster and poorly matched to neighboring clusters (strong clustering). Values near **0** mean the sample sits on the boundary between two clusters. **Negative** values indicate the sample may be misclassified and would fit better in the neighboring cluster. The average silhouette width across all samples summarizes overall clustering quality: > 0.7 = strong structure, 0.5--0.7 = reasonable structure, 0.25--0.5 = weak structure, < 0.25 = no substantial structure. This metric can guide the choice of the number of clusters (K) and help identify outlier samples that do not conform to any group.")
+figure_legend(paste(
+    "SNF cluster silhouette plot. Silhouette width compares how well each sample",
+    "fits its own cluster with the nearest alternative: near +1 a good fit, near 0",
+    "on a boundary, negative a better fit elsewhere. The average across samples",
+    "summarises structure: above 0.7 strong, 0.5-0.7 reasonable, 0.25-0.5 weak,",
+    "below 0.25 none. It can guide the choice of K and flag outlier samples."))
 render_commentary("snf_silhouette")
 ```
 

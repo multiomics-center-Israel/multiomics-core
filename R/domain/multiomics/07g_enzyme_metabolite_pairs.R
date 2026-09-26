@@ -554,7 +554,10 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
 #' Says what the table holds under the settings it was built with, rather than
 #' one fixed sentence that three of those settings can make untrue, and says
 #' where "changed" rests on the raw-p fallback rather than on FDR. It reads the
-#' table and the resolved settings; it decides nothing.
+#' table and the resolved settings; it decides nothing. The report caps every
+#' legend at 100 words, and this one holds under every combination of settings
+#' and fallbacks: which contrasts fell back is left to the per-row rule columns
+#' the table shows, since a list of contrast names has no length bound.
 #'
 #' @param pairs The pair table, as written to \code{enzyme_metabolite_pairs.tsv}.
 #' @param cfg Output of \code{enzyme_metabolite_config()}.
@@ -566,45 +569,46 @@ build_enzyme_metabolite_pairs <- function(de_results, harmonization_res, config,
 #'                metabolite_hit_rule = "raw p", note = NA),
 #'     enzyme_metabolite_config(list()))
 describe_enzyme_metabolite_table <- function(pairs, cfg, cutoff = 0.05) {
-    rule_note <- function(rule_col, what) {
-        base <- sprintf("A changed %s means FDR < %s", what, cutoff)
-        if (!all(c("contrast", rule_col) %in% names(pairs))) return(paste0(base, "."))
-        raw <- sort(unique(pairs$contrast[pairs[[rule_col]] %in% "raw p"]))
-        if (length(raw) == 0) return(paste0(base, "."))
-        sprintf(paste0("%s, except in %s, where no %s cleared FDR and it means ",
-                       "raw p < %s, uncorrected (%s)."),
-                base, paste(raw, collapse = ", "), what, cutoff, rule_col)
+    fell_back <- function(rule_col) {
+        rule_col %in% names(pairs) && any(pairs[[rule_col]] %in% "raw p")
+    }
+    raw_cols <- Filter(fell_back, c("enzyme_hit_rule", "metabolite_hit_rule"))
+    rules <- if (length(raw_cols) == 0) {
+        sprintf("Changed means FDR < %s.", cutoff)
+    } else {
+        sprintf("Changed means FDR < %s, or raw p < %s, uncorrected, where %s says raw p.",
+                cutoff, cutoff, paste(raw_cols, collapse = " or "))
     }
 
     enzymes <- if (cfg$enzyme_hits_only) {
         "Every enzyme that changed"
     } else {
-        "Every measured enzyme, changed or not (enzyme_hit marks the changed ones)"
-    }
-    link <- if (cfg$require_shared_pathway) {
-        "with the measured metabolites KEGG links to it through an EC number and a pathway both are in"
-    } else {
-        "with the measured metabolites KEGG links to it through an EC number, with no shared-pathway requirement"
+        "Every measured enzyme, changed or not (see enzyme_hit),"
     }
     no_pathways <- any(pairs$note %in% "KEGG pathway annotation unavailable")
-    unpaired <- if (cfg$list_unpaired_enzymes) {
-        "Enzymes with nothing to pair are listed too, and `note` says why."
+    # Without pathways the builder keeps pairs only when the shared-pathway
+    # filter is off, so the two cases below cannot both apply.
+    link <- if (cfg$require_shared_pathway) {
+        "with measured metabolites KEGG links to it by EC number in a pathway both are in."
+    } else if (no_pathways) {
+        "with measured metabolites KEGG links to it by EC number (pathways could not be fetched for this run)."
     } else {
-        "Only enzymes with at least one pair are listed."
+        "with measured metabolites KEGG links to it by EC number, no shared-pathway requirement."
+    }
+    unpaired <- if (cfg$list_unpaired_enzymes) {
+        "Unpaired enzymes are listed too, and `note` says why;"
+    } else {
+        "Only enzymes with at least one pair are listed;"
     }
 
     paste(
-        paste0(enzymes, ", ", link, "."),
-        if (no_pathways) "KEGG pathway membership could not be fetched for this run, so the pathway columns are empty.",
-        unpaired,
-        "Changed proteins with no EC number, or whose id could not be mapped to a KEGG gene, are left out.",
-        rule_note("enzyme_hit_rule", "enzyme"),
-        rule_note("metabolite_hit_rule", "metabolite"),
-        sprintf("Bold rows have a metabolite at FDR < %s.", cutoff),
-        "KEGG says the class can act on the compound, not that it did here, and",
-        "the same direction is not agreement: a substrate often falls as its",
-        "enzyme rises. Nothing is tested, and one metabolite has many enzymes, so",
-        "rows are not independent.")
+        enzymes, link, unpaired,
+        "proteins with no EC number or KEGG gene are left out.",
+        rules,
+        sprintf("Bold: metabolite FDR < %s.", cutoff),
+        "KEGG says the class can act on the compound, not that it did; same",
+        "direction is not agreement (substrates often fall as enzymes rise).",
+        "Nothing is tested; rows are not independent.")
 }
 
 
