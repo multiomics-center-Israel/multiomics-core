@@ -148,6 +148,17 @@ resolve_dei_comparisons <- function(cfg, layer_contrasts) {
     }
 
     keys <- lapply(layer_contrasts, normalize_contrast_key)
+    # Two contrasts of one layer on one key cannot be told apart by name, and
+    # leaving that layer out of the comparison would drop its data unsaid.
+    for (ly in names(keys)) {
+        dup <- unique(keys[[ly]][duplicated(keys[[ly]])])
+        if (length(dup) > 0) {
+            same <- layer_contrasts[[ly]][keys[[ly]] %in% dup]
+            stop("Layer '", ly, "' holds contrasts that name the same comparison (",
+                 paste(same, collapse = ", "), "), so they cannot be paired by name. ",
+                 "Name the pairs in modes.de_integration.comparisons.", call. = FALSE)
+        }
+    }
     all_keys <- sort(unique(unlist(keys)))
     comps <- list()
     for (k in all_keys) {

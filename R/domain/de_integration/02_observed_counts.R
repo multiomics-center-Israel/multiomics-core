@@ -209,6 +209,19 @@ read_observed_inputs <- function(ly, config) {
                     paste(unique(contr$df$Contrast_name[keys %in% keys[duplicated(keys)]]),
                           collapse = ", "), ")"))
     }
+    num <- trimws(as.character(contr$df$Numerator))
+    den <- trimws(as.character(contr$df$Denominator))
+    if (any(is.na(num) | !nzchar(num) | is.na(den) | !nzchar(den))) {
+        fail("contrasts_file", contr$path, "has a blank Numerator or Denominator")
+    }
+    # One group on both sides would count it twice and call the fold change
+    # well observed with no second group looked at.
+    same <- num == den
+    if (any(same)) {
+        fail("contrasts_file", contr$path,
+             paste0("gives the same group as Numerator and Denominator for ",
+                    paste(contr$df$Contrast_name[same], collapse = ", ")))
+    }
     factors <- setdiff(unique(as.character(contr$df$Factor)), names(sheet$df))
     if (length(factors) > 0) {
         fail("contrasts_file", contr$path,
@@ -233,6 +246,16 @@ read_observed_inputs <- function(ly, config) {
     if (length(not_num) > 0) {
         fail("matrix", mat$path, paste("has non-numeric sample column(s):",
                                        paste(not_num, collapse = ", ")))
+    }
+    # A count is of values present; Inf (a log of zero, say) is not a
+    # measurement, and !is.na() would count it as one.
+    not_finite <- samples[vapply(mat$df[samples], function(x) {
+        any(!is.na(x) & !is.finite(as.numeric(x)))
+    }, logical(1))]
+    if (length(not_finite) > 0) {
+        fail("matrix", mat$path, paste0("has infinite values in sample column(s) ",
+                                        paste(not_finite, collapse = ", "),
+                                        "; write unmeasured values as NA"))
     }
     # Counts are looked up by feature id; a repeated id would silently give
     # the first row's counts to a feature whose DE row came from another.

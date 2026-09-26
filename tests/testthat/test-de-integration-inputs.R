@@ -441,6 +441,31 @@ test_that("an annotation row without a symbol neither clashes nor hides one", {
     expect_identical(ly$tables$A_vs_B$symbol_source, c("symbol", "gene_id"))
 })
 
+test_that("an observed matrix with infinite values stops the run", {
+    path <- write_table_tmp(prot_summary())
+    obs <- obs_block()
+    mat <- data.frame(Protein.Group = c("P1", "P2;P9", "P3"), s1 = c(20, -Inf, 15),
+                      s2 = c(21, NA, 15), s3 = c(19, 22, NA), s4 = c(20, 23, 16))
+    # readr reads "-Inf" back as a number, as a log of zero would be written.
+    obs$matrix <- write_table_tmp(mat)
+    expect_error(read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default),
+                 "observed.matrix .*infinite values in sample column\\(s\\) s1")
+})
+
+test_that("a contrasts row with one group on both sides, or a blank one, stops the run", {
+    path <- write_table_tmp(prot_summary())
+    read_with <- function(contr) {
+        read_de_layer(layer_cfg(path, observed = obs_block(contr)), "A_vs_B", NULL,
+                      hits_default)
+    }
+    expect_error(read_with(data.frame(Contrast_name = "A_vs_B", Factor = "Group",
+                                      Numerator = "A", Denominator = "A")),
+                 "same group as Numerator and Denominator for A_vs_B")
+    expect_error(read_with(data.frame(Contrast_name = "A_vs_B", Factor = "Group",
+                                      Numerator = "A", Denominator = NA)),
+                 "blank Numerator or Denominator")
+})
+
 test_that("a contrasts file with a blank Contrast_name stops the run", {
     path <- write_table_tmp(prot_summary())
     obs <- obs_block(data.frame(Contrast_name = c("A_vs_B", NA), Factor = "Group",
@@ -564,6 +589,13 @@ test_that("contrasts are paired across layers by key, or as lone contrasts", {
     expect_error(resolve_dei_comparisons(cfg, list(cells = c("A_vs_B", "C_vs_D"),
                                                    media = "E_vs_F")),
                  "comparisons")
+})
+
+test_that("a layer with two contrasts on one key is not quietly left out", {
+    cfg <- list(comparisons = list())
+    expect_error(resolve_dei_comparisons(cfg, list(cells = c("A_vs_B", "A vs. B"),
+                                                   media = "A_vs_B", tissue = "A - B")),
+                 "Layer 'cells' holds contrasts that name the same comparison \\(A_vs_B, A vs. B\\)")
 })
 
 test_that("configured comparisons are taken as written", {
