@@ -1750,13 +1750,15 @@ if (length(diablo_feat_files) > 0) {
 # and the agreement between their partitions; they are read here, beside the
 # clusters they explain, rather than left three sections away.
 snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")
-has_snf_cmp <- has_snf && file.exists(snf_cmp_file)
 # Which methods the comparison actually holds, from its own columns.
-snf_cmp_methods <- if (has_snf_cmp) {
+snf_cmp_methods <- if (has_snf && file.exists(snf_cmp_file)) {
     tryCatch(setdiff(names(read.csv(snf_cmp_file, nrows = 1, check.names = FALSE)),
                      c("sample_id", "consensus")),
              error = function(e) character(0))
 } else character(0)
+# SNF's own PNGs can outlive a run that no longer ran SNF, so the comparison is
+# shown only when it compares SNF.
+has_snf_cmp <- "snf" %in% snf_cmp_methods
 .snf_agreement <- function(file, label) {
     f <- file.path(consensus_dir, file)
     if (!file.exists(f)) return(NULL)

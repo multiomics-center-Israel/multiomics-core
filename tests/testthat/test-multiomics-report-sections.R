@@ -791,3 +791,13 @@ test_that("the SNF agreement line handles more than one other method", {
     # No file, or no SNF row: nothing to say.
     expect_null(env$.snf_agreement("absent.csv", "x"))
 })
+
+test_that("the SNF comparison is shown only when it compares SNF", {
+    # SNF's own PNGs can survive a run that no longer ran SNF; the comparison
+    # file is cleared and rewritten each run, so it decides.
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl('has_snf_cmp <- "snf" %in% snf_cmp_methods', src, fixed = TRUE))
+    expect_false(grepl("has_snf_cmp <- has_snf && file.exists(snf_cmp_file)", src, fixed = TRUE))
+    expect_lt(regexpr("snf_cmp_methods <- if (has_snf && file.exists(snf_cmp_file))", src, fixed = TRUE),
+              regexpr('has_snf_cmp <- "snf" %in% snf_cmp_methods', src, fixed = TRUE))
+})
