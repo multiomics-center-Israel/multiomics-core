@@ -2587,11 +2587,13 @@ plot_multi_ora_dotplot <- function(combined, per_omics_ora, metab_ora, out_dir, 
 
 #' Plot multi-ORA omics support barplot
 #'
-#' Shows how many omics layers support each enriched pathway, counted on raw
-#' p-values. It used to count layers at FDR < 0.05, which reads as "0 layers
-#' support this" on every bar of a run where no layer's ORA clears FDR -- while
-#' the pathway is on the figure precisely because a layer scored it. The
-#' FDR-based count is still written to the table beside the figure.
+#' Shows how many omics layers report each enriched pathway under their own
+#' active selection rule -- adjusted p where the layer had adjusted-p hits, raw
+#' p < 0.05 where it fell back -- so not strictly every layer with raw p < 0.05.
+#' It used to count layers at FDR < 0.05, which reads as "0 layers support
+#' this" on every bar of a run where no layer's ORA clears FDR -- while the
+#' pathway is on the figure precisely because a layer scored it. The FDR-based
+#' count is still written to the table beside the figure.
 #'
 #' @param combined Multi-ORA summary table.
 #' @param out_dir Directory to write the figure into.
@@ -2607,7 +2609,7 @@ plot_multi_ora_support <- function(combined, out_dir, top_n = 25) {
     } else "n_omics_support"
     top$support <- top[[support_col]]
     support_label <- if (identical(support_col, "n_omics_support_pval")) {
-        "Layers with\nraw p < 0.05"
+        "Layers reporting it\n(own selection rule)"
     } else "Layers with\nFDR < 0.05"
     top$label <- ifelse(nchar(top$pathway) > 45,
                          paste0(substr(top$pathway, 1, 42), "..."),

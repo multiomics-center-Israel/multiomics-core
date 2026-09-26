@@ -707,7 +707,7 @@ test_that("paths pasted into generated chunks use forward slashes", {
 
 test_that("multi-ORA support is reported on both rules, not FDR alone", {
     src <- paste(template_lines(), collapse = "\n")
-    expect_true(grepl("# layers p<0.05", src, fixed = TRUE))
+    expect_true(grepl("# layers reporting it", src, fixed = TRUE))
     expect_true(grepl("# layers FDR<0.05", src, fixed = TRUE))
     # The old single column claimed "# Omics Supporting" while counting FDR only.
     expect_false(grepl("# Omics Supporting", src, fixed = TRUE))
@@ -738,8 +738,13 @@ test_that("the SNF context names only the methods that ran", {
                    "one grouping", "check against the table below")) {
         expect_false(grepl(gone, src, fixed = TRUE), info = gone)
     }
-    expect_true(grepl('if (has_diablo) "DIABLO, which looks for features', src, fixed = TRUE))
-    expect_true(grepl('if (has_mofa) "MOFA2, which decomposes variation', src, fixed = TRUE))
+    # Named only from the comparison this run wrote, never from PNGs that can
+    # outlive the run; without a comparison, no other method is named.
+    expect_true(grepl("unname(snf_method_desc[intersect(names(snf_method_desc), snf_cmp_methods)])",
+                      src, fixed = TRUE))
+    expect_true(grepl("snf_others <- if (has_snf_cmp) {", src, fixed = TRUE))
+    expect_false(grepl('if (has_diablo) "DIABLO', src, fixed = TRUE))
+    expect_false(grepl('if (has_mofa) "MOFA2', src, fixed = TRUE))
     # The comparison is referred to only when it is there, and set up first.
     expect_true(grepl("if (has_snf_cmp)\n        paste(\"The comparison below", src, fixed = TRUE))
     expect_lt(regexpr("```{r snf-vs-methods-setup", src, fixed = TRUE),
@@ -800,4 +805,37 @@ test_that("the SNF comparison is shown only when it compares SNF", {
     expect_false(grepl("has_snf_cmp <- has_snf && file.exists(snf_cmp_file)", src, fixed = TRUE))
     expect_lt(regexpr("snf_cmp_methods <- if (has_snf && file.exists(snf_cmp_file))", src, fixed = TRUE),
               regexpr('has_snf_cmp <- "snf" %in% snf_cmp_methods', src, fixed = TRUE))
+})
+
+test_that("SNF is told apart from the feature selection that fed it", {
+    src <- paste(template_lines(), collapse = "\n")
+    # Resolved as feature selection resolves it: exact "de" / "combined".
+    expect_true(grepl('snf_label_note <- if (feat_sel %in% c("de", "combined"))', src, fixed = TRUE))
+    expect_true(grepl("does not use the condition labels directly, but its", src, fixed = TRUE))
+    expect_true(grepl("input features were selected using differential-abundance results",
+                      src, fixed = TRUE))
+    expect_true(grepl("Its clustering does not use the condition labels, so its clusters",
+                      src, fixed = TRUE))
+    expect_false(grepl("It never sees the condition labels", src, fixed = TRUE))
+    fs <- paste(readLines(file.path(root_dir, "R", "domain", "multiomics",
+                                    "03_feature_selection.R"), warn = FALSE), collapse = "\n")
+    expect_true(grepl('method == "de"', fs, fixed = TRUE))
+    expect_true(grepl('method == "combined"', fs, fixed = TRUE))
+})
+
+test_that("the multi-ORA support count is described by the rule it applies", {
+    src <- paste(template_lines(), collapse = "\n")
+    calls <- legend_calls(template_lines())
+    leg <- calls$text[grepl("Multi-ORA support. Bar length", calls$text, fixed = TRUE)]
+    expect_length(leg, 1)
+    expect_lte(n_words(leg), 100)
+    expect_match(leg, "active selection rule", fixed = TRUE)
+    expect_match(leg, "raw p < 0.05 where it fell back", fixed = TRUE)
+    expect_match(leg, "but did not report is not counted", fixed = TRUE)
+    expect_false(grepl("score that pathway at raw", leg, fixed = TRUE))
+    expect_false(grepl("# layers p<0.05", src, fixed = TRUE))
+    f <- file.path(root_dir, "R", "domain", "multiomics", "07b_multigsea_plots.R")
+    mg <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    expect_true(grepl("Layers reporting it\\n(own selection rule)", mg, fixed = TRUE))
+    expect_false(grepl("Layers with\\nraw p < 0.05", mg, fixed = TRUE))
 })

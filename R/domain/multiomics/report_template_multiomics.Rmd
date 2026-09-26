@@ -755,10 +755,12 @@ if (file.exists(support_bp)) {
     cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
     figure_legend(paste(
         "Multi-ORA support. Bar length is the pooled enrichment significance",
-        "(-log10 p). Colour is how many layers score that pathway at raw",
-        "p < 0.05 on their own. The table below gives the same count and, beside",
-        "it, how many clear FDR < 0.05 -- which can be none while the pathway is",
-        "still on this figure."))
+        "(-log10 p). Colour is how many layers report the pathway under their own",
+        "active selection rule: adjusted p where that layer had adjusted-p hits,",
+        "raw p < 0.05 where it fell back. A pathway a layer scored at raw p < 0.05",
+        "but did not report is not counted. The table below gives the same count",
+        "and, beside it, how many layers clear FDR < 0.05 -- which can be none",
+        "while the pathway is still on this figure."))
 }
 
 # Summary table
@@ -775,7 +777,7 @@ if (file.exists(multi_ora_csv)) {
     mora_show <- mora_show[, display_cols, drop = FALSE]
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
                     metabolomics_padj = "Metab padj",
-                    n_omics_support_pval = "# layers p<0.05",
+                    n_omics_support_pval = "# layers reporting it",
                     n_omics_support = "# layers FDR<0.05")
     colnames(mora_show) <- col_labels[display_cols]
     # Format numeric columns (signif handles NA gracefully)
@@ -1775,14 +1777,29 @@ has_snf_cmp <- "snf" %in% snf_cmp_methods
 ```
 
 ```{r snf-intro, eval=has_snf, results='asis'}
-# Only the methods that ran are named: a default run has DIABLO and SNF only.
-snf_others <- c(
-    if (has_diablo) "DIABLO, which looks for features that separate the conditions using their labels",
-    if (has_mofa) "MOFA2, which decomposes variation into factors without labels")
+# Other methods are named only from the comparison this run wrote: their own
+# output directories can outlive a run that no longer ran them, so a PNG is not
+# evidence that a method ran. Without a comparison, no other method is named.
+snf_method_desc <- c(
+    diablo = "DIABLO, which looks for features that separate the conditions using their labels",
+    mofa = "MOFA2, which decomposes variation into factors without labels")
+snf_others <- if (has_snf_cmp) {
+    unname(snf_method_desc[intersect(names(snf_method_desc), snf_cmp_methods)])
+} else character(0)
+# The clustering itself never uses the labels, but the features it is given can
+# have been chosen with them; feat_sel is resolved above as feature selection
+# resolves it.
+snf_label_note <- if (feat_sel %in% c("de", "combined")) {
+    paste("Its clustering does not use the condition labels directly, but its",
+          "input features were selected using differential-abundance results",
+          "between the conditions, so the partition is not independent of them.")
+} else {
+    paste("Its clustering does not use the condition labels, so its clusters",
+          "describe the structure the fused data carries.")
+}
 cat("Similarity Network Fusion builds one sample-similarity network per omics",
     "layer and fuses them into a single network, then clusters the samples in",
-    "it. It never sees the condition labels, so its clusters describe the",
-    "structure the fused data carries.",
+    "it.", snf_label_note,
     if (length(snf_others) > 0)
         paste0("It answers a different question from ",
                paste(snf_others, collapse = ", and from "), "."),
