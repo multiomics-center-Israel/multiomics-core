@@ -755,12 +755,13 @@ if (file.exists(support_bp)) {
     cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
     figure_legend(paste(
         "Multi-ORA support. Bar length is the pooled enrichment significance",
-        "(-log10 p). Colour is how many layers report the pathway under their own",
-        "active selection rule: adjusted p where that layer had adjusted-p hits,",
-        "raw p < 0.05 where it fell back. A pathway a layer scored at raw p < 0.05",
-        "but did not report is not counted. The table below gives the same count",
-        "and, beside it, how many layers clear FDR < 0.05 -- which can be none",
-        "while the pathway is still on this figure."))
+        "(-log10 p). Colour counts the layers that report the pathway under their",
+        "own selection rule (adjusted p where they had adjusted-p hits, otherwise",
+        "raw p) and also have raw p < 0.05 for it. A layer that scored it at raw",
+        "p < 0.05 without reporting it, or reported it at raw p of 0.05 or more, is",
+        "not counted. The table below gives the same count and, beside it, how many",
+        "layers clear FDR < 0.05 -- which can be none while the pathway is still on",
+        "this figure."))
 }
 
 # Summary table
@@ -777,7 +778,7 @@ if (file.exists(multi_ora_csv)) {
     mora_show <- mora_show[, display_cols, drop = FALSE]
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
                     metabolomics_padj = "Metab padj",
-                    n_omics_support_pval = "# layers reporting it",
+                    n_omics_support_pval = "# layers reporting it, p<0.05",
                     n_omics_support = "# layers FDR<0.05")
     colnames(mora_show) <- col_labels[display_cols]
     # Format numeric columns (signif handles NA gracefully)

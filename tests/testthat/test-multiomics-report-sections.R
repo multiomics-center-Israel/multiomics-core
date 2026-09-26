@@ -707,7 +707,7 @@ test_that("paths pasted into generated chunks use forward slashes", {
 
 test_that("multi-ORA support is reported on both rules, not FDR alone", {
     src <- paste(template_lines(), collapse = "\n")
-    expect_true(grepl("# layers reporting it", src, fixed = TRUE))
+    expect_true(grepl("# layers reporting it, p<0.05", src, fixed = TRUE))
     expect_true(grepl("# layers FDR<0.05", src, fixed = TRUE))
     # The old single column claimed "# Omics Supporting" while counting FDR only.
     expect_false(grepl("# Omics Supporting", src, fixed = TRUE))
@@ -829,13 +829,14 @@ test_that("the multi-ORA support count is described by the rule it applies", {
     leg <- calls$text[grepl("Multi-ORA support. Bar length", calls$text, fixed = TRUE)]
     expect_length(leg, 1)
     expect_lte(n_words(leg), 100)
-    expect_match(leg, "active selection rule", fixed = TRUE)
-    expect_match(leg, "raw p < 0.05 where it fell back", fixed = TRUE)
-    expect_match(leg, "but did not report is not counted", fixed = TRUE)
+    # Both conditions: reported under the layer's own rule, and raw p < 0.05.
+    expect_match(leg, "report the pathway under their own selection rule", fixed = TRUE)
+    expect_match(leg, "and also have raw p < 0.05 for it", fixed = TRUE)
+    expect_match(leg, "or reported it at raw p of 0.05 or more", fixed = TRUE)
     expect_false(grepl("score that pathway at raw", leg, fixed = TRUE))
     expect_false(grepl("# layers p<0.05", src, fixed = TRUE))
     f <- file.path(root_dir, "R", "domain", "multiomics", "07b_multigsea_plots.R")
     mg <- paste(readLines(f, warn = FALSE), collapse = "\n")
-    expect_true(grepl("Layers reporting it\\n(own selection rule)", mg, fixed = TRUE))
+    expect_true(grepl("Layers reporting it\\nwith raw p < 0.05", mg, fixed = TRUE))
     expect_false(grepl("Layers with\\nraw p < 0.05", mg, fixed = TRUE))
 })
