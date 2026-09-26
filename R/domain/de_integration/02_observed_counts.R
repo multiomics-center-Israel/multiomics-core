@@ -141,6 +141,13 @@ layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL
     den_col <- paste0("N.observed.", grp$denominator)
     if (is.null(counts) || !all(c(num_col, den_col) %in% names(counts))) return(none)
     idx <- match(ids, rownames(counts))
+    # No shared id means the matrix is keyed differently from the DE table;
+    # all-NA counts credited to the matrix would hide that.
+    if (length(ids) > 0 && all(is.na(idx))) {
+        stop("Layer '", ly$name, "': observed.matrix (", basename(ly$observed$matrix),
+             ") matches none of the DE table's feature ids (e.g. '", ids[1], "'). ",
+             "Check observed.id_col, and that both use the same ids.", call. = FALSE)
+    }
     list(num = as.integer(counts[[num_col]][idx]), den = as.integer(counts[[den_col]][idx]),
          source = paste0("unimputed matrix ", basename(ly$observed$matrix)))
 }
@@ -173,7 +180,7 @@ read_observed_inputs <- function(ly, config) {
             fail(key, path, paste("cannot be read:", conditionMessage(e)))
         })
         if (!is.data.frame(out) || nrow(out) == 0) fail(key, path, "cannot be read, or is empty")
-        .dei_check_header(out, path, sprintf("Layer '%s': observed.%s (%s)", ly$name, key, path))
+        .dei_check_table(out, path, sprintf("Layer '%s': observed.%s (%s)", ly$name, key, path))
         list(df = out, path = path)
     }
 

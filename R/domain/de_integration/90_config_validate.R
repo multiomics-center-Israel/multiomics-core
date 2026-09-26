@@ -43,7 +43,7 @@ de_integration_column_keys <- function() {
 .check_dei_keys <- function(x, known, at) {
     if (is.null(x)) return(invisible(x))
     if (!is.list(x) || (length(x) > 0 &&
-                        (is.null(names(x)) || any(is.na(names(x)) | !nzchar(names(x)))))) {
+                        (is.null(names(x)) || any(is.na(names(x)) | !nzchar(trimws(names(x))))))) {
         stop(at, " must be a map of settings (key: value).", call. = FALSE)
     }
     bad <- setdiff(names(x), known)
@@ -225,8 +225,8 @@ validate_de_integration_config <- function(cfg) {
         cp <- comps[[j]]
         at <- sprintf("%s.comparisons[[%d]]", where, j)
         .check_dei_keys(cp, c("name", "members", "flip"), at)
-        if (!is.character(cp$name) || length(cp$name) != 1 || !nzchar(cp$name)) {
-            stop(at, ".name is required.", call. = FALSE)
+        if (!.dei_is_name(cp$name)) {
+            stop(at, ".name is required: one label that is not blank.", call. = FALSE)
         }
         if (cp$name %in% comp_names) {
             stop(at, ".name '", cp$name, "' is used twice.", call. = FALSE)
@@ -238,7 +238,7 @@ validate_de_integration_config <- function(cfg) {
                  "two layers, e.g. {cells: A_vs_B, media: A_vs_B}.", call. = FALSE)
         }
         mn <- names(members)
-        if (is.null(mn) || any(is.na(mn) | !nzchar(mn))) {
+        if (is.null(mn) || any(is.na(mn) | !nzchar(trimws(mn)))) {
             stop(at, " ('", cp$name, "').members must map each layer to its contrast, ",
                  "e.g. {cells: A_vs_B, media: A_vs_B}; found entries without a layer ",
                  "name.", call. = FALSE)

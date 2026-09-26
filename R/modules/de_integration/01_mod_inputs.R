@@ -19,7 +19,7 @@ mod_dei_load_layers <- function(config) {
         path <- resolve_input_path(config, ly$path)
         # Checked before its contrasts are listed: a repeated header would
         # otherwise surface as an extra contrast named "<label>...<n>".
-        .dei_check_header(read_table_auto(path), path,
+        .dei_check_table(read_table_auto(path), path,
                           sprintf("Layer '%s': path (%s)", ly$name, path))
     })
     layer_contrasts <- lapply(cfg$layers, function(ly) {

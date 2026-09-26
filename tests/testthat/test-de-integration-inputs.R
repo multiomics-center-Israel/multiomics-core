@@ -476,9 +476,41 @@ test_that("a unique column name that merely ends in ...<n> is accepted", {
     f <- tempfile(fileext = ".csv")
     writeLines(c("sample...1,sample...2", "1,2"), f)
     df <- data.frame(a = 1, b = 2)
-    expect_silent(.dei_check_header(df, f, "Layer 'x'"))
+    expect_silent(.dei_check_table(df, f, "Layer 'x'"))
     writeLines(c("s1,s1", "1,2"), f)
-    expect_error(.dei_check_header(df, f, "Layer 'x'"), "repeated column name \\(s1\\)")
+    expect_error(.dei_check_table(df, f, "Layer 'x'"), "repeated column name \\(s1\\)")
+})
+
+test_that("a malformed value past readr's type guess stops the run", {
+    # readr guesses the column type from its first 1000 rows; a bad value
+    # later becomes NA with only a warning.
+    n <- 1100
+    ext <- data.frame(prot = paste0("X", seq_len(n)), logFC = rep(1, n),
+                      P = as.character(rep(0.01, n)), stringsAsFactors = FALSE)
+    ext$P[n] <- "oops"
+    path <- write_table_tmp(ext, "csv")
+    suppressWarnings(expect_error(
+        read_de_layer(layer_cfg(path, format = "generic", contrast = "T_vs_C",
+                                columns = list(id = "prot", log2fc = "logFC", pvalue = "P")),
+                      "T_vs_C", NULL, hits_default),
+        "Layer 'cells': path .*column 'P' has values that are not numbers \\(e.g. 'oops'\\)"))
+})
+
+test_that("an annotation or observed matrix that matches no feature id stops the run", {
+    rna <- data.frame(Gene = c("ENSG1", "ENSG2"),
+                      log2FC.A_vs_B = c(1, -1), pvalue.A_vs_B = c(0.01, 0.02),
+                      padj.A_vs_B = c(0.04, 0.04), stringsAsFactors = FALSE)
+    ann <- write_table_tmp(data.frame(gene_id = c("ENSG1.5", "ENSG2.5"),
+                                      symbol = c("G1", "G2")), "csv")
+    expect_error(read_de_layer(layer_cfg(write_table_tmp(rna), format = "rnaseq_summary",
+                                         omics = "rnaseq", annotation_file = ann),
+                               "A_vs_B", NULL, hits_default),
+                 "annotation_file matches none of the layer's feature ids")
+
+    obs <- obs_block(ids = c("Q1", "Q2", "Q3"))
+    expect_error(read_de_layer(layer_cfg(write_table_tmp(prot_summary()), observed = obs),
+                               "A_vs_B", NULL, hits_default),
+                 "observed.matrix .*matches none of the DE table's feature ids")
 })
 
 test_that("an observed matrix with infinite values stops the run", {

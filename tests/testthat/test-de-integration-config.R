@@ -73,6 +73,12 @@ test_that("comparisons must name known layers, and flip only their members", {
     expect_identical(validate_de_integration_config(cfg)$comparisons[[1]]$flip, "media")
 })
 
+test_that("a comparison name that is only spaces is rejected", {
+    cfg <- list(layers = two_layers(), comparisons = list(
+        list(name = "   ", members = list(cells = "A_vs_B", media = "A_vs_B"))))
+    expect_error(validate_de_integration_config(cfg), "comparisons\\[\\[1\\]\\].name is required")
+})
+
 test_that("comparison members must map each layer to one contrast label", {
     cfg <- list(layers = two_layers(), comparisons = list(
         list(name = "c1", members = list("A_vs_B", "A_vs_B"))))

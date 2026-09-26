@@ -37,36 +37,42 @@
 }
 
 
-#' Stop on a table whose header repeats or leaves out a column name
+#' Check a table against the file it was read from
 #'
-#' readr renames a repeated or blank header ("s1" twice becomes "s1...1" and
-#' "s1...3"), so a lookup by name silently takes one copy and drops the other
-#' -- one of two p-value columns, or a sample's second column. The header is
-#' re-read without repair and checked as written, so a unique name that merely
-#' ends in "...<n>" is left alone. Every table this mode reads is checked here.
+#' Two things readr does quietly are caught here, for every table this mode
+#' reads. A repeated or blank header is renamed ("s1" twice becomes "s1...1"
+#' and "s1...3"), so a lookup by name takes one copy and drops the other. And
+#' a column's type is guessed from its first rows, so a malformed value further
+#' down (text in a p-value column) becomes NA with only a warning, and would
+#' then pass as a missing value. The file is re-read as text, without name
+#' repair, and compared: its header as written must have unique, non-blank
+#' names, and every value written in a numeric column must have been read as a
+#' number.
 #'
 #' @param df A table from \code{read_table_auto()} or \code{read_samplesheet()}.
 #' @param path The file it was read from.
 #' @param where Which layer, key and file, for the error message.
 #' @return \code{df}, invisibly.
-.dei_check_header <- function(df, path, where) {
+.dei_check_table <- function(df, path, where) {
     raw <- NULL
     # The delimiter whose header has as many fields as the table read is the
     # one its reader used.
     for (delim in c("\t", ",")) {
-        r <- tryCatch(names(readr::read_delim(path, delim = delim, n_max = 0,
-                                              name_repair = "minimal",
-                                              col_types = readr::cols(.default = "c"),
-                                              show_col_types = FALSE, progress = FALSE)),
+        r <- tryCatch(readr::read_delim(path, delim = delim, name_repair = "minimal",
+                                        col_types = readr::cols(.default = "c"),
+                                        na = character(0), show_col_types = FALSE,
+                                        progress = FALSE),
                       error = function(e) NULL)
-        if (length(r) == ncol(df)) {
+        if (!is.null(r) && ncol(r) == ncol(df)) {
             raw <- r
             break
         }
     }
     if (is.null(raw)) return(invisible(df))
-    blank <- is.na(raw) | !nzchar(trimws(raw))
-    rep_names <- unique(raw[!blank & duplicated(raw)])
+
+    nm <- names(raw)
+    blank <- is.na(nm) | !nzchar(trimws(nm))
+    rep_names <- unique(nm[!blank & duplicated(nm)])
     if (any(blank) || length(rep_names) > 0) {
         stop(where, " has ",
              if (length(rep_names) > 0) paste0("a repeated column name (",
@@ -75,6 +81,22 @@
              if (length(rep_names) > 0 && any(blank)) " and " else "",
              if (any(blank)) "a blank column name" else "",
              " in its header. Give every column its own name.", call. = FALSE)
+    }
+
+    # Rows line up only if both reads kept the same ones; readr drops blank
+    # lines in each, so a mismatch means something else and is not guessed at.
+    if (nrow(raw) != nrow(df)) return(invisible(df))
+    for (j in seq_along(df)) {
+        x <- df[[j]]
+        if (!(is.numeric(x) || is.logical(x))) next
+        written <- trimws(raw[[j]])
+        # "NaN" is read as a number that is.na() also reports; it is not lost.
+        lost <- is.na(x) & !is.na(written) & !written %in% c("", "NA", "NaN")
+        if (any(lost)) {
+            stop(where, ": column '", names(df)[j], "' has values that are not numbers ",
+                 "(e.g. '", written[which(lost)[1]], "'), which would be read as missing.",
+                 call. = FALSE)
+        }
     }
     invisible(df)
 }
@@ -229,7 +251,15 @@ layer_symbols <- function(ly, df, cols, ids, annotation = NULL) {
     }
 
     if (!is.null(annotation)) {
-        ann <- first_of(annotation$symbol)[match(ids, as.character(annotation$gene_id))]
+        hit <- match(ids, as.character(annotation$gene_id))
+        # An annotation that names none of the layer's ids is in another
+        # namespace or version; falling back to gene ids would hide that.
+        if (length(ids) > 0 && all(is.na(hit))) {
+            stop("Layer '", ly$name, "': annotation_file matches none of the layer's ",
+                 "feature ids (e.g. '", ids[1], "' is not among its gene_id values). ",
+                 "Check that both use the same id type and version.", call. = FALSE)
+        }
+        ann <- first_of(annotation$symbol)[hit]
         fill <- is.na(symbol) & !is.na(ann)
         symbol[fill] <- ann[fill]
         source[fill] <- "symbol"
@@ -263,7 +293,7 @@ read_layer_annotation <- function(ly, config) {
     if (is.null(ly$annotation_file)) return(NULL)
     path <- resolve_input_path(config, ly$annotation_file)
     ann <- read_table_auto(path)
-    .dei_check_header(ann, path, sprintf("Layer '%s': annotation_file (%s)", ly$name, path))
+    .dei_check_table(ann, path, sprintf("Layer '%s': annotation_file (%s)", ly$name, path))
     gap <- setdiff(c("gene_id", "symbol"), names(ann))
     if (length(gap) > 0) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
@@ -307,7 +337,7 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
                           well_observed_min = 2, df = NULL) {
     path <- resolve_input_path(config, ly$path)
     if (is.null(df)) df <- read_table_auto(path)
-    .dei_check_header(df, path, sprintf("Layer '%s': path (%s)", ly$name, path))
+    .dei_check_table(df, path, sprintf("Layer '%s': path (%s)", ly$name, path))
     cn <- names(df)
     available <- list_layer_contrasts(cn, ly$format, ly$contrast %||% "contrast")
     hits_cfg <- utils::modifyList(hits_default, ly$hits %||% list())
