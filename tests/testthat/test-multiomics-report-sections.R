@@ -301,3 +301,93 @@ test_that("pathway maps have their own top-level section after cross-omics enric
     }
     expect_false(any(grepl("Multi-Omics Pathway Maps", headings, fixed = TRUE)))
 })
+
+test_that("maps without a tab of their own leave no near-empty tab or second note", {
+    src <- template_lines()
+    headings <- static_headings(src)
+    # Overview is the one tab that always renders; Multi-Omics Maps only with maps.
+    expect_false(any(grepl("Multi-Omics Maps", headings, fixed = TRUE)))
+    expect_true(any(grepl('`r if (has_pathview) "## Multi-Omics Maps {.unnumbered}"`',
+                          src, fixed = TRUE)))
+    expect_false(any(grepl("pathview-note|pathview-none", src)))
+    # Names and contrasts come from the shared index, not parsed again in a tab.
+    joined <- paste(src, collapse = "\n")
+    expect_true(grepl("pv_index <- pathview_map_index(", joined, fixed = TRUE))
+    expect_true(grepl("pathview_missing_note(multi_cfg)", joined, fixed = TRUE))
+    expect_false(grepl("pathview_map_title <- function", joined, fixed = TRUE))
+    expect_false(grepl("contrast_part", joined, fixed = TRUE))
+})
+
+# Writes empty PNG files, plus a KGML carrying a title for the ids in `titled`.
+pathview_fixture <- function(files, titled = list()) {
+    d <- withr::local_tempdir(.local_envir = parent.frame())
+    for (f in files) file.create(file.path(d, f))
+    for (stem in names(titled)) {
+        writeLines(c('<?xml version="1.0"?>',
+                     sprintf('<pathway name="path:%s" title="%s">', stem, titled[[stem]])),
+                   file.path(d, paste0(stem, ".xml")))
+    }
+    d
+}
+
+test_that("a map's contrast is read from its filename, with the recorded spelling first", {
+    expect_identical(pathview_map_contrast("ko00010.multi_ora_A.vs.B.multi.png"), "A vs B")
+    expect_identical(pathview_map_contrast("ko00010.multi_ora_A.vs.B.png"), "A vs B")
+    # The renderer's record wins over the dotted key.
+    expect_identical(pathview_map_contrast("ko00010.multi_ora_X1.5.vs.X0.multi.png",
+                                           list(X1.5.vs.X0 = "1.5 - 0")), "1.5 - 0")
+    # A single-contrast map and the per-layer maps name no contrast.
+    expect_identical(pathview_map_contrast(c("ko00010.multi_ora.multi.png",
+                                             "hsa00010.metab_top.png",
+                                             "hsa00010.prot_top.png")),
+                     c("", "", ""))
+    expect_identical(pathview_map_contrast(character(0)), character(0))
+})
+
+test_that("the map index gives each contrast of a pathway its own row", {
+    d <- pathview_fixture(
+        c("ko00010.multi_ora_A.vs.B.multi.png", "ko00010.multi_ora_C.vs.D.multi.png",
+          "ko00010.png", "hsa00020.metab_top.png", "hsa00030.prot_top.png"),
+        titled = list(ko00010 = "Glycolysis"))
+    idx <- pathview_map_index(d)
+    expect_identical(idx$set, c("multi_ora", "multi_ora", "metab_top", "prot_top"))
+    expect_identical(idx$contrast, c("A vs B", "C vs D", "", ""))
+    expect_identical(idx$kegg_id, c("00010", "00010", "00020", "00030"))
+    expect_identical(idx$pathway, c("Glycolysis", "Glycolysis", "", ""))
+    expect_identical(idx$heading, c("Glycolysis (00010) - A vs B",
+                                    "Glycolysis (00010) - C vs D",
+                                    "Pathway 00020", "Pathway 00030"))
+    expect_identical(idx$map_set[1], "Enriched in >= 2 layers")
+    # The blank KEGG template beside the overlays is not a map.
+    expect_false(any(basename(idx$png) == "ko00010.png"))
+    # No two rows describe the same thing.
+    expect_false(anyDuplicated(idx[, c("set", "contrast", "kegg_id")]) > 0)
+})
+
+test_that("the map index includes only the sets the report shows", {
+    d <- pathview_fixture(c("ko00010.multi_ora_A.vs.B.multi.png",
+                            "hsa00020.metab_top.png", "hsa00030.prot_top.png"))
+    idx <- pathview_map_index(d, multi_ora = FALSE, prot_top = FALSE)
+    expect_identical(idx$set, "metab_top")
+    union <- pathview_map_index(d, metab_top = FALSE, prot_top = FALSE,
+                                multi_ora_union = TRUE)
+    expect_identical(union$map_set, "Enriched in a gene layer")
+
+    none <- pathview_map_index(file.path(d, "absent"))
+    expect_identical(nrow(none), 0L)
+    expect_identical(names(none), c("set", "map_set", "contrast", "kegg_id",
+                                    "pathway", "heading", "png"))
+    expect_identical(nrow(pathview_map_index(d, FALSE, FALSE, FALSE)), 0L)
+})
+
+test_that("with no maps the section says whether they were switched off", {
+    off <- pathview_missing_note(list(enrichment = list(pathview = list(run_pathview = FALSE))))
+    expect_match(off, "switched off", fixed = TRUE)
+    expect_match(off, "enrichment.pathview.run_pathview", fixed = TRUE)
+    # Same default as run_multi_ora(): an absent switch means maps were asked for.
+    for (cfg in list(NULL, list(), list(enrichment = list(pathview = list(run_pathview = TRUE))))) {
+        on <- pathview_missing_note(cfg)
+        expect_match(on, "No pathway maps are available", fixed = TRUE)
+        expect_false(grepl("switched off", on, fixed = TRUE))
+    }
+})

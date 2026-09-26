@@ -64,24 +64,6 @@ make_dt <- function(df, caption = NULL, pageLength = 5) {
     )
 }
 
-#' Human-readable title for a rendered pathview map
-#'
-#' pathview leaves the KGML beside the PNG it renders, and that file carries the
-#' pathway's title. Reading it avoids both a network call and a bare numeric id
-#' as the section heading.
-#'
-#' @param png_path Path to the rendered pathview PNG.
-#' @return Character title, or NA when no KGML sits beside the image.
-pathview_map_title <- function(png_path) {
-    stem <- sub("\\..*$", "", basename(png_path))
-    kgml <- file.path(dirname(png_path), paste0(stem, ".xml"))
-    if (!file.exists(kgml)) return(NA_character_)
-    hit <- grep("title=", readLines(kgml, n = 40, warn = FALSE), value = TRUE)
-    if (length(hit) == 0) return(NA_character_)
-    ttl <- sub('.*title="([^"]+)".*', "\\1", hit[1])
-    if (identical(ttl, hit[1])) NA_character_ else ttl
-}
-
 # Helper: render figure legend (paper-style caption below figure)
 figure_legend <- function(text) {
     cat(sprintf("<p class='figure-legend' style='text-align: center; font-size: 0.9em; color: #555; margin: 4px auto 12px auto; max-width: 88%%; line-height: 1.45; font-style: italic;'>%s</p>\n", text))
@@ -1359,9 +1341,17 @@ pv_prot_pdf <- file.path(multi_ora_dir, "pathview_top_proteomics_pathways.pdf")
 has_pv_metab <- file.exists(pv_metab_pdf)
 has_pv_prot <- file.exists(pv_prot_pdf)
 has_per_omics_pv <- has_pv_metab || has_pv_prot
+has_any_pv <- has_pathview || has_per_omics_pv
+
+# One index feeds the overview table and every tab, so a map is named and
+# assigned a contrast the same way in both; see pathview_map_index().
+pv_index <- pathview_map_index(pathview_dir, multi_ora = has_pathview,
+                               metab_top = has_pv_metab, prot_top = has_pv_prot,
+                               multi_ora_union = pathview_is_union,
+                               contrast_labels = pathview_contrast_labels)
 ```
 
-```{r pathview-all-pdf, eval=has_pathview || has_pv_metab || has_pv_prot, include=FALSE}
+```{r pathview-all-pdf, eval=has_any_pv, include=FALSE}
 # Collect ALL pathview PNGs from all sections into one combined PDF; the
 # overview tab links to it.
 all_pv_pngs <- character(0)
@@ -1402,59 +1392,31 @@ if (length(all_pv_pngs) > 0) {
 
 ## Overview {.unnumbered}
 
-```{r pathview-none, eval=!(has_pathview || has_per_omics_pv), results='asis'}
-cat("*No pathway maps were drawn for this run. Maps need pathways enriched in",
-    ">= 2 omics layers, or top pathways of one layer, or, for an organism with no",
-    "annotation database, a configured feature-to-KO map.*\n")
-```
-
-```{r pathview-overview, eval=has_pathview || has_per_omics_pv, results='asis'}
-# One place to find every map: which set it belongs to, its KEGG id and name,
-# and the contrast it shows. The maps themselves are in the tabs that follow.
-map_index <- function(pngs, set, strip) {
-    if (length(pngs) == 0) return(NULL)
-    ids <- sub("^[a-z]+", "", sub(strip, "", basename(pngs)))
-    titles <- vapply(pngs, pathview_map_title, character(1), USE.NAMES = FALSE)
-    data.frame(`Map set` = set, `KEGG id` = ids,
-               Pathway = ifelse(is.na(titles), "", titles),
-               check.names = FALSE, stringsAsFactors = FALSE)
-}
-pv_index <- rbind(
-    if (has_pathview) map_index(
-        sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$",
-                        full.names = TRUE)),
-        if (pathview_is_union) "Enriched in a gene layer" else "Enriched in >= 2 layers",
-        "\\.multi_ora.*$"),
-    if (has_pv_metab) map_index(
-        sort(list.files(pathview_dir, pattern = "\\.metab_top\\.png$", full.names = TRUE)),
-        "Top metabolomics pathways", "\\.metab_top\\.png$"),
-    if (has_pv_prot) map_index(
-        sort(list.files(pathview_dir, pattern = "\\.prot_top\\.png$", full.names = TRUE)),
-        "Top proteomics pathways", "\\.prot_top\\.png$"))
-cat("KEGG pathway maps with each layer's log2 fold changes drawn on the nodes.",
-    "Each tab holds one set of maps; this table lists all of them.\n\n")
-if (isTRUE(has_combined_pv_pdf)) {
-    cat(sprintf(
-        '\n<div style="text-align: center; margin: 16px 0;">\n<a href="%s" download style="display: inline-block; padding: 10px 24px; background-color: #4a90d9; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 1em;">Download all pathway maps (PDF, %d figures)</a>\n</div>\n\n',
-        combined_pdf, length(all_pv_pngs)))
+```{r pathview-overview, results='asis'}
+if (!has_any_pv) {
+    cat(pathview_missing_note(multi_cfg), "\n")
+} else {
+    cat("KEGG pathway maps with each layer's log2 fold changes drawn on the nodes.",
+        "Each tab holds one set of maps; this table lists all of them.\n\n")
+    if (isTRUE(has_combined_pv_pdf)) {
+        cat(sprintf(
+            '\n<div style="text-align: center; margin: 16px 0;">\n<a href="%s" download style="display: inline-block; padding: 10px 24px; background-color: #4a90d9; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 1em;">Download all pathway maps (PDF, %d figures)</a>\n</div>\n\n',
+            combined_pdf, length(all_pv_pngs)))
+    }
 }
 ```
 
-```{r pathview-index-table, eval=has_pathview || has_per_omics_pv}
-if (!is.null(pv_index) && nrow(pv_index) > 0) {
-    make_dt(pv_index, caption = "Pathway maps in this report", pageLength = 10)
+```{r pathview-index-table, eval=has_any_pv}
+if (nrow(pv_index) > 0) {
+    pv_table <- pv_index[, c("map_set", "contrast", "kegg_id", "pathway")]
+    names(pv_table) <- c("Map set", "Contrast", "KEGG id", "Pathway")
+    make_dt(pv_table, caption = "Pathway maps in this report", pageLength = 10)
 }
 ```
 
-## Multi-Omics Maps {.unnumbered}
-
-```{r pathview-note, eval=!has_pathview, results='asis'}
-cat("*No pathview maps generated. Requires pathways enriched in >= 2 omics layers,",
-    "or, for an organism with no annotation database, a configured feature-to-KO map.*\n")
-```
+`r if (has_pathview) "## Multi-Omics Maps {.unnumbered}"`
 
 ```{r pathview-plots, eval=has_pathview, results='asis'}
-pv_pngs <- sort(list.files(pathview_dir, pattern = "\\.multi_ora.*\\.(multi\\.)?png$", full.names = TRUE))
 cat(if (pathview_is_union) {
         paste("KEGG reference maps, in KO space, for pathways enriched in",
               "**at least one** gene-based omics layer, shown **per contrast**.",
@@ -1472,29 +1434,10 @@ cat(if (pathview_is_union) {
     })
 cat(sprintf("[Download these maps (PDF)](%s)\n\n", pathview_pdf))
 
-# Group PNGs by contrast (extracted from filename suffix)
-for (pv_png in pv_pngs) {
-    bn <- basename(pv_png)
-    # Extract pathway ID and contrast from filename
-    # e.g. "cel00053.multi_ora_X1.56ppm.vs..0ppm.multi.png"
-    pw_id <- sub("^[a-z]+", "", sub("\\.multi_ora.*$", "", bn))
-    contrast_part <- sub("^.*\\.multi_ora_?", "", bn)
-    contrast_part <- sub("\\.(multi\\.)?png$", "", contrast_part)
-    contrast_label <- if (!is.null(pathview_contrast_labels[[contrast_part]])) {
-        pathview_contrast_labels[[contrast_part]]
-    } else {
-        gsub("\\.", " ", contrast_part)
-    }
-    pw_title <- pathview_map_title(pv_png)
-    pw_label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else
-        paste0(pw_title, " (", pw_id, ")")
-    if (nzchar(contrast_label)) {
-        label <- paste0(pw_label, " - ", contrast_label)
-    } else {
-        label <- pw_label
-    }
-    cat(sprintf("\n### %s {.unnumbered}\n\n", label))
-    cat(sprintf("![%s](%s)\n\n", label, pv_png))
+pv_multi <- pv_index[pv_index$set == "multi_ora", ]
+for (i in seq_len(nrow(pv_multi))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_multi$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_multi$heading[i], pv_multi$png[i]))
 }
 figure_legend(paste0(
     "KEGG pathway maps generated with pathview, shown per contrast. Gene nodes show logFC from transcriptomics (left) and proteomics (right) where available. ",
@@ -1506,19 +1449,15 @@ figure_legend(paste0(
 render_commentary("multi_ora_pathview")
 ```
 
-
 ```{r per-omics-pathview-metab, eval=has_pv_metab, results='asis'}
 cat("\n## Top Metabolomics Pathways (with Proteomics Overlay) {.unnumbered}\n\n")
 cat("Top enriched metabolomics KEGG pathways with compound logFC (metabolomics) and ",
     "enzyme/gene logFC (proteomics) overlaid on the same pathway map.\n\n")
 cat(sprintf("[Download PDF](%s)\n\n", pv_metab_pdf))
-metab_pngs <- sort(list.files(pathview_dir, pattern = "\\.metab_top\\.png$", full.names = TRUE))
-for (pv_png in metab_pngs) {
-    pw_id <- sub("^[a-z]+", "", sub("\\.metab_top\\.png$", "", basename(pv_png)))
-    pw_title <- pathview_map_title(pv_png)
-    label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else paste0(pw_title, " (", pw_id, ")")
-    cat(sprintf("\n### %s {.unnumbered}\n\n", label))
-    cat(sprintf("![%s](%s)\n\n", label, pv_png))
+pv_metab <- pv_index[pv_index$set == "metab_top", ]
+for (i in seq_len(nrow(pv_metab))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_metab$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_metab$heading[i], pv_metab$png[i]))
 }
 figure_legend("Top metabolomics-enriched KEGG pathways. Compound nodes show metabolomics logFC; gene/enzyme nodes show proteomics logFC. Red = upregulated, blue/green = downregulated.")
 ```
@@ -1528,13 +1467,10 @@ cat("\n## Top Proteomics Pathways (with Metabolomics Overlay) {.unnumbered}\n\n"
 cat("Top enriched proteomics KEGG pathways with enzyme/gene logFC (proteomics) and ",
     "compound logFC (metabolomics) overlaid on the same pathway map.\n\n")
 cat(sprintf("[Download PDF](%s)\n\n", pv_prot_pdf))
-prot_pngs <- sort(list.files(pathview_dir, pattern = "\\.prot_top\\.png$", full.names = TRUE))
-for (pv_png in prot_pngs) {
-    pw_id <- sub("^[a-z]+", "", sub("\\.prot_top\\.png$", "", basename(pv_png)))
-    pw_title <- pathview_map_title(pv_png)
-    label <- if (is.na(pw_title)) paste0("Pathway ", pw_id) else paste0(pw_title, " (", pw_id, ")")
-    cat(sprintf("\n### %s {.unnumbered}\n\n", label))
-    cat(sprintf("![%s](%s)\n\n", label, pv_png))
+pv_prot <- pv_index[pv_index$set == "prot_top", ]
+for (i in seq_len(nrow(pv_prot))) {
+    cat(sprintf("\n### %s {.unnumbered}\n\n", pv_prot$heading[i]))
+    cat(sprintf("![%s](%s)\n\n", pv_prot$heading[i], pv_prot$png[i]))
 }
 figure_legend("Top proteomics-enriched KEGG pathways. Gene/enzyme nodes show proteomics logFC; compound nodes show metabolomics logFC. Red = upregulated, blue/green = downregulated.")
 ```
