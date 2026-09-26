@@ -238,22 +238,42 @@ chunk_text <- function(src, label) {
     paste(gsub('"', "", unlist(quoted)), collapse = " ")
 }
 
-test_that("the cross-omics heatmap legends stay within three lines", {
+test_that("the cross-omics heatmap legends stay within 100 words", {
+    # One rule for every legend: at most 100 words, counted with the optional
+    # multi-contrast sentence included, since that is the longest it renders.
     src <- template_lines()
     for (label in c("enrichment-heatmap-legend", "enrichment-ora-heatmap-legend")) {
         txt <- chunk_text(src, label)
         n_words <- length(strsplit(trimws(txt), "\\s+")[[1]])
-        # 120 words is the ceiling asked for; 400 characters is about three lines
-        # at the legend's width and font size.
-        expect_lte(n_words, 120, label = label)
-        expect_lte(nchar(txt), 400, label = label)
+        expect_lte(n_words, 100, label = label)
     }
+})
+
+test_that("the shortened legends keep the limits a reader must not read past", {
+    src <- template_lines()
+    nes <- chunk_text(src, "enrichment-heatmap-legend")
+    for (claim in c("not p near 1",
+                    "A missing layer was not necessarily tested and found negative",
+                    "is not a significance threshold",
+                    "scored only with its other test is left out for that layer",
+                    "the run log names it")) {
+        expect_true(grepl(claim, gsub("\\s+", " ", nes), fixed = TRUE), info = claim)
+    }
+    ora <- gsub("\\s+", " ", chunk_text(src, "enrichment-ora-heatmap-legend"))
+    for (claim in c("nothing is re-adjusted across contrasts",
+                    "GSEA results do not enter",
+                    "not p near 1",
+                    "a display choice, not an error rate controlled across contrasts")) {
+        expect_true(grepl(claim, ora, fixed = TRUE), info = claim)
+    }
+    # External ORA tables need not be BH, so the legend claims only "adjusted".
+    expect_false(grepl("BH", ora, fixed = TRUE))
 })
 
 test_that("GO figures say why metabolomics is absent from them", {
     src <- paste(template_lines(), collapse = "\n")
     expect_true(grepl("collection_note <- function(coll)", src, fixed = TRUE))
-    expect_true(grepl('grepl("^GO", coll)', src, fixed = TRUE))
+    expect_true(grepl('grepl("^GO", coll, ignore.case = TRUE)', src, fixed = TRUE))
     # Both run-level loops and the per-contrast helper place the note.
     expect_gte(lengths(regmatches(src, gregexpr("collection_note(coll)", src,
                                                 fixed = TRUE))), 3)

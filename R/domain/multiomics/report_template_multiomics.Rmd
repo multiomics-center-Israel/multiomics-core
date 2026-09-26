@@ -231,7 +231,7 @@ single_contrast_label <- contrast_layout$label
 has_metabolomics_layer <- !is.null(cfg$modes$metabolomics) ||
     "metabolomics" %in% (cfg$global$omics_present %||% character(0))
 collection_note <- function(coll) {
-    if (has_metabolomics_layer && grepl("^GO", coll)) {
+    if (has_metabolomics_layer && grepl("^GO", coll, ignore.case = TRUE)) {
         figure_legend(paste("GO annotates genes and proteins only; metabolites have",
                             "no GO terms, so metabolomics cannot appear in GO figures."))
     }
@@ -1208,14 +1208,18 @@ if (length(nes_pngs) > 0) {
 
 ```{r enrichment-heatmap-legend, eval=has_enrichment, results='asis'}
 if (length(list.files(enrichment_dir, pattern = "^cross_omics_pathway_heatmap_.*\\.png$")) > 0) {
-    # Kept to three lines of rendered text: what the colour, the grey and the
-    # row order mean. The reasoning behind them lives in the code comments of
-    # analyze_cross_omics_enrichment() and select_multi_omics_pathways().
+    # Within 100 words: how to read the colour, the grey and the row order, and
+    # the limits a reader must not read past. The reasoning behind them lives in
+    # the code comments of analyze_cross_omics_enrichment() and
+    # select_multi_omics_pathways().
     figure_legend(paste(
         "One heatmap per gene-set collection. Colour: -log10 p of each layer's own",
-        "test (GSEA if available, else ORA; the table names which).",
-        "Grey: no result in that layer. Rows: top 30 pathways by number of layers",
-        "at p < 0.05, then Stouffer combined p. Full list in the table below.",
+        "test (GSEA, else ORA; the table names which). Grey: no p-value there, not p",
+        "near 1. A missing layer was not necessarily tested and found negative. Rows:",
+        "top 30 pathways by layers at p < 0.05, then Stouffer p; that count orders the",
+        "display and is not a significance threshold. A contrast or collection a layer",
+        "scored only with its other test is left out for that layer; the run log names",
+        "it.",
         if (!single_contrast) "Each cell is the layer's smallest p across contrasts."))
     render_commentary("cross_omics_pathway_heatmap")
 }
@@ -1244,10 +1248,14 @@ if (length(ora_pngs) > 0) {
 if (length(list.files(enrichment_dir, pattern = "^cross_omics_ora_heatmap_.*\\.png$")) > 0) {
     figure_legend(paste(
         "ORA evidence, one heatmap per gene-set collection. Colour: -log10 of each",
-        "layer's own BH-adjusted ORA p, capped at 1e-10. Grey: no",
-        "ORA result in that layer. Rows: top 30 pathways by number of layers with a",
-        "result, then smallest adjusted p. Compare colours within a column.",
-        if (!single_contrast) "Each cell is the layer's smallest adjusted p across contrasts."))
+        "layer's own adjusted ORA p-value, capped at 1e-10; nothing is re-adjusted",
+        "across contrasts, and GSEA results do not enter. Grey: no ORA result in that",
+        "layer, not p near 1; a missing layer was not necessarily tested. Rows: top 30",
+        "pathways by number of layers with a result, then smallest adjusted p.",
+        "Compare colours within a column.",
+        if (!single_contrast) paste("Each cell is the layer's smallest adjusted p across",
+                                    "contrasts: a display choice, not an error rate",
+                                    "controlled across contrasts.")))
     render_commentary("cross_omics_ora_heatmap")
 }
 ```
