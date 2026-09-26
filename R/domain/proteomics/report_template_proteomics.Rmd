@@ -810,10 +810,60 @@ if (file.exists(scores_csv) && requireNamespace("plotly", quietly = TRUE)) {
 }
 ```
 
+```{r pca-complete-case, eval=show_pca_section, echo=FALSE, results='asis'}
+# The complete-case sensitivity view, shown whenever the QC module wrote the
+# panel. R/modules/proteomics/01_mod_qc_pre.R writes it when the preprocessing
+# output carries missingness flags, at least three features are observed in
+# every sample, and qc_pca_scatter() succeeds; it skips with a message
+# otherwise. The configured imputation method is not one of those conditions --
+# under "none" the flags are plain missingness and the panel is written as
+# usual. Hence the file.exists() test below rather than a config check: this
+# chunk asks whether the panel exists, not whether it should.
+#
+# It is deliberately NOT part of the feature-set selector below. That selector
+# answers "how many proteins, ranked by variance", and is off by default;
+# this answers a different question and belongs beside the main PCA. The
+# selector therefore carries the full-matrix and top-variable panels only, and
+# this panel is never drawn twice.
+#
+# No calculation here: the image is what R/modules/proteomics/01_mod_qc_pre.R
+# already wrote via qc_pca_scatter(), on the same matrix as the PCA above.
+pca_cc_file <- file.path(diag_dir, "PCA_robust.png")
+if (file.exists(pca_cc_file)) {
+    cat("### Complete-case sensitivity \u2014 proteins observed in every sample\n\n")
+    cat(sprintf(
+        '<div style="text-align: center;"><img src="%s" style="width:90%%; max-width: 900px; height: auto;" alt="PCA restricted to proteins observed in every sample" /></div>\n\n',
+        knitr::image_uri(pca_cc_file)))
+    # The legend states what the panel is and stops there. The semantic
+    # restriction lives here rather than in the report:
+    #
+    #   this view must not be described as pre-imputation or imputation-free
+    #
+    # because where batch correction ran, the displayed values were informed by
+    # imputed ones. Told to a reader that sentence lands as an instruction to
+    # whoever writes the next caption rather than as an explanation, so a test
+    # enforces it instead -- see "the report shows the complete-case panel,
+    # once, outside the selector" in tests/testthat/test-pca-protein-subsets.R,
+    # which requires the phrase here and forbids it in the legend.
+    #
+    # Each sentence is one element, so the phrases the tests pin stay intact on
+    # a single source line rather than straddling a line break.
+    figure_legend(paste(
+        "This PCA starts from the same QC-stage expression matrix as the main",
+        "PCA but restricts the feature set to proteins with an observed",
+        "measurement in every included sample.",
+        "Because this subset contains no missing cells,",
+        "no within-PCA missing-value substitution is required.",
+        "If batch correction was enabled, the displayed values remain batch-corrected."))
+}
+```
+
 ```{r pca-topvar-block, eval=show_pca_section && show_pca_topvar, echo=FALSE, results='asis'}
-# PCA feature-set selector. list_pca_feature_panels() in
-# R/domain/proteomics/08_report.R decides which panels exist, their order and
-# their labels, so the dropdown and its tests run the same code.
+# PCA feature-set selector: the full matrix and the top-variable sets.
+# list_pca_feature_panels() in R/domain/proteomics/08_report.R decides which
+# panels exist, their order and their labels, so the dropdown and its tests run
+# the same code. The complete-case panel is not among them -- it has its own
+# section above, so turning this selector on cannot show it a second time.
 pca_panels <- list_pca_feature_panels(diag_dir)
 pca_data_map <- list()
 for (i in seq_len(nrow(pca_panels))) {
@@ -830,7 +880,7 @@ if (length(pca_keys) > 0) {
     default_img_uri <- NULL
 }
 
-cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, the top-variable sets use the most variable proteins, and the last set keeps only proteins with an observed measurement in every sample.\n\n")
+cat("### By Protein Subset\n\nSelect which set of proteins the PCA is computed on. Every panel uses the same matrix and the same preprocessing; only the feature set differs. All proteins uses the full filtered matrix, while the top-variable sets restrict the PCA to the most variable proteins. The complete-case sensitivity view is shown separately above when available.\n\n")
 cat('<div style="margin-bottom: 20px;">\n')
 cat('<label for="pca_prot_selector"><strong>Protein subset:</strong></label>\n')
 cat('<select id="pca_prot_selector" onchange="updateProtPCAPlot(this.value)" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">\n')
@@ -1156,25 +1206,43 @@ if (exists("cutoff_panel_html")) {
 
 ```{r de-stats-description, results='asis'}
 de_method_name <- prot_cfg$de$method %||% "limma"
-padj_cut_de <- prot_cfg$de$p_cutoff %||% 0.05
-lfc_cut_de <- prot_cfg$de$linear_fc_cutoff %||% 1.5
 
 # Custom stats text takes priority; otherwise auto-generate from config
 custom_stats_text <- report_cfg$stats_methods_text %||% ""
 if (nzchar(trimws(custom_stats_text))) {
     cat(trimws(custom_stats_text), "\n\n")
 } else {
-    # Auto-generate description
-    test_desc <- switch(tolower(de_method_name),
-        limma = "moderated t-tests via the *limma* R/Bioconductor package (empirical Bayes shrinkage of variance estimates)",
-        "limma-voom" = "limma-voom (log-CPM transformed, precision-weighted linear models)",
-        deseq2 = "Wald tests via *DESeq2* (negative binomial generalized linear models)",
-        paste0("*", de_method_name, "* method")
-    )
-    cat(sprintf(
-        "Differential expression was assessed using %s. Multiple testing correction was applied using the **Benjamini-Hochberg** procedure (FDR). Proteins were considered differentially expressed at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
-        test_desc, padj_cut_de, lfc_cut_de
-    ))
+    # One sentence and a pointer. The full description lives in Methods and is
+    # built by build_proteomics_methods_text(); duplicating the switch() here is
+    # what let the two descriptions drift apart. report$stats_methods_text above
+    # still overrides this verbatim -- that config contract is unchanged.
+    .ds_de_files <- prot_cfg$files$de_table
+    .ds_precomputed <- !is.null(.ds_de_files) && length(.ds_de_files) > 0 &&
+                       all(nzchar(unlist(.ds_de_files)))
+    .ds_blocks <- build_proteomics_methods_text(
+        config = cfg,
+        de_method = if (.ds_precomputed) "precomputed" else de_method_name)
+    # The one-liner points at Methods, so it may only be used when Methods is
+    # rendered. With report$show_methods off there is no section to point at,
+    # and Results keeps the full description it carried before this generator
+    # existed rather than sending the reader to a section that is not there.
+    if (isTRUE(show_methods)) {
+        cat(.ds_blocks$results_oneliner, "\n\n")
+        # Only the one-liner needs the thresholds spelled out beside it. The
+        # full description already ends with its own threshold sentence, so
+        # printing this unconditionally stated the cutoffs twice -- and with the
+        # wrong comparator in precomputed mode, where the loader tests padj < .
+        cat(.ds_blocks$results_thresholds, "\n\n")
+    } else {
+        cat(.ds_blocks$differential, "\n\n")
+        # The differential block deliberately omits the per-run significance
+        # rule when multiple imputation is on, because the consensus block says
+        # it. With Methods hidden that block has nowhere else to appear, and the
+        # report would never state how a protein was called significant.
+        if (!is.null(.ds_blocks$consensus)) {
+            cat(.ds_blocks$consensus, "\n\n")
+        }
+    }
 }
 
 # Link to full results table
@@ -2028,6 +2096,16 @@ if (length(heatmap_files) > 0) {
 ```{r protein-explorer-heading, eval=show_protein_explorer, results='asis'}
 cat("## Protein Expression Explorer\n\n")
 cat("The expression explorer provides an interactive interface for examining individual protein expression patterns across experimental groups. Box plots show the distribution of expression values for each condition, enabling visual assessment of effect sizes and within-group variability.\n\n")
+cat("These are **measured** values: the filtered, normalised intensities with missing measurements left missing. A protein not detected in a sample contributes nothing here, rather than a stand-in value, so a group with no detections is shown as an empty slot and the reported mean and sample count cover only what was measured.\n\n")
+
+# The reconciliation a reader needs, claiming only what is true in every
+# configuration. Deliberately says nothing about how the fold changes were
+# produced: with de$method ttest or welch they ARE a difference of group means
+# (05c_de_ttest.R), an unblocked limma coefficient can equal one too, and with
+# an externally precomputed DE table the pipeline computed none of them. What
+# holds regardless is that they come from the differential analysis rather than
+# from the measured-only means drawn here, so they MAY differ -- not must.
+cat("Fold changes reported elsewhere in this report are taken from the differential-analysis results and are not recomputed from the measured-only means shown here. They may therefore differ from the difference between the displayed group means.\n\n")
 ```
 
 ```{r protein-explorer-data, eval=show_protein_explorer, include=FALSE}
@@ -2040,7 +2118,13 @@ meta_df_exp <- read_samplesheet(meta_file_exp)
 group_col_exp <- prot_cfg$effects$color %||% "Condition"
 sample_col_exp <- prot_cfg$effects$samples %||% "SampleID"
 
-norm_expr_exp <- NULL
+measured_expr_exp <- NULL
+# Initialised here, not inside the branches below, so the overlay block can
+# test them whichever source the measured matrix came from -- or none.
+final_df <- NULL
+id_col_exp <- NULL
+measured_from_final_results <- FALSE
+overlay_ready <- FALSE
 
 if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
     meta_sample_ids <- as.character(meta_df_exp[[sample_col_exp]])
@@ -2057,32 +2141,47 @@ if (!is.null(meta_df_exp) && sample_col_exp %in% names(meta_df_exp)) {
             # Extract only sample columns that match metadata
             expr_cols_exp <- intersect(meta_sample_ids, names(final_df))
             if (length(expr_cols_exp) > 0 && id_col_exp %in% names(final_df)) {
-                norm_expr_exp <- final_df[, expr_cols_exp, drop = FALSE]
-                rownames(norm_expr_exp) <- final_df[[id_col_exp]]
+                measured_expr_exp <- final_df[, expr_cols_exp, drop = FALSE]
+                rownames(measured_expr_exp) <- final_df[[id_col_exp]]
+                # Only this source carries the paired <sample>.norm block.
+                measured_from_final_results <- TRUE
             }
         }
     }
 
-    # Fallback: imputed expression file
-    if (is.null(norm_expr_exp)) {
-        imp_files <- list.files(datasets_dir, pattern = "imputed.*\\.tsv$", full.names = TRUE)
-        if (length(imp_files) > 0) {
-            norm_expr_exp <- tryCatch(
-                read.delim(imp_files[1], stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
+    # Measured fallback: the filtered, unimputed matrix, named exactly.
+    #
+    # This used to be list.files(pattern = "imputed.*\\.tsv$"), which is not
+    # anchored -- it matches protein_log2_filtered_unimputed.tsv as readily as
+    # protein_log2_filtered_imputed_once_*.tsv, and list.files() sorts, so the
+    # imputed file came first and won. The explorer then plotted imputed
+    # intensities, labelled them measured, and averaged them into a mean the
+    # reader had no way to distinguish from a measured one.
+    #
+    # The measured source is named, never matched: only final_results.tsv's
+    # <sample> block and this file carry measured values with their missing
+    # entries intact. If neither is available the explorer stays unavailable,
+    # because showing the model input here would answer a different question
+    # than the one the reader is asking.
+    if (is.null(measured_expr_exp)) {
+        unimputed_file <- file.path(datasets_dir, "protein_log2_filtered_unimputed.tsv")
+        if (file.exists(unimputed_file)) {
+            measured_expr_exp <- tryCatch(
+                read.delim(unimputed_file, stringsAsFactors = FALSE, row.names = 1, check.names = FALSE),
                 error = function(e) NULL
             )
-            if (!is.null(norm_expr_exp)) {
+            if (!is.null(measured_expr_exp)) {
                 # Keep only columns matching metadata sample IDs
-                keep <- intersect(meta_sample_ids, colnames(norm_expr_exp))
-                if (length(keep) > 0) norm_expr_exp <- norm_expr_exp[, keep, drop = FALSE]
-                else norm_expr_exp <- NULL
+                keep <- intersect(meta_sample_ids, colnames(measured_expr_exp))
+                if (length(keep) > 0) measured_expr_exp <- measured_expr_exp[, keep, drop = FALSE]
+                else measured_expr_exp <- NULL
             }
         }
     }
 }
 
-if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2) {
-    protein_ids <- rownames(norm_expr_exp)
+if (!is.null(measured_expr_exp) && !is.null(meta_df_exp) && ncol(measured_expr_exp) >= 2) {
+    protein_ids <- rownames(measured_expr_exp)
     protein_display <- protein_ids
 
     # Use Genes column from de_data if available
@@ -2099,22 +2198,96 @@ if (!is.null(norm_expr_exp) && !is.null(meta_df_exp) && ncol(norm_expr_exp) >= 2
     # Build sample -> group mapping
     if (sample_col_exp %in% names(meta_df_exp) && group_col_exp %in% names(meta_df_exp)) {
         group_map_exp <- setNames(as.character(meta_df_exp[[group_col_exp]]), meta_df_exp[[sample_col_exp]])
-        sample_groups_exp <- as.character(group_map_exp[colnames(norm_expr_exp)])
+        sample_groups_exp <- as.character(group_map_exp[colnames(measured_expr_exp)])
         sample_groups_exp[is.na(sample_groups_exp)] <- "Unknown"
     } else {
-        sample_groups_exp <- rep("All", ncol(norm_expr_exp))
+        sample_groups_exp <- rep("All", ncol(measured_expr_exp))
     }
 
-    expr_matrix_list <- lapply(seq_len(nrow(norm_expr_exp)), function(i) {
-        round(as.numeric(norm_expr_exp[i, ]), 3)
+    expr_matrix_list <- lapply(seq_len(nrow(measured_expr_exp)), function(i) {
+        round(as.numeric(measured_expr_exp[i, ]), 3)
     })
+
+    # ---------------------------------------------------------------------
+    # Model-input overlay
+    # ---------------------------------------------------------------------
+    # Carries ONLY the cells that were not measured and do have a model-input
+    # value. Built here rather than in the browser so the overlay layer cannot
+    # physically contain an observed value: every other cell is NA in it, so
+    # there is nothing for the plot to get wrong.
+    #
+    # Offered only when all of the following hold. Any one failing leaves the
+    # measured explorer exactly as it is and shows no control at all -- the
+    # overlay is never approximated from another source.
+    #
+    #   * the measured block came from final_results.tsv. That is the only file
+    #     carrying the paired <sample>.norm columns; the fallback source has
+    #     none, and no second file is searched to reconstruct them.
+    #   * imputation is configured. Under method "none" impute_proteomics()
+    #     returns the matrix untouched, so .norm IS the measured matrix, NAs
+    #     included, and there is nothing to overlay.
+    #   * DE was not precomputed. There .norm falls back to pre$expr_imp_single,
+    #     the QC draw, which is not the matrix an external analysis used and
+    #     must not be shown as its model input.
+    #   * every measured column has its exact <sample>.norm counterpart.
+    imp_matrix_list <- NULL
+    overlay_ready <- FALSE
+
+    .imp_method_ov <- tolower(as.character(prot_cfg$imputation$method %||% "perseus_like"))
+
+    # Same condition mod_proteomics_de() selects precomputed mode with; see
+    # R/modules/proteomics/02_mod_de.R for the source contract. Copied rather
+    # than extracted: two callers do not earn a shared helper, and the report
+    # reads the config it was rendered from, which carries files$de_table
+    # verbatim.
+    .de_table_files_ov <- prot_cfg$files$de_table
+    .has_precomputed_ov <- !is.null(.de_table_files_ov) &&
+                           length(.de_table_files_ov) > 0 &&
+                           all(nzchar(unlist(.de_table_files_ov)))
+
+    if (measured_from_final_results &&
+        !identical(.imp_method_ov, "none") &&
+        !.has_precomputed_ov &&
+        !is.null(final_df)) {
+
+        norm_cols_exp <- paste0(colnames(measured_expr_exp), ".norm")
+        if (all(norm_cols_exp %in% names(final_df))) {
+            model_input_exp <- final_df[, norm_cols_exp, drop = FALSE]
+            rownames(model_input_exp) <- final_df[[id_col_exp]]
+            # Align by feature id rather than by position, and require the same
+            # shape: a partial match means the two blocks describe different
+            # feature sets, which is a misalignment, not an overlay.
+            model_input_exp <- model_input_exp[rownames(measured_expr_exp), , drop = FALSE]
+
+            if (identical(dim(model_input_exp), dim(measured_expr_exp)) &&
+                !anyNA(rownames(model_input_exp))) {
+                meas_m <- as.matrix(measured_expr_exp)
+                mod_m  <- as.matrix(model_input_exp)
+                storage.mode(meas_m) <- "double"
+                storage.mode(mod_m)  <- "double"
+
+                # The overlay cell definition, and the only one used anywhere:
+                # measured missing AND model input present.
+                keep_ov <- is.na(meas_m) & !is.na(mod_m)
+                mod_m[!keep_ov] <- NA_real_
+
+                if (any(keep_ov)) {
+                    imp_matrix_list <- lapply(seq_len(nrow(mod_m)), function(i) {
+                        round(as.numeric(mod_m[i, ]), 3)
+                    })
+                    overlay_ready <- TRUE
+                }
+            }
+        }
+    }
 
     explorer_data <- list(
         genes = protein_display,
-        samples = colnames(norm_expr_exp),
+        samples = colnames(measured_expr_exp),
         groups = sample_groups_exp,
         expr = expr_matrix_list
     )
+    if (overlay_ready) explorer_data$imp <- imp_matrix_list
     explorer_json_str <- jsonlite::toJSON(explorer_data, auto_unbox = TRUE)
     explorer_ready <- TRUE
 }
@@ -2136,6 +2309,7 @@ cat('
 <button onclick="clearBoxplot()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Clear All</button>
 </div>
 <div id="boxplot_gene_tags" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+<div id="boxplot_overlay_ctl" style="margin-top: 8px; font-size: 0.9em; color: #555; display: none;"></div>
 <div id="boxplot_gene_info" style="margin-top: 8px; font-size: 0.9em; color: #555;"></div>
 </div>
 <div id="boxplot_container" style="width: 100%; min-height: 450px; margin-bottom: 10px;"></div>
@@ -2145,6 +2319,20 @@ cat('
   <button onclick="exportBoxplot(\'png\')" style="padding: 5px 14px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">PNG</button>
 </div>
 ')
+
+# The control exists only where an overlay does. Emitting it unconditionally
+# and disabling it client-side would put a dead switch in front of every reader
+# whose run has nothing to overlay.
+if (isTRUE(overlay_ready)) {
+    cat('
+<script>
+document.getElementById("boxplot_overlay_ctl").style.display = "block";
+document.getElementById("boxplot_overlay_ctl").innerHTML =
+    "<label style=\\"cursor:pointer;\\"><input type=\\"checkbox\\" id=\\"bp_show_imputed\\" onchange=\\"bpToggleImputed(this)\\" style=\\"vertical-align:middle; margin-right:6px;\\">Show imputed model-input values</label>" +
+    " <span style=\\"color:#777;\\">&mdash; values not measured in that sample, taken from the matrix the model was fitted on. Shown as hollow grey points; they are not part of any box, mean or sample count.</span>";
+</script>
+')
+}
 ```
 
 ```{r protein-explorer-js, eval=show_protein_explorer && explorer_ready, results='asis'}
@@ -2241,6 +2429,106 @@ function clearBoxplot() {
     document.getElementById("boxplot_export_bar").style.display = "none";
 }
 
+// One explicit test for what counts as a measured value, shared by every site
+// that reads an expression array. Missing intensities reach the browser as the
+// string "NA" -- that is how jsonlite writes NA in a numeric vector -- and
+// isNaN() is what rejects those. The null test covers the one case isNaN()
+// alone would accept: Number(null) is 0, so a null would read as a measured
+// zero if the serialisation ever changed. The peptide explorer already tested
+// null this way; this puts the same test in one place for all four sites.
+function bpIsMeasured(v) {
+    return v !== null && v !== undefined && !isNaN(v);
+}
+
+// Group and protein labels come from the sample sheet and the annotation
+// columns. They are data, and the line below them is assembled with innerHTML,
+// so a label carrying angle brackets would be read as markup rather than shown.
+function bpEscapeHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+// Overlay state. geneExprData.imp is present only when the report decided an
+// overlay is available, and it holds ONLY cells that were unmeasured and have
+// a model-input value -- every other cell in it is null. So nothing here has
+// to decide what counts as imputed; that was settled when the data was built.
+var bpShowImputed = false;
+
+function bpHasImputed() {
+    return geneExprData.imp !== null && geneExprData.imp !== undefined;
+}
+
+function bpToggleImputed(el) {
+    bpShowImputed = !!el.checked;
+    if (selectedGenes.length > 0) renderMultiBoxplot();
+}
+
+// The imputed points for one protein in one group, each carrying the group it
+// belongs to. Deliberately a separate collection rather than an append to the
+// measured arrays: these values must never reach a box, a mean or a count.
+//
+// SINGLE-PROTEIN VIEW ONLY. There each group owns a whole x slot, so a point
+// placed at the group index belongs to that group and no other. The multi-protein
+// view separates groups by boxmode "group", which offsets box-family traces
+// within one protein slot -- and offsetgroup/alignmentgroup are attributes of
+// bar, box, violin, histogram, funnel and waterfall, not of scatter. A scatter
+// overlay there would land at the centre of the protein slot regardless of
+// group, which reads as though the value belonged to whichever box it fell
+// nearest. Rather than ship that, the overlay is offered for one protein at a
+// time and the info line says so.
+function bpImputedPoints(geneIdx, pos, groupName) {
+    var out = [];
+    if (!bpShowImputed || !bpHasImputed()) return out;
+    var vals = geneExprData.imp[geneIdx];
+    if (!vals) return out;
+    for (var i = 0; i < vals.length; i++) {
+        if (geneExprData.groups[i] === groupName && bpIsMeasured(vals[i])) {
+            out.push({
+                pos: pos, value: vals[i],
+                sample: geneExprData.samples[i], group: groupName
+            });
+        }
+    }
+    return out;
+}
+
+function bpOverlayTrace(points) {
+    return {
+        x: points.map(function(p) { return p.pos; }),
+        y: points.map(function(p) { return p.value; }),
+        // Raw, like every other trace in this file. bpEscapeHtml() exists for
+        // text that reaches innerHTML -- the chips and the info line. Applied
+        // here it was the same defect as the entity below, one step earlier: a
+        // sample or group containing & < > or " would have been turned INTO an
+        // entity that Plotly then shows verbatim.
+        text: points.map(function(p) { return p.sample; }),
+        customdata: points.map(function(p) { return p.group; }),
+        type: "scatter", mode: "markers",
+        // Plotly draws trace names and hover text as SVG text, and a named
+        // HTML entity is not decoded there: the em-dash one reached the hover
+        // box verbatim. Entities are right everywhere in this file that text
+        // reaches innerHTML -- the checkbox label, the protein chips, the info
+        // line -- and wrong everywhere it reaches Plotly. A JS escape keeps
+        // this file and the generated HTML pure ASCII and leaves the decoding
+        // to the browser, which cannot get it wrong.
+        name: "Imputed \\u2014 model input",
+        showlegend: false,
+        hovertemplate: "%{customdata}<br>Sample: %{text}<br>Model input: %{y:.3f}" +
+                       "<extra>Imputed \\u2014 model input</extra>",
+        // An open symbol is drawn with marker.color, which IS its outline --
+        // there is no fill to suppress and marker.line does not supply that
+        // stroke. A transparent marker.color here made every overlay point
+        // invisible, which is to say the whole feature did nothing.
+        marker: {
+            color: "#8c8c8c", size: 9, symbol: "circle-open",
+            line: { width: 2 }
+        }
+    };
+}
+
 function renderMultiBoxplot() {
     if (selectedGenes.length === 0) return;
 
@@ -2260,9 +2548,22 @@ function renderMultiBoxplot() {
         uniqueGroups.forEach(function(g, gi) {
             var gValues = [], gSamples = [];
             for (var i = 0; i < values.length; i++) {
-                if (groups[i] === g) { gValues.push(values[i]); gSamples.push(samples[i]); }
+                // Every sample in the group used to be pushed, missing ones
+                // included, so the trace carried non-numeric placeholders that
+                // Plotly silently declines to plot. Value and sample name are
+                // dropped together: the hover text is positional, so filtering
+                // one without the other would mislabel points.
+                if (groups[i] === g && bpIsMeasured(values[i])) {
+                    gValues.push(values[i]);
+                    gSamples.push(samples[i]);
+                }
             }
+            // Pin the box to the slot belonging to its own group, rather than
+            // letting Plotly hand out positions to whichever traces happen to
+            // draw. Without this, a group with nothing measured takes no slot
+            // at all and the groups after it shift left into the gap.
             traces.push({
+                x: gValues.map(function() { return gi; }),
                 y: gValues, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: gSamples,
@@ -2272,10 +2573,32 @@ function renderMultiBoxplot() {
                 fillcolor: colors[gi % colors.length] + "33"
             });
         });
+        // Overlay last, as its own traces, so the boxes above are computed from
+        // measured values alone whatever the checkbox says.
+        var sgPts = [];
+        uniqueGroups.forEach(function(g, gi) {
+            sgPts = sgPts.concat(bpImputedPoints(geneIdx, gi, g));
+        });
+        if (sgPts.length > 0) traces.push(bpOverlayTrace(sgPts));
         var layout = {
             title: { text: selectedGenes[0].name + " Expression", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: bpGroupLabel },
+            // Label the axis from the group list, not from the data. A category
+            // axis only knows the categories its traces supply, so a group with
+            // nothing measured never creates one -- categoryarray orders the
+            // categories that exist, it does not bring a missing one into
+            // being. Ticks have no such dependency: tickmode "array" draws
+            // exactly the ticks listed here, so every group keeps a labelled
+            // slot whether or not anything was measured in it. The range is
+            // stated for the same reason, so an empty group at either end is
+            // not autoranged away.
+            xaxis: {
+                title: bpGroupLabel,
+                tickmode: "array",
+                tickvals: uniqueGroups.map(function(g, i) { return i; }),
+                ticktext: uniqueGroups,
+                range: [-0.5, uniqueGroups.length - 0.5]
+            },
             showlegend: false,
             margin: { t: 50, b: 80, l: 70, r: 30 },
             boxgap: 0.3
@@ -2285,14 +2608,20 @@ function renderMultiBoxplot() {
         // Multiple proteins: genes on x-axis, grouped by condition
         var containerH = Math.max(450, 350 + nGenes * 30);
         uniqueGroups.forEach(function(g, gi) {
-            var xVals = [], yVals = [], sampleTexts = [];
-            selectedGenes.forEach(function(sg) {
+            var xVals = [], yVals = [], sampleTexts = [], protTexts = [];
+            selectedGenes.forEach(function(sg, pi) {
                 var values = geneExprData.expr[sg.idx];
                 for (var i = 0; i < values.length; i++) {
-                    if (groups[i] === g) {
-                        xVals.push(sg.name);
+                    if (groups[i] === g && bpIsMeasured(values[i])) {
+                        // The slot, not the name. A protein measured nowhere
+                        // contributes no point, so naming the position would
+                        // leave it without one -- the same way an unmeasured
+                        // group used to lose its place above. The name travels
+                        // in customdata, so the hover reads as it always did.
+                        xVals.push(pi);
                         yVals.push(values[i]);
                         sampleTexts.push(samples[i]);
+                        protTexts.push(sg.name);
                     }
                 }
             });
@@ -2300,18 +2629,35 @@ function renderMultiBoxplot() {
                 x: xVals, y: yVals, type: "box", name: g,
                 boxpoints: "all", jitter: 0.4, pointpos: 0,
                 text: sampleTexts,
-                hovertemplate: "%{x}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
+                customdata: protTexts,
+                hovertemplate: "%{customdata}<br>Sample: %{text}<br>Expression: %{y:.3f}<extra>" + g + "</extra>",
                 marker: { color: colors[gi % colors.length], size: 5, opacity: 0.7 },
                 line: { color: colors[gi % colors.length] },
                 fillcolor: colors[gi % colors.length] + "33"
             });
         });
+        // No overlay here, deliberately. See bpImputedPoints: groups are
+        // separated by boxmode "group", which only offsets box-family traces,
+        // so a scatter point would sit at the centre of the protein slot with
+        // no way to tell which condition it came from. The info line says the
+        // overlay is a single-protein view rather than leaving the checkbox
+        // looking broken.
 
         var protNames = selectedGenes.map(function(sg) { return sg.name; });
         var layout = {
             title: { text: "Protein Expression Comparison", font: { size: 16 } },
             yaxis: { title: "Expression (log2 intensity)" },
-            xaxis: { title: "Protein", categoryorder: "array", categoryarray: protNames },
+            // Ticks from the selection, for the same reason as the
+            // single-protein branch: a protein measured in no sample creates no
+            // category, so categoryarray had nothing to order and the protein
+            // vanished from the comparison as soon as a second one was picked.
+            xaxis: {
+                title: "Protein",
+                tickmode: "array",
+                tickvals: protNames.map(function(p, i) { return i; }),
+                ticktext: protNames,
+                range: [-0.5, protNames.length - 0.5]
+            },
             showlegend: true,
             legend: { title: { text: bpGroupLabel } },
             boxmode: "group",
@@ -2326,10 +2672,35 @@ function renderMultiBoxplot() {
 
     // Show info
     var infoLines = selectedGenes.map(function(sg) {
-        var vals = geneExprData.expr[sg.idx].filter(function(v) { return !isNaN(v); });
-        var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
-        return "<strong>" + sg.name + "</strong>: mean " + mean.toFixed(3) + " (" + vals.length + " samples)";
+        var values = geneExprData.expr[sg.idx];
+        var vals = values.filter(bpIsMeasured);
+        var txt = "<strong>" + bpEscapeHtml(sg.name) + "</strong>: ";
+        if (vals.length > 0) {
+            var mean = vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+            txt += "mean " + mean.toFixed(3) + " (" + vals.length + " measured samples)";
+        } else {
+            txt += "no measured values";
+        }
+        // Name the groups with nothing measured. An empty box should read as
+        // "not detected in this group", never as a plot that failed to draw.
+        var emptyGroups = uniqueGroups.filter(function(g) {
+            for (var i = 0; i < values.length; i++) {
+                if (groups[i] === g && bpIsMeasured(values[i])) return false;
+            }
+            return true;
+        });
+        if (emptyGroups.length > 0) {
+            txt += " &mdash; no measured values in: " +
+                emptyGroups.map(function(g) { return bpEscapeHtml(g); }).join(", ");
+        }
+        return txt;
     });
+    // Say why the checkbox drew nothing, rather than leaving it looking broken.
+    if (bpShowImputed && bpHasImputed() && nGenes > 1) {
+        infoLines.push("<em>Imputed model-input values are shown one protein at a time, " +
+                       "so that each point stays attributable to its " + bpEscapeHtml(bpGroupLabel) +
+                       ". Select a single protein to see them.</em>");
+    }
     document.getElementById("boxplot_gene_info").innerHTML = infoLines.join(" &nbsp;|&nbsp; ");
     document.getElementById("boxplot_export_bar").style.display = "flex";
 }
@@ -2352,7 +2723,8 @@ document.addEventListener("click", function(e) {
 ```
 
 ```{r protein-explorer-fallback, eval=show_protein_explorer && !explorer_ready, results='asis'}
-cat("*Protein expression explorer not available. Normalized expression matrix not found.*\n")
+cat("*Protein expression explorer not available: measured expression data could not be loaded.*\n\n")
+cat("The explorer needs the measured per-sample values, which come either from the `<sample>` columns of `final_results.tsv` or from `protein_log2_filtered_unimputed.tsv` in the datasets directory. Neither was found with sample columns matching this project's metadata. The imputed matrices are deliberately not used as a substitute: they would fill the plot with modelled values under a measured heading.\n")
 ```
 
 ```{r peptide-explorer-heading, eval=show_peptide_explorer, results='asis'}
@@ -2901,8 +3273,18 @@ cat("<p style='font-size: 0.9em; color: #555; margin-bottom: 8px;'><em>Table: Ov
 ora_files <- list.files(enrich_dir, pattern = "pathway_.*_ora.*\\.csv$", full.names = TRUE)
 if (length(ora_files) > 0) {
     for (of in ora_files) {
-        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", basename(of))
+        fname <- basename(of)
+        label <- gsub("^pathway_|_ora(_up|_down)?\\.csv$", "", fname)
         label_clean <- gsub("_", " ", label)
+        # The direction was stripped along with the suffix, so a database with
+        # both files produced two sections headed identically. Tested explicitly
+        # rather than with a backreference: the file pattern admits other
+        # suffixes, and a non-matching sub() would return the whole filename.
+        if (grepl("_ora_up\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(up-regulated)")
+        } else if (grepl("_ora_down\\.csv$", fname)) {
+            label_clean <- paste(label_clean, "(down-regulated)")
+        }
 
         ora_df <- read.csv(of, stringsAsFactors = FALSE)
         # Support both column names: padj (our pipeline) and p.adjust (clusterProfiler)
@@ -3766,71 +4148,42 @@ cat("# Methods\n\n")
 ```
 
 ```{r methods-text, eval=show_methods, results='asis'}
-imp_method <- prot_cfg$imputation$method %||% "none"
-if (imp_method == "perseus") imp_method <- "perseus_like"
-de_method <- prot_cfg$de$method %||% "limma"
-padj_cut <- prot_cfg$de$p_cutoff %||% 0.05
-lfc_cut <- prot_cfg$de$linear_fc_cutoff %||% 1.5
-engine <- prot_cfg$engine %||% "unknown"
+# All wording comes from build_proteomics_methods_text() in
+# R/domain/proteomics/08_report.R, so the Methods section is generated by code
+# the tests can assert on rather than by prose inline here.
+#
+# The DE mode is detected with the same condition mod_proteomics_de() selects
+# precomputed mode with (R/modules/proteomics/02_mod_de.R); the config reaching
+# this template is config_used.yaml, which carries files$de_table verbatim, and
+# load_precomputed_proteomics_de() stops on an unreadable table, so a rendered
+# report in that mode is one where the load succeeded.
+.mt_de_files <- prot_cfg$files$de_table
+.mt_precomputed <- !is.null(.mt_de_files) && length(.mt_de_files) > 0 &&
+                   all(nzchar(unlist(.mt_de_files)))
+.mt_method <- if (.mt_precomputed) "precomputed" else (prot_cfg$de$method %||% "limma")
+.mt_n <- if (!is.null(de_data)) nrow(de_data) else NA_integer_
 
-n_proteins <- if (!is.null(de_data)) nrow(de_data) else "N"
-n_de <- "N"
-if (!is.null(de_data)) {
-    pass_col <- grep("pass_any", names(de_data), value = TRUE)[1]
-    if (!is.na(pass_col)) n_de <- sum(de_data[[pass_col]] == TRUE, na.rm = TRUE)
+# The two figure paths are passed rather than re-derived inside the generator:
+# the QC and clustering sentences describe panels that are skipped on several
+# legitimate runs, so they are gated on the artefact existing, not on the
+# config flag that asked for it.
+#
+# The complete-case path is withheld unless the PCA section renders at all.
+# 01_mod_qc_pre.R can leave a perfectly good PCA_robust.png on a run where
+# report$show_pca is off, or where no group has replicates and force_pca is
+# unset -- there the file exists and the panel is still not in the report.
+methods_blocks <- build_proteomics_methods_text(
+    config = cfg, de_method = .mt_method, n_included = .mt_n, run_dir = run_dir,
+    pca_cc_file = if (isTRUE(show_pca_section)) file.path(diag_dir, "PCA_robust.png") else NULL,
+    hier_file = file.path(clustering_dir, "Hierarchical", "Hierarchical_DE_heatmap.png"))
+
+cat("## Data processing\n\n")
+cat(methods_blocks$data_processing, "\n\n")
+
+if (!is.null(methods_blocks$missing_values)) {
+    cat("## Missing values\n\n")
+    cat(methods_blocks$missing_values, "\n\n")
 }
-
-cat("**Proteomics Analysis Methods**\n\n")
-
-cat(sprintf(
-"Proteomics data were acquired using %s and processed using the multiomics-core pipeline. ", engine
-))
-
-if (tolower(imp_method) != "none") {
-    cat(sprintf(
-    "Missing values were imputed using the %s method. ", imp_method
-    ))
-}
-
-cat(sprintf(
-"Differential expression analysis was performed using %s. ", de_method
-))
-
-cat(sprintf(
-"Proteins were considered differentially expressed at adjusted p-value <= %.2f and |fold change| >= %.1f. ",
-padj_cut, lfc_cut
-))
-
-cat(sprintf(
-"A total of %s proteins were quantified, with %s identified as differentially expressed in at least one contrast.",
-format(as.numeric(n_proteins), big.mark = ","),
-format(as.numeric(n_de), big.mark = ",")
-))
-
-if (pathway_enabled) {
-    pathway_method <- prot_cfg$pathway$method %||% "both"
-    pathway_dbs <- paste(prot_cfg$pathway$databases %||% c("GO", "KEGG"), collapse = " and ")
-    cat(sprintf(" Pathway enrichment analysis was performed using %s against %s databases.",
-                pathway_method, pathway_dbs))
-}
-
-if (ppi_enabled) {
-    cat(" Protein-protein interaction networks were constructed using the STRING database.")
-}
-
-cat("\n\n")
-
-cat("**Copy-ready version:**\n\n")
-cat("<div style='background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-size: 0.9em;'>\n")
-
-cat(sprintf(
-"Proteomics analysis was performed using the multiomics-core pipeline (v1.0). Data were acquired using %s. %sDifferential expression was assessed with %s (adjusted p <= %.2f, |FC| >= %.1f).",
-engine,
-if (tolower(imp_method) != "none") sprintf("Missing values were imputed using the %s method. ", imp_method) else "",
-de_method, padj_cut, lfc_cut
-))
-
-cat("\n</div>\n")
 ```
 
 ```{r methods-statistical-heading, eval=show_methods, results='asis'}
@@ -3838,48 +4191,43 @@ cat("## Statistical Analysis\n\n")
 ```
 
 ```{r methods-statistical-analysis, eval=show_methods, results='asis'}
-# Parameterized statistical analysis subsection for the Methods section.
-# If report_cfg$stats_section_text is non-empty, print it verbatim;
-# otherwise auto-generate from pipeline config values.
+# report$stats_section_text still overrides this subsection verbatim; that
+# config contract is unchanged. When it is unset the text comes from the same
+# generator as the blocks above, so there is one source of truth rather than a
+# second switch() that can drift from it.
+#
+# The override replaces the *statistical* description only -- the differential
+# and consensus blocks. Quality control, downstream analyses and software are
+# not statistics and are rendered either way: before this generator existed the
+# pathway and PPI Methods sentences were emitted from the Methods chunk with no
+# override gate at all, and a project supplying its own statistics text would
+# otherwise silently lose them.
 stats_section_text <- report_cfg$stats_section_text %||% ""
 if (nzchar(trimws(stats_section_text))) {
     cat(trimws(stats_section_text), "\n\n")
 } else {
-    # Auto-generate from config
-    de_method_m <- prot_cfg$de$method %||% "limma"
-    imp_method_m <- prot_cfg$imputation$method %||% "none"
-    padj_m <- prot_cfg$de$p_cutoff %||% 0.05
-    lfc_m <- prot_cfg$de$linear_fc_cutoff %||% 1.5
+    cat("### Differential protein abundance\n\n")
+    cat(methods_blocks$differential, "\n\n")
 
-    test_desc_m <- switch(tolower(de_method_m),
-        limma = "Moderated t-tests were performed using the *limma* R/Bioconductor package, which applies empirical Bayes shrinkage of variance estimates to improve statistical power in small-sample proteomics studies.",
-        "limma-voom" = "Differential expression was assessed using *limma-voom*, which transforms count data to log-CPM and applies precision-weighted linear modelling.",
-        deseq2 = "Differential expression was assessed using Wald tests implemented in *DESeq2*, which fits negative binomial generalized linear models.",
-        sprintf("Differential expression was assessed using the *%s* method.", de_method_m)
-    )
-
-    cat(test_desc_m, "\n\n")
-
-    if (tolower(imp_method_m) != "none") {
-        imp_desc <- switch(tolower(imp_method_m),
-            perseus_like = "Missing values were imputed using the Perseus-like method (down-shifted normal distribution for MNAR, KNN for MCAR).",
-            minprob = "Missing values were imputed using the MinProb method (random draws from a low-abundance distribution).",
-            knn = "Missing values were imputed using K-nearest neighbours (KNN).",
-            sprintf("Missing values were imputed using the %s method.", imp_method_m)
-        )
-        cat(imp_desc, "\n\n")
+    if (!is.null(methods_blocks$consensus)) {
+        cat("### Multiple-imputation consensus\n\n")
+        cat(methods_blocks$consensus, "\n\n")
     }
-
-    cat(sprintf(
-        "Multiple testing correction was applied using the Benjamini-Hochberg procedure to control the false discovery rate (FDR). Proteins were considered differentially expressed at adjusted p-value $\\leq$ %s and |linear fold change| $\\geq$ %s.\n\n",
-        padj_m, lfc_m
-    ))
-
-    cat(sprintf(
-        "All analyses were performed in R (version %s) using the multiomics-core pipeline.\n\n",
-        paste(R.version$major, R.version$minor, sep = ".")
-    ))
 }
+
+# Level 2, not 3: these are siblings of "Statistical Analysis" under Methods,
+# not subsections of it. Only the differential and consensus blocks above are
+# statistical-analysis content, and they stay at level 3 inside that section.
+cat("## Quality control\n\n")
+cat(methods_blocks$quality_control, "\n\n")
+
+if (!is.null(methods_blocks$downstream)) {
+    cat("## Downstream analyses\n\n")
+    cat(methods_blocks$downstream, "\n\n")
+}
+
+cat("## Software\n\n")
+cat(methods_blocks$software, "\n\n")
 ```
 
 ---
