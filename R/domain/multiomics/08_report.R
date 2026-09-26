@@ -90,3 +90,54 @@ render_multiomics_report <- function(run_dir, config, config_file = NULL) {
 
     out_html
 }
+
+
+#' How many contrasts the multi-omics report shows, and the name of a lone one
+#'
+#' The report collapses each section to a single tab when a run compared one
+#' contrast, because the per-contrast view would then repeat the combined one.
+#' Whether that is so is read from what the run produced as well as from what
+#' was configured: the design block records the intent, but the pipeline writes
+#' one `per_contrast/` directory per contrast it actually found in the data,
+#' and a run fed per-omics DE tables can hold more contrasts than its design
+#' lists. Each of the three per-contrast report sections has its own producer
+#' -- enrichment, MultiGSEA and Multi-ORA, the last of which runs even when
+#' MultiGSEA does not -- so all three are counted. The count is the largest of
+#' the design and those outputs, so a run is only treated as single-contrast
+#' when neither the config nor any output says otherwise.
+#'
+#' @param design_contrasts The config's \code{design$contrasts}, or NULL.
+#' @param enrichment_dir Cross-omics enrichment output directory.
+#' @param multigsea_dir MultiGSEA output directory; Multi-ORA writes under its
+#'   \code{multi_ora/} subdirectory.
+#' @return List with \code{n_contrasts}, \code{single_contrast} (logical) and
+#'   \code{label}: the lone contrast's name for a single-contrast run (from its
+#'   output directory, else the design), or "Results" when none is known.
+#' @examples
+#' report_contrast_layout(list("A_vs_B"), tempdir(), tempdir())$single_contrast
+report_contrast_layout <- function(design_contrasts, enrichment_dir, multigsea_dir) {
+    contrast_dirs <- function(d) {
+        d <- file.path(d, "per_contrast")
+        if (dir.exists(d)) sort(list.dirs(d, full.names = FALSE, recursive = FALSE))
+        else character(0)
+    }
+    design <- as.character(unlist(design_contrasts, use.names = FALSE))
+    enrich <- contrast_dirs(enrichment_dir)
+    mg <- contrast_dirs(multigsea_dir)
+    mora <- contrast_dirs(file.path(multigsea_dir, "multi_ora"))
+
+    n_contrasts <- max(length(design), length(enrich), length(mg), length(mora))
+    label <- if (length(enrich) == 1) {
+        gsub("_", " ", enrich)
+    } else if (length(mg) == 1) {
+        gsub("_", " ", mg)
+    } else if (length(mora) == 1) {
+        gsub("_", " ", mora)
+    } else if (length(design) == 1) {
+        design
+    } else {
+        "Results"
+    }
+    list(n_contrasts = n_contrasts, single_contrast = n_contrasts <= 1,
+         label = label)
+}

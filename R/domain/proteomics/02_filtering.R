@@ -134,6 +134,15 @@ filter_features_dynamic <- function(norm_mat, meta, sample_col, group_col, thres
 # --- Generic helpers (duplicated from 01_preprocessing.R to ensure domain independence or assume loaded) ---
 # Since these are pure logic, keeping them here or in core is fine. I'll include them here for safety.
 
+#' Determine which features pass the filter based on min_count per condition
+#'
+#' @param expr_mat Features x samples matrix; a cell counts as observed when it
+#'   is not `NA`.
+#' @param group Group label per column of `expr_mat`, in column order.
+#' @param min_per_group Minimum observations a feature needs within a group,
+#'   either one number for every group or a vector named by group.
+#' @param min_groups How many groups a feature must reach that minimum in.
+#' @return One logical per feature, in row order, named by `rownames(expr_mat)`.
 pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
     expr_mat <- as.matrix(expr_mat)
     group <- as.character(group)
@@ -143,14 +152,21 @@ pass_filter <- function(expr_mat, group, min_per_group, min_groups = 1) {
         min_per_group <- setNames(rep(min_per_group, length(groups)), groups)
     }
 
-    passes_per_group <- sapply(groups, function(g) {
-        cols <- which(group == g)
-        if (length(cols) == 0) {
-            return(rep(FALSE, nrow(expr_mat)))
-        }
-        sums <- rowSums(!is.na(expr_mat[, cols, drop = FALSE]))
-        sums >= min_per_group[[g]]
-    })
+    # sapply() simplifies on the common length of the per-group results, so with
+    # a single feature it hands back a plain vector and the rowSums() below
+    # aborts. State the features x groups shape instead of inferring it.
+    passes_per_group <- matrix(
+        sapply(groups, function(g) {
+            cols <- which(group == g)
+            if (length(cols) == 0) {
+                return(rep(FALSE, nrow(expr_mat)))
+            }
+            sums <- rowSums(!is.na(expr_mat[, cols, drop = FALSE]))
+            sums >= min_per_group[[g]]
+        }),
+        nrow = nrow(expr_mat), ncol = length(groups),
+        dimnames = list(rownames(expr_mat), groups)
+    )
 
     # Count how many groups each feature passes in, compare to min_groups
     n_groups_passed <- rowSums(passes_per_group)
