@@ -695,6 +695,10 @@ test_that("clear_multi_ora_pathview_outputs removes every renderer's results", {
                  file.path(pv, "ko00010.metab_top.png"),
                  file.path(pv, "ko00030.prot_top.png"),
                  file.path(out, "multi_ora_pathview_supported.pdf"),
+                 # Its sidecar records the tier and contrast spellings the
+                 # report names the maps by; one left from an earlier run would
+                 # describe that run's maps.
+                 file.path(out, "multi_ora_pathview_supported.yaml"),
                  file.path(out, "multi_ora_pathview_union.pdf"),
                  file.path(out, "multi_ora_pathview_union.yaml"),
                  file.path(out, "pathview_top_metabolomics_pathways.pdf"),
