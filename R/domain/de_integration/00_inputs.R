@@ -11,19 +11,26 @@
 #'
 #' The pipeline's own exports are described by \code{get_contrast_cols()}, the
 #' shared naming contract, so this reads exactly the columns the producers
-#' write. A generic table names its columns in the layer's \code{columns} map.
+#' write. A generic table names its columns in the layer's \code{columns} map;
+#' that map is also where an external table's own spelling of its observed
+#' counts belongs (\code{n_obs_num}, \code{n_obs_den}).
 #'
 #' @param format One of \code{de_integration_formats()}.
 #' @param contrast Contrast label as it appears in the column suffixes.
 #' @param columns The layer's \code{columns} map (generic format only).
+#' @param id_col The layer's \code{id_col} override (native formats only):
+#'   the feature id column, for a run that exported its ids under another
+#'   name. NULL keeps the format's own id column.
 #' @return List with \code{id}, \code{symbol}, \code{gene_id},
 #'   \code{description}, \code{log2fc} (candidates, in preference order),
 #'   \code{linear_ratio}, \code{linear_fc}, \code{pvalue}, \code{padj},
-#'   \code{hit}, \code{hit_kind} ("pass" or "updown") and \code{n_obs_prefixes};
+#'   \code{hit}, \code{hit_kind} ("pass" or "updown") and
+#'   \code{n_obs_prefix} (the prefix of the per-group observed-count columns);
 #'   NULL for anything the format does not carry.
 #' @examples
 #' de_layer_columns("proteomics_summary", "A_vs_B")$pvalue   # "pvalue.imputs.A_vs_B"
-de_layer_columns <- function(format, contrast, columns = NULL) {
+#' de_layer_columns("proteomics_final", "A_vs_B", id_col = "Protein.Group")$id
+de_layer_columns <- function(format, contrast, columns = NULL, id_col = NULL) {
     if (identical(format, "generic")) {
         cols <- columns %||% list()
         return(list(
@@ -32,7 +39,7 @@ de_layer_columns <- function(format, contrast, columns = NULL) {
             log2fc = cols$log2fc, linear_ratio = NULL, linear_fc = cols$linear_fc,
             pvalue = cols$pvalue, padj = cols$padj,
             hit = cols$hit, hit_kind = "pass",
-            n_obs_prefixes = NULL,
+            n_obs_prefix = NULL,
             n_obs_num = cols$n_obs_num, n_obs_den = cols$n_obs_den
         ))
     }
@@ -42,7 +49,7 @@ de_layer_columns <- function(format, contrast, columns = NULL) {
     if (identical(omics, "proteomics")) {
         cc <- get_contrast_cols(contrast, mode = "proteomics")
         list(
-            id = "FeatureID", symbol = "Genes", gene_id = NULL,
+            id = id_col %||% "FeatureID", symbol = "Genes", gene_id = NULL,
             description = "First.Protein.Description",
             log2fc = cc$log2fc,
             # Spelled like the other columns: the proteomics exports strip spaces
@@ -51,20 +58,23 @@ de_layer_columns <- function(format, contrast, columns = NULL) {
             linear_fc = cc$fc, pvalue = cc$p, padj = cc$padj,
             hit = if (final) cc$updown else cc$pass,
             hit_kind = if (final) "updown" else "pass",
-            n_obs_prefixes = c("N.observed.", "n_obs.")
+            # Written by build_group_raw_stats_proteomics() when the group
+            # summaries are exported (modes.proteomics.excel.group_cv).
+            n_obs_prefix = "N.observed."
         )
     } else {
         cc <- get_contrast_cols(contrast, mode = "rna")
         list(
             # The RNA exports rename FeatureID to Gene (05_outputs_legacy.R).
-            id = c("Gene", "FeatureID"), symbol = NULL, gene_id = c("Gene", "FeatureID"),
+            id = id_col %||% c("Gene", "FeatureID"), symbol = NULL,
+            gene_id = id_col %||% c("Gene", "FeatureID"),
             description = NULL,
             # log2FoldChange.<c> is what exports written before log2FC.<c> carry.
             log2fc = c(cc$log2fc, paste0("log2FoldChange.", contrast)),
             linear_ratio = NULL, linear_fc = cc$fc, pvalue = cc$p, padj = cc$padj,
             hit = if (final) cc$updown else cc$pass,
             hit_kind = if (final) "updown" else "pass",
-            n_obs_prefixes = NULL
+            n_obs_prefix = NULL
         )
     }
 }
@@ -88,11 +98,13 @@ list_layer_contrasts <- function(cn, format, generic_contrast = "contrast") {
 
 #' Pick the table's contrast that a requested label names
 #'
-#' In order: the exact label; the one contrast whose
-#' \code{normalize_contrast_key()} matches, so "A_vs_B", "A vs. B" and "A - B"
-#' agree; and, for a table holding a single contrast, that contrast whatever it
-#' is called -- the rule \code{resolve_de_summary_col()} uses, which lets two
-#' runs that spelled one comparison differently still be paired.
+#' The exact label, else the one contrast whose \code{normalize_contrast_key()}
+#' matches, so "A_vs_B", "A vs. B" and "A - B" agree. Nothing else: a label
+#' someone wrote into \code{comparisons} that the table does not hold is an
+#' error, never quietly swapped for whatever the table does hold. (Inferred
+#' comparisons name the tables' own labels, so they always resolve here; the
+#' pairing of two differently named lone contrasts is decided, and announced,
+#' in \code{resolve_dei_comparisons()}.)
 #'
 #' @param requested Contrast label asked for.
 #' @param available Contrast labels the table holds.
@@ -103,14 +115,14 @@ resolve_layer_contrast <- function(requested, available, layer) {
     by_key <- available[normalize_contrast_key(available) ==
                         normalize_contrast_key(requested)]
     if (length(by_key) == 1) return(by_key)
-    if (length(available) == 1) {
-        message("  Layer '", layer, "': contrast '", requested, "' not found by name; ",
-                "using the table's only contrast, '", available, "'.")
-        return(available)
+    why <- if (length(by_key) > 1) {
+        paste0("several contrasts match it by key (", paste(by_key, collapse = ", "), ")")
+    } else {
+        "no contrast matches it"
     }
-    stop("Layer '", layer, "': no contrast matches '", requested, "'. The table holds: ",
-         paste(available, collapse = ", "), ". Name one of these in ",
-         "modes.de_integration.comparisons.", call. = FALSE)
+    stop("Layer '", layer, "': contrast '", requested, "' cannot be resolved: ", why,
+         ". The table holds: ", paste(available, collapse = ", "),
+         ". Name one of these in modes.de_integration.comparisons.", call. = FALSE)
 }
 
 

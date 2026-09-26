@@ -73,6 +73,59 @@ test_that("comparisons must name known layers, and flip only their members", {
     expect_identical(validate_de_integration_config(cfg)$comparisons[[1]]$flip, "media")
 })
 
+test_that("comparison members must map each layer to one contrast label", {
+    cfg <- list(layers = two_layers(), comparisons = list(
+        list(name = "c1", members = list("A_vs_B", "A_vs_B"))))
+    expect_error(validate_de_integration_config(cfg), "entries without a layer name")
+
+    cfg$comparisons[[1]]$members <- list(cells = "A_vs_B", "A_vs_B")
+    expect_error(validate_de_integration_config(cfg), "entries without a layer name")
+
+    cfg$comparisons[[1]]$members <- list(cells = "A_vs_B", cells = "C_vs_D")
+    expect_error(validate_de_integration_config(cfg), "more than once: cells")
+
+    cfg$comparisons[[1]]$members <- list(cells = c("A_vs_B", "C_vs_D"), media = "A_vs_B")
+    expect_error(validate_de_integration_config(cfg), "single non-empty label for: cells")
+
+    cfg$comparisons[[1]]$members <- list(cells = list("A_vs_B"), media = "")
+    expect_error(validate_de_integration_config(cfg), "label for: cells, media")
+
+    cfg$comparisons[[1]]$members <- list(cells = "A_vs_B", media = NA_character_)
+    expect_error(validate_de_integration_config(cfg), "label for: media")
+
+    cfg$comparisons[[1]]$members <- c(cells = "A_vs_B", media = "A_vs_B")
+    expect_error(validate_de_integration_config(cfg), "must name a contrast")
+
+    cfg$comparisons[[1]]$members <- list(cells = "A_vs_B", media = "A vs B")
+    expect_silent(validate_de_integration_config(cfg))
+})
+
+test_that("id_col is one column name, for native formats only", {
+    ly <- two_layers(); ly[[1]]$id_col <- "Protein.Group"
+    expect_identical(validate_de_integration_config(list(layers = ly))$layers[[1]]$id_col,
+                     "Protein.Group")
+    ly[[1]]$id_col <- c("a", "b")
+    expect_error(validate_de_integration_config(list(layers = ly)), "id_col must be one")
+    ly[[1]]$id_col <- ""
+    expect_error(validate_de_integration_config(list(layers = ly)), "id_col must be one")
+
+    ly <- two_layers()
+    ly[[1]]$format <- "generic"
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = "logFC")
+    ly[[1]]$id_col <- "protein"
+    expect_error(validate_de_integration_config(list(layers = ly)), "columns.id")
+})
+
+test_that("a generic layer maps both observed-count columns, or neither", {
+    ly <- two_layers()
+    ly[[1]]$format <- "generic"
+    ly[[1]]$columns <- list(id = "protein", pvalue = "P", log2fc = "logFC", n_obs_num = "nA")
+    expect_error(validate_de_integration_config(list(layers = ly)),
+                 "only one of n_obs_num and n_obs_den")
+    ly[[1]]$columns$n_obs_den <- "nB"
+    expect_silent(validate_de_integration_config(list(layers = ly)))
+})
+
 test_that("hit cutoffs are range-checked", {
     expect_error(validate_de_integration_config(
         list(layers = two_layers(), hits = list(p_cutoff = 0))), "p_cutoff")

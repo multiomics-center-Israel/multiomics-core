@@ -38,17 +38,27 @@ modes:
     #             rnaseq_final        Datasets/final_results.tsv
     #             generic             any CSV/TSV, described by `columns`
     # path        absolute, or relative to paths.raw
+    # id_col      optional, native formats only: the feature id column, for a
+    #             run that exported its ids under another name. Defaults to
+    #             FeatureID (proteomics) or Gene, then FeatureID (RNA-seq).
     layers:
       - name: "cells"
         label: "Cells"
         omics_type: "proteomics"
         format: "proteomics_summary"
         path: "/path/to/Results_cells/proteomics/Datasets/limma_multimp_summary_p0.05.tsv"
+        # id_col: "Protein.Group"      # only if the export's id column is not FeatureID
         # Optional: count observed (non-imputed) values per group, to flag fold
-        # changes that rest on imputation. Not needed for *_final tables, which
-        # carry N.observed.<group> columns.
+        # changes that rest on imputation. A proteomics table that already has
+        # N.observed.<group> columns needs none -- the pipeline writes those
+        # only when the group summaries are exported
+        # (modes.proteomics.excel.group_cv, on by default). Every input named
+        # here must be readable and carry the columns below, or the run stops.
+        # With a contrasts_file, its Numerator/Denominator name the groups;
+        # without one they are read off the N.observed.<group> columns.
         # observed:
         #   matrix: "/path/to/Results_cells/proteomics/Datasets/protein_log2_filtered_unimputed.tsv"
+        #   id_col: "FeatureID"          # optional; the matrix's first column by default
         #   samplesheet: "/path/to/cells_metadata.csv"
         #   sample_col: "SampleName"
         #   contrasts_file: "/path/to/cells_contrasts.csv"   # Contrast_name, Factor, Numerator, Denominator
@@ -82,15 +92,23 @@ modes:
       #     hit: "significant"       # optional; 1/TRUE/yes marks a hit
       #     symbol: "gene"           # optional
       #     gene_id: "gene_id"       # optional; the key when there is no symbol
+      #     description: "desc"      # optional; carried through for display
+      #     n_obs_num: "n_A"         # optional, with n_obs_den: observed values
+      #     n_obs_den: "n_B"         #   per group; else the layer's observed block
 
     # --- Comparisons: which contrast of each layer goes together -------------
     # Optional. Without it, contrasts are paired by name across layers
     # ("A_vs_B", "A vs. B" and "A - B" count as one); two single-contrast
-    # tables are paired even when named differently.
+    # tables are paired even when named differently, with a message.
+    # A contrast named here must exist in its table, by exact or equivalent
+    # name ("A vs. B" for "A_vs_B"); a missing one stops the run -- it is never
+    # replaced by the table's only contrast.
     # comparisons:
     #   - name: "treated_vs_control"
     #     members: {cells: "Treated_vs_Control", media: "Treated_vs_Control"}
     #     flip: []                   # layers whose contrast runs the other way
+    #                                # (recorded as flip_requested in
+    #                                # layers/comparisons.tsv; not applied yet)
 
     # --- Hits ----------------------------------------------------------------
     # The table's own per-contrast flag is used when it has one (for the

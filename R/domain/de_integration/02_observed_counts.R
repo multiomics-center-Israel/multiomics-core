@@ -6,27 +6,46 @@
 #' Numerator and denominator groups of a contrast
 #'
 #' From the layer's contrasts file when it has one, matched on
-#' \code{normalize_contrast_key()}; otherwise from a label of the form
-#' "<A>_vs_<B>".
+#' \code{normalize_contrast_key()}. Otherwise from the groups the table itself
+#' counts (its \code{N.observed.<group>} columns): the one ordered pair whose
+#' "<numerator>_vs_<denominator>" has the contrast's key. That reads "A_vs_B"
+#' and the space-stripped "SvsNS" the proteomics export writes for "S vs NS"
+#' alike. When several pairs fit, nothing is guessed.
 #'
 #' @param contrast Contrast label.
 #' @param contrasts_df Contrasts table (\code{Contrast_name}, \code{Factor},
 #'   \code{Numerator}, \code{Denominator}), or NULL.
+#' @param groups Group names the table carries observed counts for, or NULL.
+#' @param layer Layer name, for the warning.
 #' @return List with \code{numerator}, \code{denominator} and \code{factor}
 #'   (NA where unknown), or NULL.
-contrast_groups <- function(contrast, contrasts_df = NULL) {
+#' @examples
+#' contrast_groups("SvsNS", groups = c("S", "NS"))$numerator   # "S"
+contrast_groups <- function(contrast, contrasts_df = NULL, groups = NULL, layer = "") {
+    key <- normalize_contrast_key(contrast)
     if (is.data.frame(contrasts_df) && "Contrast_name" %in% names(contrasts_df)) {
-        i <- which(normalize_contrast_key(contrasts_df$Contrast_name) ==
-                   normalize_contrast_key(contrast))
+        i <- which(normalize_contrast_key(contrasts_df$Contrast_name) == key)
         if (length(i) == 1) {
             return(list(numerator = as.character(contrasts_df$Numerator[i]),
                         denominator = as.character(contrasts_df$Denominator[i]),
                         factor = as.character(contrasts_df$Factor[i] %||% NA)))
         }
     }
-    parts <- strsplit(contrast, "_vs_", fixed = TRUE)[[1]]
-    if (length(parts) == 2 && all(nzchar(parts))) {
-        return(list(numerator = parts[1], denominator = parts[2], factor = NA_character_))
+
+    groups <- unique(groups[!is.na(groups) & nzchar(groups)])
+    if (length(groups) < 2) return(NULL)
+    pairs <- expand.grid(num = groups, den = groups, stringsAsFactors = FALSE)
+    pairs <- pairs[pairs$num != pairs$den, , drop = FALSE]
+    fit <- pairs[normalize_contrast_key(paste0(pairs$num, "_vs_", pairs$den)) == key, ,
+                 drop = FALSE]
+    if (nrow(fit) == 1) {
+        return(list(numerator = fit$num, denominator = fit$den, factor = NA_character_))
+    }
+    if (nrow(fit) > 1) {
+        warning("Layer '", layer, "', contrast '", contrast, "': its groups are ",
+                "ambiguous -- ", paste(fit$num, fit$den, sep = " vs ", collapse = "; "),
+                " all fit. Observed counts are left unavailable; give the layer an ",
+                "observed block with a contrasts_file to name the groups.", call. = FALSE)
     }
     NULL
 }
@@ -36,10 +55,12 @@ contrast_groups <- function(contrast, contrasts_df = NULL) {
 #'
 #' A fold change resting on one measured value per group is mostly imputation,
 #' and later steps flag it through \code{well_observed}. Counts come from the
-#' table's own \code{N.observed.<group>} / \code{n_obs.<group>} columns when it
-#' has them, otherwise from the layer's unimputed matrix and sample sheet
-#' (\code{observed} block), using the grouping \code{compute_group_stat_columns()}
-#' applies to the exported means. Without either, they are NA.
+#' table's own columns when it has them -- \code{N.observed.<group>} in the
+#' proteomics export, the mapped \code{n_obs_num}/\code{n_obs_den} in a generic
+#' table -- otherwise from the layer's unimputed matrix and sample sheet
+#' (\code{observed} block), using the grouping
+#' \code{compute_group_stat_columns()} applies to the exported means. Without
+#' either, they are NA.
 #'
 #' @param ly The layer's config.
 #' @param df The layer's table.
@@ -53,32 +74,38 @@ contrast_groups <- function(contrast, contrasts_df = NULL) {
 layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL) {
     none <- list(num = rep(NA_integer_, nrow(df)), den = rep(NA_integer_, nrow(df)),
                  source = "not available")
+    from_table <- function(num_col, den_col) {
+        list(num = as.integer(df[[num_col]]), den = as.integer(df[[den_col]]),
+             source = paste(num_col, den_col, sep = ", "))
+    }
 
     if (identical(ly$format, "generic")) {
         cols <- ly$columns %||% list()
-        if (!is.null(cols$n_obs_num) && !is.null(cols$n_obs_den) &&
-            all(c(cols$n_obs_num, cols$n_obs_den) %in% names(df))) {
-            return(list(num = as.integer(df[[cols$n_obs_num]]),
-                        den = as.integer(df[[cols$n_obs_den]]),
-                        source = paste(cols$n_obs_num, cols$n_obs_den, sep = ", ")))
-        }
-        return(none)
-    }
-
-    grp <- contrast_groups(contrast, observed$contrasts)
-    if (is.null(grp)) return(none)
-
-    cols <- de_layer_columns(ly$format, contrast)
-    for (prefix in cols$n_obs_prefixes) {
-        num_col <- paste0(prefix, grp$numerator)
-        den_col <- paste0(prefix, grp$denominator)
-        if (all(c(num_col, den_col) %in% names(df))) {
-            return(list(num = as.integer(df[[num_col]]), den = as.integer(df[[den_col]]),
-                        source = paste(num_col, den_col, sep = ", ")))
+        # read_de_layer() has already checked that mapped columns exist.
+        if (!is.null(cols$n_obs_num)) return(from_table(cols$n_obs_num, cols$n_obs_den))
+    } else {
+        prefix <- de_layer_columns(ly$format, contrast)$n_obs_prefix
+        if (!is.null(prefix)) {
+            counted <- substring(names(df)[startsWith(names(df), prefix)], nchar(prefix) + 1L)
+            grp <- contrast_groups(contrast, observed$contrasts, counted, ly$name)
+            if (!is.null(grp)) {
+                num_col <- paste0(prefix, grp$numerator)
+                den_col <- paste0(prefix, grp$denominator)
+                if (all(c(num_col, den_col) %in% names(df))) {
+                    return(from_table(num_col, den_col))
+                }
+            }
         }
     }
 
     if (is.null(observed)) return(none)
+    grp <- contrast_groups(contrast, observed$contrasts, layer = ly$name)
+    if (is.null(grp)) {
+        warning("Layer '", ly$name, "': contrast '", contrast, "' is not in ",
+                "observed.contrasts_file (", basename(ly$observed$contrasts_file),
+                "); its observed counts are unavailable.", call. = FALSE)
+        return(none)
+    }
     counts <- compute_group_stat_columns(
         expr = observed$matrix, sample_meta = observed$samplesheet,
         sample_id_col = ly$observed$sample_col,
@@ -96,7 +123,14 @@ layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL
 }
 
 
-#' Read a layer's observed-count inputs once
+#' Read a layer's observed-count inputs once, and check them
+#'
+#' A configured \code{observed} block is a request for counts, so an input
+#' that cannot be read, or lacks a column the counting needs, stops the run
+#' here, naming the layer and the key -- rather than leaving every
+#' \code{well_observed} NA with nothing said. Only the matrix columns the
+#' sample sheet names are kept, so annotation columns beside the samples are
+#' not read as samples.
 #'
 #' @param ly The layer's config (with an \code{observed} block).
 #' @param config Full config, for path resolution.
@@ -106,15 +140,58 @@ layer_observed_counts <- function(ly, df, ids, contrast, config, observed = NULL
 read_observed_inputs <- function(ly, config) {
     obs <- ly$observed
     if (is.null(obs)) return(NULL)
-    mat <- read_table_auto(resolve_input_path(config, obs$matrix))
-    id_col <- obs$id_col %||% names(mat)[1]
-    ids <- as.character(mat[[id_col]])
-    mat <- as.matrix(mat[, setdiff(names(mat), id_col), drop = FALSE])
-    storage.mode(mat) <- "double"
-    rownames(mat) <- ids
-    list(
-        matrix = mat,
-        samplesheet = read_samplesheet(resolve_input_path(config, obs$samplesheet)),
-        contrasts = read_table_auto(resolve_input_path(config, obs$contrasts_file))
-    )
+    fail <- function(key, path, why) {
+        stop("Layer '", ly$name, "': observed.", key, " (", path, ") ", why, ".",
+             call. = FALSE)
+    }
+    read_or_fail <- function(key, reader) {
+        path <- resolve_input_path(config, obs[[key]])
+        out <- tryCatch(reader(path), error = function(e) {
+            fail(key, path, paste("cannot be read:", conditionMessage(e)))
+        })
+        if (!is.data.frame(out) || nrow(out) == 0) fail(key, path, "cannot be read, or is empty")
+        list(df = out, path = path)
+    }
+
+    sheet <- read_or_fail("samplesheet", read_samplesheet)
+    if (!obs$sample_col %in% names(sheet$df)) {
+        fail("samplesheet", sheet$path,
+             paste0("has no column '", obs$sample_col, "' (observed.sample_col)"))
+    }
+
+    contr <- read_or_fail("contrasts_file", read_table_auto)
+    need <- c("Contrast_name", "Factor", "Numerator", "Denominator")
+    gap <- setdiff(need, names(contr$df))
+    if (length(gap) > 0) {
+        fail("contrasts_file", contr$path, paste("lacks column(s):", paste(gap, collapse = ", ")))
+    }
+    factors <- setdiff(unique(as.character(contr$df$Factor)), names(sheet$df))
+    if (length(factors) > 0) {
+        fail("contrasts_file", contr$path,
+             paste0("groups by ", paste(factors, collapse = ", "),
+                    ", which the sample sheet has no column for"))
+    }
+
+    mat <- read_or_fail("matrix", read_table_auto)
+    id_col <- obs$id_col %||% names(mat$df)[1]
+    if (!id_col %in% names(mat$df)) {
+        fail("matrix", mat$path, paste0("has no column '", id_col, "' (observed.id_col)"))
+    }
+    samples <- intersect(setdiff(names(mat$df), id_col),
+                         as.character(sheet$df[[obs$sample_col]]))
+    if (length(samples) == 0) {
+        fail("matrix", mat$path, paste0("has no column named after a sample in the ",
+                                        "sample sheet's '", obs$sample_col, "'"))
+    }
+    # A sample with nothing measured reads back as an all-NA logical column.
+    not_num <- samples[!vapply(mat$df[samples], function(x) is.numeric(x) || all(is.na(x)),
+                               logical(1))]
+    if (length(not_num) > 0) {
+        fail("matrix", mat$path, paste("has non-numeric sample column(s):",
+                                       paste(not_num, collapse = ", ")))
+    }
+    m <- as.matrix(mat$df[, samples, drop = FALSE])
+    rownames(m) <- as.character(mat$df[[id_col]])
+
+    list(matrix = m, samplesheet = sheet$df, contrasts = contr$df)
 }

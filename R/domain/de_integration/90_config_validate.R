@@ -82,6 +82,18 @@ validate_de_integration_config <- function(cfg) {
                 stop(at, " ('", nm, "') is \"generic\" and its columns map lacks: ",
                      paste(missing, collapse = ", "), ".", call. = FALSE)
             }
+            if (xor(is.null(cols$n_obs_num), is.null(cols$n_obs_den))) {
+                stop(at, " ('", nm, "').columns maps only one of n_obs_num and ",
+                     "n_obs_den; map both, or neither.", call. = FALSE)
+            }
+            if (!is.null(ly$id_col)) {
+                stop(at, " ('", nm, "').id_col is for the pipeline's own exports; a ",
+                     "\"generic\" table names its id in columns.id.", call. = FALSE)
+            }
+        }
+        if (!is.null(ly$id_col) &&
+            (!is.character(ly$id_col) || length(ly$id_col) != 1 || !nzchar(ly$id_col))) {
+            stop(at, " ('", nm, "').id_col must be one column name.", call. = FALSE)
         }
         if (!is.null(ly$observed)) {
             obs <- ly$observed
@@ -113,7 +125,26 @@ validate_de_integration_config <- function(cfg) {
             stop(at, " ('", cp$name, "').members must name a contrast for at least ",
                  "two layers, e.g. {cells: A_vs_B, media: A_vs_B}.", call. = FALSE)
         }
-        unknown <- setdiff(names(members), layer_names)
+        mn <- names(members)
+        if (is.null(mn) || any(is.na(mn) | !nzchar(mn))) {
+            stop(at, " ('", cp$name, "').members must map each layer to its contrast, ",
+                 "e.g. {cells: A_vs_B, media: A_vs_B}; found entries without a layer ",
+                 "name.", call. = FALSE)
+        }
+        dup <- unique(mn[duplicated(mn)])
+        if (length(dup) > 0) {
+            stop(at, " ('", cp$name, "').members names layer(s) more than once: ",
+                 paste(dup, collapse = ", "), ".", call. = FALSE)
+        }
+        scalar <- vapply(members, function(v) {
+            is.character(v) && length(v) == 1 && !is.na(v) && nzchar(v)
+        }, logical(1))
+        if (!all(scalar)) {
+            stop(at, " ('", cp$name, "').members must give one contrast label per ",
+                 "layer; not a single non-empty label for: ",
+                 paste(mn[!scalar], collapse = ", "), ".", call. = FALSE)
+        }
+        unknown <- setdiff(mn, layer_names)
         if (length(unknown) > 0) {
             stop(at, " ('", cp$name, "').members names unknown layer(s): ",
                  paste(unknown, collapse = ", "), ". Layers: ",

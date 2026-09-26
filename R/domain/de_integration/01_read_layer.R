@@ -131,7 +131,7 @@ layer_symbols <- function(ly, df, cols, ids, annotation = NULL) {
         source[!is.na(symbol)] <- "symbol"
     }
 
-    if (!is.null(annotation) && all(c("gene_id", "symbol") %in% names(annotation))) {
+    if (!is.null(annotation)) {
         ann <- first_of(annotation$symbol)[match(ids, as.character(annotation$gene_id))]
         fill <- is.na(symbol) & !is.na(ann)
         symbol[fill] <- ann[fill]
@@ -147,6 +147,28 @@ layer_symbols <- function(ly, df, cols, ids, annotation = NULL) {
     }
 
     data.frame(symbol = symbol, symbol_source = source, stringsAsFactors = FALSE)
+}
+
+
+#' Read a layer's gene annotation, and check it
+#'
+#' A configured \code{annotation_file} is how an RNA layer gets symbols, so a
+#' file without its \code{gene_id} and \code{symbol} columns stops the run
+#' rather than leaving every feature keyed on its gene id with nothing said.
+#'
+#' @param ly The layer's config.
+#' @param config Full config, for path resolution.
+#' @return The annotation table, or NULL when the layer names none.
+read_layer_annotation <- function(ly, config) {
+    if (is.null(ly$annotation_file)) return(NULL)
+    path <- resolve_input_path(config, ly$annotation_file)
+    ann <- read_table_auto(path)
+    gap <- setdiff(c("gene_id", "symbol"), names(ann))
+    if (length(gap) > 0) {
+        stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
+             paste(gap, collapse = ", "), ".", call. = FALSE)
+    }
+    ann
 }
 
 
@@ -174,15 +196,28 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
     available <- list_layer_contrasts(cn, ly$format, ly$contrast %||% "contrast")
     hits_cfg <- utils::modifyList(hits_default, ly$hits %||% list())
     observed <- read_observed_inputs(ly, config)
-    annotation <- if (!is.null(ly$annotation_file)) {
-        read_table_auto(resolve_input_path(config, ly$annotation_file))
-    } else NULL
+    annotation <- read_layer_annotation(ly, config)
+
+    # A column the map names is a column the reader is told to use: absent, it
+    # would quietly become BH, cutoffs or no symbols instead. The required ones
+    # (id, pvalue, fold change) are reported below with their own messages.
+    if (identical(ly$format, "generic")) {
+        optional <- c("symbol", "gene_id", "description", "padj", "hit",
+                      "n_obs_num", "n_obs_den")
+        mapped <- unlist(ly$columns[intersect(optional, names(ly$columns))])
+        gap <- mapped[!mapped %in% cn]
+        if (length(gap) > 0) {
+            stop("Layer '", ly$name, "': ",
+                 paste0("columns.", names(gap), " names '", gap, "'", collapse = ", "),
+                 ", not found in ", basename(path), ".", call. = FALSE)
+        }
+    }
 
     tables <- list()
     prov <- list()
     for (requested in unique(contrasts)) {
         contrast <- resolve_layer_contrast(requested, available, ly$name)
-        cols <- de_layer_columns(ly$format, contrast, ly$columns)
+        cols <- de_layer_columns(ly$format, contrast, ly$columns, ly$id_col)
 
         id_col <- cols$id[cols$id %in% cn][1]
         if (is.na(id_col)) {
@@ -197,11 +232,15 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
         ids <- as.character(df[[id_col]])
         lfc <- layer_log2fc(df, cols)
         pvalue <- as.numeric(df[[cols$pvalue]])
-        padj <- if (!is.null(cols$padj) && cols$padj %in% cn) {
+        # Which it was goes into the provenance: a BH computed here, over the
+        # rows this table kept, is not the adjusted p-value its producer reported.
+        has_padj <- !is.null(cols$padj) && cols$padj %in% cn
+        padj <- if (has_padj) {
             as.numeric(df[[cols$padj]])
         } else {
             stats::p.adjust(pvalue, method = "BH")
         }
+        padj_source <- if (has_padj) cols$padj else paste0("BH of ", cols$pvalue)
         hit <- layer_hit_flags(df, cols, lfc$values, pvalue, padj, hits_cfg)
         obs <- layer_observed_counts(ly, df, ids, contrast, config, observed)
         sym <- layer_symbols(ly, df, cols, ids, annotation)
@@ -219,8 +258,10 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
 
         # One row per feature: a duplicated id would pair twice later on. The
         # smallest p-value is kept, then the first in id order, so reruns agree.
+        # Radix sorts ids bytewise, so the order is the same under any locale.
         tab <- tab[!is.na(tab$feature_id) & nzchar(tab$feature_id), , drop = FALSE]
-        tab <- tab[order(tab$feature_id, tab$pvalue, na.last = TRUE), , drop = FALSE]
+        tab <- tab[order(tab$feature_id, tab$pvalue, na.last = TRUE, method = "radix"), ,
+                   drop = FALSE]
         n_dup <- sum(duplicated(tab$feature_id))
         if (n_dup > 0) {
             warning("Layer '", ly$name, "', contrast '", contrast, "': ", n_dup,
@@ -234,7 +275,8 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
         prov[[length(prov) + 1]] <- data.frame(
             layer = ly$name, requested_contrast = requested, contrast = contrast,
             file = path, n_features = nrow(tab), n_hits = sum(tab$hit),
-            log2fc_source = lfc$source, hit_source = hit$source,
+            log2fc_source = lfc$source, padj_source = padj_source,
+            hit_source = hit$source,
             n_obs_source = obs$source,
             symbol_sources = paste(sprintf("%s: %d", names(table(tab$symbol_source)),
                                            as.integer(table(tab$symbol_source))),

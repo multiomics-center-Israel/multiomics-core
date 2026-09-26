@@ -67,7 +67,9 @@ write_dei_layer_summary <- function(dei_layers, out_dir) {
     dir <- file.path(out_dir, "layers")
     comps <- do.call(rbind, lapply(dei_layers$comparisons, function(cp) data.frame(
         comparison = cp$name, layer = names(cp$members),
-        contrast = unname(cp$members), flipped = names(cp$members) %in% cp$flip,
+        contrast = unname(cp$members),
+        # Recorded, not yet applied: no value in this mode is flipped so far.
+        flip_requested = names(cp$members) %in% cp$flip,
         stringsAsFactors = FALSE)))
     c(save_tsv(dei_layers$summary, dir, "layer_summary.tsv"),
       save_tsv(comps, dir, "comparisons.tsv"))

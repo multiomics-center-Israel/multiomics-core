@@ -43,6 +43,30 @@ layer_cfg <- function(path, format = "proteomics_summary", omics = "proteomics",
       list(...))
 }
 
+# An observed block over four samples, two per group, for the features of
+# prot_summary(); `contr` is its contrasts file.
+obs_block <- function(contr = data.frame(Contrast_name = "A_vs_B", Factor = "Group",
+                                         Numerator = "A", Denominator = "B"),
+                      ids = c("P1", "P2;P9", "P3"), groups = c("A", "A", "B", "B")) {
+    mat <- data.frame(Protein.Group = ids,
+                      s1 = c(20, NA, 15), s2 = c(21, NA, 15),
+                      s3 = c(19, 22, NA), s4 = c(20, 23, 16),
+                      stringsAsFactors = FALSE)
+    sheet <- data.frame(SampleName = c("s1", "s2", "s3", "s4"), Group = groups)
+    list(matrix = write_table_tmp(mat), samplesheet = write_table_tmp(sheet, "csv"),
+         sample_col = "SampleName", contrasts_file = write_table_tmp(contr, "csv"))
+}
+
+# A proteomics final table carrying the export's own N.observed.<group> columns.
+prot_final <- function(contrast = "A_vs_B", groups = c("A", "B")) {
+    df <- prot_summary(contrast)
+    names(df)[names(df) == paste0("pass.imputs.", contrast)] <- paste0("upDown.imputs.", contrast)
+    df[[paste0("upDown.imputs.", contrast)]] <- c("Up", "Down", NA)
+    df[[paste0("N.observed.", groups[1])]] <- c(3, 1, 2)
+    df[[paste0("N.observed.", groups[2])]] <- c(3, 3, 2)
+    df
+}
+
 test_that("a proteomics summary is read with its stored log2FC and its own hit flag", {
     path <- write_table_tmp(prot_summary())
     ly <- read_de_layer(layer_cfg(path), "A_vs_B", dei_config(list(
@@ -52,6 +76,7 @@ test_that("a proteomics summary is read with its stored log2FC and its own hit f
     expect_equal(tab$log2fc, c(1.2, -2.0, 0.1))
     expect_identical(tab$hit, c(TRUE, TRUE, FALSE))
     expect_identical(ly$provenance$log2fc_source, "log2FC.imputs.A_vs_B")
+    expect_identical(ly$provenance$padj_source, "padj.imputs.A_vs_B")
     expect_identical(ly$provenance$hit_source, "pass.imputs.A_vs_B")
     # First gene of a multi-gene group; no symbol for P3.
     expect_identical(tab$symbol, c("G1", "G2", NA))
@@ -99,14 +124,25 @@ test_that("cutoffs decide when the table flag is switched off", {
     expect_match(ly$provenance$hit_source, "padj <= 0.05")
 })
 
-test_that("a differently spelled contrast resolves by key, and a lone one by default", {
+test_that("a differently spelled contrast resolves by key", {
     path <- write_table_tmp(prot_summary("A_vs_B"))
     ly <- read_de_layer(layer_cfg(path), "A vs. B", NULL, hits_default)
     expect_identical(ly$provenance$contrast, "A_vs_B")
-    expect_message(
-        ly <- read_de_layer(layer_cfg(path), "Treated_vs_Control", NULL, hits_default),
-        "only contrast")
-    expect_identical(ly$provenance$contrast, "A_vs_B")
+    expect_identical(ly$provenance$requested_contrast, "A vs. B")
+})
+
+test_that("a configured contrast the table lacks is an error, even when it holds one", {
+    path <- write_table_tmp(prot_summary("A_vs_B"))
+    expect_error(read_de_layer(layer_cfg(path), "Treated_vs_Control", NULL, hits_default),
+                 "'Treated_vs_Control' cannot be resolved.*The table holds: A_vs_B")
+
+    # Configured end to end: never swapped for the table's only contrast.
+    a <- write_table_tmp(prot_summary("A_vs_B"))
+    b <- write_table_tmp(prot_summary("A_vs_B"))
+    config <- dei_config(list(layer_cfg(a), layer_cfg(b, name = "media")),
+                         comparisons = list(list(name = "c1", members = list(
+                             cells = "A_vs_B", media = "Treated_vs_Control"))))
+    expect_error(mod_dei_load_layers(config), "Layer 'media'.*Treated_vs_Control")
 })
 
 test_that("an unknown contrast in a multi-contrast table names what is there", {
@@ -118,39 +154,175 @@ test_that("an unknown contrast in a multi-contrast table names what is there", {
                  "A_vs_B, C_vs_D")
 })
 
-test_that("a final table gives observed counts from its own columns", {
-    df <- prot_summary()
-    names(df)[names(df) == "pass.imputs.A_vs_B"] <- "upDown.imputs.A_vs_B"
-    df$upDown.imputs.A_vs_B <- c("Up", "Down", NA)
-    df$n_obs.A <- c(3, 1, 2)
-    df$n_obs.B <- c(3, 3, 2)
-    path <- write_table_tmp(df)
+test_that("a final table gives observed counts from its own N.observed columns", {
+    path <- write_table_tmp(prot_final())
     ly <- read_de_layer(layer_cfg(path, format = "proteomics_final"), "A_vs_B", NULL,
                         hits_default)
     tab <- ly$tables$A_vs_B
     expect_identical(tab$hit, c(TRUE, TRUE, FALSE))
     expect_identical(tab$n_obs_num, c(3L, 1L, 2L))
+    expect_identical(tab$n_obs_den, c(3L, 3L, 2L))
     expect_identical(tab$well_observed, c(TRUE, FALSE, TRUE))
+    expect_identical(ly$provenance$n_obs_source, "N.observed.A, N.observed.B")
+})
+
+test_that("the groups are read off the columns for the export's space-stripped labels", {
+    # "S vs NS" is written as SvsNS: nothing to split on, so the groups come
+    # from the N.observed.<group> columns the table carries.
+    path <- write_table_tmp(prot_final("SvsNS", groups = c("S", "NS")))
+    ly <- read_de_layer(layer_cfg(path, format = "proteomics_final"), "SvsNS", NULL,
+                        hits_default)
+    tab <- ly$tables$SvsNS
+    expect_identical(tab$n_obs_num, c(3L, 1L, 2L))
+    expect_identical(tab$n_obs_den, c(3L, 3L, 2L))
+    expect_identical(ly$provenance$n_obs_source, "N.observed.S, N.observed.NS")
+    expect_identical(contrast_groups("SvsNS", groups = c("NS", "S"))[1:2],
+                     list(numerator = "S", denominator = "NS"))
+})
+
+test_that("an old n_obs. prefix is not part of the native contract", {
+    df <- prot_summary()
+    df$n_obs.A <- c(3, 1, 2)
+    df$n_obs.B <- c(3, 3, 2)
+    ly <- read_de_layer(layer_cfg(write_table_tmp(df)), "A_vs_B", NULL, hits_default)
+    expect_true(all(is.na(ly$tables$A_vs_B$n_obs_num)))
+    expect_identical(ly$provenance$n_obs_source, "not available")
+})
+
+test_that("groups that fit a contrast more than one way are not guessed", {
+    df <- prot_final("A_vs_B", groups = c("A", "B"))
+    df$N.observed.a <- c(1, 1, 1)
+    df$N.observed.b <- c(1, 1, 1)
+    path <- write_table_tmp(df)
+    expect_warning(
+        ly <- read_de_layer(layer_cfg(path, format = "proteomics_final"), "A_vs_B", NULL,
+                            hits_default),
+        "ambiguous")
+    expect_true(all(is.na(ly$tables$A_vs_B$n_obs_num)))
+    expect_true(all(is.na(ly$tables$A_vs_B$well_observed)))
+})
+
+test_that("the contrasts file names the groups before the columns do", {
+    # The contrasts file says the contrast runs NS over S; the columns alone
+    # would have read it the other way.
+    contr <- data.frame(Contrast_name = "S vs NS", Factor = "Group",
+                        Numerator = "NS", Denominator = "S")
+    path <- write_table_tmp(prot_final("SvsNS", groups = c("S", "NS")))
+    ly <- read_de_layer(layer_cfg(path, format = "proteomics_final",
+                                  observed = obs_block(contr, groups = c("S", "S", "NS", "NS"))),
+                        "SvsNS", NULL, hits_default)
+    expect_identical(ly$tables$SvsNS$n_obs_num, c(3L, 3L, 2L))
+    expect_identical(ly$provenance$n_obs_source, "N.observed.NS, N.observed.S")
 })
 
 test_that("observed counts come from the unimputed matrix when the table has none", {
-    mat <- data.frame(Protein.Group = c("P1", "P2;P9", "P3"),
-                      s1 = c(20, NA, 15), s2 = c(21, NA, 15),
-                      s3 = c(19, 22, NA), s4 = c(20, 23, 16),
-                      stringsAsFactors = FALSE)
-    sheet <- data.frame(SampleName = c("s1", "s2", "s3", "s4"),
-                        Group = c("A", "A", "B", "B"))
-    contr <- data.frame(Contrast_name = "A_vs_B", Factor = "Group",
-                        Numerator = "A", Denominator = "B")
-    obs <- list(matrix = write_table_tmp(mat), samplesheet = write_table_tmp(sheet, "csv"),
-                sample_col = "SampleName", contrasts_file = write_table_tmp(contr, "csv"))
     path <- write_table_tmp(prot_summary())
-    ly <- read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default)
+    ly <- read_de_layer(layer_cfg(path, observed = obs_block()), "A_vs_B", NULL, hits_default)
     tab <- ly$tables$A_vs_B
     expect_identical(tab$n_obs_num, c(2L, 0L, 2L))
     expect_identical(tab$n_obs_den, c(2L, 2L, 1L))
     expect_identical(tab$well_observed, c(TRUE, FALSE, FALSE))
     expect_match(ly$provenance$n_obs_source, "unimputed matrix")
+})
+
+test_that("a generic table without mapped counts falls through to its observed block", {
+    ext <- data.frame(prot = c("P1", "P2;P9", "P3"), logFC = c(2, -0.1, -3),
+                      P = c(0.001, 0.5, 0.004), stringsAsFactors = FALSE)
+    path <- write_table_tmp(ext, "csv")
+    ly <- read_de_layer(layer_cfg(path, format = "generic", contrast = "A_vs_B",
+        columns = list(id = "prot", log2fc = "logFC", pvalue = "P"),
+        observed = obs_block()), "A_vs_B", NULL, hits_default)
+    tab <- ly$tables$A_vs_B
+    expect_identical(tab$n_obs_num, c(2L, 0L, 2L))
+    expect_identical(tab$n_obs_den, c(2L, 2L, 1L))
+    expect_match(ly$provenance$n_obs_source, "unimputed matrix")
+})
+
+test_that("a generic table's mapped counts are used, and must exist", {
+    ext <- data.frame(prot = c("X1", "X2"), logFC = c(1, -1), P = c(0.01, 0.2),
+                      nA = c(3, 1), nB = c(2, 2))
+    path <- write_table_tmp(ext, "csv")
+    cols <- list(id = "prot", log2fc = "logFC", pvalue = "P", n_obs_num = "nA",
+                 n_obs_den = "nB")
+    ly <- read_de_layer(layer_cfg(path, format = "generic", contrast = "T_vs_C",
+                                  columns = cols), "T_vs_C", NULL, hits_default)
+    expect_identical(ly$tables$T_vs_C$n_obs_num, c(3L, 1L))
+    expect_identical(ly$provenance$n_obs_source, "nA, nB")
+
+    cols$n_obs_den <- "nC"
+    expect_error(read_de_layer(layer_cfg(path, format = "generic", contrast = "T_vs_C",
+                                         columns = cols), "T_vs_C", NULL, hits_default),
+                 "Layer 'cells': columns.n_obs_den names 'nC', not found")
+})
+
+test_that("an optional column the map names must exist, not quietly fall back", {
+    ext <- data.frame(prot = c("X1", "X2"), logFC = c(1, -1), P = c(0.01, 0.2))
+    path <- write_table_tmp(ext, "csv")
+    ly <- layer_cfg(path, format = "generic", contrast = "T_vs_C",
+                    columns = list(id = "prot", log2fc = "logFC", pvalue = "P",
+                                   padj = "adj.P", hit = "sig"))
+    expect_error(read_de_layer(ly, "T_vs_C", NULL, hits_default),
+                 "columns.padj names 'adj.P', columns.hit names 'sig', not found")
+})
+
+test_that("an observed block that cannot serve its purpose stops the run", {
+    path <- write_table_tmp(prot_summary())
+    read_with <- function(obs) {
+        read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default)
+    }
+
+    obs <- obs_block(); obs$sample_col <- "Sample"
+    expect_error(read_with(obs), "Layer 'cells': observed.samplesheet .*no column 'Sample'")
+
+    obs <- obs_block(data.frame(Contrast_name = "A_vs_B", Factor = "Group", Numerator = "A"))
+    expect_error(read_with(obs), "observed.contrasts_file .*lacks column\\(s\\): Denominator")
+
+    obs <- obs_block(data.frame(Contrast_name = "A_vs_B", Factor = "Treatment",
+                                Numerator = "A", Denominator = "B"))
+    expect_error(read_with(obs), "observed.contrasts_file .*groups by Treatment")
+
+    obs <- obs_block(); obs$samplesheet <- file.path(tempdir(), "no_such_sheet.csv")
+    expect_error(read_with(obs), "observed.samplesheet .*cannot be read")
+
+    obs <- obs_block(); obs$id_col <- "FeatureID"
+    expect_error(read_with(obs), "observed.matrix .*no column 'FeatureID'")
+
+    sheet <- data.frame(SampleName = c("x1", "x2"), Group = c("A", "B"))
+    obs <- obs_block(); obs$samplesheet <- write_table_tmp(sheet, "csv")
+    expect_error(read_with(obs), "observed.matrix .*no column named after a sample")
+})
+
+test_that("a contrast missing from the contrasts file leaves counts unavailable, with a warning", {
+    path <- write_table_tmp(prot_summary())
+    contr <- data.frame(Contrast_name = "C_vs_D", Factor = "Group",
+                        Numerator = "A", Denominator = "B")
+    expect_warning(
+        ly <- read_de_layer(layer_cfg(path, observed = obs_block(contr)), "A_vs_B", NULL,
+                            hits_default),
+        "'A_vs_B' is not in observed.contrasts_file")
+    expect_identical(ly$provenance$n_obs_source, "not available")
+})
+
+test_that("a native export can name its own id column", {
+    df <- prot_summary()
+    names(df)[names(df) == "FeatureID"] <- "Protein.Group"
+    path <- write_table_tmp(df)
+    expect_error(read_de_layer(layer_cfg(path), "A_vs_B", NULL, hits_default),
+                 "no feature id column \\(looked for FeatureID\\)")
+    ly <- read_de_layer(layer_cfg(path, id_col = "Protein.Group"), "A_vs_B", NULL,
+                        hits_default)
+    expect_identical(ly$tables$A_vs_B$feature_id, c("P1", "P2;P9", "P3"))
+    expect_identical(ly$tables$A_vs_B$symbol, c("G1", "G2", NA))
+})
+
+test_that("features are ordered the same way under any locale", {
+    df <- prot_summary()
+    df$FeatureID <- c("b", "B", "a")
+    df <- rbind(df, df[3, ])
+    df$FeatureID[4] <- "A"
+    ly <- read_de_layer(layer_cfg(write_table_tmp(df)), "A_vs_B", NULL, hits_default)
+    # Bytewise: upper case before lower case, whatever the collation.
+    expect_identical(ly$tables$A_vs_B$feature_id, c("A", "B", "a", "b"))
 })
 
 test_that("an RNA layer uses the gene id as its key unless an annotation names symbols", {
@@ -172,6 +344,11 @@ test_that("an RNA layer uses the gene id as its key unless an annotation names s
     tab <- ly$tables$A_vs_B
     expect_identical(tab$symbol, c("G1", "ENSG2"))
     expect_identical(tab$symbol_source, c("symbol", "gene_id"))
+
+    bad <- write_table_tmp(data.frame(id = c("ENSG1"), name = c("G1")), "csv")
+    expect_error(read_de_layer(layer_cfg(path, format = "rnaseq_summary", omics = "rnaseq",
+                                         annotation_file = bad), "A_vs_B", NULL, hits_default),
+                 "annotation_file .*lacks column\\(s\\): gene_id, symbol")
 })
 
 test_that("a generic table is read through its column map", {
@@ -183,6 +360,7 @@ test_that("a generic table is read through its column map", {
         "T_vs_C", NULL, hits_default)
     tab <- ly$tables$T_vs_C
     expect_equal(tab$padj, p.adjust(c(0.001, 0.5, 0.004), "BH"))
+    expect_identical(ly$provenance$padj_source, "BH of P")
     expect_identical(tab$hit, c(TRUE, FALSE, TRUE))
     expect_identical(tab$symbol_source, rep("gene_id", 3))
 })
@@ -264,6 +442,9 @@ test_that("two layers load end to end and the summary is written", {
     files <- write_dei_layer_summary(res, out)
     expect_true(all(file.exists(files)))
     expect_true(all(c("layer_summary.tsv", "comparisons.tsv") %in% basename(files)))
+    comps <- utils::read.delim(files[basename(files) == "comparisons.tsv"])
+    expect_true("flip_requested" %in% names(comps))
+    expect_false("flipped" %in% names(comps))
 })
 
 test_that("the pipeline tracks the inputs and loads layers through them", {
