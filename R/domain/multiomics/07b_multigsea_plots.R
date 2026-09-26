@@ -6,6 +6,33 @@
 #' @name multigsea_plots
 NULL
 
+#' Remove the MultiGSEA outputs of an earlier run
+#'
+#' The report finds MultiGSEA figures by filename, so a figure a later run no
+#' longer draws -- a layer dropped, a pair with too few terms, a run that
+#' produced nothing -- would otherwise stay on the page as a current result.
+#' Removes only what \code{run_multigsea_plots()} writes: the top-level
+#' \code{multigsea_*} figures, PDFs and tables, and its \code{per_contrast/}
+#' directory. Multi-ORA writes under \code{multi_ora/} in the same directory and
+#' is left alone, as is anything else there.
+#'
+#' @param out_dir MultiGSEA output directory, or NULL.
+#' @return Character vector of the removed paths, invisibly.
+clear_multigsea_outputs <- function(out_dir) {
+    if (is.null(out_dir) || !dir.exists(out_dir)) return(invisible(character(0)))
+    stale <- list.files(out_dir, pattern = "^multigsea_.*\\.(png|pdf|csv)$",
+                        full.names = TRUE)
+    stale <- stale[!dir.exists(stale)]
+    per_contrast <- file.path(out_dir, "per_contrast")
+    if (dir.exists(per_contrast)) stale <- c(stale, per_contrast)
+    if (length(stale) > 0) {
+        unlink(stale, recursive = TRUE)
+        message("  MultiGSEA: cleared ", length(stale), " output(s) from a previous run")
+    }
+    invisible(stale)
+}
+
+
 #' Run MultiGSEA Correlation Analysis
 #'
 #' Generates scatter plots comparing enrichment scores between pairs of omics.
@@ -17,6 +44,10 @@ NULL
 #' @export
 run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
     message("=== Running MultiGSEA Correlation Analysis ===")
+
+    # Before any early return: a run that draws nothing must not leave the
+    # previous run's figures for the report to show.
+    clear_multigsea_outputs(out_dir)
 
     if (is.null(enrichment_results) || is.null(enrichment_results$per_omics)) {
         message("No enrichment results available for MultiGSEA.")
