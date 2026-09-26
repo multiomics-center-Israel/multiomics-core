@@ -37,6 +37,27 @@
 }
 
 
+#' Stop on a table whose header repeats or leaves out a column name
+#'
+#' readr renames a repeated or blank header ("s1" twice becomes "s1" and
+#' "s1...3"), so a lookup by name silently takes one copy and drops the other
+#' -- one of two p-value columns, or a sample's second column. Every table this
+#' mode reads is checked here.
+#'
+#' @param df A table from \code{read_table_auto()}.
+#' @param where Which layer, key and file, for the error message.
+#' @return \code{df}, invisibly.
+.dei_check_header <- function(df, where) {
+    repaired <- grep("\\.\\.\\.[0-9]+$", names(df), value = TRUE)
+    if (length(repaired) > 0) {
+        stop(where, " has a repeated or blank column name in its header (read as ",
+             paste(utils::head(repaired, 5), collapse = ", "),
+             "). Give every column its own name.", call. = FALSE)
+    }
+    invisible(df)
+}
+
+
 #' Signed log2 fold changes for one contrast, and where they came from
 #'
 #' In order of preference: a stored log2FC column; the unrounded
@@ -220,6 +241,7 @@ read_layer_annotation <- function(ly, config) {
     if (is.null(ly$annotation_file)) return(NULL)
     path <- resolve_input_path(config, ly$annotation_file)
     ann <- read_table_auto(path)
+    .dei_check_header(ann, sprintf("Layer '%s': annotation_file (%s)", ly$name, path))
     gap <- setdiff(c("gene_id", "symbol"), names(ann))
     if (length(gap) > 0) {
         stop("Layer '", ly$name, "': annotation_file (", path, ") lacks column(s): ",
@@ -263,6 +285,7 @@ read_de_layer <- function(ly, contrasts, config, hits_default,
                           well_observed_min = 2, df = NULL) {
     path <- resolve_input_path(config, ly$path)
     if (is.null(df)) df <- read_table_auto(path)
+    .dei_check_header(df, sprintf("Layer '%s': path (%s)", ly$name, path))
     cn <- names(df)
     available <- list_layer_contrasts(cn, ly$format, ly$contrast %||% "contrast")
     hits_cfg <- utils::modifyList(hits_default, ly$hits %||% list())

@@ -441,6 +441,28 @@ test_that("an annotation row without a symbol neither clashes nor hides one", {
     expect_identical(ly$tables$A_vs_B$symbol_source, c("symbol", "gene_id"))
 })
 
+test_that("a repeated column name in any input stops the run", {
+    write_raw <- function(lines, ext) {
+        f <- tempfile(fileext = paste0(".", ext))
+        writeLines(lines, f)
+        f
+    }
+    path <- write_table_tmp(prot_summary())
+    obs <- obs_block()
+    obs$matrix <- write_raw(c("Protein.Group\ts1\ts2\ts1\ts4",
+                              "P1\t20\t21\t19\t20", "P2;P9\tNA\tNA\t22\t23",
+                              "P3\t15\t15\tNA\t16"), "tsv")
+    expect_error(read_de_layer(layer_cfg(path, observed = obs), "A_vs_B", NULL, hits_default),
+                 "Layer 'cells': observed.matrix .*repeated or blank column name")
+
+    # The DE table itself: two p-value columns for one contrast.
+    df <- prot_summary()
+    lines <- c(paste(c(names(df), "pvalue.imputs.A_vs_B"), collapse = "\t"),
+               apply(cbind(df, 0.5), 1, paste, collapse = "\t"))
+    expect_error(read_de_layer(layer_cfg(write_raw(lines, "tsv")), "A_vs_B", NULL, hits_default),
+                 "Layer 'cells': path .*repeated or blank column name")
+})
+
 test_that("an observed matrix with infinite values stops the run", {
     path <- write_table_tmp(prot_summary())
     obs <- obs_block()
