@@ -46,25 +46,36 @@ test_that("each whole-section switch is read and gates its heading", {
                     info = sw)
     }
     expect_true(grepl('`r if (show_harmonization) "# Data Harmonization"`', src, fixed = TRUE))
-    expect_true(grepl('`r if (show_sample_concordance) "# Sample Concordance Across Omics"`',
+    # Sample Concordance shows only with content: its heading follows the group
+    # distance result, which folds in the switch and is computed above it.
+    expect_true(grepl('`r if (has_group_dist) "# Sample Concordance Across Omics"`',
                       src, fixed = TRUE))
+    expect_true(grepl("has_group_dist <- show_sample_concordance &&", src, fixed = TRUE))
+    setup_at <- as.integer(regexpr("```{r group-dist-setup", src, fixed = TRUE))
+    heading_at <- as.integer(regexpr('"# Sample Concordance Across Omics"', src, fixed = TRUE))
+    expect_gt(setup_at, 0)
+    expect_lt(setup_at, heading_at)
     expect_true(grepl('`r if (show_mechanistic) "# Mechanistic & Causal Inference {.tabset}"`',
                       src, fixed = TRUE))
 })
 
-test_that("RNA-protein tabs are replaced by one note when there is no RNA layer", {
+test_that("RNA-protein tabs appear only with results, otherwise one top-level note", {
     src <- template_lines()
     headings <- static_headings(src)
     for (h in c("Concordance Distribution", "DE Scatter (All Contrasts)",
                 "Per-Contrast DE Details", "Top Proteins by RNA Agreement")) {
         expect_false(any(grepl(h, headings, fixed = TRUE)), info = h)
-        expect_true(any(grepl(sprintf('`r if (has_transcriptomics) "## %s', h), src,
+        expect_true(any(grepl(sprintf('`r if (has_rna_prot) "## %s', h), src,
                               fixed = TRUE)), info = h)
     }
-    expect_true(any(grepl('`r if (!has_transcriptomics) "## RNA-Protein Analyses"`',
+    expect_true(any(grepl('`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency',
                           src, fixed = TRUE)))
-    expect_true(any(grepl("rna-prot-absent-note, eval=!has_transcriptomics", src,
-                          fixed = TRUE)))
+    # Without results: the same top-level heading, no tabset, and one note that
+    # says whether the RNA layer is missing or the analysis produced nothing.
+    expect_true(any(grepl(paste0('`r if (has_rna_prot) "# RNA-Protein Correlation {.tabset}" ',
+                                 'else "# RNA-Protein Correlation"`'), src, fixed = TRUE)))
+    expect_true(any(grepl("rna-prot-note, eval=!has_rna_prot", src, fixed = TRUE)))
+    expect_false(any(grepl("## RNA-Protein Analyses", src, fixed = TRUE)))
 })
 
 test_that("a single-contrast run gets one tab, not a combined and a per-contrast copy", {
@@ -88,4 +99,69 @@ test_that("the shipped config template leaves the new switches on", {
     for (sw in c("harmonization", "sample_concordance", "mechanistic")) {
         expect_true(show_section(sw), info = sw)
     }
+})
+
+
+# ---- the contrast count reads outputs as well as the config ------------------
+
+contrast_dirs <- function(root, names) {
+    for (n in names) dir.create(file.path(root, "per_contrast", n), recursive = TRUE)
+    root
+}
+
+test_that("one configured contrast and one output is a single-contrast run", {
+    enr <- contrast_dirs(withr::local_tempdir(), "A_vs_B")
+    lay <- report_contrast_layout(list("A_vs_B"), enr, withr::local_tempdir())
+    expect_true(lay$single_contrast)
+    expect_identical(lay$n_contrasts, 1L)
+    expect_identical(lay$label, "A vs B")
+})
+
+test_that("more contrasts in the outputs than in the config is not single-contrast", {
+    # The design lists one contrast, but per-omics DE tables brought two: the
+    # combined view pools both, so it must not be labelled as the one.
+    enr <- contrast_dirs(withr::local_tempdir(), c("A_vs_B", "C_vs_D"))
+    lay <- report_contrast_layout(list("A_vs_B"), enr, withr::local_tempdir())
+    expect_false(lay$single_contrast)
+    expect_identical(lay$n_contrasts, 2L)
+
+    # The same from MultiGSEA's outputs alone.
+    mg <- contrast_dirs(withr::local_tempdir(), c("A_vs_B", "C_vs_D", "E_vs_F"))
+    lay <- report_contrast_layout(list("A_vs_B"), withr::local_tempdir(), mg)
+    expect_false(lay$single_contrast)
+    expect_identical(lay$n_contrasts, 3L)
+})
+
+test_that("more contrasts in the config than in the outputs is not single-contrast", {
+    enr <- contrast_dirs(withr::local_tempdir(), "A_vs_B")
+    lay <- report_contrast_layout(list("A_vs_B", "C_vs_D"), enr, withr::local_tempdir())
+    expect_false(lay$single_contrast)
+    expect_identical(lay$n_contrasts, 2L)
+})
+
+test_that("the lone contrast is named from the outputs first, then the config", {
+    # Output directory wins over a differently spelled design entry.
+    enr <- contrast_dirs(withr::local_tempdir(), "Treated_vs_Control")
+    expect_identical(report_contrast_layout(list("treated - control"), enr,
+                                            withr::local_tempdir())$label,
+                     "Treated vs Control")
+    # No enrichment output: MultiGSEA's directory names it.
+    mg <- contrast_dirs(withr::local_tempdir(), "X_vs_Y")
+    expect_identical(report_contrast_layout(NULL, withr::local_tempdir(), mg)$label,
+                     "X vs Y")
+    # No outputs at all: the design's own spelling.
+    expect_identical(report_contrast_layout(list("A_vs_B"), withr::local_tempdir(),
+                                            withr::local_tempdir())$label, "A_vs_B")
+    # Nothing known anywhere.
+    none <- report_contrast_layout(NULL, withr::local_tempdir(), withr::local_tempdir())
+    expect_true(none$single_contrast)
+    expect_identical(none$label, "Results")
+})
+
+test_that("the report takes its contrast layout from the resolver", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("report_contrast_layout(cfg$design$contrasts, enrichment_dir,",
+                      src, fixed = TRUE))
+    expect_true(grepl("single_contrast <- contrast_layout$single_contrast", src, fixed = TRUE))
+    expect_true(grepl("single_contrast_label <- contrast_layout$label", src, fixed = TRUE))
 })

@@ -217,28 +217,14 @@ has_multigsea   <- dir.exists(multigsea_dir) && length(list.files(multigsea_dir,
 has_loadings_enrich <- dir.exists(loadings_enrich_dir) &&
     length(list.files(loadings_enrich_dir, "\\.(png|csv)$", recursive = TRUE)) > 0
 
-# How many contrasts the run compared. The design block is the usual record; a
-# run whose contrasts came from per-omics files can leave it empty, and then the
-# per-contrast output directories are what is left to count.
-n_subdirs <- function(d) {
-    if (dir.exists(d)) length(list.dirs(d, recursive = FALSE)) else 0L
-}
-design_contrasts <- unlist(cfg$design$contrasts %||% list(), use.names = FALSE)
-n_contrasts <- length(design_contrasts)
-if (n_contrasts == 0) {
-    n_contrasts <- max(n_subdirs(file.path(enrichment_dir, "per_contrast")),
-                       n_subdirs(file.path(multigsea_dir, "per_contrast")))
-}
+# How many contrasts the run compared, from the config and from the outputs
+# the run actually wrote; see report_contrast_layout().
+contrast_layout <- report_contrast_layout(cfg$design$contrasts, enrichment_dir,
+                                          multigsea_dir)
 # With one contrast every per-contrast view repeats the combined one, so each
 # section shows a single tab named after that contrast instead of two copies.
-single_contrast <- n_contrasts <= 1
-single_contrast_label <- local({
-    d <- list.dirs(file.path(enrichment_dir, "per_contrast"),
-                   full.names = FALSE, recursive = FALSE)
-    if (length(d) == 1) gsub("_", " ", d)
-    else if (length(design_contrasts) == 1) design_contrasts
-    else "Results"
-})
+single_contrast <- contrast_layout$single_contrast
+single_contrast_label <- contrast_layout$label
 combined_tab <- function(level, multi_label) {
     label <- if (single_contrast) single_contrast_label else multi_label
     paste0(strrep("#", level), " ", label, " {.unnumbered}")
@@ -332,21 +318,19 @@ kable(omics_tbl, col.names = c("Omics Layer", "Configured"))
 
 ---
 
-`r if (!has_transcriptomics) "## RNA-Protein Analyses"`
+`r if (has_rna_prot) "# RNA-Protein Correlation {.tabset}" else "# RNA-Protein Correlation"`
 
-```{r rna-prot-absent-note, eval=!has_transcriptomics, results='asis'}
-cat("*Not run: this study has no RNA-seq layer, and the RNA-protein analyses",
-    "(concordance, DE scatter, per-contrast DE details, top proteins by RNA",
-    "agreement, translation efficiency) need one.*\n")
+```{r rna-prot-note, eval=!has_rna_prot, results='asis'}
+if (!has_transcriptomics) {
+    cat("*Not run: this study has no RNA-seq layer, and the RNA-protein analyses",
+        "(concordance, DE scatter, per-contrast DE details, top proteins by RNA",
+        "agreement, translation efficiency) need one.*\n")
+} else {
+    cat("*No RNA-protein correlation results found. This analysis requires both transcriptomics and proteomics data.*\n")
+}
 ```
 
-`r if (has_transcriptomics) "# RNA-Protein Correlation {.tabset}"`
-
-```{r rna-prot-note, eval=has_transcriptomics && !has_rna_prot, results='asis'}
-cat("*No RNA-protein correlation results found. This analysis requires both transcriptomics and proteomics data.*\n")
-```
-
-`r if (has_transcriptomics) "## Concordance Distribution"`
+`r if (has_rna_prot) "## Concordance Distribution"`
 
 ```{r rna-prot-concordance, eval=has_transcriptomics && has_rna_prot, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "rna_protein_concordance.png")
@@ -360,7 +344,7 @@ figure_legend("Distribution of per-gene RNA-protein Pearson correlations across 
 render_commentary("rna_protein_concordance")
 ```
 
-`r if (has_transcriptomics) "## DE Scatter (All Contrasts)"`
+`r if (has_rna_prot) "## DE Scatter (All Contrasts)"`
 
 ```{r rna-prot-de-scatter, eval=has_transcriptomics && has_rna_prot, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "rna_protein_de_scatter.png")
@@ -376,7 +360,7 @@ figure_legend("RNA vs protein differential expression scatter plot per contrast.
 render_commentary("rna_protein_de_scatter")
 ```
 
-`r if (has_transcriptomics) "## Per-Contrast DE Details {.tabset}"`
+`r if (has_rna_prot) "## Per-Contrast DE Details {.tabset}"`
 
 ```{r rna-prot-per-contrast, eval=has_transcriptomics && has_rna_prot, results='asis'}
 per_contrast_dir <- file.path(rna_prot_dir, "per_contrast")
@@ -467,7 +451,7 @@ if (dir.exists(per_contrast_dir)) {
 }
 ```
 
-`r if (has_transcriptomics) "## Top Proteins by RNA Agreement"`
+`r if (has_rna_prot) "## Top Proteins by RNA Agreement"`
 
 ```{r rna-prot-topn-bars, eval=has_transcriptomics && has_rna_prot, fig.width=10, fig.height=7}
 # The protein side is the limma moderated log2FC, the RNA side the DESeq2
@@ -608,7 +592,7 @@ figure_legend(paste(
     "Source: rna_protein_log2FC_pairs.csv. Descriptive and hypothesis-generating."))
 ```
 
-`r if (has_transcriptomics && show_translation_eff) "## Translation Efficiency (All Contrasts)"`
+`r if (has_rna_prot && show_translation_eff) "## Translation Efficiency (All Contrasts)"`
 
 ```{r rna-prot-te-hist, eval=has_transcriptomics && has_rna_prot && show_translation_eff, results='asis'}
 p <- file.path(rna_prot_dir, "plots", "translation_efficiency_hist.png")
@@ -1508,8 +1492,6 @@ render_commentary("gene_protein_mapping")
 
 ---
 
-`r if (show_sample_concordance) "# Sample Concordance Across Omics"`
-
 ```{r mantel-setup, include=FALSE}
 foundational_dir <- file.path(run_dir, "foundational", "foundational")
 mantel_heatmap <- file.path(foundational_dir, "plots", "mantel_test_heatmap.png")
@@ -1529,11 +1511,6 @@ mantel_corr_heatmaps <- list.files(
 has_corr_heatmaps <- length(mantel_corr_heatmaps) > 0
 ```
 
-```{r clustering-consistency, eval=FALSE, results='asis'}
-# Removed: Clustering Consistency and Condition Separation plots
-# were not informative for this analysis
-```
-
 ```{r group-dist-setup, include=FALSE}
 group_dist_scatter <- file.path(foundational_dir, "plots", "sample_within_vs_cross_group_distance.png")
 group_dist_boxplot <- file.path(foundational_dir, "plots", "sample_group_distance_boxplot.png")
@@ -1542,6 +1519,13 @@ group_dist_boxplot <- file.path(foundational_dir, "plots", "sample_group_distanc
 # before -- left the heading standing over nothing.
 has_group_dist <- show_sample_concordance && show_group_distance &&
     (file.exists(group_dist_scatter) || file.exists(group_dist_boxplot))
+```
+
+`r if (has_group_dist) "# Sample Concordance Across Omics"`
+
+```{r clustering-consistency, eval=FALSE, results='asis'}
+# Removed: Clustering Consistency and Condition Separation plots
+# were not informative for this analysis
 ```
 
 ```{r group-dist-section, eval=has_group_dist, results='asis'}
