@@ -702,3 +702,141 @@ test_that("paths pasted into generated chunks use forward slashes", {
     expect_true(grepl('run_dir <- normalizePath(dirname(knitr::current_input()), winslash = "/", mustWork = TRUE)',
                       src, fixed = TRUE))
 })
+
+# ---- multi-ORA support, and SNF in context ---------------------------------
+
+test_that("multi-ORA support is reported on both rules, not FDR alone", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("# layers reporting it, p<0.05", src, fixed = TRUE))
+    expect_true(grepl("# layers FDR<0.05", src, fixed = TRUE))
+    # The old single column claimed "# Omics Supporting" while counting FDR only.
+    expect_false(grepl("# Omics Supporting", src, fixed = TRUE))
+})
+
+test_that("the support barplot colours by the nominal count when it has one", {
+    f <- file.path(root_dir, "R", "domain", "multiomics", "07b_multigsea_plots.R")
+    skip_if_not(file.exists(f))
+    src <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    expect_true(grepl('support_col <- if ("n_omics_support_pval" %in% colnames(top))',
+                      src, fixed = TRUE))
+    expect_true(grepl("fill = factor(support)", src, fixed = TRUE))
+})
+
+test_that("the SNF section says what SNF is and compares it with the other methods", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("Similarity Network Fusion builds one sample-similarity network",
+                      src, fixed = TRUE))
+    expect_true(grepl("sample_clusters_comparison.csv", src, fixed = TRUE))
+    expect_true(grepl("method_ari_matrix.csv", src, fixed = TRUE))
+    expect_true(grepl("method_nmi_matrix.csv", src, fixed = TRUE))
+})
+
+test_that("the SNF context names only the methods that ran", {
+    src <- paste(template_lines(), collapse = "\n")
+    # A default run has DIABLO and SNF only; MOFA2 is deferred.
+    for (gone in c("the other two methods", "The three agreeing",
+                   "one grouping", "check against the table below")) {
+        expect_false(grepl(gone, src, fixed = TRUE), info = gone)
+    }
+    # Named only from the comparison this run wrote, never from PNGs that can
+    # outlive the run; without a comparison, no other method is named.
+    expect_true(grepl("unname(snf_method_desc[intersect(names(snf_method_desc), snf_cmp_methods)])",
+                      src, fixed = TRUE))
+    expect_true(grepl("snf_others <- if (has_snf_cmp) {", src, fixed = TRUE))
+    expect_false(grepl('if (has_diablo) "DIABLO', src, fixed = TRUE))
+    expect_false(grepl('if (has_mofa) "MOFA2', src, fixed = TRUE))
+    # The comparison is referred to only when it is there, and set up first.
+    expect_true(grepl("if (has_snf_cmp)\n        paste(\"The comparison below", src, fixed = TRUE))
+    expect_lt(regexpr("```{r snf-vs-methods-setup", src, fixed = TRUE),
+              regexpr("```{r snf-intro", src, fixed = TRUE))
+    expect_true(grepl("Agreement means the methods produced similar", src, fixed = TRUE))
+})
+
+test_that("ARI and NMI are read differently, and DIABLO's partition is caveated", {
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl("The adjusted Rand index is corrected for chance", src, fixed = TRUE))
+    expect_true(grepl("Normalised mutual information is not", src, fixed = TRUE))
+    expect_true(grepl("unrelated partitions can score above 0", src, fixed = TRUE))
+    expect_false(grepl("0 means no more agreement than chance", src, fixed = TRUE))
+    expect_true(grepl('if ("diablo" %in% snf_cmp_methods)', src, fixed = TRUE))
+    expect_true(grepl("not independent unsupervised confirmation", src, fixed = TRUE))
+})
+
+test_that("the consensus directory is defined once and reused", {
+    src <- template_lines()
+    expect_length(grep("^consensus_dir +<- ", src), 1L)
+    expect_false(any(grepl("snf_cons_dir", src, fixed = TRUE)))
+    joined <- paste(src, collapse = "\n")
+    expect_true(grepl('snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")',
+                      joined, fixed = TRUE))
+})
+
+test_that("the SNF agreement line handles more than one other method", {
+    # m["snf", others] is a data frame once two methods sit beside SNF, and
+    # as.numeric() of a data frame is an error that would abort the render.
+    src <- template_lines()
+    start <- grep("^\\.snf_agreement <- function", src)
+    expect_length(start, 1)
+    end <- start + which(grepl("^}", src[start:length(src)]))[1] - 1
+    env <- new.env()
+    env$consensus_dir <- withr::local_tempdir()
+    eval(parse(text = src[start:end]), envir = env)
+
+    ari <- matrix(c(1, 0.5, 0.25, 0.5, 1, 0.1, 0.25, 0.1, 1), 3,
+                  dimnames = list(c("snf", "diablo", "mofa"), c("snf", "diablo", "mofa")))
+    write.csv(as.data.frame(ari), file.path(env$consensus_dir, "method_ari_matrix.csv"))
+    line <- env$.snf_agreement("method_ari_matrix.csv", "ARI:")
+    expect_identical(line, "ARI: 0.50 vs diablo, 0.25 vs mofa")
+
+    # One other method, as in a default DIABLO + SNF run.
+    two <- ari[1:2, 1:2]
+    write.csv(as.data.frame(two), file.path(env$consensus_dir, "method_nmi_matrix.csv"))
+    expect_identical(env$.snf_agreement("method_nmi_matrix.csv", "NMI:"),
+                     "NMI: 0.50 vs diablo")
+    # No file, or no SNF row: nothing to say.
+    expect_null(env$.snf_agreement("absent.csv", "x"))
+})
+
+test_that("the SNF comparison is shown only when it compares SNF", {
+    # SNF's own PNGs can survive a run that no longer ran SNF; the comparison
+    # file is cleared and rewritten each run, so it decides.
+    src <- paste(template_lines(), collapse = "\n")
+    expect_true(grepl('has_snf_cmp <- "snf" %in% snf_cmp_methods', src, fixed = TRUE))
+    expect_false(grepl("has_snf_cmp <- has_snf && file.exists(snf_cmp_file)", src, fixed = TRUE))
+    expect_lt(regexpr("snf_cmp_methods <- if (has_snf && file.exists(snf_cmp_file))", src, fixed = TRUE),
+              regexpr('has_snf_cmp <- "snf" %in% snf_cmp_methods', src, fixed = TRUE))
+})
+
+test_that("SNF is told apart from the feature selection that fed it", {
+    src <- paste(template_lines(), collapse = "\n")
+    # Resolved as feature selection resolves it: exact "de" / "combined".
+    expect_true(grepl('snf_label_note <- if (feat_sel %in% c("de", "combined"))', src, fixed = TRUE))
+    expect_true(grepl("does not use the condition labels directly, but its", src, fixed = TRUE))
+    expect_true(grepl("input features were selected using differential-abundance results",
+                      src, fixed = TRUE))
+    expect_true(grepl("Its clustering does not use the condition labels, so its clusters",
+                      src, fixed = TRUE))
+    expect_false(grepl("It never sees the condition labels", src, fixed = TRUE))
+    fs <- paste(readLines(file.path(root_dir, "R", "domain", "multiomics",
+                                    "03_feature_selection.R"), warn = FALSE), collapse = "\n")
+    expect_true(grepl('method == "de"', fs, fixed = TRUE))
+    expect_true(grepl('method == "combined"', fs, fixed = TRUE))
+})
+
+test_that("the multi-ORA support count is described by the rule it applies", {
+    src <- paste(template_lines(), collapse = "\n")
+    calls <- legend_calls(template_lines())
+    leg <- calls$text[grepl("Multi-ORA support. Bar length", calls$text, fixed = TRUE)]
+    expect_length(leg, 1)
+    expect_lte(n_words(leg), 100)
+    # Both conditions: reported under the layer's own rule, and raw p < 0.05.
+    expect_match(leg, "report the pathway under their own selection rule", fixed = TRUE)
+    expect_match(leg, "and also have raw p < 0.05 for it", fixed = TRUE)
+    expect_match(leg, "or reported it at raw p of 0.05 or more", fixed = TRUE)
+    expect_false(grepl("score that pathway at raw", leg, fixed = TRUE))
+    expect_false(grepl("# layers p<0.05", src, fixed = TRUE))
+    f <- file.path(root_dir, "R", "domain", "multiomics", "07b_multigsea_plots.R")
+    mg <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    expect_true(grepl("Layers reporting it\\nwith raw p < 0.05", mg, fixed = TRUE))
+    expect_false(grepl("Layers with\\nraw p < 0.05", mg, fixed = TRUE))
+})

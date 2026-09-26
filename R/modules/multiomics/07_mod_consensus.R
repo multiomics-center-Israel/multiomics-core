@@ -30,9 +30,11 @@ mod_multiomics_consensus <- function(harmonization_res, integration_res,
     results <- list()
 
     # 1. Integration consensus analysis
+    # The report reads these files by name, so every path that does not produce
+    # a complete set clears them rather than leave an earlier run's.
+    consensus_dir <- file.path(out_dir, "consensus")
     if (cfg$consensus$run_consensus %||% TRUE) {
         message("\nRunning integration consensus analysis...")
-        consensus_dir <- file.path(out_dir, "consensus")
         dir.create(consensus_dir, showWarnings = FALSE)
 
         # Build integration results list for consensus
@@ -51,10 +53,12 @@ mod_multiomics_consensus <- function(harmonization_res, integration_res,
             )
         }, error = function(e) {
             warning("Consensus analysis failed: ", e$message)
+            clear_consensus_outputs(consensus_dir)
             NULL
         })
     } else {
         message("\nConsensus analysis disabled in config. Skipping.")
+        clear_consensus_outputs(consensus_dir)
         results$consensus <- NULL
     }
 

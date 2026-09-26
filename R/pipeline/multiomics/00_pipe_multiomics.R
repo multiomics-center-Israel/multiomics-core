@@ -309,6 +309,10 @@ pipe_multiomics <- function() {
             {
                 if (is.null(multiomics_harmonization) || is.null(multiomics_integration)) {
                     message("Skipping consensus analysis: dependencies not ready")
+                    # The module is never called here, so its own cleanup never
+                    # runs; the report must not show the last run's comparison.
+                    clear_consensus_outputs(file.path(multiomics_out_dir,
+                                                      "consensus", "consensus"))
                     return(NULL)
                 }
 

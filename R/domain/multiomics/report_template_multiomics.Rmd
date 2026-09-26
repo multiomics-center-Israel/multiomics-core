@@ -153,6 +153,7 @@ loadings_enrich_dir <- file.path(run_dir, "loadings_enrichment")
 rna_prot_dir     <- file.path(run_dir, "rna_protein_correlation")
 multigsea_dir    <- file.path(run_dir, "multigsea")
 commentary_dir   <- file.path(run_dir, "commentary")
+consensus_dir    <- file.path(run_dir, "consensus", "consensus")
 
 # Load commentary if available
 commentary <- NULL
@@ -752,7 +753,15 @@ support_bp <- file.path(multi_ora_dir, "multi_ora_support_barplot.png")
 if (file.exists(support_bp)) {
     cat("\n#### Omics Support per Pathway {.unnumbered}\n\n")
     cat(sprintf("![Multi-ORA Support](%s)\n\n", support_bp))
-    figure_legend("Multi-ORA omics support barplot. Bar length shows pooled enrichment significance (-log10 p-value). Color indicates the number of individual omics layers that independently support each pathway (padj < 0.05).")
+    figure_legend(paste(
+        "Multi-ORA support. Bar length is the pooled enrichment significance",
+        "(-log10 p). Colour counts the layers that report the pathway under their",
+        "own selection rule (adjusted p where they had adjusted-p hits, otherwise",
+        "raw p) and also have raw p < 0.05 for it. A layer that scored it at raw",
+        "p < 0.05 without reporting it, or reported it at raw p of 0.05 or more, is",
+        "not counted. The table below gives the same count and, beside it, how many",
+        "layers clear FDR < 0.05 -- which can be none while the pathway is still on",
+        "this figure."))
 }
 
 # Summary table
@@ -761,10 +770,16 @@ if (file.exists(multi_ora_csv)) {
     cat("\n#### Top Multi-ORA Pathways {.unnumbered}\n\n")
     mora_df <- read.csv(multi_ora_csv, stringsAsFactors = FALSE)
     mora_show <- mora_df[seq_len(min(25, nrow(mora_df))), ]
-    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count", "metabolomics_padj", "n_omics_support"), colnames(mora_show))
+    # Both counts, named for their rule: the FDR-based one alone reads as "no
+    # layer supports this" on a run where no layer's ORA clears FDR.
+    display_cols <- intersect(c("pathway", "pooled_padj", "pooled_count",
+                                "metabolomics_padj", "n_omics_support_pval",
+                                "n_omics_support"), colnames(mora_show))
     mora_show <- mora_show[, display_cols, drop = FALSE]
     col_labels <- c(pathway = "Pathway", pooled_padj = "Pooled padj", pooled_count = "Gene Count",
-                    metabolomics_padj = "Metab padj", n_omics_support = "# Omics Supporting")
+                    metabolomics_padj = "Metab padj",
+                    n_omics_support_pval = "# layers reporting it, p<0.05",
+                    n_omics_support = "# layers FDR<0.05")
     colnames(mora_show) <- col_labels[display_cols]
     # Format numeric columns (signif handles NA gracefully)
     for (nc in intersect(c("Pooled padj", "Metab padj"), colnames(mora_show))) {
@@ -1733,6 +1748,69 @@ if (length(diablo_feat_files) > 0) {
 
 ## SNF
 
+```{r snf-vs-methods-setup, include=FALSE}
+# The consensus step already wrote the per-sample assignments of every method
+# and the agreement between their partitions; they are read here, beside the
+# clusters they explain, rather than left three sections away.
+snf_cmp_file <- file.path(consensus_dir, "sample_clusters_comparison.csv")
+# Which methods the comparison actually holds, from its own columns.
+snf_cmp_methods <- if (has_snf && file.exists(snf_cmp_file)) {
+    tryCatch(setdiff(names(read.csv(snf_cmp_file, nrows = 1, check.names = FALSE)),
+                     c("sample_id", "consensus")),
+             error = function(e) character(0))
+} else character(0)
+# SNF's own PNGs can outlive a run that no longer ran SNF, so the comparison is
+# shown only when it compares SNF.
+has_snf_cmp <- "snf" %in% snf_cmp_methods
+.snf_agreement <- function(file, label) {
+    f <- file.path(consensus_dir, file)
+    if (!file.exists(f)) return(NULL)
+    m <- tryCatch(read.csv(f, row.names = 1, check.names = FALSE),
+                  error = function(e) NULL)
+    if (is.null(m) || !"snf" %in% rownames(m)) return(NULL)
+    others <- setdiff(colnames(m), "snf")
+    if (length(others) == 0) return(NULL)
+    sprintf("%s %s", label,
+            paste(sprintf("%.2f vs %s",
+                          as.numeric(unlist(m["snf", others], use.names = FALSE)), others),
+                  collapse = ", "))
+}
+```
+
+```{r snf-intro, eval=has_snf, results='asis'}
+# Other methods are named only from the comparison this run wrote: their own
+# output directories can outlive a run that no longer ran them, so a PNG is not
+# evidence that a method ran. Without a comparison, no other method is named.
+snf_method_desc <- c(
+    diablo = "DIABLO, which looks for features that separate the conditions using their labels",
+    mofa = "MOFA2, which decomposes variation into factors without labels")
+snf_others <- if (has_snf_cmp) {
+    unname(snf_method_desc[intersect(names(snf_method_desc), snf_cmp_methods)])
+} else character(0)
+# The clustering itself never uses the labels, but the features it is given can
+# have been chosen with them; feat_sel is resolved above as feature selection
+# resolves it.
+snf_label_note <- if (feat_sel %in% c("de", "combined")) {
+    paste("Its clustering does not use the condition labels directly, but its",
+          "input features were selected using differential-abundance results",
+          "between the conditions, so the partition is not independent of them.")
+} else {
+    paste("Its clustering does not use the condition labels, so its clusters",
+          "describe the structure the fused data carries.")
+}
+cat("Similarity Network Fusion builds one sample-similarity network per omics",
+    "layer and fuses them into a single network, then clusters the samples in",
+    "it.", snf_label_note,
+    if (length(snf_others) > 0)
+        paste0("It answers a different question from ",
+               paste(snf_others, collapse = ", and from "), "."),
+    if (has_snf_cmp)
+        paste("The comparison below shows how its partition lines up with the",
+              "other methods'. Agreement means the methods produced similar",
+              "partitions; disagreement is not a fault in any of them."),
+    "\n\n")
+```
+
 ```{r snf-heatmap, eval=has_snf, results='asis'}
 p <- file.path(snf_dir, "snf_network_heatmap.png")
 if (file.exists(p)) {
@@ -1768,6 +1846,36 @@ if (file.exists(clusters_file)) {
     clusters <- read.csv(clusters_file, stringsAsFactors = FALSE)
     make_dt(clusters, caption = "SNF Cluster Assignments")
 }
+```
+
+```{r snf-vs-methods, eval=has_snf_cmp, results='asis'}
+cat("\n### Is this the same grouping the other methods found? {.unnumbered}\n\n")
+lines <- c(.snf_agreement("method_ari_matrix.csv", "Adjusted Rand index:"),
+           .snf_agreement("method_nmi_matrix.csv", "Normalised mutual information:"))
+if (length(lines) > 0) cat(paste(lines, collapse = "  \n"), "\n\n")
+cat("Both compare partitions, not labels: a cluster numbered 1 here and 2 there",
+    "can be the same grouping. The adjusted Rand index is corrected for chance:",
+    "1 means the two methods split the samples identically, and values near 0",
+    "mean chance-level agreement. Normalised mutual information is not: 1 still",
+    "means identical splits, but unrelated partitions can score above 0,",
+    "especially with few samples or many clusters.",
+    if ("diablo" %in% snf_cmp_methods)
+        paste("DIABLO's partition comes from its supervised component space, so",
+              "SNF-DIABLO agreement is not independent unsupervised confirmation."),
+    "\n\n")
+```
+
+```{r snf-vs-methods-table, eval=has_snf_cmp}
+cmp <- read.csv(snf_cmp_file, stringsAsFactors = FALSE)
+make_dt(cmp, caption = "Cluster per sample, by method")
+```
+
+```{r snf-vs-methods-legend, eval=has_snf_cmp, results='asis'}
+figure_legend(paste(
+    "Cluster assignments per sample from each integration method, and the",
+    "consensus of them, as written by the consensus step. Read down a row to see",
+    "where the methods place one sample. With few samples a single sample moving",
+    "between clusters changes both indices a lot."))
 ```
 
 ## MOFA2
@@ -2041,7 +2149,6 @@ if (file.exists(mofa_le_csv)) {
 # Consensus Analysis {.tabset}
 
 ```{r consensus-setup, include=FALSE}
-consensus_dir <- file.path(run_dir, "consensus", "consensus")
 has_consensus <- dir.exists(consensus_dir) &&
     length(list.files(consensus_dir, "\\.png$|\\.csv$", recursive = TRUE)) > 0
 ```
