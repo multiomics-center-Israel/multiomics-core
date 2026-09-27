@@ -216,3 +216,53 @@ test_that("two GMTs differing only in case stay two collections", {
     expect_length(unique(tolower(names(gs))), 2)
     expect_equal(gs[[names(gs)[1]]][["SET_A"]], c("g1", "g2"))
 })
+
+# Regression for #198: when validation succeeds but no pathway keeps enough
+# members in the data, the collection must stay empty rather than fall back to
+# its unfiltered sets.
+test_that("a GMT that validation empties stays present and empty", {
+    gmt <- write_gmt_file(c(
+        paste(c("SET_X", "Set X", paste0("g", 1:4)), collapse = "\t"),
+        paste(c("SET_Y", "Set Y", paste0("g", 5:8)), collapse = "\t")),
+        "sets.gmt")
+    on.exit(unlink(dirname(gmt), recursive = TRUE), add = TRUE)
+
+    gs <- NULL
+    expect_warning(
+        gs <- suppressMessages(load_gene_sets(
+            organism = "Example organism", pathway_database = "KEGG",
+            gmt_file = gmt,
+            annotation = data.frame(gene_id = paste0("g", 1:20)))),
+        "GMT 'custom'.*left empty")
+
+    # Still the only collection: no non-model GO/KEGG fallback was triggered.
+    expect_equal(names(gs), "custom")
+    expect_length(gs$custom, 0)
+})
+
+test_that("an emptied GMT does not affect a GMT that keeps pathways", {
+    emptied <- write_gmt_file(c(
+        paste(c("SET_X", "Set X", paste0("g", 1:4)), collapse = "\t"),
+        paste(c("SET_Y", "Set Y", paste0("g", 5:8)), collapse = "\t")),
+        "emptied.gmt")
+    kept <- write_gmt_file(c(
+        paste(c("SET_OK", "Set OK", paste0("g", 1:6), "u1", "u2"), collapse = "\t"),
+        paste(c("SET_SMALL", "Set small", paste0("g", 1:3)), collapse = "\t")),
+        "kept.gmt")
+    on.exit(unlink(c(dirname(emptied), dirname(kept)), recursive = TRUE), add = TRUE)
+
+    gs <- NULL
+    expect_warning(
+        gs <- suppressMessages(load_gene_sets(
+            organism = "Example organism", pathway_database = "KEGG",
+            gmt_file = list(emptied, kept),
+            annotation = data.frame(gene_id = paste0("g", 1:20)))),
+        "GMT 'emptied'.*left empty")
+
+    expect_setequal(names(gs), c("emptied", "kept"))
+    expect_length(gs$emptied, 0)
+    # The surviving collection is filtered as before: small sets dropped,
+    # members not in the data removed.
+    expect_equal(names(gs$kept), "SET_OK")
+    expect_equal(gs$kept$SET_OK, paste0("g", 1:6))
+})
