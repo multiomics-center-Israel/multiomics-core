@@ -180,11 +180,25 @@ load_gene_sets <- function(organism,
                         NULL
                     }
                 )
-                if (!is.null(gmt_val) && length(gmt_val$filtered_pathways) > 0) {
+                # An empty result is a real answer: falling back to the
+                # unfiltered sets would test the pathways validation just
+                # rejected. The collection stays, empty, so a non-model run is
+                # not sent to the GO/KEGG fallback below, and
+                # run_pathway_analysis() skips it.
+                if (!is.null(gmt_val)) {
                     gene_sets[[nm]] <- gmt_val$filtered_pathways
-                    message("GMT '", nm, "' filtered to ",
-                            length(gmt_val$filtered_pathways),
-                            " pathways with coverage in data")
+                    if (length(gmt_val$filtered_pathways) == 0) {
+                        warning("GMT '", nm, "': none of its ",
+                                gmt_val$n_pathways_original,
+                                " pathways passed validation against the data ",
+                                "(too few or too many members found); the ",
+                                "collection is left empty and will not be tested.",
+                                call. = FALSE)
+                    } else {
+                        message("GMT '", nm, "' filtered to ",
+                                length(gmt_val$filtered_pathways),
+                                " pathways with coverage in data")
+                    }
                 }
             }
         }
