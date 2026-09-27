@@ -31,15 +31,31 @@ normalize_contrast_name <- function(x) {
 #' where the key picks a table, one contrast's fold changes rendered under the
 #' other's name.
 #'
+#' A hyphen is the separator only in a label with no "vs": "A - B" and "A-B"
+#' are comparisons, but in "A-B_vs_C" the hyphen belongs to a group name and is
+#' dropped like a space or underscore -- read as "vs", it made "A-B_vs_C" and
+#' "A_vs_B-C" one key, pairing two different comparisons.
+#'
+#' A dot that opens a number (at the start, or after a space or underscore) is
+#' a decimal point, written "0.": ".5ppm" and "0.5ppm" are one dose, and
+#' "5ppm" another. A dot after a letter stays punctuation ("vs.", make.names
+#' padding such as "Day.1").
+#'
 #' @param x Character vector of contrast names.
 #' @return Character vector of canonical keys, same length as \code{x}.
 #' @examples
 #' normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b"))   # all "avsb"
 #' normalize_contrast_key(c("1.56ppm vs 0ppm", "15.6ppm vs 0ppm"))  # stay apart
+#' normalize_contrast_key(c("A-B_vs_C", "A_vs_B-C"))              # stay apart
+#' normalize_contrast_key(c(".5ppm_vs_0ppm", "0.5ppm_vs_0ppm"))   # one key
 normalize_contrast_key <- function(x) {
     x <- tolower(trimws(x))
-    # Treat " - " / "-" between groups as an alias for "vs"
-    x <- gsub("\\s*-\\s*", "vs", x)
+    # A leading decimal point keeps its number: ".5" -> "0.5".
+    x <- gsub("(^|[^0-9a-z.])\\.(?=[0-9])", "\\10.", x, perl = TRUE)
+    # Treat " - " / "-" between groups as an alias for "vs", but only where no
+    # "vs" names the separator already.
+    no_vs <- !grepl("vs", x, fixed = TRUE)
+    x[no_vs] <- gsub("\\s*-\\s*", "vs", x[no_vs])
     x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
     x <- gsub("[^a-z0-9.]", "", x)        # strip separators, dots decided below
     # A dot is only content when it sits between digits; everywhere else it is
