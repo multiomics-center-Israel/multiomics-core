@@ -14,6 +14,7 @@ A practical map of the repository for future Claude Code sessions. Read this **a
 - **Proteomics** — limma-based DE with multi-imputation and stability filtering, PPI networks, advanced stats.
 - **Metabolomics** — missingness *filtering* (no imputation stage), TSS/Median/PQN/EigenMS normalization (selected via `preprocessing.chosen_norm`), optional LOESS drift correction, DE (limma/t-test/Wilcoxon), pathway enrichment (QEA, ssGSEA, ORA, GSEA).
 - **Multi-omics integration** — DIABLO, MOFA, SNF, concordance, cross-omics enrichment, WGCNA, COSMOS, consensus and stability analysis.
+- **DE integration** (`modes.de_integration`, in progress) — compares finished DE tables across layers (proteomics or RNA-seq; this pipeline's exports or any table with a column map), without sample-level matrices. So far it loads and standardizes the layers and resolves which contrasts are compared.
 
 Behaviour is driven by a single **YAML config** (path passed via `MULTIOMICS_CONFIG`). Each run writes results under `<project.dir>/<paths.out>/Results_<project.name>_<analysis_round>/<mode>/`. AI-generated figure commentary is optional (Claude CLI / Anthropic API / OpenAI backends).
 
@@ -109,7 +110,9 @@ Numeric prefixes encode dependency order. Highlights:
 
 ### `R/domain/<omics>/` — omics-specific logic
 
-Four subfolders, one per omics mode: `rnaseq/`, `proteomics/`, `metabolomics/`, `multiomics/`.
+One subfolder per mode: `rnaseq/`, `proteomics/`, `metabolomics/`, `multiomics/`, and `de_integration/` (reads finished DE tables: `00_inputs.R` column contract and contrast resolution, `01_read_layer.R` standardized per-contrast frames, `02_observed_counts.R` observed values per group, `90_config_validate.R`).
+
+Contrast-name helpers shared across modes live in `R/core/01_io.R`: `normalize_contrast_name()` (the spelling used in column suffixes) and `normalize_contrast_key()` (the canonical key that decides which contrasts are the same comparison).
 
 Within each, numeric prefixes mirror the analysis flow. Common pattern across modes:
 
@@ -144,9 +147,10 @@ Files prefixed `mod_*` (e.g. `02_mod_de.R`, `04_mod_clustering.R`). These are th
 | `R/pipeline/proteomics/00_pipe_proteomics.R` | `pipe_proteomics(skip_outputs = FALSE)` |
 | `R/pipeline/metabolomics/00_pipe_metabolomics.R` | `pipe_metabolomics(chosen_norm, skip_outputs = FALSE)` |
 | `R/pipeline/multiomics/00_pipe_multiomics.R` | `pipe_multiomics()` |
+| `R/pipeline/de_integration/00_pipe_de_integration.R` | `pipe_de_integration()` |
 | `R/pipeline/metabolomics/templates/` | RMarkdown report templates used by the metabolomics pipeline |
 
-`_targets.R` calls these factories conditionally based on which `modes:` blocks the config contains. When `modes.multiomics` is present, the single-omics pipelines run with `skip_outputs = TRUE` (only core DE / pathway, no QC / reports / exports).
+`_targets.R` calls these factories conditionally based on which `modes:` blocks the config contains. When `modes.multiomics` is present, the single-omics pipelines run with `skip_outputs = TRUE` (only core DE / pathway, no QC / reports / exports). `modes.de_integration` needs no single-omics mode and does not count towards the multi-omics total.
 
 ---
 
@@ -159,7 +163,7 @@ Files prefixed `mod_*` (e.g. `02_mod_de.R`, `04_mod_clustering.R`). These are th
 - `run_dir` → resolved output directory
 - `execution_info_files` → execution metadata snapshot
 
-Then conditionally appends each mode's pipeline by reading the raw YAML to detect `modes.rna`, `modes.proteomics`, `modes.metabolomics`, `modes.multiomics`. Multi-omics is only enabled when ≥2 single-omics modes are configured *and* `modes.multiomics` exists.
+Then conditionally appends each mode's pipeline by reading the raw YAML to detect `modes.rna`, `modes.proteomics`, `modes.metabolomics`, `modes.multiomics`. Multi-omics is only enabled when ≥2 single-omics modes are configured *and* `modes.multiomics` exists. DE integration is enabled whenever `modes.de_integration` exists.
 
 **Rule (from `CLAUDE.md`):** helpers do not live in `_targets.R` — only target definitions.
 
@@ -173,7 +177,8 @@ config/
 │   ├── rna_config.yaml          RNA-seq template
 │   ├── proteins_config.yaml     Proteomics template
 │   ├── metabolomics_template.yaml
-│   └── multiomics_config.yaml   Multi-omics template
+│   ├── multiomics_config.yaml   Multi-omics template
+│   └── de_integration_config.yaml   DE-integration template (layers, comparisons, hits)
 └── (per-project *.yaml configs are gitignored — they live on disk, not in the repo)
 ```
 
@@ -194,6 +199,7 @@ modes:
   proteomics:    { ... }
   metabolomics:  { ..., preprocessing.chosen_norm }
   multiomics:    { ... }
+  de_integration: { layers, comparisons, hits, concordance }
 commentary: { enabled, backend, ... }     # optional
 ```
 

@@ -165,6 +165,12 @@ list(
       mode_targets <- c(mode_targets, pipe_multiomics())
 
     }
+
+    # DE-table integration: runs from finished DE tables alone, so it needs no
+    # single-omics mode and does not count towards n_omics.
+    if (!is.null(cfg_raw$modes$de_integration)) {
+      mode_targets <- c(mode_targets, pipe_de_integration())
+    }
    
 
     mode_targets
