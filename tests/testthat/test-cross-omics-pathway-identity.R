@@ -180,6 +180,21 @@ test_that("a tilde does not make a non-KEGG identifier KEGG", {
     expect_false(any(is_kegg_pathway_accession(ids, kegg_org = "hsa")))
 })
 
+test_that("a tilde with no label after it is not a labelled accession", {
+    # Identity and display have to agree: .tilde_pathway_label() leaves these
+    # whole, so the key must not collapse them onto the real pathway either.
+    ids <- c("hsa00010~", "map00010~   ", "00010~ ")
+
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+    expect_identical(
+        pathway_display_label(data.frame(pathway = ids, stringsAsFactors = FALSE),
+                              kegg_org = "hsa"),
+        trimws(ids))
+    # A label that starts after padding still counts.
+    expect_equal(normalize_pathway_join_key("hsa00010~  Glycolysis", kegg_org = "hsa"),
+                 "00010")
+})
+
 test_that("another organism's tilde-labelled accession keeps its own identity", {
     expect_identical(normalize_pathway_join_key("mmu00010~Glycolysis", kegg_org = "hsa"),
                      "mmu00010~Glycolysis")

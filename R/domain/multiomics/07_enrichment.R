@@ -2536,9 +2536,11 @@ normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
     # produces -- exactly the path this join most needs to work. GMT exports
     # spell the same thing "<accession>~<readable name>". Take the leading
     # accession; the rest of the string is a label, and pathway_display_label()
-    # still has the whole of it to show.
+    # still has the whole of it to show. A "~" counts only with a label after it,
+    # as .tilde_pathway_label() requires: "hsa00010~" is not a labelled accession,
+    # and the trimmed whitespace form can never end at its delimiter anyway.
     labelled <- !is.na(trimmed) & !exact &
-        grepl(paste0("^", body, "[[:space:]~]"), trimmed)
+        grepl(paste0("^", body, "([[:space:]]|~[[:space:]]*[^[:space:]])"), trimmed)
     ids[labelled] <- normalize_kegg_pathway_id(
         sub(paste0("^(", body, ")[[:space:]~].*$"), "\\1", trimmed[labelled])
     )
