@@ -2487,7 +2487,7 @@ resolve_kegg_org_code <- function(organism) {
 #' Regex body matching a KEGG pathway accession
 #'
 #' Unanchored on purpose: callers add \code{^...$} to match a bare accession, or
-#' \code{^...[[:space:]]} to find one at the head of a longer key.
+#' \code{^...[[:space:]~]} to find one at the head of a longer key.
 #'
 #' @param kegg_org Active KEGG organism code for the run, or NULL.
 #' @return Single regex string, with no anchors.
@@ -2507,8 +2507,9 @@ resolve_kegg_org_code <- function(organism) {
 #' gene-set name, silently merging unrelated terms.
 #'
 #' Two shapes are recognised: a bare accession, and an accession at the head of a
-#' longer key followed by whitespace, which is how \code{fetch_kegg_via_rest()}
-#' names its gene sets.
+#' longer key followed by whitespace or "~" and a label. Whitespace is how
+#' \code{fetch_kegg_via_rest()} names its gene sets; "<accession>~<label>" is how
+#' GMT files from the usual annotation exports name theirs.
 #'
 #' Detection and preservation are kept apart. Whether a value is a KEGG
 #' accession is decided on a trimmed copy, so " map00010 " is still recognised,
@@ -2532,13 +2533,14 @@ normalize_pathway_join_key <- function(ids, kegg_org = NULL) {
 
     # A gene set from fetch_kegg_via_rest() is named "<accession> <readable name>"
     # (R/core/09_enrichment.R), which is the shape the non-model KEGG fallback
-    # produces -- exactly the path this join most needs to work. Take the leading
+    # produces -- exactly the path this join most needs to work. GMT exports
+    # spell the same thing "<accession>~<readable name>". Take the leading
     # accession; the rest of the string is a label, and pathway_display_label()
     # still has the whole of it to show.
     labelled <- !is.na(trimmed) & !exact &
-        grepl(paste0("^", body, "[[:space:]]"), trimmed)
+        grepl(paste0("^", body, "[[:space:]~]"), trimmed)
     ids[labelled] <- normalize_kegg_pathway_id(
-        sub(paste0("^(", body, ")[[:space:]].*$"), "\\1", trimmed[labelled])
+        sub(paste0("^(", body, ")[[:space:]~].*$"), "\\1", trimmed[labelled])
     )
 
     ids
@@ -2674,21 +2676,61 @@ pathway_join_key <- function(df, kegg_org = NULL) {
 }
 
 
+#' Readable label of an "<accession>~<label>" identifier
+#'
+#' GMT files from the usual annotation exports name a set by its accession and
+#' its readable name joined with "~". The part before the first "~" is stripped
+#' only when the identity contract recognises it: a KEGG accession of this run,
+#' as \code{is_kegg_pathway_accession()} decides, or an anchored GO accession.
+#' Deciding on the shape of the prefix instead would clip a custom set such as
+#' `abc12345~x`, which is exactly the misreading the KEGG contract exists to
+#' prevent. Anything not recognised -- a custom name containing "~", another
+#' organism's accession, prose -- comes back unchanged, and so does a value
+#' whose label would be empty.
+#'
+#' Shared by \code{pathway_display_label()} and
+#' \code{.multigsea_readable_from_identifier()}, so the two displays cannot
+#' disagree about this form.
+#'
+#' @param ids Character vector of identifiers or labels.
+#' @param kegg_org Active KEGG organism code for the run, or NULL.
+#' @return Character vector the same length as \code{ids}.
+#' @examples
+#' .tilde_pathway_label(c("hsa00010~Glycolysis", "abc12345~x", "MY~SET"), "hsa")
+#' # "Glycolysis" "abc12345~x" "MY~SET"
+#' @keywords internal
+.tilde_pathway_label <- function(ids, kegg_org = NULL) {
+    ids     <- as.character(ids)
+    trimmed <- trimws(ids)
+    tilde   <- !is.na(trimmed) & grepl("~", trimmed, fixed = TRUE)
+    prefix  <- trimws(sub("~.*$", "", trimmed))
+    label   <- trimws(sub("^[^~]*~", "", trimmed))
+    known   <- is_kegg_pathway_accession(prefix, kegg_org) |
+               grepl("^GO:[0-9]{7}$", prefix)
+    strip   <- tilde & known & nzchar(label)
+    ids[strip] <- label[strip]
+    ids
+}
+
+
 #' Readable label for each row of a pathway table
 #'
 #' The display counterpart of \code{pathway_join_key()}: same row-wise idea,
 #' opposite preference. `pathway_name` is the column \code{add_pathway_names()}
 #' fills, and where it is absent the readable text is whatever sits in `pathway`
-#' or `Description`.
+#' or `Description`. A recognised "<accession>~<label>" value shows its label;
+#' see \code{.tilde_pathway_label()}.
 #'
 #' Unlike the join key, this one does trim: padding is worth removing from a
 #' label a reader sees, and nothing is matched against it. Keep the two that way
 #' round -- trimming an identifier is a silent edit, trimming a label is not.
 #'
 #' @param df Enrichment data frame for one omics layer.
+#' @param kegg_org Active KEGG organism code for the run, or NULL. Decides which
+#'   tilde-labelled KEGG accessions are recognised.
 #' @return Character vector of labels, one per row; NA where the row carries no
 #'   readable text at all.
-pathway_display_label <- function(df) {
+pathway_display_label <- function(df, kegg_org = NULL) {
     label <- rep(NA_character_, nrow(df))
 
     for (col in c("pathway_name", "pathway", "Description")) {
@@ -2698,7 +2740,7 @@ pathway_display_label <- function(df) {
         label[fill] <- vals[fill]
     }
 
-    label
+    .tilde_pathway_label(label, kegg_org)
 }
 
 
@@ -2729,7 +2771,7 @@ attach_pathway_display_names <- function(meta_results, pathway_tables,
     for (df in pathway_tables) {
         if (!is.data.frame(df) || nrow(df) == 0) next
         keys <- c(keys, pathway_join_key(df, kegg_org))
-        labels <- c(labels, pathway_display_label(df))
+        labels <- c(labels, pathway_display_label(df, kegg_org))
     }
 
     keep <- !is.na(keys) & !is.na(labels) & nzchar(labels)

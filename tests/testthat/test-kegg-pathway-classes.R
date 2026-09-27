@@ -137,7 +137,8 @@ test_that("a subcategory can be excluded while its siblings stay", {
 test_that("every KEGG spelling of one pathway classifies alike", {
     cache <- with_fixture_cache()
     ids <- c("04260", "map04260", "ko04260", "hsa04260",
-             "hsa04260 Cardiac muscle contraction")
+             "hsa04260 Cardiac muscle contraction",
+             "hsa04260~Cardiac muscle contraction")
 
     keep <- keep_kegg_pathways(ids, exclude = "Organismal Systems",
                                kegg_org = "hsa", cache_dir = cache)
@@ -148,8 +149,9 @@ test_that("every KEGG spelling of one pathway classifies alike", {
 test_that("identifiers that are not KEGG accessions are never excluded", {
     cache <- with_fixture_cache()
     # A GO term, a custom gene-set name, and an id shaped like an accession but
-    # belonging to another organism than this run's.
-    ids <- c("GO:0006915", "My custom set", "mmu04260")
+    # belonging to another organism than this run's -- bare and tilde-labelled.
+    ids <- c("GO:0006915", "My custom set", "mmu04260",
+             "GO:0006915~Apoptosis", "My~custom set", "mmu04260~Cardiac muscle")
 
     keep <- keep_kegg_pathways(ids, exclude = "Organismal Systems",
                                kegg_org = "hsa", cache_dir = cache)

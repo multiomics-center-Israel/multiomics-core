@@ -240,7 +240,7 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
                 # Same stripping rule as the name map synthesizes with. Two
                 # implementations of it is what let the map shadow this fallback
                 # with a worse label.
-                t <- .multigsea_readable_from_identifier(term)
+                t <- .multigsea_readable_from_identifier(term, kegg_org)
             }
             if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
             t
@@ -479,7 +479,7 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
             t <- id_to_name[[term]]
         } else {
             # Same stripping rule as the name map synthesizes with, as above.
-            t <- .multigsea_readable_from_identifier(term)
+            t <- .multigsea_readable_from_identifier(term, kegg_org)
         }
         if (nchar(t) > 50) t <- paste0(substr(t, 1, 47), "...")
         t
@@ -703,20 +703,30 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
 #' which shadows the fallback, so anything it does not strip is text
 #' \code{resolve_term()} would have removed and the label would regress.
 #'
-#' Deliberately organism-agnostic, unlike the identity side. `resolve_term()`
-#' strips any two- or three-letter prefix, so a `mmu#####` label on a human run
-#' is still shortened for display even though `mmu00010` is correctly *not* the
-#' same pathway as `hsa00010` for joining. Display and identity answer different
-#' questions here.
+#' A value containing "~" goes through \code{.tilde_pathway_label()} and nothing
+#' else, so this display and \code{pathway_display_label()} agree on that form:
+#' the prefix is stripped only when the identity contract recognises it, and a
+#' custom name such as `abc12345~x` is left whole.
+#'
+#' The whitespace form keeps its older, deliberately organism-agnostic rule.
+#' `resolve_term()` strips any two- or three-letter prefix there, so a
+#' `mmu##### <name>` label on a human run is still shortened for display even
+#' though `mmu00010` is correctly *not* the same pathway as `hsa00010` for
+#' joining. Display and identity answer different questions here.
 #'
 #' @param ids Character vector of identifiers.
+#' @param kegg_org Active KEGG organism code for the run, or NULL. Only the "~"
+#'   form reads it.
 #' @return Character vector the same length as \code{ids}.
 #' @keywords internal
-.multigsea_readable_from_identifier <- function(ids) {
+.multigsea_readable_from_identifier <- function(ids, kegg_org = NULL) {
     ids <- as.character(ids)
-    stripped <- sub("^GO:[0-9]+~", "", trimws(ids))
-    stripped <- sub("^[a-z]{2,3}[0-9]{5}[[:space:]]*", "", stripped)
-    ifelse(!is.na(stripped) & nzchar(stripped), stripped, ids)
+    out <- .tilde_pathway_label(ids, kegg_org)
+
+    plain <- !is.na(ids) & !grepl("~", ids, fixed = TRUE)
+    stripped <- sub("^[a-z]{2,3}[0-9]{5}[[:space:]]*", "", trimws(ids[plain]))
+    out[plain] <- ifelse(nzchar(stripped), stripped, ids[plain])
+    out
 }
 
 
@@ -780,7 +790,7 @@ run_multigsea_plots <- function(enrichment_results, config, out_dir = NULL) {
         #    `term` carrying its own name, an ID-only table whose accession would
         #    otherwise be lost to normalization, and the pathway/Description rungs.
         gap <- !.multigsea_usable_label(vals)
-        vals[gap] <- .multigsea_readable_from_identifier(id$raw)[gap]
+        vals[gap] <- .multigsea_readable_from_identifier(id$raw, kegg_org)[gap]
 
         # A label with nothing in it must not reserve a key. hsa00010 and
         # map00010 collapse to one key now, so a blank name in the layer that
@@ -2232,7 +2242,7 @@ build_multi_ora_summary <- function(pooled_ora, per_omics_ora, metab_ora) {
 .order_ora_rows <- function(df, score, kegg_org = NULL) {
     order(score,
           pathway_join_key(df, kegg_org),
-          pathway_display_label(df),
+          pathway_display_label(df, kegg_org),
           na.last = TRUE)
 }
 
@@ -2282,9 +2292,9 @@ classify_pathway_collection <- function(df, kegg_org = NULL,
     # Each accepts the bare accession and the "<id>~<name>" form GMT files use,
     # which is a real shape here: .multigsea_readable_from_identifier() strips
     # exactly that prefix for display, and normalize_pathway_join_key() leaves
-    # it on the key because only KEGG's own "<accession> <name>" spelling is
-    # normalized. Treating a labelled GO term as Other would pool it with the
-    # custom collections and let it crowd them out inside that bucket -- the
+    # it on the key because only KEGG accessions, with a whitespace or "~"
+    # label, are normalized. Treating a labelled GO term as Other would pool it
+    # with the custom collections and let it crowd them out inside that bucket -- the
     # very thing the round-robin exists to stop.
     #
     # The digit counts stay exact and the tail stays anchored, so this is not
@@ -2425,7 +2435,7 @@ plot_multi_ora_barplot <- function(ora_df, title, top_n = 20,
     }
 
     keys <- pathway_join_key(df, kegg_org)
-    label <- pathway_display_label(df)
+    label <- pathway_display_label(df, kegg_org)
     # A row with no readable text still gets a bar; the key is a poorer label
     # than a name but a better one than "NA".
     label[is.na(label)] <- keys[is.na(label)]
