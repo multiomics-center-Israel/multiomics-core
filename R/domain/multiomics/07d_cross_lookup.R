@@ -38,6 +38,8 @@
 #'   Defaults to the contributing rows; the target's ORA values beside its
 #'   chosen method pass the ORA rows instead.
 #' @param by_contrast Collapse per (pathway, contrast) rather than per pathway.
+#' @param kegg_org Active KEGG organism code for the run, or NULL; passed to
+#'   \code{pathway_display_label()} for the label.
 #' @return Data frame with one row per join key (or per join key and contrast)
 #'   -- \code{norm_id}, \code{label}, \code{method}, \code{NES}, \code{p},
 #'   \code{padj}, \code{n_measured}, \code{contrast}, \code{contrast_key} --
@@ -48,7 +50,7 @@
 #'   \code{normalize_contrast_key()} of the contrast, NA where there is none.
 #' @keywords internal
 .lookup_layer_stats <- function(df, contrib, keep = contrib$keep,
-                                by_contrast = FALSE) {
+                                by_contrast = FALSE, kegg_org = NULL) {
     if (!is.data.frame(df) || nrow(df) == 0 || is.null(contrib) ||
         !is.null(contrib$problem)) return(NULL)
     ok <- keep & !is.na(contrib$keys) & !is.na(contrib$pvals)
@@ -78,7 +80,7 @@
 
     tab <- data.frame(
         norm_id      = contrib$keys,
-        label        = pathway_display_label(df),
+        label        = pathway_display_label(df, kegg_org),
         method       = method,
         NES          = num_col("NES"),
         p            = contrib$pvals,
@@ -176,19 +178,22 @@ build_cross_omics_lookup <- function(pathway_tables, from, to, top_n = 15,
     if (is.data.frame(tgt_df) && nrow(tgt_df) > 0 && !.lookup_has_raw_p(tgt_df)) {
         return(NULL)
     }
-    src <- .lookup_layer_stats(src_df, .layer_contribution(src_df, kegg_org))
+    src <- .lookup_layer_stats(src_df, .layer_contribution(src_df, kegg_org),
+                               kegg_org = kegg_org)
     if (is.null(src)) return(NULL)
 
     tgt <- NULL
     tgt_ora <- NULL
     if (is.data.frame(tgt_df) && nrow(tgt_df) > 0) {
         tgt_cb <- .layer_contribution(tgt_df, kegg_org)
-        tgt <- .lookup_layer_stats(tgt_df, tgt_cb, by_contrast = TRUE)
+        tgt <- .lookup_layer_stats(tgt_df, tgt_cb, by_contrast = TRUE,
+                                   kegg_org = kegg_org)
         if (is.null(tgt_cb$problem) && "method" %in% names(tgt_df)) {
             is_ora <- !is.na(tgt_df$method) &
                 tolower(trimws(as.character(tgt_df$method))) == "ora"
             tgt_ora <- .lookup_layer_stats(tgt_df, tgt_cb, keep = is_ora,
-                                           by_contrast = TRUE)
+                                           by_contrast = TRUE,
+                                           kegg_org = kegg_org)
         }
     }
 

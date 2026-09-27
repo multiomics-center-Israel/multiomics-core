@@ -43,10 +43,11 @@ ora_fixture <- function(id, padj = NA_real_, pvalue = NA_real_,
 
 test_that("every KEGG spelling this pipeline produces is recognised", {
     df <- ora_fixture(c("hsa04110", "map00010", "ko00020", "00030",
-                        "map00040 Pentose phosphate pathway"))
+                        "map00040 Pentose phosphate pathway",
+                        "hsa00050~Something"))
 
     expect_identical(classify_pathway_collection(df, kegg_org = "hsa"),
-                     rep("KEGG", 5))
+                     rep("KEGG", 6))
 })
 
 test_that("an organism prefix is only KEGG for the organism of the run", {
@@ -68,10 +69,11 @@ test_that("a custom gene-set name shaped like an accession is not claimed", {
     # Both of these were taken by the regexes in the old stack: ^[a-z]{2,4}[0-9]{5}$
     # claimed abcd12345, and an unanchored ^GO:?[0-9]+ claimed GO12345_signalling.
     df <- ora_fixture(c("abcd12345", "GO12345_signalling", "PFAM00069x",
-                        "IPR00071", "my favourite set"))
+                        "IPR00071", "my favourite set", "abcd12345~set",
+                        "MY~SET", "mmu00010~Glycolysis"))
 
     expect_identical(classify_pathway_collection(df, kegg_org = "hsa"),
-                     rep("Other", 5))
+                     rep("Other", 8))
 })
 
 test_that("GO, Pfam and InterPro are distinguishable from each other and from KEGG", {

@@ -620,6 +620,34 @@ test_that("another species' accession is still stripped for display", {
     expect_identical(unname(nms[[keys]]), "Glycolysis / Gluconeogenesis")
 })
 
+test_that("a tilde-labelled KEGG term keys on the map number and shows its name", {
+    df <- data.frame(pathway = "hsa00010~Glycolysis / Gluconeogenesis",
+                     stringsAsFactors = FALSE)
+
+    keys <- .multigsea_term_ids(df, kegg_org = "hsa")
+    nms  <- .multigsea_term_names(list(df), kegg_org = "hsa")
+
+    expect_identical(keys, "00010")
+    # No accession and no leading "~".
+    expect_identical(unname(nms[["00010"]]), "Glycolysis / Gluconeogenesis")
+})
+
+test_that("both displays read the tilde form through one rule", {
+    # pathway_display_label() and this fallback share .tilde_pathway_label(), so
+    # they agree on every "~" value -- stripped or left whole.
+    vals <- c("hsa00010~Glycolysis / Gluconeogenesis", "GO:0006915~Apoptosis",
+              "MY~SET", "abc12345~x", "Glycolysis~hsa00010", "mmu00010~Glycolysis")
+
+    fallback <- .multigsea_readable_from_identifier(vals, kegg_org = "hsa")
+    generic  <- pathway_display_label(
+        data.frame(pathway = vals, stringsAsFactors = FALSE), kegg_org = "hsa")
+
+    expect_identical(fallback, c("Glycolysis / Gluconeogenesis", "Apoptosis",
+                                 "MY~SET", "abc12345~x", "Glycolysis~hsa00010",
+                                 "mmu00010~Glycolysis"))
+    expect_identical(fallback, generic)
+})
+
 
 # ---- a stated name outranks one synthesized from an identifier -------------
 

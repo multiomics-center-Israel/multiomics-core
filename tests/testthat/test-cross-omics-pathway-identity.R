@@ -138,6 +138,111 @@ test_that("a name-carrying key joins the bare accession form", {
     expect_false(anyNA(merged$pval_metabolomics))
 })
 
+# ---- "<accession>~<label>" (#219) -------------------------------------------
+
+test_that("a tilde-labelled KEGG key normalizes like its whitespace twin", {
+    tilde <- c("hsa00010~Glycolysis / Gluconeogenesis",
+               "ko00020~Citrate cycle (TCA cycle)",
+               "map00030~Pentose phosphate pathway",
+               "00040~Pentose and glucuronate interconversions")
+    space <- sub("~", " ", tilde, fixed = TRUE)
+
+    expect_equal(normalize_pathway_join_key(tilde, kegg_org = "hsa"),
+                 c("00010", "00020", "00030", "00040"))
+    expect_identical(normalize_pathway_join_key(tilde, kegg_org = "hsa"),
+                     normalize_pathway_join_key(space, kegg_org = "hsa"))
+    # The labelled form normalizes to an accession; it is not one itself.
+    expect_false(any(is_kegg_pathway_accession(tilde, kegg_org = "hsa")))
+})
+
+test_that("a tilde-labelled key joins the bare accession form", {
+    tables <- list(
+        rna          = data.frame(pathway = "hsa00010~Glycolysis / Gluconeogenesis",
+                                  pvalue = 0.01, stringsAsFactors = FALSE),
+        metabolomics = data.frame(pathway = "Glycolysis / Gluconeogenesis",
+                                  ID = "map00010", pvalue = 0.02,
+                                  stringsAsFactors = FALSE)
+    )
+
+    merged <- merge_pathway_pvalues(tables, "00010", names(tables),
+                                    kegg_org = "hsa")
+
+    expect_equal(nrow(merged), 1)
+    expect_false(anyNA(merged$pval_rna))
+    expect_false(anyNA(merged$pval_metabolomics))
+})
+
+test_that("a tilde does not make a non-KEGG identifier KEGG", {
+    ids <- c("GO:0006915~Apoptosis", "MY~SET", "Glycolysis~hsa00010",
+             "abc12345~x", " MY~SET ")
+
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+    expect_false(any(is_kegg_pathway_accession(ids, kegg_org = "hsa")))
+})
+
+test_that("a tilde with no label after it is not a labelled accession", {
+    # Identity and display have to agree: .tilde_pathway_label() leaves these
+    # whole, so the key must not collapse them onto the real pathway either.
+    ids <- c("hsa00010~", "map00010~   ", "00010~ ")
+
+    expect_identical(normalize_pathway_join_key(ids, kegg_org = "hsa"), ids)
+    expect_identical(
+        pathway_display_label(data.frame(pathway = ids, stringsAsFactors = FALSE),
+                              kegg_org = "hsa"),
+        trimws(ids))
+    # A label that starts after padding still counts.
+    expect_equal(normalize_pathway_join_key("hsa00010~  Glycolysis", kegg_org = "hsa"),
+                 "00010")
+})
+
+test_that("another organism's tilde-labelled accession keeps its own identity", {
+    expect_identical(normalize_pathway_join_key("mmu00010~Glycolysis", kegg_org = "hsa"),
+                     "mmu00010~Glycolysis")
+
+    tables <- list(
+        rna          = data.frame(pathway = "mmu00010~Glycolysis",
+                                  pvalue = 0.01, stringsAsFactors = FALSE),
+        metabolomics = data.frame(pathway = "Glycolysis", ID = "map00010",
+                                  pvalue = 0.02, stringsAsFactors = FALSE)
+    )
+    merged <- merge_pathway_pvalues(tables, c("00010", "mmu00010~Glycolysis"),
+                                    names(tables), kegg_org = "hsa")
+
+    bare <- merged[merged$norm_id == "00010", ]
+    other <- merged[merged$norm_id == "mmu00010~Glycolysis", ]
+    expect_true(is.na(bare$pval_rna))
+    expect_false(is.na(bare$pval_metabolomics))
+    expect_false(is.na(other$pval_rna))
+    expect_true(is.na(other$pval_metabolomics))
+})
+
+test_that("a recognised tilde label displays without its accession", {
+    df <- data.frame(pathway = c("hsa00010~Glycolysis / Gluconeogenesis",
+                                 "map00020~Citrate cycle (TCA cycle)",
+                                 "GO:0006915~Apoptosis"),
+                     stringsAsFactors = FALSE)
+
+    expect_identical(pathway_display_label(df, kegg_org = "hsa"),
+                     c("Glycolysis / Gluconeogenesis", "Citrate cycle (TCA cycle)",
+                       "Apoptosis"))
+})
+
+test_that("an unrecognised tilde value displays unchanged", {
+    vals <- c("MY~SET", "abc12345~x", "Glycolysis~hsa00010", "mmu00010~Glycolysis",
+              "hsa00010~", "GO:123~Short id")
+    df <- data.frame(pathway = vals, stringsAsFactors = FALSE)
+
+    expect_identical(pathway_display_label(df, kegg_org = "hsa"), vals)
+})
+
+test_that("display labels without a tilde are unchanged by the tilde rule", {
+    vals <- c("hsa00010 Glycolysis / Gluconeogenesis", "rno00010 - Pathway A",
+              "map00010", "HALLMARK_APOPTOSIS")
+    df <- data.frame(pathway = vals, stringsAsFactors = FALSE)
+
+    expect_identical(pathway_display_label(df, kegg_org = "hsa"), vals)
+})
+
 test_that("a leading token that is not an accession is left alone", {
     # Only a genuine accession at the head counts; prose stays prose.
     ids <- c("Glycolysis hsa00010", "HALLMARK_00010 set", "IPR001 domain")
