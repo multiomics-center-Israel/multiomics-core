@@ -28,6 +28,7 @@ Behaviour is driven by a single **YAML config** (path passed via `MULTIOMICS_CON
 multiomics-core/
 ├── _targets.R                  Pipeline definition (targets only — no helpers)
 ├── _targets/                   Pipeline cache — gitignored, NEVER touch
+├── _targets_<run>_<hash>/      Per-run caches written by run.R (+ matching .yaml) — gitignored, NEVER touch
 ├── run.R                       CLI entry point / wizard launcher (~110 KB, big script)
 ├── configure_wizard.R          Wizard for creating new configs
 ├── validate_multiomics.R       Standalone config validator
@@ -101,6 +102,7 @@ Numeric prefixes encode dependency order. Highlights:
 | `13_gmt_utils.R` | GMT pathway file utilities |
 | `15_user_summary.R`, `16_pptx_helpers.R`, `17_cutoff_panel.R` | Reporting helpers |
 | `de_summary_counts.R` | Generic DE-summary counters |
+| `18_targets_store.R` | Per-run `{targets}` store for `run.R`: name from `project$name` + `analysis_round` (readable slug + hash of the exact values), `project$targets_store` override checks, ownership stamp, `TAR_CONFIG` set and restore |
 
 ### `R/services/` — external integrations
 
@@ -164,6 +166,8 @@ Files prefixed `mod_*` (e.g. `02_mod_de.R`, `04_mod_clustering.R`). These are th
 - `execution_info_files` → execution metadata snapshot
 
 Then conditionally appends each mode's pipeline by reading the raw YAML to detect `modes.rna`, `modes.proteomics`, `modes.metabolomics`, `modes.multiomics`. Multi-omics is only enabled when ≥2 single-omics modes are configured *and* `modes.multiomics` exists. DE integration is enabled whenever `modes.de_integration` exists.
+
+**Which cache a run uses.** `run.R` gives every project run its own store (`_targets_<run>_<hash>/`), checks that the store belongs to that run, and points `{targets}` at it through `TAR_CONFIG` for the length of the run only (`R/core/18_targets_store.R`). A bare console `tar_make()` / `tar_destroy()`, and the legacy scripts, still use whatever the shared `_targets.yaml` names — moving those onto the per-run store is a follow-up.
 
 **Rule (from `CLAUDE.md`):** helpers do not live in `_targets.R` — only target definitions.
 

@@ -2490,11 +2490,22 @@ run_pipeline <- function(config_path, fresh = FALSE) {
     cat(sprintf("  Linked config -> %s\n", root_config))
   }
   Sys.setenv(MULTIOMICS_CONFIG = config_path)
+  # Each run gets its own targets store, named from the config. The shared
+  # _targets.yaml used to decide this, so a run of one project could build
+  # in, or --fresh could destroy, another project's cache. The store is checked
+  # before TAR_CONFIG points at it, and TAR_CONFIG is put back however the run
+  # ends, so an interactive session is not left on this project's store.
+  source(file.path(getwd(), "R", "core", "18_targets_store.R"), local = TRUE)
+  old_tar_config <- Sys.getenv("TAR_CONFIG", unset = NA)
+  on.exit(restore_tar_config(old_tar_config), add = TRUE)
+  store <- use_targets_store(cfg_tmp)
+  cat(sprintf("  Targets store: %s\n", store))
   if (fresh) {
     cat("  Clearing targets cache (fresh run)...\n")
     targets::tar_destroy(ask = FALSE)
-    dir.create("_targets/scratch", recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(store, "scratch"), recursive = TRUE, showWarnings = FALSE)
   }
+  stamp_targets_store(file.path(getwd(), store), cfg_tmp)
   # Quick pre-flight: verify input files exist before starting pipeline
   cfg <- yaml::read_yaml(config_path)
   if (!is.null(cfg$modes$rna)) {
