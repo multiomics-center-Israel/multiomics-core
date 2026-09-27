@@ -318,3 +318,137 @@ test_that("excluding a class leaves the retained rows' p-values untouched", {
     expect_equal(filtered$pvalue, kept$pvalue)
     expect_equal(filtered$padj, kept$padj)
 })
+
+
+# ---- run_multi_ora_kegg(): completion message and fallback (#222) -----------
+#
+# enrichKEGG is mocked in the clusterProfiler namespace, as test-loadings-gsea.R
+# mocks gseKEGG; the Fisher fallback and the classification fetch are sourced
+# globals, so they are stubbed by assignment into the function's environment.
+# Nothing here reaches KEGG.
+
+local_kegg_ora_stubs <- function(stubs, env = parent.frame()) {
+    target <- environment(run_multi_ora_kegg)
+    nms <- names(stubs)
+    had <- vapply(nms, exists, logical(1), envir = target, inherits = FALSE)
+    old <- lapply(nms[had], get, envir = target, inherits = FALSE)
+    names(old) <- nms[had]
+    withr::defer({
+        for (nm in nms) {
+            if (nm %in% names(old)) {
+                assign(nm, old[[nm]], envir = target)
+            } else if (exists(nm, envir = target, inherits = FALSE)) {
+                rm(list = nm, envir = target)
+            }
+        }
+    }, envir = env)
+    for (nm in nms) assign(nm, stubs[[nm]], envir = target)
+    invisible(NULL)
+}
+
+# enrichKEGG's result, as as.data.frame() would give it.
+fake_enrichkegg_table <- function(ids = c("hsa00010", "hsa04260"),
+                                  pvalue = c(0.001, 0.002),
+                                  p.adjust = c(0.01, 0.02)) {
+    data.frame(ID = ids, Description = paste("Pathway", ids),
+               pvalue = pvalue, p.adjust = p.adjust,
+               GeneRatio = "3/10", Count = 3L, geneID = "hsa:1/hsa:2/hsa:3",
+               stringsAsFactors = FALSE)
+}
+
+# Wires enrichKEGG to `enrich`, records whether the Fisher fallback ran, and
+# serves the fixture classification. Returns the environment the Fisher stub
+# writes to.
+wire_multi_ora_kegg <- function(enrich, env = parent.frame()) {
+    seen <- new.env()
+    seen$fisher <- FALSE
+    testthat::local_mocked_bindings(enrichKEGG = enrich,
+                                    .package = "clusterProfiler", .env = env)
+    local_kegg_ora_stubs(list(
+        run_ora_kegg_fisher = function(...) {
+            seen$fisher <- TRUE
+            data.frame(pathway = "Fisher result", ID = "00190", pvalue = 0.001,
+                       padj = 0.01, stringsAsFactors = FALSE)
+        },
+        kegg_pathway_categories = function(...) parse_kegg_brite_pathways(brite_fixture())
+    ), env = env)
+    seen
+}
+
+run_kegg_producer <- function(exclude_classes = NULL) {
+    msgs <- character(0)
+    res <- withCallingHandlers(
+        run_multi_ora_kegg(c("hsa:1", "hsa:2", "hsa:3"), paste0("hsa:", 1:50),
+                           kegg_org = "hsa", label = "pooled", pval_cutoff = 0.1,
+                           exclude_classes = exclude_classes),
+        message = function(m) {
+            msgs <<- c(msgs, conditionMessage(m))
+            invokeRestart("muffleMessage")
+        })
+    list(res = res, msgs = msgs)
+}
+
+test_that("adjusted-p hits print the completion message and skip Fisher", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- wire_multi_ora_kegg(function(...) fake_enrichkegg_table())
+
+    out <- run_kegg_producer()
+
+    expect_identical(out$res$ID, c("hsa00010", "hsa04260"))
+    expect_equal(out$res$padj, c(0.01, 0.02))
+    expect_true(any(grepl("pooled: 2 enriched pathways", out$msgs, fixed = TRUE)))
+    expect_false(seen$fisher)
+})
+
+test_that("the raw-p fallback prints its own message and the completion message", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- wire_multi_ora_kegg(function(...)
+        fake_enrichkegg_table(p.adjust = c(0.5, 0.6)))
+
+    out <- run_kegg_producer()
+
+    expect_identical(out$res$ID, c("hsa00010", "hsa04260"))
+    expect_true(any(grepl("padj too strict", out$msgs, fixed = TRUE)))
+    expect_true(any(grepl("pooled: 2 enriched pathways", out$msgs, fixed = TRUE)))
+    expect_false(seen$fisher)
+})
+
+test_that("hits that class exclusion removes entirely return NULL without Fisher", {
+    skip_if_not_installed("clusterProfiler")
+    # clusterProfiler found something; the project excluded all of it. That is
+    # a finished answer, not a missing one, so the Fisher fallback must not run
+    # and test the excluded pathways a second way.
+    seen <- wire_multi_ora_kegg(function(...)
+        fake_enrichkegg_table(ids = "hsa04260", pvalue = 0.001, p.adjust = 0.01))
+
+    out <- run_kegg_producer(exclude_classes = "Organismal Systems")
+
+    expect_null(out$res)
+    expect_false(seen$fisher)
+    expect_false(any(grepl("enriched pathways", out$msgs, fixed = TRUE)))
+})
+
+test_that("no clusterProfiler hits still fall back to Fisher", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- wire_multi_ora_kegg(function(...)
+        fake_enrichkegg_table(pvalue = c(0.5, 0.6), p.adjust = c(0.8, 0.9)))
+
+    out <- run_kegg_producer()
+
+    expect_true(seen$fisher)
+    expect_identical(out$res$pathway, "Fisher result")
+    expect_false(any(grepl("pooled: [0-9]+ enriched pathways", out$msgs)))
+})
+
+test_that("a clusterProfiler error still falls back to Fisher", {
+    skip_if_not_installed("clusterProfiler")
+    seen <- wire_multi_ora_kegg(function(...) stop("synthetic enrichKEGG failure"))
+
+    out <- run_kegg_producer()
+
+    expect_true(seen$fisher)
+    expect_identical(out$res$pathway, "Fisher result")
+    expect_true(any(grepl("clusterProfiler ORA failed: synthetic enrichKEGG failure",
+                          out$msgs, fixed = TRUE)))
+    expect_false(any(grepl("pooled: [0-9]+ enriched pathways", out$msgs)))
+})

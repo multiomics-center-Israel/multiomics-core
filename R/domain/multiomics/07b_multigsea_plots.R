@@ -1670,8 +1670,14 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
         return(NULL)
     }
 
-    # Try clusterProfiler first — use lenient cutoff, filter manually after
-    ora_res <- tryCatch({
+    # Try clusterProfiler first — use lenient cutoff, filter manually after.
+    # The expression yields its value rather than calling return(): a return()
+    # here would leave run_multi_ora_kegg() itself, skipping the completion
+    # message below. A chosen table comes back wrapped as list(table = ...), so
+    # "clusterProfiler chose a table that class exclusion then emptied" (NULL
+    # inside the list) stays distinct from "no clusterProfiler result" (NULL),
+    # and only the second reaches the Fisher fallback.
+    chosen <- tryCatch({
         res <- clusterProfiler::enrichKEGG(
             gene = sig_genes,
             universe = universe,
@@ -1704,25 +1710,32 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
             # chose, on its way out.
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
             if (nrow(padj_hits) > 0) {
-                return(.exclude_kegg_classes(padj_hits, exclude_classes,
-                                             kegg_org, label))
+                list(table = .exclude_kegg_classes(padj_hits, exclude_classes,
+                                                   kegg_org, label))
+            } else {
+                pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+                if (nrow(pval_hits) > 0) {
+                    message("    ", label, ": padj too strict, using pvalue < 0.05 (",
+                            nrow(pval_hits), " pathways)")
+                    list(table = .exclude_kegg_classes(pval_hits, exclude_classes,
+                                                       kegg_org, label))
+                } else {
+                    NULL
+                }
             }
-            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
-            if (nrow(pval_hits) > 0) {
-                message("    ", label, ": padj too strict, using pvalue < 0.05 (",
-                        nrow(pval_hits), " pathways)")
-                return(.exclude_kegg_classes(pval_hits, exclude_classes,
-                                             kegg_org, label))
-            }
+        } else {
+            NULL
         }
-        NULL
     }, error = function(e) {
         message("    ", label, " clusterProfiler ORA failed: ", e$message)
         NULL
     })
 
-    if (!is.null(ora_res)) {
-        message("    ", label, ": ", nrow(ora_res), " enriched pathways")
+    if (!is.null(chosen)) {
+        ora_res <- chosen$table
+        if (!is.null(ora_res)) {
+            message("    ", label, ": ", nrow(ora_res), " enriched pathways")
+        }
         return(ora_res)
     }
 
@@ -1832,6 +1845,8 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
         return(NULL)
     }
 
+    # The expression yields its value rather than calling return(), which would
+    # leave this function and skip the completion message below.
     ora_res <- tryCatch({
         res <- clusterProfiler::enricher(
             gene = sig_genes,
@@ -1865,20 +1880,24 @@ run_multi_ora_enricher <- function(sig_genes, universe, term2gene, term2name = N
             # Exclusion applies to whichever table this chose, on its way out.
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
             if (nrow(padj_hits) > 0) {
-                return(.exclude_kegg_classes(padj_hits, exclude_classes,
-                                             kegg_org, label,
-                                             classification = classification))
+                .exclude_kegg_classes(padj_hits, exclude_classes,
+                                      kegg_org, label,
+                                      classification = classification)
+            } else {
+                pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
+                if (nrow(pval_hits) > 0) {
+                    message("    ", label, ": padj too strict, using pvalue < 0.05 (",
+                            nrow(pval_hits), " pathways)")
+                    .exclude_kegg_classes(pval_hits, exclude_classes,
+                                          kegg_org, label,
+                                          classification = classification)
+                } else {
+                    NULL
+                }
             }
-            pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
-            if (nrow(pval_hits) > 0) {
-                message("    ", label, ": padj too strict, using pvalue < 0.05 (",
-                        nrow(pval_hits), " pathways)")
-                return(.exclude_kegg_classes(pval_hits, exclude_classes,
-                                             kegg_org, label,
-                                             classification = classification))
-            }
+        } else {
+            NULL
         }
-        NULL
     }, error = function(e) {
         message("    ", label, " enricher ORA failed: ", e$message)
         NULL

@@ -62,6 +62,70 @@ test_that("run_multi_ora_enricher returns the KEGG-parity shape and finds an enr
     expect_equal(res$pathway[res$ID == "T1"], "Term One")
 })
 
+# ---- completion message (#222) ---------------------------------------------
+#
+# The "<label>: N enriched pathways" line used to be unreachable: every success
+# branch left the function from inside tryCatch(). Messages are collected
+# rather than matched one at a time, since a run can emit several.
+
+enricher_fixture <- function() {
+    list(
+        term2gene = rbind(
+            data.frame(term = "T1", gene = paste0("g", 1:20), stringsAsFactors = FALSE),
+            data.frame(term = "T2", gene = paste0("g", 21:40), stringsAsFactors = FALSE)
+        ),
+        term2name = data.frame(term = c("T1", "T2"), name = c("Term One", "Term Two"),
+                               stringsAsFactors = FALSE),
+        universe = paste0("g", 1:100)
+    )
+}
+
+run_enricher_collecting <- function(sig_genes, pval_cutoff = 0.1) {
+    fx <- enricher_fixture()
+    msgs <- character(0)
+    res <- withCallingHandlers(
+        run_multi_ora_enricher(sig_genes, fx$universe, fx$term2gene, fx$term2name,
+                               label = "pooled", pval_cutoff = pval_cutoff),
+        message = function(m) {
+            msgs <<- c(msgs, conditionMessage(m))
+            invokeRestart("muffleMessage")
+        })
+    list(res = res, msgs = msgs)
+}
+
+test_that("an adjusted-p result prints the completion message", {
+    skip_if_not_installed("clusterProfiler")
+
+    out <- run_enricher_collecting(paste0("g", 1:15))
+
+    expect_true("T1" %in% out$res$ID)
+    expect_true(any(grepl(paste0("pooled: ", nrow(out$res), " enriched pathways"),
+                          out$msgs, fixed = TRUE)))
+    expect_false(any(grepl("padj too strict", out$msgs, fixed = TRUE)))
+})
+
+test_that("the raw-p fallback prints its own message and the completion message", {
+    skip_if_not_installed("clusterProfiler")
+
+    # No adjusted p-value clears a cutoff this small, so the raw-p branch runs.
+    out <- run_enricher_collecting(paste0("g", 1:15), pval_cutoff = 1e-300)
+
+    expect_true("T1" %in% out$res$ID)
+    expect_true(any(grepl("padj too strict", out$msgs, fixed = TRUE)))
+    expect_true(any(grepl(paste0("pooled: ", nrow(out$res), " enriched pathways"),
+                          out$msgs, fixed = TRUE)))
+})
+
+test_that("a run with nothing enriched prints no completion message", {
+    skip_if_not_installed("clusterProfiler")
+
+    # Significant genes that belong to no term: enricher has nothing to return.
+    out <- run_enricher_collecting(paste0("g", 41:55))
+
+    expect_null(out$res)
+    expect_false(any(grepl("enriched pathways", out$msgs, fixed = TRUE)))
+})
+
 test_that("run_multi_ora_enricher returns NULL when too few significant genes", {
     skip_if_not_installed("clusterProfiler")
     t2g <- data.frame(term = "T1", gene = paste0("g", 1:20), stringsAsFactors = FALSE)
