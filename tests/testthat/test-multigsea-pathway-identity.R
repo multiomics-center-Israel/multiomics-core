@@ -795,3 +795,86 @@ test_that("map and ko still normalize without an organism", {
     expect_equal(.multigsea_term_ids(mg_frame(c("map00010", "ko00010"))),
                  rep("00010", 2))
 })
+
+# ---- outputs of an earlier run -------------------------------------------
+
+# A MultiGSEA directory as an earlier run left it, beside Multi-ORA's output and
+# a file nothing here wrote.
+stale_multigsea_dir <- function(envir = parent.frame()) {
+    out <- withr::local_tempdir(.local_envir = envir)
+    old <- c(file.path(out, c("multigsea_transcriptomics_vs_proteomics.png",
+                              "multigsea_transcriptomics_vs_proteomics.pdf",
+                              "multigsea_transcriptomics_vs_proteomics.csv",
+                              "multigsea_combined_enrichment.png")),
+             file.path(out, "per_contrast", "A_vs_B",
+                       "multigsea_transcriptomics_vs_proteomics.png"))
+    kept <- c(file.path(out, "multi_ora", "multi_ora_pooled_barplot.png"),
+              file.path(out, "multi_ora", "per_contrast", "A_vs_B", "multi_ora_summary.csv"),
+              file.path(out, "notes.txt"))
+    for (f in c(old, kept)) {
+        dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+        writeLines("x", f)
+    }
+    list(out = out, old = old, kept = kept)
+}
+
+test_that("clear_multigsea_outputs removes only what MultiGSEA wrote", {
+    d <- stale_multigsea_dir()
+    expect_message(clear_multigsea_outputs(d$out), "cleared")
+    expect_false(any(file.exists(d$old)))
+    expect_false(dir.exists(file.path(d$out, "per_contrast")))
+    # Multi-ORA shares the directory and keeps its own per_contrast/.
+    expect_true(all(file.exists(d$kept)))
+    expect_true(dir.exists(file.path(d$out, "multi_ora", "per_contrast")))
+})
+
+test_that("clear_multigsea_outputs is quiet on a fresh or absent directory", {
+    expect_length(clear_multigsea_outputs(withr::local_tempdir()), 0L)
+    expect_length(clear_multigsea_outputs(NULL), 0L)
+    expect_length(clear_multigsea_outputs(file.path(withr::local_tempdir(), "none")), 0L)
+})
+
+test_that("a MultiGSEA run that draws nothing still clears the previous run's figures", {
+    # The report globs these files, so an early return must not leave the last
+    # run's figures to be shown as this run's.
+    no_results <- stale_multigsea_dir()
+    expect_null(suppressMessages(run_multigsea_plots(NULL, list(), no_results$out)))
+    expect_false(any(file.exists(no_results$old)))
+    expect_true(all(file.exists(no_results$kept)))
+
+    switched_off <- stale_multigsea_dir()
+    cfg <- list(modes = list(multiomics = list(enrichment = list(
+        multigsea = list(run_multigsea = FALSE)))))
+    expect_null(suppressMessages(run_multigsea_plots(
+        list(per_omics = list(transcriptomics = data.frame())), cfg, switched_off$out)))
+    expect_false(any(file.exists(switched_off$old)))
+    expect_true(all(file.exists(switched_off$kept)))
+
+    one_layer <- stale_multigsea_dir()
+    expect_null(suppressMessages(run_multigsea_plots(
+        list(per_omics = list(transcriptomics = data.frame())),
+        list(global = list(organism = "Homo sapiens")), one_layer$out)))
+    expect_false(any(file.exists(one_layer$old)))
+    expect_true(all(file.exists(one_layer$kept)))
+})
+
+test_that("the pipeline clears MultiGSEA outputs when it skips or fails the step", {
+    # Without cross-omics enrichment the target returns before calling
+    # run_multigsea_plots(), and an error part-way through is caught here after
+    # some pairs are written, so the cleanup has to run on both paths too.
+    src <- paste(readLines(testthat::test_path(
+        "..", "..", "R", "pipeline", "multiomics", "00_pipe_multiomics.R")),
+        collapse = "\n")
+    block <- regmatches(src, regexpr(
+        "(?s)multiomics_multigsea,.*?\n        \\),", src, perl = TRUE))
+    expect_length(block, 1)
+    skip <- regmatches(block, regexpr(
+        "(?s)Skipping MultiGSEA plots.*?return\\(NULL\\)", block, perl = TRUE))
+    expect_match(skip, "clear_multigsea_outputs(mg_dir)", fixed = TRUE)
+    # And when the step fails part-way, so no partial set is left behind.
+    err <- regmatches(block, regexpr(
+        "(?s)MultiGSEA plots failed.*?NULL\n", block, perl = TRUE))
+    expect_match(err, "clear_multigsea_outputs(mg_dir)", fixed = TRUE)
+    # And it clears the directory the step writes to.
+    expect_match(block, "out_dir = mg_dir", fixed = TRUE)
+})

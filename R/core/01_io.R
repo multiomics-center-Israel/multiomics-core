@@ -14,6 +14,56 @@ normalize_contrast_name <- function(x) {
   gsub(" ", "", x)
 }
 
+#' Canonical key for a contrast name
+#'
+#' Different omics spell the same contrast differently -- `"1.56ppm_vs_0ppm"`
+#' from RNA, `"1.56ppm vs. 0ppm"` from proteomics, `"1.56ppm - 0ppm"` from
+#' metabolomics, and the ORA exports drop the spaces again. All of those name
+#' one biological comparison and must reduce to one key, or per-contrast work
+#' silently splits a contrast in two, or pairs the wrong halves.
+#'
+#' This is identity, not display: keep the original string for headings and
+#' filenames, and use the key only to decide what belongs with what.
+#'
+#' Style is what gets dropped, not content. A decimal point survives, because
+#' stripping every non-alphanumeric character made `"1.56ppm vs 0ppm"` and
+#' `"15.6ppm vs 0ppm"` the same key -- two different doses merged into one, or,
+#' where the key picks a table, one contrast's fold changes rendered under the
+#' other's name.
+#'
+#' A hyphen is the separator only in a label with no "vs": "A - B" and "A-B"
+#' are comparisons, but in "A-B_vs_C" the hyphen belongs to a group name and is
+#' dropped like a space or underscore -- read as "vs", it made "A-B_vs_C" and
+#' "A_vs_B-C" one key, pairing two different comparisons.
+#'
+#' A dot that opens a number (at the start, or after a space or underscore) is
+#' a decimal point, written "0.": ".5ppm" and "0.5ppm" are one dose, and
+#' "5ppm" another. A dot after a letter stays punctuation ("vs.", make.names
+#' padding such as "Day.1").
+#'
+#' @param x Character vector of contrast names.
+#' @return Character vector of canonical keys, same length as \code{x}.
+#' @examples
+#' normalize_contrast_key(c("A vs. B", "A_vs_B", "a - b"))   # all "avsb"
+#' normalize_contrast_key(c("1.56ppm vs 0ppm", "15.6ppm vs 0ppm"))  # stay apart
+#' normalize_contrast_key(c("A-B_vs_C", "A_vs_B-C"))              # stay apart
+#' normalize_contrast_key(c(".5ppm_vs_0ppm", "0.5ppm_vs_0ppm"))   # one key
+normalize_contrast_key <- function(x) {
+    x <- tolower(trimws(x))
+    # A leading decimal point keeps its number: ".5" -> "0.5".
+    x <- gsub("(^|[^0-9a-z.])\\.(?=[0-9])", "\\10.", x, perl = TRUE)
+    # Treat " - " / "-" between groups as an alias for "vs", but only where no
+    # "vs" names the separator already.
+    no_vs <- !grepl("vs", x, fixed = TRUE)
+    x[no_vs] <- gsub("\\s*-\\s*", "vs", x[no_vs])
+    x <- gsub("\\s*vs\\.?\\s*", "vs", x)  # "vs." / " vs " / "vs" -> "vs"
+    x <- gsub("[^a-z0-9.]", "", x)        # strip separators, dots decided below
+    # A dot is only content when it sits between digits; everywhere else it is
+    # punctuation ("vs.", a trailing stop, make.names padding) and goes.
+    x <- gsub("(?<![0-9])\\.|\\.(?![0-9])", "", x, perl = TRUE)
+    x
+}
+
 #' Read a sample sheet, guarding both ways read.csv() mangles one
 #'
 #' \code{read.csv()} fails on a sample sheet in two independent ways, and a

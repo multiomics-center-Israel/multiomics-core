@@ -800,19 +800,15 @@ filter_changed_features <- function(de_table, thresholds = .PATHVIEW_THRESHOLDS)
 pathview_significance_caption <- function(thresholds = .PATHVIEW_THRESHOLDS) {
     fmt <- function(x) format(x, trim = TRUE, scientific = FALSE)
     paste0(
-        "Pathways are drawn where at least one omics layer scored them below ",
-        fmt(thresholds$fdr_alpha), " -- on adjusted p-values where those ",
-        "supported a selection, and on raw p-values where they did not, so ",
-        "which of the two a given map rests on is not fixed and the ",
-        "pathway-level evidence is a floor rather than an FDR. Within a map, a node is ",
-        "coloured only by features that both changed by more than ",
+        "Pathways are drawn where at least one layer scored them below ",
+        fmt(thresholds$fdr_alpha), ", on adjusted p-values or, where those ",
+        "selected nothing, on raw p-values, so the evidence is a floor rather ",
+        "than an FDR. A node is coloured only by features past ",
         fmt(thresholds$node_fc), "-fold (|log2FC| > ",
         format(round(log2(thresholds$node_fc), 2), nsmall = 2),
-        ") and reached raw p < ", fmt(thresholds$node_p),
-        "; a feature failing either condition does not contribute to the ",
-        "node's mean. An uncoloured node therefore means no measured feature ",
-        "on it passed both rules, or that nothing there was measured at all -- ",
-        "the map does not separate the two."
+        ") with raw p < ", fmt(thresholds$node_p),
+        "; an uncoloured node means no measured feature passed both rules, or ",
+        "nothing was measured -- the map does not separate the two."
     )
 }
 
@@ -865,7 +861,8 @@ pick_key_position <- function(template_png, frac = 0.28) {
 #' Ownership follows the `run_pathview` switch: \code{run_multi_ora()} decides
 #' for all three of its pathview renderers at once, so this clears the artifacts
 #' of all three -- the cross-omics `.multi_ora*` overlays, the per-omics
-#' `.metab_top*` and `.prot_top*` overlays, and every compiled PDF they produce.
+#' `.metab_top*` and `.prot_top*` overlays, every compiled PDF they produce, and
+#' the sidecars that describe those PDFs.
 #' A per-omics map is as stale as a cross-omics one when its pathway drops out
 #' of the current top-N, and the report cannot tell either from a fresh one.
 #'
@@ -889,6 +886,7 @@ clear_multi_ora_pathview_outputs <- function(out_dir) {
             full.names = TRUE)
     }
     pdfs <- file.path(out_dir, c("multi_ora_pathview_supported.pdf",
+                                 "multi_ora_pathview_supported.yaml",
                                  "multi_ora_pathview_union.pdf",
                                  "multi_ora_pathview_union.yaml",
                                  "pathview_top_metabolomics_pathways.pdf",

@@ -40,6 +40,8 @@ renv.lock          dependency lockfile — gitted, do NOT casually change
 _targets/          pipeline cache — gitignored, NEVER touch
 ```
 
+**Layers depend downward only.** `core` must not depend on `services`, `domain` or `modules`; `domain` must not depend on `modules`. A helper shared across layers belongs in the lowest appropriate shared layer consistent with its ownership; do not move domain-specific logic into `core` merely to make it reachable.
+
 > **Repo map:** see `PROJECT_STRUCTURE.md` for the full scanned map (layers, per-file roles, config layout, Shiny contract) — read it after this file. If the layout here drifts from reality, fix it — *but only after asking the user.*
 
 ---
@@ -87,6 +89,22 @@ A few conventions specific to the metabolomics mode:
 - **No `library()` calls inside functions.** Use `pkg::fn()` for external calls, or declare imports in `DESCRIPTION` if this is a package.
 - **Side effects (writing files, plotting to disk) go in their own targets**, separated from computation.
 - **Match the dependency family already used in the codebase.** If the existing code uses `dplyr`, don't introduce `data.table` for a new helper, and vice versa. Same for `purrr` vs `lapply`, `cli` vs `message()`, etc. Consistency beats your personal preference. If the codebase is mixed, ask the user which family to use for new code.
+
+---
+
+## Configuration is intent, not evidence
+
+- **Resolve a config value the way the code that acts on it resolves it** — same key, same default, same fallback. Read the consumer before you branch on a setting or describe it.
+- **A flag being set is not evidence that the step ran.** Steps skip themselves on data conditions, often with a message rather than an error. Where the outcome matters, the evidence is runtime state or a produced artefact, not the flag that requested it.
+- **One semantic decision, one resolver.** When several consumers interpret the same config or statistical contract, they call one shared resolver rather than each reading the raw keys.
+- **Old branches and commits are history, not specification.** Verify against the current implementation and runtime path before reviving logic or wording from one.
+
+---
+
+## Describing results
+
+- **Reports describe; they do not decide.** Report code must not own or recreate statistical/scientific decisions that belong to the analysis pipeline. It reads established results and semantics rather than recomputing a quantity or independently reinterpreting a rule.
+- **Say no more than the implementation supports.** Reader-facing scientific wording is a claim about what ran. If the code applies a weaker, narrower or conditional version of what the sentence says, the sentence is wrong.
 
 ---
 
