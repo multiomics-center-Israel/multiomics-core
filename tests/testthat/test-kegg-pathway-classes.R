@@ -452,3 +452,169 @@ test_that("a clusterProfiler error still falls back to Fisher", {
                           out$msgs, fixed = TRUE)))
     expect_false(any(grepl("pooled: [0-9]+ enriched pathways", out$msgs)))
 })
+
+
+# ---- one BRITE classification per multi-ORA run (#221) ----------------------
+#
+# kegg_pathway_categories() caches a successful fetch but not a failed one, so
+# every producer left to its own lazy default pays a full timeout on an offline
+# machine. run_multi_ora() resolves the table once and hands it down. The
+# resolver is a counting stub throughout; nothing here reaches KEGG.
+
+fixture_classes <- function() parse_kegg_brite_pathways(brite_fixture())
+
+test_that("a supplied classification is used on both paths and never re-resolved", {
+    skip_if_not_installed("clusterProfiler")
+    wire_multi_ora_kegg(function(...) fake_enrichkegg_table())
+    local_kegg_ora_stubs(list(kegg_pathway_categories = function(...)
+        stop("classification resolved although one was supplied")))
+
+    # clusterProfiler path: hsa04260 is Organismal Systems, hsa00010 is not.
+    kept <- suppressMessages(run_multi_ora_kegg(
+        c("hsa:1", "hsa:2", "hsa:3"), paste0("hsa:", 1:50), kegg_org = "hsa",
+        label = "pooled", exclude_classes = "Organismal Systems",
+        classification = fixture_classes()))
+    expect_identical(kept$ID, "hsa00010")
+
+    # Fisher path: no clusterProfiler hits, and the Fisher table is filtered
+    # against the same supplied table.
+    testthat::local_mocked_bindings(
+        enrichKEGG = function(...) fake_enrichkegg_table(pvalue = c(0.5, 0.6),
+                                                        p.adjust = c(0.8, 0.9)),
+        .package = "clusterProfiler")
+    local_kegg_ora_stubs(list(run_ora_kegg_fisher = function(...)
+        data.frame(pathway = c("Glycolysis", "Cardiac muscle contraction"),
+                   ID = c("00010", "04260"), pvalue = 0.001, padj = 0.01,
+                   stringsAsFactors = FALSE)))
+    fisher <- suppressMessages(run_multi_ora_kegg(
+        c("hsa:1", "hsa:2", "hsa:3"), paste0("hsa:", 1:50), kegg_org = "hsa",
+        label = "pooled", exclude_classes = "Organismal Systems",
+        classification = fixture_classes()))
+    expect_identical(fisher$ID, "00010")
+})
+
+# Drives run_multi_ora() through its KEGG gene path with two gene layers and
+# reports how often the classification was resolved and what each producer was
+# handed. DE extraction, ID mapping and the producers are stubbed; with every
+# producer returning NULL the run stops at the empty summary.
+capture_multi_ora_producers <- function(exclude, env = parent.frame()) {
+    state <- new.env(parent = emptyenv())
+    state$fetches <- 0L
+    state$seen <- list()
+
+    features <- sprintf("f%02d", 1:10)
+    local_kegg_ora_stubs(list(
+        kegg_pathway_categories = function(...) {
+            state$fetches <- state$fetches + 1L
+            fixture_classes()
+        },
+        get_kegg_organism = function(...) "hsa",
+        get_organism_db = function(...) "org.Hs.eg.db",
+        extract_de_tables = function(...) {
+            list(c1 = data.frame(feature_id = features, pvalue = 0.001,
+                                 padj = 0.001, stringsAsFactors = FALSE))
+        },
+        map_feature_ids_to_entrez = function(...) {
+            data.frame(feature_id = features, ENTREZID = as.character(1:10),
+                       stringsAsFactors = FALSE)
+        },
+        convert_entrez_to_kegg = function(...) {
+            stats::setNames(paste0("hsa:", 1:10), as.character(1:10))
+        },
+        run_multi_ora_kegg = function(..., classification = NULL) {
+            state$seen <- c(state$seen, list(classification))
+            NULL
+        }
+    ), env = env)
+
+    config <- list(
+        global = list(organism = "human"),
+        modes = list(multiomics = list(enrichment = list(
+            exclude_pathway_classes = exclude,
+            pathview = list(run_pathview = FALSE)))))
+
+    suppressMessages(run_multi_ora(
+        de_results = list(transcriptomics = list(), proteomics = list()),
+        harmonization_res = NULL, config = config,
+        out_dir = withr::local_tempdir(.local_envir = env)))
+
+    list(fetches = state$fetches, seen = state$seen)
+}
+
+test_that("one multi-ORA run resolves the classification once for all its producers", {
+    got <- capture_multi_ora_producers("Organismal Systems")
+
+    # Pooled plus one per gene layer -- three producers, one resolution.
+    expect_equal(length(got$seen), 3L)
+    expect_equal(got$fetches, 1L)
+    expect_identical(got$seen[[1]], got$seen[[2]])
+    expect_identical(got$seen[[2]], got$seen[[3]])
+    expect_identical(got$seen[[1]], fixture_classes())
+})
+
+test_that("a multi-ORA run with nothing to exclude resolves no classification", {
+    got <- capture_multi_ora_producers(character(0))
+
+    expect_equal(length(got$seen), 3L)
+    expect_equal(got$fetches, 0L)
+    expect_true(all(vapply(got$seen, is.null, logical(1))))
+})
+
+test_that("a per-contrast group reuses the classification it is handed", {
+    state <- new.env(parent = emptyenv())
+    state$fetches <- 0L
+    state$seen <- list()
+
+    features <- sprintf("f%02d", 1:10)
+    de <- data.frame(feature_id = features, pvalue = 0.001, padj = 0.001,
+                     stringsAsFactors = FALSE)
+    local_kegg_ora_stubs(list(
+        kegg_pathway_categories = function(...) {
+            state$fetches <- state$fetches + 1L
+            fixture_classes()
+        },
+        map_feature_ids_to_entrez = function(...) {
+            data.frame(feature_id = features, ENTREZID = as.character(1:10),
+                       stringsAsFactors = FALSE)
+        },
+        convert_entrez_to_kegg = function(...) {
+            stats::setNames(paste0("hsa:", 1:10), as.character(1:10))
+        },
+        run_multi_ora_kegg = function(..., classification = NULL) {
+            state$seen <- c(state$seen, list(classification))
+            NULL
+        }
+    ))
+
+    suppressMessages(.run_multi_ora_contrast_group(
+        all_de_tables = list(transcriptomics = list(c1 = de),
+                             proteomics = list(c1 = de)),
+        contrast_name = "c1", harmonization_res = NULL, kegg_org = "hsa",
+        org_db = "org.Hs.eg.db", out_dir = withr::local_tempdir(),
+        exclude_classes = "Organismal Systems",
+        classification = fixture_classes()))
+
+    # Pooled plus both layers, all handed the caller's table; none resolved.
+    expect_equal(length(state$seen), 3L)
+    expect_equal(state$fetches, 0L)
+    expect_true(all(vapply(state$seen, identical, logical(1),
+                           y = fixture_classes())))
+})
+
+test_that("run_multi_ora passes its one classification to every gene-ORA call", {
+    run_src <- paste(deparse(body(run_multi_ora)), collapse = " ")
+    grp_src <- paste(deparse(body(.run_multi_ora_contrast_group)), collapse = " ")
+    count_in <- function(src, needle) {
+        lengths(regmatches(src, gregexpr(needle, src, fixed = TRUE)))[[1]]
+    }
+
+    # Pooled, per-layer and the per-contrast group.
+    expect_equal(count_in(run_src, "classification = pathway_classes"), 3L)
+    expect_equal(count_in(run_src, "kegg_pathway_categories()"), 1L)
+    # Both producers inside the group forward what they were given.
+    expect_equal(count_in(grp_src, "classification = classification"), 2L)
+    expect_false(grepl("kegg_pathway_categories()", grp_src, fixed = TRUE))
+
+    expect_true("classification" %in% names(formals(run_multi_ora_kegg)))
+    expect_true("classification" %in% names(formals(.run_multi_ora_contrast_group)))
+})
