@@ -2982,20 +2982,21 @@ build_gene_lists <- function(de_tables,
 
     gene_lists <- list()
 
-    # Match the pipeline's canonical DE significance rule (see
-    # R/domain/rnaseq/04_de_summary.R:167-180) exactly, so ORA operates on the same
-    # gene set the summary reports as DE: padj <= p_cutoff AND
-    # abs(signif(linearFC, 3)) >= linear cutoff, where
-    # linearFC = ifelse(lfc >= 0, 2^lfc, -2^-lfc). The caller passes lfc_cutoff in
-    # log2 units (log2(linear_fc_cutoff)), so recover the linear cutoff here.
-    # Direction uses the sign of the rounded linear FC (also matching the summary).
-    linear_cut <- 2 ^ lfc_cutoff
+    # Match the pipeline's canonical DE significance rule (the <contrast>_pass
+    # gate in build_rnaseq_summary_df(), R/domain/rnaseq/04_de_summary.R)
+    # exactly, so ORA operates on the same gene set the summary reports as DE:
+    # padj <= p_cutoff AND |log2FC| >= lfc_cutoff, on the unrounded estimate.
+    # The caller passes lfc_cutoff as log2(linear_fc_cutoff), the same threshold
+    # the summary compares against. Gating on signif(linearFC, 3) instead would
+    # admit genes in [1.495, 1.5)-fold, which round up to 1.50.
+    # Direction uses the sign of the rounded linear FC; rounding never changes
+    # that sign, so it agrees with the summary's linearFC column.
     .sig_rows <- function(dt) {
         lin_fc     <- ifelse(dt$log2FoldChange >= 0, 2 ^ dt$log2FoldChange,
                              -1 * (2 ^ -dt$log2FoldChange))
         rounded_fc <- signif(lin_fc, 3)
         keep <- !is.na(dt$padj) & dt$padj <= p_cutoff &
-                !is.na(dt$log2FoldChange) & abs(rounded_fc) >= linear_cut
+                !is.na(dt$log2FoldChange) & abs(dt$log2FoldChange) >= lfc_cutoff
         out <- dt[keep, , drop = FALSE]
         out$.rounded_fc <- rounded_fc[keep]
         out
