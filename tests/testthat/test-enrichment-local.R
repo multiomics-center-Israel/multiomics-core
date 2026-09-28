@@ -762,9 +762,10 @@ test_that(".read_term_table skips a genuine text header row", {
 
 # ---------------------------------------------------------------------------
 # build_gene_lists: ORA gene selection matches the canonical DE rule (#128).
-# Canonical (R/domain/rnaseq/04_de_summary.R): padj <= cutoff AND
-# abs(signif(linearFC, 3)) >= linear cutoff. The old strict log2 comparison
-# dropped genes exactly on the boundary that the pipeline reports as DE.
+# Canonical (the <contrast>_pass gate in R/domain/rnaseq/04_de_summary.R):
+# padj <= cutoff AND |log2FC| >= log2(linear cutoff), on the unrounded
+# estimate. Both comparisons are inclusive, so a gene exactly on either
+# boundary is DE; one whose linearFC merely rounds up to the cutoff is not.
 # ---------------------------------------------------------------------------
 
 test_that("build_gene_lists includes boundary genes per the canonical DE rule", {
@@ -779,4 +780,34 @@ test_that("build_gene_lists includes boundary genes per the canonical DE rule", 
     expect_true("gBoundary" %in% names(gl$contrasts$cA))          # included (>= / <=)
     expect_equal(unname(gl$contrasts$cA[["gBoundary"]]), "up")    # direction from rounded FC
     expect_false("gLow" %in% names(gl$contrasts$cA))              # FC below cutoff
+})
+
+test_that("build_gene_lists and the summary pass flag agree at the fold-change boundary", {
+    skip_if_not(exists("build_rnaseq_summary_df"),
+                "build_rnaseq_summary_df not available")
+    # gRound*: below 1.5-fold, but linearFC = signif(2^|log2FC|, 3) rounds up
+    # to 1.50. gExact*: exactly on the cutoff. Every gene has a passing padj,
+    # so only the fold-change gate decides.
+    de <- list(cA = data.frame(
+        FeatureID      = c("gRoundUp", "gRoundDown", "gExactUp", "gExactDown",
+                           "gClear", "gNoEstimate"),
+        log2FoldChange = c(0.583, -0.583, log2(1.5), -log2(1.5), 2, NA_real_),
+        padj           = rep(1e-3, 6),
+        stringsAsFactors = FALSE
+    ))
+
+    sdf <- build_rnaseq_summary_df(de, list(p_cutoff = 0.05, linear_fc_cutoff = 1.5))
+    gl  <- build_gene_lists(de, clustering_res = NULL,
+                            p_cutoff = 0.05, lfc_cutoff = log2(1.5))
+
+    # The rounding hazard is real for this fixture, so the test cannot pass for
+    # the wrong reason if the display rounding ever changes.
+    expect_equal(abs(sdf$linearFC.cA[sdf$FeatureID %in% c("gRoundUp", "gRoundDown")]),
+                 c(1.5, 1.5))
+
+    passing <- sdf$FeatureID[!is.na(sdf$cA_pass)]
+    expect_setequal(passing, c("gExactUp", "gExactDown", "gClear"))
+    expect_setequal(names(gl$contrasts$cA), passing)
+    expect_setequal(names(gl$contrasts_wo_direction$cA), passing)
+    expect_setequal(names(gl$all_DE$any_contrast), passing)
 })
