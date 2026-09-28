@@ -140,10 +140,20 @@ mod_met_raw <- function(inp, config) {
     rownames(row_data) <- row_data$feature_id
   }
 
+  # Sanitize the KEGG column: keep only real KEGG compound IDs and route
+  # ChemSpider (CSID…) ids into their own column. This must run BEFORE the HMDB
+  # fill: add_kegg_from_hmdb() only fills blank cells, so a CSID left in KEGG
+  # would block the lookup and the cell would end up empty after routing.
+  row_data <- clean_kegg_chemspider(row_data)
+
   # Populate KEGG column from HMDB → KEGG mapping so downstream modules
   # (network, etc.) can use a uniform row_data$KEGG without re-reading the file.
   row_data <- add_kegg_from_hmdb(row_data,
                                  cfg$enrichment$mapping_file %||% NULL)
+
+  # Clean again: the mapping file's KEGG values are not validated, and the fill
+  # may have created the KEGG column itself. Idempotent on already-clean cells.
+  row_data <- clean_kegg_chemspider(row_data)
 
   list(
     expr_raw      = expr_raw,
