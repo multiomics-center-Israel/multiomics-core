@@ -1319,6 +1319,21 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         unique(k[!is.na(k)])
     })
 
+    # Resolved once, here, for every gene-ORA producer below -- pooled, each
+    # layer and each contrast -- rather than left to each producer's lazy
+    # default. kegg_pathway_categories() caches a successful fetch but returns
+    # NULL without writing anything when the endpoint cannot be reached, so a
+    # cold cache on an offline machine would otherwise cost one full timeout per
+    # producer before the run fails open. After the early returns above, so a
+    # run that stops before any ORA never fetches; and only when something is
+    # excluded, so a project that configures nothing never touches the network.
+    exclude_classes <- .excluded_pathway_classes(config)
+    pathway_classes <- if (length(exclude_classes) > 0) {
+        kegg_pathway_categories()
+    } else {
+        NULL
+    }
+
     # --- Run pooled ORA ---
     message("  Running pooled gene ORA...")
     pooled_ora <- run_multi_ora_kegg(
@@ -1326,7 +1341,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         universe = pooled_univ_kegg,
         kegg_org = kegg_org,
         label = "pooled",
-        exclude_classes = .excluded_pathway_classes(config)
+        exclude_classes = exclude_classes,
+        classification = pathway_classes
     )
 
     # --- Run per-omics ORA (with same universe) ---
@@ -1338,7 +1354,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
             universe = pooled_univ_kegg,
             kegg_org = kegg_org,
             label = om,
-            exclude_classes = .excluded_pathway_classes(config)
+            exclude_classes = exclude_classes,
+            classification = pathway_classes
         )
     }
 
@@ -1502,7 +1519,8 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
                     org_db = org_db,
                     out_dir = contrast_out,
                     metab_de_tables = metab_de_tables,
-                    exclude_classes = .excluded_pathway_classes(config)
+                    exclude_classes = exclude_classes,
+                    classification = pathway_classes
                 )
             }, error = function(e) {
                 message("    Per-contrast Multi-ORA failed for ", cname, ": ", e$message)
@@ -1537,11 +1555,16 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #' @param exclude_classes BRITE classes this project excludes from its report,
 #'   passed down so a per-contrast section cannot show a class the run-level
 #'   sections removed.
+#' @param classification The BRITE class table \code{run_multi_ora()} resolved
+#'   once for the whole run, passed to both producers here so no contrast
+#'   resolves it again. The lazy default only applies to a caller that has not
+#'   resolved one.
 #' @return Invisible NULL
 .run_multi_ora_contrast_group <- function(all_de_tables, contrast_name,
                                            harmonization_res, kegg_org, org_db,
                                            out_dir, metab_de_tables = NULL,
-                                           exclude_classes = NULL) {
+                                           exclude_classes = NULL,
+                                           classification = kegg_pathway_categories()) {
 
     per_omics_sig <- list()
     per_omics_universe <- list()
@@ -1585,14 +1608,16 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
     pooled_univ_kegg <- pooled_univ_kegg[!is.na(pooled_univ_kegg)]
 
     pooled_ora <- run_multi_ora_kegg(pooled_sig_kegg, pooled_univ_kegg, kegg_org,
-                                     "pooled", exclude_classes = exclude_classes)
+                                     "pooled", exclude_classes = exclude_classes,
+                                     classification = classification)
 
     per_omics_ora <- list()
     for (om in names(per_omics_sig)) {
         k <- kegg_conv[per_omics_sig[[om]]]
         k <- unique(k[!is.na(k)])
         per_omics_ora[[om]] <- run_multi_ora_kegg(k, pooled_univ_kegg, kegg_org, om,
-                                                  exclude_classes = exclude_classes)
+                                                  exclude_classes = exclude_classes,
+                                                  classification = classification)
     }
 
     # Run per-contrast metabolomics compound ORA if data is available
@@ -1660,10 +1685,18 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
 #'   Applied to the finished table on the way out, so everything downstream --
 #'   the summary, the plots, the OrgDb pathview renderers -- inherits an already
 #'   filtered input instead of filtering again.
+#' @param classification The resolved BRITE class table, defaulted lazily to the
+#'   fetch exactly as \code{.exclude_kegg_classes()} does, so a call with nothing
+#'   to exclude still never reaches the network. Callers running several
+#'   producers should resolve it once and pass it here, as
+#'   \code{run_multi_ora()} does: \code{kegg_pathway_categories()} caches a
+#'   successful fetch but not a failed one, so leaving each producer to its own
+#'   default makes an unreachable endpoint cost one timeout per producer.
 #' @return data.frame with ORA results
 run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
                                 label = "pooled", pval_cutoff = 0.1,
-                                exclude_classes = NULL) {
+                                exclude_classes = NULL,
+                                classification = kegg_pathway_categories()) {
 
     if (length(sig_genes) < 3) {
         message("    ", label, ": too few significant genes (", length(sig_genes), ")")
@@ -1711,14 +1744,16 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
             padj_hits <- out[!is.na(out$padj) & out$padj < pval_cutoff, ]
             if (nrow(padj_hits) > 0) {
                 list(table = .exclude_kegg_classes(padj_hits, exclude_classes,
-                                                   kegg_org, label))
+                                                   kegg_org, label,
+                                                   classification = classification))
             } else {
                 pval_hits <- out[!is.na(out$pvalue) & out$pvalue < 0.05, ]
                 if (nrow(pval_hits) > 0) {
                     message("    ", label, ": padj too strict, using pvalue < 0.05 (",
                             nrow(pval_hits), " pathways)")
                     list(table = .exclude_kegg_classes(pval_hits, exclude_classes,
-                                                       kegg_org, label))
+                                                       kegg_org, label,
+                                                       classification = classification))
                 } else {
                     NULL
                 }
@@ -1742,7 +1777,7 @@ run_multi_ora_kegg <- function(sig_genes, universe, kegg_org,
     # Fallback: Fisher's exact test
     .exclude_kegg_classes(
         run_ora_kegg_fisher(sig_genes, universe, kegg_org, 5, 500, pval_cutoff),
-        exclude_classes, kegg_org, label)
+        exclude_classes, kegg_org, label, classification = classification)
 }
 
 
