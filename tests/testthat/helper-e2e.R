@@ -76,7 +76,9 @@ e2e_stage_shipped <- function(src_rel, dest_sub) {
   function(raw_dir, repo_root) {
     src <- file.path(repo_root, "data", src_rel)
     if (!dir.exists(src)) {
-      testthat::skip(sprintf("Shipped example data not found: %s", src))
+      # Repository-owned data: missing means the checkout is broken, not that
+      # an optional dependency is absent, so fail rather than skip.
+      stop(sprintf("Shipped example data not found: %s", src), call. = FALSE)
     }
     dest <- file.path(raw_dir, dest_sub)
     dir.create(dest, recursive = TRUE, showWarnings = FALSE)

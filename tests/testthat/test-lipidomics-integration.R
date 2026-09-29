@@ -10,13 +10,6 @@
 # so breakage fails the suite, and keeps every artifact inside a per-test temp
 # dir. R/ is already sourced by helper.R, so no manual sourcing here.
 
-#' TRUE when the fixture and the lipidomics entry-point functions are available.
-lipid_fixture_available <- function() {
-  cfg_path <- testthat::test_path("fixtures", "test_lipidomics_config.yaml")
-  file.exists(cfg_path) &&
-    exists("load_lipidomics_inputs") &&
-    exists("preprocess_lipidomics")
-}
 
 #' Load the lipidomics fixture config, anchored to the repo root so the
 #' fixture's relative data paths resolve regardless of testthat's working dir.
@@ -26,8 +19,20 @@ lipid_config <- function() {
   config
 }
 
+# The fixture and the entry points are part of this repository, so their
+# absence is a failure, not a skip: helper.R catches source errors, and a
+# skip here would leave a broken lipidomics source file with a green suite.
+test_that("lipidomics: the fixture and entry points exist", {
+  expect_true(file.exists(testthat::test_path("fixtures", "test_lipidomics_config.yaml")))
+  for (fn in c("load_lipidomics_inputs", "preprocess_lipidomics",
+               "mod_lipidomics_qc_pre", "mod_lipidomics_de",
+               "mod_lipidomics_feature_selection", "mod_lipidomics_class_analysis",
+               "mod_lipidomics_report")) {
+    expect_true(exists(fn, mode = "function"), info = fn)
+  }
+})
+
 test_that("lipidomics: config validates and inputs load", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
 
   config <- lipid_config()
   expect_error(validate_lipidomics_config(config$modes$lipidomics), NA)
@@ -39,7 +44,6 @@ test_that("lipidomics: config validates and inputs load", {
 })
 
 test_that("lipidomics: preprocessing produces the `pre` contract", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
 
   config <- lipid_config()
   inputs <- load_lipidomics_inputs(config)
@@ -54,7 +58,6 @@ test_that("lipidomics: preprocessing produces the `pre` contract", {
 })
 
 test_that("lipidomics: QC and DE modules run and the DE result is well-formed", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
   skip_if_not_installed("ggplot2")
 
   config  <- lipid_config()
@@ -92,7 +95,6 @@ lipid_config_fast <- function() {
 # backend or report package) does not stop the others from running.
 
 test_that("lipidomics: feature selection returns real results for each installed backend", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
   skip_if_not_installed("ggplot2")
   backends <- lipid_fs_backends()
   if (!backends$rf && !backends$plsda) {
@@ -118,7 +120,6 @@ test_that("lipidomics: feature selection returns real results for each installed
 })
 
 test_that("lipidomics: lipid-class analysis computes class composition", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
   skip_if_not_installed("ggplot2")
 
   config  <- lipid_config_fast()
@@ -136,7 +137,6 @@ test_that("lipidomics: lipid-class analysis computes class composition", {
 })
 
 test_that("lipidomics: HTML report renders", {
-  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
   skip_if_not_installed("ggplot2")
 
   config  <- lipid_config_fast()
