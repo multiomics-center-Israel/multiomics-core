@@ -1,12 +1,7 @@
 # ============================================================
 # Shiny Export — Proteomics
 # ============================================================
-# This file contains both:
-# 1. CANONICAL builder (v2.0): build_shiny_payload_proteomics()
-# 2. LEGACY builder (deprecated): build_data_to_shiny_legacy_proteomics()
-#
-# New code should use build_shiny_payload_proteomics().
-# Legacy builder is kept for backward compatibility during transition.
+# CANONICAL builder (v2.0): build_shiny_payload_proteomics()
 # ============================================================
 
 
