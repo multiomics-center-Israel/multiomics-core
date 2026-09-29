@@ -749,6 +749,99 @@ add_kegg_from_hmdb <- function(row_data, mapping_file) {
 }
 
 
+#' Sanitize the KEGG annotation column and split out ChemSpider IDs
+#'
+#' Some Compound Discoverer exports put ChemSpider IDs (shape \code{CSID\\d+},
+#' e.g. \code{CSID900000}) in the same \code{KEGG} column as real KEGG compound
+#' IDs (shape \code{C\\d{5}}, e.g. \code{C00031}). Leaving them there inflates any
+#' naive "KEGG coverage" count that treats a non-empty cell as a KEGG hit. This
+#' keeps only valid KEGG compound IDs in \code{KEGG} (extracting the first
+#' \code{C\\d{5}} when a cell embeds one, e.g. \code{"cpd:C00031"} or
+#' \code{"C00031;C00267"}), and routes whole-cell \code{CSID\\d+} values into a
+#' separate \code{ChemSpider} column (created immediately after \code{KEGG}).
+#'
+#' This does NOT change the enrichment universe: enrichment already matched KEGG
+#' via \code{grepl("C[0-9]{5}", ...)}, which a \code{CSID} id never satisfies, so
+#' those ids were already ignored. The fix is to the annotation table itself (and
+#' any coverage count read from it), not to the statistics.
+#'
+#' A value that is neither a KEGG nor a ChemSpider id is dropped from \code{KEGG}
+#' and reported (not silently discarded). Any pre-existing \code{ChemSpider}
+#' column is preserved (routed ids only fill gaps).
+#'
+#' The same cleaning applies, in place and under its own name, to each
+#' alternative KEGG column that \code{map_compounds_for_enrichment()} accepts
+#' (\code{KEGG_ID}, \code{KEGG ID}, \code{kegg}, \code{kegg_id}). No column is
+#' renamed. When several are present, a feature's CSID is routed from the
+#' first of them, in that order, that carries one.
+#'
+#' @param row_data data.frame of feature annotations (may lack a KEGG column).
+#' @return \code{row_data} with its KEGG column(s) cleaned and a
+#'   \code{ChemSpider} column placed after the first of them. No-op when no
+#'   supported KEGG column is present.
+clean_kegg_chemspider <- function(row_data) {
+    if (is.null(row_data)) return(row_data)
+    # Same names, in the same order, as map_compounds_for_enrichment().
+    kegg_cols <- intersect(c("KEGG", "KEGG_ID", "KEGG ID", "kegg", "kegg_id"),
+                           colnames(row_data))
+    if (length(kegg_cols) == 0) return(row_data)
+
+    # Valid KEGG compound id embedded anywhere in the cell; take the first match.
+    # CSID ids contain no C-followed-by-5-digits run, so they are excluded here.
+    # The lookahead rejects a longer digit run: "C000311" is not C00031, and
+    # truncating it would silently name a different compound.
+    kegg_re <- "C[0-9]{5}(?![0-9])"
+
+    # Non-destructive: keep any pre-existing ChemSpider values, fill gaps only.
+    prev <- rep(NA_character_, nrow(row_data))
+    if ("ChemSpider" %in% colnames(row_data)) {
+        prev <- trimws(as.character(row_data$ChemSpider))
+        prev[is.na(prev) | prev %in% c("NA", "")] <- NA_character_
+    }
+    chemspider <- prev
+
+    n_valid <- 0L
+    n_other <- 0L
+    for (col in kegg_cols) {
+        raw <- trimws(as.character(row_data[[col]]))
+        raw[is.na(raw) | raw %in% c("NA", "")] <- NA_character_
+
+        has_kegg <- !is.na(raw) & grepl(kegg_re, raw, perl = TRUE)
+        # Extract the matched token itself rather than sub() away the rest: "."
+        # does not match a newline, so a line-separated Excel cell would
+        # otherwise keep its prefix or suffix.
+        kegg <- rep(NA_character_, length(raw))
+        kegg[has_kegg] <- regmatches(raw[has_kegg],
+                                     regexpr(kegg_re, raw[has_kegg], perl = TRUE))
+
+        # ChemSpider ids: a whole-cell CSID<digits>.
+        is_csid <- !is.na(raw) & grepl("^CSID[0-9]+$", raw)
+        fill    <- is_csid & is.na(chemspider)
+        chemspider[fill] <- raw[fill]
+
+        n_valid <- n_valid + sum(!is.na(kegg))
+        n_other <- n_other + sum(!is.na(raw) & !has_kegg & !is_csid)
+        row_data[[col]] <- kegg
+    }
+
+    # Count only CSIDs this call moved into an empty ChemSpider slot, so a
+    # second pass, or a curated ChemSpider column, is not reported as routed.
+    n_routed <- sum(is.na(prev) & !is.na(chemspider))
+
+    row_data$ChemSpider <- chemspider
+    # Place ChemSpider immediately after the first KEGG column.
+    nm  <- colnames(row_data)
+    nm  <- nm[nm != "ChemSpider"]
+    nm  <- append(nm, "ChemSpider", after = match(kegg_cols[1], nm))
+    row_data <- row_data[, nm, drop = FALSE]
+
+    message(sprintf(
+        "clean_kegg_chemspider: %d valid KEGG, %d ChemSpider routed, %d other dropped (%s)",
+        n_valid, n_routed, n_other, paste(kegg_cols, collapse = ", ")))
+    row_data
+}
+
+
 #' Build minimal metadata when no metadata file is provided
 #'
 #' Infers is_QC and is_blank flags from sample names.
