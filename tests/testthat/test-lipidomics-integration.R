@@ -74,51 +74,90 @@ test_that("lipidomics: QC and DE modules run and the DE result is well-formed", 
   expect_length(de_res$de_tables, 1L)
 })
 
-test_that("lipidomics: downstream stages run when their deps are available", {
+#' Which feature-selection backends are installed.
+lipid_fs_backends <- function() {
+  list(rf    = requireNamespace("ranger", quietly = TRUE) ||
+               requireNamespace("randomForest", quietly = TRUE),
+       plsda = requireNamespace("mixOmics", quietly = TRUE))
+}
+
+#' Fixture config with the RF forest trimmed for test speed (500 in production).
+lipid_config_fast <- function() {
+  config <- lipid_config()
+  config$modes$lipidomics$rf$n_trees <- 100
+  config
+}
+
+# The downstream stages are separate tests so that a skip in one (a missing
+# backend or report package) does not stop the others from running.
+
+test_that("lipidomics: feature selection returns real results for each installed backend", {
   skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
   skip_if_not_installed("ggplot2")
-
-  config  <- lipid_config()
-  # Trim the RF forest for test speed; the fixture uses 500 in production.
-  config$modes$lipidomics$rf$n_trees <- 100
-  out_dir <- withr::local_tempdir()
-  inputs  <- load_lipidomics_inputs(config)
-  pre     <- preprocess_lipidomics(inputs, config)
-  qc_res  <- mod_lipidomics_qc_pre(pre, config, out_dir)
-  de_res  <- mod_lipidomics_de(pre, config, out_dir)
-
-  # Feature selection (RF / PLS-DA). The module swallows backend errors and
-  # returns NULL, so gate on backend availability and then require real results
-  # — otherwise a broken learner would leave this test green.
-  have_rf    <- requireNamespace("ranger", quietly = TRUE) ||
-                requireNamespace("randomForest", quietly = TRUE)
-  have_plsda <- requireNamespace("mixOmics", quietly = TRUE)
-  if (!have_rf && !have_plsda) {
+  backends <- lipid_fs_backends()
+  if (!backends$rf && !backends$plsda) {
     skip("no RF/PLS-DA backend installed (ranger/randomForest/mixOmics)")
   }
+
+  config  <- lipid_config_fast()
+  out_dir <- withr::local_tempdir()
+  pre     <- preprocess_lipidomics(load_lipidomics_inputs(config), config)
+
+  # The module swallows backend errors and returns NULL, so require real
+  # results; otherwise a broken learner would leave this test green.
   fs_res <- mod_lipidomics_feature_selection(pre, config, out_dir)
   expect_false(is.null(fs_res))                       # at least one backend ran
-  if (have_rf) {
+  if (backends$rf) {
     expect_s3_class(fs_res$rf$importance_df, "data.frame")
     expect_gt(nrow(fs_res$rf$importance_df), 0)
   }
-  if (have_plsda) {
+  if (backends$plsda) {
     expect_s3_class(fs_res$plsda$vip_df, "data.frame")
     expect_gt(nrow(fs_res$plsda$vip_df), 0)
   }
+})
 
-  # Lipid-class analysis: class composition is computed from the lipid_class
-  # column parsed at preprocessing, so it must be present for this fixture (the
-  # module otherwise swallows per-computation errors and still returns a list).
+test_that("lipidomics: lipid-class analysis computes class composition", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+  skip_if_not_installed("ggplot2")
+
+  config  <- lipid_config_fast()
+  out_dir <- withr::local_tempdir()
+  pre     <- preprocess_lipidomics(load_lipidomics_inputs(config), config)
+  de_res  <- mod_lipidomics_de(pre, config, out_dir)
+
+  # Class composition is computed from the lipid_class column parsed at
+  # preprocessing, so it must be present for this fixture (the module otherwise
+  # swallows per-computation errors and still returns a list).
   class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
   expect_type(class_res, "list")
   expect_false(is.null(class_res$class_comp))
   expect_false(is.null(class_res$class_comp$class_norm))
+})
 
-  # HTML report — needs a working pandoc plus the Rmd template's own packages
-  # (DT, etc.). Skip cleanly when pandoc or any such package is missing rather
-  # than failing the suite; a real report bug still surfaces as an error.
-  # Report templates resolve relative to the repo root, so render from there.
+test_that("lipidomics: HTML report renders", {
+  skip_if_not(lipid_fixture_available(), "lipidomics fixture/functions unavailable")
+  skip_if_not_installed("ggplot2")
+
+  config  <- lipid_config_fast()
+  out_dir <- withr::local_tempdir()
+  pre     <- preprocess_lipidomics(load_lipidomics_inputs(config), config)
+  qc_res  <- mod_lipidomics_qc_pre(pre, config, out_dir)
+  de_res  <- mod_lipidomics_de(pre, config, out_dir)
+  # The report accepts NULL feature-selection results, so a missing backend
+  # does not stop it from being checked.
+  backends <- lipid_fs_backends()
+  fs_res <- if (backends$rf || backends$plsda) {
+    mod_lipidomics_feature_selection(pre, config, out_dir)
+  } else {
+    NULL
+  }
+  class_res <- mod_lipidomics_class_analysis(pre, de_res, config, out_dir)
+
+  # Needs a working pandoc plus the Rmd template's own packages (DT, etc.).
+  # Skip cleanly when pandoc or any such package is missing rather than failing
+  # the suite; a real report bug still surfaces as an error. Report templates
+  # resolve relative to the repo root, so render from there.
   skip_if_not_installed("rmarkdown")
   if (!rmarkdown::pandoc_available()) skip("pandoc not available")
   report_path <- tryCatch(

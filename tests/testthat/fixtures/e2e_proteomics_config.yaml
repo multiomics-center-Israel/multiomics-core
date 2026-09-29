@@ -65,7 +65,9 @@ modes:
 
     de:
       method: "limma"
-      # Raw p-value gate so the injected signal is reliably recovered on n=3/group.
+      # Per-imputation votes use the raw p-value. The consensus call is still
+      # gated on the summarised adjusted p (padj.imputs <= p_cutoff) in
+      # summarize_limma_mult_imputation(), so significance here is adjusted-p.
       use_adj_for_pass1: false
       p_cutoff: 0.05
       linear_fc_cutoff: 1.5
