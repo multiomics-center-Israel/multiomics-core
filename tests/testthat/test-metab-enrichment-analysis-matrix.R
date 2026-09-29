@@ -1,6 +1,7 @@
 # Tests for the enrichment analysis-matrix fix: QEA (globaltest) and ssGSEA now
-# start from the SAME upstream analysis matrix, scale, and biological-sample set
-# as DE (via .metab_de_matrix_condition()), instead of pre$expr_raw. Also covers
+# start from the analysis matrix, scale, and biological-sample set that
+# run_metabolomics_de() tests on (via .metab_de_matrix_condition()), instead of
+# pre$expr_raw. Also covers
 # the QEA `standardize` option and its wiring into globaltest::gt().
 #
 # Covers both QEA and ssGSEA, hence the file name. Each test carries its own
