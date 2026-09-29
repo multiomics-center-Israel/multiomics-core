@@ -41,7 +41,9 @@ test_that("proteomics runs end-to-end and recovers the injected DE signal", {
   expect_gte(length(sig), 8L)
   expect_lte(length(sig), 70L)
 
-  expect_true(any(PROT_TRUTH %in% ids))
+  # The generator never makes an injected protein missing, so all of them pass
+  # min_count and must be in the tested universe before recall is measured.
+  expect_true(all(PROT_TRUTH %in% ids))
   recall <- mean(PROT_TRUTH %in% sig)
   expect_gte(recall, 0.5)
 })
