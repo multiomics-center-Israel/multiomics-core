@@ -30,8 +30,17 @@ test_that("metabolomics runs end-to-end and recovers the injected DE signal", {
   expect_gte(length(sig), 15L)
   expect_lte(length(sig), 90L)
 
-  truth  <- sprintf("METAB_%03d", 1:25)
-  recall <- mean(truth %in% sig)
+  # summary_df$feature_id is the RT/m/z id build_feature_ids() constructs, so
+  # the generator's METAB_### ids survive as row_data$original_id, which
+  # run_metabolomics_de() carries into summary_df$Name. Compare truth there.
+  # The generator never makes a DE feature missing, so every truth id must be
+  # in the tested universe.
+  truth <- sprintf("METAB_%03d", 1:25)
+  expect_true("Name" %in% names(de$summary_df))
+  source_ids <- as.character(de$summary_df$Name)
+  expect_true(all(truth %in% source_ids))
+  sig_source <- source_ids[e2e_pass_flag(de$summary_df)]
+  recall <- mean(truth %in% sig_source)
   expect_gte(recall, 0.6)
 })
 
