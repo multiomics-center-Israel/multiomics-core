@@ -246,13 +246,11 @@ tests/
 │   ├── test-multiomics-harmonization.R, test-pathway-module-wiring.R
 │   ├── test-pipeline-orchestration.R, test-proteomics-core.R
 │   ├── test-metabolomics-multi-level.R
+│   ├── test-e2e-*.R + helper-e2e.R  opt-in tar_make() runs per omic (RUN_E2E_OMICS=1)
 │   └── ...
-├── PROFILER_TESTS.md, TESTING_GUIDE.md, TEST_EXECUTION_REPORT.md, TEST_STRUCTURE.txt
-├── install_and_test.R, run_profiler_tests.R, run_tests_simple.R, manual_test_profiler.R
-└── test_ppi_elah.R              (stray test at top of tests/; unclear if intentional)
 ```
 
-Standard `devtools::test()` / `testthat::test_dir("tests/testthat")` should work. The extra `*.R` files at the top of `tests/` are runner / profiling scripts, not testthat files.
+Standard `devtools::test()` / `testthat::test_dir("tests/testthat")` should work. The end-to-end tests skip unless `RUN_E2E_OMICS=1` is set (and `RUN_E2E_OMICS_FULL=1` for their file-output checks), so the default suite and CI stay fast.
 
 ---
 
@@ -341,7 +339,6 @@ In this order, before changing anything:
 ### Unclear / worth confirming
 
 - The `metabolomics/` top-level directory currently contains only a `README.md` describing the metabolomics DAG. The actual code lives in `R/domain/metabolomics/` and `R/pipeline/metabolomics/`. It is unclear whether the top-level `metabolomics/` folder is intended to grow into something else or is purely documentation.
-- `tests/test_ppi_elah.R` sits at the top of `tests/` (not in `testthat/`). Unclear whether this is an intentional standalone or a stray.
 - `scripts/*.R` is gitignored, but `scripts/` itself contains several committed Python files plus `metabolome_overview_report.Rmd` — implying the gitignore covers user scratch R scripts only.
 - `Rplots.pdf` is checked in but also `.gitignore`d — likely a historical leftover.
 - The relationship between the top-level `utils/` and `R/core/` is not crisp: both hold utility code, but `utils/` contains standalone runnable scripts (KEGG / GMT generation) rather than functions sourced by the pipeline.
