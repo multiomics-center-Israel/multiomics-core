@@ -269,6 +269,14 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' runs: this is then the matrix the pipeline's own DE would use, not
 #' necessarily the one behind the loaded tables.
 #'
+#' \code{group_col} is the column the caller groups samples by (QEA/ssGSEA pass
+#' their resolved condition column, which honours
+#' \code{enrichment.condition_column}). QC/blank/pool exclusion runs on each of
+#' DE's condition column and \code{group_col} that exists in the metadata, so a
+#' technical sample marked only in the enrichment grouping never becomes a
+#' level of its own, and a pre-computed-DE run whose metadata lacks DE's column
+#' is still filtered. The sample set can then be a subset of DE's.
+#'
 #' PARITY CONTRACT: this is a deliberate duplication of DE's matrix/scale/sample
 #' selection, not an independent policy — \code{run_metabolomics_de()} does not
 #' call this helper, so the two can drift. Any change to DE's matrix selection
@@ -278,9 +286,12 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #'
 #' @param pre    Preprocessing results (expr_work/expr_log, meta, info).
 #' @param config Full pipeline config.
+#' @param group_col Optional metadata column the caller groups samples by; NULL
+#'   applies DE's sample exclusion only.
 #' @return list(mat, condition, meta): the features x biological-samples matrix,
-#'   the condition factor (aligned to matrix columns), and the aligned metadata.
-.metab_de_matrix_condition <- function(pre, config) {
+#'   the DE condition factor (aligned to matrix columns; empty when the metadata
+#'   lacks DE's column), and the aligned metadata.
+.metab_de_matrix_condition <- function(pre, config, group_col = NULL) {
     cfg    <- config$modes$metabolomics
     de_cfg <- cfg$de %||% list()
 
@@ -298,10 +309,20 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
     }
 
     meta <- pre$meta[match(colnames(mat), pre$meta[[sample_col]]), , drop = FALSE]
-    bio  <- filter_to_biological(mat, meta, condition_col, sample_col,
-                                 label = "metabolomics enrichment",
-                                 qc_flag_column = cfg$qc$qc_flag_column)
-    list(mat = bio$mat, condition = bio$condition, meta = bio$meta)
+    # filter_to_biological() silently excludes nothing when its condition column
+    # is absent (zero-length condition values), so filter on each grouping
+    # column that exists, DE's first. With neither present, keep DE's call so
+    # the callers' own column checks report the problem.
+    filter_cols <- intersect(unique(c(condition_col, group_col)), colnames(meta))
+    if (length(filter_cols) == 0L) filter_cols <- condition_col
+    bio <- list(mat = mat, meta = meta)
+    for (col in filter_cols) {
+        bio <- filter_to_biological(bio$mat, bio$meta, col, sample_col,
+                                    label = "metabolomics enrichment",
+                                    qc_flag_column = cfg$qc$qc_flag_column)
+    }
+    list(mat = bio$mat, condition = factor(bio$meta[[condition_col]]),
+         meta = bio$meta)
 }
 
 
@@ -393,7 +414,7 @@ run_metabolomics_qea <- function(pre, config) {
     # specific compound mapping, KEGG restriction and dedup, so the FINAL feature
     # set is not identical to DE's. Behavior change vs the old expr_raw path:
     # QC/blank samples excluded, values on the log-normalized scale.
-    de_in  <- .metab_de_matrix_condition(pre, config)
+    de_in  <- .metab_de_matrix_condition(pre, config, group_col = condition_col)
     mapped <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
@@ -642,7 +663,7 @@ run_metabolomics_ssgsea <- function(pre, config) {
     # steps that do reorder features within a sample (e.g. EigenMS, per-feature
     # centering), not for scale per se. (GSVA's cross-sample score normalization
     # also makes the sample set matter.)
-    de_in    <- .metab_de_matrix_condition(pre, config)
+    de_in    <- .metab_de_matrix_condition(pre, config, group_col = condition_col)
     mapped   <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {

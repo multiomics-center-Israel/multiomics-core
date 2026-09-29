@@ -14,9 +14,12 @@
 # expr_raw is deliberately DIFFERENT from expr_work/expr_log when expr_raw_noise
 # is set, so a test can prove the fixed code never reads expr_raw. `hetero`
 # inflates per-feature scale heterogeneity so globaltest's `standardize` bites.
+# `enr_group` groups enrichment by its own column (enrichment.condition_column),
+# and `qc_enr_only` adds a QC sample that only that column identifies.
 .make_enrichment_fixture <- function(with_qc = FALSE, standardize = FALSE,
                                      shuffle_meta = FALSE, expr_raw_noise = FALSE,
-                                     hetero = FALSE) {
+                                     hetero = FALSE, enr_group = FALSE,
+                                     qc_enr_only = FALSE) {
     groups  <- rep(c("B", "A"), each = 5L)   # B = numerator
     samples <- paste0("s", seq_along(groups))
     n_feat   <- 30L
@@ -45,6 +48,17 @@
                      dimnames = list(feat_ids, "QC_1"))
         mat  <- cbind(mat, qc)
         meta <- rbind(meta, data.frame(sample_id = "QC_1", sample_type = "QC"))
+    }
+    if (enr_group) meta$enr_group <- meta$sample_type
+    if (qc_enr_only) {
+        # An ordinary sample id and a biological DE condition, so DE's own
+        # exclusion keeps it; only the enrichment grouping column says QC.
+        stopifnot(enr_group)
+        qc <- matrix(1e6, nrow = n_feat, ncol = 1,
+                     dimnames = list(feat_ids, "s11"))
+        mat  <- cbind(mat, qc)
+        meta <- rbind(meta, data.frame(sample_id = "s11", sample_type = "A",
+                                       enr_group = "QC"))
     }
     if (shuffle_meta) {
         # Prove alignment is by sample id, not row position.
@@ -78,6 +92,7 @@
         effects = list(samples = "sample_id", color = "sample_type"),
         enrichment = list(run_enrichment = TRUE, gmt_file = gmt,
                           mapping_file = NULL,
+                          condition_column = if (enr_group) "enr_group",
                           qea = list(standardize = standardize))
     )))
     list(pre = pre, config = config, gmt = gmt)
@@ -140,6 +155,64 @@ test_that(".metab_de_matrix_condition drops QC/blanks and matches by sample id",
 })
 
 
+test_that(".metab_de_matrix_condition drops samples the enrichment grouping marks as QC", {
+    work <- matrix(1:15, nrow = 3,
+                   dimnames = list(c("f1","f2","f3"),
+                                   c("s1","s2","s3","s4","s5")))
+    # s5 is biological by DE's column and its id; only `treatment` says QC.
+    meta <- data.frame(sample_id   = c("s1","s2","s3","s4","s5"),
+                       sample_type = c("A","A","B","B","A"),
+                       treatment   = c("ctl","ctl","trt","trt","QC"),
+                       stringsAsFactors = FALSE)
+    pre <- list(expr_work = work, expr_log = work, meta = meta,
+                info = list(normalization = list(scaling = "none")))
+    config <- list(modes = list(metabolomics = list(
+        de = list(condition_column = "sample_type"),
+        effects = list(samples = "sample_id", color = "sample_type")
+    )))
+
+    # DE's own exclusion keeps s5 (parity with run_metabolomics_de()).
+    expect_true("s5" %in% colnames(.metab_de_matrix_condition(pre, config)$mat))
+
+    out <- .metab_de_matrix_condition(pre, config, group_col = "treatment")
+    expect_setequal(colnames(out$mat), c("s1","s2","s3","s4"))
+    expect_false("QC" %in% out$meta$treatment)
+    # The returned condition is still DE's, aligned to the retained columns.
+    expect_equal(as.character(out$condition),
+                 out$meta$sample_type[match(colnames(out$mat), out$meta$sample_id)])
+
+    # Same column as DE, or a column the metadata lacks: DE's exclusion only.
+    expect_equal(.metab_de_matrix_condition(pre, config, group_col = "sample_type"),
+                 .metab_de_matrix_condition(pre, config))
+    expect_equal(.metab_de_matrix_condition(pre, config, group_col = "missing"),
+                 .metab_de_matrix_condition(pre, config))
+})
+
+test_that(".metab_de_matrix_condition filters on the enrichment grouping when DE's column is absent", {
+    # Pre-computed DE runs need no DE grouping, so the metadata may carry only
+    # the enrichment column: QC must still go, by that column, by id, and by
+    # qc.qc_flag_column.
+    work <- matrix(1:18, nrow = 3,
+                   dimnames = list(c("f1","f2","f3"),
+                                   c("s1","s2","s3","s4","s5","QC_2")))
+    meta <- data.frame(sample_id = c("s1","s2","s3","s4","s5","QC_2"),
+                       enr_group = c("A","A","B","B","QC","A"),
+                       batch     = c("b1","b1","b1","pool","b1","b1"),
+                       stringsAsFactors = FALSE)
+    pre <- list(expr_work = work, expr_log = work, meta = meta,
+                info = list(normalization = list(scaling = "none")))
+    config <- list(modes = list(metabolomics = list(
+        de = list(condition_column = "sample_type"),
+        effects = list(samples = "sample_id", color = "sample_type"),
+        qc = list(qc_flag_column = "batch")
+    )))
+
+    out <- .metab_de_matrix_condition(pre, config, group_col = "enr_group")
+    expect_setequal(colnames(out$mat), c("s1","s2","s3"))
+    expect_equal(out$meta$sample_id, colnames(out$mat))
+})
+
+
 # ---- QEA (needs globaltest) --------------------------------------------------
 
 test_that("run_metabolomics_qea runs on the DE matrix and returns a valid table", {
@@ -186,6 +259,20 @@ test_that("run_metabolomics_qea excludes QC/blank samples", {
     m <- function(r) r$table[order(r$table$pathway), c("pathway", "raw_p")]
     # The extreme QC sample would change results (and add a 3rd level) if kept;
     # biological filtering drops it, so results match the no-QC fixture.
+    expect_equal(m(run_metabolomics_qea(fx_qc$pre, fx_qc$config)),
+                 m(run_metabolomics_qea(fx_no$pre, fx_no$config)))
+})
+
+test_that("run_metabolomics_qea excludes a QC sample marked only by enrichment.condition_column", {
+    skip_if_not_installed("globaltest")
+    skip_if_not_installed("withr")
+
+    fx_no <- .make_enrichment_fixture(enr_group = TRUE)
+    fx_qc <- .make_enrichment_fixture(enr_group = TRUE, qc_enr_only = TRUE)
+    on.exit(unlink(c(fx_no$gmt, fx_qc$gmt)), add = TRUE)
+
+    m <- function(r) r$table[order(r$table$pathway), c("pathway", "raw_p")]
+    # Kept, the extreme QC sample would become a third "QC" group level.
     expect_equal(m(run_metabolomics_qea(fx_qc$pre, fx_qc$config)),
                  m(run_metabolomics_qea(fx_no$pre, fx_no$config)))
 })
@@ -250,6 +337,21 @@ test_that("run_metabolomics_ssgsea scores only biological samples (QC excluded)"
     expect_false("QC_1" %in% colnames(res$scores))
     expect_equal(ncol(res$scores), length(bio_ids))
     expect_setequal(colnames(res$scores), bio_ids)
+})
+
+test_that("run_metabolomics_ssgsea excludes a QC sample marked only by enrichment.condition_column", {
+    skip_if_not_installed("GSVA")
+    skip_if_not_installed("withr")
+
+    fx <- .make_enrichment_fixture(enr_group = TRUE, qc_enr_only = TRUE)
+    on.exit(unlink(fx$gmt), add = TRUE)
+
+    res <- run_metabolomics_ssgsea(fx$pre, fx$config)
+    skip_if(is.null(res) || is.null(res$scores), "ssGSEA produced no scores")
+
+    expect_setequal(colnames(res$scores), paste0("s", 1:10))
+    # Two biological levels remain, so the Wilcoxon table is produced.
+    expect_false(is.null(res$table))
 })
 
 test_that("run_metabolomics_ssgsea does not read pre$expr_raw anymore", {
