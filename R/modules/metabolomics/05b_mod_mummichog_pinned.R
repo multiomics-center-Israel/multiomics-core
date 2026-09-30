@@ -31,7 +31,7 @@
 #'   and the `<timestamp>.<project>/` tree), so a shared id makes every contrast's
 #'   tables identically named — fragile for any downstream keying and confusing
 #'   on disk. A unique id makes every output path and basename self-distinct.
-#' @param network,mode,instrument_ppm,permutations,cutoff,force_primary_ion,python
+#' @param network,mode,instrument_ppm,permutations,cutoff,force_primary_ion,seed,python
 #'   Run parameters (a single global model + params for every contrast).
 #' @return Character vector of files this contrast produced (input, id-map,
 #'   result tree, manifest).
@@ -39,7 +39,7 @@
 .mmc_run_one_contrast <- function(de_table, row_data, mz_col, rt_col,
                                   contrast_label, contrast_dir, project,
                                   network, mode, instrument_ppm, permutations,
-                                  cutoff, force_primary_ion, python) {
+                                  cutoff, force_primary_ion, seed, python) {
   for (col in c("feature_id", "P.Value", "logFC")) {
     if (!col %in% names(de_table)) {
       .mmc_stop("contrast '", contrast_label,
@@ -80,7 +80,8 @@
     instrument_ppm = instrument_ppm,
     permutations   = permutations,
     cutoff         = cutoff,
-    force_primary_ion = force_primary_ion
+    force_primary_ion = force_primary_ion,
+    seed           = seed
   )
   sort(unique(c(input_file, paste0(input_file, ".idmap.tsv"), result_files)))
 }
@@ -132,6 +133,12 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
   # 2.7.0's default (require a primary ion); set false to allow non-primary
   # adducts. Passed through to run_mummichog_v2().
   force_primary_ion <- mummi_cfg$force_primary_ion
+  # The project seed drives mummichog's permutation draws, so a rerun on the same
+  # input reproduces the pathway p-values. Validated here, before the
+  # per-contrast tryCatch, so a bad value fails the stage once instead of
+  # surfacing as every contrast failing. 1 when unset, like the other
+  # params$seed readers.
+  seed <- .mmc_as_seed(config$params$seed %||% 1L, key = "params.seed")
   # Select the metabolic model (06d): a URL+sha256 `model_ref` (fetched, verified
   # and cached) wins, then a local `model_json` path, then the built-in human
   # model. Falling back to human on a non-human organism is refused there rather
@@ -225,6 +232,7 @@ mod_mummichog_pinned <- function(pre, de_res, config, out_dir,
         permutations      = n_perm,
         cutoff            = p_cutoff,
         force_primary_ion = force_primary_ion,
+        seed              = seed,
         python            = python
       ),
       error = function(e) {
