@@ -2228,6 +2228,11 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
     for (folder in result_folders) {
       rds_files <- list.files(folder, pattern = "shiny_payload_.*\\.rds$",
                               recursive = TRUE, full.names = TRUE)
+      # A rerun leaves the older bare-named payload next to the run-named one, and
+      # the first match per layer wins below. Put the bare names last so a
+      # run-named file is preferred, instead of relying on list.files() order.
+      is_bare <- tools::file_path_sans_ext(basename(rds_files)) %in% names(payload_map)
+      rds_files <- c(rds_files[!is_bare], rds_files[is_bare])
       for (rds in rds_files) {
         base <- tools::file_path_sans_ext(basename(rds))
         # Current names are "<prefix>_<run_name>"; the older bare "<prefix>" is
