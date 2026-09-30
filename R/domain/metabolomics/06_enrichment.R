@@ -254,6 +254,78 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 }
 
 
+# ==== SHARED ANALYSIS MATRIX ================================================
+
+#' Rebuild the metabolomics DE analysis matrix + condition factor
+#'
+#' QEA and ssGSEA use this to start from the matrix, scale and biological-sample
+#' set that \code{run_metabolomics_de()} tests on: pre-scaling \code{expr_log}
+#' when a variance scaling was applied, otherwise \code{expr_work}, with
+#' QC/blank samples removed. It mirrors that function's setup
+#' (\code{03_differential.R}) without re-running DE; that function remains the
+#' source of truth — if its setup changes, update this to match.
+#'
+#' When DE tables are loaded pre-computed (\code{files$de_table}), no local DE
+#' runs: this is then the matrix the pipeline's own DE would use, not
+#' necessarily the one behind the loaded tables.
+#'
+#' \code{group_col} is the column the caller groups samples by (QEA/ssGSEA pass
+#' their resolved condition column, which honours
+#' \code{enrichment.condition_column}). QC/blank/pool exclusion runs on each of
+#' DE's condition column and \code{group_col} that exists in the metadata, so a
+#' technical sample marked only in the enrichment grouping never becomes a
+#' level of its own, and a pre-computed-DE run whose metadata lacks DE's column
+#' is still filtered. The sample set can then be a subset of DE's.
+#'
+#' PARITY CONTRACT: this is a deliberate duplication of DE's matrix/scale/sample
+#' selection, not an independent policy — \code{run_metabolomics_de()} does not
+#' call this helper, so the two can drift. Any change to DE's matrix selection
+#' (the expr_log-vs-expr_work branch or the biological-sample filtering) MUST be
+#' mirrored here. A single canonical helper used by both is the eventual fix, but
+#' is out of scope for this change.
+#'
+#' @param pre    Preprocessing results (expr_work/expr_log, meta, info).
+#' @param config Full pipeline config.
+#' @param group_col Optional metadata column the caller groups samples by; NULL
+#'   applies DE's sample exclusion only.
+#' @return list(mat, condition, meta): the features x biological-samples matrix,
+#'   the DE condition factor (aligned to matrix columns; empty when the metadata
+#'   lacks DE's column), and the aligned metadata.
+.metab_de_matrix_condition <- function(pre, config, group_col = NULL) {
+    cfg    <- config$modes$metabolomics
+    de_cfg <- cfg$de %||% list()
+
+    condition_col <- de_cfg$condition_column %||% cfg$effects$color %||% "sample_type"
+    sample_col    <- cfg$effects$samples %||% "sample_id"
+
+    # Variance-scaling (auto/pareto/range) distorts within-group variance, so DE
+    # tests on the pre-scaling matrix (expr_log). Keep this branch identical to
+    # run_metabolomics_de().
+    scaling_used <- pre$info$normalization$scaling %||% "none"
+    mat <- if (scaling_used %in% c("auto", "pareto", "range")) {
+        pre$expr_log %||% pre$expr_work
+    } else {
+        pre$expr_work
+    }
+
+    meta <- pre$meta[match(colnames(mat), pre$meta[[sample_col]]), , drop = FALSE]
+    # filter_to_biological() silently excludes nothing when its condition column
+    # is absent (zero-length condition values), so filter on each grouping
+    # column that exists, DE's first. With neither present, keep DE's call so
+    # the callers' own column checks report the problem.
+    filter_cols <- intersect(unique(c(condition_col, group_col)), colnames(meta))
+    if (length(filter_cols) == 0L) filter_cols <- condition_col
+    bio <- list(mat = mat, meta = meta)
+    for (col in filter_cols) {
+        bio <- filter_to_biological(bio$mat, bio$meta, col, sample_col,
+                                    label = "metabolomics enrichment",
+                                    qc_flag_column = cfg$qc$qc_flag_column)
+    }
+    list(mat = bio$mat, condition = factor(bio$meta[[condition_col]]),
+         meta = bio$meta)
+}
+
+
 # ==== QEA VIA GLOBALTEST =====================================================
 
 #' Run Quantitative Enrichment Analysis (QEA) using globaltest
@@ -264,7 +336,8 @@ translate_gmt_hmdb_to_kegg <- function(gmt_list, mapping_file) {
 #' libraries are combined into a single table with FDR correction across all
 #' pathways.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). QEA runs on the DE analysis matrix — see below.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, per_library_tables, method) or NULL if disabled/unavailable.
 run_metabolomics_qea <- function(pre, config) {
@@ -320,11 +393,29 @@ run_metabolomics_qea <- function(pre, config) {
     }
 
     mapping_file <- enr_cfg$mapping_file
+    # standardize (globaltest::gt) rescales predictors so each metabolite gets
+    # equal baseline weight. It changes pathway statistics, so treat it as a
+    # sensitivity setting, not an automatic correction. Validate loudly — a
+    # mistyped value must not silently coerce to FALSE.
+    standardize <- (enr_cfg$qea %||% list())$standardize %||% FALSE
+    if (!is.logical(standardize) || length(standardize) != 1L || is.na(standardize)) {
+        stop("enrichment.qea.standardize must be TRUE or FALSE.")
+    }
 
     # ---- Prepare QEA data ----
     # Map features to compound IDs and transpose into the samples-by-compounds
     # layout expected by globaltest. The result is written to a temp TSV.
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    #
+    # Matrix source: QEA now starts from the analysis matrix, scale, and
+    # biological-sample set that run_metabolomics_de() tests on — via
+    # .metab_de_matrix_condition() — instead of pre$expr_raw. This makes
+    # the QEA-vs-DE comparison fair (globaltest is scale/parametrization
+    # sensitive). Note: map_compounds_for_enrichment() then applies enrichment-
+    # specific compound mapping, KEGG restriction and dedup, so the FINAL feature
+    # set is not identical to DE's. Behavior change vs the old expr_raw path:
+    # QC/blank samples excluded, values on the log-normalized scale.
+    de_in  <- .metab_de_matrix_condition(pre, config, group_col = condition_col)
+    mapped <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     if (nrow(mapped$expr_mapped) < 3) {
         message("metabolomics QEA: too few compounds — skipping")
         return(NULL)
@@ -332,11 +423,28 @@ run_metabolomics_qea <- function(pre, config) {
 
     # Build globaltest input format: rows=samples, cols=compounds.
     # Prepend Sample and Group columns required by run_qea_gmt_internal().
-    meta <- pre$meta
-    mat_t <- as.data.frame(t(mapped$expr_mapped), check.names = FALSE)
-    conditions <- meta[[condition_col]][match(rownames(mat_t), meta[[sample_col]])]
+    # Align conditions against the ALREADY-FILTERED metadata (de_in$meta), matched
+    # by sample id (not position), and guard: a stale sample id or a bad
+    # condition_column must fail loudly here, not surface as NAs deep inside
+    # globaltest.
+    mat_t      <- as.data.frame(t(mapped$expr_mapped), check.names = FALSE)
+    sample_ids <- rownames(mat_t)
+    idx        <- match(sample_ids, de_in$meta[[sample_col]])
+    if (anyNA(idx)) {
+        stop("metabolomics QEA: analysis-matrix samples could not be matched to ",
+             "metadata via '", sample_col, "'.")
+    }
+    conditions <- droplevels(factor(de_in$meta[[condition_col]][idx]))
+    if (anyNA(conditions)) {
+        stop("metabolomics QEA: condition column '", condition_col,
+             "' has missing values after sample alignment.")
+    }
+    if (nlevels(conditions) < 2L) {
+        stop("metabolomics QEA: at least two condition levels are required ",
+             "(column '", condition_col, "').")
+    }
     df_t <- cbind(
-        data.frame(Sample = rownames(mat_t), Group = as.character(conditions),
+        data.frame(Sample = sample_ids, Group = as.character(conditions),
                    stringsAsFactors = FALSE),
         mat_t
     )
@@ -371,7 +479,8 @@ run_metabolomics_qea <- function(pre, config) {
 
     for (lib in libraries) {
         result <- tryCatch(
-            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file),
+            run_qea_gmt_internal(data_file, gmt_lookup[[lib]], mapping_file,
+                                 standardize = standardize),
             error = function(e) {
                 warning("QEA failed for ", lib, ": ", e$message)
                 NULL
@@ -411,6 +520,20 @@ run_metabolomics_qea <- function(pre, config) {
 
 # ---- QEA internals ----------------------------------------------------------
 
+#' Thin seam around globaltest::gt (isolates the standardize wiring)
+#'
+#' Exists so tests can assert that \code{standardize} is threaded through to
+#' \code{globaltest::gt()} without depending on gt's numeric output.
+#'
+#' @param response   Response factor of sample groups.
+#' @param X          Samples x compounds matrix.
+#' @param subsets    Named list of compound sets (pathways).
+#' @param standardize Logical, forwarded to \code{globaltest::gt()}.
+#' @return A \code{gt.object}.
+.run_globaltest <- function(response, X, subsets, standardize = FALSE) {
+    globaltest::gt(response, X, subsets = subsets, standardize = standardize)
+}
+
 #' Run QEA via globaltest on a single GMT file
 #'
 #' Parses the GMT, optionally translates HMDB IDs to KEGG, filters to pathways
@@ -420,8 +543,13 @@ run_metabolomics_qea <- function(pre, config) {
 #' @param data_file    Path to the tab-delimited QEA data (Sample, Group, compounds).
 #' @param gmt_file     Path to GMT file defining pathway sets.
 #' @param mapping_file Path to HMDB-to-KEGG mapping TSV (or NULL).
+#' @param standardize  Logical, passed to \code{globaltest::gt()}. When TRUE,
+#'   each compound is standardized to equal baseline weight (recommended when the
+#'   features' relative scales are arbitrary). Default FALSE preserves gt()'s
+#'   default.
 #' @return data.frame(pathway, raw_p, hits) or NULL if no testable pathways.
-run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
+run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file,
+                                 standardize = FALSE) {
     if (!requireNamespace("globaltest", quietly = TRUE)) {
         stop("Package 'globaltest' required for GMT enrichment.")
     }
@@ -465,9 +593,10 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
             " pathways with >= 2 matching compounds")
 
     # Run the global test: tests whether compound profiles in each pathway
-    # are collectively associated with the condition factor.
+    # are collectively associated with the condition factor. Wrapped in
+    # .run_globaltest() so the standardize wiring is a single, testable seam.
     res_gt <- tryCatch(
-        globaltest::gt(response, X, subsets = subsets),
+        .run_globaltest(response, X, subsets = subsets, standardize = standardize),
         error = function(e) { warning("globaltest error: ", e$message); NULL }
     )
     if (is.null(res_gt)) return(NULL)
@@ -493,7 +622,8 @@ run_qea_gmt_internal <- function(data_file, gmt_file, mapping_file) {
 #' Requires exactly two condition levels for statistical testing; if more
 #' are present, scores are returned without p-values.
 #'
-#' @param pre     Preprocessing results (must include expr_raw, meta, row_data).
+#' @param pre     Preprocessing results (must include expr_work/expr_log, meta,
+#'   row_data, info). Scores are computed on the DE analysis matrix.
 #' @param config  Full pipeline config (reads modes$metabolomics$enrichment).
 #' @return list(table, scores, method) or NULL if disabled/unavailable.
 run_metabolomics_ssgsea <- function(pre, config) {
@@ -525,8 +655,16 @@ run_metabolomics_ssgsea <- function(pre, config) {
     mapping_file <- enr_cfg$mapping_file
 
     # ---- Build expression matrix with compound IDs ----
-    # Map features to enrichment-ready IDs (Name/HMDB/KEGG)
-    mapped <- map_compounds_for_enrichment(pre$row_data, pre$expr_raw, mapping_file)
+    # Map features to enrichment-ready IDs (Name/HMDB/KEGG). Source matrix: the
+    # DE analysis matrix via .metab_de_matrix_condition(), not pre$expr_raw.
+    # Unlike QEA, ssGSEA is RANK-BASED within each sample, so a monotonic
+    # transform (log) does not change the scores — the alignment here is for
+    # consistency with DE on sample inclusion (QC/blank excluded) and on the
+    # steps that do reorder features within a sample (e.g. EigenMS, per-feature
+    # centering), not for scale per se. (GSVA's cross-sample score normalization
+    # also makes the sample set matter.)
+    de_in    <- .metab_de_matrix_condition(pre, config, group_col = condition_col)
+    mapped   <- map_compounds_for_enrichment(pre$row_data, de_in$mat, mapping_file)
     expr_mat <- as.matrix(mapped$expr_mapped)
     if (nrow(expr_mat) < 2) {
         message("metabolomics ssGSEA: too few features — skipping")
