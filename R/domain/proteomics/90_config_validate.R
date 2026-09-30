@@ -85,7 +85,8 @@ validate_proteomics_config <- function(cfg) {
         # A group passes when a feature has at least min_count values in it, so
         # a threshold of 0 passes every feature in that group, measured or not,
         # and a feature with no value anywhere can survive filtering. Checked per
-        # value: a bare number, or a `default` plus per-group thresholds.
+        # value: a bare number, or a `default` plus per-group thresholds. Inf is
+        # refused too: no finite count reaches it, so every feature would go.
         if (!is.null(cfg$filtering$min_count)) {
             mc <- cfg$filtering$min_count
             if (is.list(mc)) {
@@ -98,7 +99,7 @@ validate_proteomics_config <- function(cfg) {
             }
             for (i in seq_along(mc)) {
                 assert_scalar_num(mc[[i]], keys[[i]])
-                if (mc[[i]] < 1 || mc[[i]] != round(mc[[i]])) {
+                if (!is.finite(mc[[i]]) || mc[[i]] < 1 || mc[[i]] != round(mc[[i]])) {
                     stop(sprintf(paste0(
                         "'%s' must be a whole number of at least 1 (got %s). A threshold ",
                         "of 0 keeps features with no measured value in that group; the ",

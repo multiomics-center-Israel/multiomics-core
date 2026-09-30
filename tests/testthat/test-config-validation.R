@@ -182,11 +182,17 @@ test_that("validate_proteomics_config refuses min_count 0, naming the exact key"
                  "min_count: 1 with min_groups: 1", fixed = TRUE)
 })
 
-test_that("validate_proteomics_config refuses a fractional, negative or non-numeric min_count", {
+test_that("validate_proteomics_config refuses a fractional, negative, infinite or non-numeric min_count", {
     expect_error(validate_proteomics_config(with_min_count(1.5)),
                  "'filtering$min_count' must be a whole number", fixed = TRUE)
     expect_error(validate_proteomics_config(with_min_count(-1)),
                  "'filtering$min_count' must be a whole number", fixed = TRUE)
+    # YAML `.inf` arrives as Inf; no finite count reaches it, so every feature
+    # would be filtered out.
+    expect_error(validate_proteomics_config(with_min_count(Inf)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = Inf))),
+                 "'filtering$min_count$Treated' must be a whole number", fixed = TRUE)
     expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = 2.5))),
                  "'filtering$min_count$Treated' must be a whole number", fixed = TRUE)
     expect_error(validate_proteomics_config(with_min_count("3")),
