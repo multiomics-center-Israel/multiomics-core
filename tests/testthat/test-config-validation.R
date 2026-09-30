@@ -146,6 +146,57 @@ test_that("validate_proteomics_config errors on invalid scale_in", {
     expect_error(validate_proteomics_config(cfg))
 })
 
+# --- filtering$min_count (#236) ---
+# pass_filter() keeps a group when a feature has at least min_count values in
+# it, so 0 passed every feature, including ones never measured.
+
+with_min_count <- function(min_count) {
+    cfg <- create_mock_proteomics_config()
+    cfg$filtering <- list(min_count = min_count, min_groups = 1)
+    cfg
+}
+
+test_that("validate_proteomics_config accepts whole-number min_count >= 1", {
+    expect_true(validate_proteomics_config(with_min_count(3)))
+    expect_true(validate_proteomics_config(with_min_count(1)))
+    expect_true(validate_proteomics_config(with_min_count(list(default = 3))))
+    expect_true(validate_proteomics_config(with_min_count(list(default = 3, Treated = 2))))
+    expect_true(validate_proteomics_config(with_min_count(list(Control = 3, Treated = 2))))
+})
+
+test_that("validate_proteomics_config leaves an absent min_count to the default", {
+    cfg <- create_mock_proteomics_config()
+    cfg$filtering <- list(min_groups = 1)
+    expect_true(validate_proteomics_config(cfg))
+})
+
+test_that("validate_proteomics_config refuses min_count 0, naming the exact key", {
+    expect_error(validate_proteomics_config(with_min_count(0)),
+                 "'filtering$min_count' must be a whole number of at least 1", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 0))),
+                 "'filtering$min_count$default' must be a whole number of at least 1", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = 0))),
+                 "'filtering$min_count$Treated' must be a whole number of at least 1", fixed = TRUE)
+    # The message points at the least-filtering setting that remains valid.
+    expect_error(validate_proteomics_config(with_min_count(0)),
+                 "min_count: 1 with min_groups: 1", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses a fractional, negative or non-numeric min_count", {
+    expect_error(validate_proteomics_config(with_min_count(1.5)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(-1)),
+                 "'filtering$min_count' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = 3, Treated = 2.5))),
+                 "'filtering$min_count$Treated' must be a whole number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count("3")),
+                 "'filtering$min_count' must be a number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(list(default = NA))),
+                 "'filtering$min_count$default' must be a number", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_min_count(c(3, 2))),
+                 "'filtering$min_count' must be a number", fixed = TRUE)
+})
+
 # --- RNA-seq Config ---
 
 create_mock_rna_config <- function() {
