@@ -5,8 +5,8 @@
 # MUMMICHOG_SMOKE_INSTALL=1 to let the test build a throwaway venv and
 # pip install mummichog==2.7.0 itself (needs network + python3).
 #
-# Output is permutation-based and stochastic, so we assert only that the
-# expected files appear — never exact values.
+# This test checks only that the expected files appear. That a seeded rerun
+# reproduces the pathway table is covered in test-mummichog-seed.R.
 
 test_that("pinned mummichog v2 runs end-to-end and emits the expected tree", {
   # No skip_on_cran(): this project runs tests via `Rscript tests/testthat.R`
@@ -53,7 +53,7 @@ test_that("pinned mummichog v2 runs end-to-end and emits the expected tree", {
     out_dir      = file.path(work, "v2"),
     project      = "smoke_test",
     python       = py,
-    permutations = 20,          # small for speed; results are stochastic anyway
+    permutations = 20,          # small for speed
     cutoff       = 0.05
   )
 

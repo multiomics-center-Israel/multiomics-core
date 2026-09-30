@@ -8,14 +8,21 @@
 # (05b), gated by modes.metabolomics.enrichment.mummichog.enabled.
 #
 # Design principles:
-#   * Do NOT import mummichog internals. Call `python -m mummichog.main` only.
+#   * Do NOT import mummichog internals. Run the `mummichog.main` module only
+#     (through a seeding prelude, .mmc_launcher_args(), that runs it exactly as
+#     `python -m mummichog.main` would).
 #   * mummichog lives in its OWN pinned venv (see setup-mummichog-venv.sh); the
 #     main R pipeline never depends on Python packages.
 #   * Fail loudly and early on bad input and on missing/unexpected output.
 #   * Return the full set of produced files (+ a manifest) so {targets} can hash
 #     them with format = "file". v2 emits a whole result tree, not one file.
-#   * v2 output is STOCHASTIC (permutation-based, no seed control). Do not expect
-#     bit-identical reruns; {targets} only reruns on input change, so that's fine.
+#   * v2 p-values come from permutations drawn with Python's global stdlib
+#     `random` (functional_analysis.py; mummichog never seeds it and has no seed
+#     flag). The launcher seeds it from params$seed, so a rerun with the same
+#     input and seed reproduces every pathway's p-value and overlap. mummichog
+#     still writes some sets of objects in memory-address order, so the order
+#     of rows with tied p-values, and of the ids within an overlap cell, can
+#     differ between runs; compare those columns as sets.
 #
 # Verified against mummichog==2.7.0 (get_user_data.py / reporting.py + a real
 # run):
@@ -438,10 +445,76 @@ write_mummichog_manifest <- function(files, manifest_file) {
             paste(as.character(x), collapse = ", "), "'.")
 }
 
-#' Assemble the `python -m mummichog.main` argument vector
+#' Validate a seed for the mummichog launcher and return it as an integer
+#'
+#' Checked BEFORE any coercion: as.integer() would turn 1.5 into 1 and a
+#' character "7" into 7 without a word, and a run would then claim a seed it
+#' was never given. Negative seeds are refused because Python's random.seed()
+#' seeds from abs() of an integer, so -5 and 5 would silently give the same
+#' draws.
+#'
+#' @param x   The seed value (a whole number, 0 to .Machine$integer.max).
+#' @param key Name to quote in the error message.
+#' @return `x` as a single integer.
+#' @noRd
+.mmc_as_seed <- function(x, key = "seed") {
+  ok <- is.numeric(x) && length(x) == 1L && !is.na(x) && is.finite(x) &&
+    x == round(x) && x >= 0 && x <= .Machine$integer.max
+  if (!ok) {
+    .mmc_stop("'", key, "' must be a single whole number between 0 and ",
+              .Machine$integer.max, "; got '",
+              paste(format(x), collapse = ", "), "' (", class(x)[1], ").")
+  }
+  as.integer(x)
+}
+
+#' Interpreter arguments that seed Python's RNG, then run mummichog.main
+#'
+#' mummichog 2.7.0 draws its permutation nulls with Python's global stdlib
+#' `random` and never seeds it, and its CLI has no seed flag. This prelude
+#' seeds that RNG and then runs the module with runpy as `__main__`, which is
+#' what `python -m mummichog.main` does, so no mummichog internals are imported
+#' and the CLI arguments that follow reach mummichog's getopt unchanged. The
+#' seed travels as the first script argument and is removed before mummichog
+#' parses sys.argv.
+#'
+#' @param seed   Seed for Python's `random` (validated by .mmc_as_seed()).
+#' @param module Module to run; mummichog.main in production. A test can point
+#'   it at a stand-in module to check the prelude without a mummichog install.
+#' @return Character vector: `-c`, the prelude, and the seed.
+#' @noRd
+.mmc_launcher_args <- function(seed, module = "mummichog.main") {
+  seed <- .mmc_as_seed(seed)
+  prelude <- paste0(
+    "import random, runpy, sys; random.seed(int(sys.argv[1])); del sys.argv[1]; ",
+    "runpy.run_module('", module, "', run_name='__main__', alter_sys=True)"
+  )
+  c("-c", prelude, as.character(seed))
+}
+
+#' Environment for the mummichog subprocess
+#'
+#' PYTHONHASHSEED must be set before the interpreter starts (it is read once at
+#' startup), so it goes in the process environment rather than the launcher.
+#' It fixes the iteration order of the sets of string ids mummichog builds. The
+#' p-values do not depend on it (the seeded `random` alone reproduces them),
+#' and it cannot fix sets of objects, which Python orders by memory address.
+#' The headless matplotlib
+#' backend is needed because mummichog imports matplotlib.pyplot and writes
+#' figures, and a non-framework venv python on macOS must not reach for a GUI
+#' backend. "current" inherits the caller's environment.
+#'
+#' @return A processx `env` vector.
+#' @noRd
+.mmc_subprocess_env <- function() {
+  c("current", MPLBACKEND = "Agg", PYTHONHASHSEED = "0")
+}
+
+#' Assemble mummichog's own command-line arguments
 #'
 #' Pure builder split out of run_mummichog() so the CLI flags are unit-testable
-#' without a live subprocess. SHORT flags only: mummichog 2.7.0's getopt long
+#' without a live subprocess. It returns mummichog's flags only; the
+#' interpreter arguments that launch the module come from .mmc_launcher_args(). SHORT flags only: mummichog 2.7.0's getopt long
 #' options for --cutoff and --force_primary_ion are declared without a trailing
 #' "=", so they cannot take a value — the short forms (-c, -z) do.
 #'
@@ -453,16 +526,14 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #'   emit `-z True` / `-z False`; `-z` takes a VALUE in 2.7.0 (getopt "z:"), so a
 #'   bare -z is invalid, and FALSE is what allows non-primary adducts through.
 #' @param extra_args Extra CLI args appended verbatim.
-#' @return Character vector of arguments following the interpreter.
+#' @return Character vector of mummichog arguments (after the launcher's).
 #' @noRd
 .mmc_build_cli_args <- function(infile, project, network, mode,
                                 instrument_ppm, permutations,
                                 cutoff = NULL, force_primary_ion = NULL,
                                 extra_args = character()) {
-  # `-m mummichog.main` is Python's module flag; the later `-m <mode>` is
-  # mummichog's ionization mode (Python passes it through).
-  args <- c("-m", "mummichog.main",
-            "-f", infile,
+  # `-m <mode>` here is mummichog's ionization mode, not Python's module flag.
+  args <- c("-f", infile,
             "-o", project,
             "-n", network,
             "-m", mode,
@@ -517,7 +588,8 @@ write_mummichog_manifest <- function(files, manifest_file) {
 
 #' Run mummichog v2 as an isolated subprocess
 #'
-#' Invokes `python -m mummichog.main` in the pinned venv with the working
+#' Runs the `mummichog.main` module in the pinned venv, seeded (see
+#' .mmc_launcher_args()), with the working
 #' directory set to out_dir (so v2's default workdir resolves there). out_dir is
 #' WIPED and recreated on each run for a clean, hashable result tree.
 #'
@@ -535,6 +607,10 @@ write_mummichog_manifest <- function(files, manifest_file) {
 #' @param force_primary_ion Optional logical passed to mummichog's `-z`. NULL
 #'                        keeps 2.7.0's default (require a primary ion); FALSE
 #'                        emits `-z False` to allow non-primary adducts.
+#' @param seed           Seed for the permutation draws: a whole number from 0
+#'                        to .Machine$integer.max (the pipeline passes
+#'                        params$seed). The same input and seed reproduce the
+#'                        pathway table.
 #' @param timeout        Seconds before the process is killed.
 #' @param extra_args     Extra CLI args passed through verbatim.
 #' @return Sorted character vector of all produced files plus the manifest.
@@ -547,12 +623,15 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
                           permutations = 100,
                           cutoff = NULL,
                           force_primary_ion = NULL,
+                          seed = 1L,
                           timeout = 3600,
                           extra_args = character()) {
   # Validate the shared runner (interpreter exists, pinned version) and take its
   # absolute path. Kept here too — defensive when run_mummichog() is called
   # directly — even though mod_mummichog_pinned() also preflights before its loop.
   python <- .mmc_preflight_runner(python)
+  # Validate before wiping out_dir, so a bad seed never costs a previous result.
+  launcher <- .mmc_launcher_args(seed)
   if (file.exists(network)) network <- normalizePath(network, mustWork = TRUE)
   if (!grepl("^[A-Za-z0-9._-]+$", project)) {
     .mmc_stop("Use a simple project name (letters, digits, dot, underscore, hyphen).")
@@ -566,20 +645,20 @@ run_mummichog <- function(infile, out_dir, project = "mummichog_run",
   out_dir <- normalizePath(out_dir, mustWork = TRUE)
   log_file <- file.path(out_dir, "runner.log")
 
-  args <- .mmc_build_cli_args(infile, project, network, mode, instrument_ppm,
-                              permutations, cutoff, force_primary_ion, extra_args)
+  args <- c(launcher,
+            .mmc_build_cli_args(infile, project, network, mode, instrument_ppm,
+                                permutations, cutoff, force_primary_ion,
+                                extra_args))
 
-  # Force a headless matplotlib backend: mummichog imports matplotlib.pyplot and
-  # writes figures, and a non-framework venv python on macOS must not reach for a
-  # GUI backend. "current" inherits the caller's environment.
   result <- processx::run(
     command = python, args = args, wd = out_dir,
-    env = c("current", MPLBACKEND = "Agg"),
+    env = .mmc_subprocess_env(),
     echo = TRUE, error_on_status = FALSE, timeout = timeout
   )
 
   writeLines(
     c(paste("Version:", "v2 (mummichog==2.7.0)"),
+      paste("Seed:", launcher[[3]], "(PYTHONHASHSEED=0)"),
       paste("Timeout (s):", timeout),
       paste("Working directory:", out_dir),
       paste("Command:", python, paste(args, collapse = " ")),
