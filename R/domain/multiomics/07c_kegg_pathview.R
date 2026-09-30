@@ -589,68 +589,6 @@ plot_multiple_pathways <- function(pathway_ids,
 }
 
 
-#' Run consensus pathview for multi-omics data
-#'
-#' Generates KEGG pathway overlays for pathways agreed upon by multiple
-#' integration methods.
-#'
-#' @param consensus_pathways Character vector of KEGG pathway IDs
-#' @param mae MultiAssayExperiment object
-#' @param config Full config object
-#' @param out_dir Output directory
-#' @return List of pathview results
-#' @export
-run_consensus_pathview <- function(consensus_pathways, mae, config, out_dir = NULL) {
-    message("=== Running Consensus Pathview ===")
-
-    if (!requireNamespace("pathview", quietly = TRUE)) {
-        message("Package 'pathview' not installed. Skipping.")
-        return(NULL)
-    }
-
-    if (length(consensus_pathways) == 0) {
-        message("No consensus pathways provided.")
-        return(NULL)
-    }
-
-    pathview_cfg <- config$modes$multiomics$enrichment$pathview %||% list()
-    top_n <- pathview_cfg$top_n %||% 10
-
-    # Limit to top N
-    if (length(consensus_pathways) > top_n) {
-        message(sprintf("Limiting to top %d pathways", top_n))
-        consensus_pathways <- consensus_pathways[seq_len(top_n)]
-    }
-
-    # Create output directory
-    if (is.null(out_dir)) {
-        out_dir <- tempdir()
-    }
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-    # Extract gene/metabolite fold changes from MAE
-    # This would need to be adapted based on MAE structure
-    message("Extracting fold changes from MAE...")
-
-    # Placeholder - actual implementation would extract from MAE
-    results <- list()
-
-    for (pid in consensus_pathways) {
-        message("Processing: ", pid)
-        tryCatch({
-            # Actual pathview call would go here
-            results[[pid]] <- list(pathway = pid, status = "processed")
-        }, error = function(e) {
-            warning("Failed: ", pid, " - ", e$message)
-            results[[pid]] <- list(pathway = pid, error = e$message)
-        })
-    }
-
-    message("Consensus pathview complete: ", length(results), " pathways processed")
-    return(results)
-}
-
-
 # =============================================================================
 # KO-space pathview for organisms with no OrgDb
 # =============================================================================
