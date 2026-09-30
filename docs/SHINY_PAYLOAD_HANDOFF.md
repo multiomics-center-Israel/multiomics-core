@@ -17,7 +17,7 @@
 3. Three things differ by omics: what `expr_norm` is (4.1), what `de_final_table`
    contains (4.2), and how per-contrast columns in `de_stats` are named (4.3).
    Use `contrasts` and `de_summary` for the contrast list instead of parsing
-   column names.
+   column names (except proteomics without a contrasts file, see 4.3).
 4. `de_final_table` is a clean data.frame in all three omics.
 5. What changed compared with earlier payloads: section 7. What we need from
    you: section 8.
@@ -73,7 +73,7 @@ is worth testing that they print in the app's environment (see section 8).
 | `payload_source` | character | yes | omics identifier |
 | `sample_meta` | data.frame | yes | row names = sample IDs, matching `colnames(expr_norm)` |
 | `feature_annot` | data.frame | no | row names = feature IDs; the ID column is **not** in the body. Every annotation column of the feature table flows through. Index by `rownames(feature_annot)`. |
-| `contrasts` | data.frame | no | one row per contrast, with a `Contrast_name` column. `NULL` if no contrasts were supplied. |
+| `contrasts` | data.frame | no | one row per contrast, with a `Contrast_name` column. `NULL` if no contrasts were supplied; this includes proteomics runs without a contrasts file, see 4.3. |
 
 ### Expression
 
@@ -81,7 +81,7 @@ is worth testing that they print in the app's environment (see section 8).
 |---|---|---|---|
 | `expr_raw` | matrix | yes | filtered features x samples, **before** normalization; may contain `NA` |
 | `expr_norm` | matrix | yes | features x samples, no `NA`. **What it is differs by omics**, see section 4. |
-| `expr_long` | data.frame | no | long format of `expr_norm` joined with `sample_meta` (`feature_id`, `sample_id`, `value`, plus metadata columns) |
+| `expr_long` | data.frame | no | long format of `expr_norm` joined with `sample_meta` (`feature_id`, `sample_id`, `value`, plus metadata columns). **In metabolomics it is built before the display fill (4.1), so it keeps `NA` where a value was missing while `expr_norm` has them filled.** |
 
 ### QC / PCA
 
@@ -110,7 +110,7 @@ is worth testing that they print in the app's environment (see section 8).
 
 | Key | Type | Notes |
 |---|---|---|
-| `clust_partition` | data.frame | partition-clustering assignment per feature |
+| `clust_partition` | integer (named) | cluster assignment per feature, as a named integer vector (names are feature IDs): from the partition clustering when it ran, otherwise the hierarchical tree cut at `k` |
 | `clust_patterns` | list | binary clustering patterns |
 | `clust_patterns_list` | character | labels of the binary patterns that have at least one feature (e.g. `"010"`) |
 | `clust_heatmaps_by_pattern` | list | pheatmap objects per pattern |
@@ -162,6 +162,7 @@ The block is validated by `validate_enrichment_payload()`.
   clustering ran on.
   The unfilled matrix is available as `metab_norm` (section 6), so
   `is.na(payload$metab_norm)` gives the positions of the original missing values.
+  `expr_long` is built before the fill and therefore also keeps those `NA`.
 
 ### 4.2 `de_final_table`
 
@@ -208,6 +209,13 @@ As emitted by the builders:
 All three also have `feature_id` and `pass_any_contrast`. To avoid hard-coding
 these patterns, `de_summary` (contrast, up, down, total) and `contrasts` give the
 contrast list and the counts.
+
+**Exception (proteomics without a contrasts file):** when no contrasts file is
+supplied, the proteomics DE step generates its contrasts itself, but these are not
+passed on to the export. In that case `contrasts`, `de_summary`, `de_final_table`,
+`all_final_xlsx` and `de_final_xlsx` are `NULL`, although `de_stats` is populated.
+The contrast names then have to be read from the `pass.imputs.<contrast>` columns
+of `de_stats`.
 
 ## 5. Metabolomics-specific extension keys
 
@@ -309,3 +317,4 @@ Open on the pipeline side (not blocking this handoff):
 
 - Enrichment for metabolomics and proteomics in the canonical `enrichment` key.
 - Renaming the `include_legacy` switch.
+- Proteomics runs without a contrasts file: passing the generated contrasts to the export (4.3).

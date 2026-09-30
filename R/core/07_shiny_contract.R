@@ -157,9 +157,13 @@ get_payload_key_definitions <- function() {
 
         # --- Clustering ---
         clust_partition = list(
-            type = "data.frame",
+            type = "integer",
             required = FALSE,
-            description = "Partition clustering assignments (feature_id, cluster)"
+            description = paste(
+                "Cluster assignment per feature: a named integer vector (names are",
+                "feature IDs), from the partition clustering when it ran, otherwise",
+                "the hierarchical tree cut at k"
+            )
         ),
         clust_patterns = list(
             type = "list",
