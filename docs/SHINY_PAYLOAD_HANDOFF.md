@@ -228,8 +228,10 @@ These are **not** canonical. They exist only in `payload_source == "metabolomics
 
 `rf_*`, `plsda_*`, `enrichment_*`, `missingness`, `sample_map` and the keys in
 section 6 are written when the pipeline runs with `include_legacy = TRUE` (its
-current setting; the name is historical). `mummichog`, `chosen_norm` and
-`samples_hm_w_qc` are always written.
+current setting; the name is historical). `mummichog` and `chosen_norm` are
+always present (possibly `NULL`). `samples_hm_w_qc` does not depend on
+`include_legacy`, but is present only when the corresponding QC heatmap is
+available.
 
 ### 5.1 `mummichog`
 
