@@ -21,6 +21,9 @@
 #' @param pca_res Optional: pre-computed PCA results
 #' @param clustering_res Optional: pre-computed clustering results
 #' @param annot Optional: external annotation data.frame
+#' @param final_results Optional: the final-results data.frame (as built by
+#'   \code{build_final_results_proteomics()}), the source of \code{de_final_table}.
+#'   NULL leaves \code{de_final_table} NULL.
 #' @return A named list containing every canonical key (NULL where not applicable),
 #'   plus any omics-specific extension keys.
 #'
@@ -191,18 +194,42 @@ build_shiny_payload_proteomics <- function(
             if (!is.null(summary_counts)) payload$de_summary <- summary_counts
         }
 
-        # de_final_table: DE-filtered final results table (richer than de_stats)
-        if (!is.null(final_results)){
-          message(sprintf("[shiny export] read %s file", final_results))
-          de_df = as.data.frame(readxl::read_excel(final_results, sheet = "Results"))
-          payload$de_final_table <- de_df
+        # de_final_table: clean DE table built from the final-results data.frame
+        # (not from the workbook, whose Results sheet is a presentation layout).
+        # Same construction as the RNA-seq and metabolomics payloads: DE rows
+        # only, cutoff/pass helper columns dropped, clustering order + z-scores
+        # appended.
+        if (!is.null(final_results)) {
+            # Same key and default the export module uses to build final_results.
+            id_col <- prot_cfg$de_table$id_col %||% "FeatureID"
+
+            if (!all(c(id_col, "pass_any_contrast") %in% names(final_results))) {
+                warning("[shiny_export] de_final_table: final_results has no '",
+                        id_col, "' or 'pass_any_contrast' column; left NULL.")
+            } else {
+                is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
+                de_df <- final_results[is_de, , drop = FALSE]
+                de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
+                excel_ord <- clustering_res$excel_order %||% NULL
+                if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+                    de_df$order <- match(de_df[[id_col]], excel_ord$ordered_ids)
+                    if (!is.null(excel_ord$zscore_mat)) {
+                        zmat <- excel_ord$zscore_mat
+                        idx <- match(de_df[[id_col]], rownames(zmat))
+                        de_df <- cbind(de_df, zmat[idx, , drop = FALSE])
+                    }
+                }
+
+                payload$de_final_table <- de_df
+            }
         }
     }
 
     # ============================================================
     # Embedded xlsx bytes (all_final_xlsx, de_final_xlsx)
-    # Independent of the de_final_table path above: that one still reads the
-    # DE xlsx via readxl to populate a data.frame; this one stores raw bytes.
+    # Independent of the de_final_table path above, which uses the final-results
+    # data.frame; this one stores the workbooks' raw bytes.
     # ============================================================
     payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 

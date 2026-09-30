@@ -161,12 +161,6 @@ mod_proteomics_exports <- function(
     # 6. Build and save Shiny payload
     # =========================================================================
     shiny_payload_file <- file.path(out_dir, "shiny_payload_proteomics.rds")
-    # Same DE-workbook pattern attach_final_results_xlsx_bytes() uses. A separate
-    # name (not `final_results`) keeps the data.frame above intact, and NULL is
-    # passed when no workbook exists: the builder reads the file only if non-NULL,
-    # and character(0) would reach readxl and fail.
-    de_xlsx <- excel_files[grepl(.final_xlsx_de_pattern, basename(excel_files))]
-
     shiny_payload <- build_shiny_payload_proteomics(
         pre = pre,
         de_res = de_res,
@@ -174,7 +168,9 @@ mod_proteomics_exports <- function(
         config = config,
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
-        final_results = if (length(de_xlsx) > 0) de_xlsx[[1]] else NULL,
+        # The data.frame built above (NULL if no DE results); the workbooks reach
+        # the payload as raw bytes through xlsx_files.
+        final_results = final_results,
         xlsx_files = excel_files,
         out_dir = out_dir
     )
