@@ -25,7 +25,7 @@
 #' @export
 get_payload_key_definitions <- function() {
     list(
-        # --- Execution Info (3 keys) ---
+        # --- Execution Info ---
         payload_version = list(
             type = "character",
             required = TRUE,
@@ -42,7 +42,7 @@ get_payload_key_definitions <- function() {
             description = "Omics type identifier ('rnaseq', 'proteomics', 'metabolomics')"
         ),
 
-        # --- Metadata (3 keys) ---
+        # --- Metadata ---
         sample_meta = list(
             type = "data.frame",
             required = TRUE,
@@ -53,8 +53,17 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "Feature annotations (gene symbols, descriptions, etc.)"
         ),
+        contrasts = list(
+            type = "data.frame",
+            required = FALSE,
+            description = paste(
+                "Contrast definitions, one row per contrast, with a Contrast_name",
+                "column (as read from the contrasts input). NULL when no contrasts",
+                "were supplied."
+            )
+        ),
 
-        # --- Expression Data (3 keys) ---
+        # --- Expression Data ---
         expr_raw = list(
             type = "matrix",
             required = TRUE,
@@ -71,7 +80,7 @@ get_payload_key_definitions <- function() {
             description = "Long-format expression data (feature_id, sample_id, value + metadata)"
         ),
 
-        # --- QC/PCA (4 keys) ---
+        # --- QC/PCA ---
         pca_object = list(
             type = "prcomp",
             required = FALSE,
@@ -104,7 +113,7 @@ get_payload_key_definitions <- function() {
             description = "Samples distance heatmap with NA (relevant to proteomics)"
         ),
 
-        # --- DE Results (5 keys) ---
+        # --- DE Results ---
         de_model = list(
             type = "model",
             required = FALSE,
@@ -146,16 +155,29 @@ get_payload_key_definitions <- function() {
             description = "Raw bytes of Final_results_DE_P_<p_cutoff>.xlsx (writeBin to round-trip)"
         ),
 
-        # --- Clustering (4 keys) ---
+        # --- Clustering ---
         clust_partition = list(
-            type = "data.frame",
+            type = "integer",
             required = FALSE,
-            description = "Partition clustering assignments (feature_id, cluster)"
+            description = paste(
+                "Cluster assignment per feature: a named integer vector (names are",
+                "feature IDs), from the partition clustering when it ran, otherwise",
+                "the hierarchical tree cut at k"
+            )
         ),
         clust_patterns = list(
             type = "list",
             required = FALSE,
             description = "Binary clustering patterns"
+        ),
+        clust_patterns_list = list(
+            type = "character",
+            required = FALSE,
+            description = paste(
+                "Labels of the binary patterns that have at least one feature",
+                "assigned (e.g. '010'). NULL when binary-pattern clustering did",
+                "not run."
+            )
         ),
         clust_heatmap_hier = list(
             type = "list",
@@ -172,13 +194,18 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "Partition clustering heatmap (pheatmap figure)"
         ),
+        clust_heatmap_partition_fig = list(
+            type = "gtable",
+            required = FALSE,
+            description = "Drawable gtable of the partition clustering heatmap (extracted from clust_heatmap_partition)"
+        ),
         clust_heatmap_hier_fig = list(
             type = "list",
             required = FALSE,
             description = "Hierarchical clustering heatmap figure (pheatmap object only, extracted from clust_heatmap_hier)"
         ),
 
-        # --- Configuration (6 keys) ---
+        # --- Configuration ---
         padj_cutoff = list(
             type = "numeric",
             required = TRUE,
@@ -226,7 +253,7 @@ get_payload_key_definitions <- function() {
 
 #' Get list of all canonical key names
 #'
-#' @return Character vector of canonical key names (29 keys)
+#' @return Character vector of canonical key names
 #' @export
 get_canonical_keys <- function() {
     names(get_payload_key_definitions())
@@ -256,7 +283,7 @@ get_optional_keys <- function() {
 
 #' Initialize empty canonical Shiny payload
 #'
-#' Creates a payload structure with all 29 canonical keys set to NULL.
+#' Creates a payload structure with every canonical key set to NULL.
 #' Use this as the starting point for all omics builders.
 #'
 #' @param source Character. Omics type: "rnaseq", "proteomics", or "metabolomics"
@@ -514,99 +541,6 @@ assert_de_stats <- function(de_stats, context = "de_stats") {
 attach_legacy_aliases <- function(payload) {
     payload
 }
-
-#' Remove legacy aliases from payload
-#'
-#' Strips legacy keys, leaving only canonical keys.
-#' Use for clean exports or testing.
-#'
-#' @param payload Payload with legacy aliases
-#'
-#' @return Payload with only canonical keys
-#' @export
-# strip_legacy_aliases <- function(payload) {
-#     canonical_keys <- get_canonical_keys()
-#     payload[canonical_keys]
-# }
-
-#' Attach legacy aliases to a Shiny payload
-#'
-#' Placeholder — returns payload unchanged. Legacy alias mappings
-#' can be added here as needed for backward compatibility.
-#'
-#' @param payload Shiny payload list
-#' @return payload (unchanged)
-attach_legacy_aliases <- function(payload) {
-    payload
-}
-
-
-# ------------------------------------------------------------
-# Legacy Base Builder (for backward compatibility during transition)
-# ------------------------------------------------------------
-
-#' Build base legacy Shiny structure (generic)
-#'
-#' DEPRECATED: Use init_shiny_payload() for new code.
-#' This function exists only to support existing domain builders during transition.
-#'
-#' CRITICAL: This function preserves EXACT legacy values.
-#' Do NOT modify legacy_source strings - they must match pre-refactor values exactly.
-#'
-#' @param legacy_source EXACT legacy source string (e.g., "Proteomics pipeline", "RNAseq pipeline")
-#' @param pca_basename PCA 3D basename (e.g., "prot_pca_3d", "rna_pca_3d")
-#' @return List with all legacy keys initialized to NULL
-#' @export
-# build_shiny_legacy_base <- function(legacy_source, pca_basename) {
-    # Validate inputs
-    # if (!is.character(legacy_source) || length(legacy_source) != 1 || nchar(legacy_source) == 0) {
-    #     stop("legacy_source must be a non-empty string")
-    # }
-    # if (!is.character(pca_basename) || length(pca_basename) != 1 || nchar(pca_basename) == 0) {
-    #     stop("pca_basename must be a non-empty string")
-    # }
-    # 
-    # # Return structure with EXACT legacy values
-    # list(
-    #     # Metadata
-    #     legacy_version = "1.0",
-    #     legacy_created_at = Sys.time(),
-    #     legacy_source = legacy_source, # EXACT value, no transformations
-    # 
-    #     # Data objects (full union of keys from both modes)
-    #     col_data = NULL,
-    #     contrasts_data = NULL,
-        # dds = NULL,
-        # norm_counts = NULL,
-        # norm_log_counts = NULL,
-        # norm_log_counts_pca = NULL, # PCA prcomp object (optional)
-        # mat2plot = NULL, # LEGACY: DE expression matrix (features x samples) - use de_expr_norm in new code
-        # de_expr_norm = NULL, # DE expression matrix (features x samples) - canonical key
-        # EFFECTS = NULL,
-        # PCA_3D_BASENAME = pca_basename,
-#         stats_df = NULL,
-#         DE_genes_stats = NULL,
-#         hm_hier_de = NULL,
-#         patterns = NULL,
-#         heatmaps_by_pattern = NULL,
-#         New_clusters = NULL,
-#         annot = NULL,
-#         trinotate_main = NULL,
-# 
-#         # Config parameters
-#         PADJ_CUTOFF = NULL,
-#         DESEQ_PADJ_CUTOFF = NULL,
-#         LOG_FC_CUTOFF = NULL,
-#         LINEAR_FC_CUTOFF = NULL,
-#         NORM_METHOD = NULL,
-#         GROUP = NULL,
-# 
-#         # Shiny aesthetics (column names)
-#         color = NULL,
-#         shape = NULL
-#     )
-# }
-
 
 # ------------------------------------------------------------
 # Expression Data Helpers

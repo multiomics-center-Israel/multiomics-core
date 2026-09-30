@@ -311,8 +311,7 @@ mod_rnaseq_qc_pre <- function(pre, config, out_dir) {
         files = unique(files),
         plots = plots,
         objects = objs,
-        # Keep these at top level for compatibility with current build_data_to_shiny_legacy_rna
-        # (until that function is updated to look inside 'objects')
+        # Kept at top level: build_shiny_payload_rnaseq() reads them from here
         norm_log_counts_pca = pca_obj,
         pca_scores = assert_pca_scores(scores, context = "rnaseq QC")
     )

@@ -121,6 +121,10 @@ mod_proteomics_exports <- function(
     # =========================================================================
     # 5. Write Excel files (using the already-built final_results)
     # =========================================================================
+    # Defined up front: the Shiny payload below reads it even when no workbook
+    # was written (final_results NULL), which would otherwise be "object not found".
+    excel_files <- character(0)
+
     if (!is.null(final_results)) {
         # Extract Excel config for enriched layout (annotation rows, sample labels)
         excel_cfg <- prot_cfg$excel %||% list()
@@ -156,9 +160,8 @@ mod_proteomics_exports <- function(
     # =========================================================================
     # 6. Build and save Shiny payload
     # =========================================================================
-    shiny_payload_file <- file.path(out_dir, "shiny_payload_proteomics.rds")
-    final_results = files[grep("Final_results_DE", files)]
-    
+    shiny_payload_file <- file.path(
+        out_dir, sprintf("shiny_payload_proteomics_%s.rds", get_run_name(config)))
     shiny_payload <- build_shiny_payload_proteomics(
         pre = pre,
         de_res = de_res,
@@ -166,6 +169,8 @@ mod_proteomics_exports <- function(
         config = config,
         pca_res = qc_pre_obj,
         clustering_res = clustering_res,
+        # The data.frame built above (NULL if no DE results); the workbooks reach
+        # the payload as raw bytes through xlsx_files.
         final_results = final_results,
         xlsx_files = excel_files,
         out_dir = out_dir
