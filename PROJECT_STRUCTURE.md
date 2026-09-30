@@ -272,6 +272,7 @@ What *is* here:
 
 - `R/core/07_shiny_contract.R` — defines the **canonical Shiny payload contract v2.0** (`init_shiny_payload()`, `assert_shiny_payload_contract()`).
 - Per-omics `*_shiny_export.R` files in `R/domain/<omics>/` that produce payloads conforming to the contract.
+- `docs/SHINY_PAYLOAD_HANDOFF.md` — payload contract and handoff notes for the app owner (keys, per-omics differences).
 
 **Interpretation:** the actual Shiny app lives in a separate repository and consumes payloads this pipeline emits. Changes to the *contract* break the downstream app, so the "do not touch" rule effectively covers `R/core/07_shiny_contract.R` and the `*_shiny_export.R` files. Confirm with the team before changing payload schemas.
 

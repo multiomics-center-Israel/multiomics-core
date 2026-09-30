@@ -1,10 +1,26 @@
 # Shiny payload: contract and handoff (v2.0)
 
-> **Status: DRAFT for review.** Not yet reviewed by the app owner.
+> **Status: for review by the app owner.**
 > This document describes what the `multiomics-core` pipeline **emits**. It was
-> written without access to the app code (the app repository was empty when this
-> was prepared), so nothing here has been checked against what the app actually
-> reads. Section 8 lists the questions that only the app owner can answer.
+> written without access to the app code, so nothing here has been checked
+> against what the app actually reads. Section 8 lists the questions that only
+> the app owner can answer.
+
+## Quick start
+
+1. Load the file for your omics and check `payload$payload_source` and
+   `payload$payload_version` (`"2.0"`); file names are in section 1.
+2. **Canonical keys** (section 3) are always in the list, `NULL` when they do not
+   apply. Use `is.null()`. **Extension keys** (section 5) exist only for
+   metabolomics; treat missing as `NULL`. Payloads from older runs lack the keys
+   added later (section 7).
+3. Three things differ by omics: what `expr_norm` is (4.1), what `de_final_table`
+   contains (4.2), and how per-contrast columns in `de_stats` are named (4.3).
+   Use `contrasts` and `de_summary` for the contrast list instead of parsing
+   column names.
+4. `de_final_table` is a clean data.frame in all three omics.
+5. What changed compared with earlier payloads: section 7. What we need from
+   you: section 8.
 
 ## 1. What you receive
 
@@ -28,9 +44,8 @@ The payload is a named list. The contract is defined in code by
 
 **R packages needed to load and draw the objects:** `ggplot2` (plus `ggrepel` for
 the mummichog plots), `plotly` (`pca_3d`), `pheatmap`/`grid` (heatmaps), and
-`limma` or `DESeq2` if you use `de_model`. ggplot objects are saved as R
-objects, so a different `ggplot2` version in the app than in the pipeline may fail
-to print them (see section 8).
+`limma` or `DESeq2` if you use `de_model`. Plots are stored as R objects, so it
+is worth testing that they print in the app's environment (see section 8).
 
 ## 2. Conventions
 
@@ -134,9 +149,13 @@ The block is validated by `validate_enrichment_payload()`.
   is reproducible. The QC/PCA objects and the clustering objects in the payload
   are based on this matrix. The differential-abundance statistics are **not**
   computed on it: they come from separate multiple imputations that are pooled,
-  so no single matrix in the payload is "the matrix the DE used". Values in
-  `expr_norm` may therefore differ from the z-scores in `de_final_table` for
-  cells that were imputed.
+  so no single matrix in the payload is "the matrix the DE used". When
+  clustering ran, the `<sample>.zscore` columns of `de_final_table` come from the
+  clustering's z-scored matrix, which is derived from the same
+  `pre$expr_imp_single`, so they are consistent with `expr_norm`. The
+  `<sample>.norm` columns of `de_final_table` are different: they hold the
+  imputation the DE model was fitted on (its first draw), and can differ from
+  `expr_norm` for cells that were imputed.
 - **Metabolomics:** the normalized working matrix (`pre$expr_work`) in which any
   `NA` left after preprocessing is filled with the median of that feature.
   **This fill is for display in the app only.** The differential analysis uses
@@ -150,28 +169,33 @@ The block is validated by `validate_enrichment_payload()`.
 ### 4.2 `de_final_table`
 
 A plain data.frame meant for use in the app, not a copy of the Excel layout.
+It is built the same way in all three omics from the final-results data.frame
+that also feeds the workbook: DE rows only (`pass_any_contrast == 1`), without
+the `manual_cutoffs*` and `pass_any_contrast` columns. When the clustering order
+is available it also contains `order` (rank of the feature in the clustering
+order) and one `<sample>.zscore` column per sample. Rows are **not** sorted by
+`order`. If no feature passes, it is a zero-row data.frame; if it could not be
+built, or no final-results table was available, it is `NULL` (with a warning in
+the first case). The workbook-only columns `Hierarchical_Order`, `Partition_*`
+and `Binary_*`, and the sheet layout (sample and annotation rows above the
+table), are not part of it.
 
-- **RNA-seq and metabolomics:** built by the same function that builds the
-  final-results workbook. Contains the DE rows only (`pass_any_contrast == 1`),
-  without the `manual_cutoffs*` and `pass_any_contrast` columns. When the
-  clustering order is available it also contains `order` (rank of the feature in
-  the clustering order) and one `<sample>.zscore` column per sample. Rows are
-  **not** sorted by `order`. If no feature passes, it is a zero-row data.frame;
-  if it could not be built, it is `NULL` and the pipeline warns.
-  - RNA-seq: the ID column is `Gene` or `FeatureID`.
-  - Metabolomics: the ID column is `feature_id`, followed by `original_id` (when
-    available) and the other annotation columns; then one column per sample
-    (values from the working matrix **before** the display fill, so `NA` where
-    the measurement was missing); optional per-group `CV.<group>` columns
-    (present only when enabled and valid for the chosen normalization); then the
-    per-contrast statistics (`linearFC.`, `pvalue.`, `padj.`, `upDown.` plus the
-    contrast name).
-  - Compared with `Final_results_DE_P_*.xlsx`, it has no sheet layout, no
-    `Partition_*` / `Binary_*` columns, and the ordering column is called `order`
-    (in the workbook: `Hierarchical_Order`).
-- **Proteomics:** currently read from the `Results` sheet of the DE workbook.
-  **Open item:** the shape of this table (header row, extra rows from the sheet
-  layout) is being checked. Do not build on its column structure yet.
+- **RNA-seq:** the ID column is `Gene` or `FeatureID`.
+- **Metabolomics:** the ID column is `feature_id`, followed by `original_id` (when
+  available) and the other annotation columns; then one column per sample
+  (values from the working matrix **before** the display fill, so `NA` where
+  the measurement was missing); optional per-group `CV.<group>` columns
+  (present only when enabled and valid for the chosen normalization); then the
+  per-contrast statistics (`linearFC.`, `pvalue.`, `padj.`, `upDown.` plus the
+  contrast name).
+- **Proteomics:** the ID column is the one named by
+  `modes$proteomics$de_table$id_col` in the config (default `FeatureID`). Besides
+  annotation columns and the statistics per contrast, it holds one column per
+  sample with the measured values (`NA` where not observed), the
+  `<sample>.norm` block described in 4.1, and group mean, CV and pre-imputation
+  summary columns.
+- In all omics the ordering column is called `order` (in the workbook:
+  `Hierarchical_Order`).
 
 ### 4.3 Per-contrast column names in `de_stats`
 
@@ -202,11 +226,10 @@ These are **not** canonical. They exist only in `payload_source == "metabolomics
 | `enrichment_qea`, `enrichment_ssgsea`, `enrichment_ssgsea_scores`, `enrichment_ora`, `enrichment_gsea` | metabolomics enrichment tables | pending migration to the canonical `enrichment` block; names may change |
 | `missingness`, `sample_map` | missingness summary; sample-ID mapping from the raw file | |
 
-`rf_*`, `plsda_*`, `enrichment_*`, `missingness`, `sample_map` and the
-compatibility keys in section 6 are written only when the pipeline runs with
-`include_legacy = TRUE`, which is what it does today. Despite its name, that
-switch also controls this newer content. `mummichog`, `chosen_norm` and
-`samples_hm_w_qc` do not depend on it.
+`rf_*`, `plsda_*`, `enrichment_*`, `missingness`, `sample_map` and the keys in
+section 6 are written when the pipeline runs with `include_legacy = TRUE` (its
+current setting; the name is historical). `mummichog`, `chosen_norm` and
+`samples_hm_w_qc` are always written.
 
 ### 5.1 `mummichog`
 
@@ -256,11 +279,15 @@ If the app was written against an earlier payload, these are the differences.
 2. **Metabolomics `de_final_table`** was a copy of `de_sig_stats`. It is now the
    richer table described in 4.2. When no feature passes it is a zero-row
    data.frame instead of `NULL`.
-3. **Metabolomics `clust_patterns_list`** is now populated (it was missing).
-4. **New metabolomics extension key `mummichog`.**
-5. Removed from the pipeline (no payload effect): the deprecated RNA-seq
-   "legacy" export functions.
-6. `payload_version` stays `"2.0"`: all changes are additive except item 2.
+3. **Proteomics `de_final_table`** was read from the `Results` sheet of the DE
+   workbook, which is a presentation layout, so it was not a clean table. It is
+   now built from the final-results data.frame like the other omics (4.2); the
+   workbook-only columns `Hierarchical_Order`, `Partition_*` and `Binary_*` are
+   no longer in it.
+4. **Metabolomics `clust_patterns_list`** is now populated (it was missing).
+5. **New metabolomics extension key `mummichog`.**
+6. `payload_version` stays `"2.0"`: all changes are additive except items 2 and 3
+   (the content of `de_final_table`).
 
 ## 8. Open items and questions for the app owner
 
@@ -272,18 +299,14 @@ Not verified against the app:
    or `logFC_<contrast>`? The three schemas in 4.3 differ, and the planned
    rename of internal differential-expression names to "differential abundance"
    for metabolomics (`docs/DE_to_DA_rename_map.md`) is blocked until this is known.
-3. **ggplot2 / ggrepel versions** in the app compared with the pipeline
-   environment (needed to print `imp_hist_samp` and the `mummichog` plots).
-4. **Does the app need `expr_norm` without `NA`?** In metabolomics it is filled
-   for that reason (4.1). If the app can handle `NA`, the unfilled matrix could
-   be exposed as `expr_norm` in the future.
-5. **Does the app use `slug`?** It can be dropped if not.
-6. **Empty results:** `de_sig_stats` is `NULL` for proteomics but a zero-row
+3. **Compatibility testing:** please check that `imp_hist_samp` and the
+   `mummichog` plots print in the app's environment (they depend on the
+   installed `ggplot2` and `ggrepel`).
+4. **Empty results:** `de_sig_stats` is `NULL` for proteomics but a zero-row
    data.frame for RNA-seq and metabolomics when nothing passes. Which should the
    app expect? (To be aligned once known.)
 
 Open on the pipeline side (not blocking this handoff):
 
-- Proteomics `de_final_table` shape (4.2).
 - Enrichment for metabolomics and proteomics in the canonical `enrichment` key.
 - Renaming the `include_legacy` switch.
