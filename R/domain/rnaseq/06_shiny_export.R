@@ -12,7 +12,7 @@
 #' Build canonical Shiny payload for RNA-seq
 #'
 #' Creates a Shiny payload conforming to the canonical contract (v2.0).
-#' All 26 keys are guaranteed to exist (NULL if not applicable).
+#' Every canonical key is guaranteed to exist (NULL if not applicable).
 #'
 #' @param pre Preprocessing results (from preprocess_rna)
 #' @param de_res DE results (from run_deseq2_de). Can be NULL if DE was skipped.
@@ -23,7 +23,8 @@
 #' @param annot Optional: external annotation data.frame
 #' @param trinotate_main Optional: Trinotate annotation data.frame (for legacy compatibility)
 #'
-#' @return A named list with 26 canonical keys (+ legacy aliases if requested)
+#' @return A named list containing every canonical key (NULL where not applicable),
+#'   plus any omics-specific extension keys.
 #'
 #' @export
 build_shiny_payload_rnaseq <- function(
@@ -54,7 +55,7 @@ build_shiny_payload_rnaseq <- function(
     effects_cfg <- rna_cfg$effects %||% list()
 
     # ============================================================
-    # METADATA (3 keys)
+    # METADATA
     # ============================================================
 
     # sample_meta: Sample metadata with rownames as sample IDs
@@ -68,19 +69,19 @@ build_shiny_payload_rnaseq <- function(
     }
 
     # contrasts: Contrast definitions
-    payload$contrasts <- inputs$contrasts
+    payload["contrasts"] <- list(inputs$contrasts)
 
     # feature_annot: Feature annotations (gene symbols, descriptions).
     # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
     # the shared helper so future annotation columns flow through automatically.
-    payload$feature_annot <- if (!is.null(annot)) {
+    payload["feature_annot"] <- list(if (!is.null(annot)) {
         annot
     } else {
         build_feature_annot(pre$row_data, rna_cfg$id_columns$gene_id)
-    }
+    })
 
     # ============================================================
-    # EXPRESSION DATA (2 keys)
+    # EXPRESSION DATA
     # ============================================================
 
     # expr_raw: Filtered expression (before normalization)
@@ -90,10 +91,10 @@ build_shiny_payload_rnaseq <- function(
     payload$expr_norm <- pre$expr_work
 
     # expr_long: Long-format expression with metadata
-    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+    payload["expr_long"] <- list(build_expr_long(payload$expr_norm, payload$sample_meta))
 
     # ============================================================
-    # QC/PCA (3 keys)
+    # QC/PCA
     # ============================================================
 
     if (!is.null(pca_res)) {
@@ -114,7 +115,7 @@ build_shiny_payload_rnaseq <- function(
     }
 
     # ============================================================
-    # DE RESULTS (5 keys)
+    # DE RESULTS
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -128,7 +129,7 @@ build_shiny_payload_rnaseq <- function(
         # was designed to run with annot_cols = NULL (see 05_outputs_legacy.R:113).
         de_stats_pre_annot <- NULL
         if (!is.null(de_res$tables)) {
-            payload$de_stats <- build_rnaseq_summary_df(de_res$tables, de_cfg)
+            payload["de_stats"] <- list(build_rnaseq_summary_df(de_res$tables, de_cfg))
 
             # Ensure feature_id column exists (standardize from Gene/FeatureID)
             if (!is.null(payload$de_stats)) {
@@ -197,11 +198,11 @@ build_shiny_payload_rnaseq <- function(
             } else {
                 character(0)
             }
-            payload$de_summary <- build_de_summary_counts_rnaseq(
+            payload["de_summary"] <- list(build_de_summary_counts_rnaseq(
                 payload$de_stats,
                 contrasts = contrasts_vec,
                 out_dir   = out_dir
-            )
+            ))
         }
 
         # de_final_table: DE-filtered final results table (richer than de_stats)
@@ -244,7 +245,7 @@ build_shiny_payload_rnaseq <- function(
     payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
-    # CLUSTERING (4 keys)
+    # CLUSTERING
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -256,7 +257,7 @@ build_shiny_payload_rnaseq <- function(
         if (!is.null(val)) payload$clust_partition <- val
         if (!is.null(src$patterns)) {
           payload$clust_patterns <- src$patterns
-          payload$clust_patterns_list <- src$patterns_list}
+          payload["clust_patterns_list"] <- list(src$patterns_list)}
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
 
@@ -290,7 +291,7 @@ build_shiny_payload_rnaseq <- function(
         payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
-    # CONFIGURATION (6 keys)
+    # CONFIGURATION
     # ============================================================
 
     payload$padj_cutoff <- de_cfg$padj_cutoff %||% de_cfg$p_cutoff %||% 0.05

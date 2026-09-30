@@ -25,7 +25,7 @@
 #' @export
 get_payload_key_definitions <- function() {
     list(
-        # --- Execution Info (3 keys) ---
+        # --- Execution Info ---
         payload_version = list(
             type = "character",
             required = TRUE,
@@ -42,7 +42,7 @@ get_payload_key_definitions <- function() {
             description = "Omics type identifier ('rnaseq', 'proteomics', 'metabolomics')"
         ),
 
-        # --- Metadata (3 keys) ---
+        # --- Metadata ---
         sample_meta = list(
             type = "data.frame",
             required = TRUE,
@@ -53,8 +53,17 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "Feature annotations (gene symbols, descriptions, etc.)"
         ),
+        contrasts = list(
+            type = "data.frame",
+            required = FALSE,
+            description = paste(
+                "Contrast definitions, one row per contrast, with a Contrast_name",
+                "column (as read from the contrasts input). NULL when no contrasts",
+                "were supplied."
+            )
+        ),
 
-        # --- Expression Data (3 keys) ---
+        # --- Expression Data ---
         expr_raw = list(
             type = "matrix",
             required = TRUE,
@@ -71,7 +80,7 @@ get_payload_key_definitions <- function() {
             description = "Long-format expression data (feature_id, sample_id, value + metadata)"
         ),
 
-        # --- QC/PCA (4 keys) ---
+        # --- QC/PCA ---
         pca_object = list(
             type = "prcomp",
             required = FALSE,
@@ -104,7 +113,7 @@ get_payload_key_definitions <- function() {
             description = "Samples distance heatmap with NA (relevant to proteomics)"
         ),
 
-        # --- DE Results (5 keys) ---
+        # --- DE Results ---
         de_model = list(
             type = "model",
             required = FALSE,
@@ -146,7 +155,7 @@ get_payload_key_definitions <- function() {
             description = "Raw bytes of Final_results_DE_P_<p_cutoff>.xlsx (writeBin to round-trip)"
         ),
 
-        # --- Clustering (4 keys) ---
+        # --- Clustering ---
         clust_partition = list(
             type = "data.frame",
             required = FALSE,
@@ -156,6 +165,15 @@ get_payload_key_definitions <- function() {
             type = "list",
             required = FALSE,
             description = "Binary clustering patterns"
+        ),
+        clust_patterns_list = list(
+            type = "character",
+            required = FALSE,
+            description = paste(
+                "Labels of the binary patterns that have at least one feature",
+                "assigned (e.g. '010'). NULL when binary-pattern clustering did",
+                "not run."
+            )
         ),
         clust_heatmap_hier = list(
             type = "list",
@@ -172,13 +190,18 @@ get_payload_key_definitions <- function() {
             required = FALSE,
             description = "Partition clustering heatmap (pheatmap figure)"
         ),
+        clust_heatmap_partition_fig = list(
+            type = "gtable",
+            required = FALSE,
+            description = "Drawable gtable of the partition clustering heatmap (extracted from clust_heatmap_partition)"
+        ),
         clust_heatmap_hier_fig = list(
             type = "list",
             required = FALSE,
             description = "Hierarchical clustering heatmap figure (pheatmap object only, extracted from clust_heatmap_hier)"
         ),
 
-        # --- Configuration (6 keys) ---
+        # --- Configuration ---
         padj_cutoff = list(
             type = "numeric",
             required = TRUE,
@@ -226,7 +249,7 @@ get_payload_key_definitions <- function() {
 
 #' Get list of all canonical key names
 #'
-#' @return Character vector of canonical key names (29 keys)
+#' @return Character vector of canonical key names
 #' @export
 get_canonical_keys <- function() {
     names(get_payload_key_definitions())
@@ -256,7 +279,7 @@ get_optional_keys <- function() {
 
 #' Initialize empty canonical Shiny payload
 #'
-#' Creates a payload structure with all 29 canonical keys set to NULL.
+#' Creates a payload structure with every canonical key set to NULL.
 #' Use this as the starting point for all omics builders.
 #'
 #' @param source Character. Omics type: "rnaseq", "proteomics", or "metabolomics"

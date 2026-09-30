@@ -54,7 +54,7 @@ make_metab_export_fixture <- function(pass = c(1L, 1L, 0L, 0L, 1L),
         excel_order = list(ordered_ids = c("F5", "F1", "F2"),
                            zscore_mat  = zscore_mat),
         objects = list(patterns      = data.frame(pattern = "p1"),
-                       patterns_list = list(p1 = "F1"))
+                       patterns_list = c("010", "101"))
     )
 
     list(pre = pre, de_res = de_res, inputs = inputs, config = config,
@@ -137,7 +137,7 @@ test_that("a failing final-results build warns and leaves de_final_table NULL", 
 
 test_that("clust_patterns_list is carried over from the clustering objects", {
     p <- build_metab_payload(make_metab_export_fixture())
-    expect_identical(p$clust_patterns_list, list(p1 = "F1"))
+    expect_identical(p$clust_patterns_list, c("010", "101"))
 })
 
 test_that("clust_patterns_list stays present as NULL when patterns have no list", {

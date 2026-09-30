@@ -16,7 +16,7 @@
 #' Build canonical Shiny payload for Metabolomics
 #'
 #' Creates a Shiny payload conforming to the canonical contract (v2.0).
-#' All 26 keys are guaranteed to exist (NULL if not applicable).
+#' Every canonical key is guaranteed to exist (NULL if not applicable).
 #'
 #' @param pre Preprocessing results (from preprocess_metabolomics)
 #' @param de_res DE results (from metabolomics DE analysis). Can be NULL if DE was skipped.
@@ -29,7 +29,9 @@
 #' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
 #'
-#' @return A named list with 26 canonical keys (+ legacy aliases if requested)
+#' @return A named list containing every canonical key (NULL where not applicable),
+#'   plus omics-specific extension keys (and legacy keys when
+#'   \code{include_legacy} is TRUE).
 #'
 #' @export
 build_shiny_payload_metabolomics <- function(
@@ -63,7 +65,7 @@ build_shiny_payload_metabolomics <- function(
     effects_cfg <- metab_cfg$effects %||% list()
 
     # ============================================================
-    # METADATA (3 keys)
+    # METADATA
     # ============================================================
 
     # sample_meta: Sample metadata with rownames as sample IDs
@@ -76,20 +78,20 @@ build_shiny_payload_metabolomics <- function(
     }
 
     # contrasts: Contrast definitions
-    payload$contrasts <- inputs$contrasts %||% NULL
+    payload["contrasts"] <- list(inputs$contrasts)
 
     # feature_annot: Feature annotations (metabolite names, m/z, RT, etc.).
     # An explicit `annot` arg overrides; otherwise derive from pre$row_data via
     # the shared helper (feature_id -> rownames) so future annotation columns
     # flow through automatically.
-    payload$feature_annot <- if (!is.null(annot)) {
+    payload["feature_annot"] <- list(if (!is.null(annot)) {
         annot
     } else {
         build_feature_annot(pre$row_data, "feature_id")
-    }
+    })
 
     # ============================================================
-    # EXPRESSION DATA (2 keys)
+    # EXPRESSION DATA
     # ============================================================
 
     # expr_raw: Filtered expression (before normalization, may have NAs)
@@ -100,7 +102,7 @@ build_shiny_payload_metabolomics <- function(
     payload$expr_norm <- pre$expr_work
 
     # expr_long: Long-format expression with metadata
-    payload$expr_long <- build_expr_long(payload$expr_norm, payload$sample_meta)
+    payload["expr_long"] <- list(build_expr_long(payload$expr_norm, payload$sample_meta))
 
     # Handle NAs in expr_norm if present (warn but don't fail)
     if (!is.null(payload$expr_norm) && anyNA(payload$expr_norm)) {
@@ -123,7 +125,7 @@ build_shiny_payload_metabolomics <- function(
     }
 
     # ============================================================
-    # QC/PCA (3 keys)
+    # QC/PCA
     # ============================================================
 
     if (!is.null(pca_res)) {
@@ -131,26 +133,25 @@ build_shiny_payload_metabolomics <- function(
         pca_objects <- pca_res$objects %||% pca_res
 
         # pca_object: prcomp result
-        payload$pca_object <- pca_objects$norm_log_counts_pca %||%
-                              pca_objects$pca_object %||%
-                              pca_objects$pca %||%
-                              NULL
+        payload["pca_object"] <- list(pca_objects$norm_log_counts_pca %||%
+                                      pca_objects$pca_object %||%
+                                      pca_objects$pca)
 
         # pca_scores: PCA scores data.frame with metadata
-        payload$pca_scores <- pca_objects$pca_scores %||% NULL
+        payload["pca_scores"] <- list(pca_objects$pca_scores)
 
 
         # pca_3d: 3D PCA plotly widget
-        payload$pca_3d <- pca_res$plots$pca_3d %||% NULL
+        payload["pca_3d"] <- list(pca_res$plots$pca_3d)
         
         # QC plot
-        payload$imp_hist_samp <- pca_res$plots$imputation_hist %||% NULL
+        payload["imp_hist_samp"] <- list(pca_res$plots$imputation_hist)
         payload$samples_hm_w_qc <- pca_res$plots$dist_heatmap %||% NULL
-        payload$samples_hm <- pca_res$plots$dist_heatmap_noQC %||% NULL
+        payload["samples_hm"] <- list(pca_res$plots$dist_heatmap_noQC)
     }
 
     # ============================================================
-    # DE RESULTS (5 keys)
+    # DE RESULTS
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -213,11 +214,11 @@ build_shiny_payload_metabolomics <- function(
             } else {
                 character(0)
             }
-            payload$de_summary <- build_de_summary_counts_metabolomics(
+            payload["de_summary"] <- list(build_de_summary_counts_metabolomics(
                 payload$de_stats,
                 contrasts = contrasts_vec,
                 out_dir   = out_dir
-            )
+            ))
         }
 
         # de_final_table: clean DE table with the same rows and stat columns as the
@@ -268,7 +269,7 @@ build_shiny_payload_metabolomics <- function(
     payload <- attach_final_results_xlsx_bytes(payload, xlsx_files)
 
     # ============================================================
-    # CLUSTERING (4 keys)
+    # CLUSTERING
     # Note: Keys already initialized to NULL by init_shiny_payload()
     # Do NOT use payload$key <- NULL here as it REMOVES the key!
     # ============================================================
@@ -315,7 +316,7 @@ build_shiny_payload_metabolomics <- function(
       payload$clust_heatmap_hier_fig <- val$pheatmap$gtable
 
     # ============================================================
-    # CONFIGURATION (6 keys)
+    # CONFIGURATION
     # ============================================================
 
     # Canonical key names (overwrite init_shiny_payload defaults)
