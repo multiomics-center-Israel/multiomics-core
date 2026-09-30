@@ -28,6 +28,10 @@
 #' @param plsda_res Optional: PLS-DA results (from feature_sel_res$plsda)
 #' @param enrichment_res Optional: enrichment results (from mod_metabolomics_enrichment)
 #' @param annot Optional: external annotation data.frame
+#' @param mummichog_pathways Optional: per-contrast mummichog pathway tables, as
+#'   passed to the HTML report (`metab_mummichog_report_pathways`). Becomes
+#'   `payload$mummichog`, one section per contrast built by
+#'   `build_mummichog_report_sections()`; NULL when not supplied or empty.
 #'
 #' @return A named list containing every canonical key (NULL where not applicable),
 #'   plus omics-specific extension keys (and legacy keys when
@@ -47,7 +51,8 @@ build_shiny_payload_metabolomics <- function(
     annot = NULL,
     include_legacy = TRUE,
     xlsx_files = NULL,
-    out_dir = NULL
+    out_dir = NULL,
+    mummichog_pathways = NULL
 ) {
     # ============================================================
     # Initialize canonical payload structure
@@ -361,6 +366,18 @@ build_shiny_payload_metabolomics <- function(
     if (!is.null(effects_cfg$shape)) {
         payload$shape <- as.character(effects_cfg$shape)
     }
+
+    # ============================================================
+    # MUMMICHOG (metabolomics extension: per-contrast plot + table)
+    # ============================================================
+    # Built by the same function the HTML report uses, so the app receives the
+    # report's own ggplot and table (plus title, subtitle and slug) for each
+    # contrast instead of rebuilding them. NULL when mummichog did not run or no
+    # contrast has a result; list-style assignment keeps the key present then.
+    mummichog_sections <- build_mummichog_report_sections(mummichog_pathways, config)
+    payload["mummichog"] <- list(
+        if (length(mummichog_sections) > 0) mummichog_sections else NULL
+    )
 
     # ============================================================
     # VALIDATION

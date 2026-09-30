@@ -61,12 +61,13 @@ make_metab_export_fixture <- function(pass = c(1L, 1L, 0L, 0L, 1L),
          clustering_res = clustering_res)
 }
 
-build_metab_payload <- function(fx, clustering_res = fx$clustering_res) {
+build_metab_payload <- function(fx, clustering_res = fx$clustering_res,
+                                include_legacy = FALSE, ...) {
     suppressMessages(suppressWarnings(
         build_shiny_payload_metabolomics(
             pre = fx$pre, de_res = fx$de_res, inputs = fx$inputs,
             config = fx$config, clustering_res = clustering_res,
-            include_legacy = FALSE
+            include_legacy = include_legacy, ...
         )
     ))
 }
@@ -147,4 +148,72 @@ test_that("clust_patterns_list stays present as NULL when patterns have no list"
 
     expect_true("clust_patterns_list" %in% names(p))
     expect_null(p$clust_patterns_list)
+})
+
+# --- mummichog extension --------------------------------------------------
+
+# Columns as mummichog delivers them (literal `p-value`), see test-mummichog-plots.R.
+make_mummichog_pathways <- function() {
+    data.frame(
+        check.names      = FALSE,
+        stringsAsFactors = FALSE,
+        pathway      = c("Pathway one", "Pathway two", "Pathway three"),
+        overlap_size = c(5, 3, 8),
+        pathway_size = c(10, 6, 12),
+        "p-value"    = c(0.02, 0.20, 0.60)
+    )
+}
+
+test_that("mummichog is NULL, with the key present, when it did not run or has no result", {
+    fx <- make_metab_export_fixture()
+    for (input in list(NULL, list(), list(A_vs_B = NULL))) {
+        p <- build_metab_payload(fx, mummichog_pathways = input)
+        expect_true("mummichog" %in% names(p))
+        expect_null(p$mummichog)
+    }
+    expect_null(build_metab_payload(fx)$mummichog)   # argument omitted
+})
+
+test_that("mummichog sections match build_mummichog_report_sections() output", {
+    fx <- make_metab_export_fixture()
+    by_contrast <- list(A_vs_B = make_mummichog_pathways())
+
+    p      <- build_metab_payload(fx, mummichog_pathways = by_contrast)
+    direct <- build_mummichog_report_sections(by_contrast, fx$config)
+
+    expect_named(p$mummichog, names(direct))
+    sec <- p$mummichog[["A_vs_B"]]
+    dir <- direct[["A_vs_B"]]
+
+    expect_named(sec, c("title", "subtitle", "plot", "table", "slug"),
+                 ignore.order = TRUE)
+    expect_identical(sec$title, dir$title)
+    expect_identical(sec$subtitle, dir$subtitle)
+    expect_identical(sec$slug, dir$slug)
+    expect_identical(sec$table, dir$table)
+    # Two separately built ggplots never compare identical() (each holds its own
+    # plot_env), so compare what defines the plot: class, labels and data.
+    expect_s3_class(sec$plot, "ggplot")
+    expect_identical(sec$plot$labels$title, dir$plot$labels$title)
+    expect_identical(sec$plot$data, dir$plot$data)
+    expect_length(sec$plot$layers, length(dir$plot$layers))
+})
+
+test_that("mummichog keeps only contrasts that have a result", {
+    fx <- make_metab_export_fixture()
+    p <- build_metab_payload(
+        fx, mummichog_pathways = list(A_vs_B = make_mummichog_pathways(),
+                                      no_result = NULL))
+    expect_named(p$mummichog, "A_vs_B")
+})
+
+test_that("mummichog does not depend on include_legacy", {
+    fx <- make_metab_export_fixture()
+    by_contrast <- list(A_vs_B = make_mummichog_pathways())
+
+    for (legacy in c(FALSE, TRUE)) {
+        p <- build_metab_payload(fx, include_legacy = legacy,
+                                 mummichog_pathways = by_contrast)
+        expect_named(p$mummichog, "A_vs_B", info = paste("include_legacy =", legacy))
+    }
 })

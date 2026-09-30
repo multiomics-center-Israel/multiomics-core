@@ -454,6 +454,7 @@ pipe_metabolomics <- function(chosen_norm = NULL, skip_outputs = FALSE,
         enrichment_res = metab_enrichment_res,
         include_legacy = TRUE,
         xlsx_files     = metab_final_results,
+        mummichog_pathways = metab_mummichog_report_pathways,
         out_file       = file.path(metab_out_dir,
                                    "shiny_payload_metabolomics.rds")
       ),
