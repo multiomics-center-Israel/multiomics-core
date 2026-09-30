@@ -2,6 +2,7 @@
 # Each module runs end-to-end with a tiny synthetic DE table + an inline GMT,
 # and asserts no error — catches "unused argument" and similar wiring breakage
 # that CI's unit tests don't otherwise exercise (CI doesn't invoke tar_make()).
+# The proteomics tests also assert which identifiers reach enrichment.
 
 test_that("mod_rnaseq_pathway: end-to-end wiring with synthetic DE + tiny GMT", {
     skip_if_not_installed("fgsea")
@@ -100,16 +101,16 @@ test_that("mod_rnaseq_pathway resolves a list of relative GMT paths against the 
     expect_gt(length(res$pathway_results), 0)
 })
 
-test_that("run_proteomics_pathway: end-to-end wiring with synthetic summary + tiny GMT", {
-    skip_if_not_installed("fgsea")
+# run_proteomics_pathway() maps FeatureID to the first Genes symbol before
+# enrichment, except when annotation.skip_annotation is true (#148): a
+# non-model run's custom GMT is keyed on the raw Protein.Group FeatureID, and
+# remapping there left every gene set with an empty intersection, silently.
+# The tests below assert on the identifiers that reach fgsea, read back from
+# the leading edges it returns, so reverting that gate fails them.
 
+prot_pathway_fixture <- function(skip_annotation, gmt_lines) {
     gmt <- tempfile(fileext = ".gmt")
-    writeLines(c(
-        "SET_A\tdesc A\tg1\tg2\tg3\tg4\tg5",
-        "SET_B\tdesc B\tg6\tg7\tg8\tg9\tg10\tg11\tg12"
-    ), gmt)
-    on.exit(unlink(gmt), add = TRUE)
-
+    writeLines(gmt_lines, gmt)
     summary_df <- data.frame(
         FeatureID                  = paste0("p", 1:15),
         Genes                      = paste0("g", 1:15),
@@ -122,12 +123,9 @@ test_that("run_proteomics_pathway: end-to-end wiring with synthetic summary + ti
         stringsAsFactors = FALSE,
         check.names      = FALSE
     )
-
-    de_res <- list(summary_df = summary_df)
-    pre    <- list()
     config <- list(modes = list(proteomics = list(
         de_table   = list(id_col = "FeatureID"),
-        annotation = list(skip_annotation = TRUE, organism = "Homo sapiens"),
+        annotation = list(skip_annotation = skip_annotation, organism = "Homo sapiens"),
         pathway    = list(
             enabled   = TRUE,
             databases = character(0),
@@ -136,11 +134,63 @@ test_that("run_proteomics_pathway: end-to-end wiring with synthetic summary + ti
             max_size  = 50
         )
     )))
-    out_dir <- tempfile("test-prot-pathway-")
-    dir.create(out_dir)
-    on.exit(unlink(out_dir, recursive = TRUE), add = TRUE)
+    list(gmt = gmt, de_res = list(summary_df = summary_df), config = config)
+}
 
-    expect_no_error(suppressMessages(suppressWarnings(
-        run_proteomics_pathway(de_res, pre, config, out_dir)
-    )))
+# Every identifier in the leading edges of the fgsea tables for one contrast.
+prot_fgsea_ids <- function(res, contrast = "contrast_A") {
+    tabs <- res[[contrast]][grepl("_fgsea$", names(res[[contrast]]))]
+    unlist(lapply(tabs, function(t) strsplit(t$leadingEdge, ",", fixed = TRUE)),
+           use.names = FALSE)
+}
+
+test_that("run_proteomics_pathway keeps FeatureID when skip_annotation is true", {
+    skip_if_not_installed("fgsea")
+
+    # A custom GMT keyed on the raw FeatureID, as a non-model run has it.
+    fx <- prot_pathway_fixture(TRUE, c(
+        "SET_A\tdesc A\tp1\tp2\tp3\tp4\tp5",
+        "SET_B\tdesc B\tp6\tp7\tp8\tp9\tp10\tp11\tp12"
+    ))
+    on.exit(unlink(fx$gmt), add = TRUE)
+    out_dir <- withr::local_tempdir("test-prot-pathway-")
+
+    res <- suppressMessages(suppressWarnings(
+        run_proteomics_pathway(fx$de_res, list(), fx$config, out_dir)
+    ))
+
+    # Remapped to g1..g15, nothing would overlap this GMT and no fgsea table
+    # would be produced at all.
+    ids <- prot_fgsea_ids(res)
+    expect_gt(length(ids), 0)
+    expect_true(all(ids %in% paste0("p", 1:15)))
+})
+
+test_that("run_proteomics_pathway maps FeatureID to gene symbols when skip_annotation is false", {
+    skip_if_not_installed("fgsea")
+
+    fx <- prot_pathway_fixture(FALSE, c(
+        "SET_A\tdesc A\tg1\tg2\tg3\tg4\tg5",
+        "SET_B\tdesc B\tg6\tg7\tg8\tg9\tg10\tg11\tg12"
+    ))
+    on.exit(unlink(fx$gmt), add = TRUE)
+    out_dir <- withr::local_tempdir("test-prot-pathway-")
+
+    # With skip_annotation false the function also annotates the ids through
+    # biomaRt/OrgDb. That lookup is not what this test is about and would reach
+    # the network, so it returns no annotation here; the symbol mapping comes
+    # from the Genes column regardless. Sourced functions live in the global
+    # environment, not a package, so stub by assignment and restore after.
+    target <- environment(run_proteomics_pathway)
+    real_annotate <- get("annotate_genes_v2", envir = target)
+    assign("annotate_genes_v2", function(...) NULL, envir = target)
+    withr::defer(assign("annotate_genes_v2", real_annotate, envir = target))
+
+    res <- suppressMessages(suppressWarnings(
+        run_proteomics_pathway(fx$de_res, list(), fx$config, out_dir)
+    ))
+
+    ids <- prot_fgsea_ids(res)
+    expect_gt(length(ids), 0)
+    expect_true(all(ids %in% paste0("g", 1:15)))
 })
