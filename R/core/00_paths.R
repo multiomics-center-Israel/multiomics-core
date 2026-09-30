@@ -61,6 +61,19 @@ get_run_out_dir <- function(config) {
     resolve_out_path(config, sprintf("Results_%s_%s", proj, round))
 }
 
+#' Get the run name: the run directory name without its `Results_` prefix
+#'
+#' Derived from \code{get_run_out_dir()} so the name always matches the run
+#' directory (\code{Results_<project name>_<analysis round>}). Only the single
+#' prefix that \code{get_run_out_dir()} adds is removed.
+#'
+#' @param config Config object (uses \code{project$name}, \code{project$analysis_round}
+#'   and \code{project$dir}).
+#' @return A character scalar, e.g. \code{"Noam_Ziv_A07"}.
+get_run_name <- function(config) {
+    sub("^Results_", "", basename(get_run_out_dir(config)))
+}
+
 #' Get output directory for a specific omics mode
 get_mode_out_dir <- function(out_dir, mode) {
     stopifnot(is.character(out_dir), length(out_dir) == 1)

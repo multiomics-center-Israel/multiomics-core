@@ -160,7 +160,8 @@ mod_proteomics_exports <- function(
     # =========================================================================
     # 6. Build and save Shiny payload
     # =========================================================================
-    shiny_payload_file <- file.path(out_dir, "shiny_payload_proteomics.rds")
+    shiny_payload_file <- file.path(
+        out_dir, sprintf("shiny_payload_proteomics_%s.rds", get_run_name(config)))
     shiny_payload <- build_shiny_payload_proteomics(
         pre = pre,
         de_res = de_res,

@@ -24,16 +24,13 @@
 
 ## 1. What you receive
 
-Each omics run writes one RDS file next to its other outputs:
-
-| Omics | File |
-|---|---|
-| RNA-seq | `shiny_payload_rnaseq.rds` |
-| Proteomics | `shiny_payload_proteomics.rds` |
-| Metabolomics | `shiny_payload_metabolomics.rds` |
+Each omics run writes one RDS file next to its other outputs, named
+`shiny_payload_<omics>_<run_name>.rds`, where `<omics>` is `rnaseq`,
+`proteomics` or `metabolomics` and `<run_name>` is the run directory name
+without its `Results_` prefix (project name and analysis round):
 
 ```r
-payload <- readRDS("shiny_payload_metabolomics.rds")
+payload <- readRDS("shiny_payload_metabolomics_Noam_Ziv_A07.rds")
 payload$payload_source   # "rnaseq" | "proteomics" | "metabolomics"
 payload$payload_version  # "2.0"
 ```

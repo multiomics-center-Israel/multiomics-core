@@ -169,7 +169,8 @@ pipe_rnaseq <- function(skip_outputs = FALSE) {
           trinotate_main = rna_trinotate_main,  # Optional: Trinotate annotation
           xlsx_files = rna_outputs_legacy,      # paths of Final_results_{ALL,DE}_P_*.xlsx
           pathway_res = rna_pathway_res,        # Stage 3C: enrichment -> payload$enrichment
-          out_file = file.path(rna_out_dir, "shiny_payload_rnaseq.rds")
+          out_file = file.path(rna_out_dir,
+                               sprintf("shiny_payload_rnaseq_%s.rds", get_run_name(config)))
         ),
         format = "file"
       ),

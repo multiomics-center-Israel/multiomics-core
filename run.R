@@ -2230,8 +2230,12 @@ wizard_multiomics <- function(project_dir, project_name, analyst, round) {
                               recursive = TRUE, full.names = TRUE)
       for (rds in rds_files) {
         base <- tools::file_path_sans_ext(basename(rds))
-        if (base %in% names(payload_map)) {
-          layer_name <- payload_map[[base]]
+        # Current names are "<prefix>_<run_name>"; the older bare "<prefix>" is
+        # still accepted. Matching is per explicit prefix, not a broad pattern.
+        prefix <- names(payload_map)[base == names(payload_map) |
+                                     startsWith(base, paste0(names(payload_map), "_"))]
+        if (length(prefix) == 1) {
+          layer_name <- payload_map[[prefix]]
           if (!layer_name %in% names(layer_configs)) {
             layer_configs[[layer_name]] <- rds
             cat(sprintf("  Found %s: %s\n", layer_name, rds))
