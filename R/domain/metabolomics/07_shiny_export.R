@@ -220,9 +220,45 @@ build_shiny_payload_metabolomics <- function(
             )
         }
 
-        # de_final_table: DE-significant rows (equivalent to Final_results_DE_P_*.xlsx)
-        if (!is.null(payload$de_sig_stats) && nrow(payload$de_sig_stats) > 0) {
-            payload$de_final_table <- payload$de_sig_stats
+        # de_final_table: clean DE table with the same rows and stat columns as the
+        # DE-only Final_results workbook, as a plain data.frame rather than the
+        # sheet layout. Built from the same final-results builder the workbook
+        # uses (summary_df, not the annotated de_stats), then filtered like the
+        # RNA-seq payload: DE rows only, cutoff/pass helper columns dropped,
+        # clustering order + z-scores appended.
+        if (!is.null(de_res$summary_df)) {
+            final_results <- tryCatch(
+                build_final_results_metabolomics(
+                    pre             = pre,
+                    summary_df      = de_res$summary_df,
+                    contrast_labels = names(de_res$de_tables),
+                    row_data        = pre$row_data,
+                    feature_id_col  = "feature_id",
+                    cv_contrasts_df = inputs$contrasts,
+                    config          = config
+                ),
+                error = function(e) {
+                    warning("[shiny_export] de_final_table: ", conditionMessage(e))
+                    NULL
+                }
+            )
+            if (!is.null(final_results) && "pass_any_contrast" %in% names(final_results)) {
+                is_de <- !is.na(final_results$pass_any_contrast) & final_results$pass_any_contrast == 1
+                de_df <- final_results[is_de, , drop = FALSE]
+                de_df <- de_df[, !startsWith(names(de_df), "manual_cutoffs") & names(de_df) != "pass_any_contrast", drop = FALSE]
+
+                excel_ord <- clustering_res$excel_order %||% NULL
+                if (!is.null(excel_ord) && !is.null(excel_ord$ordered_ids)) {
+                    de_df$order <- match(de_df$feature_id, excel_ord$ordered_ids)
+                    if (!is.null(excel_ord$zscore_mat)) {
+                        zmat <- excel_ord$zscore_mat
+                        idx <- match(de_df$feature_id, rownames(zmat))
+                        de_df <- cbind(de_df, zmat[idx, , drop = FALSE])
+                    }
+                }
+
+                payload$de_final_table <- de_df
+            }
         }
     }
 
@@ -242,7 +278,11 @@ build_shiny_payload_metabolomics <- function(
 
         val <- src$clusters %||% src$New_clusters
         if (!is.null(val)) payload$clust_partition <- val
-        if (!is.null(src$patterns)) payload$clust_patterns <- src$patterns
+        if (!is.null(src$patterns)) {
+            payload$clust_patterns <- src$patterns
+            # List-style assignment keeps the key present when the value is NULL.
+            payload["clust_patterns_list"] <- list(src$patterns_list)
+        }
         val <- src$heatmaps %||% src$heatmaps_by_pattern
         if (!is.null(val)) payload$clust_heatmaps_by_pattern <- val
 
