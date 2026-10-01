@@ -147,6 +147,37 @@ validate_proteomics_config <- function(cfg) {
                      "or de$paired/de$pairing_col for the paired t-test.")
             }
         }
+
+        # Pass-1 p-value choice (#258). de_uses_adjusted_p() resolves it for the
+        # summariser, the Methods text and the Excel export alike; the checks
+        # live here so they run once per config rather than once per reader.
+        # Keys are matched by name: `$` partially matches on lists, so
+        # cfg$de$use_adj would find use_adj_for_pass1.
+        de_keys <- names(cfg$de)
+        other_mode <- intersect(c("use_adj", "use_adjusted_pval"), de_keys)
+        if (length(other_mode) > 0) {
+            stop(sprintf(paste0(
+                "de$%s is not a proteomics setting (it belongs to the RNA or ",
+                "metabolomics/lipidomics config) and would be ignored here. ",
+                "Use de$use_adj_for_pass1 to choose the pass-1 p-value."),
+                other_mode[[1]]), call. = FALSE)
+        }
+        has_canon <- "use_adj_for_pass1" %in% de_keys
+        has_alias <- "use_fdr_for_pass1" %in% de_keys
+        if (has_canon) assert_scalar_bool(cfg$de[["use_adj_for_pass1"]], "de$use_adj_for_pass1")
+        if (has_alias) assert_scalar_bool(cfg$de[["use_fdr_for_pass1"]], "de$use_fdr_for_pass1")
+        if (has_canon && has_alias &&
+            !identical(cfg$de[["use_adj_for_pass1"]], cfg$de[["use_fdr_for_pass1"]])) {
+            stop(sprintf(paste0(
+                "de$use_adj_for_pass1 (%s) and the deprecated de$use_fdr_for_pass1 ",
+                "(%s) disagree. Keep only de$use_adj_for_pass1."),
+                cfg$de[["use_adj_for_pass1"]], cfg$de[["use_fdr_for_pass1"]]),
+                call. = FALSE)
+        }
+        if (has_alias && !has_canon) {
+            warning("de$use_fdr_for_pass1 is deprecated; it is read as ",
+                    "de$use_adj_for_pass1. Rename the key.", call. = FALSE)
+        }
     }
 
     # 4b. Pathway Settings
