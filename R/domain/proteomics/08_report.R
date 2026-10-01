@@ -492,6 +492,9 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
     p_adjust_none <- identical(tolower(as.character(p_adjust)), "none")
     p_cut <- de_cfg$p_cutoff %||% 0.05
     fc_cut <- de_cfg$linear_fc_cutoff %||% 1.5
+    # The pass-1 p-value, resolved exactly as summarize_limma_mult_imputation()
+    # resolves it, so the text states the rule that ran (#258).
+    pass1_adj <- de_uses_adjusted_p(de_cfg, "proteomics")
 
     # Resolved before the differential block so the use_adj_for_pass1 sentence
     # can be stated once: the consensus paragraph already names which p-value
@@ -633,10 +636,9 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                 "|linear fold change| >= %s."),
                 methods_p_value_label(de_method, p_adjust_none), p_cut, fc_cut))
         }
-        # summarize_limma_mult_imputation() reads this with isTRUE(), so an
-        # absent key means the per-run call used the raw p-value. Stated here
-        # only when no consensus paragraph follows to say it.
-        if (!multi_on && !isTRUE(de_cfg$use_adj_for_pass1)) {
+        # An absent key resolves to FALSE, so the per-run call used the raw
+        # p-value. Stated here only when no consensus paragraph follows to say it.
+        if (!multi_on && !pass1_adj) {
             # Same labelling rule as the consensus paragraph: pass 1 read
             # P.Value, which for ANOVA is already Tukey's.
             de_txt <- paste(de_txt, sprintf(
@@ -685,7 +687,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                 "Each run was drawn under its own seed."
             },
             methods_p_value_label(de_method, p_adjust_none,
-                                  across_proteins = isTRUE(de_cfg$use_adj_for_pass1)),
+                                  across_proteins = pass1_adj),
             format(min_passed), n_reps,
             methods_p_value_label(de_method, p_adjust_none))
         cons <- paste(cons, sprintf(paste0(
@@ -812,7 +814,7 @@ build_proteomics_methods_text <- function(config, de_method = "limma",
                        "%s p-value $\\leq$ %s."),
                 format(min_passed), n_reps,
                 methods_p_value_label(de_method, p_adjust_none,
-                                      across_proteins = isTRUE(de_cfg$use_adj_for_pass1)),
+                                      across_proteins = pass1_adj),
                 p_cut, fc_cut,
                 methods_p_value_label(de_method, p_adjust_none), p_cut)
     } else {

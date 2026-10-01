@@ -13,9 +13,10 @@ summarize_limma_mult_imputation <- function(runs_de_tables, config) {
         MIN_NO_PASSED <- 1L
     }
 
-    # whether to use adjusted p-value in final results tables and plots
-    # (if FALSE the cutoff will use the raw p-value instead)
-    use_adj_for_pass1 <- isTRUE(de_cfg$use_adj_for_pass1)
+    # Whether pass 1 reads the adjusted p-value (if FALSE, the raw p-value).
+    # Resolved by de_uses_adjusted_p(), the same call the Methods text and the
+    # Excel export make, so all three describe the rule that ran (#258).
+    use_adj_for_pass1 <- de_uses_adjusted_p(de_cfg, "proteomics")
     p_cutoff <- as.numeric(de_cfg$p_cutoff)
 
     linear_fc_cutoff <- as.numeric(de_cfg$linear_fc_cutoff)

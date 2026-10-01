@@ -203,6 +203,54 @@ test_that("validate_proteomics_config refuses a fractional, negative, infinite o
                  "'filtering$min_count' must be a number", fixed = TRUE)
 })
 
+# --- de pass-1 p-value keys (#258) ---
+# use_adj_for_pass1 is canonical; use_fdr_for_pass1 is a deprecated alias.
+
+with_pass1 <- function(...) {
+    cfg <- create_mock_proteomics_config()
+    cfg$de <- c(cfg$de, list(...))
+    cfg
+}
+
+test_that("validate_proteomics_config accepts the canonical pass-1 key silently", {
+    expect_no_warning(validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE)),
+                      message = "use_fdr_for_pass1")
+    expect_true(validate_proteomics_config(with_pass1(use_adj_for_pass1 = FALSE)))
+})
+
+test_that("validate_proteomics_config warns once for the deprecated alias alone", {
+    expect_warning(res <- validate_proteomics_config(with_pass1(use_fdr_for_pass1 = TRUE)),
+                   "de$use_fdr_for_pass1 is deprecated", fixed = TRUE)
+    expect_true(res)
+})
+
+test_that("validate_proteomics_config accepts both keys when they agree, and stops when they conflict", {
+    expect_no_warning(
+        validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE, use_fdr_for_pass1 = TRUE)),
+        message = "use_fdr_for_pass1")
+    expect_error(
+        validate_proteomics_config(with_pass1(use_adj_for_pass1 = TRUE, use_fdr_for_pass1 = FALSE)),
+        "disagree", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses the other modes' spellings, naming the canonical key", {
+    expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
+                 "de$use_adj is not a proteomics setting", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adjusted_pval = TRUE)),
+                 "de$use_adjusted_pval is not a proteomics setting", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adj = TRUE)),
+                 "de$use_adj_for_pass1", fixed = TRUE)
+})
+
+test_that("validate_proteomics_config refuses a non-boolean pass-1 value", {
+    expect_error(validate_proteomics_config(with_pass1(use_adj_for_pass1 = "yes")),
+                 "'de$use_adj_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_fdr_for_pass1 = 1)),
+                 "'de$use_fdr_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+    expect_error(validate_proteomics_config(with_pass1(use_adj_for_pass1 = NA)),
+                 "'de$use_adj_for_pass1' must be TRUE/FALSE", fixed = TRUE)
+})
+
 # --- RNA-seq Config ---
 
 create_mock_rna_config <- function() {

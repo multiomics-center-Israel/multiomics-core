@@ -13,6 +13,15 @@
 #' \code{use_adjusted_pval} to TRUE, proteomics defaults \code{use_adj_for_pass1}
 #' to FALSE.
 #'
+#' For proteomics this is the single resolver of the pass-1 choice: the DE
+#' summariser, the Methods text and the Excel export all call it, so they cannot
+#' disagree about a run (#258). It reads \code{use_adj_for_pass1}, then the
+#' deprecated alias \code{use_fdr_for_pass1}, and nothing else; the other
+#' modes' spellings are refused for proteomics by
+#' \code{validate_proteomics_config()}, which also owns the deprecation warning
+#' and the conflict check, so this stays silent for proteomics however often it
+#' is called.
+#'
 #' @param de_cfg The \code{de} config list for the mode (may be NULL).
 #' @param mode Mode string, e.g. "rna", "proteomics", "metabolomics".
 #' @return TRUE if significance was gated on the adjusted p-value (FDR),
@@ -25,6 +34,7 @@ de_uses_adjusted_p <- function(de_cfg, mode = "proteomics") {
         rna          = c("use_adj", "use_adj_for_pass1", "use_adjusted_pval"),
         metabolomics = ,
         lipidomics   = c("use_adjusted_pval", "use_adj", "use_adj_for_pass1"),
+        proteomics   = c("use_adj_for_pass1", "use_fdr_for_pass1"),
         c("use_adj_for_pass1", "use_adj", "use_adjusted_pval")
     )
     default <- mode %in% c("rna", "metabolomics", "lipidomics")
