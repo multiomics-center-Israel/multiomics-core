@@ -260,6 +260,30 @@ modes:
         # force_primary_ion option.
         force_primary_ion: true
 
+        # Complementary GSEA (MetaboAnalyst-style MS peaks-to-pathways), run on
+        # the same mapped EmpiricalCompound / pathway universe IN ADDITION to the
+        # ORA above — the pinned engine and its statistics are untouched. It uses
+        # the FULL ranked EC list (no p-value cutoff), ranked by the moderated t
+        # statistic when the DE table has one (falling back to logFC), with each
+        # EC scored as the signed max of its member features.
+        # Needs `fgsea` and a READABLE model (model_ref / model_json below): the
+        # built-in human_mfn model ships inside the Python package, so pathway
+        # membership cannot be read for it and both GSEA and the pathway
+        # supporting-evidence section are skipped with a message.
+        #
+        # The values below are the MetaboAnalystR Peaks-to-Pathways defaults
+        # (xia-lab/MetaboAnalystR @ 398476ae2a0c996e390925fa62adc46b5ecde334):
+        # PerformPSEA(permNum = 100) and .run_fgsea_inner(gseaParam = 1,
+        # minSize = 1, maxSize = Inf, set.seed(123)). ALL FOUR KEYS ARE OPTIONAL
+        # and are commented out on purpose — overriding any of them is a
+        # methodological deviation from the reference implementation, and it is
+        # recorded as such in the report and in the GSEA result.
+        # gsea_permutations: 100
+        # gsea_seed: 123
+        # gsea_min_size: 1
+        # gsea_max_size: .inf
+        # gsea_param: 1
+
         # Metabolic model (precedence: model_ref > model_json > built-in human).
         # The built-in model is HUMAN ONLY: a non-human `organism` (above) with
         # no custom model is refused, not silently run against human pathways.
