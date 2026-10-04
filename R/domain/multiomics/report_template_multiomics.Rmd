@@ -1484,8 +1484,11 @@ cat(pathview_support$intro,
               "so compound nodes are uncolored.\n\n")
     })
 cat(sprintf("[Download these maps (PDF)](%s)\n\n", pathview_pdf))
+# Kept out of the legend below, which is held to 100 words with its threshold text.
+cat("A box standing for several genes prints only one name; where a different",
+    "member passed the node rule, its symbol is written just above the box.\n\n")
 
-pv_multi <- pv_index[pv_index$set == "multi_ora", ]
+pv_multi <-pv_index[pv_index$set == "multi_ora", ]
 for (i in seq_len(nrow(pv_multi))) {
     cat(sprintf("\n### %s {.unnumbered}\n\n", pv_multi$heading[i]))
     cat(sprintf("![%s](%s)\n\n", pv_multi$heading[i], pv_multi$png[i]))
@@ -1495,8 +1498,6 @@ figure_legend(paste0(
     " (left) and proteomics (right) logFC, where available. ",
     if (pathview_has_compounds) "Compound nodes: metabolomics logFC. " else "",
     "Red up, green/blue down. ",
-    "A box standing for several genes prints only one name; where a different ",
-    "member passed the node rule, its symbol is written just above the box. ",
     # Taken from the same constants the selection and the node filter
     # read, so the caption cannot describe a rule the figure did not apply.
     pathview_significance_caption()))
