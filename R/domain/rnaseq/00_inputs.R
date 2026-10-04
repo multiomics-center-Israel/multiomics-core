@@ -156,6 +156,20 @@ load_rsem_as_tximport <- function(rsem_dir,
     }
     names(files) <- sample_names
 
+    # tximport's RSEM importer silently drops txIn whenever the first file's
+    # full path contains "genes" (directory included), and would then read
+    # isoform rows as genes instead of summarising them through tx2gene.
+    # Mirror its check so that case fails loudly rather than mis-importing.
+    if (!is.null(tx2gene) && grepl("genes", files[1])) {
+        stop(
+            "[load_rsem_as_tximport] 'tx2gene' was supplied for isoform-level input, but the path '",
+            files[1], "' contains \"genes\". tximport treats any such path as gene-level RSEM ",
+            "output and would skip the transcript-to-gene summary. Move or rename the isoform ",
+            "files so their full path does not contain \"genes\", then try again.",
+            call. = FALSE
+        )
+    }
+
     # Isoform-level input needs a tx2gene map; gene-level (the default) does not.
     txi <- tximport::tximport(
         files,

@@ -60,6 +60,21 @@ test_that("load_rsem_as_tximport honours explicit sample_names", {
     expect_equal(colnames(txi$counts), c("ctrl_1", "trt_1"))
 })
 
+test_that("load_rsem_as_tximport rejects isoform input under a path containing 'genes'", {
+    skip_if_not_installed("tximport")
+
+    # tximport would silently switch to gene mode here and skip tx2gene.
+    dir <- file.path(withr::local_tempdir(), "genes")
+    dir.create(dir)
+    write_mock_rsem(file.path(dir, "SampleA.isoforms.results"), c(800, 0, 1200))
+    tx2gene <- data.frame(tx = c("t1", "t2", "t3"), gene = c("G1", "G1", "G2"))
+
+    expect_error(
+        load_rsem_as_tximport(dir, pattern = "\\.isoforms\\.results$", tx2gene = tx2gene),
+        "contains \"genes\""
+    )
+})
+
 test_that("load_rsem_as_tximport errors on empty dir and bad inputs", {
     dir <- withr::local_tempdir()
 
