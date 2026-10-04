@@ -161,6 +161,38 @@ select_gsea_pair_pathways <- function(per_omics_enrichment, enzyme_pairs,
 }
 
 
+#' Which map numbers the other renderers already drew for a contrast
+#'
+#' Read from this run's pathview directory, which \code{run_multi_ora()}
+#' clears before any renderer runs, so every file found is from this run. The
+#' per-omics maps (`metab_top`, `prot_top`) show the first contrast; the
+#' supported maps carry \code{make.names(contrast)} in their name.
+#'
+#' @param pv_dir The Multi-ORA \code{pathview/} directory.
+#' @param kegg_org KEGG organism code of the run.
+#' @param contrast Readable contrast label.
+#' @param first_contrast Logical: \code{contrast} is the one the per-omics
+#'   maps show.
+#' @return Named character vector: map number -> the set that drew it.
+.pathview_already_drawn <- function(pv_dir, kegg_org, contrast, first_contrast) {
+    f <- basename(list.files(pv_dir, pattern = "\\.png$"))
+    f <- f[startsWith(f, kegg_org)]
+    rest <- substring(f, nchar(kegg_org) + 1)
+    id <- substr(rest, 1, 5)
+    tag <- substring(rest, 7)
+    set <- rep(NA_character_, length(f))
+    if (isTRUE(first_contrast)) {
+        set[grepl("^metab_top(\\.multi)?\\.png$", tag)] <- "top metabolomics pathways"
+        set[grepl("^prot_top(\\.multi)?\\.png$", tag)] <- "top proteomics pathways"
+    }
+    sup <- paste0("multi_ora_", make.names(contrast))
+    set[tag %in% paste0(sup, c(".png", ".multi.png"))] <- "multi-omics maps"
+    keep <- !is.na(set) & grepl("^[0-9]{5}$", id)
+    out <- stats::setNames(set[keep], id[keep])
+    out[!duplicated(names(out))]
+}
+
+
 #' Render KEGG maps for GSEA- and enzyme-pair-selected pathways
 #'
 #' Gene nodes carry proteomics (and transcriptomics, when present) log2FC and
@@ -241,6 +273,19 @@ generate_gsea_pair_pathview <- function(per_omics_enrichment, enzyme_pairs,
     pv_dir <- normalizePath(pv_dir, winslash = "/", mustWork = FALSE)
 
     sel$drawn <- FALSE
+    # Where an earlier renderer already drew the pathway, it is not drawn
+    # again; the selection table says where to find it instead.
+    sel$drawn_in <- NA_character_
+    first_key <- NULL
+    # The per-omics maps show proteomics first, then transcriptomics.
+    for (om in c(intersect(c("proteomics", "transcriptomics"), names(gene_tables)),
+                 if (!is.null(metab_tables)) "metabolomics")) {
+        tabs <- if (om == "metabolomics") metab_tables else gene_tables[[om]]
+        if (length(tabs) > 0 && !is.null(names(tabs))) {
+            first_key <- normalize_contrast_key(names(tabs)[1])
+            break
+        }
+    }
     page_labels <- character(0)
     generated <- withr::with_dir(pv_dir, {
         made <- character(0)
@@ -283,10 +328,19 @@ generate_gsea_pair_pathview <- function(per_omics_enrichment, enzyme_pairs,
 
             out_suffix <- paste0("gsea_pair_", .contrast_out_key(k))
             two_layers <- !is.null(dim(gene_data)) && ncol(gene_data) > 1
+            de_entrez <- if (is.null(dim(gene_data))) names(gene_data) else rownames(gene_data)
+            done <- .pathview_already_drawn(pv_dir, kegg_org, sel$contrast[sel$ckey == k][1],
+                                            first_contrast = identical(k, first_key))
             for (i in which(sel$ckey == k)) {
                 pid <- sel$pathway[i]
+                if (pid %in% names(done)) {
+                    sel$drawn_in[i] <- done[[pid]]
+                    message("    GSEA/pair pathview: ", kegg_org, pid,
+                            " already drawn in ", done[[pid]], "; not repeated")
+                    next
+                }
                 tryCatch({
-                    pathview::pathview(gene.data = gene_data, cpd.data = cpd_data,
+                    pv_out <- pathview::pathview(gene.data = gene_data, cpd.data = cpd_data,
                                        pathway.id = pid, species = kegg_org,
                                        out.suffix = out_suffix, kegg.dir = pv_dir,
                                        keys.align = "y", match.data = TRUE,
@@ -296,6 +350,8 @@ generate_gsea_pair_pathview <- function(per_omics_enrichment, enzyme_pairs,
                            paste0(kegg_org, pid, ".", out_suffix, ".png"))
                     f <- f[file.exists(f)]
                     if (length(f) > 0) {
+                        label_de_genes_on_pathview(pv_out, file.path(pv_dir, f[1]),
+                                                   de_entrez, org_db)
                         made <- c(made, file.path(pv_dir, f[1]))
                         sel$drawn[i] <- TRUE
                         page_labels <- c(page_labels, paste0(
