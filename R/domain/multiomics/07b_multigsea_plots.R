@@ -1163,10 +1163,14 @@ run_multigsea_pathview <- function(enrichment_results, mae_data, config, out_dir
 #' @param per_omics_enrichment This run's per-omics enrichment frames
 #'   (`multiomics_cross_enrichment$per_omics`), used by the no-OrgDb pathview
 #'   fallback to select pathways from the current run rather than from whatever
-#'   enrichment CSVs an earlier run left on disk.
+#'   enrichment CSVs an earlier run left on disk. Also the GSEA source for the
+#'   GSEA/pair pathway maps.
+#' @param enzyme_pairs Enzyme-metabolite pair table
+#'   (`multiomics_enzyme_metabolite$pairs`), or NULL; the pathways of its
+#'   changed enzymes get a map.
 #' @return List with: results (data.frame), plots (list of paths)
 run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
-                          per_omics_enrichment = NULL) {
+                          per_omics_enrichment = NULL, enzyme_pairs = NULL) {
 
     message("=== Running Multi-ORA (combined cross-omics ORA) ===")
 
@@ -1484,6 +1488,23 @@ run_multi_ora <- function(de_results, harmonization_res, config, out_dir,
         plots$pathview_metabolomics_pdf <- per_omics_pv$metabolomics_pdf
         plots$pathview_proteomics_pdf <- per_omics_pv$proteomics_pdf
     }
+
+    # 6. Pathways the two renderers above never see: GSEA calls them enriched,
+    #    or a changed enzyme in the enzyme-metabolite table sits in them, but
+    #    ORA on the short DE list did not.
+    plots$pathview_gsea_pairs_pdf <- if (!run_pathview) NULL else tryCatch(
+        generate_gsea_pair_pathview(
+            per_omics_enrichment = per_omics_enrichment,
+            enzyme_pairs = enzyme_pairs,
+            de_results = de_results,
+            harmonization_res = harmonization_res,
+            config = config,
+            out_dir = out_dir
+        ),
+        error = function(e) {
+            message("  GSEA/pair pathview failed: ", conditionMessage(e))
+            NULL
+        })
 
     # --- Per-contrast Multi-ORA ---
     # Re-extract DE tables to get per-contrast names, then run ORA per contrast
